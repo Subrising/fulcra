@@ -180,10 +180,8 @@ jobs:
         run: |
           set -euo pipefail
           build_args=(-- --publish never --mac --${{ matrix.electron_arch }})
-          build_args+=("-c.publish.releaseType=$RELEASE_TYPE")
-          if [ -n "${RELEASE_BUILDER_CHANNEL:-}" ]; then
-            build_args+=("-c.publish.channel=$RELEASE_BUILDER_CHANNEL")
-          fi
+          # electron-builder.yml sets publish: null (Fulcra has no update feed yet), so pass no
+          # -c.publish.* overrides: they create a provider-less publish object that fails validation.
           npm run build:desktop "${build_args[@]}"
 
       - name: Upload packaged smoke diagnostics
@@ -287,10 +285,8 @@ jobs:
         run: |
           set -euo pipefail
           build_args=(-- --publish never --linux --x64)
-          build_args+=("-c.publish.releaseType=$RELEASE_TYPE")
-          if [ -n "${RELEASE_BUILDER_CHANNEL:-}" ]; then
-            build_args+=("-c.publish.channel=$RELEASE_BUILDER_CHANNEL")
-          fi
+          # electron-builder.yml sets publish: null (Fulcra has no update feed yet), so pass no
+          # -c.publish.* overrides: they create a provider-less publish object that fails validation.
           npm run build:desktop "${build_args[@]}"
 
       - name: Upload packaged smoke diagnostics
@@ -391,10 +387,8 @@ jobs:
         run: |
           set -euo pipefail
           build_args=(-- --publish never --win --x64 --arm64)
-          build_args+=("-c.publish.releaseType=$RELEASE_TYPE")
-          if [ -n "${RELEASE_BUILDER_CHANNEL:-}" ]; then
-            build_args+=("-c.publish.channel=$RELEASE_BUILDER_CHANNEL")
-          fi
+          # electron-builder.yml sets publish: null (Fulcra has no update feed yet), so pass no
+          # -c.publish.* overrides: they create a provider-less publish object that fails validation.
           npm run build:desktop "${build_args[@]}"
 
       - name: Upload packaged smoke diagnostics
