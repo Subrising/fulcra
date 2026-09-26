@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import createDOMPurify from "dompurify";
+import mermaid from "mermaid";
 import { mermaidRuntimeHtml } from "./html.gen";
 import { parseMermaidRuntimeMessage, type MermaidRuntimeMessage } from "./messages";
 
@@ -53,7 +55,7 @@ function renderedSize(message: MermaidRuntimeMessage): { height: number; width: 
 
 function render(
   frame: HTMLIFrameElement,
-  input: { revision: number; source: string },
+  input: { revision: number; source: string; colorScheme?: "light" | "dark" },
 ): Promise<MermaidRuntimeMessage> {
   const response = waitForRuntimeMessage(
     frame,
@@ -67,7 +69,7 @@ function render(
       type: "render",
       revision: input.revision,
       source: input.source,
-      colorScheme: "dark",
+      colorScheme: input.colorScheme ?? "dark",
       interactive: false,
     },
     "*",
@@ -82,6 +84,75 @@ afterEach(() => {
 });
 
 describe("Mermaid sandbox runtime", () => {
+  it("keeps YAML merge tags disabled and renders after rejected frontmatter", async () => {
+    const frame = await mountRuntime();
+    const ordinary = "---\ntitle: Product delivery\n---\nflowchart LR\nPlan --> Review";
+    const implicit =
+      "---\ntitle: Literal merge key\nbase: &base {title: Replaced}\n<<: *base\n---\nflowchart LR\nPlan --> Review";
+    const explicit =
+      '---\nbase: &base {title: Replaced}\n!!merge "<<": *base\n---\nflowchart LR\nPlan --> Review';
+
+    expect(await render(frame, { revision: 1, source: ordinary })).toMatchObject({
+      type: "rendered",
+      revision: 1,
+      source: ordinary,
+    });
+    expect(await render(frame, { revision: 2, source: implicit })).toMatchObject({
+      type: "rendered",
+      revision: 2,
+      source: implicit,
+    });
+    expect(await render(frame, { revision: 3, source: explicit })).toEqual({
+      type: "renderError",
+      revision: 3,
+    });
+    expect(await render(frame, { revision: 4, source: ordinary })).toMatchObject({
+      type: "rendered",
+      revision: 4,
+      source: ordinary,
+    });
+  });
+
+  it("de-arms detached descendants removed by sanitizer hooks", () => {
+    for (const hook of ["beforeSanitizeElements", "uponSanitizeElement"] as const) {
+      const purifier = createDOMPurify(window);
+      const root = document.createElement("div");
+      root.innerHTML = '<footer><img onload="void 0"></footer><div>safe</div>';
+      const image = root.querySelector("img")!;
+      const removeFooter = (node: Node) => {
+        if (node.nodeName === "FOOTER") node.parentNode?.removeChild(node);
+      };
+      if (hook === "beforeSanitizeElements") purifier.addHook(hook, removeFooter);
+      else purifier.addHook(hook, removeFooter);
+      purifier.sanitize(root, { IN_PLACE: true, ALLOWED_TAGS: ["div", "footer", "#text"] });
+      expect(root.innerHTML).toBe("<div>safe</div>");
+      expect(image.getAttribute("onload")).toBeNull();
+    }
+  });
+
+  it("does not let configuration merge mutate the object prototype", () => {
+    const prototype = Object.prototype as Record<string, unknown>;
+    try {
+      mermaid.initialize(JSON.parse('{"__proto__":{"orcaDiagramPolluted":"yes"}}'));
+      expect(prototype.orcaDiagramPolluted).toBeUndefined();
+    } finally {
+      delete prototype.orcaDiagramPolluted;
+    }
+  });
+
+  it("renders the same diagram after light, dark and light changes", async () => {
+    const frame = await mountRuntime();
+    const source = "flowchart LR\nA[Plan] --> B[Review] --> C[Ship]";
+    let revision = 1;
+    for (const colorScheme of ["light", "dark", "light"] as const) {
+      const result = await render(frame, { revision, source, colorScheme });
+      expect(result).toMatchObject({ type: "rendered", revision, source, colorScheme });
+      expect(renderedSize(result).width).toBeGreaterThan(0);
+      expect(renderedSize(result).height).toBeGreaterThan(0);
+      revision++;
+    }
+  });
+
   it("renders successive valid streaming prefixes and reports an invalid prefix", async () => {
     const frame = await mountRuntime();
     const firstSource = "flowchart TD\nA --> B";

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { getElectronDeviceKey } from "../features/device-key-electron.js";
 import path from "node:path";
 import { app, ipcMain, powerMonitor } from "electron";
 import log from "electron-log/main";
@@ -123,7 +124,13 @@ function parseDesktopDaemonStopReason(
 // ---------------------------------------------------------------------------
 
 function getPaseoHome(): string {
-  return resolvePaseoHome(process.env);
+  return resolvePaseoHome({
+    ...process.env,
+    PASEO_HOME:
+      process.env.FULCRA_HOME ||
+      process.env.PASEO_HOME ||
+      path.join(app.getPath("userData"), "daemon"),
+  });
 }
 
 function logFilePath(): string {
@@ -457,6 +464,10 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
     get_local_daemon_version: () => getLocalDaemonVersion(),
     install_cli: () => installCli(),
     get_cli_install_status: () => getCliInstallStatus(),
+    // Device key: the private key stays in this process.
+    device_status: () => getElectronDeviceKey().status(),
+    device_pair: (args) => getElectronDeviceKey().pair(args ?? {}),
+    device_sign: (args) => getElectronDeviceKey().sign(args),
     read_legacy_skill_selection: () => readLegacySkillSelection(),
     delete_legacy_skill_selection: () => deleteLegacySkillSelection(),
   };

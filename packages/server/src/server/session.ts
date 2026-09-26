@@ -1,4 +1,6 @@
 import { searchTimeline } from "./agent/chat-search/index.js";
+import { handleFileAtCommitRequest } from "./checkout/file-at-commit-request.js";
+import type { CheckoutFileAtCommitGetRequest } from "@getpaseo/protocol/messages";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
@@ -96,11 +98,13 @@ import {
 
 import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
+import { getTimelineFileHistory, listTimelineTurns } from "./agent/timeline-turn-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import type {
   AgentManagerEvent,
   AgentTimelineCursor,
   AgentTimelineFetchDirection,
+  AgentTimelineFetchOptions,
   AgentTimelineFetchResult,
   ManagedAgent,
 } from "./agent/agent-manager.js";
@@ -282,6 +286,8 @@ type ProviderSubagentManagerEvent = Extract<
 const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
 const MIN_VERSION_EXPLICIT_WORKSPACE_RECOVERY = "0.1.105";
+const TIMELINE_TURN_PAGE_DEFAULT = 100;
+const TIMELINE_TURN_PAGE_MAX = 500;
 function errorToFriendlyMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -315,7 +321,14 @@ function clientUsesLegacyWorkspaceRestore(appVersion: string | null): boolean {
 
 type DeleteFencedAgentStorage = AgentStorage & {
   beginDelete(agentId: string): void;
+  cancelDelete(agentId: string): void;
 };
+
+function cancelAgentDeleteIfSupported(agentStorage: AgentStorage, agentId: string): void {
+  if ("cancelDelete" in agentStorage && typeof agentStorage.cancelDelete === "function") {
+    (agentStorage as DeleteFencedAgentStorage).cancelDelete(agentId);
+  }
+}
 
 function beginAgentDeleteIfSupported(agentStorage: AgentStorage, agentId: string): void {
   if ("beginDelete" in agentStorage && typeof agentStorage.beginDelete === "function") {
@@ -508,6 +521,11 @@ export interface SessionOptions {
     invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
+  // Plugin notifications and the shared credential store (Fulcra host APIs).
+  hostIntegrations?: import("./plugins/plugin-host-calls.js").PluginHostServices;
+  // The plugin id when this is a plugin subprocess's own session. Set by the daemon from the socket
+  // it created, never from the client; it narrows the host APIs the session may use.
+  pluginOriginId?: string;
   mcpBaseUrl?: string | null;
   stt: Resolvable<SpeechToTextProvider | null>;
   sttLanguage?: string;
@@ -726,6 +744,8 @@ export class Session {
   private readonly daemonConfigStore: DaemonConfigStore;
   private readonly pushNotifications: PushNotifications;
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
+  private readonly hostIntegrations: SessionOptions["hostIntegrations"];
+  private readonly pluginOriginId: string | undefined;
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
   private unsubscribeAgentEvents: (() => void) | null = null;
   private unsubscribeProjectMutations: (() => void) | null = null;
@@ -865,6 +885,8 @@ export class Session {
     this.projectIcons = new ProjectIconReader(paseoHome);
     this.worktreesRoot = worktreesRoot;
     this.pluginRuntime = pluginRuntime;
+    this.hostIntegrations = options.hostIntegrations;
+    this.pluginOriginId = options.pluginOriginId;
     this.orchestrationSkills = orchestrationSkills;
     this.sessionLogger = logger.child({
       module: "session",
@@ -2362,6 +2384,8 @@ export class Session {
   }
 
   private dispatchPluginMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    const integration = this.dispatchIntegrationMessage(msg);
+    if (integration) return integration;
     if (msg.type === "plugin.list.request") {
       return (this.pluginRuntime?.listPlugins() ?? Promise.resolve([])).then((plugins) => {
         this.emit({
@@ -2528,6 +2552,107 @@ export class Session {
     return undefined;
   }
 
+  private dispatchIntegrationMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    if (msg.type === "plugin.notifications.list.request") {
+      const notifications = this.hostIntegrations?.notifications;
+      if (!notifications) throw new Error("Plugin notifications are unavailable on this host");
+      const listed = notifications.list(msg.limit);
+      this.emit({
+        type: "plugin.notifications.list.response",
+        payload: {
+          requestId: msg.requestId,
+          // A plugin's own session sees only its own notifications.
+          notifications: this.pluginOriginId
+            ? listed.filter((entry) => entry.pluginId === this.pluginOriginId)
+            : listed,
+        },
+      });
+      return Promise.resolve();
+    }
+    if (!msg.type.startsWith("credentials.")) return undefined;
+    const credentials = this.hostIntegrations?.credentials;
+    if (!credentials) throw new Error("The credential store is unavailable on this host");
+    if (this.pluginOriginId) return this.dispatchPluginCredentialsMessage(credentials, msg);
+    return this.dispatchCredentialsMessage(credentials, msg);
+  }
+
+  // Account management is an app/operator power. A plugin's own session may
+  // only list metadata for the connectors its manifest declares.
+  private async dispatchPluginCredentialsMessage(
+    credentials: NonNullable<NonNullable<SessionOptions["hostIntegrations"]>["credentials"]>,
+    msg: SessionInboundMessage,
+  ): Promise<void> {
+    if (msg.type !== "credentials.list.request") {
+      throw new Error(
+        "Plugins cannot manage accounts; use Settings › Integrations in the Fulcra app",
+      );
+    }
+    const pluginId = this.pluginOriginId;
+    const grants = pluginId
+      ? (this.hostIntegrations?.pluginCredentialGrants?.(pluginId) ?? [])
+      : [];
+    const { accounts, providers } = await credentials.list();
+    this.emit({
+      type: "credentials.list.response",
+      payload: {
+        requestId: msg.requestId,
+        accounts: accounts.filter((account) => grants.includes(account.connector)),
+        providers: providers.filter((provider) => grants.includes(provider.connector)),
+      },
+    });
+  }
+
+  private async dispatchCredentialsMessage(
+    credentials: NonNullable<NonNullable<SessionOptions["hostIntegrations"]>["credentials"]>,
+    msg: SessionInboundMessage,
+  ): Promise<void> {
+    if (msg.type === "credentials.list.request") {
+      const { accounts, providers } = await credentials.list();
+      this.emit({
+        type: "credentials.list.response",
+        payload: { requestId: msg.requestId, accounts, providers },
+      });
+    } else if (msg.type === "credentials.begin.request") {
+      const flow = await credentials.begin({
+        connector: msg.connector,
+        method: msg.method,
+        site: msg.site,
+        redirect: msg.redirect,
+      });
+      this.emit({
+        type: "credentials.begin.response",
+        payload: { requestId: msg.requestId, flow },
+      });
+    } else if (msg.type === "credentials.complete.request") {
+      let result;
+      if (msg.input.kind === "callback") {
+        result = await credentials.completeCallback(msg.input.url);
+      } else {
+        if (!msg.flowId) throw new Error("flowId is required");
+        result = await credentials.complete(msg.flowId, msg.input);
+      }
+      this.emit({
+        type: "credentials.complete.response",
+        payload: { requestId: msg.requestId, result },
+      });
+    } else if (msg.type === "credentials.reconnect.request") {
+      const flow = await credentials.reconnect(msg.accountId, {
+        method: msg.method,
+        redirect: msg.redirect,
+      });
+      this.emit({
+        type: "credentials.reconnect.response",
+        payload: { requestId: msg.requestId, flow },
+      });
+    } else if (msg.type === "credentials.remove.request") {
+      const removed = await credentials.remove(msg.accountId);
+      this.emit({
+        type: "credentials.remove.response",
+        payload: { requestId: msg.requestId, removed },
+      });
+    }
+  }
+
   private subscribeToPluginChanges(
     pluginRuntime: SessionOptions["pluginRuntime"],
   ): (() => void) | null {
@@ -2617,6 +2742,12 @@ export class Session {
         return this.handleAgentTimelineSearchRequest(msg, source);
       case "agent.timeline.list_prompts.request":
         return this.handleAgentTimelineListPromptsRequest(msg, source);
+      case "agent.timeline.list_turns.request":
+        return this.handleAgentTimelineListTurnsRequest(msg, source);
+      case "agent.timeline.get_file_history.request":
+        return this.handleAgentTimelineGetFileHistoryRequest(msg, source);
+      case "agent.timeline.purge.request":
+        return this.handleAgentTimelinePurgeRequest(msg);
       case "agent.provider_subagents.list.request":
         return this.handleProviderSubagentListRequest(msg);
       case "agent.provider_subagents.timeline.get.request":
@@ -2706,7 +2837,9 @@ export class Session {
       case "fetch_agent_request":
         return this.handleFetchAgent(msg.agentId, msg.requestId);
       case "delete_agent_request":
-        return this.handleDeleteAgentRequest(msg.agentId, msg.requestId);
+        return this.handleDeleteAgentRequest(msg.agentId, msg.requestId, {
+          purgeHistory: msg.purgeHistory === true,
+        });
       case "archive_agent_request":
         return this.handleArchiveAgentRequest(msg.agentId, msg.requestId);
       case "close_items_request":
@@ -2741,6 +2874,23 @@ export class Session {
   }
 
   private dispatchAgentConfigMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    return this.dispatchAgentMcpMessage(msg) ?? this.dispatchAgentAndDaemonConfigMessage(msg);
+  }
+
+  private dispatchAgentMcpMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
+      case "agent.mcp.get_refresh_state.request":
+        return this.handleAgentMcpGetRefreshState(msg);
+      case "agent.mcp.refresh.request":
+        return this.handleAgentMcpRefresh(msg);
+      default:
+        return undefined;
+    }
+  }
+
+  private dispatchAgentAndDaemonConfigMessage(
+    msg: SessionInboundMessage,
+  ): Promise<void> | undefined {
     switch (msg.type) {
       case "set_agent_mode_request":
         return this.agentConfigSession.handleSetAgentModeRequest(msg);
@@ -2792,6 +2942,16 @@ export class Session {
     }
   }
 
+  // The cwd must be a workspace in this daemon's registry.
+  private async handleFileAtCommitRequest(msg: CheckoutFileAtCommitGetRequest): Promise<void> {
+    const payload = await handleFileAtCommitRequest({
+      msg,
+      listWorkspaceCwds: async () =>
+        (await this.workspaceRegistry.list()).map((workspace) => workspace.cwd),
+    });
+    this.emit({ type: "checkout.file-at-commit.get.response", payload });
+  }
+
   // eslint-disable-next-line complexity
   private dispatchCheckoutMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
@@ -2801,6 +2961,8 @@ export class Session {
         return this.checkoutSession.handleCommitsListRequest(msg);
       case "checkout.commits.file_diff.request":
         return this.checkoutSession.handleCommitFileDiffRequest(msg);
+      case "checkout.file-at-commit.get.request":
+        return this.handleFileAtCommitRequest(msg);
       case "validate_branch_request":
         return this.checkoutSession.handleValidateBranchRequest(msg);
       case "branch_suggestions_request":
@@ -2996,6 +3158,8 @@ export class Session {
         return this.providerCatalogSession.handleProviderDiagnosticRequest(msg);
       case "provider.usage.list.request":
         return this.providerCatalogSession.handleProviderUsageListRequest(msg);
+      case "agent.quota.read.request":
+        return this.handleAgentQuotaRead(msg);
       default:
         return undefined;
     }
@@ -3137,13 +3301,22 @@ export class Session {
     }
   }
 
-  private async handleDeleteAgentRequest(agentId: string, requestId: string): Promise<void> {
+  private async handleDeleteAgentRequest(
+    agentId: string,
+    requestId: string,
+    options: { purgeHistory: boolean },
+  ): Promise<void> {
     this.sessionLogger.info({ agentId }, `Deleting agent ${agentId} from registry`);
 
-    const knownWorkspaceId =
-      this.agentManager.getAgent(agentId)?.workspaceId ??
-      (await this.agentStorage.get(agentId))?.workspaceId ??
-      null;
+    const live = this.agentManager.getAgent(agentId);
+    const stored = await this.agentStorage.get(agentId);
+    const knownWorkspaceId = live?.workspaceId ?? stored?.workspaceId ?? null;
+    const placementCwd = live?.cwd ?? stored?.cwd;
+    const placementProvider = live?.provider ?? stored?.provider;
+    const placement = {
+      ...(placementCwd ? { cwd: placementCwd } : {}),
+      ...(placementProvider ? { provider: placementProvider } : {}),
+    };
 
     // File-backed storage still needs an early delete fence before closeAgent().
     beginAgentDeleteIfSupported(this.agentStorage, agentId);
@@ -3161,9 +3334,29 @@ export class Session {
     // durable snapshot, otherwise an in-flight background write can recreate it.
     await this.agentManager.flush();
 
+    // History is retained (or purged) before the record goes, so a failure leaves a deletable
+    // agent rather than a missing record with history stranded part way.
+    try {
+      await this.agentManager.removeDeletedAgentState(agentId, { ...options, placement });
+    } catch (error) {
+      this.sessionLogger.error({ err: error, agentId }, `Failed to retain history for ${agentId}`);
+      cancelAgentDeleteIfSupported(this.agentStorage, agentId);
+      this.emit({
+        type: "rpc_error",
+        payload: {
+          requestId,
+          requestType: "delete_agent_request",
+          error: "The agent was not deleted because its history could not be saved. Try again.",
+          code: "agent_history_retention_failed",
+        },
+      });
+      return;
+    }
+
     try {
       await this.agentStorage.remove(agentId);
-      await this.agentManager.deleteAgentState(agentId);
+      // Only now is the delete finished; until then the agent's reads resolve to the retained copy.
+      await this.agentManager.finishDeletedAgentState(agentId);
     } catch (error) {
       this.sessionLogger.error({ err: error, agentId }, `Failed to fully delete agent ${agentId}`);
     }
@@ -4520,6 +4713,37 @@ export class Session {
     }
   }
 
+  private async handleAgentMcpGetRefreshState(
+    msg: Extract<SessionInboundMessage, { type: "agent.mcp.get_refresh_state.request" }>,
+  ): Promise<void> {
+    this.emit({
+      type: "agent.mcp.get_refresh_state.response",
+      payload: {
+        requestId: msg.requestId,
+        agentId: msg.agentId,
+        state: await this.agentManager.getAgentMcpRefreshState(msg.agentId),
+      },
+    });
+  }
+
+  private async handleAgentMcpRefresh(
+    msg: Extract<SessionInboundMessage, { type: "agent.mcp.refresh.request" }>,
+  ): Promise<void> {
+    const result = await this.agentManager.refreshAgentMcp({
+      agentId: msg.agentId,
+      expected: msg.expected,
+      changes: msg.changes,
+      // Absent preserves the saved policy; an explicit null clears it. Both are distinct
+      // from each other, so the key is only forwarded when the client sent it.
+      ...(msg.toolPolicy !== undefined ? { toolPolicy: msg.toolPolicy } : {}),
+      ...(msg.reconnect !== undefined ? { reconnect: msg.reconnect } : {}),
+    });
+    this.emit({
+      type: "agent.mcp.refresh.response",
+      payload: { ...result, requestId: msg.requestId, agentId: msg.agentId },
+    });
+  }
+
   private async handleRefreshAgentRequest(
     msg: Extract<SessionInboundMessage, { type: "refresh_agent_request" }>,
   ): Promise<void> {
@@ -4603,7 +4827,12 @@ export class Session {
 
     try {
       await cancelAgentRunCommand(
-        { agentManager: this.agentManager, logger: this.sessionLogger },
+        // Storage lets stop clear a dead turn on an agent no process has loaded.
+        {
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        },
         agentId,
       );
       if (requestId) {
@@ -7554,6 +7783,24 @@ export class Session {
     }
   }
 
+  private async handleAgentQuotaRead(
+    msg: Extract<SessionInboundMessage, { type: "agent.quota.read.request" }>,
+  ): Promise<void> {
+    const agent = this.agentManager.getAgent(msg.agentId);
+    if (!agent || !this.isProviderVisibleToClient(agent.provider)) {
+      throw new Error("Agent is unavailable");
+    }
+    const quota = await this.agentManager.getAgentQuota(msg.agentId);
+    this.emit({
+      type: "agent.quota.read.response",
+      payload: {
+        requestId: msg.requestId,
+        agentId: msg.agentId,
+        quota,
+      },
+    });
+  }
+
   private async handleFetchAgent(agentIdOrIdentifier: string, requestId: string): Promise<void> {
     const resolved = await this.resolveAgentIdentifier(agentIdOrIdentifier);
     if (!resolved.ok) {
@@ -7603,18 +7850,12 @@ export class Session {
       : undefined;
 
     try {
-      const snapshot = await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const agentPayload = await this.buildAgentPayload(snapshot);
-
-      const fetchedControlTimeline = this.agentManager.fetchTimeline(msg.agentId, {
+      const resolved = await this.resolveTimelineFetch(msg, {
         direction,
         cursor,
         limit: pageLimit,
       });
+      const fetchedControlTimeline = resolved.timeline;
       const selectedTimeline = {
         timeline: fetchedControlTimeline,
         entries: fetchedControlTimeline.rows,
@@ -7641,7 +7882,8 @@ export class Session {
           payload: {
             requestId: msg.requestId,
             agentId: msg.agentId,
-            agent: agentPayload,
+            agent: resolved.agent,
+            ...(resolved.retained ? { retained: true } : {}),
             direction,
             projection,
             epoch: selectedTimeline.timeline.epoch,
@@ -7656,7 +7898,7 @@ export class Session {
             ...(msg.mergeWindow === true ? { mergeWindow: true } : {}),
             entries: entries.map((entry) => {
               const payloadEntry = {
-                provider: snapshot.provider,
+                provider: resolved.provider,
                 item: entry.item,
                 timestamp: entry.timestamp,
                 seqStart: entry.seqStart,
@@ -7710,6 +7952,43 @@ export class Session {
         source,
       );
     }
+  }
+
+  /**
+   * A live or archived agent is loaded as before. An agent that no longer exists is served from
+   * its retained history, labelled with the provider recorded when it was deleted.
+   */
+  private async resolveTimelineFetch(
+    msg: Extract<SessionInboundMessage, { type: "fetch_agent_timeline_request" }>,
+    options: AgentTimelineFetchOptions,
+  ) {
+    if (
+      this.agentManager.getAgent(msg.agentId) === null &&
+      !(await this.agentStorage.get(msg.agentId))
+    ) {
+      const retained = await this.agentManager.fetchRetainedTimeline(msg.agentId, {
+        ...options,
+        ...(msg.turnId ? { turnId: msg.turnId } : {}),
+      });
+      if (retained) {
+        return {
+          timeline: retained.result,
+          provider: retained.placement.provider ?? "unknown",
+          agent: null,
+          retained: true,
+        };
+      }
+    }
+    const snapshot = await ensureAgentLoaded(msg.agentId, {
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      logger: this.sessionLogger,
+    });
+    const agent = await this.buildAgentPayload(snapshot);
+    const timeline = msg.turnId
+      ? await this.agentManager.fetchTimelineTurn(msg.agentId, msg.turnId, options)
+      : this.agentManager.fetchTimeline(msg.agentId, options);
+    return { timeline, provider: snapshot.provider, agent, retained: false };
   }
 
   private async handleAgentTimelineAppendRequest(
@@ -7830,6 +8109,138 @@ export class Session {
     }
   }
 
+  /**
+   * Index reads never resume a provider session. An archived agent is placed with its stored cwd;
+   * a deleted one falls back to its retained history.
+   */
+  private async resolveTimelineIndex(agentId: string) {
+    const known = this.agentManager.getAgent(agentId) !== null;
+    const stored = known ? null : await this.agentStorage.get(agentId);
+    const snapshot = await this.agentManager.getTimelineIndex(agentId, {
+      ...(stored ? { cwd: stored.cwd } : {}),
+      allowRetained: !known && !stored,
+    });
+    if (!snapshot) throw new Error(`No timeline history for agent ${agentId}`);
+    return snapshot;
+  }
+
+  private async handleAgentTimelineListTurnsRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.timeline.list_turns.request" }>,
+    source?: object,
+  ): Promise<void> {
+    try {
+      const snapshot = await this.resolveTimelineIndex(msg.agentId);
+      const turns = listTimelineTurns(snapshot.index);
+      const offset = Math.min(msg.cursor ?? 0, turns.length);
+      const limit = Math.min(msg.limit ?? TIMELINE_TURN_PAGE_DEFAULT, TIMELINE_TURN_PAGE_MAX);
+      const page = turns.slice(offset, offset + limit);
+      const end = offset + page.length;
+      this.emitForSource(
+        {
+          type: "agent.timeline.list_turns.response",
+          payload: {
+            requestId: msg.requestId,
+            agentId: msg.agentId,
+            epoch: snapshot.epoch,
+            retained: snapshot.retained,
+            turns: page,
+            totalTurns: turns.length,
+            nextCursor: end < turns.length ? end : null,
+            error: null,
+          },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "agent.timeline.list_turns.response",
+          payload: {
+            requestId: msg.requestId,
+            agentId: msg.agentId,
+            epoch: "",
+            retained: false,
+            turns: [],
+            totalTurns: 0,
+            nextCursor: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+        source,
+      );
+    }
+  }
+
+  private async handleAgentTimelineGetFileHistoryRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.timeline.get_file_history.request" }>,
+    source?: object,
+  ): Promise<void> {
+    try {
+      const snapshot = await this.resolveTimelineIndex(msg.agentId);
+      const { location, touches } = getTimelineFileHistory(snapshot.index, msg.path, snapshot.cwd);
+      this.emitForSource(
+        {
+          type: "agent.timeline.get_file_history.response",
+          payload: {
+            requestId: msg.requestId,
+            agentId: msg.agentId,
+            epoch: snapshot.epoch,
+            retained: snapshot.retained,
+            path: location.kind === "relative" ? location.path : null,
+            touches,
+            error: null,
+          },
+        },
+        source,
+      );
+    } catch (error) {
+      this.emitForSource(
+        {
+          type: "agent.timeline.get_file_history.response",
+          payload: {
+            requestId: msg.requestId,
+            agentId: msg.agentId,
+            epoch: "",
+            retained: false,
+            path: null,
+            touches: [],
+            error: error instanceof Error ? error.message : String(error),
+          },
+        },
+        source,
+      );
+    }
+  }
+
+  private async handleAgentTimelinePurgeRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.timeline.purge.request" }>,
+  ): Promise<void> {
+    try {
+      if (
+        this.agentManager.getAgent(msg.agentId) !== null ||
+        (await this.agentStorage.get(msg.agentId))
+      ) {
+        throw new Error("Delete the agent before purging its history");
+      }
+      const { purged } = await this.agentManager.purgeTimelineHistory(msg.agentId);
+      this.sessionLogger.info({ agentId: msg.agentId, purged }, "Purged agent timeline history");
+      this.emit({
+        type: "agent.timeline.purge.response",
+        payload: { requestId: msg.requestId, agentId: msg.agentId, purged, error: null },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.timeline.purge.response",
+        payload: {
+          requestId: msg.requestId,
+          agentId: msg.agentId,
+          purged: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
   private async handleProviderSubagentListRequest(
     msg: Extract<SessionInboundMessage, { type: "agent.provider_subagents.list.request" }>,
   ): Promise<void> {
@@ -7926,7 +8337,7 @@ export class Session {
                     timestamp: new Date().toISOString(),
                     item: {
                       type: "assistant_message",
-                      text: "Please upgrade the Paseo app to view this subagent conversation.",
+                      text: "Please upgrade the Fulcra app to view this subagent conversation.",
                     },
                   },
                 ],
@@ -8365,7 +8776,7 @@ export class Session {
       ...snapshot,
       status: "failed" as const,
       error:
-        "Workspace setup is blocked pending approval of code from a fork pull request. Update Paseo to review and run setup.",
+        "Workspace setup is blocked pending approval of code from a fork pull request. Update Fulcra to review and run setup.",
     };
     return message.type === "workspace_setup_progress"
       ? { ...message, payload: { ...message.payload, ...legacySnapshot } }

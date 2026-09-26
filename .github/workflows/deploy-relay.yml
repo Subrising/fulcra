@@ -17,6 +17,10 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci --workspace=@getpaseo/relay --include-workspace-root
 

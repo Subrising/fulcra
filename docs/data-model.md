@@ -52,6 +52,7 @@ $PASEO_HOME/
 ├── agents/
 │   └── {sanitized-cwd}/
 │       └── {agentId}.json               # One file per agent
+├── native-timeline-journal/             # Private append-only timeline journals, index/ and retained/; see session-timeline.md
 ├── schedules/
 │   └── {scheduleId}.json                # One file per schedule
 ├── projects/

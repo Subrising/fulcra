@@ -1,5 +1,10 @@
 # Product
 
+Fulcra is based on Paseo. It keeps upstream package names, protocol compatibility, attribution
+and Git ancestry; changes to the product shell belong in app configuration, desktop identity and
+host-home routing rather than in renamed internal APIs (see [UPSTREAM.md](UPSTREAM.md)). The rest of
+this page describes the Paseo foundation Fulcra builds on.
+
 Paseo is an environment for running, monitoring, and interacting with coding agents across desktop, mobile, web, and the command line.
 
 **Paseo has a lean, opinionated core built to be extended.** It should be easy to start using and leave room for people to build far beyond the default experience.

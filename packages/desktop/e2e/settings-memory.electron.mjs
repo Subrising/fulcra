@@ -37,7 +37,15 @@ function assert(condition, message) {
 async function openSettingsDestination(page, title) {
   const sidebar = page.locator('[data-testid="settings-sidebar"]:visible');
   const button = sidebar.getByRole("button", { name: title, exact: true });
-  await button.waitFor({ state: "visible" });
+  try {
+    await button.waitFor({ state: "visible" });
+  } catch (error) {
+    const names = await sidebar.getByRole("button").allInnerTexts();
+    console.log(
+      `[settings-memory] route ${new URL(page.url()).pathname}; sidebar buttons: ${JSON.stringify(names)}`,
+    );
+    throw error;
+  }
   await button.click();
   await page.waitForFunction(
     (expectedTitle) =>

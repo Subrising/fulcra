@@ -1,3 +1,4 @@
+import { QueryObserver, skipToken } from "@tanstack/react-query";
 import appPackage from "../../package.json";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -221,3 +222,62 @@ describe("PluginRegistry", () => {
     expect(pluginRegistry.getSnapshot()).toEqual([]);
   });
 });
+
+it.each(["reconnect", "remove", "uninstall", "reload", "changed", "expired"])(
+  "disposes runtime but restores only eligible choices on %s",
+  async (mode) => {
+    vi.useFakeTimers();
+    try {
+      const entry = { id: "example", clientBundle: bundle("one") };
+      pluginRegistry.installCatalog("host-a", [entry]);
+      const first = registry.getSnapshot()[0]!;
+      const observer = new QueryObserver(first.queryClient, {
+        queryKey: ["view"],
+        queryFn: skipToken,
+        enabled: false,
+        meta: { paseoLocalView: true },
+        initialData: { selected: "saved" },
+      });
+      expect(observer.getCurrentResult().data).toEqual({ selected: "saved" });
+      first.queryClient.setQueryData(["activity"], { permission: "stale" });
+      const aborted = vi.fn();
+      const pending = first.queryClient
+        .fetchQuery({
+          queryKey: ["pending"],
+          queryFn: ({ signal }) =>
+            new Promise((_resolve, reject) =>
+              signal.addEventListener("abort", () => {
+                aborted();
+                reject(new Error("cancelled"));
+              }),
+            ),
+        })
+        .catch(() => undefined);
+      registry.suspendHost("host-a");
+      await pending;
+      expect(aborted).toHaveBeenCalledOnce();
+      expect(first.queryClient.getQueryCache().getAll()).toEqual([]);
+      expect(registry.getSnapshot()).toEqual([]);
+      expect(Reflect.get(globalThis, "__pluginCleanups")).toBe(1);
+      vi.advanceTimersByTime(20 * 60 * 1000);
+      registry.suspendHost("host-a");
+      if (mode === "expired") vi.advanceTimersByTime(11 * 60 * 1000);
+      if (mode === "remove") registry.removeHost("host-a");
+      if (mode === "uninstall") pluginRegistry.installCatalog("host-a", []);
+      pluginRegistry.installCatalog(
+        "host-a",
+        [mode === "changed" ? { ...entry, clientBundle: bundle("two") } : entry],
+        mode === "reload" ? { replacePluginId: "example" } : {},
+      );
+      const current = registry.getSnapshot()[0]!;
+      expect(current.queryClient).not.toBe(first.queryClient);
+      expect(current.queryClient.getQueryData(["view"])).toEqual(
+        mode === "reconnect" ? { selected: "saved" } : undefined,
+      );
+      expect(current.queryClient.getQueryData(["activity"])).toBeUndefined();
+      expect(Reflect.get(globalThis, "__pluginCleanups")).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);

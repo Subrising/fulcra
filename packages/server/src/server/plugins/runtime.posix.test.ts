@@ -1422,7 +1422,7 @@ export default function contribute(server: { registerProvider(provider: Provider
     const runtime = createTestRuntime();
 
     await expect(runtime.startPlugin("legacy", directory)).rejects.toThrow(
-      "This plugin was made for an older version of Paseo and cannot run on Paseo v0.8. Ask its author to update it. Plugin authors can follow the migration guide: https://paseo.sh/docs/plugins/migration",
+      "This plugin was made for the plugin API before 0.8 and cannot run on this version of Fulcra. Ask its author to update it.",
     );
   });
 
@@ -1938,6 +1938,309 @@ export default function contribute(plugin: any) {
     } finally {
       finishAttachment();
       await runtime.stopAll();
+    }
+  });
+});
+
+describe("host plugin APIs through the real plugin subprocess", () => {
+  const GITHUB_TOKEN = "ghp_CANARY_runtime_0123456789";
+
+  async function createDeclaredPlugin(
+    id: string,
+    requirements: Record<string, unknown>,
+  ): Promise<string> {
+    const directory = await createPlugin(
+      id,
+      `import { z } from "zod";
+import { defineRpc } from "@getpaseo/plugin";
+const run = defineRpc({
+  name: "run",
+  input: z.object({ step: z.string(), accountId: z.string().optional() }),
+  output: z.unknown(),
+});
+export default function contribute(server: any) {
+  server.handle(run, async ({ step, accountId }: { step: string; accountId?: string }) => {
+    if (step === "capabilities") {
+      return { notify: typeof server.notify, credentials: typeof server.credentials };
+    }
+    if (step === "device") {
+      return { device: typeof server.device, keys: Object.keys(server).sort() };
+    }
+    if (step === "notify") {
+      return server.notify({ key: "decision:1", title: "Approve the release", urgency: "now" });
+    }
+    if (step === "request") {
+      const response = await server.credentials.request(accountId, "github", {
+        method: "GET",
+        path: "/user/issues",
+      });
+      // Everything a careless plugin might do with the answer.
+      console.log("response", JSON.stringify(response));
+      console.error("headers", JSON.stringify(response.headers));
+      await server.notify({
+        key: "echo",
+        title: String(JSON.stringify(response.body)).slice(0, 100),
+        urgency: "now",
+      });
+      return response;
+    }
+    if (step === "auth-header") {
+      return server.credentials.request(accountId, "github", {
+        method: "GET",
+        path: "/user",
+        headers: { Authorization: "Bearer plugin-supplied" },
+      });
+    }
+    if (step === "provider-error") {
+      const response = await server.credentials.request(accountId, "github", {
+        method: "GET",
+        path: "/fail",
+      });
+      throw new Error("provider said " + JSON.stringify(response.body));
+    }
+    if (step === "use-jira") {
+      return server.credentials.request(accountId, "jira", { method: "GET", path: "/rest/api/3/myself" });
+    }
+    if (step === "write") {
+      return server.credentials.request(accountId, "github", { method: "POST", path: "/repos/a/b/issues", body: {} });
+    }
+    return null;
+  });
+  return () => undefined;
+}`,
+    );
+    await writeFile(
+      path.join(directory, "paseo-plugin.json"),
+      JSON.stringify({ id, requirements: { paseo: ">=0.4.0", ...requirements } }),
+      "utf8",
+    );
+    return directory;
+  }
+
+  async function hostServices() {
+    const { PluginNotificationCenter } = await import("./plugin-notifications.js");
+    const { handlePluginHostCall } = await import("./plugin-host-calls.js");
+    const { CredentialService } = await import("../integrations/credential-service.js");
+    const { createMemoryAccountsStore } = await import("../integrations/accounts-store.js");
+    const { createMemoryCredentialBackend } = await import("../integrations/credential-backend.js");
+    const pushes: unknown[] = [];
+    const notifications = new PluginNotificationCenter({
+      push: {
+        send: async (payload) => {
+          pushes.push(payload);
+          return { devices: 1, accepted: 1 };
+        },
+      },
+      serverId: "server-test",
+      logger: pino({ level: "silent" }),
+      autoDrain: false,
+    });
+    // A provider that echoes the credential back in the body and a header.
+    const providerFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const authorization =
+        (init?.headers as Record<string, string> | undefined)?.Authorization ?? "";
+      if (url === "https://api.github.com/user" && !init?.method) {
+        return new Response(JSON.stringify({ login: "octocat" }), { status: 200 });
+      }
+      const status = url.endsWith("/fail") ? 500 : 200;
+      return new Response(
+        JSON.stringify({ echoed: authorization, message: `bad ${GITHUB_TOKEN}` }),
+        {
+          status,
+          headers: { "Content-Type": "application/json", ETag: GITHUB_TOKEN },
+        },
+      );
+    }) as typeof fetch;
+    const credentials = new CredentialService({
+      accounts: createMemoryAccountsStore(),
+      backend: createMemoryCredentialBackend(),
+      fetch: providerFetch,
+    });
+    const begun = await credentials.begin({ connector: "github", method: "token" });
+    const connected = await credentials.complete(begun.flowId, {
+      kind: "token",
+      token: GITHUB_TOKEN,
+    });
+    if (connected.status !== "connected") throw new Error("expected a connected account");
+    const services = { notifications, credentials };
+    return {
+      pushes,
+      notifications,
+      accountId: connected.account.id,
+      hostCalls: (call: Parameters<typeof handlePluginHostCall>[1]) =>
+        handlePluginHostCall(services, call),
+    };
+  }
+
+  function capturingLogger() {
+    const lines: string[] = [];
+    const logger = pino({ level: "info" }, { write: (line: string) => void lines.push(line) });
+    return { lines, logger };
+  }
+
+  it("never lets the credential reach plugin code, logs, notifications, results or errors", async () => {
+    const services = await hostServices();
+    const directory = await createDeclaredPlugin("declared", {
+      notify: true,
+      credentials: ["github"],
+    });
+    const daemonLog = capturingLogger();
+    const runtime = createTestRuntime(
+      { hostCalls: services.hostCalls, hostCapabilities: { notify: true, credentials: true } },
+      daemonLog.logger,
+    );
+    try {
+      await runtime.startPlugin("declared", directory);
+      const response = (await runtime.invoke("declared", "run", {
+        step: "request",
+        accountId: services.accountId,
+      })) as { status: number; headers: Record<string, string>; body: unknown };
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ echoed: "[redacted]", message: "bad [redacted]" });
+
+      await expect(
+        runtime.invoke("declared", "run", { step: "auth-header", accountId: services.accountId }),
+      ).rejects.toThrow("set by the host");
+      const providerError = await runtime
+        .invoke("declared", "run", { step: "provider-error", accountId: services.accountId })
+        .catch((error: Error) => error.message);
+      expect(providerError).toContain("provider said");
+      await expect(
+        runtime.invoke("declared", "run", { step: "use-jira", accountId: services.accountId }),
+      ).rejects.toThrow('did not declare "jira"');
+      await expect(
+        runtime.invoke("declared", "run", { step: "write", accountId: services.accountId }),
+      ).rejects.toThrow("credentialsWrite");
+      await services.notifications.drain();
+
+      const surfaces = {
+        response: JSON.stringify(response),
+        providerError,
+        logTail: JSON.stringify(runtime.getLogs("declared")),
+        daemonLog: daemonLog.lines.join("\n"),
+        notifications: JSON.stringify(services.notifications.list()),
+        pushes: JSON.stringify(services.pushes),
+      };
+      expect(surfaces.logTail).toContain("response");
+      expect(services.pushes).toHaveLength(1);
+      for (const [surface, text] of Object.entries(surfaces)) {
+        expect({ surface, leaked: text.includes(GITHUB_TOKEN) }).toEqual({
+          surface,
+          leaked: false,
+        });
+      }
+    } finally {
+      await runtime.stopAll();
+    }
+  });
+
+  it("refuses notify and credentials to a plugin whose manifest declares neither", async () => {
+    const services = await hostServices();
+    const directory = await createDeclaredPlugin("undeclared", {});
+    const runtime = createTestRuntime({
+      hostCalls: services.hostCalls,
+      hostCapabilities: { notify: true, credentials: true },
+    });
+    try {
+      await runtime.startPlugin("undeclared", directory);
+      await expect(runtime.invoke("undeclared", "run", { step: "notify" })).rejects.toThrow(
+        "did not declare requirements.notify",
+      );
+      await expect(
+        runtime.invoke("undeclared", "run", { step: "request", accountId: services.accountId }),
+      ).rejects.toThrow('did not declare "github"');
+      expect(services.pushes).toEqual([]);
+    } finally {
+      await runtime.stopAll();
+    }
+  });
+
+  it("gives plugin server code no device key: no ctx.device, no client SDK, no host call", async () => {
+    const { PLUGIN_HOST_CALL_METHODS } = await import("./plugin-process-protocol.js");
+    expect(PLUGIN_HOST_CALL_METHODS.filter((method) => /device|sign/i.test(method))).toEqual([]);
+    const services = await hostServices();
+    const directory = await createDeclaredPlugin("no-device", {
+      notify: true,
+      credentials: ["github"],
+    });
+    const runtime = createTestRuntime({
+      hostCalls: services.hostCalls,
+      hostCapabilities: { notify: true, credentials: true },
+    });
+    try {
+      await runtime.startPlugin("no-device", directory);
+      const result = (await runtime.invoke("no-device", "run", { step: "device" })) as {
+        device: string;
+        keys: string[];
+      };
+      expect(result.device).toBe("undefined");
+      expect(result.keys).not.toContain("device");
+    } finally {
+      await runtime.stopAll();
+    }
+    // Server code cannot even load the client SDK that carries ctx.device: the compiler refuses it.
+    const clientImport = await createPlugin(
+      "client-import",
+      `import type { PluginClientContext } from "@getpaseo/plugin/client";
+export default function contribute(server: unknown) {
+  const device = (server as unknown as PluginClientContext).device;
+  void device;
+  return () => undefined;
+}`,
+    );
+    const importing = createTestRuntime();
+    await expect(importing.startPlugin("client-import", clientImport)).rejects.toThrow(
+      "client-only module cannot be imported into the plugin server bundle",
+    );
+    await importing.stopAll();
+    // Nothing in the daemon can reach a device key: no RPC, host call or command names one.
+    const { readdir, readFile: read } = await import("node:fs/promises");
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const files = (await readdir(root, { recursive: true })).filter(
+      (file) => file.endsWith(".ts") && !file.endsWith(".test.ts"),
+    );
+    for (const file of files) {
+      const text = await read(path.join(root, file), "utf8");
+      expect({
+        file,
+        signs: /device_sign|device\.sign|getPluginDevice|PaseoDeviceKey/.test(text),
+      }).toEqual({
+        file,
+        signs: false,
+      });
+    }
+  });
+
+  it("installs server.notify and server.credentials only when the host offers them", async () => {
+    const directory = await createDeclaredPlugin("capabilities", { notify: true });
+    const withoutHost = createTestRuntime();
+    try {
+      await withoutHost.startPlugin("capabilities", directory);
+      await expect(
+        withoutHost.invoke("capabilities", "run", { step: "capabilities" }),
+      ).resolves.toEqual({
+        notify: "undefined",
+        credentials: "undefined",
+      });
+    } finally {
+      await withoutHost.stopAll();
+    }
+    const services = await hostServices();
+    const notifyOnly = createTestRuntime({
+      hostCalls: services.hostCalls,
+      hostCapabilities: { notify: true, credentials: false },
+    });
+    try {
+      await notifyOnly.startPlugin("capabilities", directory);
+      await expect(
+        notifyOnly.invoke("capabilities", "run", { step: "capabilities" }),
+      ).resolves.toEqual({
+        notify: "function",
+        credentials: "undefined",
+      });
+    } finally {
+      await notifyOnly.stopAll();
     }
   });
 });

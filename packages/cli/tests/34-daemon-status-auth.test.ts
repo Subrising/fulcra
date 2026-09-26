@@ -106,7 +106,13 @@ import('node:fs').then(({appendFileSync}) => {
       workDir,
       env: { PASEO_PASSWORD: "shared-secret" },
     });
-    console.log("Test 4: local status separates authenticated reachability from slow details");
+    // The daemon bounds this optional probe to 1000ms, inside the CLI's 1500ms
+    // deadline, so a provider slower than the budget no longer costs the caller
+    // its status. Whether the surrounding handler also lands inside 1500ms is
+    // load-dependent — the pid lock read ahead of it retries for up to 500ms —
+    // so this asserts what holds either way. The details-timeout branch itself
+    // is pinned deterministically in src/commands/daemon/status.test.ts.
+    console.log("Test 4: a slow provider leaves local status useful and free of invented facts");
     const local = await runLocalPaseo(["daemon", "status", "--home", home, "--json"], {
       PASEO_PASSWORD: "shared-secret",
     });
@@ -115,32 +121,36 @@ import('node:fs').then(({appendFileSync}) => {
     assert.strictEqual(status.localDaemon, "running");
     assert.strictEqual(status.connectedDaemon, "reachable", JSON.stringify(status));
     assert.strictEqual(typeof status.serverId, "string");
-    assert.match(status.note, /DAEMON_REQUEST_TIMEOUT/);
-    assert.match(status.note, /Status details unavailable/);
-    assert(!("workerPid" in status), "must not invent worker facts");
-    assert(!("providers" in status), "must not invent provider facts");
+    // Either the bounded probe answered with nothing established, or the details
+    // never arrived. Neither may claim the provider is available.
+    assert.deepStrictEqual(
+      status.providers ?? [],
+      [],
+      `a probe that never answered must not be reported as available: ${local.stdout}`,
+    );
     assert.match(
       await readFile(marker, "utf8"),
       /\["--version"\]/,
       "the public provider executable was actually probed",
     );
-    console.log("✓ local authenticated connection remains reachable when details time out\n");
+    console.log("✓ slow optional probe keeps local status useful without provider facts\n");
 
-    console.log("Test 5: explicit endpoint status remains an error when details time out");
+    console.log("Test 5: an explicit endpoint observation claims no local ownership");
     const remote = await runLocalPaseo(
       ["daemon", "status", "--host", `127.0.0.1:${slowDaemon.port}`, "--json"],
       { PASEO_PASSWORD: "shared-secret" },
     );
-    assert.notStrictEqual(remote.exitCode, 0);
-    const { error } = JSON.parse(remote.stderr);
-    assert.strictEqual(error.code, "DAEMON_REQUEST_TIMEOUT");
-    assert.match(error.message, /Status details unavailable/);
-    assert.strictEqual(error.details.connectedDaemon, "reachable");
-    assert.strictEqual(error.details.serverId, status.serverId);
-    assert(!("home" in error.details), "endpoint observation must not invent local ownership");
-    assert(!("workerPid" in error.details));
-    assert(!("providers" in error.details));
-    console.log("✓ failed remote query retains its error and authenticated connection fact\n");
+    // An endpoint target reports the status it obtained, or fails when the
+    // details time out. Both are intended; what must hold in either case is
+    // that an endpoint never reports ownership of a local daemon.
+    const observation =
+      remote.exitCode === 0 ? JSON.parse(remote.stdout) : JSON.parse(remote.stderr).error.details;
+    assert.strictEqual(observation.connectedDaemon, "reachable", remote.stderr || remote.stdout);
+    assert.strictEqual(observation.serverId, status.serverId);
+    assert.deepStrictEqual(observation.providers ?? [], []);
+    assert(!("home" in observation), "endpoint observation must not invent local ownership");
+    assert(!("localDaemon" in observation), "endpoint observation owns no local daemon state");
+    console.log("✓ endpoint reachability recorded without inventing local ownership\n");
   } finally {
     await slowDaemon?.stop();
     await rm(root, { recursive: true, force: true });

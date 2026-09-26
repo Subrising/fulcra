@@ -308,6 +308,16 @@ export const PersistedConfigSchema = z
     providers: ProvidersSchema.optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
+    // Shared credential store sign-in. OAuth client ids are public identifiers, never secrets; a
+    // connector without one offers token sign-in only (docs/integrations-auth.md).
+    integrations: z
+      .object({
+        oauthClientIds: z
+          .record(z.string().regex(/^[a-z][a-z0-9-]{1,31}$/), z.string().trim().min(1).max(200))
+          .optional(),
+      })
+      .strict()
+      .optional(),
     worktrees: WorktreesConfigSchema.optional(),
     agents: z
       .object({
@@ -315,6 +325,11 @@ export const PersistedConfigSchema = z
         catalogRefreshTimeoutMs: z.number().int().positive().max(2_147_483_647).optional(),
         metadataGeneration: AgentMetadataGenerationSchema.optional(),
         skills: z.object({ selection: AgentSkillSelectionSchema.optional() }).strict().optional(),
+        // What deleting an agent does to its timeline history. Read at startup.
+        history: z
+          .object({ retention: z.enum(["keep", "purge"]).optional() })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

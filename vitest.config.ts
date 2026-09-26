@@ -57,6 +57,10 @@ export default defineConfig({
     ],
   },
   test: {
+    // Protocol resolves through its built dist, so a stale build fails suites with errors
+    // that read as code defects. `npx vitest run <file>` skips npm scripts, so the guard
+    // has to live here rather than in a pretest hook.
+    globalSetup: [path.resolve(__dirname, "scripts/vitest-global-setup.mjs")],
     // Fake-timer suites freeze p-throttle's clock, so a real per-second cap deadlocks them.
     env: {
       PASEO_GIT_MAX_PROCESSES_PER_SECOND: "10000",

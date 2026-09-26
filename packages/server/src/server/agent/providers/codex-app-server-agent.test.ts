@@ -21,6 +21,7 @@ import {
   CodexAppServerAgentSession,
   codexMicrosoftStoreBinaryCandidates,
   codexAppServerTurnInputFromPrompt,
+  CodexMissingRolloutError,
   listCodexSkills,
   mapCodexPatchNotificationToToolCall,
   mapCodexPlanUpdateToTodo,
@@ -82,7 +83,7 @@ describe("Codex executable discovery", () => {
   });
 });
 
-import { CodexAppServerClient } from "./codex/app-server-transport.js";
+import { CodexAppServerClient, CodexAppServerRpcError } from "./codex/app-server-transport.js";
 import {
   createFakeCodexAppServer,
   type FakeCodexAppServer,
@@ -212,6 +213,27 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("Codex session quota", () => {
+  test("refuses unopened and closed threads without spawning or resuming", async () => {
+    let spawns = 0;
+    const session = new CodexAppServerAgentSession(
+      createConfig(),
+      { sessionId: "saved-human-thread" },
+      createTestLogger(),
+      async () => {
+        spawns++;
+        throw new Error("must not spawn");
+      },
+    );
+    await expect(session.getQuota()).rejects.toMatchObject({ code: "unavailable" });
+    expect(session.id).toBe("saved-human-thread");
+    await session.close();
+    await expect(session.getQuota()).rejects.toMatchObject({ code: "unavailable" });
+    expect(spawns).toBe(0);
+    expect(session.id).toBeNull();
+  });
+});
 
 describe("Codex active-turn steering admission", () => {
   test("a steer without the clearing contract leaves permissions open", async () => {
@@ -1509,6 +1531,99 @@ describe("Codex app-server provider", () => {
     ).rejects.toThrow("thread history is unavailable");
 
     expect(killSpy).toHaveBeenCalledWith("SIGTERM");
+    appServer.assertNoErrors();
+  });
+
+  test("explains a missing rollout when a live Codex thread cannot be resumed", async () => {
+    const threadRequests: string[] = [];
+    const appServer = createFakeCodexAppServer({
+      "thread/loaded/list": () => {
+        threadRequests.push("thread/loaded/list");
+        return { data: [] };
+      },
+      "thread/resume": () => {
+        threadRequests.push("thread/resume");
+        return Promise.reject(new Error("no rollout found for thread id archived-thread-id"));
+      },
+      "thread/start": () => {
+        threadRequests.push("thread/start");
+        return { thread: { id: "replacement-thread" } };
+      },
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    // The canary shape: a stored thread that is not archived, so this is the interactive
+    // resume path and it fails inside thread/resume.
+    const error = await provider.resumeSession(archivedThreadHandle()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(CodexMissingRolloutError);
+    const missing = error as CodexMissingRolloutError;
+    expect(missing.threadId).toBe("archived-thread-id");
+    expect(missing.operation).toBe("resume");
+    expect(missing.message).toContain("no stored rollout for thread archived-thread-id");
+    expect(missing.message).toContain("no readable");
+    expect(missing.message).toContain("created and never ran");
+    // It must not claim the transcript was lost, nor that anything was put back.
+    expect(missing.message).not.toMatch(/deleted|recovered|restored/i);
+    // The raw Codex reply stays attached for inspection.
+    expect((missing.cause as CodexAppServerRpcError).message).toBe(
+      "no rollout found for thread id archived-thread-id",
+    );
+    expect(missing.cause).toBeInstanceOf(CodexAppServerRpcError);
+    // No replacement thread, no unarchive, no resend.
+    expect(threadRequests).toEqual(["thread/loaded/list", "thread/resume"]);
+    appServer.assertNoErrors();
+  });
+
+  test("leaves an unrelated Codex resume failure reported as before", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/resume": () =>
+        Promise.reject(new Error("internal error: permission profile unavailable")),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const error = await provider.resumeSession(archivedThreadHandle()).catch((e: unknown) => e);
+
+    expect(error).not.toBeInstanceOf(CodexMissingRolloutError);
+    expect((error as Error).message).toBe(
+      "Failed to resume Codex thread archived-thread-id: internal error: permission profile unavailable",
+    );
+    appServer.assertNoErrors();
+  });
+
+  test("explains a missing rollout on the archived history path without inventing a history", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/read": () =>
+        Promise.reject(new Error("no rollout found for thread id archived-thread-id")),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const error = await provider
+      .resumeSession(archivedThreadHandle(), undefined, undefined, { purpose: "history" })
+      .catch((e: unknown) => e);
+
+    // A session that cannot be read is never handed back as a readable session with an
+    // empty timeline, whatever the record looks like.
+    expect(error).toBeInstanceOf(CodexMissingRolloutError);
+    expect((error as CodexMissingRolloutError).operation).toBe("history");
+    expect((error as CodexMissingRolloutError).threadId).toBe("archived-thread-id");
+    appServer.assertNoErrors();
+  });
+
+  test("keeps an unreadable Codex history a failure rather than an empty one", async () => {
+    const appServer = createFakeCodexAppServer({
+      // An ambiguous record: Codex answered, but not with a readable transcript. Nothing
+      // here proves the session never ran, so it must not be reported as empty history.
+      "thread/read": () => ({ thread: { turns: "not-a-turn-list" } }),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const error = await provider
+      .resumeSession(archivedThreadHandle(), undefined, undefined, { purpose: "history" })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(CodexMissingRolloutError);
     appServer.assertNoErrors();
   });
 

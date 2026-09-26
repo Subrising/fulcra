@@ -34,18 +34,18 @@ leaf.
 - Good: `/` -> `/h/[serverId]`
 - Bad: `/` -> `/h/[serverId]/workspace/[workspaceId]`
 
-`/h/[serverId]` is the host home route. The host index restores the last
-remembered workspace for that host after the remembered selection has hydrated
-and the workspace has not been proven missing. If there is no restorable
-workspace, it goes to global `/open-project`.
+`/h/[serverId]` restores a remembered workspace on that same host, waiting for
+saved selection hydration. With no remembered workspace, it opens the host's plugin-provided
+home surface when the host contributes one, and `/open-project` when it does not. Explicit
+conversation routes keep their saved host and session identity.
 
-This restore is based on the last navigated workspace, not current connection
-status. Do not redirect to another online host just because the remembered host
-is still connecting or offline; the workspace screen owns that offline/loading
-state.
+The root still selects the remembered host boundary. It must not jump straight
+to a plugin or workspace leaf, or silently choose another online host while the
+remembered one connects.
 
-This split is deliberate. The host layout must mount first so native local
-dynamic params exist before any nested workspace leaf is selected.
+Returning from app settings restores an existing conversation workspace when one
+is remembered. Without a workspace, it returns through `/` and the host boundary.
+Connecting a second host must not require opening a project first.
 
 ## Error Recovery
 
@@ -181,7 +181,11 @@ The pure policy tests should still enforce the boundary split:
 - root startup with a saved workspace returns `/h/[serverId]`;
 - host index with the same saved workspace returns
   `/h/[serverId]/workspace/[workspaceId]`;
-- host index with no restorable workspace returns `/open-project`.
+- host index with no restorable workspace returns the host's plugin-provided home when that
+  host contributes one, and `/open-project` when it does not. The plugin catalog arrives after
+  connect, so the index waits rather than redirecting while a connected host that supports plugins
+  is still answering. Offline, unsupported and failed lookups resolve immediately — a permanent
+  redirect to a surface that never loads strands the app on a screen with no menu.
 
 ## Checklist
 

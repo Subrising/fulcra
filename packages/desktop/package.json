@@ -1,9 +1,8 @@
 {
   "name": "@getpaseo/desktop",
-  "version": "0.9.1",
+  "version": "0.1.0",
   "private": true,
-  "description": "Paseo desktop app (Electron wrapper)",
-  "homepage": "https://paseo.sh",
+  "description": "Fulcra desktop app",
   "license": "Apache-2.0",
   "author": {
     "name": "Mohamed Boudra",
@@ -15,7 +14,7 @@
   },
   "main": "dist/main.js",
   "scripts": {
-    "build": "npm --prefix ../.. run build:server:clean && npm run build:main && electron-builder --config electron-builder.yml",
+    "build": "npm --prefix ../.. run build:server:clean && npm run build:app-dist && npm run build:main && electron-builder --config electron-builder.yml",
     "build:main": "tsc -p tsconfig.json",
     "capture-harness": "npm run build:main && ./capture-harness/run.sh",
     "dev": "./scripts/dev.sh",
@@ -25,7 +24,10 @@
     "verify:electron-cdp": "node ./scripts/verify-electron-cdp.mjs",
     "test": "install-electron && vitest run --exclude \"e2e/**\"",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
-    "test:e2e:lifecycle": "npm run build:main && node ./e2e/daemon-lifecycle.e2e.mjs"
+    "test:e2e:lifecycle": "npm run build:main && node ./e2e/daemon-lifecycle.e2e.mjs",
+    "build:unsigned": "npm --prefix ../.. run build:server:clean && npm run build:app-dist && npm run build:main && electron-builder --config electron-builder.yml -c.mac.hardenedRuntime=false",
+    "release:mac": "PASEO_DESKTOP_SMOKE=1 npm run build",
+    "build:app-dist": "cross-env PASEO_WEB_PLATFORM=electron npm --prefix ../app run build:web"
   },
   "dependencies": {
     "@getpaseo/cli": "*",
@@ -37,6 +39,7 @@
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@types/node": "24.6.0",
     "@types/ws": "^8.5.14",
     "electron": "44.2.0",
@@ -46,5 +49,6 @@
     "vitest": "^4.1.6",
     "wait-on": "8.0.5"
   },
-  "desktopName": "Paseo.desktop"
+  "desktopName": "Fulcra.desktop",
+  "productName": "Fulcra"
 }

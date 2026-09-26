@@ -4,7 +4,10 @@ on:
   push:
     branches: [main]
     tags:
+      # A private-preview tag sets install_version from the tag (0.1.0) while
+      # package.json differs, so the version check fails.
       - "v*"
+      - "!v*-private-preview"
   workflow_dispatch:
     inputs:
       paseo_version:

@@ -91,5 +91,8 @@ packages/desktop/.cache/
 packages/desktop/src-tauri/resources/managed-runtime/
 app.json
 
+# Build-only Fulcra preview artifacts (directory names kept for compatibility)
+/packages/desktop/release-preview/
+
 # Heap snapshots dumped by --heapsnapshot-near-heap-limit; keep them for debugging.
 *.heapsnapshot

@@ -22,6 +22,8 @@ export type PluginProcessRequest =
       bundle: string;
       appVersion: string;
       settingsDirectory?: string;
+      // Host capabilities this daemon offers; absent ones are not installed on the plugin context.
+      capabilities?: { notify: boolean; credentials: boolean };
     }
   | {
       type: "provider.catalog_key";
@@ -46,11 +48,23 @@ export type PluginProcessRequest =
     }
   | { type: "provider.close"; connectionId: string }
   | { type: "shutdown" }
+  | { type: "host.result"; callId: string; output: unknown }
+  | { type: "host.error"; callId: string; error: string }
   | { type: "paseo_frame"; data: string | Uint8Array; isBinary: boolean }
   | { type: "paseo_close" };
 
+// Calls from plugin code to host capabilities. The host resolves the plugin id and manifest grants
+// itself; nothing in `input` can name another plugin or widen a grant.
+export const PLUGIN_HOST_CALL_METHODS = [
+  "notify",
+  "credentials.request",
+  "credentials.import_legacy",
+] as const;
+export type PluginHostCallMethod = (typeof PLUGIN_HOST_CALL_METHODS)[number];
+
 export type PluginProcessMessage =
   | { type: "settings.changed"; settingsId: string }
+  | { type: "host.call"; callId: string; method: PluginHostCallMethod; input: unknown }
   | { type: "hooks.changed"; hooks: { events: string[]; before: string[] } }
   | {
       type: "ready";
@@ -112,6 +126,10 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
         bundle: z.string(),
         appVersion: z.string(),
         settingsDirectory: z.string().optional(),
+        capabilities: z
+          .object({ notify: z.boolean(), credentials: z.boolean() })
+          .strict()
+          .optional(),
       })
       .strict(),
     z
@@ -167,6 +185,12 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
       .strict(),
     z.object({ type: z.literal("provider.close"), connectionId: z.string().min(1) }).strict(),
     z.object({ type: z.literal("shutdown") }).strict(),
+    z
+      .object({ type: z.literal("host.result"), callId: z.string().min(1), output: z.unknown() })
+      .strict(),
+    z
+      .object({ type: z.literal("host.error"), callId: z.string().min(1), error: z.string() })
+      .strict(),
     z.object({ type: z.literal("paseo_frame"), ...frameFields }).strict(),
     z.object({ type: z.literal("paseo_close") }).strict(),
   ],
@@ -176,6 +200,14 @@ export const PluginProcessMessageSchema: z.ZodType<PluginProcessMessage> = z.dis
   "type",
   [
     z.object({ type: z.literal("settings.changed"), settingsId: z.string() }).strict(),
+    z
+      .object({
+        type: z.literal("host.call"),
+        callId: z.string().min(1).max(64),
+        method: z.enum(PLUGIN_HOST_CALL_METHODS),
+        input: z.unknown(),
+      })
+      .strict(),
     z.object({ type: z.literal("hooks.changed"), hooks: hooksSchema }).strict(),
     z
       .object({

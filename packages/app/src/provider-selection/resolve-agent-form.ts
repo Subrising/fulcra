@@ -161,6 +161,11 @@ function resolvePreferredThinkingOptionId(input: {
   const model = findModelByReference(input.availableModels, input.modelId);
   const modelReferences = model ? [model.id, ...(model.aliases ?? [])] : [input.modelId];
   for (const modelReference of modelReferences) {
+    // Only an effort the user picked for this model. A stored effort with no mark was resolved -- from
+    // the model's own default, or from an earlier stored value -- and honouring it kept a profile on the
+    // High it happened to be created with, instead of the Medium the model itself defaults to. See
+    // ProviderPreferences.thinkingChosenByModel.
+    if (input.providerPrefs?.thinkingChosenByModel?.[modelReference] !== true) continue;
     const thinkingOptionId = input.providerPrefs?.thinkingByModel?.[modelReference]?.trim();
     if (thinkingOptionId) return thinkingOptionId;
   }
@@ -189,13 +194,20 @@ export function resolveThinkingOptionId(args: {
 
 const normalizeSelectedModeId = normalizeSelectedModelId;
 
+// The saved mode, but only when the user picked it. Read through this everywhere rather than off the
+// preferences directly: the marker is worth nothing if one reader forgets it, and a mode is read in four
+// places. See ProviderPreferences.modeChosenByUser.
+function chosenModeOf(providerPrefs: ProviderPrefs | undefined): string | undefined {
+  return providerPrefs?.modeChosenByUser === true ? providerPrefs.mode : undefined;
+}
+
 function resolvePreferredModeId(input: {
   initialModeId?: string | null;
   preferredModeId?: string | null;
   providerDef: AgentProviderDefinition | undefined;
 }): string {
-  // Saved modes are user intent. Provider create config validates unknown modes
-  // at submission time, so background form resolution should not erase them.
+  // A saved mode the user CHOSE is user intent, and the caller passes only those. Provider create config
+  // validates unknown modes at submission time, so background form resolution should not erase them.
   const initialModeId = normalizeSelectedModeId(input.initialModeId);
   if (initialModeId) return initialModeId;
 
@@ -264,11 +276,21 @@ function resolveProvider(input: {
   userModified: boolean;
   initialValues: FormInitialValues | undefined;
   preferences: FormPreferences | null;
+  allowedProviderMap: Map<AgentProvider, AgentProviderDefinition>;
 }): AgentProvider | null {
-  const { currentProvider, userModified, initialValues, preferences } = input;
+  const { currentProvider, userModified, initialValues, preferences, allowedProviderMap } = input;
   // Discovery readiness does not change the user's saved or explicit choice.
   if (userModified) return currentProvider;
-  return initialValues?.provider ?? preferences?.provider ?? currentProvider;
+  // With nothing explicit, remembered or already selected, take the host's first usable provider, in the
+  // host's own order, rather than leaving a fresh draft on "Select model". Model, mode and effort then
+  // follow that provider's own defaults below.
+  return (
+    initialValues?.provider ??
+    preferences?.provider ??
+    currentProvider ??
+    allowedProviderMap.keys().next().value ??
+    null
+  );
 }
 
 function resolveModeId(input: {
@@ -285,7 +307,10 @@ function resolveModeId(input: {
   if (!provider) return "";
   return resolvePreferredModeId({
     initialModeId: initialValues?.modeId,
-    preferredModeId: providerPrefs?.mode,
+    // Only a mode the user picked, for the reason on ProviderPreferences.modeChosenByUser: an unmarked
+    // saved "default" (Always Ask) written before the app told chosen from resolved outranked the
+    // adapter's own `auto` on every new chat, which is one third of the defect this change exists for.
+    preferredModeId: chosenModeOf(providerPrefs),
     providerDef,
   });
 }
@@ -303,7 +328,12 @@ function resolveModelField(input: {
   if (userModified) return currentModel;
   if (!provider) return "";
   const initialModel = normalizeSelectedModelId(initialValues?.model);
-  const preferredModel = normalizeSelectedModelId(providerPrefs?.model);
+  // Only a model the user picked is a preference. A saved model with no marker was written back by a form
+  // that merely resolved one -- see ProviderPreferences.modelChosenByUser -- and treating it as intent is
+  // what pinned a profile to an older model and stopped the host's own default from ever applying.
+  const preferredModel = normalizeSelectedModelId(
+    providerPrefs?.modelChosenByUser === true ? providerPrefs.model : undefined,
+  );
   // COMPAT(default-model-id): added in v0.7.2, remove after 2026-12-06.
   // Older drafts used "default" before providers exposed concrete model IDs.
   if ((initialModel || preferredModel) === "default" && availableModels?.length) {
@@ -321,6 +351,11 @@ function resolveModelField(input: {
       ? preferredModel
       : resolveCanonicalModelId(availableModels, preferredModel) || preferredModel;
   }
+  // Deliberately EMPTY rather than the host's default model id, and this is load-bearing for the defect
+  // above rather than an omission. Empty means "no model was chosen", which the composer already renders
+  // as the default model's label (resolveSelectedModelLabel) and submits as no model at all -- so the
+  // session follows whatever the host advertises, then and later. Filling in the id here would show the
+  // same label while PINNING that id into the created session, which is the behaviour being removed.
   return "";
 }
 
@@ -373,6 +408,7 @@ export function resolveFormState(
     userModified: userModified.provider,
     initialValues,
     preferences,
+    allowedProviderMap,
   });
 
   const providerDef = result.provider ? allowedProviderMap.get(result.provider) : undefined;
@@ -455,7 +491,7 @@ function pickNextModeForProvider(input: {
 }): string {
   const { providerDef, providerPrefs } = input;
   return resolvePreferredModeId({
-    preferredModeId: providerPrefs?.mode,
+    preferredModeId: chosenModeOf(providerPrefs),
     providerDef,
   });
 }
@@ -538,11 +574,16 @@ function completeResolution(
 }
 
 function applyProfile(state: AgentFormReducerState, action: ApplyProfileAction) {
-  const preferredModelId = action.modelId || action.providerPrefs?.model || "";
+  // A profile's own values win; what falls through to the saved preference falls through to a CHOSEN one
+  // only, for the reason on ProviderPreferences.modelChosenByUser / .modeChosenByUser.
+  const preferredModelId =
+    action.modelId ||
+    (action.providerPrefs?.modelChosenByUser === true ? action.providerPrefs.model : "") ||
+    "";
   const normalizedModelId = resolveCanonicalModelId(action.providerModels, preferredModelId);
   const nextModelId = normalizedModelId || resolveDefaultModelId(action.providerModels);
   const availableModeIds = new Set(action.providerDef?.modes.map((mode) => mode.id) ?? []);
-  const preferredModeId = action.modeId || action.providerPrefs?.mode || "";
+  const preferredModeId = action.modeId || chosenModeOf(action.providerPrefs) || "";
   const defaultModeId = action.providerDef?.defaultModeId ?? "";
   let nextModeId = "";
   if (availableModeIds.has(preferredModeId)) {
@@ -570,7 +611,10 @@ function applyProfile(state: AgentFormReducerState, action: ApplyProfileAction) 
       ...state.userModified,
       provider: true,
       model: true,
-      modeId: true,
+      // nextModeId falls back to the saved preference and then the provider default, so a profile
+      // that supplies no mode would otherwise mark whatever was resolved as the user's intent --
+      // pinning a default that should stay free to change.
+      modeId: Boolean(action.modeId) || state.userModified.modeId,
       thinkingOptionId: true,
     },
   };
@@ -652,7 +696,15 @@ export function resolveAgentForm(
           modeId: nextModeId,
           thinkingOptionId: nextThinkingOptionId,
         },
-        userModified: { ...state.userModified, provider: true, model: true },
+        userModified: {
+          ...state.userModified,
+          provider: true,
+          model: true,
+          // pickNextModeForProviderAndModel resolves a fresh mode whenever the provider actually
+          // changed, so carrying the old flag over would persist a choice made for one provider as
+          // a choice for another.
+          ...(action.provider === state.form.provider ? {} : { modeId: false }),
+        },
       };
     }
 

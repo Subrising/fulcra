@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { Appearance, AppState, Platform } from "react-native";
 import { UnistylesRuntime } from "react-native-unistyles";
 import { DEFAULT_THEME_PREFERENCE, useAppSettings, type AppSettings } from "@/hooks/use-settings";
 import {
@@ -51,6 +52,23 @@ function applyTheme({ preference, contributedTheme }: ApplyThemeInput): void {
 }
 
 export function AppearanceProvider({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    // Unistyles 3.2.4 checks Android's configuration broadcast before resources
+    // have the new colour scheme. React Native's Appearance event arrives after it.
+    function refreshSystemTheme() {
+      if (UnistylesRuntime.hasAdaptiveThemes) UnistylesRuntime.setAdaptiveThemes(true);
+    }
+    const appearance = Appearance.addChangeListener(refreshSystemTheme);
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state === "active") refreshSystemTheme();
+    });
+    return () => {
+      appearance.remove();
+      appState.remove();
+    };
+  }, []);
+
   const { settings, updateSettings, isLoading } = useAppSettings();
   const [hasAppliedAppearance, setHasAppliedAppearance] = useState(false);
   const options = usePluginThemeCatalog();

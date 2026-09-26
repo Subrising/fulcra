@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Paseo",
-  "short_name": "Paseo",
+  "name": "Fulcra",
+  "short_name": "Fulcra",
   "description": "Monitor and control local AI coding agents from anywhere.",
   "start_url": "/",
   "scope": "/",

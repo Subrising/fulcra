@@ -1,4 +1,5 @@
 import type { PluginLifecycle } from "./lifecycle/index.js";
+import type { PluginHostCall } from "./plugin-host-calls.js";
 import path from "node:path";
 import { stat, rm } from "node:fs/promises";
 import type pino from "pino";
@@ -48,6 +49,8 @@ interface PluginRuntimePort {
 
 interface PluginServiceDependencies {
   settingsDirectory?: string;
+  hostCalls?: (call: PluginHostCall) => Promise<unknown>;
+  hostCapabilities?: { notify: boolean; credentials: boolean };
   runtime?: PluginRuntimePort;
   managedSources?: ManagedPluginSources;
 }
@@ -86,6 +89,8 @@ export class PluginService {
       dependencies.runtime ??
       new PluginRuntime(logger, daemonVersion, {
         settingsDirectory: dependencies.settingsDirectory,
+        hostCalls: dependencies.hostCalls,
+        hostCapabilities: dependencies.hostCapabilities,
         onSettingsChanged: (pluginId, settingsId) => {
           for (const listener of this.settingsListeners) listener(pluginId, settingsId);
         },

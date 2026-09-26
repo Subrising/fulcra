@@ -38,6 +38,12 @@ export interface LifecycleAgentManager {
 export interface LifecycleAgentStorage {
   get(agentId: string): Promise<StoredAgentRecord | null>;
   upsert(record: StoredAgentRecord): Promise<void>;
+  // Optional so every existing storage double keeps compiling; AgentStorage implements it.
+  normalizeInterruptedTurn?(
+    agentId: string,
+    marker: { detectedAt: string; bootId: string | null },
+    stillUnloaded: () => boolean,
+  ): Promise<StoredAgentRecord | null>;
 }
 
 export interface AgentLifecycleCommandDependencies {
@@ -55,13 +61,47 @@ interface RequestedAgentRunCancellation extends CancelAgentRunResult {
   cancellation: AgentRunCancellationResult;
 }
 
+type CancellationDependencies = Pick<AgentLifecycleCommandDependencies, "agentManager" | "logger"> &
+  Partial<Pick<AgentLifecycleCommandDependencies, "agentStorage">>;
+
+// Only the explicit stop command may normalise an unloaded agent's stored record: that is the
+// path the admission patch guards as human input (its anchor is cancelAgentRunCommand's first line). Every other
+// caller -- archiveAgentCommand today -- gets the old behaviour whatever its dependencies carry.
+interface CancellationOptions {
+  readonly normalizeUnloadedStoredTurn?: true;
+}
+
 async function requestAgentRunCancellation(
-  dependencies: Pick<AgentLifecycleCommandDependencies, "agentManager" | "logger">,
+  dependencies: CancellationDependencies,
   agentId: string,
+  options: CancellationOptions = {},
 ): Promise<RequestedAgentRunCancellation> {
   const { agentManager, logger } = dependencies;
   const agent = agentManager.getAgent(agentId);
   if (!agent) {
+    // An agent no process has loaded runs no turn. A stored running/initializing record for it is a
+    // dead turn: stop normalises it to idle (with the interruption marker) and reports not_running, instead of
+    // failing with "not found" and leaving the stored status running forever.
+    const stored = options.normalizeUnloadedStoredTurn
+      ? await dependencies.agentStorage?.get(agentId)
+      : null;
+    if (stored && dependencies.agentStorage?.normalizeInterruptedTurn) {
+      const normalized = await dependencies.agentStorage.normalizeInterruptedTurn(
+        agentId,
+        { detectedAt: new Date().toISOString(), bootId: null },
+        () => agentManager.getAgent(agentId) === null,
+      );
+      const record = normalized ?? (await dependencies.agentStorage.get(agentId)) ?? stored;
+      logger.info(
+        { agentId, normalized: normalized !== null },
+        "cancelAgentRunCommand: agent not loaded; stored turn is not running",
+      );
+      return {
+        agent: { id: record.id, cwd: record.cwd, lifecycle: record.lastStatus },
+        cancelled: false,
+        cancellation: { status: "not_running" },
+      };
+    }
     logger.trace({ agentId }, "cancelAgentRunCommand: agent not found");
     throw new Error(`Agent ${agentId} not found`);
   }
@@ -94,10 +134,12 @@ async function requestAgentRunCancellation(
 }
 
 export async function cancelAgentRunCommand(
-  dependencies: Pick<AgentLifecycleCommandDependencies, "agentManager" | "logger">,
+  dependencies: CancellationDependencies,
   agentId: string,
 ): Promise<CancelAgentRunResult> {
-  const result = await requestAgentRunCancellation(dependencies, agentId);
+  const result = await requestAgentRunCancellation(dependencies, agentId, {
+    normalizeUnloadedStoredTurn: true,
+  });
   if (result.cancellation.status === "refused") {
     dependencies.logger.warn(
       { agentId },

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { ToolCallTimelineItem } from "../../agent-sdk-types.js";
+import type { ToolCallFileChange, ToolCallTimelineItem } from "../../agent-sdk-types.js";
 import {
   extractCodexShellOutput,
   normalizeToolCallStatus,
@@ -37,6 +37,7 @@ interface CodexNormalizedToolCallEnvelope {
   error?: unknown;
   metadata?: Record<string, unknown>;
   cwd?: string | null;
+  fileChanges?: ToolCallFileChange[];
 }
 
 type CodexToolKind = "shell" | "read" | "write" | "edit" | "search" | "speak" | "unknown";
@@ -74,6 +75,7 @@ interface CodexResolvedToolCall {
   error: unknown;
   metadata?: Record<string, unknown>;
   cwd: string | null;
+  fileChanges?: ToolCallFileChange[];
 }
 
 export interface CodexMcpToolResultImage {
@@ -95,7 +97,7 @@ function toToolCallTimelineItem(envelope: CodexResolvedToolCall): ToolCallTimeli
     cwd: envelope.cwd ?? null,
   });
 
-  const detail: ToolCallTimelineItem["detail"] =
+  const resolvedDetail: ToolCallTimelineItem["detail"] =
     envelope.toolKind === "edit" &&
     envelope.status !== "running" &&
     !hasRenderableEditDetail(parsedDetail)
@@ -105,6 +107,7 @@ function toToolCallTimelineItem(envelope: CodexResolvedToolCall): ToolCallTimeli
           output: envelope.output,
         }
       : parsedDetail;
+  const detail = withFileChanges(resolvedDetail, envelope.fileChanges);
 
   if (envelope.status === "failed") {
     return {
@@ -672,6 +675,7 @@ function toToolCallFromNormalizedEnvelope(
     error: envelope.error ?? null,
     ...(envelope.metadata ? { metadata: envelope.metadata } : {}),
     cwd: envelope.cwd ?? null,
+    ...(envelope.fileChanges ? { fileChanges: envelope.fileChanges } : {}),
   });
 }
 
@@ -839,6 +843,54 @@ function resolveFileChangeTextFields(file: CodexFileChangeEntry | undefined): {
   return asEditTextFields(file.diff);
 }
 
+function toToolCallFileChangeKind(kind: string | undefined): ToolCallFileChange["kind"] {
+  switch (kind?.toLowerCase()) {
+    case "add":
+    case "added":
+    case "create":
+      return "add";
+    case "delete":
+    case "deleted":
+    case "remove":
+      return "delete";
+    default:
+      return "update";
+  }
+}
+
+const FILE_CHANGES_DIFF_BUDGET_CHARS = 64 * 1024;
+
+/** Paths are always kept; diffs only while they fit the budget. */
+/**
+ * The structured file list does not depend on a preview. A renderable single-file edit is fully
+ * described by `filePath`; a multi-file edit carries every file; and a patch whose preview fell back
+ * to `unknown` still carries its files, so rendering is unchanged and nothing leaves the index.
+ */
+function withFileChanges(
+  detail: ToolCallTimelineItem["detail"],
+  files: ToolCallFileChange[] | undefined,
+): ToolCallTimelineItem["detail"] {
+  if (!files?.length) return detail;
+  if (detail.type === "edit") return files.length > 1 ? { ...detail, files } : detail;
+  if (detail.type === "unknown") return { ...detail, files };
+  return detail;
+}
+
+function toToolCallFileChanges(files: CodexFileChangeEntry[]): ToolCallFileChange[] | undefined {
+  if (files.length === 0) return undefined;
+  let remaining = FILE_CHANGES_DIFF_BUDGET_CHARS;
+  return files.map((file) => {
+    const { unifiedDiff } = resolveFileChangeTextFields(file);
+    const keepDiff = unifiedDiff !== undefined && unifiedDiff.length <= remaining;
+    if (keepDiff) remaining -= unifiedDiff.length;
+    return {
+      path: file.path,
+      kind: toToolCallFileChangeKind(file.kind),
+      ...(keepDiff ? { unifiedDiff } : {}),
+    };
+  });
+}
+
 function mapFileChangeItem(
   item: z.infer<typeof CodexFileChangeItemSchema>,
   options?: CodexMapperOptions,
@@ -894,6 +946,7 @@ function mapFileChangeItem(
     status,
     error,
     cwd: options?.cwd ?? null,
+    fileChanges: toToolCallFileChanges(files),
   };
 }
 
@@ -1064,6 +1117,8 @@ export function mapCodexToolCallEnvelope(params: {
   output?: unknown;
   error?: unknown;
   cwd?: string | null;
+  /** Every file in a legacy patch notification; paths are normalized against `cwd` here. */
+  fileChanges?: Array<{ path: string; kind?: string; diff?: string }>;
 }): ToolCallTimelineItem | null {
   const parsed = CodexToolCallEnvelopeParamsSchema.safeParse(params);
   if (!parsed.success) {
@@ -1095,5 +1150,18 @@ export function mapCodexToolCallEnvelope(params: {
       parsed.data.output ?? null,
     ),
     cwd: params.cwd ?? null,
+    fileChanges: params.fileChanges
+      ? toToolCallFileChanges(normalizeFileChangePaths(params.fileChanges, params.cwd))
+      : undefined,
+  });
+}
+
+function normalizeFileChangePaths(
+  files: Array<{ path: string; kind?: string; diff?: string }>,
+  cwd: string | null | undefined,
+): CodexFileChangeEntry[] {
+  return files.flatMap((file) => {
+    const normalizedPath = normalizeCodexFilePath(file.path, cwd);
+    return normalizedPath ? [{ ...file, path: normalizedPath }] : [];
   });
 }

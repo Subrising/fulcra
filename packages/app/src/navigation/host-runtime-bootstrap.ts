@@ -6,11 +6,56 @@ import type {
   StartDaemonIfEnabledInput,
 } from "@/runtime/daemon-start-service";
 import type { Href } from "expo-router";
+import { buildPluginSurfaceRoute } from "@/plugins/routes";
+
 import {
   buildHostRootRoute,
   buildHostWorkspaceRoute,
   buildOpenProjectRoute,
 } from "@/utils/host-routes";
+
+export const HOME_PLUGIN_ID = "organization";
+export const HOME_SIDEBAR_ID = "organization";
+
+export type OrcaHomeAvailability = "unknown" | "present" | "absent";
+
+/**
+ * The home plugin lives in a plugin surface, and the catalog that would contain it arrives
+ * asynchronously after connect. Redirecting before it lands is permanent, so a cold start with
+ * The home plugin installed would be thrown to the fallback and never come back.
+ *
+ * "unknown" is therefore only reported while an answer is still genuinely coming: connected,
+ * plugins supported, catalog not yet settled. Offline, unsupported, and asked-and-failed all
+ * resolve to "absent" — they cannot render a plugin surface anyway, and treating them as
+ * pending would hold the splash forever.
+ */
+/**
+ * A cold start passes through three states that all look like "no the home plugin" if you only read
+ * booleans: the connection is still opening, the host has not sent its features yet, and the
+ * catalog has not arrived. Only the last of those was treated as pending before, so a host that
+ * does have the home plugin was redirected away permanently. Known absence still answers immediately,
+ * and `unknownSettledByBound` keeps an unanswered host from waiting forever.
+ */
+export const ORCA_HOME_UNKNOWN_BOUND_MS = 5_000;
+
+export type HostConnectionPhase = "idle" | "connecting" | "online" | "offline" | "error";
+
+export function resolveOrcaHomeAvailability(input: {
+  connection: HostConnectionPhase;
+  pluginsSupported: boolean | null;
+  catalogSettled: boolean;
+  hasOrganizationSidebarSurface: boolean;
+  unknownSettledByBound?: boolean;
+}): OrcaHomeAvailability {
+  if (input.hasOrganizationSidebarSurface) return "present";
+  // Offline and failed hosts are answered, not pending: the app stays usable without a host.
+  if (input.connection === "offline" || input.connection === "error") return "absent";
+  if (input.unknownSettledByBound) return "absent";
+  if (input.connection !== "online") return "unknown";
+  if (input.pluginsSupported === null) return "unknown";
+  if (!input.pluginsSupported) return "absent";
+  return input.catalogSettled ? "absent" : "unknown";
+}
 
 export interface HostRuntimeBootstrapStore {
   boot: () => Promise<void>;
@@ -156,14 +201,27 @@ export function resolveHostIndexRoute(input: {
   serverId: string;
   workspaceSelection: ActiveWorkspaceSelection | null;
   workspaceSelectionStatus: WorkspaceSelectionStatus;
-}): Href {
+  orcaHome: OrcaHomeAvailability;
+}): Href | null {
   if (
     input.workspaceSelection?.serverId === input.serverId &&
     shouldRestoreWorkspaceSelection(input)
   ) {
     return buildHostWorkspaceRoute(input.serverId, input.workspaceSelection.workspaceId);
   }
-  return buildOpenProjectRoute();
+  // The home plugin is a plugin surface, and a host that does not have that plugin installed has
+  // nowhere to render it: the surface screen shows "This plugin surface is unavailable" with
+  // no shell chrome, so there is no menu and no way back to settings. Sending a fresh install
+  // there strands it on the first screen it ever shows. Fall back to the built-in route this
+  // used before the surface existed.
+  // Null keeps the caller on its splash for the brief window where the catalog is still
+  // arriving. A remembered workspace is resolved above and never waits on it.
+  if (input.orcaHome === "unknown") return null;
+  if (input.orcaHome === "absent") return buildOpenProjectRoute();
+  return buildPluginSurfaceRoute(input.serverId, HOME_PLUGIN_ID, {
+    kind: "sidebar",
+    id: HOME_SIDEBAR_ID,
+  });
 }
 
 function isIndexPathname(pathname: string) {

@@ -100,6 +100,28 @@ describe("default provider availability", () => {
     }
   });
 
+  // which REAL providers store their default mode at creation. Claude must (a mode-less Claude session is
+  // stuck in Always Ask); Codex must not (a mode-less Codex session defers approval and sandbox to the user's
+  // own Codex config, and storing a mode would make the daemon override it).
+  test("Claude opts in to storing its default mode at creation, and Codex does not", () => {
+    expect(new ClaudeAgentClient({ logger: createTestLogger() }).persistsDefaultModeOnCreate).toBe(
+      true,
+    );
+    expect(
+      new CodexAppServerAgentClient(createTestLogger()).persistsDefaultModeOnCreate,
+    ).toBeUndefined();
+  });
+
+  // the same split for the thinking option. Codex without one defers reasoning effort to the user's config.
+  test("Claude opts in to storing its model's default thinking option at creation, and Codex does not", () => {
+    expect(
+      new ClaudeAgentClient({ logger: createTestLogger() }).persistsDefaultThinkingOnCreate,
+    ).toBe(true);
+    expect(
+      new CodexAppServerAgentClient(createTestLogger()).persistsDefaultThinkingOnCreate,
+    ).toBeUndefined();
+  });
+
   test("Claude reports unavailable when the default command cannot be resolved", async () => {
     const binDir = makeTempDir("provider-availability-claude-");
     isolatePathTo(binDir);

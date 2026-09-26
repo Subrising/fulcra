@@ -56,7 +56,11 @@ import { HostAppearanceSection } from "@/screens/settings/host-appearance-sectio
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { useSessionStore } from "@/stores/session-store";
 import { settingsStyles } from "@/styles/settings";
-import type { HostConnection, HostProfile } from "@/types/host-connection";
+import {
+  describeHostEndpoint,
+  type HostConnection,
+  type HostProfile,
+} from "@/types/host-connection";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { isVersionMismatch } from "@/desktop/updates/desktop-updates";
 import { resolveAppVersion } from "@/utils/app-version";
@@ -920,7 +924,7 @@ function AutoArchiveMergedWorkspacesCard({ serverId }: { serverId: string }) {
         <View style={settingsStyles.rowContent}>
           <Text style={settingsStyles.rowTitle}>Archive merged PR workspaces</Text>
           <Text style={settingsStyles.rowHint}>
-            Automatically archive clean Paseo workspaces after their pull request is merged
+            Automatically archive clean Fulcra workspaces after their pull request is merged
           </Text>
         </View>
         <Switch
@@ -1160,6 +1164,13 @@ function RemoveHostSection({
     setIsConfirming(false);
   }, [isRemoving]);
   const handleCancel = useCallback(() => setIsConfirming(false), []);
+  // Hosts can share a display name — a portable daemon beside the machine's own daemon
+  // reports the same hostname. Name the endpoint too, so the row being deleted is
+  // identifiable without opening the route. The endpoint never carries a credential.
+  const removalTargetName = useMemo(() => {
+    const endpoint = describeHostEndpoint(host);
+    return endpoint ? `${host.label} (${endpoint})` : host.label;
+  }, [host]);
   const rollbackLocalhostRemoval = useCallback(
     async (shouldRestartDaemon: boolean) => {
       await updateSettings({ daemon: { manageBuiltInDaemon: true } });
@@ -1275,7 +1286,7 @@ function RemoveHostSection({
           <Text style={styles.confirmText}>
             {stopsOwnedDaemon
               ? t("settings.host.daemon.remove.localConfirmMessage")
-              : t("settings.host.daemon.remove.confirmMessage", { name: host.label })}
+              : t("settings.host.daemon.remove.confirmMessage", { name: removalTargetName })}
           </Text>
           <View style={styles.confirmActions}>
             <Button

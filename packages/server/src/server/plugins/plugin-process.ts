@@ -1,6 +1,7 @@
 import { PluginHookHandlers } from "./lifecycle/index.js";
 import {
   PluginProcessRequestSchema,
+  type PluginHostCallMethod,
   type PluginProcessMessage,
   type PluginProcessRequest,
 } from "./plugin-process-protocol.js";
@@ -9,7 +10,12 @@ import * as pluginSharedRuntime from "@getpaseo/plugin";
 import * as pluginProviderRuntime from "@getpaseo/plugin/server/provider";
 import * as pluginAcpRuntime from "@getpaseo/plugin/server/acp";
 import type { SettingsDefinition, PluginRpcContract } from "@getpaseo/plugin";
-import type { PluginHandlerContext } from "@getpaseo/plugin/server";
+import type {
+  PluginCredentials,
+  PluginHandlerContext,
+  PluginNotifyInput,
+  PluginNotifyResult,
+} from "@getpaseo/plugin/server";
 import type { ZodType } from "zod";
 import {
   ProviderEventSchema,
@@ -23,7 +29,15 @@ import { isPluginClientOnlySdkSpecifier } from "./plugin-sdk-specifiers.js";
 import { createPluginClientId } from "./plugin-session-identity.js";
 
 import { PluginSettingsStore } from "./settings/index.js";
+import {
+  createPluginSecretStore,
+  guardPluginOutput,
+  redactPluginError,
+  type PluginSecretStore,
+} from "./plugin-secrets.js";
 let settingsStore: PluginSettingsStore | null = null;
+let secretStore: PluginSecretStore | null = null;
+let hostCapabilities = { notify: false, credentials: false };
 function registerSettings<Schema extends ZodType>(definition: SettingsDefinition<Schema>) {
   if (!settingsStore) throw new Error("Plugin settings storage is unavailable");
   const handlers = settingsStore.register(definition);
@@ -59,6 +73,57 @@ let daemonClient: DaemonClient | null = null;
 let paseo: PaseoApi | null = null;
 let stopping = false;
 const nodeRequire = createRequire(import.meta.url);
+const pendingHostCalls = new Map<
+  string,
+  { resolve: (output: unknown) => void; reject: (error: Error) => void }
+>();
+let nextHostCallId = 0;
+
+// Plugin code reaches host capabilities only through the daemon, which checks the manifest.
+function hostCall(method: PluginHostCallMethod, input: unknown): Promise<unknown> {
+  if (stopping) return Promise.reject(new Error("Plugin is stopping"));
+  nextHostCallId += 1;
+  const callId = `host-${nextHostCallId}`;
+  return new Promise((resolve, reject) => {
+    pendingHostCalls.set(callId, { resolve, reject });
+    send({ type: "host.call", callId, method, input });
+  });
+}
+
+function settleHostCall(
+  message: Extract<PluginProcessRequest, { type: "host.result" | "host.error" }>,
+): void {
+  const pending = pendingHostCalls.get(message.callId);
+  if (!pending) return;
+  pendingHostCalls.delete(message.callId);
+  if (message.type === "host.result") pending.resolve(message.output);
+  else pending.reject(new Error(message.error));
+}
+
+async function notify(input: PluginNotifyInput): Promise<PluginNotifyResult> {
+  const output = (await hostCall("notify", input)) as PluginNotifyResult;
+  return { id: output.id, duplicate: output.duplicate };
+}
+
+// Provider requests run in the daemon, which attaches the credential; the plugin process never
+// holds a secret.
+const credentials: PluginCredentials = {
+  async request(accountId, connectorId, request) {
+    const output = (await hostCall("credentials.request", {
+      accountId,
+      connector: connectorId,
+      request,
+    })) as { status: number; headers: Record<string, string>; body: unknown };
+    return { status: output.status, headers: output.headers, body: output.body };
+  },
+  async importLegacy(input) {
+    const output = (await hostCall("credentials.import_legacy", input)) as {
+      accountId: string;
+      imported: boolean;
+    };
+    return { accountId: output.accountId, imported: output.imported };
+  },
+};
 
 function send(message: PluginProcessMessage): void {
   process.send?.(message);
@@ -75,7 +140,7 @@ function sendAndWait(message: PluginProcessMessage): Promise<void> {
 }
 
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return redactPluginError(secretStore, error instanceof Error ? error.message : String(error));
 }
 
 function jsonTransportValue<Value>(value: Value): Value {
@@ -237,6 +302,9 @@ function evaluateBundle(bundle: string): void {
     handle: register,
     registerProvider,
     registerSettings,
+    secrets: secretStore?.secrets,
+    ...(hostCapabilities.notify ? { notify } : {}),
+    ...(hostCapabilities.credentials ? { credentials } : {}),
     on: hooks.on,
     before: hooks.before,
   });
@@ -271,6 +339,9 @@ async function initialize(message: Extract<PluginProcessRequest, { type: "initia
         send({ type: "settings.changed", settingsId }),
       )
     : null;
+  // The namespace comes from the host's initialize message, never from plugin code.
+  secretStore = createPluginSecretStore({ pluginId: message.pluginId });
+  hostCapabilities = message.capabilities ?? { notify: false, credentials: false };
   evaluateBundle(message.bundle);
   send({
     type: "ready",
@@ -290,6 +361,8 @@ async function shutdown(): Promise<void> {
     .catch((error) => console.error("Plugin API cleanup failed", error));
   hooks.close();
   for (const pending of pendingProviderConnections.values()) pending.tombstoned = true;
+  for (const pending of pendingHostCalls.values()) pending.reject(new Error("Plugin is stopping"));
+  pendingHostCalls.clear();
   const currentCleanup = cleanup;
   cleanup = null;
   try {
@@ -339,25 +412,12 @@ process.on("message", (rawMessage: unknown) => {
     void shutdown();
     return;
   }
+  if (message.type === "host.result" || message.type === "host.error") {
+    settleHostCall(message);
+    return;
+  }
   if (stopping) {
-    if (message.type === "provider.catalog_key") {
-      send({ type: "error", requestId: message.requestId, error: "Plugin is stopping" });
-    } else if (message.type === "provider.connect") {
-      send({
-        type: "provider.connect_failed",
-        connectionId: message.connectionId,
-        error: "Plugin is stopping",
-      });
-    } else if (message.type === "provider.send") {
-      send({
-        type: "provider.rejected",
-        connectionId: message.connectionId,
-        acceptanceId: message.acceptanceId,
-        error: "Plugin is stopping",
-      });
-    } else if (message.type === "provider.close") {
-      send({ type: "provider.closed", connectionId: message.connectionId });
-    }
+    refuseWhileStopping(message);
     return;
   }
   if (message.type === "provider.catalog_key") {
@@ -427,6 +487,7 @@ process.on("message", (rawMessage: unknown) => {
       return registered.handler(input, { paseo });
     })
     .then((output) => registered.contract.output.parseAsync(output))
+    .then((output) => guardPluginOutput(secretStore, output))
     .then(
       (output) => send({ type: "result", requestId: message.requestId, output }),
       (error) => send({ type: "error", requestId: message.requestId, error: describeError(error) }),
@@ -451,7 +512,15 @@ function handleHookMessage(
     }
     void hooks.invoke(message.requestId, message.kind, message.name, message.input, paseo).then(
       (output) => {
-        return send({ type: "result", requestId: message.requestId, output });
+        try {
+          return send({
+            type: "result",
+            requestId: message.requestId,
+            output: guardPluginOutput(secretStore, output),
+          });
+        } catch (error) {
+          return send({ type: "error", requestId: message.requestId, error: describeError(error) });
+        }
       },
       (error) => {
         return send({ type: "error", requestId: message.requestId, error: describeError(error) });
@@ -465,4 +534,26 @@ function isHookMessage(
   message: PluginProcessRequest,
 ): message is Extract<PluginProcessRequest, { type: "hook" | "hook.cancel" }> {
   return message.type === "hook" || message.type === "hook.cancel";
+}
+
+// Requests that arrive after shutdown began get a definite answer instead of silence.
+function refuseWhileStopping(message: PluginProcessRequest): void {
+  if (message.type === "provider.catalog_key") {
+    send({ type: "error", requestId: message.requestId, error: "Plugin is stopping" });
+  } else if (message.type === "provider.connect") {
+    send({
+      type: "provider.connect_failed",
+      connectionId: message.connectionId,
+      error: "Plugin is stopping",
+    });
+  } else if (message.type === "provider.send") {
+    send({
+      type: "provider.rejected",
+      connectionId: message.connectionId,
+      acceptanceId: message.acceptanceId,
+      error: "Plugin is stopping",
+    });
+  } else if (message.type === "provider.close") {
+    send({ type: "provider.closed", connectionId: message.connectionId });
+  }
 }

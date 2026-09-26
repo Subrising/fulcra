@@ -11,6 +11,8 @@ export interface HighlightedTextProps {
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
   testID?: string;
+  /** Spoken instead of the marked text when the label needs to say more than it shows. */
+  accessibilityLabel?: string;
 }
 
 /**
@@ -28,6 +30,7 @@ export function HighlightedText({
   style,
   numberOfLines,
   testID,
+  accessibilityLabel,
 }: HighlightedTextProps): ReactElement {
   const segments = useMemo(
     () => (ranges && ranges.length > 0 ? toHighlightSegments(text, ranges) : null),
@@ -36,14 +39,24 @@ export function HighlightedText({
 
   if (!segments) {
     return (
-      <Text style={style} numberOfLines={numberOfLines} testID={testID}>
+      <Text
+        style={style}
+        numberOfLines={numberOfLines}
+        testID={testID}
+        accessibilityLabel={accessibilityLabel}
+      >
         {text}
       </Text>
     );
   }
 
   return (
-    <Text style={style} numberOfLines={numberOfLines} testID={testID}>
+    <Text
+      style={style}
+      numberOfLines={numberOfLines}
+      testID={testID}
+      accessibilityLabel={accessibilityLabel}
+    >
       {segments.map((segment) =>
         segment.marked ? (
           <Text key={segment.start} style={styles.mark}>

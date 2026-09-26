@@ -21,24 +21,51 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
 RESOURCES_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
 
 MACOS_DIR="${RESOURCES_DIR}/../MacOS"
-MACOS_HELPER_EXECUTABLE="${RESOURCES_DIR}/../Frameworks/Paseo Helper.app/Contents/MacOS/Paseo Helper"
+
+# electron-builder names the packaged executable, the Helper app and the Linux
+# launcher after productName, which has changed over time (all three names are accepted)
+# before that. All are accepted, current name first, so an installed bundle from
+# any of those generations still finds its own Electron. This shim is copied into the bundle and cannot
+# read that bundle's productName back out of the asar, so a shim that knows only
+# one name stops finding its own Electron the moment the product is renamed —
+# which is exactly how the installed Linux package came to fail here with
+# "not found relative to /opt/<old name>/resources".
+APP_NAMES="Fulcra Orca Paseo"
+APP_EXECUTABLE=""
 
 # macOS CLI invocations must enter Electron through the agent Helper. Launching
 # the main APPL executable here makes later daemon supervision inherit app UI
 # lifecycle behavior.
 if [ -d "${MACOS_DIR}" ]; then
-  if [ ! -x "${MACOS_HELPER_EXECUTABLE}" ]; then
-    echo "Bundled Paseo Helper executable not found at ${MACOS_HELPER_EXECUTABLE}" >&2
+  for APP_NAME in ${APP_NAMES}; do
+    CANDIDATE="${RESOURCES_DIR}/../Frameworks/${APP_NAME} Helper.app/Contents/MacOS/${APP_NAME} Helper"
+    if [ -x "${CANDIDATE}" ]; then
+      APP_EXECUTABLE="${CANDIDATE}"
+      break
+    fi
+  done
+  if [ -z "${APP_EXECUTABLE}" ]; then
+    echo "Bundled Helper executable not found under ${RESOURCES_DIR}/../Frameworks (tried: ${APP_NAMES})" >&2
     exit 1
   fi
-  APP_EXECUTABLE="${MACOS_HELPER_EXECUTABLE}"
-elif [ -x "${RESOURCES_DIR}/../Paseo.bin" ]; then
-  APP_EXECUTABLE="${RESOURCES_DIR}/../Paseo.bin"
-elif [ -x "${RESOURCES_DIR}/../Paseo" ]; then
-  APP_EXECUTABLE="${RESOURCES_DIR}/../Paseo"
 else
-  echo "Bundled Paseo executable not found relative to ${RESOURCES_DIR}" >&2
-  exit 1
+  # `.bin` first: the Linux sandbox launcher renames the real Electron binary to
+  # <name>.bin and installs a shell launcher at <name>. This entrypoint wants
+  # Electron itself.
+  for APP_NAME in ${APP_NAMES}; do
+    if [ -x "${RESOURCES_DIR}/../${APP_NAME}.bin" ]; then
+      APP_EXECUTABLE="${RESOURCES_DIR}/../${APP_NAME}.bin"
+      break
+    fi
+    if [ -x "${RESOURCES_DIR}/../${APP_NAME}" ]; then
+      APP_EXECUTABLE="${RESOURCES_DIR}/../${APP_NAME}"
+      break
+    fi
+  done
+  if [ -z "${APP_EXECUTABLE}" ]; then
+    echo "Bundled app executable not found relative to ${RESOURCES_DIR} (tried: ${APP_NAMES})" >&2
+    exit 1
+  fi
 fi
 
 RUNNER_PATH="${RESOURCES_DIR}/app.asar.unpacked/dist/daemon/node-entrypoint-runner.js"

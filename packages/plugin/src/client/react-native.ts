@@ -10,6 +10,7 @@ import type {
 import type {
   StyleProp,
   ViewStyle,
+  ViewProps,
   ScrollView as NativeScrollView,
   ScrollViewProps,
   FlatList as NativeFlatList,
@@ -74,3 +75,19 @@ export declare function copyText(text: string): Promise<void>;
 export declare const TextInput: ForwardRefExoticComponent<
   TextInputProps & RefAttributes<NativeTextInput>
 >;
+
+export interface PanTranslation {
+  x: number;
+  y: number;
+}
+export interface PanSurfaceProps extends ViewProps {
+  onPanStart(): void;
+  onPanUpdate(translation: PanTranslation): void;
+  onPanEnd(cancelled: boolean): void;
+}
+/** Opt-in page scrolling that waits for descendant PanSurface gestures. */
+export declare const PanScrollView: ForwardRefExoticComponent<
+  ScrollViewProps & RefAttributes<NativeScrollView>
+>;
+/** Native pan arbitration; child buttons retain ordinary tap/accessibility behavior. */
+export declare const PanSurface: ComponentType<PanSurfaceProps>;

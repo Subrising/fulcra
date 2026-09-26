@@ -3,8 +3,14 @@ name: Desktop Release
 on:
   push:
     tags:
+      # The inherited release contract accepts X.Y.Z and X.Y.Z-beta.N only
+      # (scripts/release-version-utils.mjs). Private-preview tags are
+      # neither, so publishing them is rejected after the workflow has already
+      # started. Exclude them at the trigger. See docs/pipelines.md.
       - "v*"
+      - "!v*-private-preview"
       - "desktop-v*"
+      - "!desktop-v*-private-preview"
       - "desktop-macos-v*"
       - "desktop-linux-v*"
       - "desktop-windows-v*"
@@ -130,6 +136,10 @@ jobs:
           registry-url: "https://npm.pkg.github.com"
           scope: "@boudra"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci
         env:
@@ -237,6 +247,10 @@ jobs:
           registry-url: "https://npm.pkg.github.com"
           scope: "@boudra"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci
         env:
@@ -337,6 +351,10 @@ jobs:
           cache-dependency-path: package-lock.json
           registry-url: "https://npm.pkg.github.com"
           scope: "@boudra"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci
@@ -440,6 +458,10 @@ jobs:
           cache-dependency-path: package-lock.json
           registry-url: "https://npm.pkg.github.com"
           scope: "@boudra"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci

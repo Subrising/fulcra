@@ -5,6 +5,7 @@ import { app } from "electron";
 import { UUID } from "builder-util-runtime";
 import log from "electron-log/main";
 import { autoUpdater } from "electron-updater";
+import { APP_DISPLAY_NAME } from "../app-display-name.js";
 import {
   createAppUpdateService,
   type AppUpdateCheckResult,
@@ -97,6 +98,14 @@ export function shouldAdmitToRollout(args: {
 }): boolean {
   return shouldAdmitAppUpdate({ ...args, intent: "automatic" });
 }
+
+// This fork publishes no update feed (electron-builder.yml sets `publish: null`), so update checks
+// must not fall through to the upstream one -- doing so would offer, and then install, upstream Paseo
+// over a Fulcra install. Keyed on a list rather than the current product name: the guard was written as
+// `app.getName() === <old name>` and silently stopped firing the moment the product was renamed, which is a
+// runtime-only failure on a user's machine. Every name this fork has shipped under stays listed.
+const FORK_APP_NAMES = new Set(["Fulcra", "Orca"]);
+const hasNoUpdateFeed = () => FORK_APP_NAMES.has(app.getName());
 
 export async function resolveStagingUserId(filePath: string): Promise<string> {
   try {
@@ -251,6 +260,17 @@ export async function checkForAppUpdate({
   releaseChannel: AppReleaseChannel;
   intent: AppUpdateCheckIntent;
 }): Promise<AppUpdateCheckResult> {
+  if (hasNoUpdateFeed()) {
+    return {
+      hasUpdate: false,
+      readyToInstall: false,
+      currentVersion,
+      latestVersion: currentVersion,
+      body: null,
+      date: null,
+      errorMessage: `${APP_DISPLAY_NAME} updates are not published yet. Install a reviewed build manually.`,
+    };
+  }
   updateLifecycleLog.checkStarted({ currentVersion, releaseChannel, intent });
   const result = await appUpdateService.checkForAppUpdate({
     currentVersion,
@@ -279,6 +299,13 @@ export async function downloadAndInstallUpdate(
   },
   onBeforeQuit?: () => Promise<void>,
 ): Promise<AppUpdateInstallResult> {
+  if (hasNoUpdateFeed()) {
+    return {
+      installed: false,
+      version: null,
+      message: `${APP_DISPLAY_NAME} has no configured release feed.`,
+    };
+  }
   return appUpdateService.downloadAndInstallUpdate(
     { currentVersion, releaseChannel },
     onBeforeQuit,

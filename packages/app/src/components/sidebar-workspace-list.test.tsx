@@ -31,6 +31,8 @@ import {
   type SidebarProjectEntry,
 } from "@/hooks/use-sidebar-workspaces-list";
 import { useSidebarWorkspacesList } from "@/hooks/use-sidebar-workspaces-list";
+import { useSidebarWorkspaceEntries } from "@/hooks/use-sidebar-workspace-entries";
+import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import {
   getHostRuntimeStore,
   type HostRuntimeController,
@@ -351,6 +353,95 @@ describe("sidebar workspace render isolation", () => {
         workspaceOrderByProject: {},
       });
     });
+  });
+
+  it("reacts to saved conversation renames without changing routing or rerendering on activity", async () => {
+    const uuid = "123e4567-e89b-42d3-a456-426614174000";
+    initializeSidebarState([
+      {
+        ...workspace({
+          id: "generated",
+          projectId: "generated-project",
+          projectDisplayName: uuid,
+          name: uuid,
+        }),
+        projectKind: "non_git",
+      },
+    ]);
+    const agent = normalizeAgentSnapshot(
+      {
+        id: "original-agent",
+        provider: "codex",
+        cwd: "/tasks/" + uuid,
+        workspaceId: "generated",
+        title: "Launch planning",
+        model: null,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z",
+        lastUserMessageAt: null,
+        status: "idle",
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: false,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+          supportsRewindConversation: false,
+          supportsRewindFiles: false,
+          supportsRewindBoth: false,
+        },
+        currentModeId: null,
+        availableModes: [],
+        pendingPermissions: [],
+        persistence: null,
+        labels: {},
+      },
+      SERVER_ID,
+    );
+    act(() => useSessionStore.getState().setAgents(SERVER_ID, new Map([[agent.id, agent]])));
+    let renders = 0;
+    function Names() {
+      renders++;
+      const view = useSidebarWorkspacesList({ hostFilters: [SERVER_ID] });
+      const entries = useSidebarWorkspaceEntries(view.workspacePlacements);
+      return (
+        <div>
+          {JSON.stringify({
+            projects: view.projects.map((p) => p.projectName),
+            rows: [...entries.values()].map((e) => ({ name: e.name, id: e.workspaceId })),
+          })}
+        </div>
+      );
+    }
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => root!.render(<Names />));
+    expect(JSON.parse(container.textContent!).projects).toEqual([
+      "Project A",
+      "Project B",
+      "Launch planning",
+    ]);
+    expect(container.textContent).toContain('"name":"Launch planning","id":"generated"');
+    const settled = renders;
+    act(() =>
+      useSessionStore
+        .getState()
+        .setAgents(SERVER_ID, new Map([[agent.id, { ...agent, updatedAt: new Date() }]])),
+    );
+    expect(renders).toBe(settled);
+    act(() =>
+      useSessionStore
+        .getState()
+        .setAgents(SERVER_ID, new Map([[agent.id, { ...agent, title: "Product strategy" }]])),
+    );
+    expect(JSON.parse(container.textContent!).projects).toEqual([
+      "Project A",
+      "Project B",
+      "Product strategy",
+    ]);
+    expect(container.textContent).toContain('"name":"Product strategy","id":"generated"');
   });
 
   it("re-renders only the changed workspace row for a status update", async () => {

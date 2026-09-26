@@ -227,8 +227,21 @@ function renderChatAgentNonReadyView(args: {
   effectiveAgent: AgentScreenAgent | null;
   t: TFunction;
   onRetryLoad: () => void;
+  serverLabel: string;
+  connectionStatus: HostRuntimeConnectionStatus;
+  connectionError: string | null;
+  isUnknownDaemon: boolean;
 }): React.ReactElement | null {
-  const { viewState, effectiveAgent, t, onRetryLoad } = args;
+  const {
+    viewState,
+    effectiveAgent,
+    t,
+    onRetryLoad,
+    serverLabel,
+    connectionStatus,
+    connectionError,
+    isUnknownDaemon,
+  } = args;
   if (viewState.tag === "not_found") {
     return (
       <View style={styles.container} testID="agent-not-found">
@@ -243,11 +256,14 @@ function renderChatAgentNonReadyView(args: {
   }
   if (viewState.tag === "boot" || !effectiveAgent) {
     return (
-      <View style={styles.container} testID="agent-loading">
-        <View style={styles.errorContainer}>
-          <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
-        </View>
-      </View>
+      <AgentSessionUnavailableState
+        testID="agent-loading"
+        serverLabel={serverLabel}
+        connectionStatus={connectionStatus}
+        lastError={connectionError}
+        isUnknownDaemon={isUnknownDaemon}
+        t={t}
+      />
     );
   }
   return null;
@@ -567,6 +583,10 @@ function AgentPanelContent({
       isPaneFocused={isPaneFocused}
       client={runtimeClient}
       isConnected={runtimeIsConnected}
+      connectionStatus={connectionStatus}
+      serverLabel={serverLabel}
+      connectionError={lastConnectionError}
+      isUnknownDaemon={isUnknownDaemon}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
     />
   );
@@ -579,6 +599,10 @@ function AgentPanelBody({
   isPaneFocused,
   client,
   isConnected,
+  connectionStatus,
+  serverLabel,
+  connectionError,
+  isUnknownDaemon,
   onOpenWorkspaceFile,
 }: {
   serverId: string;
@@ -587,6 +611,10 @@ function AgentPanelBody({
   isPaneFocused: boolean;
   client: ReturnType<typeof useHostRuntimeClient>;
   isConnected: boolean;
+  connectionStatus: HostRuntimeConnectionStatus;
+  serverLabel: string;
+  connectionError: string | null;
+  isUnknownDaemon: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
@@ -706,11 +734,14 @@ function AgentPanelBody({
 
   if (!agent) {
     return (
-      <View style={styles.container} testID="agent-loading">
-        <View style={styles.errorContainer}>
-          <ThemedLoadingSpinner size="large" uniProps={foregroundMutedColorMapping} />
-        </View>
-      </View>
+      <AgentSessionUnavailableState
+        testID="agent-loading"
+        serverLabel={serverLabel}
+        connectionStatus={connectionStatus}
+        lastError={connectionError}
+        isUnknownDaemon={isUnknownDaemon}
+        t={t}
+      />
     );
   }
 
@@ -722,6 +753,10 @@ function AgentPanelBody({
       isPaneFocused={isPaneFocused}
       client={client}
       isConnected={isConnected}
+      connectionStatus={connectionStatus}
+      serverLabel={serverLabel}
+      connectionError={connectionError}
+      isUnknownDaemon={isUnknownDaemon}
       onOpenWorkspaceFile={onOpenWorkspaceFile}
     />
   );
@@ -734,6 +769,10 @@ function ChatAgentContent({
   isPaneFocused,
   client,
   isConnected,
+  connectionStatus,
+  serverLabel,
+  connectionError,
+  isUnknownDaemon,
   onOpenWorkspaceFile,
 }: {
   serverId: string;
@@ -742,6 +781,10 @@ function ChatAgentContent({
   isPaneFocused: boolean;
   client: ReturnType<typeof useHostRuntimeClient>;
   isConnected: boolean;
+  connectionStatus: HostRuntimeConnectionStatus;
+  serverLabel: string;
+  connectionError: string | null;
+  isUnknownDaemon: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
@@ -1056,6 +1099,10 @@ function ChatAgentContent({
     effectiveAgent,
     t,
     onRetryLoad: retryAgentLoad,
+    serverLabel,
+    connectionStatus,
+    connectionError,
+    isUnknownDaemon,
   });
   if (nonReadyView) return nonReadyView;
   invariant(agentId, "agent id is defined when agent content is ready");
@@ -1648,12 +1695,14 @@ function ActiveAgentComposer({
 }
 
 function AgentSessionUnavailableState({
+  testID,
   serverLabel,
   connectionStatus,
   lastError,
   isUnknownDaemon = false,
   t,
 }: {
+  testID?: string;
   serverLabel: string;
   connectionStatus: HostRuntimeConnectionStatus;
   lastError: string | null;
@@ -1662,7 +1711,7 @@ function AgentSessionUnavailableState({
 }) {
   if (isUnknownDaemon) {
     return (
-      <View style={styles.container}>
+      <View style={styles.container} testID={testID}>
         <View style={styles.centerState}>
           <Text style={styles.errorText}>
             {t("agentPanel.unavailable.unknownHost", { serverLabel })}
@@ -1677,7 +1726,7 @@ function AgentSessionUnavailableState({
   const isPreparingSession = connectionStatus === "online";
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID={testID}>
       <View style={styles.centerState}>
         {isConnecting || isPreparingSession ? (
           <>

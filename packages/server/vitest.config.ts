@@ -8,6 +8,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Same guard as the root config: protocol resolves through its built dist, and running
+    // vitest from inside this package uses this config rather than the root one.
+    globalSetup: [path.resolve(__dirname, "../../scripts/vitest-global-setup.mjs")],
     // Fake-timer suites freeze p-throttle's clock, so a real per-second cap deadlocks them.
     env: {
       PASEO_GIT_MAX_PROCESSES_PER_SECOND: "10000",

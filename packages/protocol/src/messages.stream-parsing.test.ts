@@ -431,3 +431,45 @@ describe("shared messages stream parsing", () => {
     expect(highlightedParsed.success).toBe(false);
   });
 });
+
+describe("quiet MCP refresh wire contract", () => {
+  const request = {
+    type: "agent.mcp.refresh.request",
+    requestId: "mcp-1",
+    agentId: "agent-1",
+    expected: { provider: "codex", sessionId: "native-1", configRevision: "opaque-revision" },
+    changes: { memory: { type: "stdio", command: "memory", args: ["--version=2"] }, legacy: null },
+  };
+  it("accepts targeted MCP changes and requires expected identity/config", () => {
+    expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+    expect(
+      SessionInboundMessageSchema.parse({ ...request, changes: {}, reconnect: true }),
+    ).toMatchObject({ changes: {}, reconnect: true });
+    expect(SessionInboundMessageSchema.safeParse({ ...request, expected: undefined }).success).toBe(
+      false,
+    );
+    expect(
+      SessionInboundMessageSchema.safeParse({ ...request, model: "different-model" }).success,
+    ).toBe(false);
+  });
+  it("parses a failed resume with a closed reconciliation snapshot", () => {
+    const message = {
+      type: "agent.mcp.refresh.response",
+      payload: {
+        requestId: "mcp-1",
+        agentId: "agent-1",
+        outcome: "failed",
+        reason: "resume_failed",
+        state: {
+          provider: "codex",
+          sessionId: "native-1",
+          configRevision: "closed-revision",
+          lifecycle: "closed",
+          supported: false,
+          mcpServerNames: ["memory"],
+        },
+      },
+    };
+    expect(SessionOutboundMessageSchema.parse(message)).toEqual(message);
+  });
+});

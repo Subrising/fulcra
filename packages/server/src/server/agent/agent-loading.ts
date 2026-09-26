@@ -128,6 +128,8 @@ export async function ensureAgentLoaded(
         labels: record.labels,
         workspaceId: record.workspaceId,
         owner: record.owner,
+        // An existing record keeps its stored mode, missing or not; only brand-new sessions get the default.
+        fromStoredRecord: true,
       });
       deps.logger.info({ agentId, provider: record.provider }, "Agent created from stored config");
     }

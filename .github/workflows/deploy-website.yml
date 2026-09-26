@@ -16,8 +16,48 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Seconds, before the install/build/deploy job. This publishes the marketing
+  # site to a Cloudflare Workers account. A fork inherits the workflow but must
+  # not inherit the destination. See docs/pipelines.md.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          DEPLOY_TARGET: ${{ vars.ORCA_DEPLOY_TARGET }}
+          API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          missing=""
+          [ "$DEPLOY_TARGET" = "configured" ] || missing="$missing\n- repository variable \`ORCA_DEPLOY_TARGET\` set to \`configured\`"
+          [ -n "$API_TOKEN" ] || missing="$missing\n- repository secret \`CLOUDFLARE_API_TOKEN\`"
+
+          if [ -z "$missing" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Website deploy target configured for this repository; continuing." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Skipped: website deployment is not configured for this repository"
+            echo
+            echo "Deployment is intentionally opt-in so a fork cannot publish to the upstream"
+            echo "Cloudflare account it inherited. Still needed:"
+            printf "%b\n" "$missing"
+            echo
+            echo "Setting those is not enough on its own. \`packages/website/wrangler.toml\`"
+            echo "names the worker \`paseo-website\` and claims the custom domains \`paseo.sh\`"
+            echo "and \`www.paseo.sh\`. Repoint that file at this fork's own worker name and"
+            echo "routes before enabling deployment, or it will still target upstream."
+            echo
+            echo "The website workspace is still typechecked by CI."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
-    if: ${{ github.event_name != 'release' || (!github.event.release.prerelease && !github.event.release.draft) }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.configured == 'true' && (github.event_name != 'release' || (!github.event.release.prerelease && !github.event.release.draft)) }}
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +67,10 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci --workspace=@getpaseo/website --include-workspace-root

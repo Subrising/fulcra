@@ -1,6 +1,6 @@
 import type { AgentModelDefinition, AgentSelectOption } from "../../agent-sdk-types.js";
 
-type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 interface ClaudeModelManifestEntry {
   id: string;
@@ -30,17 +30,25 @@ const CLAUDE_EFFORT_LABELS = {
 } as const satisfies Record<ClaudeEffortLevel, string>;
 
 export const CLAUDE_DEFAULT_THINKING_OPTION_ID = "high";
+export const CLAUDE_STANDARD_EFFORT_LEVELS = CLAUDE_EFFORT_LEVELS.standard;
 
 export const CLAUDE_DISABLED_THINKING_OPTION_ID = "off";
 export const CLAUDE_ULTRACODE_THINKING_OPTION_ID = "ultracode";
 
 export const CLAUDE_MODEL_MANIFEST = [
+  // Taken verbatim from upstream getpaseo/paseo rather than written here: every field has a
+  // consequence (minimumClaudeCodeVersion gates availability, contextWindowMaxTokens affects
+  // compaction, effortLevels decides which thinking options render) and guessing them produces a
+  // model entry that looks right and behaves wrong.
   {
     id: "claude-opus-5-5",
     label: "Opus 5.5",
     description: "Opus 5.5 · Latest release",
     defaultPriority: 3,
     minimumClaudeCodeVersion: "2.1.280",
+    // Upstream's own entry (#5200). Our earlier hand-added 5.5 omitted this field because the
+    // manifest type did not have it yet; upstream added both together, so 5.5 now defaults to
+    // "medium" thinking instead of falling through to CLAUDE_DEFAULT_THINKING_OPTION_ID ("high").
     defaultThinkingOptionId: "medium",
     contextWindowMaxTokens: 1_000_000,
     effortLevels: CLAUDE_EFFORT_LEVELS.xhigh,
@@ -173,7 +181,7 @@ function getDefaultThinkingOptionId(model: ClaudeModelManifestEntry): ClaudeEffo
   return model.defaultThinkingOptionId ?? CLAUDE_DEFAULT_THINKING_OPTION_ID;
 }
 
-function buildThinkingOptions(
+export function buildClaudeThinkingOptions(
   effortLevels: readonly ClaudeEffortLevel[] | undefined,
   supportsThinkingDisabled: boolean,
   defaultThinkingOptionId: ClaudeEffortLevel,
@@ -210,7 +218,7 @@ export function getClaudeManifestModels(claudeCodeVersion?: string): AgentModelD
 
   const definitions: AgentModelDefinition[] = [];
   for (const model of availableModels) {
-    const thinkingOptions = buildThinkingOptions(
+    const thinkingOptions = buildClaudeThinkingOptions(
       model.effortLevels,
       model.supportsThinkingDisabled === true,
       getDefaultThinkingOptionId(model),
@@ -370,7 +378,9 @@ export function normalizeClaudeManifestModelId(value: string | null | undefined)
  * Runtime metadata may include provider prefixes such as Bedrock model IDs; feature
  * gates should use normalizeClaudeManifestModelId instead. The prefixed matches are
  * unanchored, so major-minor runs first: "claude-opus-5-5" would otherwise stop at the
- * "claude-opus-5" entry.
+ * "claude-opus-5" entry. A string that names a minor release the manifest does not know is not
+ * normalized at all: returning the family ("claude-opus-5-6" as "claude-opus-5") mislabels a newer
+ * model as an older one, so callers get null and keep the raw id.
  */
 export function normalizeClaudeRuntimeModelId(value: string | null | undefined): string | null {
   const normalizedManifestModelId = normalizeClaudeManifestModelId(value);
@@ -383,19 +393,17 @@ export function normalizeClaudeRuntimeModelId(value: string | null | undefined):
     return null;
   }
 
+  // A minor is one or two digits; a longer run is a date stamp on a single-segment id.
   const runtimeMatch = trimmed.match(
-    /claude[-_ ](fable|opus|sonnet|haiku)[-_ ]+(\d+)[-.](\d+)(\[1m\])?/i,
+    /claude[-_ ](fable|opus|sonnet|haiku)[-_ ]+(\d+)[-.](\d{1,2})(?!\d)(\[1m\])?/i,
   );
   if (runtimeMatch) {
-    const normalizedModelId = normalizeMajorMinorClaudeModelId(
+    return normalizeMajorMinorClaudeModelId(
       runtimeMatch[1],
       runtimeMatch[2],
       runtimeMatch[3],
       trimmed.toLowerCase().includes("[1m]"),
     );
-    if (normalizedModelId) {
-      return normalizedModelId;
-    }
   }
 
   const singleSegmentMatch = trimmed.match(

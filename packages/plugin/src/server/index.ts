@@ -1,5 +1,11 @@
 export type {
+  PluginCredentialRequest,
+  PluginCredentialResponse,
+  PluginCredentials,
   PluginHandlerContext,
+  PluginNotifyInput,
+  PluginNotifyResult,
+  PluginSecrets,
   PluginServerContext,
   PluginServerContribution,
   PluginSettings,

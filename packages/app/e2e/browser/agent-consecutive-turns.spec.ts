@@ -846,6 +846,9 @@ test("keeps the first prompt of a new agent in place through authoritative hydra
     await expect(submittedRow).toBeVisible();
     await gate.waitForHeldServerMessage("fetch_agent_timeline_response");
     gate.truncateHeldTimelineAfterLast("user_message");
+    // Isolate first-prompt hydration from subsequent response snapshots, whose
+    // legitimate follow-to-bottom behavior can scroll the prompt out of view.
+    gate.setServerMessageSuppressed("fetch_agent_timeline_response", true);
     gate.releaseHeldServerMessage("fetch_agent_timeline_response");
     await expect(submittedRow.getByTestId("rewind-menu-trigger")).toBeVisible();
     await recordPaintsFor(page, 80);

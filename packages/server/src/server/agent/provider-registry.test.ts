@@ -85,6 +85,8 @@ vi.mock("./providers/claude/agent.js", async () => {
   const { resolveConfiguredClaudeModel } = await import("./providers/claude/models.js");
   return {
     ClaudeAgentClient: class ClaudeAgentClient {
+      readonly persistsDefaultModeOnCreate = true;
+      readonly persistsDefaultThinkingOnCreate = true;
       readonly capabilities = {
         supportsStreaming: true,
         supportsSessionPersistence: true,
@@ -1040,6 +1042,26 @@ test("disallowedTools flows through to runtime settings", () => {
       disallowedTools: ["WebSearch", "WebFetch"],
     },
   });
+});
+
+test("a provider derived from Claude keeps the create-time default-mode opt-in through the wrapper", () => {
+  const registry = buildProviderRegistry(logger, {
+    providerOverrides: { zai: { extends: "claude", label: "ZAI" } },
+  });
+  // "zai" differs from its base provider id, so wrapClientProvider rebuilds the client; the opt-in must
+  // survive that rebuild or a Claude profile would silently fall back to Always Ask again.
+  const client = registry.zai.createClient(logger);
+  expect(client.provider).toBe("zai");
+  expect(client.persistsDefaultModeOnCreate).toBe(true);
+});
+
+test("a provider derived from Claude keeps the create-time default-thinking opt-in through the wrapper", () => {
+  const registry = buildProviderRegistry(logger, {
+    providerOverrides: { zai: { extends: "claude", label: "ZAI" } },
+  });
+  const client = registry.zai.createClient(logger);
+  expect(client.provider).toBe("zai");
+  expect(client.persistsDefaultThinkingOnCreate).toBe(true);
 });
 
 test("derived provider inherits and merges disallowedTools from base", () => {

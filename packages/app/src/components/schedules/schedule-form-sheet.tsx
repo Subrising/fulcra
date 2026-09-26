@@ -34,12 +34,9 @@ import {
   type SelectFieldRenderOptionInput,
 } from "@/components/ui/select-field";
 import { formatThinkingOptionLabel } from "@/agent-controls/labels";
-import {
-  mergeProviderPreferences,
-  useFormPreferences,
-  type FormPreferences,
-} from "@/hooks/use-form-preferences";
+import { useFormPreferences, type FormPreferences } from "@/hooks/use-form-preferences";
 import { useScheduleMutations } from "@/hooks/use-schedule-mutations";
+import { updateSelectionPreferences } from "@/schedules/selection-preferences";
 import { useAggregatedAgents } from "@/hooks/use-aggregated-agents";
 import { useProjects } from "@/hooks/use-projects";
 import { useHosts } from "@/runtime/host-runtime";
@@ -150,31 +147,6 @@ function buildSnapshot(input: {
       preferences: input.preferences,
       timezone: input.timezone,
     },
-  };
-}
-
-function updateSelectionPreferences(input: {
-  preferences: FormPreferences;
-  provider: AgentProvider;
-  model: string;
-  mode: string;
-  thinkingOptionId: string;
-  isolation: "local" | "worktree";
-}): FormPreferences {
-  const model = input.model.trim();
-  const mode = input.mode.trim();
-  const thinkingOptionId = input.thinkingOptionId.trim();
-  return {
-    ...mergeProviderPreferences({
-      preferences: input.preferences,
-      provider: input.provider,
-      updates: {
-        model: model || undefined,
-        mode: mode || undefined,
-        ...(model && thinkingOptionId ? { thinkingByModel: { [model]: thinkingOptionId } } : {}),
-      },
-    }),
-    isolation: input.isolation,
   };
 }
 
@@ -301,11 +273,15 @@ function OpenScheduleFormSheet({
         provider,
         model: state.selectedModel,
         mode: state.selectedMode,
+        modeChosenByUser: model.getModeChosenByUser(),
+        modelChosenByUser: model.getModelChosenByUser(),
+        thinkingChosenByUser: model.getThinkingChosenByUser(),
         thinkingOptionId: state.selectedThinkingOptionId,
         isolation: state.isolation,
       }),
     );
   }, [
+    model,
     state.isolation,
     state.selectedMode,
     state.selectedModel,

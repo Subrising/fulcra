@@ -11,7 +11,6 @@ import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-moda
 import { SettingsCard, SettingsRow } from "@/components/settings";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { ExternalLink } from "@/components/ui/external-link";
 import { Field, FormTextInput } from "@/components/ui/form-field";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Switch } from "@/components/ui/switch";
@@ -33,7 +32,6 @@ import { settingsStyles } from "@/styles/settings";
 import { confirmDialog } from "@/utils/confirm-dialog";
 
 const pluginQueryKey = (serverId: string) => ["plugins", serverId] as const;
-const PLUGIN_SOURCE_DOCS_URL = "https://paseo.sh/docs/plugins/reference#plugin-sources";
 type PluginRowAction = "reload" | "enable" | "disable" | "remove";
 
 function errorMessage(error: unknown): string {
@@ -282,16 +280,6 @@ export function HostPluginsPage({ serverId }: { serverId: string }) {
     installForm.getState,
     installForm.getState,
   );
-  const sourceDocsLink = useMemo(
-    () => (
-      <ExternalLink
-        href={PLUGIN_SOURCE_DOCS_URL}
-        label={t("settings.plugins.docs")}
-        testID="plugin-source-docs-link"
-      />
-    ),
-    [t],
-  );
   const [logsPluginId, setLogsPluginId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(
     null,
@@ -489,7 +477,7 @@ export function HostPluginsPage({ serverId }: { serverId: string }) {
         </View>
         {sourceInstallSupported ? (
           <View style={[settingsStyles.card, styles.install]}>
-            <Field label={t("settings.plugins.sourceLabel")} trailing={sourceDocsLink}>
+            <Field label={t("settings.plugins.sourceLabel")}>
               <FormTextInput
                 initialValue=""
                 resetKey={installState.resetKey}

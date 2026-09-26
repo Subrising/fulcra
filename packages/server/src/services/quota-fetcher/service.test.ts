@@ -422,7 +422,12 @@ describe("real provider usage fetchers", () => {
           platform: options.platform,
           fetch: fetchThroughTestDouble,
         }),
-        new CodexQuotaProvider({ logger, codexHome, fetch: fetchThroughTestDouble }),
+        new CodexQuotaProvider({
+          logger,
+          codexHome,
+          fetch: fetchThroughTestDouble,
+          now: () => Date.parse("2026-06-19T00:00:00.000Z"),
+        }),
         new CopilotQuotaProvider({ logger, fetch: fetchThroughTestDouble }),
         new CursorQuotaProvider({
           logger,
@@ -603,6 +608,305 @@ describe("real provider usage fetchers", () => {
       ]),
       balances: [expect.objectContaining({ id: "credits", remaining: 0 })],
     });
+  });
+
+  it.each([undefined, null])("keeps missing Codex quota readings unknown (%s)", async (value) => {
+    writeCodexAuth(codexHome, "at_codex_valid");
+    fetchApi = mockFetch(
+      new Map([
+        [
+          "https://chatgpt.com/backend-api/wham/usage",
+          () =>
+            jsonResponse(
+              makeCodexResponse({
+                rate_limit: { primary_window: { used_percent: value, reset_at: value } },
+                credits: { balance: value },
+              }),
+            ),
+        ],
+      ]),
+    );
+
+    const codex = findProvider(await service().listUsage(), "codex");
+    expect(codex).toMatchObject({
+      status: "available",
+      windows: [
+        { id: "session", usedPct: null, remainingPct: null, resetsAt: null, tone: "default" },
+      ],
+      balances: [],
+    });
+  });
+
+  it.each([false, true, "", " ", [], {}, -1, 101, "not-a-number"])(
+    "rejects invalid Codex percentages instead of advertising capacity (%j)",
+    async (value) => {
+      writeCodexAuth(codexHome, "at_codex_valid");
+      fetchApi = mockFetch(
+        new Map([
+          [
+            "https://chatgpt.com/backend-api/wham/usage",
+            () =>
+              jsonResponse(
+                makeCodexResponse({
+                  rate_limit: { primary_window: { used_percent: value } },
+                }),
+              ),
+          ],
+        ]),
+      );
+      expect(findProvider(await service().listUsage(), "codex")).toMatchObject({
+        status: "error",
+        windows: [],
+        balances: [],
+      });
+    },
+  );
+
+  it.each([0, "0", 100, "100"])("retains reported Codex quota endpoints (%s)", async (value) => {
+    writeCodexAuth(codexHome, "at_codex_valid");
+    fetchApi = mockFetch(
+      new Map([
+        [
+          "https://chatgpt.com/backend-api/wham/usage",
+          () =>
+            jsonResponse(
+              makeCodexResponse({
+                rate_limit: { primary_window: { used_percent: value, reset_at: 0 } },
+              }),
+            ),
+        ],
+      ]),
+    );
+    expect(findProvider(await service().listUsage(), "codex")).toMatchObject({
+      status: "available",
+      windows: [
+        {
+          usedPct: Number(value),
+          remainingPct: 100 - Number(value),
+          resetsAt: "1970-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it.each([
+    [604800, "Weekly"],
+    [18000, "5-hour"],
+    [86400, "1-day"],
+    [60, "1-minute"],
+    [90, "90-second"],
+    ["3600", "1-hour"],
+    [null, "Primary window"],
+    [undefined, "Primary window"],
+  ])("labels Codex quota by reported duration (%s)", async (seconds, label) => {
+    writeCodexAuth(codexHome, "at_codex_valid");
+    fetchApi = mockFetch(
+      new Map([
+        [
+          "https://chatgpt.com/backend-api/wham/usage",
+          () =>
+            jsonResponse(
+              makeCodexResponse({
+                rate_limit: {
+                  primary_window: { used_percent: 42, limit_window_seconds: seconds },
+                  secondary_window: { used_percent: 8 },
+                },
+                code_review_rate_limit: {
+                  primary_window: { used_percent: 1, limit_window_seconds: 604800 },
+                },
+              }),
+            ),
+        ],
+      ]),
+    );
+    expect(findProvider(await service().listUsage(), "codex")).toMatchObject({
+      status: "available",
+      windows: [
+        { id: "session", label, usedPct: 42 },
+        { id: "weekly", label: "Secondary window", usedPct: 8 },
+        { id: "code_review", label: "Code review", usedPct: 1 },
+      ],
+    });
+  });
+
+  it.each([
+    { allowed: true, used: 100, state: "allowed" },
+    { allowed: false, used: 0, state: "blocked" },
+    { allowed: undefined, used: 0, state: "unknown" },
+  ])(
+    "uses explicit Codex admission rather than display percent ($state)",
+    async ({ allowed, used, state }) => {
+      writeCodexAuth(codexHome, "at_codex_valid");
+      fetchApi = mockFetch(
+        new Map([
+          [
+            "https://chatgpt.com/backend-api/wham/usage",
+            () =>
+              jsonResponse(
+                makeCodexResponse({
+                  account_id: "test-account",
+                  rate_limit: { allowed, primary_window: { used_percent: used } },
+                }),
+              ),
+          ],
+        ]),
+      );
+      const codex = findProvider(await service().listUsage(), "codex");
+      expect(codex.admission).toMatchObject({
+        state,
+        accountScope: expect.stringMatching(/^codex:[a-f0-9]{64}$/),
+        observedAt: "2026-06-19T00:00:00.000Z",
+      });
+      expect(JSON.stringify(codex)).not.toContain("test-account");
+      expect(JSON.stringify(codex)).not.toContain("at_codex_valid");
+    },
+  );
+
+  it.each([
+    {
+      authAccount: "account-a",
+      responseAccount: "account-a",
+      rotate: false,
+      status: "available",
+      state: "allowed",
+    },
+    {
+      authAccount: "account-a",
+      responseAccount: "account-b",
+      rotate: false,
+      status: "error",
+      state: undefined,
+    },
+    {
+      authAccount: "account-a",
+      responseAccount: undefined,
+      rotate: false,
+      status: "available",
+      state: "allowed",
+    },
+    {
+      authAccount: undefined,
+      responseAccount: undefined,
+      rotate: false,
+      status: "available",
+      state: "unknown",
+    },
+    {
+      authAccount: "account-a",
+      responseAccount: "account-a",
+      rotate: true,
+      status: "error",
+      state: undefined,
+    },
+  ])(
+    "binds Codex observations to unchanged credentials ($authAccount/$responseAccount/$rotate)",
+    async ({ authAccount, responseAccount, rotate, status, state }) => {
+      const authPath = join(codexHome, "auth.json");
+      const tokens = { access_token: "at_codex_valid", account_id: authAccount };
+      writeFileSync(authPath, JSON.stringify({ tokens }));
+      fetchApi = mockFetch(
+        new Map([
+          [
+            "https://chatgpt.com/backend-api/wham/usage",
+            () => {
+              if (rotate)
+                writeFileSync(
+                  authPath,
+                  JSON.stringify({ tokens: { ...tokens, access_token: "at_rotated" } }),
+                );
+              return jsonResponse(
+                makeCodexResponse({ account_id: responseAccount, rate_limit: { allowed: true } }),
+              );
+            },
+          ],
+        ]),
+      );
+      const codex = findProvider(await service().listUsage(), "codex");
+      expect(codex.status).toBe(status);
+      expect(codex.admission?.state).toBe(state);
+      expect(JSON.stringify(codex)).not.toMatch(/account-a|account-b|at_codex_valid|at_rotated/);
+      expect(JSON.parse(readFileSync(authPath, "utf8")).tokens.access_token).toBe(
+        rotate ? "at_rotated" : "at_codex_valid",
+      );
+    },
+  );
+
+  it.each([
+    { extra: { spend_control: { reached: true } }, state: "blocked" },
+    { extra: { additional_rate_limits: [{ rate_limit: { allowed: false } }] }, state: "unknown" },
+    {
+      extra: { additional_rate_limits: [{ rate_limit: { limit_reached: true } }] },
+      state: "unknown",
+    },
+    { extra: { additional_rate_limits: [{ rate_limit: {} }] }, state: "unknown" },
+    { extra: { additional_rate_limits: [{ rate_limit: { allowed: true } }] }, state: "allowed" },
+    { extra: { rate_limit: { allowed: true, limit_reached: true } }, state: "blocked" },
+  ])("retains restrictive Codex admission signals ($state/$extra)", async ({ extra, state }) => {
+    writeCodexAuth(codexHome, "at_codex_valid");
+    fetchApi = mockFetch(
+      new Map([
+        [
+          "https://chatgpt.com/backend-api/wham/usage",
+          () =>
+            jsonResponse(
+              makeCodexResponse({
+                account_id: "test-account",
+                rate_limit: { allowed: true },
+                ...extra,
+              }),
+            ),
+        ],
+      ]),
+    );
+    expect(findProvider(await service().listUsage(), "codex").admission?.state).toBe(state);
+  });
+
+  it("keeps cached admission age and scope until a fresh read confirms the account", async () => {
+    let now = Date.parse("2026-06-19T00:00:00.000Z"),
+      account = "account-one",
+      calls = 0;
+    const authPath = join(codexHome, "auth.json");
+    writeFileSync(
+      authPath,
+      JSON.stringify({ tokens: { access_token: "token-one", account_id: account } }),
+    );
+    const provider = new CodexQuotaProvider({
+      logger: createLogger(),
+      codexHome,
+      now: () => now,
+      fetch: async (_url, init) => {
+        calls++;
+        expect(new Headers(init?.headers).get("ChatGPT-Account-Id")).toBe(account);
+        return jsonResponse(
+          makeCodexResponse({ account_id: account, rate_limit: { allowed: true } }),
+        );
+      },
+    });
+    const catalog = new ProviderUsageService({
+      logger: createLogger(),
+      now: () => now,
+      fetchers: [provider],
+    });
+    const first = findProvider(await catalog.listUsage(), "codex");
+    now += 1000;
+    writeFileSync(
+      authPath,
+      JSON.stringify({ tokens: { access_token: "token-two", account_id: account } }),
+    );
+    expect(findProvider(await catalog.listUsage(), "codex").admission).toEqual(first.admission);
+    expect(calls).toBe(1);
+    const rotated = findProvider(await catalog.listUsage({ forceRefresh: true }), "codex");
+    expect(rotated.admission?.accountScope).toBe(first.admission?.accountScope);
+    expect(rotated.admission?.observedAt).toBe("2026-06-19T00:00:01.000Z");
+    account = "account-two";
+    writeFileSync(
+      authPath,
+      JSON.stringify({ tokens: { access_token: "token-three", account_id: account } }),
+    );
+    const switched = findProvider(await catalog.listUsage({ forceRefresh: true }), "codex");
+    expect(switched.admission?.accountScope).not.toBe(first.admission?.accountScope);
+    expect(switched.admission?.state).toBe("allowed");
+    expect(calls).toBe(3);
   });
 
   it("treats a Codex HTML usage response as auth failure", async () => {

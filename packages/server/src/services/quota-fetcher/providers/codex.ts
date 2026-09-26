@@ -1,4 +1,5 @@
 import { existsSync, promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "pino";
@@ -10,7 +11,6 @@ import type {
 } from "../../../server/messages.js";
 import type { ProviderApiFetch, ProviderUsageFetcher } from "../provider.js";
 import {
-  ApiNumberSchema,
   balanceToneFromRemaining,
   toneFromUsedPct,
   fetchProviderApi,
@@ -28,20 +28,31 @@ const CodexAuthSchema = z.object({
     .optional(),
 });
 
+const CodexNumberSchema = z
+  .union([z.number(), z.string().trim().min(1)])
+  .pipe(z.coerce.number<string | number>().finite());
 const CodexWindowSchema = z.object({
-  used_percent: ApiNumberSchema.optional(),
-  reset_at: ApiNumberSchema.optional(),
+  used_percent: CodexNumberSchema.pipe(z.number().min(0).max(100)).nullish(),
+  reset_at: CodexNumberSchema.pipe(z.number().int().nonnegative()).nullish(),
+  limit_window_seconds: CodexNumberSchema.pipe(z.number().int().positive()).nullish(),
+});
+
+const CodexRateLimitSchema = z.object({
+  allowed: z.boolean().nullish(),
+  limit_reached: z.boolean().nullish(),
+  primary_window: CodexWindowSchema.nullish(),
+  secondary_window: CodexWindowSchema.nullish(),
 });
 
 const CodexUsageResponseSchema = z.object({
+  account_id: z.string().min(1).nullish(),
   plan_type: z.string().optional(),
   email: z.string().optional(),
-  rate_limit: z
-    .object({
-      primary_window: CodexWindowSchema.nullish(),
-      secondary_window: CodexWindowSchema.nullish(),
-    })
+  rate_limit: CodexRateLimitSchema.nullish(),
+  additional_rate_limits: z
+    .array(z.object({ rate_limit: CodexRateLimitSchema.nullish() }))
     .nullish(),
+  spend_control: z.object({ reached: z.boolean().nullish() }).nullish(),
   code_review_rate_limit: z
     .object({
       primary_window: CodexWindowSchema.nullish(),
@@ -51,7 +62,7 @@ const CodexUsageResponseSchema = z.object({
     .object({
       has_credits: z.boolean().optional(),
       unlimited: z.boolean().optional(),
-      balance: ApiNumberSchema.optional(),
+      balance: CodexNumberSchema.nullish(),
     })
     .nullish(),
 });
@@ -64,16 +75,65 @@ interface CodexQuotaProviderOptions {
   logger: Logger;
   codexHome?: string;
   fetch?: ProviderApiFetch;
+  now?: () => number;
 }
 
 function codexWindow(
   window: CodexWindow | null | undefined,
-): { usedPct: number; resetsAt: string | null } | null {
+): { usedPct: number | null; resetsAt: string | null } | null {
   if (!window) return null;
   return {
-    usedPct: window.used_percent ?? 0,
+    usedPct: window.used_percent ?? null,
     resetsAt: window.reset_at != null ? new Date(window.reset_at * 1000).toISOString() : null,
   };
+}
+
+function codexWindowLabel(window: CodexWindow | null | undefined, fallback: string): string {
+  const seconds = window?.limit_window_seconds;
+  if (seconds == null) return fallback;
+  if (seconds === 604800) return "Weekly";
+  for (const [unit, size] of [
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+    ["second", 1],
+  ] as const) {
+    if (seconds % size === 0) return `${seconds / size}-${unit}`;
+  }
+  return fallback;
+}
+
+interface CodexAdmissionInput {
+  resp: CodexUsageResponse;
+  accountId?: string;
+  observedAt: string;
+}
+
+function codexAdmission({
+  resp,
+  accountId,
+  observedAt,
+}: CodexAdmissionInput): NonNullable<ProviderUsage["admission"]> {
+  const identity = (accountId || resp.account_id)?.trim();
+  const accountScope = identity
+    ? `codex:${createHash("sha256").update(identity).digest("hex")}`
+    : null;
+  const denied = resp.rate_limit?.allowed === false || resp.rate_limit?.limit_reached === true;
+  const scopedLimitsClear = (resp.additional_rate_limits ?? []).every(
+    ({ rate_limit: limit }) => limit?.allowed === true && limit.limit_reached !== true,
+  );
+  let state: "allowed" | "blocked" | "unknown" = "unknown";
+  let reason = "Account scope or explicit provider admission unavailable";
+  if (denied || resp.spend_control?.reached === true) {
+    state = "blocked";
+    reason = "Provider reports a usage limit";
+  } else if (!scopedLimitsClear) {
+    reason = "Additional provider limits require matching the selected model";
+  } else if (accountScope && resp.rate_limit?.allowed === true) {
+    state = "allowed";
+    reason = "Provider reports account allowance available";
+  }
+  return { state, accountScope, observedAt, reason };
 }
 
 export class CodexQuotaProvider implements ProviderUsageFetcher {
@@ -82,13 +142,16 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
 
   private readonly codexHome: string;
   private readonly fetchApi: ProviderApiFetch;
+  private readonly now: () => number;
 
   constructor(options: CodexQuotaProviderOptions) {
     this.codexHome = options.codexHome || process.env["CODEX_HOME"] || join(homedir(), ".codex");
     this.fetchApi = options.fetch ?? fetch;
+    this.now = options.now ?? Date.now;
   }
 
   async fetchUsage(): Promise<ProviderUsage> {
+    const observedAt = new Date(this.now()).toISOString();
     const auth = await this.readCodexAuth();
     const accessToken = auth?.tokens?.access_token;
     if (!auth || !accessToken) {
@@ -103,7 +166,17 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
       return unavailableUsage(this);
     }
 
-    return this.toUsage(resp);
+    const fresh = await this.readCodexAuth();
+    if (fresh?.tokens?.access_token !== accessToken || fresh?.tokens?.account_id !== account_id) {
+      throw new Error("Codex credentials changed during usage observation");
+    }
+    if (account_id && resp.account_id && account_id !== resp.account_id) {
+      throw new Error("Codex usage account does not match the requested account");
+    }
+    return {
+      ...this.toUsage(resp),
+      admission: codexAdmission({ resp, accountId: account_id, observedAt }),
+    };
   }
 
   private toUsage(resp: CodexUsageResponse): ProviderUsage {
@@ -116,7 +189,7 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
       windows.push(
         windowFromUsedPct({
           id: "session",
-          label: "Session",
+          label: codexWindowLabel(resp.rate_limit?.primary_window, "Primary window"),
           utilizationPct: session.usedPct,
           resetsAt: session.resetsAt,
           tone: toneFromUsedPct(session.usedPct),
@@ -127,7 +200,7 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
       windows.push(
         windowFromUsedPct({
           id: "weekly",
-          label: "Weekly",
+          label: codexWindowLabel(resp.rate_limit?.secondary_window, "Secondary window"),
           utilizationPct: weekly.usedPct,
           resetsAt: weekly.resetsAt,
           tone: toneFromUsedPct(weekly.usedPct),
@@ -147,7 +220,7 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
     }
 
     const balances: ProviderUsageBalance[] = [];
-    if (resp.credits?.balance !== undefined) {
+    if (resp.credits?.balance != null) {
       balances.push({
         id: "credits",
         label: "Credits",

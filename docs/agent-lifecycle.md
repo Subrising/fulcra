@@ -37,6 +37,49 @@ work is gone. Report that exit as a turn failure so the agent lands in `error` w
 Only the Claude provider does this today; the others still report a death only when a turn happens to
 be in flight.
 
+### Quiet MCP configuration refresh
+
+For an authorized connection update on a retained session, use the client agent handle's
+`getMcpRefreshState()` followed by `refreshMcp({ expected, changes })`. Copy `provider`, `sessionId`
+and the opaque `configRevision` into `expected`. `changes` replaces only named external MCP entries;
+a null value removes an entry. For a selector updated at the same launch address, explicitly set
+`reconnect: true` (requires `server_info.features.agentMcpReconnect`); otherwise identical settings
+return `unchanged` without closing the runtime. Reconnect uses the same quiet/identity checks and
+can use an empty `changes` object. You cannot change the daemon's `paseo` connection or remove a server
+still referenced by the saved tool policy. The endpoints require `workspace.read` and
+`workspace.write`, respectively, and are gated by `server_info.features.agentMcpRefresh`.
+
+This path supports resident, persisted Claude and Codex sessions with MCP support. It refuses busy
+turns, pending permission responses, running provider children, stale identities/configurations and
+unsupported sessions before releasing the writer. Runtime configuration edits share the lifecycle
+lane; new prompts are refused during the swap. No prompt is sent, history is not rehydrated, and
+provider identity, timeline epochs/rows, ownership, labels and saved tool policy are retained.
+`refreshed` means the provider resumed with the requested configuration; it does not prove the remote
+MCP service is reachable or that a model used it.
+
+Hosts with an external authority can configure the trusted synchronous
+`AgentManagerOptions.mcpRefreshAdmission` callback. It returns `{ revision, allowed }` from a
+consistent read of current ownership, generation, human-input and grant state. This host revision
+is included in the opaque `configRevision`. After all asynchronous launch preparation and event
+draining, the manager reads it again and checks admission immediately before invoking provider
+close, with no intervening await. Changed or denied authority returns `refused/stale`; unavailable
+or malformed authority fails closed. The callback must not mutate grants, send a prompt, or return
+a promise. This adds a host fence to the existing `workspace.write` permission; it grants no new
+authority. Hosts without an external authority retain the normal permission/identity checks.
+
+Treat `refused` as no adoption and inspect again before deciding what to do. `unchanged` means the
+requested entries already match. A failed resume normally leaves the original saved configuration
+closed with its history intact. A failed close or replacement cleanup retains the uncertain writer
+in an error state and blocks prompts until explicit close recovery. If registration fails after
+resume, the retained error-state configuration may already contain the requested entries. The response's state reports
+which identity/revision remains; provider diagnostics and MCP secrets are not returned here.
+
+After a timeout or disconnect, inspect again: the lifecycle operation can finish after the client
+stops waiting. Do not replay the request automatically, use public history refresh as a substitute,
+or import a second writer. Revisions are daemon-local and change on runtime replacement, so inspect
+after restarting the daemon. Live adoption, service reachability checks and subsequent prompts are
+separate authorized actions.
+
 ### Cancellation
 
 Provider interruption is idempotent at the `AgentSession` boundary. It resolves when the prior

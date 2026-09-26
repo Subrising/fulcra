@@ -32,6 +32,9 @@ function buildModelRowKey(provider: string, modelId: string): string {
 export type ProviderModelSelection =
   | { kind: "models"; rows: ProviderSelectionModelRow[] }
   | { kind: "loading" }
+  // The host reported the provider's CLI as not available (not installed) — distinct from a CLI that
+  // is installed and failed, which stays an error.
+  | { kind: "unavailable" }
   | { kind: "error"; message: string };
 
 export interface ProviderSelectorProvider {
@@ -113,6 +116,9 @@ function buildEntryModelSelection(
   if (entry.status === "loading") {
     return { kind: "loading" };
   }
+  if (entry.status === "unavailable" && !entry.error) {
+    return { kind: "unavailable" };
+  }
   return {
     kind: "error",
     message:
@@ -143,7 +149,7 @@ export function buildProviderSelectorProviders(input: {
 export function buildSelectableProviderSelectorProviders(
   entries: ProviderSnapshotEntry[] | undefined,
 ): ProviderSelectorProvider[] {
-  return (entries ?? [])
+  const providers = (entries ?? [])
     .filter((entry) => entry.enabled)
     .map((entry) => {
       const label = entry.label ?? entry.provider;
@@ -153,6 +159,11 @@ export function buildSelectableProviderSelectorProviders(
         modelSelection: buildEntryModelSelection(entry, label),
       };
     });
+  // Providers whose CLI is not installed go last, in the host's order; everything else keeps its place.
+  return [
+    ...providers.filter((provider) => provider.modelSelection.kind !== "unavailable"),
+    ...providers.filter((provider) => provider.modelSelection.kind === "unavailable"),
+  ];
 }
 
 export function getProviderModelRows(
@@ -191,6 +202,9 @@ export function resolveSelectedModelLabel(input: {
   }
   if (provider.modelSelection.kind === "error") {
     return i18n.t("providerSelection.error");
+  }
+  if (provider.modelSelection.kind === "unavailable") {
+    return i18n.t("providerSelection.unavailable");
   }
   if (provider.modelSelection.kind !== "models") {
     return i18n.t("providerSelection.selectModel");

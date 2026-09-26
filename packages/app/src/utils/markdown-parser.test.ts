@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createMarkdownParser } from "./markdown-parser";
 
-// Every string markdown-it's typographer would rewrite, with the character it
-// would rewrite it to. Sourced from markdown-it/lib/rules_core/replacements.js
-// and smartquotes.js. `--flag` is deliberately absent: the en-dash rules need
+// Text that must remain copyable, including sequences rewritten by typographer.
+// `--flag` alone is deliberately absent: the en-dash rules need
 // whitespace or a word character on both sides, so a CLI flag after a space is
 // never touched and asserting on it would prove nothing.
-const REWRITTEN_BY_TYPOGRAPHER = [
+const VERBATIM_TEXT = [
   "(c)",
   "(C)",
   "(r)",
@@ -32,7 +31,7 @@ describe("createMarkdownParser", () => {
   it("renders every typographer-rewritten sequence verbatim", () => {
     const parser = createMarkdownParser({ linkify: true });
 
-    for (const source of REWRITTEN_BY_TYPOGRAPHER) {
+    for (const source of VERBATIM_TEXT) {
       expect(parser.renderInline(source)).toBe(escapeHtml(source));
     }
   });
@@ -43,7 +42,7 @@ describe("createMarkdownParser", () => {
     const typographer = createMarkdownParser({ linkify: true });
     typographer.set({ typographer: true });
 
-    for (const source of REWRITTEN_BY_TYPOGRAPHER) {
+    for (const source of VERBATIM_TEXT.filter((text) => !["(p)", "(P)"].includes(text))) {
       expect(typographer.renderInline(source)).not.toBe(escapeHtml(source));
     }
   });
@@ -67,6 +66,22 @@ describe("createMarkdownParser", () => {
     expect(
       createMarkdownParser({ linkify: false }).render("see https://paseo.sh now"),
     ).not.toContain("href");
+  });
+
+  it("preserves bare domains, email links and complete user-info URL targets", () => {
+    const parser = createMarkdownParser({ linkify: true });
+    expect(parser.renderInline("example.com hello@example.com https://u:p@example.com/repo")).toBe(
+      '<a href="http://example.com">example.com</a> <a href="mailto:hello@example.com">hello@example.com</a> <a href="https://u:p@example.com/repo">https://u:p@example.com/repo</a>',
+    );
+    expect(
+      createMarkdownParser({ linkify: false }).renderInline("example.com hello@example.com"),
+    ).toBe("example.com hello@example.com");
+  });
+
+  it("ends automatic links before Unicode punctuation", () => {
+    expect(
+      createMarkdownParser({ linkify: true }).renderInline("https://example.com/a，下一条"),
+    ).toBe('<a href="https://example.com/a">https://example.com/a</a>，下一条');
   });
 });
 

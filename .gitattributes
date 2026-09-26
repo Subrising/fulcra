@@ -1,0 +1,15 @@
+# The only npm `bin` target in this workspace (packages/cli/package.json).
+#
+# On Windows, Git for Windows defaults to core.autocrlf=true, so a checkout
+# without this entry writes the shebang line as `\r\n`. `npm ci` then links the
+# workspace bin, and bin-links' fixBin() detects a Windows hashbang and rewrites
+# only that first line back to `\n` (bin-links/lib/fix-bin.js). The result is a
+# mixed-ending file that Git cannot normalise back, so `git status` reports
+# ` M packages/cli/bin/paseo` immediately after install — which recorded
+# sourceDirty: true in the preview build manifest and refused draft delivery.
+#
+# Checking this executable out as LF keeps the hashbang unix-ended, so fixBin
+# finds nothing to convert and never mutates the file. Scoped to this one path
+# on purpose: packages/desktop/bin/paseo.cmd is a batch file that wants CRLF,
+# and no other tracked file is an npm bin target.
+packages/cli/bin/paseo text eol=lf

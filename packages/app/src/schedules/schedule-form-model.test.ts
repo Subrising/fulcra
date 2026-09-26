@@ -699,6 +699,10 @@ describe("schedule form model", () => {
       providerPreferences: {
         mock: {
           model: "model-b",
+          // A saved model is only a preference when the user chose it; see
+          // ProviderPreferences.modelChosenByUser. This fixture is a profile the user built, so it is
+          // marked -- an unmarked one would correctly resolve to the host's default instead.
+          modelChosenByUser: true,
           mode: "load-test",
           thinkingByModel: { "model-b": "high" },
         },

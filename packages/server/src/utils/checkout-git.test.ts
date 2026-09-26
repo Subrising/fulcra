@@ -19,6 +19,7 @@ import {
   __resetCheckoutShortstatCacheForTests,
   __resetPullRequestStatusCacheForTests,
   __setPullRequestStatusCacheTtlForTests,
+  __settleCheckoutShortstatWarmsForTests,
   commitAll,
   discardChanges,
   CHECKOUT_DIFF_MAX_STRUCTURED_BYTES,
@@ -257,7 +258,10 @@ describe("checkout git utilities", () => {
     __resetPullRequestStatusCacheForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Deleting the repo while a background warm still runs git inside it fails with EBUSY on
+    // Windows, so wait for that work before touching the fixture.
+    await __settleCheckoutShortstatWarmsForTests();
     __resetCheckoutShortstatCacheForTests();
     __resetPullRequestStatusCacheForTests();
     rmSync(tempDir, { recursive: true, force: true });
@@ -1384,17 +1388,13 @@ const x = 1;
 
     warmCheckoutShortstatInBackground(repoDir);
 
-    // A repo with no origin/main computes to null, but null should still be cached.
-    for (let attempts = 0; attempts < 20; attempts += 1) {
-      const cached = getCachedCheckoutShortstat(repoDir);
-      if (cached !== undefined) {
-        expect(cached).toBeNull();
-        return;
-      }
-      await sleep(25);
-    }
+    // The warm returns before its git work finishes, so the listing caller sees no cache yet.
+    expect(getCachedCheckoutShortstat(repoDir)).toBeUndefined();
 
-    throw new Error("shortstat background warm did not populate cache in time");
+    await __settleCheckoutShortstatWarmsForTests();
+
+    // A repo with no origin/main computes to null, but null should still be cached.
+    expect(getCachedCheckoutShortstat(repoDir)).toBeNull();
   });
 
   it("commits messages with quotes safely", async () => {

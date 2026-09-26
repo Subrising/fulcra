@@ -80,13 +80,15 @@ it("marks pre-0.8 plugins failed on startup and recovers after migration and rel
   expect(await service.listPlugins()).toEqual([
     expect.objectContaining({
       status: "failed",
-      error: expect.stringContaining("https://paseo.sh/docs/plugins/migration"),
+      error: expect.stringContaining(
+        "was written for the plugin API before 0.8. Ask its author to migrate it.",
+      ),
     }),
   ]);
   await writePlugin(root, ">=0.8.0");
   await expect(service.reloadPlugin("example")).resolves.toMatchObject({ status: "running" });
   await writePlugin(root, ">=0.9.0");
-  await expect(service.reloadPlugin("example")).rejects.toThrow("requires Paseo >=0.9.0");
+  await expect(service.reloadPlugin("example")).rejects.toThrow("requires Fulcra >=0.9.0");
   expect(service.catalog()).toEqual([]);
 });
 
@@ -97,7 +99,7 @@ it("still requires entry migration when an old plugin adds a compatible requirem
   await writeFile(path.join(root, "index.ts"), "export default () => () => {};");
   const { service } = await host();
   await expect(service.installDirectory({ path: root })).rejects.toThrow(
-    "https://paseo.sh/docs/plugins/migration",
+    "cannot run on this version of Fulcra. Ask its author to update it.",
   );
 });
 
@@ -123,14 +125,14 @@ it("rejects Git install and update before build commands, preserving the running
   const [preview] = await service.previewUpdates({ pluginId: "example" });
   expect(preview).toMatchObject({ outcome: "update" });
   await expect(service.applyUpdates([preview!.proposal!])).resolves.toMatchObject([
-    { id: "example", outcome: "error", error: expect.stringContaining("requires Paseo >=0.9.0") },
+    { id: "example", outcome: "error", error: expect.stringContaining("requires Fulcra >=0.9.0") },
   ]);
   expect(await service.listPlugins()).toEqual([installed]);
   expect(service.catalog()).toHaveLength(1);
   expect(await readdir(path.join(home, "plugins", ".staging"))).toEqual([]);
   await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(service.installSource({ source, id: "second" })).rejects.toThrow(
-    "requires Paseo >=0.9.0",
+    "requires Fulcra >=0.9.0",
   );
   await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await service.listPlugins()).toEqual([installed]);

@@ -71,8 +71,8 @@ describe("plugin host access", () => {
   it("rejects unknown and disconnected targets without falling through to another host", () => {
     const h = registry();
     h.snapshots.set("a", { connectionStatus: "online", client: connection("a") });
-    expect(() => h.runtime.getPaseoClient("missing")).toThrow("Unknown Paseo host: missing");
-    expect(() => h.runtime.getPaseoClient("b")).toThrow("Paseo host is disconnected: b");
+    expect(() => h.runtime.getPaseoClient("missing")).toThrow("Unknown Fulcra host: missing");
+    expect(() => h.runtime.getPaseoClient("b")).toThrow("Fulcra host is disconnected: b");
     h.lifetime.abort();
   });
 
@@ -92,7 +92,7 @@ describe("plugin host access", () => {
     h.snapshots.set("b", { connectionStatus: "offline", client });
     h.publish();
     expect(() => h.runtime.getPaseoClient("b")).toThrow("disconnected");
-    expect(() => api.config.get()).toThrow("Paseo host is disconnected: b");
+    expect(() => api.config.get()).toThrow("Fulcra host is disconnected: b");
     h.snapshots.set("b", { connectionStatus: "online", client });
     h.publish();
     expect(h.runtime.getPaseoClient("b")).toBe(api);

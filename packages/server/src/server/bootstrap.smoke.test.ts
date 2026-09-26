@@ -10,6 +10,7 @@ import { WebSocket } from "ws";
 import { createPaseoDaemon, parseListenString, type PaseoDaemonConfig } from "./bootstrap.js";
 import { loadConfig } from "./config.js";
 import { AgentManagerShuttingDownError } from "./agent/agent-manager.js";
+import { FileAgentTimelineStore } from "./agent/file-agent-timeline-store.js";
 import { hashDaemonPassword } from "./auth.js";
 import { generateLocalPairingOffer } from "./pairing-offer.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
@@ -80,17 +81,28 @@ describe("paseo daemon bootstrap", () => {
     }
   });
 
-  test("keeps timeline activity in memory and removes obsolete timeline files at startup", async () => {
+  test("retains native journals while removing only obsolete timeline files at startup", async () => {
     const paseoHomeRoot = await mkdtemp(path.join(os.tmpdir(), "paseo-timeline-cleanup-"));
     const paseoHome = path.join(paseoHomeRoot, ".paseo");
     const obsoleteTimelineDirectory = path.join(paseoHome, "agent-timelines");
     const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-timeline-agent-"));
     await mkdir(obsoleteTimelineDirectory, { recursive: true });
     await writeFile(path.join(obsoleteTimelineDirectory, "obsolete.json"), "{}\n", "utf-8");
+    const nativeDirectory = path.join(paseoHome, "native-timeline-journal");
+    const journal = new FileAgentTimelineStore(nativeDirectory);
+    await journal.appendCommitted("sentinel", {
+      type: "user_message",
+      text: "retained",
+      clientMessageId: "original",
+    });
+    const sentinel = await journal.fetchCommitted("sentinel");
 
     const daemonHandle = await createTestPaseoDaemon({ paseoHomeRoot, cleanup: false });
     try {
       await expect(access(obsoleteTimelineDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await new FileAgentTimelineStore(nativeDirectory).fetchCommitted("sentinel")).toEqual(
+        sentinel,
+      );
 
       const agent = await daemonHandle.daemon.agentManager.createAgent(
         { provider: "codex", cwd: agentCwd },
@@ -99,9 +111,12 @@ describe("paseo daemon bootstrap", () => {
       );
       await daemonHandle.daemon.agentManager.appendTimelineItem(agent.id, {
         type: "assistant_message",
-        text: "timeline stays in memory",
+        text: "timeline survives startup cleanup",
       });
       await daemonHandle.daemon.agentManager.flush();
+      expect(await new FileAgentTimelineStore(nativeDirectory).fetchCommitted(agent.id)).toEqual(
+        daemonHandle.daemon.agentManager.fetchTimeline(agent.id),
+      );
 
       await expect(access(obsoleteTimelineDirectory)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

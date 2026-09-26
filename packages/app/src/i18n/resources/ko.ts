@@ -2,6 +2,12 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ko: TranslationResources = {
+  sessionOwnership: {
+    noLeaderYet: "아직 리더 없음",
+    unknownProject: "프로젝트 알 수 없음",
+    reportsTo: "{{leader}}에 보고",
+    unknownAccessibility: "소유 프로젝트를 알 수 없음",
+  },
   paneFind: {
     connectionFailure: "이 채팅을 검색할 수 없습니다. 호스트 연결을 확인하고 다시 시도하세요.",
     historyChangedFailure: "검색 중에 채팅이 변경되었습니다. 다시 검색하세요.",
@@ -871,7 +877,7 @@ export const ko: TranslationResources = {
             "이 브랜치가 이미 {{baseRef}}와 최신 상태이므로 업데이트를 사용할 수 없습니다",
           mergePrNoGithub: "GitHub가 연결되어 있지 않아 지금은 PR 병합을 사용할 수 없습니다",
           archiveNotWorktree:
-            "이 워크스페이스가 Paseo 워크트리로 생성되지 않아 여기서 보관을 사용할 수 없습니다",
+            "이 워크스페이스가 Fulcra 워크트리로 생성되지 않아 여기서 보관을 사용할 수 없습니다",
           mergePrNoForge:
             "{{brand}}가 연결되어 있지 않기 때문에 지금은 {{noun}} 병합을 사용할 수 없습니다.",
           mergePrMissing: "아직 풀 리퀘스트가 없어 PR 병합을 사용할 수 없습니다",
@@ -1161,7 +1167,7 @@ export const ko: TranslationResources = {
       discord: "Discord",
       github: "GitHub 이슈 만들기",
       whatsNew: "새로운 소식",
-      appName: "Paseo",
+      appName: "Fulcra",
     },
     sections: {
       sessions: "기록",
@@ -1308,7 +1314,7 @@ export const ko: TranslationResources = {
       close: "창 닫기",
     },
     quitting: {
-      title: "Paseo 종료 중...",
+      title: "Fulcra 종료 중...",
       detail: "로컬 데몬을 중지하는 중입니다.",
     },
     daemon: {
@@ -1323,19 +1329,19 @@ export const ko: TranslationResources = {
       },
       management: {
         title: "내장 데몬 관리",
-        hint: "Paseo가 내장 데몬을 시작하고 중지하도록 허용합니다",
+        hint: "Fulcra가 내장 데몬을 시작하고 중지하도록 허용합니다",
         pauseTitle: "내장 데몬 일시 중지",
         pauseMessage:
           "내장 데몬이 즉시 중지됩니다. 내장 데몬에 연결된 실행 중인 에이전트와 터미널이 중지됩니다.",
         pauseAndStop: "일시 중지 후 중지",
         registrationFailed:
-          "내장 데몬이 시작되었지만 Paseo가 localhost 연결을 저장하지 못했습니다. 데몬 관리를 껐다가 다시 켜거나 localhost를 수동으로 추가하세요.",
-        pausedStopFailed: "내장 데몬 관리가 일시 중지되었지만 Paseo가 데몬을 중지하지 못했습니다.",
+          "내장 데몬이 시작되었지만 Fulcra가 localhost 연결을 저장하지 못했습니다. 데몬 관리를 껐다가 다시 켜거나 localhost를 수동으로 추가하세요.",
+        pausedStopFailed: "내장 데몬 관리가 일시 중지되었지만 Fulcra가 데몬을 중지하지 못했습니다.",
         updateFailed: "내장 데몬 관리를 업데이트할 수 없습니다.",
       },
       keepRunning: {
         title: "종료 후에도 데몬 계속 실행",
-        hint: "Paseo를 종료해도 데몬이 계속 실행됩니다",
+        hint: "Fulcra를 종료해도 데몬이 계속 실행됩니다",
       },
       logs: {
         title: "로그 파일",
@@ -1404,7 +1410,7 @@ export const ko: TranslationResources = {
     },
     rosetta: {
       title: "Apple Silicon 빌드 다운로드",
-      runningIntel: "Apple Silicon에서 Rosetta로 Paseo의 Intel 빌드를 실행하고 있습니다.",
+      runningIntel: "Apple Silicon에서 Rosetta로 Fulcra의 Intel 빌드를 실행하고 있습니다.",
       highCpu:
         "이로 인해 CPU 사용량이 높아집니다. 이를 해결하려면 Apple Silicon 빌드를 다운로드하세요.",
       download: "다운로드",
@@ -1447,7 +1453,7 @@ export const ko: TranslationResources = {
         microphone: "마이크 상태를 아직 확인하지 않았습니다.",
       },
       testNotification: {
-        title: "Paseo 알림 테스트",
+        title: "Fulcra 알림 테스트",
         body: "이 메시지가 보이면 데스크톱 알림이 작동하는 것입니다.",
         notDelivered: "알림이 전달되지 않았습니다. 시스템 설정 > 알림을 확인하세요.",
         failed: "알림을 보내지 못했습니다.",
@@ -1456,12 +1462,12 @@ export const ko: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "CLI 설치 상태를 확인할 수 없습니다.",
-        installFailed: "Paseo CLI를 설치할 수 없습니다.",
+        installFailed: "Fulcra CLI를 설치할 수 없습니다.",
       },
     },
   },
   rootError: {
-    title: "Paseo에 문제가 발생했습니다.",
+    title: "Fulcra에 문제가 발생했습니다.",
     body: "앱을 다시 로드해 보세요. 이런 일이 계속 발생하면 신고할 때 아래 세부정보를 포함하세요.",
     details: "세부",
   },
@@ -1556,7 +1562,7 @@ export const ko: TranslationResources = {
     },
   },
   onboarding: {
-    title: "Paseo에 오신 것을 환영합니다",
+    title: "Fulcra에 오신 것을 환영합니다",
     subtitle: "시작하려면 컴퓨터를 연결하세요",
     actions: {
       settings: "설정",
@@ -1570,6 +1576,8 @@ export const ko: TranslationResources = {
     loadingShort: "불러오는 중",
     loadingSelector: "모델 선택기 불러오는 중...",
     error: "오류",
+    notInstalled: "설치되지 않음",
+    notInstalledMessage: "이 호스트에 {{provider}}이(가) 설치되어 있지 않습니다.",
     defaultModel: "기본값",
     profiles: "프로필",
     providers: "제공자",
@@ -1644,7 +1652,7 @@ export const ko: TranslationResources = {
     },
     direct: {
       title: "직접 연결",
-      helper: "Paseo 서버의 주소를 입력하세요.",
+      helper: "Fulcra 서버의 주소를 입력하세요.",
       fields: {
         host: "호스트",
         port: "포트",
@@ -1685,7 +1693,7 @@ export const ko: TranslationResources = {
     },
     remoteSsh: {
       title: "원격 SSH",
-      helper: "원격 호스트에서 실행 중인 Paseo 데몬에 연결합니다.",
+      helper: "원격 호스트에서 실행 중인 Fulcra 데몬에 연결합니다.",
       fields: {
         target: "SSH 호스트",
       },
@@ -1742,15 +1750,15 @@ export const ko: TranslationResources = {
       enableDescription:
         "릴레이를 사용하면 이 장치를 어디에서나 연결할 수 있습니다. 페어링 트래픽은 종단 간 암호화됩니다.",
       relayDocs: "릴레이 작동 방식",
-      relayDocsAccessibility: "Paseo 릴레이 작동 방식 읽기",
+      relayDocsAccessibility: "Fulcra 릴레이 작동 방식 읽기",
       enableRelay: "릴레이 활성화",
       enablingRelay: "활성화 중...",
       notNow: "지금은 아님",
       directConnectionHint:
         "릴레이 없이 TCP, Tailscale 또는 다른 VPN을 통해 직접 연결하세요. QR 코드가 생성되지 않습니다.",
-      updateRequired: "Paseo 데스크톱에서 릴레이를 활성화하려면 호스트를 업데이트하세요.",
+      updateRequired: "Fulcra 데스크톱에서 릴레이를 활성화하려면 호스트를 업데이트하세요.",
       unavailable: "페어링 정보를 사용할 수 없습니다.",
-      hint: "휴대폰의 Paseo로 이 QR 코드를 스캔하거나 아래 링크를 복사하세요.",
+      hint: "휴대폰의 Fulcra로 이 QR 코드를 스캔하거나 아래 링크를 복사하세요.",
       securityWarning:
         "이 페어링 링크는 비밀번호처럼 취급하세요. 링크를 가진 사람은 누구나 이 데몬에 접근할 수 있습니다.",
       qrUnavailable: "QR 코드를 사용할 수 없습니다.",
@@ -1785,7 +1793,7 @@ export const ko: TranslationResources = {
   serviceUrl: {
     title: "서비스 URL 열기",
     message: "{{url}}을(를) 열까요?",
-    inPaseo: "Paseo에서",
+    inPaseo: "Fulcra에서",
     externalBrowser: "외부 브라우저",
     dontAskAgain: "다시 묻지 않기",
   },
@@ -1863,6 +1871,100 @@ export const ko: TranslationResources = {
       emptyTitle: "아직 풀 리퀘스트가 없습니다",
       emptyDescription: "이 체크아웃에 풀 리퀘스트를 만들면 세부 정보가 여기에 표시됩니다.",
     },
+    architectureMap: {
+      label: "아키텍처 맵",
+      subtitle: "프로젝트 아키텍처",
+      tooltip: "프로젝트 아키텍처 맵 보기",
+      emptyTitle: "이 프로젝트에는 아키텍처 맵이 없습니다",
+      emptyDescription: "Fulcra는 {{directory}}에 저장된 맵을 표시합니다.",
+      oversized: "너무 커서 표시할 수 없음(1MiB 초과): {{names}}",
+      truncated: "처음 20개 맵만 표시됩니다.",
+      listFailed: "아키텍처 맵 목록을 가져올 수 없습니다",
+      reload: "새로고침",
+      cannotShow: "이 맵을 표시할 수 없습니다",
+      tooLarge: "파일이 1MiB보다 큽니다.",
+      openFile: "파일 열기",
+      hiddenCharacters: "이 맵의 텍스트에서 숨겨진 문자 또는 방향 변경 문자를 제거했습니다.",
+      zoomIn: "확대",
+      zoomOut: "축소",
+      fit: "맞춤",
+      actualSize: "실제 크기",
+      components: "구성 요소",
+      boundaries: "경계",
+      closeDetail: "세부 정보 닫기",
+      detailId: "ID",
+      change: {
+        viewMap: "지도",
+        viewChange: "변경",
+        openFromPullRequest: "아키텍처 변경",
+        openFromPullRequestHint: "이 풀 리퀘스트가 시스템 지도에서 무엇을 바꾸는지 보여 줍니다",
+        title: "이 변경이 시스템에 미치는 영향",
+        comparedWith: "{{base}}와(과) 비교",
+        comparedWithStart: "이 브랜치가 시작된 지점과 비교",
+        summaryParts_one: "시스템의 {{count}}개 부분에 영향을 줍니다.",
+        summaryParts_other: "시스템의 {{count}}개 부분에 영향을 줍니다.",
+        summaryNoParts: "시스템 지도의 어떤 부분도 바뀌지 않았습니다.",
+        summaryRearranged: "지도의 배치만 바뀌었고 시스템의 어떤 부분도 바뀌지 않았습니다.",
+        summaryNewMap: "이 변경은 시스템 지도를 추가합니다.",
+        summaryDeletedMap: "이 변경은 시스템 지도를 삭제합니다.",
+        dependents_one: "다른 {{count}}개 부분이 변경된 부분에 의존합니다.",
+        dependents_other: "다른 {{count}}개 부분이 변경된 부분에 의존합니다.",
+        files_one: "파일 {{count}}개가 변경되었습니다.",
+        files_other: "파일 {{count}}개가 변경되었습니다.",
+        testsBeside: "변경된 코드 파일 {{checked}}개 중 {{withTests}}개는 옆에 테스트가 있습니다.",
+        testsNotChecked_one: "나머지 {{count}}개는 확인하지 않았습니다.",
+        testsNotChecked_other: "나머지 {{count}}개는 확인하지 않았습니다.",
+        staleTitle: "이 다이어그램은 오래되었을 수 있습니다",
+        staleFiles:
+          "이 변경은 파일 {{files}}개에 영향을 주지만 지도는 함께 업데이트되지 않았습니다.",
+        staleSources:
+          "이 변경은 지도의 바탕이 되는 파일을 수정하지만 지도는 함께 업데이트되지 않았습니다.",
+        staleAsk: "같은 풀 리퀘스트에서 지도를 업데이트해 달라고 요청하세요.",
+        modeSideBySide: "나란히 보기",
+        modeChanges: "변경 사항",
+        modeBefore: "변경 전",
+        modeAfter: "변경 후",
+        legendAdded: "추가됨",
+        legendRemoved: "삭제됨",
+        legendChanged: "변경됨",
+        legendUnchanged: "변경 없음",
+        badgeAdded: "새로 추가",
+        badgeRemoved: "삭제됨",
+        badgeChanged: "변경됨",
+        noBefore: "이 변경 전에는 지도가 없었습니다.",
+        noAfter: "이 변경은 지도를 삭제합니다.",
+        touchedTitle: "바뀐 것",
+        dependsTitle: "함께 영향을 받는 것",
+        dependsHint: "이 부분들은 바뀐 것을 사용합니다.",
+        statusAdded: "새로 추가",
+        statusRemoved: "삭제됨",
+        statusChangedFields: "변경됨: {{fields}}",
+        statusConnections: "연결이 바뀌었습니다",
+        field: {
+          type: "종류",
+          label: "이름",
+          sublabel: "설명",
+          tag: "메모",
+          from: "시작",
+          to: "끝",
+          style: "모양",
+        },
+        renamed:
+          "“{{from}}”은(는) 변경된 것이 아니라 “{{to}}”(으)로 대체된 것 같습니다. 지도가 새 식별자를 부여했기 때문에 기록이 처음부터 다시 시작됩니다.",
+        openPullRequest: "풀 리퀘스트 #{{number}} 열기",
+        unavailableTitle: "이 변경은 비교할 수 없습니다",
+        unavailablePullRequest: "이 풀 리퀘스트는 비교할 수 없습니다",
+        unavailablePullRequestDetail:
+          "Fulcra는 풀 리퀘스트 자체의 커밋을 비교하지만, 아직 특정 커밋의 파일을 읽을 수 없습니다. 저장하지 않은 수정 때문에 결과가 틀릴 수 있으므로 이 컴퓨터의 파일로 추측하지 않습니다.",
+        openPullRequestPlain: "풀 리퀘스트 열기",
+        unavailableCommitRead: "풀 리퀘스트 커밋 시점의 지도를 읽지 못했습니다.",
+        unavailableNotInPullRequest: "이 지도는 풀 리퀘스트의 커밋에 없습니다.",
+        unavailableTooLarge: "변경이 너무 커서 여기서 비교할 수 없습니다.",
+        unavailableMismatch: "비교하는 동안 지도가 바뀌었습니다. 다시 불러와 주세요.",
+        unavailableInvalid: "지도의 한쪽을 읽을 수 없습니다.",
+        unavailableDiff: "변경된 파일 목록이 잘려서 지도 변경이 빠졌을 수 있습니다.",
+      },
+    },
     diff: {
       changesLabel: "변경 사항",
       diffLabel: "Diff",
@@ -1905,8 +2007,8 @@ export const ko: TranslationResources = {
       other: "기타 도구 {{count}}개 사용함",
     },
     paseoCalls: {
-      one: "Paseo를 {{count}}회 호출함",
-      other: "Paseo를 {{count}}회 호출함",
+      one: "Fulcra를 {{count}}회 호출함",
+      other: "Fulcra를 {{count}}회 호출함",
     },
     and: "그리고",
   },
@@ -1968,6 +2070,7 @@ export const ko: TranslationResources = {
       permissions: "권한",
       diagnostics: "진단",
       about: "정보",
+      licenses: "라이선스",
     },
     layout: en.settings.layout,
     editor: {
@@ -1987,7 +2090,7 @@ export const ko: TranslationResources = {
       send: "보내기",
       sending: "보내는 중...",
       sentTitle: "테스트 알림을 보냈습니다",
-      sentDescription: "Paseo가 알림을 운영 체제에 전달했습니다.",
+      sentDescription: "Fulcra가 알림을 운영 체제에 전달했습니다.",
       sendFailedTitle: "테스트 알림을 보낼 수 없음",
     },
     hostSections: {
@@ -2010,10 +2113,10 @@ export const ko: TranslationResources = {
       selection: "모델 선택",
       automatic: "자동",
       preferred: "수동",
-      automaticHint: "Paseo가 사용 가능한 빠른 모델을 선택합니다",
-      preferredHint: "Paseo에서 사용할 모델을 선택하세요",
+      automaticHint: "Fulcra가 사용 가능한 빠른 모델을 선택합니다",
+      preferredHint: "Fulcra에서 사용할 모델을 선택하세요",
       model: "모델",
-      fallbackHint: "사용할 수 없으면 Paseo가 다른 사용 가능한 모델을 사용합니다",
+      fallbackHint: "사용할 수 없으면 Fulcra가 다른 사용 가능한 모델을 사용합니다",
       docs: "문서",
       saveError: "메타데이터 생성을 업데이트할 수 없습니다",
     },
@@ -2022,7 +2125,7 @@ export const ko: TranslationResources = {
       browserData: {
         title: "브라우저 데이터",
         siteData: "쿠키 및 사이트 데이터",
-        description: "브라우저 탭은 Paseo 전체에서 로그인 및 사이트 데이터를 공유합니다.",
+        description: "브라우저 탭은 Fulcra 전체에서 로그인 및 사이트 데이터를 공유합니다.",
         clear: "브라우저 데이터 지우기",
         clearing: "삭제 중...",
         confirmTitle: "브라우저 데이터를 삭제하시겠습니까?",
@@ -2051,7 +2154,7 @@ export const ko: TranslationResources = {
         description: "실행 중인 스크립트의 URL을 열 위치",
         options: {
           ask: "물어보기",
-          inApp: "Paseo에서",
+          inApp: "Fulcra에서",
           external: "외부 브라우저",
         },
       },
@@ -2118,10 +2221,18 @@ export const ko: TranslationResources = {
         },
       },
     },
+    licenses: {
+      title: "라이선스 및 감사의 글",
+      upstreamTitle: "오픈 소스 기반",
+      upstreamHint:
+        "Fulcra는 Paseo를 수정한 포크이며 Apache License 2.0에 따라 사용됩니다. 아래 고지는 해당 라이선스의 요구에 따라 게재합니다.",
+      noticeTitle: "저작자 고지",
+      licenseTitle: "라이선스 전문",
+    },
     about: {
       title: "정보",
       appVersion: "앱 버전",
-      whatsNewHint: "모든 버전의 릴리스 노트",
+      licensesHint: "Fulcra의 기반이 되는 소프트웨어의 라이선스 및 저작자 고지",
       thisDevice: "이 기기",
       connectedHosts: "연결된 호스트",
       offline: "오프라인",
@@ -2136,7 +2247,7 @@ export const ko: TranslationResources = {
         label: "앱 업데이트",
         readyToInstall: "설치 준비됨: {{version}}",
         installTitle: "데스크톱 업데이트 설치",
-        installMessage: "이 컴퓨터의 Paseo를 업데이트합니다",
+        installMessage: "이 컴퓨터의 Fulcra를 업데이트합니다",
         installConfirm: "업데이트 설치",
         update: "업데이트",
         updateTo: "{{version}}(으)로 업데이트",
@@ -2365,11 +2476,11 @@ export const ko: TranslationResources = {
         title: "오케스트레이션 스킬",
         description: "CLI를 통해 에이전트가 오케스트레이션하도록 가르칩니다",
         updateAvailable: "업데이트 사용 가능",
-        updateTitle: "Paseo 스킬을 업데이트할까요?",
+        updateTitle: "Fulcra 스킬을 업데이트할까요?",
         updateFallback: "번들된 스킬을 내 컴퓨터에 동기화합니다.",
-        uninstallTitle: "Paseo 스킬을 제거할까요?",
+        uninstallTitle: "Fulcra 스킬을 제거할까요?",
         uninstallMessage:
-          "~/.agents, ~/.claude, ~/.codex에서 모든 Paseo 오케스트레이션 스킬을 제거합니다.",
+          "~/.agents, ~/.claude, ~/.codex에서 모든 Fulcra 오케스트레이션 스킬을 제거합니다.",
         choose: "스킬 선택",
         chooseAll: "모든 스킬",
         chooseAllHint: "나중에 추가되는 항목을 포함하여 모든 번들 스킬을 설치된 상태로 유지합니다.",
@@ -2405,9 +2516,9 @@ export const ko: TranslationResources = {
         title: "오케스트레이션",
         unavailable: "오케스트레이션을 관리하려면 이 호스트에 연결하세요",
         enableTools: {
-          title: "Paseo 도구 활성화",
+          title: "Fulcra 도구 활성화",
           hint: "에이전트가 워크트리, 에이전트, 일정을 관리할 수 있습니다",
-          accessibilityLabel: "Paseo 도구 주입",
+          accessibilityLabel: "Fulcra 도구 주입",
         },
         systemPrompt: {
           title: "시스템 프롬프트",
@@ -2511,15 +2622,15 @@ export const ko: TranslationResources = {
             "이 호스트는 연결되어 있지 않습니다. 재시작하기 전에 온라인 상태가 될 때까지 기다리세요.",
           offlineTitle: "호스트 오프라인",
           offlineMessage:
-            "이 호스트는 오프라인입니다. Paseo가 자동으로 다시 연결하므로 다시 온라인이 될 때까지 기다린 후 재시작하세요.",
+            "이 호스트는 오프라인입니다. Fulcra가 자동으로 다시 연결하므로 다시 온라인이 될 때까지 기다린 후 재시작하세요.",
           requestFailedTitle: "오류",
           requestFailedMessage:
-            "재시작 요청을 보내지 못했습니다. Paseo가 자동으로 다시 연결하므로 호스트가 온라인으로 표시되면 다시 시도하세요.",
+            "재시작 요청을 보내지 못했습니다. Fulcra가 자동으로 다시 연결하므로 호스트가 온라인으로 표시되면 다시 시도하세요.",
           dialogFailedMessage: "재시작 확인 대화 상자를 열 수 없습니다.",
         },
         update: {
           desktopManagedHint:
-            "이 데몬은 Paseo Desktop에서 관리됩니다. 호스트에서 Paseo 데스크톱을 업데이트합니다.",
+            "이 데몬은 Fulcra Desktop에서 관리됩니다. 호스트에서 Fulcra 데스크톱을 업데이트합니다.",
           title: "데몬 업데이트",
           hint: "데몬을 최신 버전으로 업데이트하고 다시 시작하세요.",
           confirm: "업데이트",
@@ -2680,7 +2791,7 @@ export const ko: TranslationResources = {
         newScript: "새 스크립트",
         editScript: "{{name}} 편집",
         runAsService: "서비스로 실행",
-        serviceHint: "Paseo가 프로세스를 감독하고 $PASEO_PORT를 통해 포트를 할당합니다",
+        serviceHint: "Fulcra가 프로세스를 감독하고 $PASEO_PORT를 통해 포트를 할당합니다",
         actions: {
           add: "스크립트 추가",
           edit: "편집",
@@ -2689,7 +2800,7 @@ export const ko: TranslationResources = {
       },
       metadata: {
         title: "메타데이터 생성",
-        info: "Paseo가 메타데이터를 생성하는 데 사용하는 AI 프롬프트에 주입되는 프로젝트별 지침 - 브랜치 이름, 커밋 스타일, PR 형식 같은 팀 규칙을 적용하는 데 사용하세요",
+        info: "Fulcra가 메타데이터를 생성하는 데 사용하는 AI 프롬프트에 주입되는 프로젝트별 지침 - 브랜치 이름, 커밋 스타일, PR 형식 같은 팀 규칙을 적용하는 데 사용하세요",
         branchName: "브랜치 이름",
         branchNamePlaceholder:
           "브랜치에 feat/ 또는 fix/를 접두사로, 개인 브랜치에는 mb/를 붙이세요",

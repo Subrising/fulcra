@@ -160,6 +160,8 @@ export interface WorkspaceGitRuntimeSnapshot {
       state: string;
       baseRefName: string;
       headRefName: string;
+      baseRefOid?: string;
+      headRefOid?: string;
       isMerged: boolean;
       isDraft?: boolean;
       mergeable?: PullRequestMergeable;

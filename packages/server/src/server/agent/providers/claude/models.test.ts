@@ -39,10 +39,17 @@ async function createClaudeConfigDirWithRawSettings(settings: string): Promise<s
   return configDir;
 }
 
+// Default fixture version must be >= the newest model's minimumClaudeCodeVersion, or the catalog
+// filters that model out while getClaudeModels() still returns it, and every deep-equality test
+// between them fails for a reason that has nothing to do with what it is testing.
 function createCatalogClient(claudeCodeVersion = "2.1.280"): ClaudeAgentClient {
   return new ClaudeAgentClient({
     logger: createTestLogger(),
     resolveVersion: async () => claudeCodeVersion,
+    // No real CLI in unit tests: discovery fails, so these exercise the manifest fallback.
+    modelProbe: async () => {
+      throw new Error("no Claude Code in unit tests");
+    },
   });
 }
 
@@ -458,12 +465,16 @@ describe("findClaudeModel", () => {
 });
 
 describe("Claude Opus 5 catalog", () => {
-  it("offers a single Opus 5 entry with a 1M context window", () => {
+  // The point of this test is that each Opus 5 generation appears ONCE -- no separate "[1m]" variant
+  // and no dated duplicates -- each advertising the full context window. Adding Opus 5.5 extends the
+  // guarantee rather than changing it, so the new entry belongs here too.
+  it("offers a single entry per Opus 5 generation, each with a 1M context window", () => {
     const opus5Models = getClaudeModels()
-      .filter((model) => /^claude-opus-5(\[1m\])?$/.test(model.id))
+      .filter((model) => model.id.startsWith("claude-opus-5"))
       .map(({ id, label, contextWindowMaxTokens }) => ({ id, label, contextWindowMaxTokens }));
 
     expect(opus5Models).toEqual([
+      { id: "claude-opus-5-5", label: "Opus 5.5", contextWindowMaxTokens: 1_000_000 },
       { id: "claude-opus-5", label: "Opus 5", contextWindowMaxTokens: 1_000_000 },
     ]);
   });

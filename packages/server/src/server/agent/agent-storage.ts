@@ -42,6 +42,39 @@ const PERSISTENCE_HANDLE_SCHEMA = z
   .nullable()
   .optional();
 
+// A turn the daemon was running when it stopped. At boot, a stored `running`/`initializing` record on an
+// agent no process has loaded is, by definition, a turn nobody is running any more: it is normalised to `idle` and
+// this marker records what happened, so "idle" is not read as "the turn finished". The marker describes only the
+// most recent turn: it survives snapshot flushes while `lastUserMessageAt` is unchanged and is dropped by the next
+// user message.
+export const StoredInterruptedTurnSchema = z.object({
+  previousStatus: z.enum(["running", "initializing"]),
+  detectedAt: z.string(),
+  bootId: z.string().nullable(),
+  lastUserMessageAt: z.string().nullable(),
+});
+export type StoredInterruptedTurn = z.infer<typeof StoredInterruptedTurnSchema>;
+
+export function interruptedRecord(
+  record: StoredAgentRecord,
+  marker: Pick<StoredInterruptedTurn, "detectedAt" | "bootId">,
+): StoredAgentRecord | null {
+  if (record.archivedAt || record.internal) return null;
+  if (record.lastStatus !== "running" && record.lastStatus !== "initializing") return null;
+  // Only the status changes, plus the marker. updatedAt and lastUserMessageAt stay byte-identical: sidebar order
+  // depends on updatedAt, and the input fence compares lastUserMessageAt.
+  return {
+    ...record,
+    lastStatus: "idle",
+    interruptedTurn: {
+      previousStatus: record.lastStatus,
+      detectedAt: marker.detectedAt,
+      bootId: marker.bootId,
+      lastUserMessageAt: record.lastUserMessageAt ?? null,
+    },
+  };
+}
+
 const STORED_AGENT_SCHEMA = z.object({
   id: z.string(),
   provider: z.string(),
@@ -75,6 +108,7 @@ const STORED_AGENT_SCHEMA = z.object({
   internal: z.boolean().optional(),
   archivedAt: z.string().nullable().optional(),
   owner: AgentOwnerSchema.optional(),
+  interruptedTurn: StoredInterruptedTurnSchema.nullable().optional(),
 });
 
 export type SerializableAgentConfig = Pick<
@@ -159,9 +193,11 @@ export class AgentStorage {
     return this.queueRecordMutation(record.id, () => record);
   }
 
+  // A mutation may return null to leave the record exactly as it is (a normalisation that no longer
+  // applies writes nothing).
   private queueRecordMutation(
     agentId: string,
-    mutate: (existing: StoredAgentRecord | null) => StoredAgentRecord,
+    mutate: (existing: StoredAgentRecord | null) => StoredAgentRecord | null,
   ): Promise<void> {
     const prev = this.pendingWrites.get(agentId) ?? Promise.resolve();
     const next = prev.then(async () => {
@@ -170,6 +206,7 @@ export class AgentStorage {
       }
 
       const record = mutate(this.cache.get(agentId) ?? null);
+      if (record === null) return undefined;
       await this.writeRecord(record);
       return undefined;
     });
@@ -208,6 +245,11 @@ export class AgentStorage {
 
   beginDelete(agentId: string): void {
     this.deleting.add(agentId);
+  }
+
+  /** Lifts the fence when a delete is abandoned before the record was removed. */
+  cancelDelete(agentId: string): void {
+    this.deleting.delete(agentId);
   }
 
   async remove(agentId: string): Promise<void> {
@@ -259,8 +301,58 @@ export class AgentStorage {
       if (existing && existing.archivedAt !== undefined) {
         record.archivedAt = existing.archivedAt;
       }
+      // Keep the interruption marker until the agent receives a new user message.
+      if (
+        existing?.interruptedTurn &&
+        existing.interruptedTurn.lastUserMessageAt === (record.lastUserMessageAt ?? null)
+      ) {
+        record.interruptedTurn = existing.interruptedTurn;
+      }
       return record;
     });
+  }
+
+  // Called once at daemon boot before any agent is loaded. Rewrites every stored non-archived,
+  // non-internal `running`/`initializing` record to `idle` with an interruption marker. It loads, resumes and
+  // prompts nothing. Each rewrite runs inside the per-agent write queue against the record current at that moment.
+  async normalizeInterruptedTurns(
+    marker: Pick<StoredInterruptedTurn, "detectedAt" | "bootId">,
+    isLoaded: (agentId: string) => boolean = () => false,
+  ): Promise<string[]> {
+    await this.load();
+    const changed: string[] = [];
+    await Promise.all(
+      Array.from(this.cache.values())
+        .filter((record) => interruptedRecord(record, marker) !== null)
+        .map((record) =>
+          this.queueRecordMutation(record.id, (existing) => {
+            // A live agent owns its own status; only a record no process has loaded is normalised.
+            const next =
+              existing && !isLoaded(record.id) ? interruptedRecord(existing, marker) : null;
+            if (next) changed.push(record.id);
+            return next;
+          }),
+        ),
+    );
+    return changed.sort();
+  }
+
+  // The same normalisation for ONE agent, for `stop` on an agent no process has loaded. `stillUnloaded`
+  // is re-checked inside the write queue, so an agent that was loaded (and may have started a real turn) in the
+  // meantime is never touched.
+  async normalizeInterruptedTurn(
+    agentId: string,
+    marker: Pick<StoredInterruptedTurn, "detectedAt" | "bootId">,
+    stillUnloaded: () => boolean,
+  ): Promise<StoredAgentRecord | null> {
+    await this.load();
+    let result: StoredAgentRecord | null = null;
+    await this.queueRecordMutation(agentId, (existing) => {
+      const next = existing && stillUnloaded() ? interruptedRecord(existing, marker) : null;
+      result = next;
+      return next;
+    });
+    return result;
   }
 
   async setTitle(agentId: string, title: string): Promise<void> {

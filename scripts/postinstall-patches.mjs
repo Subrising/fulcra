@@ -8,6 +8,19 @@ import { join, relative } from "node:path";
 // workspace root live in their workspace's own node_modules, and patch-package resolves
 // the patch's node_modules/... paths relative to its working directory.
 const patchedPackages = [
+  // EAS 16 imports tar as a default; patched tar 7 exposes named exports.
+  {
+    nodeModulesPath: "node_modules/eas-cli",
+    patchPrefix: "eas-cli+16.32.0",
+  },
+  {
+    nodeModulesPath: "node_modules/electron-updater",
+    patchPrefix: "electron-updater+6.",
+  },
+  {
+    nodeModulesPath: "node_modules/electron-updater/node_modules/builder-util-runtime",
+    patchPrefix: "electron-updater++builder-util-runtime+",
+  },
   {
     nodeModulesPath: "node_modules/react-native-markdown-display",
     patchPrefix: "react-native-markdown-display+",

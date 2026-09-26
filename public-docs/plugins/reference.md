@@ -61,8 +61,11 @@ The required root manifest is `paseo-plugin.json`:
 
 ### Requirements
 
-`requirements` is an optional object. Its currently supported key, `paseo`, accepts an npm semver
-range. An omitted `requirements.paseo` means `<0.8.0`: the plugin predates the first breaking
+`requirements` is an optional object. Its key `paseo` accepts an npm semver range. Two optional
+keys grant host capabilities: `notify: true` allows `server.notify`, and `credentials` lists the
+connectors `server.credentials.request` may use, such as `["github", "jira"]`. See
+[Notify the user and use connected accounts](#notify-the-user-and-use-connected-accounts).
+An omitted `requirements.paseo` means `<0.8.0`: the plugin predates the first breaking
 plugin release. Paseo 0.8 and later reject it with a link to the [migration guide](migration).
 Empty strings, invalid ranges, and unknown manifest requirement keys are rejected.
 
@@ -698,12 +701,21 @@ export default function contribute(client: PluginClientContext) {
 
 `PluginSurfaceProps` contains:
 
-| Field        | Meaning                                                                                                                                                                                                                                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `theme`      | Typed `PluginTheme` color tokens for the active Paseo theme.                                                                                                                                                                                                                                                                      |
-| `host`       | Selected host `id` and display `label`.                                                                                                                                                                                                                                                                                           |
-| `layout`     | `compact` and the `ios`, `android`, or `web` platform.                                                                                                                                                                                                                                                                            |
-| `navigation` | Optional client navigation. `openAgent({ agentId, serverId? })` and `openWorkspace({ workspaceId, serverId? })` open targets on `serverId`, or on the selected host when omitted. `openBrowser({ url, workspaceId, serverId? })` is available only on Electron; see [links and browsers](#external-links-and-workspace-browsers). |
+| Field        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `theme`      | Typed `PluginTheme` color tokens for the active Paseo theme.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `host`       | Selected host `id` and display `label`.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `layout`     | `compact` and the `ios`, `android`, or `web` platform.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `navigation` | Optional client navigation. `openAgent({ agentId, serverId? })` and `openWorkspace({ workspaceId, serverId? })` open targets on `serverId`, or on the selected host when omitted. `openBrowser({ url, workspaceId, serverId? })` is available only on Electron; see [links and browsers](#external-links-and-workspace-browsers). Feature-check optional `openAgentOnHost({ serverId, agentId })` when you need the request refused rather than attempted. |
+
+`openAgentOnHost` returns `"requested"` when the global saved-host registry is ready and contains the
+exact target. Offline, connecting, idle or error states still use that host's existing navigation and
+loading/error UI. It returns `"host-unavailable"` while the registry loads or when the host is missing;
+it never queues or replays that invocation. Offer an explicit retry after the host becomes available.
+`"requested"` confirms a navigation request, not a loaded conversation. This capability does not grant
+plugin data or RPC access to another host. It differs from passing `serverId` to `openAgent`, which
+navigates without checking whether the host is known. Older clients may omit this method even when
+`navigation` exists.
 
 Paseo owns the route, header, close action, host picker, error boundary, and query client. The plugin owns the surface body.
 
@@ -790,6 +802,36 @@ the modal. Dismissal calls `onOpenChange(false)`; the plugin must update `open` 
 
 Modal children keep the plugin runtime context. `usePaseo`, `useRpc`, `useWorkspace`, and
 `useAgent` work inside them.
+
+### Coordinated pan surfaces
+
+Fulcra adds `PanScrollView` and `PanSurface` to the existing
+`@getpaseo/plugin/client/react-native` module. Use them together for a draggable
+canvas inside a scrolling page. Ordinary `ScrollView` behavior is unchanged.
+
+`PanScrollView` accepts React Native `ScrollView` props and forwards its ref.
+`PanSurface` accepts `View` props plus these required callbacks:
+
+| Callback                | Meaning                                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| `onPanStart()`          | The gesture crossed its activation threshold. A tap does not start a pan.                            |
+| `onPanUpdate({ x, y })` | Cumulative translation in layout points from the touch origin, including movement before activation. |
+| `onPanEnd(cancelled)`   | Exactly one completion for each started pan. Cancellation and unmount pass `true`.                   |
+
+Keep the position at `onPanStart` and apply the cumulative translation to that
+position. Rendering `PanSurface` without a `PanScrollView` ancestor throws during
+render. Child buttons retain
+their normal tap behavior. Gestures outside the surface can scroll the page.
+Callbacks run on the JavaScript thread; changing callback identities does not
+replace an active recognizer. Multiple touches use centroid translation.
+Keep callbacks free of uncaught exceptions: errors propagate to the JavaScript
+event handler, like errors in an `onPress` callback.
+
+For clients predating these exports, use named imports from this existing module
+and check for both components during rendering. Show an update explanation and accessible
+navigation controls when absent. Do not import a new module path or dereference
+missing components during plugin evaluation. This extension does not change the
+plugin protocol and is not an upstream Paseo API guarantee.
 
 ### Scrolling
 
@@ -1758,6 +1800,37 @@ export default function contribute(server: PluginServerContext) {
 Inputs and outputs are validated on both sides. RPC names start with a lowercase letter and contain lowercase letters, numbers, dots, hyphens, or underscores. `useRpc()` returns a typed async function. Use TanStack Query for request state, caching, and mutations.
 
 Backend handlers receive the same `PaseoApi` as `{ paseo }`. Their connection belongs to the subprocess and closes when the plugin stops. It does not subscribe to timelines or catalog events until plugin code subscribes. Follow the [SDK event contract](../../sdk/events.md) for cleanup and timeline replacements. Backend code can use Node APIs and dependencies installed in the plugin directory.
+
+## Notify the user and use connected accounts
+
+Both capabilities are optional on `PluginServerContext`; check them before use, because hosts that
+lack them omit them. The daemon grants them from your manifest's `requirements`, never from plugin
+code.
+
+```ts
+await server.notify?.({ key: `decision:${id}`, title: "Approve the release", urgency: "now" });
+```
+
+Every notification appears in the host's notification list. Only `urgency: "now"` also pushes to
+the user's devices. The title is one line of at most 120 characters with no body, so keep details
+and names out of it. Repeating a `key` within 90 days returns the original notification without
+pushing again. Each plugin can create ten new notifications a minute.
+
+```ts
+const issues = await server.credentials?.request(accountId, "github", {
+  method: "GET",
+  path: "/issues",
+  query: { state: "open" },
+});
+```
+
+Your plugin never receives a token. The host attaches the account's credential, sends the request
+only to that account's provider API, and removes the credential from the answer. `request` reaches
+only the connectors in `requirements.credentials`; methods other than `GET` also need
+`requirements.credentialsWrite`. Setting an `Authorization` or `Cookie` header is refused. Account
+ids come from `paseo.credentials.list()`, which lists your declared connectors' accounts, never
+secrets. Connecting and disconnecting accounts happens in the app; a settings screen can offer it
+with `paseo.credentials`, and `plugin-examples/integrations-dev` shows each call.
 
 ## Debug backend output
 

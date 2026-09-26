@@ -103,7 +103,26 @@ function findUntranslatedConnectionErrors(): string[] {
   });
 }
 
+// The only value allowed to name the upstream project: the licence attribution.
+const UPSTREAM_ATTRIBUTION_KEY = "settings.licenses.upstreamHint";
+
+// Substring match on purpose: machine translations glue words ("Bienvenido aPaseo"), so a
+// word-boundary pattern misses them. Env var names such as $PASEO_PORT are identifiers.
+function findOldBrandValues(resource: unknown): string[] {
+  return Object.entries(flattenStrings(resource)).flatMap(([key, value]) => {
+    if (key === UPSTREAM_ATTRIBUTION_KEY) return [];
+    const visible = value.replace(/\$PASEO_[A-Z_]+/g, "");
+    return /Paseo|Orca|ORCA/.test(visible) ? [`${key}: ${value}`] : [];
+  });
+}
+
 describe("translation resources", () => {
+  it("names the product Fulcra in every language, except the upstream attribution", () => {
+    for (const resource of [en, ar, es, fr, ja, ko, ptBR, ru, zhCN]) {
+      expect(findOldBrandValues(resource)).toEqual([]);
+    }
+  });
+
   it("keeps all supported language keys in sync with English", () => {
     const englishKeys = flattenKeys(en).sort();
     expect(flattenKeys(ar).sort()).toEqual(englishKeys);
@@ -273,7 +292,7 @@ describe("translation resources", () => {
     expect(en.settings.host.notFound).toBe("Host not found");
     expect(en.settings.host.connections.title).toBe("Connections");
     expect(en.settings.host.daemon.restart.title).toBe("Restart daemon");
-    expect(en.settings.host.orchestration.enableTools.title).toBe("Enable Paseo tools");
+    expect(en.settings.host.orchestration.enableTools.title).toBe("Enable Fulcra tools");
     expect(en.settings.providers.title).toBe("Providers");
     expect(en.settings.providers.models.addModel).toBe("Add model");
     expect(en.settings.providers.diagnostic.title).toBe("Diagnostic");
@@ -353,7 +372,7 @@ describe("translation resources", () => {
   });
 
   it("includes onboarding and direct connection keys for the Batch 4E migration", () => {
-    expect(en.onboarding.title).toBe("Welcome to Paseo");
+    expect(en.onboarding.title).toBe("Welcome to Fulcra");
     expect(en.onboarding.actions.settings).toBe("Settings");
     expect(en.pairing.direct.title).toBe("Direct connection");
     expect(en.pairing.direct.fields.host).toBe("Host");
@@ -584,7 +603,7 @@ describe("translation resources", () => {
     expect(en.message.compaction.completed).toBe("Context compacted");
     expect(en.agentPanel.archived.callout).toBe("This agent is archived");
     expect(en.agentPanel.archived.unarchive).toBe("Unarchive");
-    expect(en.desktop.quitting.title).toBe("Quitting Paseo...");
+    expect(en.desktop.quitting.title).toBe("Quitting Fulcra...");
     expect(en.desktop.quitting.detail).toBe("Stopping the local daemon.");
     expect(en.composer.attachments.dropImagesHere).toBe("Drop images here");
   });
@@ -645,7 +664,7 @@ describe("translation resources", () => {
     );
     expect(en.desktop.rosetta.title).toBe("Download the Apple Silicon build");
     expect(en.desktop.rosetta.runningIntel).toBe(
-      "You're running the Intel build of Paseo under Rosetta on Apple Silicon.",
+      "You're running the Intel build of Fulcra under Rosetta on Apple Silicon.",
     );
     expect(en.desktop.rosetta.highCpu).toBe(
       "This causes high CPU usage. Download the Apple Silicon build to fix it.",
@@ -673,7 +692,7 @@ describe("translation resources", () => {
     expect(en.desktop.permissions.empty.notifications).toBe(
       "Notification status has not been checked yet.",
     );
-    expect(en.desktop.permissions.testNotification.title).toBe("Paseo notification test");
+    expect(en.desktop.permissions.testNotification.title).toBe("Fulcra notification test");
     expect(en.desktop.permissions.testNotification.failed).toBe("Failed to send notification.");
   });
 
@@ -694,7 +713,7 @@ describe("translation resources", () => {
       "Failed to fetch daemon status: {{message}}",
     );
     expect(en.desktop.daemon.loadFailed).toBe("Unable to load desktop daemon status.");
-    expect(en.desktop.integrations.cli.installFailed).toBe("Unable to install the Paseo CLI.");
+    expect(en.desktop.integrations.cli.installFailed).toBe("Unable to install the Fulcra CLI.");
   });
 
   it("includes remaining utility chrome keys for the Batch 4T migration", () => {

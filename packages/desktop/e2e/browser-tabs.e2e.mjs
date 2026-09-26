@@ -9,7 +9,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { experimental_createMCPClient } from "ai";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { chromium } from "playwright";
 import { runAppearanceFontSizeRegression } from "./appearance-font-size.electron.mjs";
@@ -195,6 +195,51 @@ async function waitForDesktopStatus(page) {
   );
 }
 
+/**
+ * Give the renderer a host before the settings rotation expects host-scoped sections.
+ *
+ * waitForDesktopStatus only proves the desktop IPC bridge answers with a daemon status. It says
+ * nothing about the renderer's host registry, and the built-in daemon is opt-in, so a fresh
+ * profile has no host: the settings sidebar renders General..About and then "Add host" /
+ * "Enable built-in daemon", with no Overview for the rotation to click.
+ *
+ * Register the daemon this harness already started, through the same direct-connection flow a
+ * user performs on first launch. Defaults are left alone — nothing here turns the built-in
+ * daemon on.
+ */
+async function registerHarnessHost(page, daemonPort) {
+  const onWelcome = new URL(page.url()).pathname.startsWith("/welcome");
+  if (onWelcome) {
+    await page.getByTestId("welcome-direct-connection").click();
+  } else {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .locator('[data-testid="settings-sidebar"]:visible')
+      .getByRole("button", { name: "Add host", exact: true })
+      .click();
+    // "Add host" opens the method picker; the welcome entry point skips straight to direct.
+    await page.getByRole("button", { name: "Direct connection", exact: true }).click();
+  }
+  await page.getByTestId("direct-host-input").fill("127.0.0.1");
+  await page.getByTestId("direct-port-input").fill(String(daemonPort));
+  await page.getByTestId("direct-host-submit").click();
+  await page
+    .locator('[data-testid="settings-sidebar"]:visible')
+    .getByRole("button", { name: "Overview", exact: true })
+    .waitFor({ state: "visible" })
+    .catch(async () => {
+      // Not in settings yet: the welcome flow lands in the app shell instead.
+      await page.waitForFunction(() => !window.location.pathname.startsWith("/welcome"));
+    });
+  // Adding a host from Settings keeps Settings open. Leave it through the real
+  // back control before the settings stress flow starts from the workspace shell.
+  if (new URL(page.url()).pathname.startsWith("/settings")) {
+    await page.locator('[data-testid="settings-back-to-workspace"]:visible').click();
+    await page.waitForFunction(() => !location.pathname.startsWith("/settings"));
+  }
+  console.log(`[browser-tabs] renderer connected to 127.0.0.1:${daemonPort}`);
+}
+
 async function startTargetPage() {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -239,7 +284,7 @@ function mcpPayload(result, command) {
 }
 
 async function callBrowserTool(client, name, args = {}) {
-  return mcpPayload(await client.callTool({ name, args }), name);
+  return mcpPayload(await client.callTool({ name, arguments: args }), name);
 }
 
 async function waitForGuestSelector(client, browserId) {
@@ -276,11 +321,12 @@ async function createCallerAgent(daemonPort) {
   const transport = new StreamableHTTPClientTransport(
     new URL(`http://127.0.0.1:${daemonPort}/mcp/agents`),
   );
-  const client = await experimental_createMCPClient({ transport });
+  const client = new Client({ name: "paseo-desktop-test", version: "1" });
+  await client.connect(transport);
   try {
     const response = await client.callTool({
       name: "create_agent",
-      args: {
+      arguments: {
         relationship: { kind: "detached" },
         workspace: { kind: "existing", workspaceId: workspaceIds[0] },
         title: "Browser desktop browser E2E caller",
@@ -529,7 +575,10 @@ async function verifyHiddenBrowserScreenshots({
       browserId,
       function: "() => { document.body.style.background = 'rgb(0,255,0)'; }",
     });
-    const response = await client.callTool({ name: "browser_screenshot", args: { browserId } });
+    const response = await client.callTool({
+      name: "browser_screenshot",
+      arguments: { browserId },
+    });
     mcpPayload(response, "browser_screenshot");
     const screenshot = response.content.find((item) => item.type === "image");
     assert(screenshot, "browser_screenshot returned no image");
@@ -1128,6 +1177,7 @@ async function main() {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
     const page = await waitForAppPage(browser, expoPort);
     const status = await waitForDesktopStatus(page);
+    await registerHarnessHost(page, daemonPort);
 
     const checkPluginLinks = () =>
       runPluginLinksRegression({
@@ -1162,7 +1212,8 @@ async function main() {
         `http://127.0.0.1:${daemonPort}/mcp/agents?callerAgentId=${encodeURIComponent(callerAgentId)}`,
       ),
     );
-    client = await experimental_createMCPClient({ transport });
+    client = new Client({ name: "paseo-desktop-test", version: "1" });
+    await client.connect(transport);
     const report = await runRegression({
       page,
       client,

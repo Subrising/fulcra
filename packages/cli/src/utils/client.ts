@@ -45,6 +45,17 @@ export function buildDaemonConnectionCommandError(options: ConnectOptions & { er
     message = message.replaceAll(options.target.host, describeDaemonTarget(options.target));
   if (message.startsWith("Cannot connect to daemon at "))
     return error as { code: string; message: string; details: string };
+  // `--host host:8443` against a TLS listener connects, then the plain-ws handshake is rejected with
+  // an HTTP status. The status alone reads as a server fault; it is almost always a missing scheme,
+  // so say which one to use instead of leaving the reader to guess.
+  if (
+    options.target.kind === "endpoint" &&
+    /Unexpected server response: (400|426|501)/.test(message)
+  ) {
+    const bare = options.target.host.trim();
+    if (!/^[a-z+]+:\/\//i.test(bare))
+      message += `. If this endpoint terminates TLS (for example behind \`tailscale serve\`), address it as wss://${bare} -- a scheme-less host is dialled as plain ws://`;
+  }
   let code = "DAEMON_UNREACHABLE";
   if (typeof error === "object" && error !== null && "code" in error) code = String(error.code);
   else if (message === "Password required") code = "AUTH_REQUIRED";
@@ -56,6 +67,53 @@ export function buildDaemonConnectionCommandError(options: ConnectOptions & { er
       options.target.kind === "instance"
         ? `Start with: paseo daemon start --home ${JSON.stringify(options.target.home)}`
         : "Check the selected endpoint and credentials. SSH transport does not install or start the daemon.",
+  };
+}
+
+/**
+ * Schemes a user may reasonably type for a daemon that is reachable over HTTP(S) or WebSocket --
+ * a `tailscale serve` front end, a reverse proxy, or the daemon's own listener. The value is whether
+ * that scheme implies TLS.
+ *
+ * Without this, `normalizeDaemonHost` fell through to its `includes(":")` branch and returned the URL
+ * with its scheme still attached, and `resolveDaemonTarget` then wrapped it again as
+ * `ws://wss://host:8443/ws`. Node parses that as hostname "wss" with the rest as a path, so the
+ * failure was `getaddrinfo ENOTFOUND wss` -- the real host name never reached the resolver.
+ */
+const URL_ENDPOINT_SCHEMES = new Map<string, boolean>([
+  ["ws:", false],
+  ["wss:", true],
+  ["http:", false],
+  ["https:", true],
+]);
+
+interface UrlEndpoint {
+  useTls: boolean;
+  /** host:port, IPv6 already bracketed, port defaulted from the scheme when omitted. */
+  hostPort: string;
+  password?: string;
+  scheme: string;
+}
+
+function parseUrlEndpoint(trimmed: string): UrlEndpoint | null {
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  const useTls = URL_ENDPOINT_SCHEMES.get(url.protocol);
+  if (useTls === undefined || !url.hostname) return null;
+  // parseHostPort requires an explicit port, so the scheme's default is supplied here rather than
+  // letting a portless URL fail as "Invalid host:port".
+  const port = url.port || (useTls ? "443" : "80");
+  // URL.hostname already brackets an IPv6 literal, so it must not be bracketed again.
+  const hostPort = `${url.hostname}:${port}`;
+  return {
+    useTls,
+    hostPort,
+    ...(url.password ? { password: decodeURIComponent(url.password) } : {}),
+    scheme: url.protocol,
   };
 }
 
@@ -107,6 +165,11 @@ export function normalizeDaemonHost(raw: string): string | null {
     return `127.0.0.1:${trimmed}`;
   }
 
+  const url = parseUrlEndpoint(trimmed);
+  if (url) return `${url.scheme}//${url.hostPort}`;
+
+  // A bare host:port is plain ws. A scheme-less TLS endpoint cannot be detected here; the connect
+  // path turns the resulting handshake rejection into an explicit hint.
   return trimmed.includes(":") ? trimmed : null;
 }
 
@@ -149,6 +212,11 @@ export function resolveDaemonTarget(host: string): TransportTarget {
     };
   }
 
+  const url = parseUrlEndpoint(trimmed);
+  if (url) {
+    return { type: "tcp", url: buildDaemonWebSocketUrl(url.hostPort, { useTls: url.useTls }) };
+  }
+
   return {
     type: "tcp",
     url: `ws://${trimmed}/ws`,
@@ -161,6 +229,8 @@ export function resolveDaemonPassword(host: string): string | undefined {
     const fromUri = parseConnectionUri(trimmed).password;
     if (fromUri) return fromUri;
   }
+  const fromUrl = parseUrlEndpoint(trimmed)?.password;
+  if (fromUrl) return fromUrl;
   const fromEnv = process.env.PASEO_PASSWORD;
   return fromEnv && fromEnv.length > 0 ? fromEnv : undefined;
 }

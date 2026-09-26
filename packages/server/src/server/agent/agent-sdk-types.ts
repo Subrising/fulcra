@@ -5,10 +5,11 @@ import type {
   ProviderOptions,
   ToolPolicy,
 } from "@getpaseo/protocol/agent-types";
-import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import type { AgentAttachment, AgentQuotaSnapshot } from "@getpaseo/protocol/messages";
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type { AgentProviderNotice, AgentTaskItem };
+export type { AgentQuotaSnapshot };
 
 export type AgentProvider = string;
 
@@ -209,7 +210,11 @@ export type AgentPromptContentBlock =
 
 export type AgentPromptInput = string | AgentPromptContentBlock[];
 
+// Daemon-only capability: symbol keys cannot arrive through wire JSON. Codex startTurn only.
+export const CODEX_TURN_ADMISSION = Symbol("codex-turn-admission");
+
 export interface AgentRunOptions {
+  [CODEX_TURN_ADMISSION]?: (quota: AgentQuotaSnapshot) => true;
   outputSchema?: unknown;
   resumeFrom?: AgentPersistenceHandle;
   maxThinkingTokens?: number;
@@ -250,6 +255,12 @@ export const TOOL_CALL_ICON_NAMES = [
 
 export type ToolCallIconName = (typeof TOOL_CALL_ICON_NAMES)[number];
 
+export interface ToolCallFileChange {
+  path: string;
+  kind: "add" | "delete" | "update";
+  unifiedDiff?: string;
+}
+
 export type ToolCallDetail =
   | {
       type: "shell";
@@ -267,10 +278,13 @@ export type ToolCallDetail =
     }
   | {
       type: "edit";
+      /** The first changed file, kept for clients that predate `files`. */
       filePath: string;
       oldString?: string;
       newString?: string;
       unifiedDiff?: string;
+      /** Every file in a multi-file patch, in patch order. */
+      files?: ToolCallFileChange[];
     }
   | {
       type: "write";
@@ -347,6 +361,8 @@ export type ToolCallDetail =
       type: "unknown";
       input: unknown;
       output: unknown;
+      /** Files a patch touched when no preview could be rendered; paths stay usable without a diff. */
+      files?: ToolCallFileChange[];
     };
 
 interface ToolCallBase {
@@ -668,6 +684,8 @@ export interface AgentSession {
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
   getRuntimeInfo(): Promise<AgentRuntimeInfo>;
+  /** Read the attached provider without connecting, creating a thread or starting a turn. */
+  getQuota?(): Promise<AgentQuotaSnapshot>;
   getAvailableModes(): Promise<AgentMode[]>;
   getCurrentMode(): Promise<string | null>;
   setMode(modeId: string): Promise<void | AgentProviderNotice>;
@@ -767,6 +785,23 @@ export interface AgentClient {
   /** Apply provider-owned defaults to a model supplied through provider configuration. */
   resolveConfiguredModel?(model: AgentModelDefinition): AgentModelDefinition;
   resolveDefaultModeId?(input: ResolveAgentDefaultModeInput): Promise<string | undefined>;
+  /**
+   * Store the provider's default mode on a session created without one, so the session keeps it.
+   *
+   * Opt-in, and only right for a provider whose "no mode" fallback is NOT its declared default. Claude
+   * falls back to `default` (Always Ask) while its catalog default is `auto`, so a mode-less session is
+   * stuck in Always Ask for life. Codex must not opt in: a mode-less Codex session defers approval and
+   * sandbox to the user's own Codex config, and storing a mode would make the daemon override it.
+   */
+  readonly persistsDefaultModeOnCreate?: boolean;
+  /**
+   * Store the created model's default thinking option on a session created without one.
+   *
+   * Opt-in, on the same terms as persistsDefaultModeOnCreate. A Claude session without a thinking option
+   * sends no effort, so Claude Code picks its own rather than the model's declared default. Codex must not
+   * opt in: a Codex session without one defers reasoning effort to the user's own Codex config.
+   */
+  readonly persistsDefaultThinkingOnCreate?: boolean;
   resolveCreateConfig?(input: ResolveAgentCreateConfigInput): ResolveAgentCreateConfigResult;
   isCreateConfigUnattended?(input: AgentCreateConfigUnattendedInput): boolean;
   listCommands?(config: AgentSessionConfig): Promise<AgentSlashCommand[]>;

@@ -206,13 +206,6 @@ export async function switchPairDeviceToHost(page: Page, serverId: string): Prom
   await expect(page.getByTestId("host-page-pair-device-row")).toBeVisible();
 }
 
-export async function openRelaySecurityDocs(page: Page): Promise<void> {
-  await page.getByRole("link", { name: "Read how Paseo relay works" }).click();
-  await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("@paseo:e2e-opened-url")))
-    .toBe("https://paseo.sh/docs/security");
-}
-
 export function expectDaemonPidUnchanged(
   before: number | undefined,
   after: number | undefined,

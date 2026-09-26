@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { defaultHostAppearance } from "@/hosts/appearance";
 import {
   createRemoteSshHostConnection,
+  describeHostEndpoint,
   normalizeStoredHostProfile,
   orderHostsLocalFirst,
   resolveActiveHostServerId,
@@ -321,5 +322,66 @@ describe("resolveActiveHostServerId", () => {
         orderedHosts: [makeHost("srv_local"), makeHost("srv_remote")],
       }),
     ).toBe("srv_local");
+  });
+});
+
+describe("describeHostEndpoint", () => {
+  // Two daemons on one Mac report the same hostname, so the label cannot identify either
+  // one. This is what the picker and the removal confirmation use to tell them apart.
+  const withConnections = (
+    connections: HostConnection[],
+    preferredConnectionId: string | null = null,
+  ): HostProfile => ({
+    ...makeHost("srv_same_name"),
+    label: "Workstation.local",
+    connections,
+    preferredConnectionId,
+  });
+
+  it("names the address of hosts that share a label", () => {
+    const portable = withConnections([
+      { id: "c1", type: "directTcp", endpoint: "127.0.0.1:54873" },
+    ]);
+    const main = withConnections([
+      { id: "c2", type: "directTcp", endpoint: "workstation.example-net.ts.net:8443" },
+    ]);
+    expect(portable.label).toBe(main.label);
+    expect(describeHostEndpoint(portable)).toBe("127.0.0.1:54873");
+    expect(describeHostEndpoint(main)).toBe("workstation.example-net.ts.net:8443");
+  });
+
+  it("prefers the connection the host actually uses", () => {
+    expect(
+      describeHostEndpoint(
+        withConnections(
+          [
+            { id: "c1", type: "directTcp", endpoint: "127.0.0.1:6767" },
+            { id: "c2", type: "directTcp", endpoint: "127.0.0.1:54873" },
+          ],
+          "c2",
+        ),
+      ),
+    ).toBe("127.0.0.1:54873");
+  });
+
+  it("drops uninformative standard web ports and falls back when there is no address", () => {
+    expect(
+      describeHostEndpoint(
+        withConnections([
+          { id: "c1", type: "relay", relayEndpoint: "relay.paseo.sh:443", daemonPublicKeyB64: "k" },
+        ]),
+      ),
+    ).toBe("relay.paseo.sh");
+    expect(describeHostEndpoint(withConnections([]))).toBeNull();
+  });
+
+  it("never exposes a stored password", () => {
+    const described = describeHostEndpoint(
+      withConnections([
+        { id: "c1", type: "directTcp", endpoint: "127.0.0.1:54873", password: "super-secret" },
+      ]),
+    );
+    expect(described).toBe("127.0.0.1:54873");
+    expect(described).not.toContain("super-secret");
   });
 });

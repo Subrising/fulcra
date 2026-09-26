@@ -11,7 +11,6 @@ import { useIsFocused } from "@react-navigation/native";
 import { CalendarClock, Plus } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { MenuHeader } from "@/components/headers/menu-header";
-import { ExternalLink } from "@/components/ui/external-link";
 import { HostFilter } from "@/components/hosts/host-filter";
 import { ALL_HOSTS_OPTION_ID } from "@/components/hosts/host-picker";
 import { ScheduleFormSheet } from "@/components/schedules/schedule-form-sheet";
@@ -321,7 +320,6 @@ function SchedulesEmptyState({
       <View style={styles.emptyTextStack}>
         <Text style={styles.emptyTitle}>No active schedules</Text>
         <Text style={styles.emptyDescription}>Schedules run agents on a cadence.</Text>
-        <ExternalLink href="https://paseo.sh/docs/schedules" label="See docs" />
       </View>
       <Button variant="outline" leftIcon={Plus} onPress={onCreate} testID="schedules-empty-new">
         New schedule

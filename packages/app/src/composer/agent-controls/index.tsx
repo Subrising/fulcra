@@ -1617,7 +1617,9 @@ export const AgentControls = memo(function AgentControls({
           mergeProviderPreferences({
             preferences: current,
             provider: agentProvider,
-            updates: { model: modelId },
+            // Picking a model from this control is the user choosing one, which is what makes it outrank
+            // the host's advertised default on later sessions.
+            updates: { model: modelId, modelChosenByUser: true },
           }),
         );
       } catch (error) {
@@ -1663,10 +1665,13 @@ export const AgentControls = memo(function AgentControls({
             preferences: current,
             provider: agentProvider,
             updates: {
-              model: activeModelId,
-              thinkingByModel: {
-                [activeModelId]: thinkingOptionId,
-              },
+              // The model is deliberately NOT written here. Choosing an effort says nothing about
+              // wanting this model, and recording it would either pin a merely-active model as a
+              // preference or -- once the marker exists -- clear an earlier real choice. The effort is
+              // keyed by the model id below, which is the part that had to be kept.
+              thinkingByModel: { [activeModelId]: thinkingOptionId },
+              // Chosen, though: the user picked this effort for this model from the control.
+              thinkingChosenByModel: { [activeModelId]: true },
             },
           }),
         ).catch((error) => {

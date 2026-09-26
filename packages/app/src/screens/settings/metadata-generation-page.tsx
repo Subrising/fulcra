@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
 import { CombinedModelSelector } from "@/components/combined-model-selector";
-import { ExternalLink } from "@/components/ui/external-link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
@@ -13,7 +12,6 @@ import { buildSelectableProviderSelectorProviders } from "@/provider-selection/p
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { settingsStyles } from "@/styles/settings";
 
-const METADATA_GENERATION_DOCS_URL = "https://paseo.sh/docs/metadata-generation";
 type SelectionMode = "automatic" | "preferred";
 
 export function MetadataGenerationPage({ serverId }: { serverId: string }) {
@@ -89,15 +87,6 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
     (provider: AgentProvider) => snapshot.refresh([provider]),
     [snapshot],
   );
-  const docsLink = useMemo(
-    () => (
-      <ExternalLink
-        href={METADATA_GENERATION_DOCS_URL}
-        label={t("settings.metadataGeneration.docs")}
-      />
-    ),
-    [t],
-  );
 
   if (isConfigLoading || !config) {
     return (
@@ -111,7 +100,6 @@ export function MetadataGenerationPage({ serverId }: { serverId: string }) {
     <SettingsSection
       title={t("settings.metadataGeneration.title")}
       info={t("settings.metadataGeneration.description")}
-      trailing={docsLink}
       testID="metadata-generation-settings"
     >
       <View style={settingsStyles.card}>

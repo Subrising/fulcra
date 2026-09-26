@@ -44,6 +44,15 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly workspaceId: string;
       readonly serverId?: string;
     }) => void;
+    /**
+     * Optional on older clients. Requests navigation to a saved host even when offline.
+     * An unloaded registry or missing host returns unavailable; requests are never queued.
+     * Distinct from openAgent's optional serverId, which navigates without checking the host.
+     */
+    readonly openAgentOnHost?: (input: {
+      readonly serverId: string;
+      readonly agentId: string;
+    }) => "requested" | "host-unavailable";
   };
 }
 
@@ -84,7 +93,70 @@ export interface PluginClientOpenPanelOptions extends PluginOpenPanelOptions {
   agentId?: string;
 }
 
+// The answering device's key. The private key never leaves the device and is
+// never reachable from the daemon or plugin server code; plugin client code gets status, pairing
+// and choice signatures, each confirmed by the user on the device.
+export type PluginDevicePlatform = "macos" | "ios" | "android" | "windows" | "linux";
+export type PluginDeviceKeyStorage =
+  | "secure-enclave"
+  | "keychain-biometric"
+  | "android-keystore"
+  | "os-protected"
+  | "software";
+
+export interface PluginDeviceStatus {
+  paired: boolean;
+  deviceId?: string;
+  publicKey?: string;
+  platform: PluginDevicePlatform;
+  keyStorage: PluginDeviceKeyStorage;
+  // True when every signature needs Touch ID, Face ID or a fingerprint (or the device passcode).
+  userPresence: boolean;
+}
+
+export interface PluginDevicePairResult {
+  deviceId: string;
+  // base64 DER SubjectPublicKeyInfo, P-256.
+  publicKey: string;
+  alg: "ES256";
+  platform: PluginDevicePlatform;
+  keyStorage: PluginDeviceKeyStorage;
+  userPresence: boolean;
+}
+
+// Exactly the choice payload; anything else is refused before any prompt.
+export interface PluginChoicePayload {
+  decisionId: string;
+  revision: number;
+  optionId: string;
+  digest: string | null;
+  messageId: string;
+  note: string;
+  at: string;
+  confirmDestructive: boolean;
+}
+
+export interface PluginChoiceProof {
+  deviceId: string;
+  alg: "ES256";
+  // base64 raw r‖s (64 bytes) over the canonical JSON of `payload`.
+  signature: string;
+  payload: PluginChoicePayload;
+}
+
+export interface PluginDevice {
+  status(): Promise<PluginDeviceStatus>;
+  // Asks for Touch ID / Face ID / fingerprint (or a confirmation where the device has none), then
+  // generates the key. `code` is the pairing code, shown in the prompt.
+  pair(input?: { code?: string }): Promise<PluginDevicePairResult>;
+  // `reason` is shown in the prompt, prefixed with "Fulcra:". A refused prompt rejects.
+  sign(payload: PluginChoicePayload, reason: string): Promise<PluginChoiceProof>;
+}
+
 export interface PluginClientContext extends PluginCommandCapabilities {
+  // Present only in apps that can hold a device key (iOS, Android, desktop). Absent in the
+  // browser and in older apps.
+  device?: PluginDevice;
   addSettingsScreen(contribution: PluginSettingsScreenContribution): PluginCleanup;
   addSurface(id: string, Component: ComponentType<PluginSurfaceProps>): PluginCleanup;
   addSidebarItem(contribution: PluginSidebarContribution): PluginCleanup;

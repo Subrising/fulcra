@@ -1,4 +1,5 @@
 import { defineConfig, configDefaults } from "vitest/config";
+import { transformWithEsbuild } from "vite";
 import { playwright } from "@vitest/browser-playwright";
 import path from "path";
 import fs from "fs";
@@ -13,8 +14,26 @@ const resolvePackageEntry = (packageName: string) => {
 };
 
 export default defineConfig({
+  plugins: [
+    {
+      name: "native-markdown-jsx",
+      enforce: "pre",
+      transform(code, id) {
+        // This native package publishes JSX in .js files; exercise its real exports in tests.
+        const file = id.split("?")[0];
+        if (/\/react-native-markdown-display\/src\/.*\.js$/.test(file)) {
+          return transformWithEsbuild(code, file, { loader: "jsx", jsx: "automatic" });
+        }
+      },
+    },
+  ],
   test: {
     environment: "node",
+    deps: {
+      optimizer: {
+        ssr: { enabled: true, include: ["react-native-fit-image"] },
+      },
+    },
     exclude: [...configDefaults.exclude, "e2e/**"],
     projects: [
       {
@@ -114,6 +133,14 @@ export default defineConfig({
       {
         find: /^@getpaseo\/relay$/,
         replacement: path.resolve(__dirname, "../relay/src/index.ts"),
+      },
+      // Vitest loses the grammars' propSources when it loads their ESM
+      // builds, so every highlighted token comes back unstyled. The CJS
+      // builds keep them. Node and Metro both get this right; this only
+      // steers the test loader.
+      {
+        find: /^@lezer\/([a-z-]+)$/,
+        replacement: path.resolve(rootNodeModules, "@lezer/$1/dist/index.cjs"),
       },
       { find: "@", replacement: path.resolve(__dirname, "src") },
       // Keep keyboard-controller's imports in Vite so native aliases and platform extensions apply.

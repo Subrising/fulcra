@@ -175,6 +175,17 @@ export function __setPullRequestStatusCacheTtlForTests(ttlMs: number): void {
   lastSuccessfulPullRequestStatus.clear();
 }
 
+/**
+ * Resolves once every background warm has finished running git against its repo. Clearing the
+ * in-flight map drops the handle but not the child process, so a test that deletes its temp repo
+ * without settling first races the warm - on Windows that surfaces as EBUSY on rmdir.
+ */
+export async function __settleCheckoutShortstatWarmsForTests(): Promise<void> {
+  while (shortstatInFlight.size > 0) {
+    await Promise.allSettled(shortstatInFlight.values());
+  }
+}
+
 export function __resetCheckoutShortstatCacheForTests(): void {
   shortstatCache.clear();
   shortstatCache.cancelTimer();
@@ -3998,6 +4009,9 @@ export interface PullRequestStatus {
   state: string;
   baseRefName: string;
   headRefName: string;
+  // The PR's base and head commits (40-hex), when the forge reports them.
+  baseRefOid?: string;
+  headRefOid?: string;
   isMerged: boolean;
   isDraft?: boolean;
   mergeable?: PullRequestMergeable;

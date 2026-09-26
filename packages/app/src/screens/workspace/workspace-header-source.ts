@@ -1,4 +1,5 @@
 import type { WorkspaceDescriptor } from "@/stores/session-store";
+import type { SidebarConversationLabel } from "@/hooks/sidebar-conversation-labels";
 
 export type WorkspaceHeaderCheckoutState =
   | { kind: "pending" }
@@ -41,25 +42,32 @@ function areHeaderLabelsEquivalent(
   return normalizedA === normalizedB;
 }
 
-export function resolveWorkspaceHeader(input: { workspace: WorkspaceDescriptor }): {
+export function resolveWorkspaceHeader(input: {
+  workspace: WorkspaceDescriptor;
+  conversationLabel?: SidebarConversationLabel | null;
+}): {
   title: string;
   subtitle: string;
 } {
   return {
-    title: input.workspace.name,
-    subtitle: input.workspace.projectDisplayName,
+    title: input.conversationLabel?.workspaceName ?? input.workspace.name,
+    subtitle: input.conversationLabel?.projectName ?? input.workspace.projectDisplayName,
   };
 }
 
 export function resolveWorkspaceHeaderRenderState(input: {
   workspace: WorkspaceDescriptor | null;
   checkoutState: WorkspaceHeaderCheckoutState;
+  conversationLabel?: SidebarConversationLabel | null;
 }): WorkspaceHeaderRenderState {
   if (!input.workspace) {
     return { kind: "skeleton" };
   }
 
-  const header = resolveWorkspaceHeader({ workspace: input.workspace });
+  const header = resolveWorkspaceHeader({
+    workspace: input.workspace,
+    conversationLabel: input.conversationLabel,
+  });
   const checkout = input.checkoutState.kind === "ready" ? input.checkoutState.checkout : null;
   const currentBranchName =
     checkout?.isGit && checkout.currentBranch !== "HEAD"

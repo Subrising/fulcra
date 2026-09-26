@@ -359,3 +359,169 @@ function storedAgent(id: string): StoredAgentRecord {
     archivedAt: null,
   };
 }
+
+// Stop on an agent no process has loaded.
+describe("stop on an unloaded agent", () => {
+  const at = "2026-09-23T22:10:00.000Z";
+  const stale = (id: string) => ({
+    id,
+    provider: "claude",
+    cwd: "/tmp/project",
+    createdAt: at,
+    updatedAt: at,
+    lastUserMessageAt: at,
+    title: null,
+    labels: {},
+    lastStatus: "running",
+    lastModeId: null,
+    config: null,
+  });
+  async function setup() {
+    const { AgentStorage } = await import("./agent-storage.js");
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const os = await import("node:os"),
+      path = await import("node:path");
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paseo-stop-unloaded-"));
+    const storage = new AgentStorage(dir, createTestLogger());
+    return { storage, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+  const unloaded = (live: () => LifecycleAgentSnapshot | null = () => null) =>
+    ({
+      getAgent: live,
+      hasInFlightRun: () => {
+        throw new Error("must not be consulted for an unloaded agent");
+      },
+    }) as unknown as LifecycleAgentManager;
+
+  test("clears the stored running state, marks the interruption, and reports not running", async () => {
+    const { storage, cleanup } = await setup();
+    try {
+      await storage.upsert(stale("agent-a") as never);
+      const result = await cancelAgentRunCommand(
+        { agentManager: unloaded(), agentStorage: storage, logger: createTestLogger() },
+        "agent-a",
+      );
+      expect(result).toEqual({
+        agent: { id: "agent-a", cwd: "/tmp/project", lifecycle: "idle" },
+        cancelled: false,
+      });
+      const record = await storage.get("agent-a");
+      expect(record?.lastStatus).toBe("idle");
+      expect(record?.interruptedTurn?.previousStatus).toBe("running");
+      expect(record?.updatedAt).toBe(at);
+      expect(record?.lastUserMessageAt).toBe(at);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("never touches an agent that was loaded between the check and the write", async () => {
+    const { storage, cleanup } = await setup();
+    try {
+      await storage.upsert(stale("agent-b") as never);
+      let calls = 0;
+      const live = {
+        id: "agent-b",
+        cwd: "/tmp/project",
+        lifecycle: "running",
+      } as LifecycleAgentSnapshot;
+      await cancelAgentRunCommand(
+        {
+          agentManager: unloaded(() => (calls++ === 0 ? null : live)),
+          agentStorage: storage,
+          logger: createTestLogger(),
+        },
+        "agent-b",
+      );
+      expect((await storage.get("agent-b"))?.lastStatus).toBe("running");
+      expect((await storage.get("agent-b"))?.interruptedTurn).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("without a stored record it is still 'not found', and without storage the old behaviour stands", async () => {
+    const { storage, cleanup } = await setup();
+    try {
+      await expect(
+        cancelAgentRunCommand(
+          { agentManager: unloaded(), agentStorage: storage, logger: createTestLogger() },
+          "missing",
+        ),
+      ).rejects.toThrow("Agent missing not found");
+      await storage.upsert(stale("agent-c") as never);
+      await expect(
+        cancelAgentRunCommand({ agentManager: unloaded(), logger: createTestLogger() }, "agent-c"),
+      ).rejects.toThrow("Agent agent-c not found");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// The unloaded-stop normalisation is reachable only from the guarded stop command.
+describe("unloaded normalisation is stop-only", () => {
+  test("F2: archiveAgentCommand can never trigger it, even when the agent unloads mid-call", async () => {
+    const { AgentStorage } = await import("./agent-storage.js");
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const os = await import("node:os"),
+      path = await import("node:path");
+    const dir = mkdtempSync(path.join(os.tmpdir(), "paseo-archive-no-normalise-"));
+    try {
+      const storage = new AgentStorage(dir, createTestLogger());
+      const at = "2026-09-23T22:10:00.000Z";
+      await storage.upsert({
+        id: "agent-f2",
+        provider: "claude",
+        cwd: "/tmp/project",
+        createdAt: at,
+        updatedAt: at,
+        lastUserMessageAt: at,
+        title: null,
+        labels: {},
+        lastStatus: "running",
+        lastModeId: null,
+        config: null,
+      } as never);
+      let normalisations = 0;
+      const original = storage.normalizeInterruptedTurn.bind(storage);
+      storage.normalizeInterruptedTurn = async (...args) => {
+        normalisations++;
+        return original(...args);
+      };
+      // Loaded when archiveAgentCommand checks, unloaded by the time cancellation looks: the one ordering that
+      // would reach the unloaded branch from archive.
+      let calls = 0;
+      const live = {
+        id: "agent-f2",
+        cwd: "/tmp/project",
+        lifecycle: "running",
+      } as LifecycleAgentSnapshot;
+      const manager = {
+        getAgent: () => (calls++ === 0 ? live : null),
+      } as unknown as LifecycleAgentManager;
+      await expect(
+        archiveAgentCommand(
+          { agentManager: manager, agentStorage: storage, logger: createTestLogger() },
+          "agent-f2",
+        ),
+      ).rejects.toThrow("Agent agent-f2 not found");
+      expect(normalisations).toBe(0);
+      expect((await storage.get("agent-f2"))?.lastStatus).toBe("running");
+      expect((await storage.get("agent-f2"))?.interruptedTurn).toBeUndefined();
+      // The explicit stop command, with the same storage, does normalise it.
+      await cancelAgentRunCommand(
+        {
+          agentManager: { getAgent: () => null } as unknown as LifecycleAgentManager,
+          agentStorage: storage,
+          logger: createTestLogger(),
+        },
+        "agent-f2",
+      );
+      expect(normalisations).toBe(1);
+      expect((await storage.get("agent-f2"))?.lastStatus).toBe("idle");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

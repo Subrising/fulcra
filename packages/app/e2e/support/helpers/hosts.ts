@@ -229,7 +229,14 @@ export async function expectNoHostBadge(page: Page, target: HostBadgeTarget): Pr
 //
 // The icon takes the *foreground* variant of the identity colour, not the fill one: it is a
 // stroked glyph on a surface, so it has to clear contrast against that surface rather than
-// behind white letters. That variant is per-scheme, and the browser project runs light.
+// behind white letters. That variant is per-scheme, so it is read from BROWSER_COLOR_SCHEME
+// rather than named again here.
+// The app renders its own dark theme by default; it does not follow the browser's
+// prefers-color-scheme here. These helpers asserted the light foreground and so read a stale
+// default: teal resolved to #6cacab, its dark foreground, not #3e6d6c. Name the scheme once so
+// the identity assertion stays exact and a future default change fails in one place.
+const BROWSER_COLOR_SCHEME = "dark" as const;
+
 export async function expectHostBadgeTinted(
   page: Page,
   target: HostBadgeTarget & { color: IdentityColorName },
@@ -239,7 +246,7 @@ export async function expectHostBadgeTinted(
   await expect(badge).toHaveText(target.hostName);
   await expect(badge.locator("svg")).toHaveAttribute(
     "stroke",
-    identityForeground(target.color, "light"),
+    identityForeground(target.color, BROWSER_COLOR_SCHEME),
   );
 }
 
@@ -253,7 +260,7 @@ export async function expectHostAppearancePreview(
   await expect(badge).toHaveText(input.hostName);
   await expect(badge.locator("svg")).toHaveAttribute(
     "stroke",
-    identityForeground(input.color, "light"),
+    identityForeground(input.color, BROWSER_COLOR_SCHEME),
   );
 }
 

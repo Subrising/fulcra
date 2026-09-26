@@ -30,7 +30,6 @@ import { WorktreeSetupCalloutSource } from "@/components/worktree-setup-callout-
 import { DownloadToast } from "@/components/download-toast";
 import { QuittingOverlay } from "@/components/quitting-overlay";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
-import { ChangelogHost } from "@/changelog";
 import { AppDiagnosticHost } from "@/components/app-diagnostic-host";
 import { AppearanceStyleBoundary } from "@/components/appearance-style-boundary";
 import { LeftSidebar } from "@/components/left-sidebar";
@@ -74,6 +73,7 @@ import { registerWorkspaceRouteNavigationRef } from "@/navigation/workspace-rout
 import { ThemedStack } from "@/navigation/themed-stack";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { AgentNavigationListener } from "@/desktop/agent-navigation";
+import { OAuthCallbackListener } from "@/integrations/oauth-callback-listener";
 import { LegacyAgentSkillsMigration } from "@/agent-skills/legacy-migration";
 import { legacyFavoriteProfileMigration } from "@/agent-profiles/migration";
 import { listenToDesktopEvent } from "@/desktop/electron/events";
@@ -611,7 +611,6 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
         <WorkspaceSetupDialog />
         <KeyboardShortcutsDialog />
         <AppDiagnosticHost />
-        <ChangelogHost />
         <QuittingOverlay />
       </AppearanceStyleBoundary>
     </View>
@@ -905,6 +904,7 @@ function RootStack() {
         <Stack.Screen name="sessions" />
         <Stack.Screen name="schedules" />
         <Stack.Screen name="pair-scan" />
+        <Stack.Screen name="oauth/[flowId]" />
       </Stack.Protected>
       <Stack.Screen name="h/[serverId]" />
       <Stack.Screen name="settings/hosts/[serverId]/index" />
@@ -932,6 +932,7 @@ function AppShell() {
       <HorizontalScrollProvider>
         <OpenProjectListener />
         <AgentNavigationListener />
+        <OAuthCallbackListener />
         <AppWithSidebar>
           <WorkspaceRouteNavigationBridge />
           <RootStack />

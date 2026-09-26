@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveAgentForm,
   resolveFormState,
+  resolveFormStateFromProviderModels,
   resolveEffectiveModel,
   resolveThinkingOptionId,
   mergeSelectedComposerPreferences,
@@ -15,7 +16,13 @@ import {
   type ProviderModelsByProvider,
   type UserModifiedFields,
 } from "./resolve-agent-form";
+import type { FormPreferences } from "@/create-agent-preferences/preferences";
 import { buildProviderDefinitions } from "@/utils/provider-definitions";
+import { AGENT_PROVIDER_DEFINITIONS } from "@getpaseo/protocol/provider-manifest";
+import {
+  resolveEffectiveComposerModelId,
+  resolveEffectiveComposerThinkingOptionId,
+} from "./provider-selection";
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
 import type {
   AgentModelDefinition,
@@ -140,7 +147,9 @@ describe("model aliases", () => {
         providerPreferences: {
           codex: {
             model: "gpt-5.3-codex-legacy",
+            modelChosenByUser: true,
             thinkingByModel: { "gpt-5.3-codex-legacy": "low" },
+            thinkingChosenByModel: { "gpt-5.3-codex-legacy": true },
           },
         },
       },
@@ -162,10 +171,12 @@ describe("model aliases", () => {
         providerPreferences: {
           codex: {
             model: "gpt-5.3-codex-legacy",
+            modelChosenByUser: true,
             thinkingByModel: {
               "gpt-5.3-codex": "xhigh",
               "gpt-5.3-codex-legacy": "low",
             },
+            thinkingChosenByModel: { "gpt-5.3-codex": true, "gpt-5.3-codex-legacy": true },
           },
         },
       },
@@ -191,7 +202,7 @@ describe("model aliases", () => {
       undefined,
       {
         provider: "codex",
-        providerPreferences: { codex: { model: configuredAlias.id } },
+        providerPreferences: { codex: { model: configuredAlias.id, modelChosenByUser: true } },
       },
       [...ALIASED_CODEX_MODELS, configuredAlias],
       INITIAL_USER_MODIFIED,
@@ -267,11 +278,11 @@ describe("mergeSelectedComposerPreferences", () => {
       mergeSelectedComposerPreferences({
         preferences: {},
         provider: "codex",
-        updates: { model: "gpt-5.4" },
+        updates: { model: "gpt-5.4", modelChosenByUser: true },
       }),
     ).toEqual({
       provider: "codex",
-      providerPreferences: { codex: { model: "gpt-5.4" } },
+      providerPreferences: { codex: { model: "gpt-5.4", modelChosenByUser: true } },
     });
   });
 
@@ -286,22 +297,23 @@ describe("mergeSelectedComposerPreferences", () => {
               thinkingByModel: { "gpt-5.4-mini": "medium" },
               featureValues: { fast_mode: true },
             },
-            claude: { model: "claude-sonnet-4-6" },
+            claude: { model: "claude-sonnet-4-6", modelChosenByUser: true },
           },
         },
         provider: "codex",
-        updates: { model: "gpt-5.4" },
+        updates: { model: "gpt-5.4", modelChosenByUser: true },
       }),
     ).toEqual({
       provider: "codex",
       providerPreferences: {
         codex: {
           model: "gpt-5.4",
+          modelChosenByUser: true,
           mode: "full-access",
           thinkingByModel: { "gpt-5.4-mini": "medium" },
           featureValues: { fast_mode: true },
         },
-        claude: { model: "claude-sonnet-4-6" },
+        claude: { model: "claude-sonnet-4-6", modelChosenByUser: true },
       },
     });
   });
@@ -314,6 +326,7 @@ describe("mergeSelectedComposerPreferences", () => {
           providerPreferences: {
             codex: {
               model: "gpt-5.4",
+              modelChosenByUser: true,
               mode: "auto",
               thinkingByModel: { "gpt-5.4-mini": "low" },
             },
@@ -330,6 +343,7 @@ describe("mergeSelectedComposerPreferences", () => {
       providerPreferences: {
         codex: {
           model: "gpt-5.4",
+          modelChosenByUser: true,
           mode: "full-access",
           thinkingByModel: { "gpt-5.4-mini": "low", "gpt-5.4": "xhigh" },
         },
@@ -385,16 +399,169 @@ describe("buildProviderDefinitions", () => {
   });
 });
 
-describe("resolveFormState", () => {
-  it("keeps provider, mode, and model unset on first open without preferences or explicit values", () => {
+// A fresh draft starts on the host's own defaults instead of "Select model". Everything below comes from
+// the host's provider snapshot; nothing names a provider, model, mode or effort in the app.
+const J6_CLAUDE_MODELS: AgentModelDefinition[] = [
+  {
+    provider: "claude",
+    id: "claude-opus-5-5",
+    label: "Opus 5.5",
+    isDefault: true,
+    defaultThinkingOptionId: "medium",
+    thinkingOptions: [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium", isDefault: true },
+      { id: "high", label: "High" },
+    ],
+  },
+  {
+    provider: "claude",
+    id: "claude-opus-5",
+    label: "Opus 5",
+    defaultThinkingOptionId: "high",
+    thinkingOptions: [
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High", isDefault: true },
+    ],
+  },
+];
+const J6_CODEX_MODELS: AgentModelDefinition[] = [
+  { ...CODEX_MODELS[0]!, id: "gpt-5.5", label: "GPT-5.5" },
+];
+
+function j6HostEntry(provider: "claude" | "codex"): ProviderSnapshotEntry {
+  return provider === "claude"
+    ? {
+        provider: "claude",
+        status: "ready",
+        enabled: true,
+        label: "Claude",
+        defaultModeId: "auto",
+        modes: [
+          { id: "default", label: "Always Ask", icon: "ShieldCheck", colorTier: "safe" },
+          { id: "auto", label: "Auto", icon: "ShieldAlert", colorTier: "moderate" },
+        ],
+        models: J6_CLAUDE_MODELS,
+      }
+    : {
+        provider: "codex",
+        status: "ready",
+        enabled: true,
+        label: "Codex",
+        defaultModeId: "auto-review",
+        modes: [
+          { id: "auto-review", label: "Auto Review", icon: "ShieldCheck", colorTier: "safe" },
+          { id: "full-access", label: "Full Access", icon: "ShieldAlert", colorTier: "dangerous" },
+        ],
+        models: J6_CODEX_MODELS,
+      };
+}
+
+function j6Resolve(input: {
+  hostOrder: ("claude" | "codex")[];
+  preferences?: FormPreferences;
+  initialValues?: { provider: AgentProvider };
+}) {
+  const entries = input.hostOrder.map(j6HostEntry);
+  const allowedProviderMap = buildProviderDefinitionMapForStatuses({
+    snapshotEntries: entries,
+    providerDefinitions: buildProviderDefinitions(entries),
+    statuses: new Set<ProviderSnapshotEntry["status"]>(["ready", "loading"]),
+  });
+  const providerModels: ProviderModelsByProvider = new Map(
+    entries.map((entry) => [entry.provider, entry.models ?? null]),
+  );
+  const form = resolveFormStateFromProviderModels(
+    input.initialValues,
+    input.preferences ?? {},
+    providerModels,
+    INITIAL_USER_MODIFIED,
+    makeState().form,
+    allowedProviderMap,
+  );
+  // What the composer shows and submits for this form (see provider-selection.ts).
+  const selection = {
+    provider: form.provider,
+    modelId: form.model,
+    modeId: form.modeId,
+    thinkingOptionId: form.thinkingOptionId,
+    availableModels: (form.provider ? providerModels.get(form.provider) : null) ?? [],
+    modeOptions: [],
+  };
+  const effectiveModelId = resolveEffectiveComposerModelId(selection);
+  return {
+    form,
+    effectiveModelId,
+    effectiveThinkingOptionId: resolveEffectiveComposerThinkingOptionId(
+      selection,
+      effectiveModelId,
+    ),
+  };
+}
+
+describe("fresh draft defaults", () => {
+  it("a fresh draft starts on the host's first provider with its default model, mode and effort", () => {
+    const { form, effectiveModelId, effectiveThinkingOptionId } = j6Resolve({
+      hostOrder: ["claude", "codex"],
+    });
+
+    expect(form.provider).toBe("claude");
+    expect(form.modeId).toBe("auto");
+    expect(effectiveModelId).toBe("claude-opus-5-5");
+    expect(effectiveThinkingOptionId).toBe("medium");
+    // Still unpinned: an empty model follows the host's default, then and later.
+    expect(form.model).toBe("");
+  });
+
+  it("follows the host's provider order rather than a provider named in the app", () => {
+    const { form, effectiveModelId } = j6Resolve({ hostOrder: ["codex", "claude"] });
+
+    expect(form.provider).toBe("codex");
+    expect(form.modeId).toBe("auto-review");
+    expect(effectiveModelId).toBe("gpt-5.5");
+  });
+
+  it("a remembered provider still wins over the host's first provider", () => {
+    const { form, effectiveModelId } = j6Resolve({
+      hostOrder: ["claude", "codex"],
+      preferences: { provider: "codex" },
+    });
+
+    expect(form.provider).toBe("codex");
+    expect(form.modeId).toBe("auto-review");
+    expect(effectiveModelId).toBe("gpt-5.5");
+  });
+
+  it("an explicit provider still wins over the host's first provider", () => {
+    const { form } = j6Resolve({
+      hostOrder: ["claude", "codex"],
+      initialValues: { provider: "codex" },
+    });
+
+    expect(form.provider).toBe("codex");
+  });
+
+  it("a remembered model choice still wins over the host's default model and its effort", () => {
+    const { form, effectiveModelId, effectiveThinkingOptionId } = j6Resolve({
+      hostOrder: ["claude", "codex"],
+      preferences: {
+        providerPreferences: { claude: { model: "claude-opus-5", modelChosenByUser: true } },
+      },
+    });
+
+    expect(form.provider).toBe("claude");
+    expect(effectiveModelId).toBe("claude-opus-5");
+    expect(effectiveThinkingOptionId).toBe("high");
+  });
+
+  it("keeps a draft unset when the host offers no usable provider", () => {
     const resolved = resolveFormState(
       undefined,
       {},
       null,
       INITIAL_USER_MODIFIED,
       makeState().form,
-
-      bothProviderMap,
+      new Map(),
     );
 
     expect(resolved.provider).toBeNull();
@@ -402,7 +569,9 @@ describe("resolveFormState", () => {
     expect(resolved.model).toBe("");
     expect(resolved.thinkingOptionId).toBe("");
   });
+});
 
+describe("resolveFormState", () => {
   it("does not auto-select a model on fresh drafts without preferences", () => {
     const resolved = resolveFormState(
       undefined,
@@ -421,7 +590,10 @@ describe("resolveFormState", () => {
   it("auto-selects the model's default thinking option when model is preferred but thinking is not", () => {
     const resolved = resolveFormState(
       undefined,
-      { provider: "codex", providerPreferences: { codex: { model: "gpt-5.3-codex" } } },
+      {
+        provider: "codex",
+        providerPreferences: { codex: { model: "gpt-5.3-codex", modelChosenByUser: true } },
+      },
       CODEX_MODELS,
       INITIAL_USER_MODIFIED,
       makeState({ provider: "codex" }).form,
@@ -436,7 +608,10 @@ describe("resolveFormState", () => {
   it("falls back to model default when saved thinking preference is invalid", () => {
     const resolved = resolveFormState(
       undefined,
-      { provider: "codex", providerPreferences: { codex: { model: "gpt-5.3-codex" } } },
+      {
+        provider: "codex",
+        providerPreferences: { codex: { model: "gpt-5.3-codex", modelChosenByUser: true } },
+      },
       CODEX_MODELS,
       INITIAL_USER_MODIFIED,
       makeState({ provider: "codex" }).form,
@@ -492,7 +667,10 @@ describe("resolveFormState", () => {
 
     const resolved = resolveFormState(
       undefined,
-      { provider: "claude", providerPreferences: { claude: { model: "default" } } },
+      {
+        provider: "claude",
+        providerPreferences: { claude: { model: "default", modelChosenByUser: true } },
+      },
       claudeWithThinking,
       INITIAL_USER_MODIFIED,
       makeState({ provider: "claude" }).form,
@@ -595,7 +773,14 @@ describe("resolveFormState", () => {
       undefined,
       {
         provider: "codex",
-        providerPreferences: { codex: { mode: "full-access", model: "gpt-5.3-codex" } },
+        providerPreferences: {
+          codex: {
+            mode: "full-access",
+            modeChosenByUser: true,
+            model: "gpt-5.3-codex",
+            modelChosenByUser: true,
+          },
+        },
       },
       null,
       INITIAL_USER_MODIFIED,
@@ -613,7 +798,14 @@ describe("resolveFormState", () => {
       undefined,
       {
         provider: "codex",
-        providerPreferences: { codex: { mode: "workspace-write", model: "gpt-5.3-codex" } },
+        providerPreferences: {
+          codex: {
+            mode: "workspace-write",
+            modeChosenByUser: true,
+            model: "gpt-5.3-codex",
+            modelChosenByUser: true,
+          },
+        },
       },
       CODEX_MODELS,
       INITIAL_USER_MODIFIED,
@@ -794,7 +986,10 @@ describe("resolveFormState", () => {
 it("keeps the explicit model when a refreshed catalogue no longer lists it", () => {
   const resolved = resolveFormState(
     undefined,
-    { provider: "codex", providerPreferences: { codex: { model: "gpt-6-astra" } } },
+    {
+      provider: "codex",
+      providerPreferences: { codex: { model: "gpt-6-astra", modelChosenByUser: true } },
+    },
     CODEX_MODELS,
     INITIAL_USER_MODIFIED,
     makeState().form,
@@ -810,9 +1005,9 @@ describe("resolveAgentForm", () => {
     it.each(["error", "unavailable"] as const)(
       "restores a remembered model after opening against a %s provider snapshot",
       (status) => {
-        const preferences = {
+        const preferences: FormPreferences = {
           provider: "codex",
-          providerPreferences: { codex: { model: "gpt-5.3-codex" } },
+          providerPreferences: { codex: { model: "gpt-5.3-codex", modelChosenByUser: true } },
         };
         const snapshotEntries: ProviderSnapshotEntry[] = [
           {
@@ -870,7 +1065,7 @@ describe("resolveAgentForm", () => {
         initialValues: undefined,
         preferences: {
           provider: "codex",
-          providerPreferences: { codex: { model: "gpt-5.3-codex" } },
+          providerPreferences: { codex: { model: "gpt-5.3-codex", modelChosenByUser: true } },
         },
         providerModelsByProvider: makeProviderModelsByProvider([["codex", CODEX_MODELS]]),
         allowedProviderMap: codexProviderMap,
@@ -889,7 +1084,7 @@ describe("resolveAgentForm", () => {
         initialValues: undefined,
         preferences: {
           provider: "codex",
-          providerPreferences: { codex: { model: "gpt-5.3-codex" } },
+          providerPreferences: { codex: { model: "gpt-5.3-codex", modelChosenByUser: true } },
         },
         providerModelsByProvider: makeProviderModelsByProvider([["codex", CODEX_MODELS]]),
         allowedProviderMap: codexProviderMap,
@@ -902,7 +1097,7 @@ describe("resolveAgentForm", () => {
         initialValues: undefined,
         preferences: {
           provider: "codex",
-          providerPreferences: { codex: { model: "gpt-5.4-codex" } },
+          providerPreferences: { codex: { model: "gpt-5.4-codex", modelChosenByUser: true } },
         },
         providerModelsByProvider: makeProviderModelsByProvider([["codex", backgroundModels]]),
         allowedProviderMap: codexProviderMap,
@@ -944,7 +1139,7 @@ describe("resolveAgentForm", () => {
         initialValues: undefined,
         preferences: {
           provider: "codex",
-          providerPreferences: { codex: { model: "gpt-5.3-codex" } },
+          providerPreferences: { codex: { model: "gpt-5.3-codex", modelChosenByUser: true } },
         },
         providerModelsByProvider: makeProviderModelsByProvider([["codex", alternateModels]]),
         allowedProviderMap: codexProviderMap,
@@ -960,7 +1155,7 @@ describe("resolveAgentForm", () => {
         initialValues: undefined,
         preferences: {
           provider: "codex",
-          providerPreferences: { codex: { model: "gpt-5.3-codex" } },
+          providerPreferences: { codex: { model: "gpt-5.3-codex", modelChosenByUser: true } },
         },
         providerModelsByProvider: makeProviderModelsByProvider([["codex", CODEX_MODELS]]),
         allowedProviderMap: codexProviderMap,
@@ -1039,7 +1234,10 @@ describe("resolveAgentForm", () => {
         modelId: "gpt-5.3-codex",
         providerDef: TEST_CODEX_DEFINITION,
         providerModels: CODEX_MODELS,
-        providerPrefs: { thinkingByModel: { "gpt-5.3-codex": "low" } },
+        providerPrefs: {
+          thinkingByModel: { "gpt-5.3-codex": "low" },
+          thinkingChosenByModel: { "gpt-5.3-codex": true },
+        },
       });
 
       expect(next.form.thinkingOptionId).toBe("low");
@@ -1066,7 +1264,7 @@ describe("resolveAgentForm", () => {
         thinkingOptionId: "",
         providerDef: TEST_PI_DEFINITION,
         providerModels: [{ provider: "pi", id: "anthropic/sonnet", label: "Sonnet" }],
-        providerPrefs: { mode: "full-access" },
+        providerPrefs: { mode: "full-access", modeChosenByUser: true },
       });
 
       expect(next.form).toMatchObject({
@@ -1085,7 +1283,10 @@ describe("resolveAgentForm", () => {
         thinkingOptionId: "",
         providerDef: TEST_CODEX_DEFINITION,
         providerModels: CODEX_MODELS,
-        providerPrefs: { thinkingByModel: { "gpt-5.3-codex": "low" } },
+        providerPrefs: {
+          thinkingByModel: { "gpt-5.3-codex": "low" },
+          thinkingChosenByModel: { "gpt-5.3-codex": true },
+        },
       });
 
       expect(next.form.thinkingOptionId).toBe("low");
@@ -1116,7 +1317,10 @@ describe("resolveAgentForm", () => {
         type: "SET_MODEL_FROM_USER",
         modelId: "gpt-5.3-codex",
         availableModels: CODEX_MODELS,
-        providerPrefs: { thinkingByModel: { "gpt-5.3-codex": "xhigh" } },
+        providerPrefs: {
+          thinkingByModel: { "gpt-5.3-codex": "xhigh" },
+          thinkingChosenByModel: { "gpt-5.3-codex": true },
+        },
       });
 
       expect(next.form.thinkingOptionId).toBe("low");
@@ -1154,7 +1358,10 @@ describe("resolveAgentForm", () => {
         type: "SET_MODEL_FROM_USER",
         modelId: "gpt-5.3-codex",
         availableModels: models,
-        providerPrefs: { thinkingByModel: { "gpt-5.3-codex": "low" } },
+        providerPrefs: {
+          thinkingByModel: { "gpt-5.3-codex": "low" },
+          thinkingChosenByModel: { "gpt-5.3-codex": true },
+        },
       });
 
       expect(next.form.thinkingOptionId).toBe("low");
@@ -1248,7 +1455,10 @@ it("owns input readiness, reopening and user edits in the reducer", () => {
     isPreferencesLoading: true,
     hasSnapshot: false,
     initialValues: undefined,
-    preferences: { provider: "codex", providerPreferences: { codex: { model: "astra" } } },
+    preferences: {
+      provider: "codex",
+      providerPreferences: { codex: { model: "astra", modelChosenByUser: true as const } },
+    },
     allowedProviderMap: new Map(),
     providerModelsByProvider: new Map(),
   };
@@ -1268,4 +1478,204 @@ it("owns input readiness, reopening and user edits in the reducer", () => {
   expect(state.resolution.status).toBe("pending");
   state = resolveAgentForm(state, { ...inputs, isPreferencesLoading: false, hasSnapshot: true });
   expect(state.form).toMatchObject({ provider: "codex", model: "astra" });
+});
+
+// The defect, as measured: a new chat opened on the previous Opus release while the host
+// advertised the current one as its default, and picking the newer model by hand did not stick. The
+// profile held a model nobody had chosen -- every submit used to write the resolved model back -- and a
+// saved model outranks the host's default by design. So the host could advertise whatever it liked and
+// the app would never move.
+describe("a saved model is only a preference when the user chose it", () => {
+  const CLAUDE_MODELS: AgentModelDefinition[] = [
+    { provider: "claude", id: "claude-opus-5", label: "Opus 5" },
+    { provider: "claude", id: "claude-opus-5-5", label: "Opus 5.5", isDefault: true },
+  ];
+
+  it("ignores a model saved without the marker, so the host's default applies again", () => {
+    const resolved = resolveFormState(
+      undefined,
+      { provider: "claude", providerPreferences: { claude: { model: "claude-opus-5" } } },
+      CLAUDE_MODELS,
+      INITIAL_USER_MODIFIED,
+      makeState({ provider: "claude" }).form,
+      claudeProviderMap,
+    );
+    // Empty is the value that means "follow the host": the composer labels it with the default model and
+    // submits no model, so the session takes whatever the host advertises at launch.
+    expect(resolved.model).toBe("");
+  });
+
+  it("honours a model the user chose", () => {
+    const resolved = resolveFormState(
+      undefined,
+      {
+        provider: "claude",
+        providerPreferences: { claude: { model: "claude-opus-5", modelChosenByUser: true } },
+      },
+      CLAUDE_MODELS,
+      INITIAL_USER_MODIFIED,
+      makeState({ provider: "claude" }).form,
+      claudeProviderMap,
+    );
+    expect(resolved.model).toBe("claude-opus-5");
+  });
+
+  it("still honours an unmarked model carried in initial values", () => {
+    // Initial values describe THIS draft -- a duplicated session, a deep link -- not a stored profile, so
+    // the marker does not apply to them and dropping them would break resuming a draft.
+    const resolved = resolveFormState(
+      { model: "claude-opus-5" },
+      { provider: "claude", providerPreferences: { claude: { model: "claude-opus-5-5" } } },
+      CLAUDE_MODELS,
+      INITIAL_USER_MODIFIED,
+      makeState({ provider: "claude" }).form,
+      claudeProviderMap,
+    );
+    expect(resolved.model).toBe("claude-opus-5");
+  });
+});
+
+// The whole outcome on one profile, which is how the gap got through the first time: the model was fixed,
+// tested and reported while the mode and the effort beside it were still stuck. This is the exact stale
+// profile the brief named -- opus-5 / high / default, all written by a form that merely resolved them --
+// and all three axes are asserted together so no future change can fix one and quietly leave two.
+describe("a profile stuck on the old defaults returns to the host's, on every axis", () => {
+  const CLAUDE_MODELS: AgentModelDefinition[] = [
+    {
+      provider: "claude",
+      id: "claude-opus-5",
+      label: "Opus 5",
+      defaultThinkingOptionId: "high",
+      thinkingOptions: [
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
+    },
+    {
+      provider: "claude",
+      id: "claude-opus-5-5",
+      label: "Opus 5.5",
+      isDefault: true,
+      // The manifest's own value for 5.5, which is the Medium the owner asked for.
+      defaultThinkingOptionId: "medium",
+      thinkingOptions: [
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
+    },
+  ];
+  // The real adapter definition, not the suite's TEST_CLAUDE_DEFINITION, whose defaultModeId is "default".
+  // Using the test double here would assert the wrong default and hide exactly this defect.
+  const realClaudeDefinition = AGENT_PROVIDER_DEFINITIONS.find((entry) => entry.id === "claude");
+  const realClaudeMap = buildProviderDefinitionMap(
+    realClaudeDefinition ? [realClaudeDefinition] : [],
+  );
+
+  // What the composer displays and submits, which is where the model and the effort actually land: the
+  // form leaves both empty when nothing was chosen, and these two resolve that emptiness against the
+  // host's inventory. Asserting the form fields alone would prove nothing about what the user sees.
+  const composed = (form: { model: string; modeId: string; thinkingOptionId: string }) => {
+    const selection = {
+      provider: "claude" as const,
+      modelId: form.model,
+      modeId: form.modeId,
+      thinkingOptionId: form.thinkingOptionId,
+      availableModels: CLAUDE_MODELS,
+      modeOptions: realClaudeDefinition?.modes ?? [],
+    };
+    const modelId = resolveEffectiveComposerModelId(selection);
+    return {
+      modelId,
+      thinkingOptionId: resolveEffectiveComposerThinkingOptionId(selection, modelId),
+    };
+  };
+
+  const STALE: FormPreferences = {
+    provider: "claude",
+    providerPreferences: {
+      claude: {
+        model: "claude-opus-5",
+        mode: "default",
+        thinkingByModel: { "claude-opus-5": "high", "claude-opus-5-5": "high" },
+      },
+    },
+  };
+
+  it("opens Opus 5.5 / Medium / Auto, not Opus 5 / High / Always Ask", () => {
+    const resolved = resolveFormState(
+      undefined,
+      STALE,
+      CLAUDE_MODELS,
+      INITIAL_USER_MODIFIED,
+      makeState({ provider: "claude" }).form,
+      realClaudeMap,
+    );
+    // "" is the follow-the-host value for both: nothing was chosen, so nothing is submitted.
+    expect(resolved.model).toBe("");
+    expect(resolved.thinkingOptionId).toBe("");
+    // Auto, from the adapter's own defaultModeId, because the saved "default" carries no mark.
+    expect(resolved.modeId).toBe("auto");
+    // And what the user sees and sends: the host's default model, at that model's own default effort.
+    expect(composed(resolved)).toEqual({
+      modelId: "claude-opus-5-5",
+      thinkingOptionId: "medium",
+    });
+  });
+
+  it("still honours every one of them when the user did choose it", () => {
+    const chosen: FormPreferences = {
+      provider: "claude",
+      providerPreferences: {
+        claude: {
+          model: "claude-opus-5",
+          modelChosenByUser: true,
+          mode: "default",
+          modeChosenByUser: true,
+          thinkingByModel: { "claude-opus-5": "high" },
+          thinkingChosenByModel: { "claude-opus-5": true },
+        },
+      },
+    };
+    const resolved = resolveFormState(
+      undefined,
+      chosen,
+      CLAUDE_MODELS,
+      INITIAL_USER_MODIFIED,
+      makeState({ provider: "claude" }).form,
+      realClaudeMap,
+    );
+    expect(resolved.model).toBe("claude-opus-5");
+    expect(resolved.modeId).toBe("default");
+    expect(resolved.thinkingOptionId).toBe("high");
+  });
+
+  it("marks each axis independently", () => {
+    // A user who picked only the mode keeps the mode and follows the host for the rest. Asserted because
+    // a marker implemented as one flag for the whole record would pass the two tests above and fail here.
+    const modeOnly: FormPreferences = {
+      provider: "claude",
+      providerPreferences: {
+        claude: {
+          model: "claude-opus-5",
+          mode: "plan",
+          modeChosenByUser: true,
+          thinkingByModel: { "claude-opus-5": "high" },
+        },
+      },
+    };
+    const resolved = resolveFormState(
+      undefined,
+      modeOnly,
+      CLAUDE_MODELS,
+      INITIAL_USER_MODIFIED,
+      makeState({ provider: "claude" }).form,
+      realClaudeMap,
+    );
+    expect(resolved.modeId).toBe("plan");
+    expect(resolved.model).toBe("");
+    expect(composed(resolved)).toEqual({
+      modelId: "claude-opus-5-5",
+      thinkingOptionId: "medium",
+    });
+  });
 });

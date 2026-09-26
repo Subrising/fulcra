@@ -59,6 +59,7 @@ import type {
 import { HubEnrollmentRejectedError } from "../relationship-remote.js";
 
 const execFileAsync = promisify(execFile);
+export const HUB_CLI_PROCESS_TIMEOUT_MS = 30_000;
 const HUB_ORIGIN = "https://hub.test";
 const SOCKET_URL = "wss://hub.test/daemon";
 const REPOSITORY_ROOT = path.resolve(import.meta.dirname, "../../../../../..");
@@ -1454,7 +1455,15 @@ export class HubRelationshipHarness {
   }
 
   runCli(args: string[]): Promise<Record<string, unknown>> {
-    return this.trackOperation(this.executeCli(args));
+    const startedAt = Date.now();
+    return this.trackOperation(
+      this.executeCli(args).finally(() => {
+        // Report only the command name, never its API key or enrollment arguments.
+        console.info(
+          `[hub-cli-contract] ${args.slice(0, 2).join(" ")}: ${Date.now() - startedAt}ms`,
+        );
+      }),
+    );
   }
 
   private async executeCli(args: string[]): Promise<Record<string, unknown>> {
@@ -1471,7 +1480,11 @@ export class HubRelationshipHarness {
         this.host,
         "--json",
       ],
-      { cwd: REPOSITORY_ROOT, env: { ...process.env, NO_COLOR: "1" } },
+      {
+        cwd: REPOSITORY_ROOT,
+        env: { ...process.env, NO_COLOR: "1" },
+        timeout: HUB_CLI_PROCESS_TIMEOUT_MS,
+      },
     );
     const parsed = JSON.parse(stdout) as unknown;
     if (Array.isArray(parsed)) return parsed[0] as Record<string, unknown>;

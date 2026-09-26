@@ -7,7 +7,12 @@ import { HostStatusDot } from "@/components/host-status-dot";
 import { Combobox, ComboboxItem, type ComboboxProps } from "@/components/ui/combobox";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import { useHostRuntimeSnapshot, type ActiveConnection } from "@/runtime/host-runtime";
-import { orderHostsLocalFirst } from "@/types/host-connection";
+import {
+  describeHostEndpoint,
+  formatHostEndpoint,
+  orderHostsLocalFirst,
+  type HostConnection,
+} from "@/types/host-connection";
 import {
   ADD_HOST_OPTION_ID,
   ALL_HOSTS_OPTION_ID,
@@ -27,6 +32,9 @@ type RenderHostOption = NonNullable<ComboboxProps["renderOption"]>;
 interface HostPickerHost {
   serverId: string;
   label: string;
+  // Callers pass whole host profiles; these are read only to disambiguate equal labels.
+  connections?: HostConnection[];
+  preferredConnectionId?: string | null;
 }
 
 export function HostStatusDotSlot({ serverId }: { serverId: string }): ReactElement {
@@ -37,25 +45,21 @@ export function HostStatusDotSlot({ serverId }: { serverId: string }): ReactElem
   );
 }
 
-// Standard secure/plain web ports carry no information in the host display, so
-// "relay.paseo.sh:443" reads as "relay.paseo.sh" while "127.0.0.1:6767" is kept.
-function formatConnectionEndpoint(endpoint: string): string {
-  return endpoint.replace(/:(?:443|80)$/, "");
-}
-
 // Socket/pipe transports have no host:port — their endpoint is a filesystem
 // path, so they read as "Local". TCP and relay show the address being used.
 function formatActiveConnectionLabel(connection: ActiveConnection): string {
   if (connection.type === "directSocket" || connection.type === "directPipe") {
     return "Local";
   }
-  return formatConnectionEndpoint(connection.endpoint);
+  return formatHostEndpoint(connection.endpoint);
 }
 
 export interface HostPickerOptionProps {
   serverId: string;
   label: string;
   showActiveConnection: boolean;
+  /** Address shown when this host shares its label with another and is not connected. */
+  endpointFallback?: string;
   selected?: boolean;
   active: boolean;
   onPress: () => void;
@@ -67,6 +71,7 @@ export function HostPickerOption({
   serverId,
   label,
   showActiveConnection,
+  endpointFallback,
   selected,
   active,
   onPress,
@@ -75,10 +80,13 @@ export function HostPickerOption({
 }: HostPickerOptionProps): ReactElement {
   const { theme } = useUnistyles();
   const activeConnection = useHostRuntimeSnapshot(serverId)?.activeConnection ?? null;
+  // A live connection is the most accurate address. When there is none and the label is
+  // shared with another host, fall back to the saved endpoint so the rows stay tellable
+  // apart while offline.
   const connectionLabel =
-    showActiveConnection && activeConnection
+    (showActiveConnection && activeConnection
       ? formatActiveConnectionLabel(activeConnection)
-      : undefined;
+      : undefined) ?? endpointFallback;
   const leadingSlot = useMemo(() => <HostStatusDotSlot serverId={serverId} />, [serverId]);
   const handleSettingsPress = useCallback(
     (event: GestureResponderEvent) => {
@@ -223,6 +231,24 @@ export function HostPicker({
     return hostOptions;
   }, [orderedHosts, includeAllHost, includeAddHost, includeEnableBuiltInDaemon]);
 
+  // A portable daemon added beside the machine's main one reports the same hostname, so
+  // two rows read identically. Give every host in a colliding group its address.
+  const endpointsForDuplicateLabels = useMemo(() => {
+    const labelCounts = new Map<string, number>();
+    for (const host of orderedHosts)
+      labelCounts.set(host.label, (labelCounts.get(host.label) ?? 0) + 1);
+    const endpoints = new Map<string, string>();
+    for (const host of orderedHosts) {
+      if ((labelCounts.get(host.label) ?? 0) < 2 || !host.connections) continue;
+      const endpoint = describeHostEndpoint({
+        connections: host.connections,
+        preferredConnectionId: host.preferredConnectionId,
+      });
+      if (endpoint) endpoints.set(host.serverId, endpoint);
+    }
+    return endpoints;
+  }, [orderedHosts]);
+
   const isSearchable = searchable === true && orderedHosts.length > SEARCHABLE_THRESHOLD;
 
   const handleSelect = useCallback(
@@ -280,6 +306,7 @@ export function HostPicker({
           serverId={option.id}
           label={option.label}
           showActiveConnection={showActiveConnection === true}
+          endpointFallback={endpointsForDuplicateLabels.get(option.id)}
           selected={selected}
           active={active}
           onPress={onPress}
@@ -294,6 +321,7 @@ export function HostPicker({
       onOpenHostSettings,
       showActiveConnection,
       handleOpenHostSettings,
+      endpointsForDuplicateLabels,
     ],
   );
 

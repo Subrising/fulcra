@@ -226,6 +226,14 @@ try {
     const workerArgs = workerEntry.endsWith(".ts")
       ? ["--import", "tsx", workerEntry, "--relay"]
       : [workerEntry, "--relay"];
+    // Capture the worker's own output. daemon.log belongs to the supervisor, and this
+    // fixture launches the worker directly, so tailDaemonLog has only ever been able to
+    // report "<daemon log unavailable>" — which is exactly what the CI failure printed
+    // where the daemon's account of itself should have been.
+    let workerOutput = "";
+    const recordWorkerOutput = (chunk: Buffer) => {
+      workerOutput = `${workerOutput}${chunk.toString()}`.slice(-8000);
+    };
     const worker = spawn(process.execPath, workerArgs, {
       cwd: join(import.meta.dirname, ".."),
       env: {
@@ -237,8 +245,10 @@ try {
         PASEO_VOICE_MODE_ENABLED: "0",
         CI: "true",
       },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    worker.stdout?.on("data", recordWorkerOutput);
+    worker.stderr?.on("data", recordWorkerOutput);
 
     try {
       const relayProbe = await retryWhileWorkerRuns(
@@ -260,6 +270,7 @@ try {
             `status: ${result.statusResult.stdout || result.statusResult.stderr}`,
             `pairing: ${result.pairingResult.stdout || result.pairingResult.stderr}`,
             `daemon log:\n${await tailDaemonLog()}`,
+            `worker output:\n${workerOutput || "<none captured>"}`,
           ].join("\n"),
       );
       const { statusResult: status, statusPayload: payload, pairingResult: pairing } = relayProbe;

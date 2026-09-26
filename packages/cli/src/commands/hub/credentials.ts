@@ -137,7 +137,7 @@ export class PrivateHubCredentialStore implements HubCredentialStore {
 }
 
 function resolvePaseoHome(env: Readonly<Record<string, string | undefined>>): string {
-  const configured = env.PASEO_HOME ?? "~/.paseo";
+  const configured = env.FULCRA_HOME ?? env.PASEO_HOME ?? "~/.paseo";
   const expanded = configured === "~" ? homedir() : configured.replace(/^~\//u, `${homedir()}/`);
   return path.resolve(expanded);
 }

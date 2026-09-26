@@ -1,0 +1,550 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
+import Svg, { G, Line, Polygon, Rect, Text as SvgText } from "react-native-svg";
+import { useTranslation } from "react-i18next";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { isWeb } from "@/constants/platform";
+import type { Theme } from "@/styles/theme";
+import type { ArchitectureMapModel, ArchitectureMapNode, CardTone, NodeTone } from "./ir-model";
+import {
+  computeViewBox,
+  edgeGeometry,
+  fitText,
+  indexNodes,
+  shouldDrawLabels,
+  type EdgeGeometry,
+} from "./layout";
+
+// Security boundary: every IR-derived string below is a React child of a Text element, so it
+// reaches the screen as a text node. Nothing from the IR is placed in an href, a style, a
+// colour, a font or an id attribute; colours come from fixed tone tables. The test
+// `architecture-map-safety.test.ts` fails if this module grows an HTML sink or a link.
+
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 3;
+const ZOOM_STEP = 1.25;
+const LABEL_SIZE = 13;
+const DETAIL_SIZE = 10.5;
+const SELECTED_STATE = { selected: true } as const;
+const UNSELECTED_STATE = { selected: false } as const;
+
+type Tone = NodeTone | CardTone;
+
+// Colours reach SVG props through withUnistyles uniProps (docs/unistyles.md bans the hook).
+// Each mapping is created once per tone so wrapped components keep stable props.
+function toneColor(theme: Theme, tone: Tone): string {
+  const colors = theme.colors;
+  switch (tone) {
+    case "service":
+    case "cyan":
+      return colors.accent;
+    case "client":
+    case "emerald":
+      return colors.statusSuccess;
+    case "data":
+    case "amber":
+      return colors.statusWarning;
+    case "security":
+    case "rose":
+      return colors.statusDanger;
+    case "messaging":
+    case "cloud":
+    case "violet":
+      return colors.statusMerged;
+    case "external":
+    case "neutral":
+      return colors.foregroundMuted;
+  }
+}
+
+function cachedByKey<K, V>(create: (key: K) => V): (key: K) => V {
+  const cache = new Map<K, V>();
+  return (key) => {
+    const existing = cache.get(key);
+    if (existing !== undefined) return existing;
+    const created = create(key);
+    cache.set(key, created);
+    return created;
+  };
+}
+
+const toneFill = cachedByKey((tone: Tone) => (theme: Theme) => ({ fill: toneColor(theme, tone) }));
+const accentStroke = (theme: Theme) => ({ stroke: theme.colors.accent });
+const accentFill = (theme: Theme) => ({ fill: theme.colors.accent });
+const mutedStroke = (theme: Theme) => ({ stroke: theme.colors.foregroundMuted });
+const mutedFill = (theme: Theme) => ({ fill: theme.colors.foregroundMuted });
+const foregroundFill = (theme: Theme) => ({ fill: theme.colors.foreground });
+const nodeFrame = cachedByKey((tone: NodeTone | "selected") => (theme: Theme) => ({
+  fill: theme.colors.surface1,
+  stroke: tone === "selected" ? theme.colors.accent : toneColor(theme, tone),
+}));
+
+const ThemedLine = withUnistyles(Line);
+const ThemedPolygon = withUnistyles(Polygon);
+const ThemedRect = withUnistyles(Rect);
+const ThemedSvgText = withUnistyles(SvgText);
+
+export interface ArchitectureMapViewProps {
+  model: ArchitectureMapModel;
+}
+
+export function ArchitectureMapView({ model }: ArchitectureMapViewProps) {
+  const { t } = useTranslation();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState<number | null>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+
+  const nodesById = useMemo(() => indexNodes(model), [model]);
+  const geometries = useMemo(
+    () =>
+      model.edges.flatMap((edge) => {
+        const geometry = edgeGeometry(edge, nodesById);
+        return geometry ? [{ edge, geometry }] : [];
+      }),
+    [model.edges, nodesById],
+  );
+  const viewBox = useMemo(
+    () =>
+      computeViewBox(
+        model,
+        geometries.map((entry) => entry.geometry),
+      ),
+    [model, geometries],
+  );
+  const fitZoom =
+    availableWidth > 0 ? Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, availableWidth / viewBox.width)) : 1;
+  const effectiveZoom = zoom ?? Math.min(1, fitZoom);
+  const drawLabels = shouldDrawLabels(model.nodes.length, effectiveZoom);
+
+  const incident = useMemo(() => {
+    if (!selectedId) return null;
+    const ids = new Set<string>([selectedId]);
+    const edgeIds = new Set<string>();
+    for (const edge of model.edges) {
+      if (edge.from === selectedId || edge.to === selectedId) {
+        edgeIds.add(edge.id);
+        ids.add(edge.from);
+        ids.add(edge.to);
+      }
+    }
+    return { nodeIds: ids, edgeIds };
+  }, [model.edges, selectedId]);
+
+  const clearSelection = useCallback(() => setSelectedId(null), []);
+  const toggleSelection = useCallback(
+    (id: string) => setSelectedId((current) => (current === id ? null : id)),
+    [],
+  );
+  const zoomOut = useCallback(
+    () => setZoom(Math.max(MIN_ZOOM, effectiveZoom / ZOOM_STEP)),
+    [effectiveZoom],
+  );
+  const zoomIn = useCallback(
+    () => setZoom(Math.min(MAX_ZOOM, effectiveZoom * ZOOM_STEP)),
+    [effectiveZoom],
+  );
+  const zoomToFit = useCallback(() => setZoom(fitZoom), [fitZoom]);
+  const zoomToActualSize = useCallback(() => setZoom(1), []);
+  useEffect(() => {
+    if (!isWeb || typeof window === "undefined") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") clearSelection();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearSelection]);
+
+  const onCanvasLayout = useCallback((event: LayoutChangeEvent) => {
+    setAvailableWidth(event.nativeEvent.layout.width);
+  }, []);
+
+  const selected = selectedId ? (nodesById.get(selectedId) ?? null) : null;
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      testID="architecture-map"
+    >
+      <View style={styles.header}>
+        <Text style={styles.title} testID="architecture-map-title">
+          {model.title}
+        </Text>
+        {model.subtitle ? (
+          <Text style={styles.subtitle} testID="architecture-map-subtitle">
+            {model.subtitle}
+          </Text>
+        ) : null}
+        {model.hiddenCharactersRemoved ? (
+          <Text style={styles.notice} testID="architecture-map-hidden-characters">
+            {t("panels.architectureMap.hiddenCharacters")}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.toolbar}>
+        <ZoomButton
+          label={t("panels.architectureMap.zoomOut")}
+          onPress={zoomOut}
+          testID="architecture-map-zoom-out"
+        >
+          −
+        </ZoomButton>
+        <ZoomButton
+          label={t("panels.architectureMap.zoomIn")}
+          onPress={zoomIn}
+          testID="architecture-map-zoom-in"
+        >
+          +
+        </ZoomButton>
+        <ZoomButton
+          label={t("panels.architectureMap.fit")}
+          onPress={zoomToFit}
+          testID="architecture-map-fit"
+        >
+          {t("panels.architectureMap.fit")}
+        </ZoomButton>
+        <ZoomButton
+          label={t("panels.architectureMap.actualSize")}
+          onPress={zoomToActualSize}
+          testID="architecture-map-actual-size"
+        >
+          100%
+        </ZoomButton>
+      </View>
+
+      <View style={styles.canvasFrame} onLayout={onCanvasLayout}>
+        <ScrollView horizontal>
+          <Svg
+            width={viewBox.width * effectiveZoom}
+            height={viewBox.height * effectiveZoom}
+            viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
+            accessibilityLabel={model.title}
+          >
+            {geometries.map(({ edge, geometry }) => (
+              <MapEdge
+                key={edge.id}
+                geometry={geometry}
+                label={drawLabels ? edge.label : null}
+                style={edge.style}
+                dimmed={incident !== null && !incident.edgeIds.has(edge.id)}
+              />
+            ))}
+            {model.nodes.map((node) => (
+              <MapNode
+                key={node.id}
+                node={node}
+                drawLabels={drawLabels}
+                selected={node.id === selectedId}
+                dimmed={incident !== null && !incident.nodeIds.has(node.id)}
+                onToggle={toggleSelection}
+              />
+            ))}
+          </Svg>
+        </ScrollView>
+      </View>
+
+      {selected ? <NodeDetail node={selected} model={model} onClose={clearSelection} /> : null}
+
+      {model.cards.length > 0 ? (
+        <View style={styles.cards}>
+          {model.cards.map((card) => (
+            <View key={card.key} style={styles.card} testID="architecture-map-card">
+              <View style={styles.cardHeader}>
+                <View style={[styles.dot, dotStyles[card.tone]]} />
+                <Text style={styles.cardTitle}>{card.title}</Text>
+              </View>
+              {card.items.map((item) => (
+                <Text key={item.key} style={styles.cardItem}>
+                  {item.text}
+                </Text>
+              ))}
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>{t("panels.architectureMap.components")}</Text>
+        {model.nodes.map((node) => (
+          <NodeRow
+            key={node.id}
+            node={node}
+            selected={node.id === selectedId}
+            onToggle={toggleSelection}
+          />
+        ))}
+      </View>
+
+      {model.boundaries.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t("panels.architectureMap.boundaries")}</Text>
+          {model.boundaries.map((boundary) => (
+            <Text key={boundary.key} style={styles.cardItem} testID="architecture-map-boundary">
+              {boundary.label} · {boundary.kind}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+    </ScrollView>
+  );
+}
+
+function NodeRow(props: {
+  node: ArchitectureMapNode;
+  selected: boolean;
+  onToggle: (id: string) => void;
+}) {
+  const { node, selected, onToggle } = props;
+  const onPress = useCallback(() => onToggle(node.id), [node.id, onToggle]);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={selected ? SELECTED_STATE : UNSELECTED_STATE}
+      onPress={onPress}
+      style={[styles.listRow, selected && styles.listRowSelected]}
+      testID="architecture-map-node-row"
+    >
+      <Text style={styles.listLabel}>{node.label}</Text>
+      <Text style={styles.listMeta}>{node.type}</Text>
+    </Pressable>
+  );
+}
+
+function ZoomButton(props: {
+  label: string;
+  onPress: () => void;
+  testID: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={props.label}
+      onPress={props.onPress}
+      style={styles.toolbarButton}
+      testID={props.testID}
+    >
+      <Text style={styles.toolbarText}>{props.children}</Text>
+    </Pressable>
+  );
+}
+
+function MapEdge(props: {
+  geometry: EdgeGeometry;
+  label: string | null;
+  style: "solid" | "emphasis" | "dashed";
+  dimmed: boolean;
+}) {
+  const { geometry, label, style, dimmed } = props;
+  const emphasis = style === "emphasis";
+  const points = geometry.arrow.map((point) => `${point.x},${point.y}`).join(" ");
+  return (
+    <G opacity={dimmed ? 0.2 : 1} testID="architecture-map-edge">
+      <ThemedLine
+        x1={geometry.start.x}
+        y1={geometry.start.y}
+        x2={geometry.end.x}
+        y2={geometry.end.y}
+        uniProps={emphasis ? accentStroke : mutedStroke}
+        strokeWidth={emphasis ? 2 : 1.5}
+        strokeDasharray={style === "dashed" ? "6 4" : undefined}
+      />
+      <ThemedPolygon points={points} uniProps={emphasis ? accentFill : mutedFill} />
+      {label ? (
+        <ThemedSvgText
+          x={geometry.labelAt.x}
+          y={geometry.labelAt.y}
+          fontSize={DETAIL_SIZE}
+          uniProps={mutedFill}
+          textAnchor="middle"
+        >
+          {label}
+        </ThemedSvgText>
+      ) : null}
+    </G>
+  );
+}
+
+function MapNode(props: {
+  node: ArchitectureMapNode;
+  drawLabels: boolean;
+  selected: boolean;
+  dimmed: boolean;
+  onToggle: (id: string) => void;
+}) {
+  const { node, drawLabels, selected, dimmed, onToggle } = props;
+  const onPress = useCallback(() => onToggle(node.id), [node.id, onToggle]);
+  const textX = node.x + 10;
+  return (
+    <G opacity={dimmed ? 0.2 : 1} testID="architecture-map-node">
+      <ThemedRect
+        x={node.x}
+        y={node.y}
+        width={node.width}
+        height={node.height}
+        rx={8}
+        uniProps={nodeFrame(selected ? "selected" : node.tone)}
+        strokeWidth={selected ? 2.5 : 1.5}
+        strokeDasharray={node.tone === "external" ? "5 3" : undefined}
+        onPress={onPress}
+      />
+      {drawLabels ? (
+        <>
+          <ThemedSvgText
+            x={textX}
+            y={node.y + 20}
+            fontSize={LABEL_SIZE}
+            fontWeight="600"
+            uniProps={foregroundFill}
+          >
+            {fitText(node.label, node.width, LABEL_SIZE)}
+          </ThemedSvgText>
+          {node.sublabel ? (
+            <ThemedSvgText x={textX} y={node.y + 36} fontSize={DETAIL_SIZE} uniProps={mutedFill}>
+              {fitText(node.sublabel, node.width, DETAIL_SIZE)}
+            </ThemedSvgText>
+          ) : null}
+          {node.tag ? (
+            <ThemedSvgText
+              x={textX}
+              y={node.y + 51}
+              fontSize={DETAIL_SIZE}
+              uniProps={toneFill(node.tone)}
+            >
+              {fitText(node.tag, node.width, DETAIL_SIZE)}
+            </ThemedSvgText>
+          ) : null}
+        </>
+      ) : null}
+    </G>
+  );
+}
+
+function NodeDetail(props: {
+  node: ArchitectureMapNode;
+  model: ArchitectureMapModel;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const { node, model, onClose } = props;
+  const outgoing = model.edges.filter((edge) => edge.from === node.id);
+  const incoming = model.edges.filter((edge) => edge.to === node.id);
+  return (
+    <View style={styles.detail} testID="architecture-map-detail">
+      <View style={styles.cardHeader}>
+        <Text style={styles.cardTitle}>{node.label}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("panels.architectureMap.closeDetail")}
+          onPress={onClose}
+          testID="architecture-map-detail-close"
+        >
+          <Text style={styles.toolbarText}>×</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.cardItem}>
+        {t("panels.architectureMap.detailId")}: {node.id} · {node.type}
+      </Text>
+      {node.sublabel ? <Text style={styles.cardItem}>{node.sublabel}</Text> : null}
+      {node.tag ? (
+        <Text style={styles.cardItem} testID="architecture-map-detail-tag">
+          {node.tag}
+        </Text>
+      ) : null}
+      {outgoing.map((edge) => (
+        <Text key={`out-${edge.id}`} style={styles.cardItem}>
+          → {edge.to}
+          {edge.label ? ` · ${edge.label}` : ""}
+        </Text>
+      ))}
+      {incoming.map((edge) => (
+        <Text key={`in-${edge.id}`} style={styles.cardItem}>
+          ← {edge.from}
+          {edge.label ? ` · ${edge.label}` : ""}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  root: { flex: 1, backgroundColor: theme.colors.surface0 },
+  content: { padding: theme.spacing[4], gap: theme.spacing[3] },
+  header: { gap: theme.spacing[1] },
+  title: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.lg,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  subtitle: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  notice: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm, fontStyle: "italic" },
+  toolbar: { flexDirection: "row", gap: theme.spacing[2] },
+  toolbarButton: {
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  toolbarText: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
+  canvasFrame: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.lg,
+    overflow: "hidden",
+  },
+  cards: { gap: theme.spacing[2] },
+  card: {
+    gap: theme.spacing[1],
+    padding: theme.spacing[3],
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: theme.colors.surface1,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing[2],
+  },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  cardTitle: {
+    flex: 1,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  cardItem: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  detail: {
+    gap: theme.spacing[1],
+    padding: theme.spacing[3],
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderAccent,
+  },
+  section: { gap: theme.spacing[1] },
+  sectionTitle: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  listRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: theme.spacing[2],
+    borderRadius: theme.borderRadius.md,
+  },
+  listRowSelected: { backgroundColor: theme.colors.surface2 },
+  listLabel: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
+  listMeta: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+}));
+
+const dotStyles = StyleSheet.create((theme) => ({
+  emerald: { backgroundColor: toneColor(theme, "emerald") },
+  cyan: { backgroundColor: toneColor(theme, "cyan") },
+  amber: { backgroundColor: toneColor(theme, "amber") },
+  rose: { backgroundColor: toneColor(theme, "rose") },
+  violet: { backgroundColor: toneColor(theme, "violet") },
+  neutral: { backgroundColor: toneColor(theme, "neutral") },
+}));

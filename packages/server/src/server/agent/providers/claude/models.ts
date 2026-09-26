@@ -10,6 +10,7 @@ import {
   normalizeClaudeManifestModelId,
   normalizeClaudeRuntimeModelId as normalizeClaudeManifestRuntimeModelId,
 } from "./model-manifest.js";
+import { mergeClaudeRuntimeCatalog, type ClaudeRuntimeModel } from "./model-discovery.js";
 
 const CLAUDE_SETTINGS_MODEL_ENV_KEYS = [
   "ANTHROPIC_MODEL",
@@ -48,18 +49,27 @@ export function findClaudeModel(
   return getClaudeModels().find((model) => model.id === normalizedModelId);
 }
 
+/**
+ * The Claude catalog: the models Claude Code reported (runtimeModels) overlaid with the manifest, or the
+ * manifest alone when there is no report (the probe failed or timed out). Models named in Claude
+ * settings.json are appended either way.
+ */
 export async function getClaudeModelsWithSettings(
   logger: Logger,
   configDir?: string,
   claudeCodeVersion?: string,
+  runtimeModels?: readonly ClaudeRuntimeModel[] | null,
 ): Promise<AgentModelDefinition[]> {
-  const hardcodedModels = getClaudeModels(claudeCodeVersion);
+  const manifestModels = getClaudeModels(claudeCodeVersion);
+  const baseModels = runtimeModels?.length
+    ? mergeClaudeRuntimeCatalog({ runtimeModels, manifestModels })
+    : manifestModels;
   const settingsModels = await readClaudeSettingsModels(logger, configDir);
   if (settingsModels.length === 0) {
-    return hardcodedModels;
+    return baseModels;
   }
 
-  const models = [...hardcodedModels];
+  const models = [...baseModels];
 
   for (const model of settingsModels) {
     const existingIndex = models.findIndex((candidate) => candidate.id === model.id);

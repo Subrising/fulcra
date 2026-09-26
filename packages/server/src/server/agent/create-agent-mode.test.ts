@@ -35,7 +35,41 @@ describe("resolveAndValidateCreateAgentMode", () => {
     );
   });
 
-  it("returns undefined (provider default) when no mode and no caller", () => {
+  it("selects the adapter's declared automatic-approval mode when no mode and no caller", () => {
+    // Claude's declared automatic mode is the classifier, and it must be offered by the
+    // live adapter to be selected.
+    expect(
+      resolveAndValidateCreateAgentMode({
+        requestedMode: undefined,
+        targetProvider: "claude",
+        parent: null,
+        unattended: false,
+        availableModes: [...CLAUDE_MODES, "auto"],
+      }),
+    ).toBe("auto");
+    // Never Bypass, whatever the adapter offers.
+    expect(
+      resolveAndValidateCreateAgentMode({
+        requestedMode: undefined,
+        targetProvider: "claude",
+        parent: null,
+        unattended: false,
+        availableModes: [...CLAUDE_MODES, "auto"],
+      }),
+    ).not.toBe("bypassPermissions");
+    // Codex takes auto-review, not the mode named "auto".
+    expect(
+      resolveAndValidateCreateAgentMode({
+        requestedMode: undefined,
+        targetProvider: "codex",
+        parent: null,
+        unattended: false,
+        availableModes: [...CODEX_MODES, "auto-review"],
+      }),
+    ).toBe("auto-review");
+  });
+
+  it("falls back to the provider default when the adapter offers no automatic mode", () => {
     const resolved = resolveAndValidateCreateAgentMode({
       requestedMode: undefined,
       targetProvider: "claude",

@@ -11,6 +11,7 @@ import {
 } from "./workspace-header-source";
 import { createSidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { selectSidebarConversationLabels } from "@/hooks/sidebar-conversation-labels";
 
 function createWorkspaceDescriptor(input: Partial<WorkspaceDescriptor> = {}): WorkspaceDescriptor {
   return {
@@ -32,6 +33,91 @@ function createWorkspaceDescriptor(input: Partial<WorkspaceDescriptor> = {}): Wo
 }
 
 describe("workspace source of truth consumption", () => {
+  const generatedName = "123e4567-e89b-42d3-a456-426614174000";
+  function headerWithObservedConversation(
+    workspace: WorkspaceDescriptor,
+    agentServerId = "srv",
+    agentWorkspaceId = workspace.id,
+    title: string | null = "Team leadership",
+  ) {
+    const conversation = {
+      id: "leader",
+      serverId: agentServerId,
+      workspaceId: agentWorkspaceId,
+      title,
+      createdAt: new Date(1000),
+      archivedAt: null,
+      parentAgentId: null,
+    };
+    const labels = selectSidebarConversationLabels(
+      {
+        srv: {
+          agents: new Map([[conversation.id, conversation]]),
+          workspaces: new Map([[workspace.id, workspace]]),
+        },
+      },
+      ["srv"],
+    );
+    return resolveWorkspaceHeaderRenderState({
+      workspace,
+      checkoutState: { kind: "pending" },
+      conversationLabel: labels.get(`srv:${workspace.id}`),
+    });
+  }
+
+  it("uses the sidebar conversation label for generated non-git header names", () => {
+    const workspace = createWorkspaceDescriptor({
+      projectKind: "non_git",
+      name: generatedName,
+      projectDisplayName: generatedName,
+    });
+    const before = structuredClone(workspace);
+    expect(headerWithObservedConversation(workspace)).toMatchObject({
+      kind: "ready",
+      title: "Team leadership",
+      subtitle: "Team leadership",
+      isSubtitleDistinct: false,
+    });
+    expect(workspace).toEqual(before);
+  });
+
+  it.each([
+    { projectKind: "git" as const, name: generatedName, projectDisplayName: generatedName },
+    { projectKind: "non_git" as const, name: "Research", projectDisplayName: "Research hub" },
+    {
+      projectKind: "non_git" as const,
+      name: "My workspace",
+      title: "My workspace",
+      projectDisplayName: "My project",
+      projectCustomName: "My project",
+    },
+  ])("keeps saved and git identity in header: $name", (input) => {
+    const workspace = createWorkspaceDescriptor(input);
+    expect(headerWithObservedConversation(workspace)).toMatchObject({
+      title: workspace.name,
+      subtitle: workspace.projectDisplayName,
+    });
+  });
+
+  it.each([
+    { host: "other-host", workspaceId: "/repo/main", title: "Foreign conversation" },
+    { host: "srv", workspaceId: "/other-workspace", title: "Other workspace" },
+    { host: "srv", workspaceId: "/repo/main", title: null },
+  ])(
+    "does not borrow missing or foreign conversation metadata: $host $workspaceId",
+    ({ host, workspaceId, title }) => {
+      const workspace = createWorkspaceDescriptor({
+        projectKind: "non_git",
+        name: generatedName,
+        projectDisplayName: generatedName,
+      });
+      expect(headerWithObservedConversation(workspace, host, workspaceId, title)).toMatchObject({
+        title: generatedName,
+        subtitle: generatedName,
+      });
+    },
+  );
+
   it("uses the same descriptor name in header and sidebar row", () => {
     const workspace = createWorkspaceDescriptor();
 

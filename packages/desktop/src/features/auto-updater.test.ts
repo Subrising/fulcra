@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { app } from "electron";
 import { UUID } from "builder-util-runtime";
 import { describe, expect, it, vi } from "vitest";
 
@@ -28,6 +29,7 @@ const { autoUpdaterMock } = vi.hoisted(() => {
 vi.mock("electron", () => ({
   app: {
     getPath: vi.fn(),
+    getName: vi.fn(() => "Paseo"),
     isPackaged: true,
   },
 }));
@@ -39,6 +41,7 @@ vi.mock("electron-updater", () => ({
 import {
   bucketFromStagingUserId,
   checkForAppUpdate,
+  downloadAndInstallUpdate,
   createAppUpdateLifecycleLogger,
   resolveStagingUserId,
   rolloutManifestSchema,
@@ -47,6 +50,28 @@ import {
 } from "./auto-updater";
 
 describe("checkForAppUpdate", () => {
+  it("never checks or installs upstream releases in a fork product", async () => {
+    vi.mocked(app.getName).mockReturnValue("Orca");
+    const checks = autoUpdaterMock.checkForUpdates.mock.calls.length;
+    const downloads = autoUpdaterMock.downloadUpdate.mock.calls.length;
+    try {
+      const result = await checkForAppUpdate({
+        currentVersion: "0.8.0",
+        releaseChannel: "stable",
+        intent: "manual",
+      });
+      expect(result.hasUpdate).toBe(false);
+      expect(result.errorMessage).toContain("Fulcra updates are not published");
+      expect(
+        (await downloadAndInstallUpdate({ currentVersion: "0.8.0", releaseChannel: "stable" }))
+          .installed,
+      ).toBe(false);
+      expect(autoUpdaterMock.checkForUpdates.mock.calls.length).toBe(checks);
+      expect(autoUpdaterMock.downloadUpdate.mock.calls.length).toBe(downloads);
+    } finally {
+      vi.mocked(app.getName).mockReturnValue("Paseo");
+    }
+  });
   it("treats an unpublished channel manifest as an unavailable update", async () => {
     const error = Object.assign(new Error("Cannot find latest-mac.yml"), {
       code: "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND",

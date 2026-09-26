@@ -46,3 +46,22 @@ export async function readGitFileContents(
   if (offset !== result.stdout.length) throw new Error("Unexpected git object output");
   return contents;
 }
+
+/**
+ * One blob's exact bytes by object id (`git cat-file blob <id>`), for callers that must keep binary
+ * content intact; readGitFileContents decodes as UTF-8. Null when the blob exceeds `maxBytes`.
+ */
+export async function readGitBlobBytes(
+  cwd: string,
+  objectId: string,
+  maxBytes: number,
+): Promise<Buffer | null> {
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(objectId)) throw new Error("Invalid object id");
+  const result = await runGitCommandBytes(["cat-file", "blob", objectId], {
+    cwd,
+    envOverlay: { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
+    maxOutputBytes: maxBytes + 1,
+  });
+  if (result.truncated || result.stdout.length > maxBytes) return null;
+  return result.stdout;
+}

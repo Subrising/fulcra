@@ -67,6 +67,10 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
 
@@ -85,6 +89,10 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
@@ -110,6 +118,10 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
@@ -146,6 +158,10 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Fetch origin/main (worktree tests)
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
@@ -196,6 +212,10 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install dependencies with retry
         run: node scripts/npm-retry.mjs ci
 
@@ -223,14 +243,25 @@ jobs:
         env:
           PASEO_DESKTOP_LIFECYCLE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-lifecycle
 
+      # Diagnostics only. Actions storage quota must not fail a build whose
+      # tests and packaging passed; the failure is reported instead. Every
+      # other step in this job stays failure-sensitive.
       - name: Upload desktop lifecycle screenshots
+        id: upload-desktop-lifecycle
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         with:
           name: desktop-lifecycle
           path: ${{ runner.temp }}/desktop-lifecycle
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Report unavailable desktop-lifecycle diagnostics
+        if: ${{ !cancelled() && steps.upload-desktop-lifecycle.outcome == 'failure' }}
+        run: |
+          echo "::warning title=Diagnostic upload failed::desktop-lifecycle was not uploaded. The job log still has the full output."
+          echo "Diagnostic artifact \`desktop-lifecycle\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run desktop lifecycle E2E (Windows)
         if: ${{ runner.os == 'Windows' }}
@@ -246,14 +277,25 @@ jobs:
         env:
           PASEO_DESKTOP_BROWSER_E2E_ARTIFACT_DIR: ${{ runner.temp }}/desktop-browser-e2e
 
+      # Diagnostics only. Actions storage quota must not fail a build whose
+      # tests and packaging passed; the failure is reported instead. Every
+      # other step in this job stays failure-sensitive.
       - name: Upload desktop browser diagnostics
+        id: upload-desktop-browser
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         if: ${{ failure() && runner.os == 'Linux' }}
         with:
           name: desktop-browser-e2e
           path: ${{ runner.temp }}/desktop-browser-e2e
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Report unavailable desktop-browser-e2e diagnostics
+        if: ${{ !cancelled() && steps.upload-desktop-browser.outcome == 'failure' }}
+        run: |
+          echo "::warning title=Diagnostic upload failed::desktop-browser-e2e was not uploaded. The job log still has the full output."
+          echo "Diagnostic artifact \`desktop-browser-e2e\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
 
   desktop-tests-windows:
     name: desktop-tests (windows-latest)
@@ -278,8 +320,15 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install dependencies with retry
         run: node scripts/npm-retry.mjs ci
+
+      - name: Verify dependency overrides
+        run: npm run test:dependency-overrides
 
       - name: Install Playwright browsers
         timeout-minutes: 10
@@ -303,6 +352,10 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
@@ -344,6 +397,10 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install dependencies with retry
         run: node scripts/npm-retry.mjs ci
 
@@ -368,8 +425,13 @@ jobs:
           # early agent/Changes specs. Required check names remain unchanged.
           PWTEST_SHARD_WEIGHTS: "111:172:137:160"
 
+      # Diagnostics only. Actions storage quota must not fail a build whose
+      # tests and packaging passed; the failure is reported instead. Every
+      # other step in this job stays failure-sensitive.
       - name: Upload test artifacts
+        id: upload-playwright
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         if: failure()
         with:
           name: playwright-results-${{ env.PLAYWRIGHT_ARTIFACT }}
@@ -377,6 +439,12 @@ jobs:
             packages/app/test-results/
             packages/app/playwright-report/
           retention-days: 7
+
+      - name: Report unavailable playwright-results diagnostics
+        if: ${{ !cancelled() && steps.upload-playwright.outcome == 'failure' }}
+        run: |
+          echo "::warning title=Diagnostic upload failed::playwright-results was not uploaded. The job log still has the full output."
+          echo "Diagnostic artifact \`playwright-results\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
 
   playwright-2:
     name: playwright (shard 2/4)
@@ -421,6 +489,10 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
 
@@ -448,6 +520,10 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci

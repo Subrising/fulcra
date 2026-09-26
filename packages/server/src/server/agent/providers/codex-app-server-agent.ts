@@ -1,5 +1,6 @@
 import {
   getAgentStreamEventTurnId,
+  CODEX_TURN_ADMISSION,
   type AgentPermissionAction,
   type AgentCapabilityFlags,
   type AgentClient,
@@ -87,6 +88,12 @@ import {
 } from "./codex/app-server-transport.js";
 import { type CodexUserMessageTurnIndex, revertCodexConversation } from "./codex/rewind.js";
 import {
+  assertCodexTurnAdmission,
+  CodexQuotaError,
+  readCodexQuota,
+  type CodexQuotaBinding,
+} from "./codex/quota.js";
+import {
   materializeProviderImage,
   renderProviderImageOutputAsAssistantMarkdown,
   type ProviderImageOutput,
@@ -134,6 +141,43 @@ function isArchivedCodexThreadResumeError(error: unknown, threadId: string): boo
 function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes(`no archived rollout found for thread id ${threadId}`);
+}
+
+/**
+ * Both `thread/resume` and `thread/read` can fail when no rollout is available.
+ * Matched narrowly on purpose: the reply has
+ * to be a Codex refusal that names this thread and reports a missing rollout, so permission,
+ * internal and protocol failures keep their own error and their own handling.
+ */
+function isCodexMissingRolloutError(error: unknown, threadId: string): boolean {
+  if (!(error instanceof CodexAppServerRpcError)) return false;
+  const message = error.message.toLowerCase();
+  if (!message.includes(threadId.toLowerCase())) return false;
+  return /\bno (?:\w+ )?rollout found\b/.test(message);
+}
+
+/**
+ * Codex has no transcript to read for a thread id. Says what is known and what is not: a
+ * session created and never run may have no rollout, but an absent rollout is not itself proof
+ * of that, and nothing here establishes that a transcript once existed or was removed. The
+ * Codex reply is kept as `cause` so the raw code and data stay inspectable.
+ */
+export class CodexMissingRolloutError extends Error {
+  constructor(
+    readonly threadId: string,
+    readonly operation: "resume" | "history",
+    cause: unknown,
+  ) {
+    super(
+      `Codex reports no stored rollout for thread ${threadId}, so there is no readable ` +
+        `transcript to ${operation === "resume" ? "resume this session from" : "load this history from"}. ` +
+        `A session that was created and never ran may have no transcript. Fulcra cannot tell from ` +
+        `this reply whether a transcript ever existed. The saved session identity is unchanged. ` +
+        `Check this host's Codex session storage and backups before attempting recovery.`,
+      { cause },
+    );
+    this.name = "CodexMissingRolloutError";
+  }
 }
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;
@@ -1607,6 +1651,11 @@ export function mapCodexPatchNotificationToToolCall(params: {
   const mapped = mapCodexToolCallEnvelope({
     callId: params.callId ?? null,
     name: "apply_patch",
+    fileChanges: files.map((file) => ({
+      path: file.path,
+      ...(file.kind ? { kind: file.kind } : {}),
+      ...(file.content ? { diff: file.content } : {}),
+    })),
     input: firstPath
       ? {
           path: firstPath,
@@ -3374,6 +3423,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     cancelRequested: boolean;
   } | null = null;
   private client: CodexAppServerClient | null = null;
+  private quotaRevision = 0;
+  private quotaModelProvider: string | null = null;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
@@ -3587,7 +3638,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  private rememberResolvedSandboxPolicy(response: unknown): void {
+  private rememberResolvedThreadConfig(response: unknown): void {
+    this.quotaRevision++;
+    this.quotaModelProvider = nonEmptyString(toObjectRecord(response)?.modelProvider) ?? null;
     const sandbox = toObjectRecord(toObjectRecord(response)?.sandbox);
     this.resolvedSandboxPolicy = sandbox ?? null;
     if (sandbox?.type !== "workspaceWrite") return;
@@ -3874,6 +3927,13 @@ export class CodexAppServerAgentSession implements AgentSession {
       requestThread: (threadIdToRead) => {
         return readCodexThread(client, threadIdToRead);
       },
+    }).catch((error: unknown) => {
+      // Never substitute an empty timeline here: an unreadable transcript is not an empty
+      // one, and this failure must stay a failure. Only the reply's wording changes.
+      if (isCodexMissingRolloutError(error, threadId)) {
+        throw new CodexMissingRolloutError(threadId, "history", error);
+      }
+      throw error;
     });
     const { timeline, subAgentRoutes } = history;
     this.subAgentCallsByCallId.clear();
@@ -3967,7 +4027,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         return;
       }
       const response = await this.client.request("thread/resume", params);
-      this.rememberResolvedSandboxPolicy(response);
+      this.rememberResolvedThreadConfig(response);
     } catch (error) {
       const threadId = this.currentThreadId;
       const message = error instanceof Error ? error.message : String(error);
@@ -3980,11 +4040,15 @@ export class CodexAppServerAgentSession implements AgentSession {
           }
         }
         const response = await this.client.request("thread/resume", params);
-        this.rememberResolvedSandboxPolicy(response);
+        this.rememberResolvedThreadConfig(response);
         this.logger.info({ threadId }, "Unarchived Codex thread to restore active Paseo agent");
         return;
       }
       this.logger.warn({ error, threadId }, "Failed to resume persisted Codex thread");
+      if (isCodexMissingRolloutError(error, threadId)) {
+        // Still a failure, and the thread id stays as it is: no new thread, no replay.
+        throw new CodexMissingRolloutError(threadId, "resume", error);
+      }
       throw new Error(`Failed to resume Codex thread ${threadId}: ${message}`, { cause: error });
     }
   }
@@ -4274,6 +4338,9 @@ export class CodexAppServerAgentSession implements AgentSession {
         await this.ensureThread();
       }
 
+      const preparedClient = this.client;
+      const preparedThread = this.currentThreadId;
+      const preparedRevision = this.quotaRevision;
       const turnStart = await this.buildTurnStartParams(effectivePrompt, options);
       const turnId = this.createTurnId();
       this.activeForegroundTurnId = turnId;
@@ -4299,9 +4366,23 @@ export class CodexAppServerAgentSession implements AgentSession {
         hasDeveloperInstructions: turnStart.hasDeveloperInstructions,
         hasCodexConfig: turnStart.hasCodexConfig,
       });
+      const admission = options?.[CODEX_TURN_ADMISSION];
+      if (admission !== undefined) {
+        const quota = await this.getQuota();
+        assertCodexTurnAdmission({ check: admission, quota, parameters: turnStart.params });
+        const unchanged =
+          !this.closed &&
+          this.connectionState === "connected" &&
+          this.client === preparedClient &&
+          this.currentThreadId === preparedThread &&
+          this.quotaRevision === preparedRevision;
+        if (!unchanged) throw new CodexQuotaError("session_changed");
+      }
       if (pendingStart.cancelRequested) {
         throw new Error("Codex turn start was interrupted before reaching Codex");
       }
+      // The transport writes synchronously: no await may separate the final
+      // admission/cancellation checks from this request.
       await this.client.request("turn/start", turnStart.params, TURN_START_TIMEOUT_MS);
       return { turnId };
     } catch (error) {
@@ -4464,6 +4545,27 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
+  getQuota() {
+    return readCodexQuota((): CodexQuotaBinding | null => {
+      if (
+        this.closed ||
+        this.connectionState !== "connected" ||
+        this.quotaModelProvider !== "openai" ||
+        !this.client ||
+        !this.currentThreadId
+      ) {
+        return null;
+      }
+      return {
+        client: this.client,
+        sessionId: this.currentThreadId,
+        model: this.config.model ?? null,
+        serviceTier: this.serviceTier,
+        revision: this.quotaRevision,
+      };
+    });
+  }
+
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
     if (this.cachedRuntimeInfo) return { ...this.cachedRuntimeInfo };
     if (this.connectionState === "disconnected") {
@@ -4509,6 +4611,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async setModel(modelId: string | null): Promise<void> {
+    this.quotaRevision++;
     this.config.model = modelId ?? undefined;
     if (!codexModelSupportsFastMode(this.config.model)) {
       this.serviceTier = null;
@@ -4527,6 +4630,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
+    this.quotaRevision++;
     if (featureId === "fast_mode") {
       if (Boolean(value) && !codexModelSupportsFastMode(this.config.model)) {
         throw new Error(
@@ -5158,7 +5262,7 @@ export class CodexAppServerAgentSession implements AgentSession {
 
     const { params, approvalPolicy, sandbox } = this.buildThreadStartRequest(model);
     const rawResponse = await this.client.request("thread/start", params);
-    this.rememberResolvedSandboxPolicy(rawResponse);
+    this.rememberResolvedThreadConfig(rawResponse);
     const response = toObjectRecord(rawResponse);
     const threadRecord = toObjectRecord(response?.thread);
     const threadId = typeof threadRecord?.id === "string" ? threadRecord.id : undefined;
@@ -5269,6 +5373,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private handleNotification(method: string, params: unknown): void {
+    if (method === "account/updated") {
+      this.quotaRevision++;
+      return;
+    }
     const notificationParams = toObjectRecord(params);
     if (method === "serverRequest/resolved" && typeof notificationParams?.requestId === "number") {
       const requestId = this.mcpElicitationPermissionIds.get(notificationParams.requestId);

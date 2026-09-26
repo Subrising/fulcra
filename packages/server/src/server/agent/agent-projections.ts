@@ -195,6 +195,21 @@ function buildStoredPersistenceHandle(
   return toAgentPersistenceHandle(validProviders, record.persistence);
 }
 
+// Backstop: a stored payload is built only for an agent no process has loaded, and nothing runs a turn
+// for such an agent, so a stored running/initializing is projected as idle (as handleWaitForFinish already treats
+// it). The boot normalisation makes this unreachable for records that existed at boot.
+function storedAgentStatus(record: StoredAgentRecord): StoredAgentRecord["lastStatus"] {
+  return record.lastStatus === "running" || record.lastStatus === "initializing"
+    ? "idle"
+    : record.lastStatus;
+}
+
+function interruptedTurnField(
+  record: StoredAgentRecord,
+): Pick<AgentSnapshotPayload, "interruptedTurn"> {
+  return record.interruptedTurn ? { interruptedTurn: record.interruptedTurn } : {};
+}
+
 export function buildStoredAgentPayload(
   record: StoredAgentRecord,
   validProviders: Iterable<AgentProvider>,
@@ -236,7 +251,7 @@ export function buildStoredAgentPayload(
     createdAt: createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     lastUserMessageAt: lastUserMessageAt ? lastUserMessageAt.toISOString() : null,
-    status: record.lastStatus,
+    status: storedAgentStatus(record),
     capabilities: defaultCapabilities,
     currentModeId: record.lastModeId ?? null,
     availableModes: [],
@@ -249,6 +264,7 @@ export function buildStoredAgentPayload(
     archivedAt: record.archivedAt ?? null,
     labels: normalizeLabels(record.labels),
     ...(providerAvailable ? {} : { providerUnavailable: true }),
+    ...interruptedTurnField(record),
   };
 }
 

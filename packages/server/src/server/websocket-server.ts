@@ -60,6 +60,8 @@ import {
   createPushNotifications,
   type PushNotifications,
   type PushNotificationSender,
+  type PushDeliveryReport,
+  type PushPayload,
 } from "./push/index.js";
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import type { ServiceProxySubsystem } from "./service-proxy.js";
@@ -467,6 +469,8 @@ interface SocketSessionOptions {
   onLifecycleIntent?: (intent: SessionLifecycleIntent) => void;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
+  // Set by the daemon for a plugin subprocess's own session; never taken from the client.
+  pluginOriginId?: string;
 }
 
 interface ClosePhysicalSocketParams {
@@ -587,6 +591,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly advertiseRelayConfig: boolean;
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
+  private readonly hostIntegrations: SessionOptions["hostIntegrations"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
 
   private async validateCompletedCreation(snapshot: CreationSnapshot): Promise<void> {
@@ -654,6 +659,7 @@ export class VoiceAssistantWebSocketServer {
     pluginRuntime?: SessionOptions["pluginRuntime"],
     orchestrationSkills?: SessionOptions["orchestrationSkills"],
     workspaceLabelService?: WorkspaceLabelService,
+    hostIntegrations?: SessionOptions["hostIntegrations"],
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -669,6 +675,7 @@ export class VoiceAssistantWebSocketServer {
     this.browserToolsBroker = browserToolsBroker ?? null;
     this.hubRelationships = hubRelationships ?? null;
     this.pluginRuntime = pluginRuntime;
+    this.hostIntegrations = hostIntegrations;
     this.orchestrationSkills = orchestrationSkills;
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
@@ -1407,6 +1414,7 @@ export class VoiceAssistantWebSocketServer {
       },
       hubExecutionAgents: admission.hubExecutionAgents,
       hubRelationships: this.hubRelationships ?? undefined,
+      ...(lifecycle.kind === "ephemeral-plugin" ? { pluginOriginId: lifecycle.pluginId } : {}),
     });
 
     const base: SessionConnectionBase = {
@@ -1434,6 +1442,7 @@ export class VoiceAssistantWebSocketServer {
       appVersion: options.appVersion,
       clientCapabilities: options.clientCapabilities,
       permissions: options.permissions,
+      pluginOriginId: options.pluginOriginId,
       onMessage: options.onMessage,
       onMessageToSource: options.onMessageToSource,
       onBinaryMessage: options.onBinaryMessage,
@@ -1467,6 +1476,7 @@ export class VoiceAssistantWebSocketServer {
       workspaceAutoName: this.workspaceAutoName,
       daemonConfigStore: this.daemonConfigStore,
       pluginRuntime: this.pluginRuntime,
+      hostIntegrations: this.hostIntegrations,
       orchestrationSkills: this.orchestrationSkills,
       mcpBaseUrl: this.mcpBaseUrl,
       stt: () => this.speech?.resolveStt() ?? null,
@@ -1676,6 +1686,7 @@ export class VoiceAssistantWebSocketServer {
       features: {
         ownedSubscriptions: true,
         agentRequestReceipts: true,
+        interruptedTurn: true,
         workspaceRequestReceipts: true,
         creationLifecycle: true,
         hubAgentRpc: true,
@@ -1726,6 +1737,9 @@ export class VoiceAssistantWebSocketServer {
         pluginLogs: true,
         // COMPAT(pluginThemes): added in v0.5.0, remove gate after 2027-08-20.
         pluginThemes: true,
+        pluginNotifications: this.hostIntegrations?.notifications !== undefined,
+        checkoutFileAtCommit: true,
+        credentials: this.hostIntegrations?.credentials !== undefined,
         pluginSettings: true,
         pluginTimelineItems: true,
         // COMPAT(skillManagement): added in v0.4.0, remove gate after 2027-08-16.
@@ -1741,6 +1755,8 @@ export class VoiceAssistantWebSocketServer {
         rewind: true,
         // COMPAT(agentTimelinePromptIndex): added in v0.2.X, drop the gate when floor >= v0.2.X.
         agentTimelinePromptIndex: true,
+        // COMPAT(agentTimelineTurnIndex): added in v0.9.2, remove gate after 2027-09-24.
+        agentTimelineTurnIndex: true,
         // COMPAT(agentHistorySearch): added in v0.3.0, remove gate after 2027-02-07.
         agentHistorySearch: true,
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
@@ -1761,6 +1777,9 @@ export class VoiceAssistantWebSocketServer {
         workspaceFileEditing: true,
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: true,
+        agentQuotaRead: true,
+        agentMcpRefresh: true,
+        agentMcpReconnect: true,
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
         agentDetach: true,
         // COMPAT(agentThinkingUpdate): added in v0.2.4, remove gate after 2027-01-28.
@@ -2475,6 +2494,18 @@ export class VoiceAssistantWebSocketServer {
       focusedTerminalId: activity.focusedTerminalId,
       lastActivityAtMs: activity.lastActivityAt.getTime(),
     };
+  }
+
+  // Plugin notifications push through the same registered-device tokens as agent attention, and
+  // need the delivery outcome so a failed push is retried rather than reported as sent.
+  async sendPushNotification(payload: PushPayload): Promise<PushDeliveryReport> {
+    const sender = this.pushNotificationSender;
+    if ("sendReporting" in sender && typeof sender.sendReporting === "function") {
+      return sender.sendReporting(payload);
+    }
+    // Only test harnesses replace the sender with a send-only fake.
+    await sender.send(payload);
+    return { devices: 1, accepted: 1 };
   }
 
   private async broadcastAgentAttention(params: {

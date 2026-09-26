@@ -21,6 +21,7 @@ type NewWorkspaceDaemonClient = Pick<
   | "fetchWorkspaces"
   | "getPaseoWorktreeList"
   | "getDaemonConfig"
+  | "getPluginCatalog"
   | "installDirectoryPlugin"
   | "installPluginSource"
   | "disablePlugin"

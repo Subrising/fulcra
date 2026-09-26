@@ -1,4 +1,5 @@
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
+import { getPluginDevice } from "@/device/plugin-device";
 import { createPluginHosts } from "./hosts";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { PluginClientOpenPanelOptions } from "@getpaseo/plugin/client";
@@ -26,8 +27,11 @@ export function createPluginClientRuntime(
     runtime,
     createPluginNavigation({ serverId: installation.serverId, workspaceId: null }),
   );
+  // The answering device's key: present only where this app can hold one.
+  const device = getPluginDevice();
   return {
     ...capabilities,
+    ...(device ? { device } : {}),
     hosts: createPluginHosts(getHostRuntimeStore(), installation.lifetime.signal),
     addComposerPill(contribution) {
       return pluginButtonStore.addComposerPill(installation, contribution);

@@ -751,6 +751,71 @@ describe("ForgeService", () => {
     ]);
   });
 
+  it("uses a connected GitHub account's token, and falls back to the gh login when it is refused", async () => {
+    const autoMergeStatus = () =>
+      createCurrentPullRequestStatus({
+        forgeSpecific: githubStatusFacts({
+          autoMergeRequest: {
+            enabledAt: "2026-05-13T12:00:00Z",
+            mergeMethod: "SQUASH",
+            enabledBy: "octocat",
+          },
+          viewerCanDisableAutoMerge: true,
+        }),
+      });
+    const hosts: Array<string | null> = [];
+    const accepted = createRunner([""]);
+    const withAccount = createGitHubService({
+      runner: accepted.runner,
+      resolveAccountToken: async (host) => {
+        hosts.push(host);
+        return "gho_account_token";
+      },
+    });
+    await expect(
+      withAccount.disablePullRequestAutoMerge({
+        cwd: "/tmp/repo",
+        prNumber: 42,
+        status: autoMergeStatus(),
+      }),
+    ).resolves.toEqual({ success: true });
+    expect(hosts).toEqual([null]);
+    expect(accepted.calls).toEqual([
+      {
+        args: ["pr", "merge", "42", "--disable-auto"],
+        cwd: "/tmp/repo",
+        envOverlay: { GH_PROMPT_DISABLED: "1", GH_TOKEN: "gho_account_token" },
+      },
+    ]);
+
+    const refused = createScriptedRunner([
+      {
+        error: new GitHubCommandError({
+          args: ["pr", "merge", "42", "--disable-auto"],
+          cwd: "/tmp/repo",
+          exitCode: 1,
+          stderr: "HTTP 401: Bad credentials",
+        }),
+      },
+      "",
+    ]);
+    const fallback = createGitHubService({
+      runner: refused.runner,
+      resolveAccountToken: async () => "gho_revoked_token",
+    });
+    await expect(
+      fallback.disablePullRequestAutoMerge({
+        cwd: "/tmp/repo",
+        prNumber: 42,
+        status: autoMergeStatus(),
+      }),
+    ).resolves.toEqual({ success: true });
+    expect(refused.calls.map((call) => call.envOverlay)).toEqual([
+      { GH_PROMPT_DISABLED: "1", GH_TOKEN: "gho_revoked_token" },
+      { GH_PROMPT_DISABLED: "1" },
+    ]);
+  });
+
   it("computes fast cadence for pending and slow cadence for stable PR states", () => {
     const pendingStatus = createCurrentPullRequestStatus({ checksStatus: "pending" });
     const runningCheckStatus = createCurrentPullRequestStatus({
@@ -4265,6 +4330,30 @@ describe("ForgeService", () => {
         ],
       },
     ]);
+  });
+
+  it("reports the PR's base and head commits, dropping anything that is not a 40-hex sha", async () => {
+    const withOids = createGitHubService({
+      runner: createRunner([currentPullRequestJson({ baseRefOid: "2".repeat(40) })]).runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+      now: () => 100,
+    });
+    await expect(
+      withOids.getCurrentPullRequestStatus({ cwd: "/repo", headRef: "feature/fork" }),
+    ).resolves.toMatchObject({ baseRefOid: "2".repeat(40), headRefOid: "1".repeat(40) });
+
+    const malformed = createGitHubService({
+      runner: createRunner([currentPullRequestJson({ headRefOid: "HEAD~1", baseRefOid: "oid" })])
+        .runner,
+      resolveGhPath: async () => "/usr/bin/gh",
+      now: () => 100,
+    });
+    const status = await malformed.getCurrentPullRequestStatus({
+      cwd: "/repo",
+      headRef: "feature/fork",
+    });
+    expect(status).not.toHaveProperty("baseRefOid");
+    expect(status).not.toHaveProperty("headRefOid");
   });
 
   it("reuses cached PR status without another gh call", async () => {

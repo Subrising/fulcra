@@ -6899,3 +6899,215 @@ test("reviewed plugin updates gate before requests and preserve exact proposal d
     ]);
   }
 });
+
+test.each([
+  ["absent", { ownedSubscriptions: true }],
+  ["false", { ownedSubscriptions: true, agentTimelineTurnIndex: false }],
+])(
+  "timeline index methods refuse a host whose turn-index feature is %s, before sending",
+  async (_label, features) => {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "timeline_turn_index_gate",
+      transportFactory: () => mock.transport,
+      reconnect: { enabled: false },
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    mock.triggerOpen({ features });
+    await connecting;
+
+    for (const call of [
+      () => client.listAgentTimelineTurns("agent"),
+      () => client.getAgentTimelineFileHistory("agent", "src/a.ts"),
+      () => client.purgeAgentTimeline("agent"),
+      () => client.fetchAgentTimeline("agent", { turnId: "turn-1" }),
+    ]) {
+      await expect(call()).rejects.toThrow("This needs a newer Fulcra host.");
+    }
+    expect(mock.sent).toEqual([]);
+
+    // Ordinary timeline fetches and deletes are not gated.
+    void client.fetchAgentTimeline("agent", { timeout: 60_000 }).catch(() => undefined);
+    void client.deleteAgent("agent").catch(() => undefined);
+    expect(mock.sent.map((frame) => parseSentFrame(frame).type)).toEqual([
+      "fetch_agent_timeline_request",
+      "delete_agent_request",
+    ]);
+  },
+);
+
+test("timeline index methods send their requests to a host that advertises the turn index", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "timeline_turn_index_supported",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: { ownedSubscriptions: true, agentTimelineTurnIndex: true } });
+  await connecting;
+
+  for (const call of [
+    () => client.listAgentTimelineTurns("agent", { timeout: 60_000 }),
+    () => client.getAgentTimelineFileHistory("agent", "src/a.ts", { timeout: 60_000 }),
+    () => client.purgeAgentTimeline("agent", { timeout: 60_000 }),
+    () => client.fetchAgentTimeline("agent", { turnId: "turn-1", timeout: 60_000 }),
+  ]) {
+    void call().catch(() => undefined);
+  }
+  const sent = mock.sent.map((frame) => parseSentFrame(frame));
+  expect(sent.map((message) => message.type)).toEqual([
+    "agent.timeline.list_turns.request",
+    "agent.timeline.get_file_history.request",
+    "agent.timeline.purge.request",
+    "fetch_agent_timeline_request",
+  ]);
+  expect(sent[3]).toMatchObject({ turnId: "turn-1" });
+});
+
+test("credential and plugin-notification methods refuse before sending when the host lacks them", async () => {
+  for (const features of [{}, { credentials: false, pluginNotifications: false }]) {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "integrations-gate",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => transport.transport,
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    transport.triggerOpen({ features });
+    await connecting;
+    const sent = transport.sent.length;
+    const update = "Update the host to manage integrations.";
+    await expect(client.listCredentials()).rejects.toThrow(update);
+    await expect(
+      client.beginCredentialSignIn({ connector: "github", method: "token" }),
+    ).rejects.toThrow(update);
+    await expect(
+      client.completeCredentialSignIn({ flowId: "f", input: { kind: "poll" } }),
+    ).rejects.toThrow(update);
+    await expect(client.reconnectCredential({ accountId: "a" })).rejects.toThrow(update);
+    await expect(client.removeCredential("a")).rejects.toThrow(update);
+    await expect(client.listPluginNotifications()).rejects.toThrow(
+      "Update the host to list plugin notifications.",
+    );
+    expect(transport.sent.length).toBe(sent);
+  }
+});
+
+test("a client owns only the unexpired browser sign-in flows it started", async () => {
+  async function connected(clientId: string) {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId,
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => transport.transport,
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    transport.triggerOpen({ features: { credentials: true } });
+    await connecting;
+    return { client, transport };
+  }
+  function answer(
+    transport: ReturnType<typeof createMockTransport>,
+    flow: { flowId: string; method: string; expiresAt: string },
+  ) {
+    const request = parseSentFrame(transport.sent.at(-1));
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: String(request.type).replace(/\.request$/, ".response"),
+        payload: { requestId: request.requestId, flow },
+      }),
+    );
+  }
+  const soon = new Date(Date.now() + 60_000).toISOString();
+  const owner = await connected("sign-in-owner");
+  const other = await connected("sign-in-other");
+
+  const browser = owner.client.beginCredentialSignIn({
+    connector: "github",
+    method: "browser",
+    redirect: "app",
+  });
+  answer(owner.transport, { flowId: "flow_browser01", method: "browser", expiresAt: soon });
+  await browser;
+  const device = owner.client.beginCredentialSignIn({ connector: "github", method: "device" });
+  answer(owner.transport, { flowId: "flow_device001", method: "device", expiresAt: soon });
+  await device;
+  const reconnect = owner.client.reconnectCredential({ accountId: "acct-1", redirect: "app" });
+  answer(owner.transport, { flowId: "flow_reconnect", method: "browser", expiresAt: soon });
+  await reconnect;
+  const stale = owner.client.beginCredentialSignIn({ connector: "github", method: "browser" });
+  answer(owner.transport, { flowId: "flow_expired01", method: "browser", expiresAt: "not a date" });
+  await stale;
+
+  expect(owner.client.ownsSignInFlow("flow_browser01")).toBe(true);
+  expect(owner.client.ownsSignInFlow("flow_reconnect")).toBe(true);
+  expect(owner.client.ownsSignInFlow("flow_device001")).toBe(false);
+  expect(owner.client.ownsSignInFlow("flow_expired01")).toBe(false);
+  expect(other.client.ownsSignInFlow("flow_browser01")).toBe(false);
+
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse(soon) + 1);
+  expect(owner.client.ownsSignInFlow("flow_browser01")).toBe(false);
+});
+
+test("reading a file at a commit refuses before sending on a host without the capability", async () => {
+  const request = {
+    cwd: "/workspace",
+    at: { kind: "merge-base" as const, of: ["a".repeat(40), "b".repeat(40)] as [string, string] },
+    path: "docs/map.json",
+    maxBytes: 1024,
+  };
+  for (const features of [{}, { checkoutFileAtCommit: false }]) {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "file-at-commit-gate",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => transport.transport,
+    });
+    clients.push(client);
+    const connecting = client.connect();
+    transport.triggerOpen({ features });
+    await connecting;
+    const sent = transport.sent.length;
+    await expect(client.getFileAtCommit(request)).rejects.toThrow(
+      "Update the host to compare a pull request at its own commits.",
+    );
+    expect(transport.sent.length).toBe(sent);
+  }
+
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "file-at-commit-capable",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => transport.transport,
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  transport.triggerOpen({ features: { checkoutFileAtCommit: true } });
+  await connecting;
+  void client.getFileAtCommit(request).catch(() => undefined);
+  await vi.waitFor(() =>
+    expect(parseSentFrame(transport.sent.at(-1))).toMatchObject({
+      type: "checkout.file-at-commit.get.request",
+      cwd: "/workspace",
+      at: request.at,
+      path: "docs/map.json",
+      maxBytes: 1024,
+    }),
+  );
+});

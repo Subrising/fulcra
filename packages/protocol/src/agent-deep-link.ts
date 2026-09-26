@@ -36,7 +36,7 @@ export function parseAgentDeepLink(input: string): AgentDeepLinkTarget | null {
   }
 
   if (
-    url.protocol !== "paseo:" ||
+    !["paseo:", "orca:"].includes(url.protocol) ||
     url.hostname !== "h" ||
     url.username ||
     url.password ||

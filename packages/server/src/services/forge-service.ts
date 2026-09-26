@@ -126,6 +126,10 @@ export interface CurrentPullRequestStatus {
   state: string;
   baseRefName: string;
   headRefName: string;
+  /** 40-hex commit of the base branch tip, when the forge reports it. */
+  baseRefOid?: string;
+  /** 40-hex commit of the PR head, when the forge reports it. */
+  headRefOid?: string;
   isMerged: boolean;
   isDraft?: boolean;
   mergeable: PullRequestMergeable;

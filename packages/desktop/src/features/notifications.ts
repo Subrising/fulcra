@@ -1,7 +1,8 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { app, BrowserWindow, Notification, ipcMain, nativeImage } from "electron";
+import { BrowserWindow, Notification, ipcMain, nativeImage } from "electron";
 import { getDesktopSettingsStore } from "../settings/desktop-settings-electron.js";
+import { APP_DISPLAY_NAME } from "../app-display-name.js";
 
 interface NotificationInput {
   title?: unknown;
@@ -72,7 +73,7 @@ export function ensureNotificationCenterRegistration(): void {
     return;
   }
 
-  const probe = new Notification({ title: app.name, silent: true });
+  const probe = new Notification({ title: APP_DISPLAY_NAME, silent: true });
   probe.on("show", () => probe.close());
   setTimeout(() => probe.close(), 2_000);
   probe.show();

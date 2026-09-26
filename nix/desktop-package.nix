@@ -2,7 +2,7 @@
   lib,
   stdenv,
   buildNpmPackage,
-  nodejs_22,
+  nodejs_24,
   python3,
   makeWrapper,
   autoPatchelfHook,
@@ -57,7 +57,11 @@ buildNpmPackage {
       && baseName != "release";
   };
 
-  nodejs = nodejs_22;
+  # Node 24 (24.13.0 in the pinned nixpkgs) so buildNpmPackage runs npm 11.
+  # npm 10 mis-resolves the root markdown-it override and fails the offline
+  # install. This deliberately differs from .tool-versions, which pins Node 22
+  # for development; see docs/pipelines.md.
+  nodejs = nodejs_24;
   inherit (paseo) npmDeps;
 
   # Prevent onnxruntime-node's install script from running during automatic
@@ -203,14 +207,30 @@ buildNpmPackage {
     ''}
 
     ${lib.optionalString stdenv.hostPlatform.isDarwin ''
-      app="$(find packages/desktop/release -maxdepth 3 -type d -name Paseo.app -print -quit)"
-      if [ -z "$app" ]; then
-        echo "electron-builder did not produce Paseo.app" >&2
+      # The bundle is named after electron-builder's productName, which this
+      # fork renames. Discover it instead of hardcoding the upstream name, and
+      # still fail when packaging produced nothing or produced more than one.
+      apps="$(find packages/desktop/release -maxdepth 3 -type d -name '*.app' -print | sort)"
+      count="$(printf '%s' "$apps" | grep -c . || true)"
+      if [ "$count" -eq 0 ]; then
+        echo "electron-builder did not produce an .app bundle" >&2
+        exit 1
+      fi
+      if [ "$count" -gt 1 ]; then
+        echo "electron-builder produced $count .app bundles; expected exactly one:" >&2
+        printf '  %s\n' "$apps" >&2
+        exit 1
+      fi
+      app="$apps"
+      appName="$(basename "$app")"
+      binName="''${appName%.app}"
+      if [ ! -x "$app/Contents/MacOS/$binName" ]; then
+        echo "$appName has no executable at Contents/MacOS/$binName" >&2
         exit 1
       fi
       mkdir -p "$out/Applications"
-      cp -R "$app" "$out/Applications/Paseo.app"
-      ln -s ../Applications/Paseo.app/Contents/MacOS/Paseo "$out/bin/paseo-desktop"
+      cp -R "$app" "$out/Applications/$appName"
+      ln -s "../Applications/$appName/Contents/MacOS/$binName" "$out/bin/paseo-desktop"
     ''}
 
     runHook postInstall

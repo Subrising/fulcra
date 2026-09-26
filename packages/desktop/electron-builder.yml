@@ -1,11 +1,14 @@
 npmRebuild: false
-appId: sh.paseo.desktop
-productName: Paseo
-executableName: Paseo
+appId: app.fulcra.desktop
+productName: Fulcra
+executableName: Fulcra
 protocols:
-  - name: Paseo agent link
+  - name: Fulcra conversation link
     schemes:
-      - paseo
+      - orca
+  - name: Fulcra sign-in link
+    schemes:
+      - fulcra
 afterPack: ./scripts/after-pack.js
 afterSign: ./scripts/after-sign.js
 directories:
@@ -31,15 +34,13 @@ extraResources:
     to: app-dist
   - from: assets/editor-targets
     to: editor-target-icons
-publish:
-  provider: github
-  owner: getpaseo
-  repo: paseo
+# Fulcra has no public update feed yet. Never publish into the upstream project.
+publish: null
 mac:
-  artifactName: "Paseo-${version}-${arch}.${ext}"
+  artifactName: "Fulcra-${version}-${arch}.${ext}"
   minimumSystemVersion: "13.0.0"
   category: public.app-category.developer-tools
-  icon: assets/icon.icns
+  icon: assets/fulcra-v1/icon.png
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist
@@ -47,17 +48,17 @@ mac:
   extraResources:
     - from: bin/paseo
       to: bin/paseo
-    - from: assets/icon.png
+    - from: assets/fulcra-v1/icon.png
       to: icon.png
   target:
     - dmg
     - zip
 linux:
   category: Development
-  icon: assets
-  artifactName: "Paseo-${version}-${arch}.${ext}"
+  icon: assets/fulcra-v1/icon.png
+  artifactName: "Fulcra-${version}-${arch}.${ext}"
   maintainer: "Mohamed Boudra <hello@moboudra.com>"
-  vendor: "Paseo"
+  vendor: "Fulcra"
   extraResources:
     - from: bin/paseo
       to: bin/paseo
@@ -72,16 +73,16 @@ rpm:
   afterInstall: scripts/linux-sandbox/after-install.tpl
 appImage:
   # A nonempty argument list replaces builder's hardcoded --no-sandbox default.
-  executableArgs: ["--class=Paseo"]
+  executableArgs: ["--class=Fulcra"]
   # Keep the AppImage filename stable across versions (no ${version}) so
   # electron-updater overwrites the file in place instead of renaming it to a new
   # versioned path. A rename orphans the old binary, breaks desktop shortcuts, and
   # dangles the ~/.local/bin/paseo CLI symlink, which points at $APPIMAGE. The
   # version stays discoverable via the release tag and the in-app version.
-  artifactName: "Paseo-${arch}.${ext}"
+  artifactName: "Fulcra-${arch}.${ext}"
 win:
-  artifactName: "Paseo-Setup-${version}-${arch}.${ext}"
-  icon: assets/icon.ico
+  artifactName: "Fulcra-Setup-${version}-${arch}.${ext}"
+  icon: assets/fulcra-v1/icon.png
   extraResources:
     - from: bin/paseo.cmd
       to: bin/paseo.cmd

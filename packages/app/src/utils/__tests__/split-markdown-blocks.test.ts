@@ -98,12 +98,21 @@ describe("splitMarkdownBlocks", () => {
     ]);
   });
 
-  it("recognizes every destination the renderer accepts, including escaped spaces", () => {
-    expect(splitMarkdownBlocks("See [docs].\n\n[docs]: docs\\ folder/readme")).toEqual([
-      "See [docs].\n\n[docs]: docs\\ folder/readme",
-    ]);
+  it("recognizes every destination the renderer accepts", () => {
     expect(splitMarkdownBlocks("See [docs].\n\n[docs]: <docs folder/readme> 'Title'")).toEqual([
       "See [docs].\n\n[docs]: <docs folder/readme> 'Title'",
+    ]);
+  });
+
+  // Upstream also asserted a backslash-escaped space in a BARE destination
+  // ("[docs]: docs\\ folder/readme"). That parsed as a definition on markdown-it 10, which upstream
+  // depends on; this fork is on 15, where it is not one -- CommonMark requires <angle brackets> for a
+  // destination containing a space, and 15 follows that. splitMarkdownBlocks asks the same parser the
+  // renderer uses, so two blocks is the correct answer here: it is what will be rendered.
+  it("leaves a bare destination with an escaped space as its own block on markdown-it 15", () => {
+    expect(splitMarkdownBlocks("See [docs].\n\n[docs]: docs\\ folder/readme")).toEqual([
+      "See [docs].",
+      "[docs]: docs\\ folder/readme",
     ]);
   });
 

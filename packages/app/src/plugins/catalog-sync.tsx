@@ -1,7 +1,7 @@
 import { pluginSettingsKey } from "./settings/use-settings";
 import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { useHostFeature } from "@/runtime/host-features";
+import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { pluginRegistry } from "./registry";
 
@@ -13,16 +13,22 @@ export function PluginCatalogSync({
   client: DaemonClient;
 }) {
   const connected = useHostRuntimeIsConnected(serverId);
-  const supported = useHostFeature(serverId, "plugins");
+  const supported = useHostFeatureAvailability(serverId, "plugins");
 
   useEffect(() => {
     let cancelled = false;
     let refreshQueue = Promise.resolve();
-    if (!supported) {
-      pluginRegistry.removeHost(serverId);
+    if (!connected) {
+      pluginRegistry.suspendHost(serverId);
       return;
     }
-    if (!connected) {
+    if (supported === null) {
+      // Connected, but the host has not sent its features yet. Removing here would settle the
+      // catalog as "this host has no plugins" before the host ever said so.
+      pluginRegistry.suspendHost(serverId);
+      return;
+    }
+    if (!supported) {
       pluginRegistry.removeHost(serverId);
       return;
     }
@@ -42,6 +48,9 @@ export function PluginCatalogSync({
           .catch((error) => {
             if (!cancelled) {
               console.warn(`[Plugins] Failed to load catalog for ${serverId}`, error);
+              // The question was asked and answered badly. Leaving it unanswered would park
+              // anything waiting on the catalog — the host index route — on a splash forever.
+              pluginRegistry.markCatalogSettled(serverId);
             }
             return undefined;
           }),

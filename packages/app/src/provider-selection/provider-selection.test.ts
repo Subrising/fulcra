@@ -159,9 +159,75 @@ describe("combined model selector data", () => {
       {
         id: "unavailable-provider",
         label: "unavailable-provider",
-        modelSelection: { kind: "error", message: "Unavailable" },
+        modelSelection: { kind: "unavailable" },
       },
     ]);
+  });
+
+  // a CLI that is not installed is not an error; an installed CLI that fails still is.
+  it("marks a provider whose CLI is not installed as unavailable, not as an error", () => {
+    const [copilot] = buildSelectableProviderSelectorProviders([
+      snapshotEntry({ provider: "copilot", label: "Copilot", status: "unavailable", models: [] }),
+    ]);
+
+    expect(copilot?.modelSelection).toEqual({ kind: "unavailable" });
+  });
+
+  it("keeps an installed provider's failure as an error with its message", () => {
+    const [codex, claude] = buildSelectableProviderSelectorProviders([
+      snapshotEntry({
+        provider: "codex",
+        status: "error",
+        error: "codex app-server exited (1)",
+        models: [],
+      }),
+      snapshotEntry({
+        provider: "claude",
+        status: "unavailable",
+        error: "auth check failed",
+        models: [],
+      }),
+    ]);
+
+    expect(codex?.modelSelection).toEqual({
+      kind: "error",
+      message: "codex app-server exited (1)",
+    });
+    // An unavailable status that carries an error is still shown as that error.
+    expect(claude?.modelSelection).toEqual({ kind: "error", message: "auth check failed" });
+  });
+
+  it("lists not-installed providers last, keeping the host's order otherwise", () => {
+    const providers = buildSelectableProviderSelectorProviders([
+      snapshotEntry({ provider: "claude", models: [codexModel] }),
+      snapshotEntry({ provider: "copilot", status: "unavailable", models: [] }),
+      snapshotEntry({ provider: "codex", models: [codexModel] }),
+      snapshotEntry({ provider: "opencode", status: "unavailable", models: [] }),
+      snapshotEntry({ provider: "broken", status: "error", error: "boom", models: [] }),
+    ]);
+
+    expect(providers.map((provider) => provider.id)).toEqual([
+      "claude",
+      "codex",
+      "broken",
+      "copilot",
+      "opencode",
+    ]);
+  });
+
+  it("labels a selected not-installed provider as unavailable rather than as an error", () => {
+    const providers = buildSelectableProviderSelectorProviders([
+      snapshotEntry({ provider: "copilot", status: "unavailable", models: [] }),
+    ]);
+
+    expect(
+      resolveSelectedModelLabel({
+        providers,
+        selectedProvider: "copilot",
+        selectedModel: "",
+        isLoading: false,
+      }),
+    ).toBe(i18n.t("providerSelection.unavailable"));
   });
 
   it("builds selector providers from an already-curated provider list", () => {
@@ -408,10 +474,15 @@ describe("combined model selector data", () => {
       ]);
 
       expect(getAllModelLabels(providers)).toContain("默认");
-      expect(providers[1]?.modelSelection).toEqual({
-        kind: "error",
-        message: "不可用",
-      });
+      expect(providers[1]?.modelSelection).toEqual({ kind: "unavailable" });
+      expect(
+        resolveSelectedModelLabel({
+          providers,
+          selectedProvider: "unavailable-provider",
+          selectedModel: "",
+          isLoading: false,
+        }),
+      ).toBe("不可用");
       expect(
         resolveSubmissionReadiness({
           text: "",

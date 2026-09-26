@@ -21,6 +21,10 @@ import type {
   MutableDaemonConfigPatch,
   ProviderDiagnosticResponseMessage,
   ProviderUsageListResponseMessage,
+  AgentQuotaReadResponseMessage,
+  AgentMcpRefreshInput,
+  AgentMcpRefreshResult,
+  AgentMcpRefreshState,
   ProjectPlacementPayload,
   WorkspaceProjectDescriptorPayload,
   RefreshProvidersSnapshotResponseMessage,
@@ -48,6 +52,8 @@ export type {
 } from "./terminals/index.js";
 import type { PluginTimelineItem } from "@getpaseo/protocol/agent-types";
 import type {
+  AgentTimelineFileHistoryPayload,
+  AgentTimelineTurnsPayload,
   FetchAgentsEntry,
   FetchAgentsOptions,
   FetchAgentsPageInfo,
@@ -273,8 +279,14 @@ export interface PaseoAgentTimelineRefetchOptions {
   cursor?: FetchAgentTimelineCursor;
   limit?: number;
   projection?: FetchAgentTimelineProjection;
+  /** Limit the page to one turn from `turns()`. Needs a host with the timeline turn index. */
+  turnId?: string;
   requestId?: string;
 }
+
+export type { AgentTimelineFileHistoryPayload, AgentTimelineTurnsPayload };
+/** The message every timeline turn-index call fails with on a host without the feature. */
+export { TIMELINE_TURN_INDEX_UNSUPPORTED } from "./daemon-client.js";
 
 export interface PaseoAgentSendOptions {
   messageId?: string;
@@ -330,6 +342,13 @@ export interface PaseoAgentTimelineHandle {
    */
   refetch(options?: PaseoAgentTimelineRefetchOptions): Promise<FetchAgentTimelinePayload>;
   /**
+   * The agent's turns, oldest first, in pages. Answers for live, archived and deleted-but-retained
+   * agents. Fails with TIMELINE_TURN_INDEX_UNSUPPORTED on a host without the timeline turn index.
+   */
+  turns(options?: { cursor?: number; limit?: number }): Promise<AgentTimelineTurnsPayload>;
+  /** Every read, write, edit and patch of one file. Same host requirement as `turns()`. */
+  fileHistory(path: string): Promise<AgentTimelineFileHistoryPayload>;
+  /**
    * Delivers live events only. After reconnect, subscription_restored precedes
    * subsequent updates. History may have been missed; use refetch() to request
    * the range you need. No history is fetched automatically. A replacement event
@@ -364,6 +383,9 @@ export interface PaseoAgentHandle {
   readonly timeline: PaseoAgentTimelineHandle;
   current(): PaseoAgent | null;
   refresh(requestId?: string): Promise<PaseoAgentRefetchResult | null>;
+  getMcpRefreshState(): Promise<AgentMcpRefreshState | null>;
+  refreshMcp(input: Omit<AgentMcpRefreshInput, "agentId">): Promise<AgentMcpRefreshResult>;
+  quota(options?: { requestId?: string }): Promise<AgentQuotaReadResponseMessage["payload"]>;
   send(text: string, options?: PaseoAgentSendOptions): Promise<void>;
   respondToPermission(options: PaseoAgentRespondToPermissionOptions): Promise<void>;
   /** Sends a prompt and resolves when that turn finishes or needs attention. */
@@ -485,6 +507,24 @@ export interface PaseoConfigActions {
   ): Promise<{ requestId: string; config: MutableDaemonConfig }>;
 }
 
+/**
+ * Shared credential store (Settings › Integrations): app/operator account management. Methods throw
+ * "Update the host" when `server_info.features.credentials` is absent. Nothing here returns a
+ * secret; from a plugin's own session only `list` is allowed, filtered to its declared connectors.
+ */
+export interface PaseoCredentialActions {
+  list: DaemonClient["listCredentials"];
+  begin: DaemonClient["beginCredentialSignIn"];
+  complete: DaemonClient["completeCredentialSignIn"];
+  reconnect: DaemonClient["reconnectCredential"];
+  remove: DaemonClient["removeCredential"];
+}
+
+/** Plugin notifications in the host's in-app list; gate on `features.pluginNotifications`. */
+export interface PaseoNotificationActions {
+  list: DaemonClient["listPluginNotifications"];
+}
+
 export interface PaseoApi {
   dispose(): Promise<void>;
   observeEvents: DaemonClient["observeEvents"];
@@ -494,6 +534,8 @@ export interface PaseoApi {
   readonly agents: PaseoAgentActions;
   readonly providers: PaseoProviderActions;
   readonly config: PaseoConfigActions;
+  readonly credentials: PaseoCredentialActions;
+  readonly notifications: PaseoNotificationActions;
 }
 
 export interface PaseoClient extends PaseoApi {
@@ -761,6 +803,16 @@ export function createPaseoApi(
       get: (requestId) => daemonClient.getDaemonConfig(requestId),
       patch: (patch, requestId) => daemonClient.patchDaemonConfig(patch, requestId),
     },
+    credentials: {
+      list: () => daemonClient.listCredentials(),
+      begin: (input) => daemonClient.beginCredentialSignIn(input),
+      complete: (input) => daemonClient.completeCredentialSignIn(input),
+      reconnect: (input) => daemonClient.reconnectCredential(input),
+      remove: (accountId) => daemonClient.removeCredential(accountId),
+    },
+    notifications: {
+      list: (limit) => daemonClient.listPluginNotifications(limit),
+    },
   };
 }
 
@@ -875,6 +927,8 @@ function createAgentHandleFactory(
           }
           return result;
         },
+        turns: (options) => daemonClient.listAgentTimelineTurns(id, options),
+        fileHistory: (path) => daemonClient.getAgentTimelineFileHistory(id, path),
         subscribe: (handler) =>
           subscribeTimeline(id, (message) => {
             switch (message.type) {
@@ -944,6 +998,9 @@ function createAgentHandleFactory(
       send: async (text, options) => {
         await daemonClient.sendAgentMessage(id, text, options);
       },
+      getMcpRefreshState: () => daemonClient.getAgentMcpRefreshState(id),
+      refreshMcp: (input) => daemonClient.refreshAgentMcp({ ...input, agentId: id }),
+      quota: (options) => daemonClient.readAgentQuota(id, options),
       respondToPermission: async ({ requestId, response }) => {
         await daemonClient.respondToPermission(id, requestId, response);
       },

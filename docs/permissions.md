@@ -35,6 +35,8 @@ Owner, operator, and viewer are UI presets expanded into explicit permissions. D
 
 Permissions are additive allows. Missing authority denies the operation. Do not add deny precedence.
 
+An operation may require several existing permissions together. Session-bound quota reads require both `workspace.read` for the native session identity and `daemon.read` for account usage. Apply this conjunction to requests and replies so revocation also prevents delivery of an in-flight result. Existing arrays of alternative permissions remain any-of requirements.
+
 ## Resources
 
 Permissions are daemon-wide today. Future grants may select workspaces or agents, but operation classification remains inside the authorization module:
@@ -49,6 +51,32 @@ type Grant = {
 A delegating principal can grant only authority it already possesses. A session may attenuate its principal's grants but cannot widen them.
 
 Workspace-scoped grants require every resource-bearing operation and outbound observation to enforce the same workspace boundary. File preview currently accepts any daemon-readable regular file, so it must gain resource enforcement before workspace-specific access ships.
+
+## Adopting a tool capability on a retained agent
+
+An agent that already exists cannot reach a tool its saved policy does not preapprove.
+Replacing the agent would grant it and lose the session's history, so `agent.mcp.refresh`
+carries the MCP server entry and the tool policy together:
+
+```ts
+{ agentId, expected: { provider, sessionId, configRevision },
+  changes: { "my-tools": { type: "stdio", command: "…", env: { MY_TOOLS_CONFIG: "…" } } },
+  toolPolicy: { preapproved: [{ kind: "mcp", server: "my-tools", tool: "lookup" }] } }
+```
+
+`toolPolicy` omitted preserves the saved policy; `null` clears it. Both halves are needed
+in one call — a preapproval naming a server that the same request does not leave in the
+config is refused as `invalid_changes`, before anything is closed. That rule is the
+authorization boundary: the refresh cannot widen a policy past the servers it installs,
+and `paseo` remains outside the API's authority.
+
+The fence is unchanged. `expected.configRevision` comes from
+`agent.mcp.get_refresh_state` and is single-use: a stale revision, a changed admission, a
+non-idle agent, a pending permission or an in-flight turn refuses the call. Refusal is the
+normal outcome of a racing operator, not an error to retry blindly — re-read the state
+first. A refresh resumes the same provider session and asserts the resumed identity, so
+the timeline and native session id survive; a provider that resumes anything else fails
+the refresh.
 
 ## Hub
 

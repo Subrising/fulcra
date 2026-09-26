@@ -336,6 +336,7 @@ const CurrentPullRequestStatusSchema = z.object({
   isDraft: z.boolean().optional().catch(false),
   baseRefName: z.string().catch(""),
   headRefName: z.string().catch(""),
+  baseRefOid: z.string().optional(),
   headRefOid: z.string().optional(),
   mergedAt: z.string().nullable().optional(),
   statusCheckRollup: z.unknown().optional(),
@@ -504,6 +505,10 @@ query PullRequestCheckoutTarget($owner: String!, $name: String!, $number: Int!) 
   }
 }`;
 
+const SHA40 = /^[0-9a-f]{40}$/;
+
+// The `gh pr view --json` list keeps its existing fields: an older gh that doesn't know
+// `baseRefOid` would reject the whole list. The GraphQL batch poll supplies `baseRefOid`.
 const CURRENT_PR_STATUS_BASE_FIELDS =
   "number,url,title,state,isDraft,baseRefName,headRefName,headRefOid,mergedAt,reviewDecision,mergeable,headRepositoryOwner";
 const CURRENT_PR_STATUS_FIELDS = `${CURRENT_PR_STATUS_BASE_FIELDS},statusCheckRollup`;
@@ -620,6 +625,7 @@ const BatchPollPrNodeSchema = z.object({
   isDraft: z.boolean().optional().catch(false),
   baseRefName: z.string().catch(""),
   headRefName: z.string().catch(""),
+  baseRefOid: z.string().optional().catch(undefined),
   headRefOid: z.string().catch(""),
   mergedAt: z.string().nullable().optional(),
   mergeable: PullRequestMergeableSchema.optional().default("UNKNOWN"),
@@ -724,6 +730,7 @@ fragment PaseoPollPullRequest on PullRequest {
   isDraft
   baseRefName
   headRefName
+  baseRefOid
   headRefOid
   mergedAt
   mergeable
@@ -922,6 +929,11 @@ interface CacheEntry {
 
 interface GitHubServiceDependencies {
   runner: GitHubCommandRunner;
+  /**
+   * Token of a connected GitHub account from the shared credential store, for the
+   * repository host (null = github.com). Null means none: `gh` uses its own login.
+   */
+  resolveAccountToken: (host: string | null) => Promise<string | null>;
   resolveGhPath: () => Promise<string | null>;
   now: () => number;
   /**
@@ -1021,9 +1033,20 @@ export class GitHubEnterpriseHostProbeError extends Error {
   }
 }
 
+export type GitHubAccountTokenResolver = (host: string | null) => Promise<string | null>;
+
+// The daemon installs this once at startup so every GitHub service the forge registry creates reads
+// the same connected accounts. Without it, `gh` uses its own login exactly as before.
+let defaultAccountTokenResolver: GitHubAccountTokenResolver = async () => null;
+
+export function setGitHubAccountTokenResolver(resolver: GitHubAccountTokenResolver | null): void {
+  defaultAccountTokenResolver = resolver ?? (async () => null);
+}
+
 interface CreateGitHubServiceOptions {
   ttlMs?: number;
   runner?: GitHubCommandRunner;
+  resolveAccountToken?: GitHubAccountTokenResolver;
   resolveGhPath?: () => Promise<string | null>;
   now?: () => number;
   resolveRepoHost?: (cwd: string) => Promise<string | null>;
@@ -1105,6 +1128,8 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
   const ttlMs = options.ttlMs ?? DEFAULT_GITHUB_CACHE_TTL_MS;
   const deps: GitHubServiceDependencies = {
     runner: options.runner ?? runGhCommand,
+    resolveAccountToken:
+      options.resolveAccountToken ?? ((host: string | null) => defaultAccountTokenResolver(host)),
     resolveGhPath: options.resolveGhPath ?? resolveGhPath,
     now: options.now ?? Date.now,
     resolveRepoHost: options.resolveRepoHost ?? resolveGitHubEnterpriseHost,
@@ -1308,6 +1333,21 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
     const effectiveOptions: GitHubCommandRunnerOptions = host
       ? { ...runOptions, envOverlay: { ...runOptions.envOverlay, GH_HOST: host } }
       : runOptions;
+    // A connected account wins over the CLI login; `gh` reads GH_TOKEN for github.com. If GitHub
+    // refuses that token, the call falls back to the CLI's own login.
+    const accountToken = await deps.resolveAccountToken(host).catch(() => null);
+    if (accountToken) {
+      try {
+        const result = await deps.runner(args, {
+          ...effectiveOptions,
+          envOverlay: { ...effectiveOptions.envOverlay, GH_TOKEN: accountToken },
+        });
+        return result.stdout.trim();
+      } catch (error) {
+        const normalized = githubCliRunner.normalizeError(error, { args, cwd: runOptions.cwd });
+        if (!isGitHubAuthenticationError(normalized)) throw normalized;
+      }
+    }
     try {
       const result = await deps.runner(args, effectiveOptions);
       return result.stdout.trim();
@@ -3260,6 +3300,7 @@ function toBatchCurrentPullRequestItem(
     isDraft: node.isDraft ?? false,
     baseRefName: node.baseRefName,
     headRefName: node.headRefName,
+    ...(node.baseRefOid ? { baseRefOid: node.baseRefOid } : {}),
     ...(node.headRefOid ? { headRefOid: node.headRefOid } : {}),
     mergedAt: node.mergedAt ?? null,
     ...(statusCheckRollup ? { statusCheckRollup } : {}),
@@ -3892,6 +3933,9 @@ function toCurrentPullRequestStatus(
     state,
     baseRefName: item.baseRefName,
     headRefName: item.headRefName || fallbackHeadRefName,
+    // Only well-formed commits are passed on; the app reads files at exactly these.
+    ...(item.baseRefOid && SHA40.test(item.baseRefOid) ? { baseRefOid: item.baseRefOid } : {}),
+    ...(item.headRefOid && SHA40.test(item.headRefOid) ? { headRefOid: item.headRefOid } : {}),
     isMerged: mergedAt !== null,
     isDraft: item.isDraft ?? false,
     mergeable: item.mergeable,

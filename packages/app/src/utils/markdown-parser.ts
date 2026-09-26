@@ -1,4 +1,4 @@
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type MarkdownIt as MarkdownParser } from "markdown-it";
 
 /**
  * The one place that decides how the app parses markdown.
@@ -14,6 +14,9 @@ import MarkdownIt from "markdown-it";
  * disagree today: chat and the default renderer linkify bare URLs, plan cards
  * never have. Unifying that is a product decision on its own.
  */
-export function createMarkdownParser({ linkify }: { linkify: boolean }): MarkdownIt {
-  return new MarkdownIt({ html: false, linkify });
+export function createMarkdownParser({ linkify }: { linkify: boolean }): MarkdownParser {
+  const parser = new MarkdownIt({ html: false, linkify });
+  // Keep existing bare-domain links and complete user-info URL targets after the v15 defaults change.
+  parser.linkify.set({ fuzzyLink: true, urlAuth: true });
+  return parser;
 }

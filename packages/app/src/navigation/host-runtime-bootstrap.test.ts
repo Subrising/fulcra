@@ -3,6 +3,7 @@ import {
   resolveStartupBlocker,
   resolveStartupNavigationReady,
   resolveHostIndexRoute,
+  resolveOrcaHomeAvailability,
   resolveStartupRoute,
   shouldRunStartupGiveUpTimer,
   startHostRuntimeBootstrap,
@@ -350,6 +351,7 @@ describe("resolveHostIndexRoute", () => {
         serverId: "server-saved",
         workspaceSelection: { serverId: "server-saved", workspaceId: "workspace-a" },
         workspaceSelectionStatus: "exists",
+        orcaHome: "present",
       }),
     ).toEqual("/h/server-saved/workspace/workspace-a");
   });
@@ -360,38 +362,129 @@ describe("resolveHostIndexRoute", () => {
         serverId: "server-saved",
         workspaceSelection: { serverId: "server-saved", workspaceId: "workspace-a" },
         workspaceSelectionStatus: "unknown",
+        orcaHome: "present",
       }),
     ).toEqual("/h/server-saved/workspace/workspace-a");
   });
 
-  it("opens global project selection when the remembered workspace is proven missing", () => {
+  it("opens the home plugin when the remembered workspace is proven missing", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",
         workspaceSelection: { serverId: "server-saved", workspaceId: "workspace-a" },
         workspaceSelectionStatus: "missing",
+        orcaHome: "present",
       }),
-    ).toEqual("/open-project");
+    ).toEqual("/h/server-saved/plugin/organization/sidebar/organization");
   });
 
-  it("opens global project selection when the remembered workspace belongs to another host", () => {
+  it("opens the home plugin when the remembered workspace belongs to another host", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",
         workspaceSelection: { serverId: "server-other", workspaceId: "workspace-a" },
         workspaceSelectionStatus: "exists",
+        orcaHome: "present",
       }),
-    ).toEqual("/open-project");
+    ).toEqual("/h/server-saved/plugin/organization/sidebar/organization");
   });
 
-  it("opens global project selection when no workspace is remembered", () => {
+  it("opens the home plugin when no workspace is remembered", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",
         workspaceSelection: null,
         workspaceSelectionStatus: "unknown",
+        orcaHome: "present",
+      }),
+    ).toEqual("/h/server-saved/plugin/organization/sidebar/organization");
+  });
+
+  // The home plugin is a plugin surface. A host without that plugin renders "This plugin surface is
+  // unavailable" with no shell chrome, so routing a fresh install there leaves it with no menu
+  // and no way into settings.
+  it("opens the built-in project route when the host has no the home plugin surface", () => {
+    expect(
+      resolveHostIndexRoute({
+        serverId: "server-saved",
+        workspaceSelection: null,
+        workspaceSelectionStatus: "unknown",
+        orcaHome: "absent",
       }),
     ).toEqual("/open-project");
+  });
+
+  // The catalog arrives after connect. Redirecting before it lands is permanent, so a cold
+  // start with the home plugin installed would be thrown to the fallback and never come back.
+  it("waits instead of redirecting while the plugin catalog is still arriving", () => {
+    expect(
+      resolveHostIndexRoute({
+        serverId: "server-saved",
+        workspaceSelection: null,
+        workspaceSelectionStatus: "unknown",
+        orcaHome: "unknown",
+      }),
+    ).toBeNull();
+  });
+
+  it("never makes a remembered workspace wait on the plugin catalog", () => {
+    expect(
+      resolveHostIndexRoute({
+        serverId: "server-saved",
+        workspaceSelection: { serverId: "server-saved", workspaceId: "workspace-a" },
+        workspaceSelectionStatus: "exists",
+        orcaHome: "unknown",
+      }),
+    ).toEqual("/h/server-saved/workspace/workspace-a");
+  });
+
+  it("still restores a remembered workspace when the host has no the home plugin surface", () => {
+    expect(
+      resolveHostIndexRoute({
+        serverId: "server-saved",
+        workspaceSelection: { serverId: "server-saved", workspaceId: "workspace-a" },
+        workspaceSelectionStatus: "exists",
+        orcaHome: "absent",
+      }),
+    ).toEqual("/h/server-saved/workspace/workspace-a");
+  });
+});
+
+describe("resolveOrcaHomeAvailability", () => {
+  const base = {
+    connection: "online" as const,
+    pluginsSupported: true as boolean | null,
+    catalogSettled: false,
+    hasOrganizationSidebarSurface: false,
+  };
+
+  it("is unknown only while a connected host that supports plugins is still answering", () => {
+    expect(resolveOrcaHomeAvailability(base)).toBe("unknown");
+  });
+
+  it.each([
+    ["the connection is still opening", { connection: "connecting" as const }],
+    ["the host has not reported its features", { pluginsSupported: null }],
+  ])("is unknown, not absent, while %s", (_label, override) => {
+    expect(resolveOrcaHomeAvailability({ ...base, ...override, catalogSettled: true })).toBe(
+      "unknown",
+    );
+  });
+
+  it("is present once the sidebar contribution is there", () => {
+    expect(resolveOrcaHomeAvailability({ ...base, hasOrganizationSidebarSurface: true })).toBe(
+      "present",
+    );
+  });
+
+  it.each([
+    ["offline", { connection: "offline" as const }],
+    ["the connection failed", { connection: "error" as const }],
+    ["plugins unsupported", { pluginsSupported: false }],
+    ["catalog settled without it", { catalogSettled: true }],
+    ["the startup bound passed with no answer", { unknownSettledByBound: true }],
+  ])("settles as absent rather than waiting forever when %s", (_label, override) => {
+    expect(resolveOrcaHomeAvailability({ ...base, ...override })).toBe("absent");
   });
 });
 

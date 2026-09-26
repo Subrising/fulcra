@@ -16,6 +16,14 @@ describe("normalizeClientMessageId", () => {
 });
 
 describe("resolveClientMessageId", () => {
+  test("preserves an existing identifier and uses the real v4 generator for new messages", () => {
+    const existing = "123e4567-e89b-42d3-a456-426614174000";
+    expect(resolveClientMessageId(existing)).toBe(existing);
+    expect(resolveClientMessageId(undefined)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
   test("preserves a non-empty clientMessageId", () => {
     expect(resolveClientMessageId("client-msg-3", () => "generated-id")).toBe("client-msg-3");
   });

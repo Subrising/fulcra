@@ -1,5 +1,5 @@
 import { test, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
@@ -137,6 +137,249 @@ test("createAgent without an initial prompt returns an idle snapshot", async () 
     await daemon.close();
   }
 });
+
+test("steps through turns and files, and keeps history after delete until purged", async () => {
+  const daemon = await createTestPaseoDaemon();
+  const client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemon.port}/ws`,
+    appVersion: "0.1.82",
+  });
+  const cwd = tmpCwd();
+
+  try {
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    const agent = await client.createAgent({ provider: "codex", cwd, title: "Timeline index" });
+    const manager = daemon.daemon.agentManager;
+    await manager.appendTimelineItem(agent.id, {
+      type: "user_message",
+      text: "change two files",
+      clientMessageId: "prompt-1",
+    });
+    await manager.appendTimelineItem(agent.id, {
+      type: "tool_call",
+      callId: "patch-1",
+      name: "apply_patch",
+      status: "completed",
+      error: null,
+      detail: {
+        type: "edit",
+        filePath: "src/a.ts",
+        unifiedDiff: "@@ -1 +1 @@\n-a\n+b\n",
+        files: [
+          { path: "src/a.ts", kind: "update" },
+          { path: "src/b.ts", kind: "add" },
+        ],
+      },
+    });
+    await manager.appendTimelineItem(agent.id, {
+      type: "tool_call",
+      callId: "read-1",
+      name: "Read",
+      status: "completed",
+      error: null,
+      detail: { type: "read", filePath: path.join(cwd, "src", "a.ts") },
+    });
+
+    const listed = await client.listAgentTimelineTurns(agent.id);
+    expect(listed).toMatchObject({ retained: false, nextCursor: null, error: null });
+    expect(listed.totalTurns).toBe(listed.turns.length);
+    const turn = listed.turns.at(-1)!;
+    expect(turn).toMatchObject({ implicit: true, toolCount: 2, files: ["src/a.ts", "src/b.ts"] });
+
+    const history = await client.getAgentTimelineFileHistory(agent.id, path.join(cwd, "src/a.ts"));
+    expect(history.path).toBe("src/a.ts");
+    expect(history.touches.map((touch) => [touch.kind, touch.turnId])).toEqual([
+      ["patch", turn.turnId],
+      ["read", turn.turnId],
+    ]);
+
+    const page = await client.fetchAgentTimeline(agent.id, {
+      turnId: turn.turnId,
+      direction: "after",
+      limit: 0,
+    });
+    expect(page.entries.map((entry) => entry.item.type)).toEqual([
+      "user_message",
+      "tool_call",
+      "tool_call",
+    ]);
+
+    await expect(client.purgeAgentTimeline(agent.id)).rejects.toThrow(/Delete the agent/);
+    await client.deleteAgent(agent.id);
+    const retained = await client.listAgentTimelineTurns(agent.id);
+    expect(retained.retained).toBe(true);
+    expect(retained.turns.at(-1)).toMatchObject({ files: ["src/a.ts", "src/b.ts"] });
+    // The absolute path is still placed after delete: the cwd was kept with the history.
+    const retainedHistory = await client.getAgentTimelineFileHistory(
+      agent.id,
+      path.join(cwd, "src/a.ts"),
+    );
+    expect(retainedHistory).toMatchObject({ retained: true, path: "src/a.ts" });
+    expect(retainedHistory.touches).toHaveLength(2);
+
+    // Deleted-session content is served from retained history, whole or by turn.
+    const retainedTail = await client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 0 });
+    expect(retainedTail).toMatchObject({ retained: true, agent: null, error: null });
+    expect(retainedTail.entries.every((entry) => entry.provider === "codex")).toBe(true);
+    expect(retainedTail.entries.slice(-3).map((entry) => entry.item.type)).toEqual([
+      "user_message",
+      "tool_call",
+      "tool_call",
+    ]);
+    const retainedTurn = await client.fetchAgentTimeline(agent.id, {
+      turnId: turn.turnId,
+      direction: "after",
+      limit: 0,
+    });
+    expect(retainedTurn.retained).toBe(true);
+    expect(retainedTurn.entries.map((entry) => entry.item.type)).toEqual([
+      "user_message",
+      "tool_call",
+      "tool_call",
+    ]);
+
+    await expect(client.purgeAgentTimeline(agent.id)).resolves.toEqual({ purged: true });
+    await expect(client.listAgentTimelineTurns(agent.id)).rejects.toThrow(/No timeline history/);
+  } finally {
+    await client.close();
+    await daemon.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 30000);
+
+test("a delete whose history cannot be retained fails and keeps the agent", async () => {
+  const daemon = await createTestPaseoDaemon();
+  const client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemon.port}/ws`,
+    appVersion: "0.1.82",
+  });
+  const cwd = tmpCwd();
+
+  try {
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    const agent = await client.createAgent({ provider: "codex", cwd, title: "Retention failure" });
+    await daemon.daemon.agentManager.appendTimelineItem(agent.id, {
+      type: "user_message",
+      text: "keep me",
+      clientMessageId: "prompt-1",
+    });
+    // A plain file where the retained directory belongs makes retention fail on disk.
+    const blocker = path.join(daemon.paseoHome, "native-timeline-journal", "retained");
+    writeFileSync(blocker, "not a directory");
+
+    await expect(client.deleteAgent(agent.id)).rejects.toThrow(/could not be saved/);
+    const listed = await client.fetchAgents({ filter: { includeArchived: true } });
+    expect(listed.entries.some((entry) => entry.agent.id === agent.id)).toBe(true);
+    const kept = await client.listAgentTimelineTurns(agent.id);
+    expect(kept.retained).toBe(false);
+    expect(kept.totalTurns).toBeGreaterThan(0);
+
+    // Once the disk is fixed, the same delete succeeds and the history is retained.
+    rmSync(blocker, { force: true });
+    await client.deleteAgent(agent.id);
+    const after = await client.fetchAgents({ filter: { includeArchived: true } });
+    expect(after.entries.some((entry) => entry.agent.id === agent.id)).toBe(false);
+    expect((await client.listAgentTimelineTurns(agent.id)).retained).toBe(true);
+  } finally {
+    await client.close();
+    await daemon.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 30000);
+
+// Regression: fail after a segment moves, read the agent, restart with the registry record present, read
+// again, then retry the delete. Every acknowledged row stays readable, tail and by turn, before and after.
+test("a failed delete, reads and a retry keep every acknowledged row, across a restart", async () => {
+  const paseoHomeRoot = mkdtempSync(path.join(tmpdir(), "paseo-pending-delete-"));
+  const cwd = tmpCwd();
+  let failOnce = true;
+  let daemon = await createTestPaseoDaemon({
+    paseoHomeRoot,
+    cleanup: false,
+    timelineStoreStep: (step) => {
+      if (failOnce && step === "retention-segment-staged-0") {
+        failOnce = false;
+        throw new Error("injected disk failure");
+      }
+    },
+  });
+  const connect = async () => {
+    const next = new DaemonClient({
+      url: `ws://127.0.0.1:${daemon.port}/ws`,
+      appVersion: "0.1.82",
+    });
+    await next.connect();
+    await next.fetchAgents({ subscribe: {} });
+    return next;
+  };
+  let client = await connect();
+  const texts = (entries: { item: { type: string; text?: unknown } }[]) =>
+    entries
+      .filter((e) => e.item.type === "assistant_message" || e.item.type === "user_message")
+      .map((e) => String(e.item.text));
+  const acknowledged = ["keep all of this", "first answer", "second answer"];
+  const expectEverything = async (retained: boolean) => {
+    const tail = await client.fetchAgentTimeline(agent.id, { direction: "tail", limit: 0 });
+    expect(tail.error).toBeNull();
+    expect(tail.retained === true).toBe(retained);
+    expect(texts(tail.entries).slice(-3)).toEqual(acknowledged);
+    const turns = await client.listAgentTimelineTurns(agent.id);
+    const byTurn = await client.fetchAgentTimeline(agent.id, {
+      turnId: turns.turns.at(-1)!.turnId,
+      direction: "after",
+      limit: 0,
+    });
+    expect(texts(byTurn.entries)).toEqual(acknowledged);
+  };
+  let agent: { id: string } = { id: "" };
+  try {
+    agent = await client.createAgent({ provider: "codex", cwd, title: "Pending delete" });
+    const manager = daemon.daemon.agentManager;
+    await manager.appendTimelineItem(agent.id, {
+      type: "user_message",
+      text: acknowledged[0]!,
+      clientMessageId: "p-1",
+    });
+    await manager.appendTimelineItem(agent.id, {
+      type: "assistant_message",
+      text: acknowledged[1]!,
+      messageId: "a-1",
+    });
+    await manager.appendTimelineItem(agent.id, {
+      type: "assistant_message",
+      text: acknowledged[2]!,
+      messageId: "a-2",
+    });
+
+    await expect(client.deleteAgent(agent.id)).rejects.toThrow(/could not be saved/);
+    // The read that used to create an empty journal over the recovered history.
+    await expectEverything(false);
+
+    await client.close();
+    await daemon.close();
+    daemon = await createTestPaseoDaemon({ paseoHomeRoot, cleanup: false });
+    client = await connect();
+    const listed = await client.fetchAgents({ filter: { includeArchived: true } });
+    expect(listed.entries.some((entry) => entry.agent.id === agent.id)).toBe(true);
+    await expectEverything(false);
+
+    await client.deleteAgent(agent.id);
+    await expectEverything(true);
+    const retainedRoot = path.join(daemon.paseoHome, "native-timeline-journal", "retained");
+    expect(
+      readdirSync(retainedRoot).filter(
+        (name) => name.includes(".superseded-") || name.endsWith(".pending.json"),
+      ),
+    ).toEqual([]);
+  } finally {
+    await client.close();
+    await daemon.close();
+    rmSync(paseoHomeRoot, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 60000);
 
 test("DaemonClient uploads file bytes to daemon temp storage", async () => {
   const daemon = await createTestPaseoDaemon();

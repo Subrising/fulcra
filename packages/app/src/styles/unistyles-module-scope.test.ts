@@ -48,7 +48,9 @@ function findEagerModuleStyleReads(filePath: string): string[] {
     filePath,
     source,
     ts.ScriptTarget.Latest,
-    true,
+    // No parent pointers: `getStart` is given the source file and nothing else
+    // here walks upward. Building them costs ~37% of the parse across the tree.
+    false,
     filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
 
@@ -68,9 +70,13 @@ function findEagerModuleStyleReads(filePath: string): string[] {
 }
 
 describe("Unistyles module scope", () => {
+  // This is a whole-tree static check: it parses every .ts/.tsx under src/
+  // (~2,050 files, ~0.9s on an idle machine). The default 5s budget is not
+  // sized for that once CI runs it alongside another worker, so give it a
+  // bounded one that reflects the work. The assertion itself is unchanged.
   it("does not materialize style proxies before the persisted theme loads", () => {
     const violations = listSourceFiles(SOURCE_ROOT).flatMap(findEagerModuleStyleReads);
 
     expect(violations).toEqual([]);
-  });
+  }, 30_000);
 });

@@ -1,3 +1,4 @@
+import { resolveAutomaticApprovalMode } from "@getpaseo/protocol/provider-manifest";
 import type {
   AgentCreateConfigParent,
   AgentCreateConfigUnattendedInput,
@@ -19,6 +20,20 @@ export interface ResolveCreateAgentModeInput {
   // Target provider's own unattended mode id, if it has one. Used to bridge
   // unattended parents into unattended children across providers.
   targetUnattendedMode: string | undefined;
+}
+
+/**
+ * The adapter's own automatic-approval mode, or `undefined` when it declares none — in
+ * which case the caller keeps the provider default and the limitation is reported rather
+ * than papered over. `availableModes === undefined` means the live mode list is unknown,
+ * so the manifest answer is used unchecked; a known list must actually contain it.
+ */
+function resolveDeclaredAutomaticApprovalMode(
+  targetProvider: AgentProvider,
+  availableModes: string[] | undefined,
+): string | undefined {
+  const resolution = resolveAutomaticApprovalMode(targetProvider, availableModes);
+  return resolution.supported && resolution.modeId ? resolution.modeId : undefined;
 }
 
 function listModes(modes: string[] | undefined): string {
@@ -58,7 +73,12 @@ export function resolveAndValidateCreateAgentMode(
     if (input.unattended && input.targetUnattendedMode !== undefined) {
       return input.targetUnattendedMode;
     }
-    return undefined;
+    // Nobody asked for a mode and nothing is being inherited. Rather than leaving the
+    // session to the provider's runtime default — which is how every session was born
+    // asking for permission — select the adapter's declared automatic-approval mode.
+    // Declared, never a literal: `auto` is the classifier on Claude and plain default
+    // permissions on Codex. Unattended modes are never used as a substitute here.
+    return resolveDeclaredAutomaticApprovalMode(targetProvider, availableModes);
   }
 
   if (parent.provider === targetProvider) {

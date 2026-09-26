@@ -35,6 +35,21 @@ function outboundMessage(type: SessionOutboundMessage["type"]): SessionOutboundM
 }
 
 describe("SessionAuthorization", () => {
+  test.each([
+    { grants: [], allowed: false },
+    { grants: ["workspace.read"] as const, allowed: false },
+    { grants: ["daemon.read"] as const, allowed: false },
+    { grants: ["workspace.read", "daemon.read"] as const, allowed: true },
+  ])("quota requires both read grants: $grants", ({ grants, allowed }) => {
+    const authorization = new SessionAuthorization(grants);
+    expect(authorization.allowsInbound(inboundMessage("agent.quota.read.request"))).toBe(allowed);
+    expect(authorization.allowsOutbound(outboundMessage("agent.quota.read.response"))).toBe(
+      allowed,
+    );
+    authorization.replacePermissions(["workspace.read"]);
+    expect(authorization.allowsOutbound(outboundMessage("agent.quota.read.response"))).toBe(false);
+  });
+
   test("owner authority covers every session operation", () => {
     const authorization = new SessionAuthorization(OWNER_PERMISSIONS);
 

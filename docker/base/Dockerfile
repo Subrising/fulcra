@@ -15,6 +15,7 @@ RUN set -eux; \
       test "$(node -p "require('./package.json').version")" = "${PASEO_VERSION}"; \
     fi; \
     node -e 'const fs=require("node:fs"); const pkg=JSON.parse(fs.readFileSync("package.json","utf8")); delete pkg.scripts.prepare; fs.writeFileSync("package.json", `${JSON.stringify(pkg)}\n`);'; \
+    npm install --global npm@11.12.1; \
     npm ci
 
 RUN set -eux; \

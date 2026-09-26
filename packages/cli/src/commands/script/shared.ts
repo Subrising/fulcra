@@ -61,8 +61,8 @@ export async function resolveWorkspaceScriptWorkspaceId(
   }
   throw {
     code: "WORKSPACE_NOT_FOUND",
-    message: `No Paseo workspace found for ${cwd}`,
-    details: "Open the directory in Paseo first, or pass --workspace <workspace-id>.",
+    message: `No Fulcra workspace found for ${cwd}`,
+    details: "Open the directory in Fulcra first, or pass --workspace <workspace-id>.",
   } satisfies CommandError;
 }
 

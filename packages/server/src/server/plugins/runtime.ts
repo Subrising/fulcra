@@ -27,6 +27,7 @@ import type {
 } from "./plugin-process-protocol.js";
 import { PluginProcessMessageSchema } from "./plugin-process-protocol.js";
 import { PluginSessionSocket } from "./session-socket.js";
+import type { PluginHostCall } from "./plugin-host-calls.js";
 
 const CLIENT_ENTRY_FILENAMES = ["index.client.ts", "index.client.tsx"] as const;
 const SERVER_ENTRY_FILENAMES = ["index.server.ts", "index.server.tsx"] as const;
@@ -112,6 +113,9 @@ interface RemoteProviderConnection {
 }
 
 interface PluginRuntimeDependencies {
+  // Host capabilities reached through `host.call`: notify and the shared credential store.
+  hostCalls?: (call: PluginHostCall) => Promise<unknown>;
+  hostCapabilities?: { notify: boolean; credentials: boolean };
   settingsDirectory?: string;
   onSettingsChanged?: (pluginId: string, settingsId: string) => void;
   spawnChild?: () => PluginChild;
@@ -276,7 +280,7 @@ async function resolveEntryPaths(directory: string): Promise<{
   const legacyEntry = await findEntry(directory, ["index.ts", "index.tsx"]);
   if (legacyEntry) {
     throw new Error(
-      "This plugin was made for an older version of Paseo and cannot run on Paseo v0.8. Ask its author to update it. Plugin authors can follow the migration guide: https://paseo.sh/docs/plugins/migration",
+      "This plugin was made for the plugin API before 0.8 and cannot run on this version of Fulcra. Ask its author to update it.",
     );
   }
   throw new Error(
@@ -658,6 +662,9 @@ export class PluginRuntime {
             settingsDirectory: this.dependencies.settingsDirectory
               ? path.join(this.dependencies.settingsDirectory, pluginId)
               : undefined,
+            capabilities: this.dependencies.hostCalls
+              ? (this.dependencies.hostCapabilities ?? { notify: false, credentials: false })
+              : { notify: false, credentials: false },
           }).catch(fail);
         },
       );
@@ -758,6 +765,10 @@ export class PluginRuntime {
       this.dependencies.onSettingsChanged?.(loaded.id, message.settingsId);
       return;
     }
+    if (message.type === "host.call") {
+      this.handleHostCall(loaded, message);
+      return;
+    }
     if (message.type.startsWith("provider.")) {
       this.handleProviderMessage(loaded, message);
       return;
@@ -769,6 +780,30 @@ export class PluginRuntime {
     clearTimeout(pending.timeout);
     if (message.type === "result") pending.resolve(message.output);
     else pending.reject(new Error(message.error));
+  }
+
+  private handleHostCall(
+    loaded: LoadedPlugin,
+    message: Extract<PluginProcessMessage, { type: "host.call" }>,
+  ): void {
+    const child = loaded.child;
+    if (!child) return;
+    const hostCalls = this.dependencies.hostCalls;
+    const result = hostCalls
+      ? hostCalls({
+          pluginId: loaded.id,
+          requirements: loaded.requirements,
+          method: message.method,
+          input: message.input,
+        })
+      : Promise.reject(new Error(`${message.method} is not available on this host`));
+    void result
+      .then(
+        (output) => send(child, { type: "host.result", callId: message.callId, output }),
+        (error: unknown) =>
+          send(child, { type: "host.error", callId: message.callId, error: describeError(error) }),
+      )
+      .catch(() => undefined);
   }
 
   private handleProviderMessage(loaded: LoadedPlugin, message: PluginProcessMessage): void {

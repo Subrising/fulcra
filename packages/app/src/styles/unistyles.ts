@@ -11,7 +11,8 @@ StyleSheet.configure({
     xl: 1200,
   },
   settings: {
-    adaptiveThemes: true,
+    // Start dim while persisted preferences load; AppearanceProvider applies the saved choice.
+    initialTheme: "dark",
   },
 });
 

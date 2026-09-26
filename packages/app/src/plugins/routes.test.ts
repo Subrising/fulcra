@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { buildLegacyPluginSurfaceRedirectRoute, buildPluginSurfaceRoute } from "./routes";
 
 describe("buildPluginSurfaceRoute", () => {
+  it("keeps the home plugin inside the selected native host boundary", () => {
+    expect(
+      buildPluginSurfaceRoute("host/one", "organization", {
+        kind: "sidebar",
+        id: "organization",
+      }),
+    ).toBe("/h/host%2Fone/plugin/organization/sidebar/organization");
+  });
   it("keeps direct surfaces and sidebar contributions in separate route namespaces", () => {
     expect(buildPluginSurfaceRoute("host/one", "review", { kind: "surface", id: "overview" })).toBe(
       "/h/host%2Fone/plugin/review/surface/overview",

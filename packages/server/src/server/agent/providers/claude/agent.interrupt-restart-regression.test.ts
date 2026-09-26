@@ -1042,3 +1042,90 @@ test("auto-completes an open autonomous turn when a foreground prompt starts", a
   subscribedEvents.close();
   await session.close();
 });
+
+test("changing thinking with no live query still lets the next prompt start", async () => {
+  const logger = createTestLogger();
+  const queries: ScriptedQuery[] = [];
+
+  queryFactory.mockImplementation(({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+    const scriptedQuery = createScriptedQuery({
+      prompt,
+      sessionId: "thinking-no-query-session",
+      async handlePrompt({ query }) {
+        query.emit({
+          type: "assistant",
+          message: { content: "THINKING_PROMPT_RESPONSE" },
+          session_id: "thinking-no-query-session",
+        });
+        query.emit(buildSuccessResult("thinking-no-query-session"));
+      },
+    });
+    queries.push(scriptedQuery);
+    return scriptedQuery;
+  });
+
+  const session = await new ClaudeAgentClient({
+    logger,
+    queryFactory,
+    resolveBinary: async () => "/test/claude/bin",
+  }).createSession({ provider: "claude", cwd: process.cwd() });
+
+  // A resumed runtime has not queried yet, so there is no query to restart.
+  expect(queryFactory).not.toHaveBeenCalled();
+  await session.setThinkingOption?.("high");
+
+  const events = await collectUntilTerminal(streamSession(session, "prompt after thinking change"));
+
+  expect(events.find((event) => event.type === "turn_failed")).toBeUndefined();
+  expect(events.some((event) => event.type === "turn_completed")).toBe(true);
+  expect(collectAssistantText(events)).toContain("THINKING_PROMPT_RESPONSE");
+  // The query built for this turn already carries the new thinking option, so the pump
+  // must not tear it down and build a second one.
+  expect(queryFactory).toHaveBeenCalledTimes(1);
+  expect(queries[0]?.return).not.toHaveBeenCalled();
+
+  await session.close();
+});
+
+test("changing thinking with a live query still restarts it before the next prompt", async () => {
+  const logger = createTestLogger();
+  const queries: ScriptedQuery[] = [];
+
+  queryFactory.mockImplementation(({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+    const scriptedQuery = createScriptedQuery({
+      prompt,
+      sessionId: "thinking-live-query-session",
+      async handlePrompt({ promptRecord, query }) {
+        query.emit({
+          type: "assistant",
+          message: { content: `RESPONSE_TO_${promptRecord.text}` },
+          session_id: "thinking-live-query-session",
+        });
+        query.emit(buildSuccessResult("thinking-live-query-session"));
+      },
+    });
+    queries.push(scriptedQuery);
+    return scriptedQuery;
+  });
+
+  const session = await new ClaudeAgentClient({
+    logger,
+    queryFactory,
+    resolveBinary: async () => "/test/claude/bin",
+  }).createSession({ provider: "claude", cwd: process.cwd() });
+
+  await collectUntilTerminal(streamSession(session, "first"));
+  await waitFor(() => queries.length === 1);
+
+  await session.setThinkingOption?.("high");
+
+  const events = await collectUntilTerminal(streamSession(session, "second"));
+
+  expect(events.some((event) => event.type === "turn_completed")).toBe(true);
+  // A live query was built before the change, so it has to be retired for the new option.
+  expect(queryFactory).toHaveBeenCalledTimes(2);
+  expect(queries[0]?.return).toHaveBeenCalled();
+  expect(queries[1]?.prompts.map((prompt) => prompt.text)).toEqual(["second"]);
+
+  await session.close();
+});

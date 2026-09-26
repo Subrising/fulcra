@@ -6,6 +6,21 @@ export {
   type AgentSkillSelection,
 } from "./agent-profile.js";
 import { PluginIdSchema, PluginRequirementsSchema, PluginSourceSchema } from "./plugin-config.js";
+import {
+  CredentialsBeginRequestSchema,
+  CredentialsBeginResponseSchema,
+  CredentialsCompleteRequestSchema,
+  CredentialsCompleteResponseSchema,
+  CredentialsListRequestSchema,
+  CredentialsListResponseSchema,
+  CredentialsReconnectRequestSchema,
+  CredentialsReconnectResponseSchema,
+  CredentialsRemoveRequestSchema,
+  CredentialsRemoveResponseSchema,
+  PluginNotificationsListRequestSchema,
+  PluginNotificationsListResponseSchema,
+} from "./integrations.js";
+export * from "./integrations.js";
 export {
   PluginIdSchema,
   PluginRequirementsSchema,
@@ -427,7 +442,7 @@ const McpToolRefSchema = z
   })
   .strict();
 
-const ToolPolicySchema = z
+export const ToolPolicySchema = z
   .object({
     preapproved: z.array(McpToolRefSchema),
   })
@@ -523,6 +538,14 @@ const WorktreeSetupDetailPayloadSchema = z.object({
   truncated: z.boolean().optional(),
 });
 
+const ToolCallFileChangesPayloadSchema = z.array(
+  z.object({
+    path: z.string(),
+    kind: z.enum(["add", "delete", "update"]),
+    unifiedDiff: z.string().optional(),
+  }),
+);
+
 const ToolCallDetailPayloadSchema: z.ZodType<ToolCallDetail, unknown> = z.discriminatedUnion(
   "type",
   [
@@ -547,6 +570,8 @@ const ToolCallDetailPayloadSchema: z.ZodType<ToolCallDetail, unknown> = z.discri
       oldString: z.string().optional(),
       newString: z.string().optional(),
       unifiedDiff: z.string().optional(),
+      // Every file in a multi-file patch; filePath stays the first file for older clients.
+      files: ToolCallFileChangesPayloadSchema.optional(),
     }),
     z.object({
       type: z.literal("write"),
@@ -618,6 +643,8 @@ const ToolCallDetailPayloadSchema: z.ZodType<ToolCallDetail, unknown> = z.discri
       type: z.literal("unknown"),
       input: UnknownValueSchema,
       output: UnknownValueSchema,
+      // Files a patch touched when no preview could be rendered.
+      files: ToolCallFileChangesPayloadSchema.optional(),
     }),
   ],
 );
@@ -835,6 +862,17 @@ export const AgentSnapshotPayloadSchema = z.object({
   attentionTimestamp: z.string().nullable().optional(),
   archivedAt: z.string().nullable().optional(),
   providerUnavailable: z.boolean().optional(),
+  // COMPAT(interruptedTurn): added 2026-09-24; gate on server_info.features.interruptedTurn.
+  // A turn the daemon was running when it stopped. Present only on a stored (not loaded) agent's snapshot.
+  interruptedTurn: z
+    .object({
+      previousStatus: z.enum(["running", "initializing"]),
+      detectedAt: z.string(),
+      bootId: z.string().nullable(),
+      lastUserMessageAt: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export type AgentSnapshotPayload = z.infer<typeof AgentSnapshotPayloadSchema>;
@@ -912,6 +950,8 @@ export const DeleteAgentRequestMessageSchema = z.object({
   type: z.literal("delete_agent_request"),
   agentId: z.string(),
   requestId: z.string(),
+  // Remove the agent's timeline history too, instead of retaining it. Older daemons always remove it.
+  purgeHistory: z.boolean().optional(),
 });
 
 export const ArchiveAgentRequestMessageSchema = z.object({
@@ -1774,6 +1814,12 @@ export const ProviderUsageListRequestMessageSchema = z.object({
   requestId: z.string(),
 });
 
+export const AgentQuotaReadRequestMessageSchema = z.object({
+  type: z.literal("agent.quota.read.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+});
+
 export const ResumeAgentRequestMessageSchema = z.object({
   type: z.literal("resume_agent_request"),
   handle: AgentPersistenceHandleSchema,
@@ -1797,6 +1843,80 @@ export const RefreshAgentRequestMessageSchema = z.object({
   type: z.literal("refresh_agent_request"),
   agentId: z.string(),
   requestId: z.string(),
+});
+
+// The revision is opaque and daemon-local; callers must inspect again after reconnect/restart.
+export const AgentMcpRefreshStateSchema = z.object({
+  provider: AgentProviderSchema,
+  sessionId: z.string().nullable(),
+  configRevision: z.string(),
+  lifecycle: z.enum(AGENT_LIFECYCLE_STATUSES),
+  supported: z.boolean(),
+  mcpServerNames: z.array(z.string()),
+});
+export type AgentMcpRefreshState = z.infer<typeof AgentMcpRefreshStateSchema>;
+
+export const AgentMcpRefreshInputSchema = z
+  .object({
+    agentId: z.string(),
+    expected: z
+      .object({
+        provider: AgentProviderSchema,
+        sessionId: z.string(),
+        configRevision: z.string(),
+      })
+      .strict(),
+    // Null removes just this entry. Omitted entries are preserved.
+    changes: z.record(z.string().min(1), McpServerConfigSchema.nullable()),
+    // Replace the agent's tool policy in the same fenced refresh. Omitted preserves the
+    // saved policy; null clears it. A retained session cannot otherwise reach a tool the
+    // policy does not already preapprove without being replaced, which discards history.
+    // Preapprovals are still checked against the servers in the resulting config.
+    toolPolicy: ToolPolicySchema.nullable().optional(),
+    // Explicitly reconnect a same-address MCP selector whose saved config has not changed.
+    reconnect: z.boolean().optional(),
+  })
+  .strict();
+export type AgentMcpRefreshInput = z.infer<typeof AgentMcpRefreshInputSchema>;
+
+export const AgentMcpRefreshResultSchema = z.object({
+  outcome: z.enum(["refreshed", "unchanged", "refused", "failed"]),
+  reason: z
+    .enum([
+      "busy",
+      "stale",
+      "unsupported",
+      "not_resident",
+      "invalid_changes",
+      "prepare_failed",
+      "close_failed",
+      "resume_failed",
+    ])
+    .nullable(),
+  state: AgentMcpRefreshStateSchema.nullable(),
+});
+export type AgentMcpRefreshResult = z.infer<typeof AgentMcpRefreshResultSchema>;
+
+export const AgentMcpGetRefreshStateRequestMessageSchema = z.object({
+  type: z.literal("agent.mcp.get_refresh_state.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+});
+export const AgentMcpGetRefreshStateResponseMessageSchema = z.object({
+  type: z.literal("agent.mcp.get_refresh_state.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    state: AgentMcpRefreshStateSchema.nullable(),
+  }),
+});
+export const AgentMcpRefreshRequestMessageSchema = AgentMcpRefreshInputSchema.extend({
+  type: z.literal("agent.mcp.refresh.request"),
+  requestId: z.string(),
+});
+export const AgentMcpRefreshResponseMessageSchema = z.object({
+  type: z.literal("agent.mcp.refresh.response"),
+  payload: AgentMcpRefreshResultSchema.extend({ requestId: z.string(), agentId: z.string() }),
 });
 
 export const CancelAgentRequestMessageSchema = z.object({
@@ -1838,6 +1958,8 @@ export const FetchAgentTimelineRequestMessageSchema = z.object({
   projection: z.enum(["projected", "canonical"]).optional(),
   // Allow the client to merge this bounded page outside its contiguous loaded range.
   mergeWindow: z.boolean().optional(),
+  // Restrict the page to one turn from agent.timeline.list_turns; cursors page within the turn.
+  turnId: z.string().optional(),
 });
 
 export const AgentTimelineSearchRequestMessageSchema = z.object({
@@ -1850,6 +1972,29 @@ export const AgentTimelineSearchRequestMessageSchema = z.object({
 
 export const AgentTimelineListPromptsRequestMessageSchema = z.object({
   type: z.literal("agent.timeline.list_prompts.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+});
+
+export const AgentTimelineListTurnsRequestMessageSchema = z.object({
+  type: z.literal("agent.timeline.list_turns.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+  // Offset into the turn list, from a previous response's nextCursor.
+  cursor: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional(),
+});
+
+export const AgentTimelineGetFileHistoryRequestMessageSchema = z.object({
+  type: z.literal("agent.timeline.get_file_history.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+  // Relative to the agent's working directory. An absolute path inside it is also accepted.
+  path: z.string(),
+});
+
+export const AgentTimelinePurgeRequestMessageSchema = z.object({
+  type: z.literal("agent.timeline.purge.request"),
   agentId: z.string(),
   requestId: z.string(),
 });
@@ -2278,6 +2423,21 @@ export const CheckoutCommitsListRequestSchema = z.object({
   type: z.literal("checkout.commits.list.request"),
   cwd: z.string(),
   requestId: z.string(),
+});
+
+// Read one file as it was at a commit, or at the merge base
+// of two commits. Read-only. The host validates `sha` (40 lower-case hex) and `path`
+// (repository-relative, no `..`, NUL or backslash) and answers `status`; the wire stays structural.
+export const CheckoutFileAtCommitGetRequestSchema = z.object({
+  type: z.literal("checkout.file-at-commit.get.request"),
+  requestId: z.string(),
+  cwd: z.string(),
+  at: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("commit"), sha: z.string() }),
+    z.object({ kind: z.literal("merge-base"), of: z.tuple([z.string(), z.string()]) }),
+  ]),
+  path: z.string(),
+  maxBytes: z.number().int().min(0).max(1_048_576).optional(),
 });
 
 export const CheckoutCommitFileDiffRequestSchema = z.object({
@@ -3197,6 +3357,12 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   PluginCatalogGetRequestSchema,
   PluginListRequestSchema,
   PluginLogsGetRequestSchema,
+  PluginNotificationsListRequestSchema,
+  CredentialsListRequestSchema,
+  CredentialsBeginRequestSchema,
+  CredentialsCompleteRequestSchema,
+  CredentialsReconnectRequestSchema,
+  CredentialsRemoveRequestSchema,
   PluginDirectoryInstallRequestSchema,
   PluginDirectoryInspectRequestSchema,
   PluginSourceInstallRequestSchema,
@@ -3232,9 +3398,12 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotRequestMessageSchema,
   ProviderDiagnosticRequestMessageSchema,
   ProviderUsageListRequestMessageSchema,
+  AgentQuotaReadRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
   ImportAgentRequestMessageSchema,
   RefreshAgentRequestMessageSchema,
+  AgentMcpGetRefreshStateRequestMessageSchema,
+  AgentMcpRefreshRequestMessageSchema,
   CancelAgentRequestMessageSchema,
   ShutdownServerRequestMessageSchema,
   RestartServerRequestMessageSchema,
@@ -3242,6 +3411,9 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   FetchAgentTimelineRequestMessageSchema,
   AgentTimelineSearchRequestMessageSchema,
   AgentTimelineListPromptsRequestMessageSchema,
+  AgentTimelineListTurnsRequestMessageSchema,
+  AgentTimelineGetFileHistoryRequestMessageSchema,
+  AgentTimelinePurgeRequestMessageSchema,
   ProviderSubagentListRequestMessageSchema,
   ProviderSubagentTimelineRequestMessageSchema,
   SetAgentTimelineSubscriptionRequestMessageSchema,
@@ -3271,6 +3443,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutGithubSetAutoMergeRequestSchema,
   CheckoutCommitsListRequestSchema,
   CheckoutCommitFileDiffRequestSchema,
+  CheckoutFileAtCommitGetRequestSchema,
   CheckoutForgeGetCheckDetailsRequestSchema,
   CheckoutGithubGetCheckDetailsRequestSchema,
   CheckoutPrStatusRequestSchema,
@@ -3527,6 +3700,10 @@ export const ServerInfoStatusPayloadSchema = z
       .object({
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
+        // COMPAT(interruptedTurn): added 2026-09-24; remove gate after 2027-09-24.
+        interruptedTurn: z.boolean().optional(),
+        agentMcpRefresh: z.boolean().optional(),
+        agentMcpReconnect: z.boolean().optional(),
         // COMPAT(workspaceRequestReceipts): added in v0.8.0; remove gate after 2027-03-07.
         workspaceRequestReceipts: z.boolean().optional(),
         creationLifecycle: z.boolean().optional(),
@@ -3589,6 +3766,12 @@ export const ServerInfoStatusPayloadSchema = z
         pluginThemes: z.boolean().optional(),
         pluginSettings: z.boolean().optional(),
         pluginTimelineItems: z.boolean().optional(),
+        // Host plugin APIs (Fulcra P1): `ctx.notify` plus the in-app list, and the shared
+        // credential store with `credentials.*` RPCs and `ctx.credentials`.
+        pluginNotifications: z.boolean().optional(),
+        // `checkout.file-at-commit.get` and PR status baseRefOid/headRefOid.
+        checkoutFileAtCommit: z.boolean().optional(),
+        credentials: z.boolean().optional(),
         // COMPAT(skillManagement): added in v0.4.0, remove gate after 2027-08-16.
         skillManagement: z.boolean().optional(),
         // COMPAT(terminalRestoreModes): added in v0.1.81, remove gate after 2026-11-23.
@@ -3601,6 +3784,8 @@ export const ServerInfoStatusPayloadSchema = z
         rewind: z.boolean().optional(),
         // COMPAT(agentTimelinePromptIndex): added in v0.2.X, drop the gate when floor >= v0.2.X.
         agentTimelinePromptIndex: z.boolean().optional(),
+        // COMPAT(agentTimelineTurnIndex): added in v0.9.2, remove gate after 2027-09-24.
+        agentTimelineTurnIndex: z.boolean().optional(),
         // COMPAT(agentHistorySearch): added in v0.3.0, remove gate after 2027-02-07.
         agentHistorySearch: z.boolean().optional(),
         // COMPAT(checkoutRefresh): added in v0.1.86, remove gate after 2026-11-29.
@@ -3619,6 +3804,7 @@ export const ServerInfoStatusPayloadSchema = z
         workspaceFileEditing: z.boolean().optional(),
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: z.boolean().optional(),
+        agentQuotaRead: z.boolean().optional(),
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
         agentDetach: z.boolean().optional(),
         // COMPAT(agentThinkingUpdate): added in v0.2.4, remove gate after 2027-01-28.
@@ -4587,6 +4773,8 @@ export const FetchAgentTimelineResponseMessageSchema = z.object({
     hasOlder: z.boolean(),
     hasNewer: z.boolean(),
     mergeWindow: z.boolean().optional(),
+    // True when the agent was deleted and this page comes from its retained history.
+    retained: z.boolean().optional(),
     entries: z.array(AgentTimelineEntryPayloadSchema),
     error: z.string().nullable(),
   }),
@@ -4634,6 +4822,68 @@ export const AgentTimelineListPromptsResponseMessageSchema = z.object({
         preview: z.string(),
       }),
     ),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentTimelineTurnPayloadSchema = z.object({
+  // Provider turn id, or `seq-<n>` for rows recorded without one.
+  turnId: z.string(),
+  implicit: z.boolean(),
+  seqStart: z.number().int().nonnegative(),
+  seqEnd: z.number().int().nonnegative(),
+  startedAt: z.string(),
+  endedAt: z.string(),
+  toolCount: z.number().int().nonnegative(),
+  // Relative to the agent's working directory.
+  files: z.array(z.string()),
+  // Touches outside the working directory; their paths are not recorded.
+  externalFileCount: z.number().int().nonnegative(),
+});
+
+export const AgentTimelineListTurnsResponseMessageSchema = z.object({
+  type: z.literal("agent.timeline.list_turns.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    epoch: z.string(),
+    // True when the agent was deleted and this is its retained history.
+    retained: z.boolean(),
+    turns: z.array(AgentTimelineTurnPayloadSchema),
+    totalTurns: z.number().int().nonnegative(),
+    nextCursor: z.number().int().nonnegative().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentTimelineGetFileHistoryResponseMessageSchema = z.object({
+  type: z.literal("agent.timeline.get_file_history.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    epoch: z.string(),
+    retained: z.boolean(),
+    // The normalized relative path, or null when the request named a path outside the working
+    // directory; touches then cover every external file.
+    path: z.string().nullable(),
+    touches: z.array(
+      z.object({
+        seq: z.number().int().nonnegative(),
+        turnId: z.string(),
+        kind: z.enum(["read", "write", "edit", "patch"]),
+        timestamp: z.string(),
+      }),
+    ),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentTimelinePurgeResponseMessageSchema = z.object({
+  type: z.literal("agent.timeline.purge.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    purged: z.boolean(),
     error: z.string().nullable(),
   }),
 });
@@ -5278,6 +5528,10 @@ export const CheckoutPrStatusSchema = z.object({
   state: z.string(),
   baseRefName: z.string(),
   headRefName: z.string(),
+  // The 40-hex commits of the base branch tip and the head, as the forge
+  // reports them. Unset where a forge (or code path) doesn't provide them.
+  baseRefOid: z.string().optional(),
+  headRefOid: z.string().optional(),
   isMerged: z.boolean(),
   isDraft: z.boolean().optional().default(false),
   mergeable: z
@@ -5508,6 +5762,22 @@ export const CheckoutCommitsListResponseSchema = z.object({
     commits: z.array(CheckoutCommitSchema),
     error: CheckoutErrorSchema.nullable(),
     requestId: z.string(),
+  }),
+});
+
+export const CheckoutFileAtCommitGetResponseSchema = z.object({
+  type: z.literal("checkout.file-at-commit.get.response"),
+  payload: z.object({
+    requestId: z.string(),
+    cwd: z.string(),
+    path: z.string(),
+    // The commit actually read (the resolved merge base when one was asked for).
+    commit: z.string().nullable(),
+    status: z.enum(["ok", "missing", "too_large", "not_a_file", "error"]),
+    encoding: z.enum(["utf-8", "base64", "none"]),
+    content: z.string().optional(),
+    size: z.number().optional(),
+    error: z.string().optional(),
   }),
 });
 
@@ -6212,6 +6482,14 @@ export const ProviderUsageSchema = z.object({
   sourceLabel: z.string().nullable().optional(),
   fetchedAt: z.string().nullable().optional(),
   nextRefreshAt: z.string().nullable().optional(),
+  admission: z
+    .object({
+      state: z.enum(["allowed", "blocked", "unknown"]),
+      accountScope: z.string().nullable(),
+      observedAt: z.string(),
+      reason: z.string(),
+    })
+    .optional(),
   windows: z.array(ProviderUsageWindowSchema),
   balances: z.array(ProviderUsageBalanceSchema).optional(),
   details: z.array(ProviderUsageDetailSchema).optional(),
@@ -6224,6 +6502,41 @@ export const ProviderUsageListResponseMessageSchema = z.object({
     requestId: z.string(),
     fetchedAt: z.string(),
     providers: z.array(ProviderUsageSchema),
+  }),
+});
+
+const AgentQuotaWindowSchema = z.object({
+  usedPercent: z.number(),
+  windowDurationMins: z.number().nullable(),
+  resetsAt: z.number().nullable(),
+});
+
+export const AgentQuotaSnapshotSchema = z.object({
+  provider: z.string(),
+  sessionId: z.string(),
+  model: z.string().nullable(),
+  serviceTier: z.string().nullable(),
+  accountScope: z.string().nullable(),
+  observedAt: z.string(),
+  ordinaryUsageAllowed: z.boolean().nullable(),
+  limits: z.array(
+    z.object({
+      id: z.string().nullable(),
+      model: z.string().nullable(),
+      primary: AgentQuotaWindowSchema.nullable(),
+      secondary: AgentQuotaWindowSchema.nullable(),
+      spendControlReached: z.boolean().nullable(),
+      rateLimitReachedType: z.string().nullable(),
+    }),
+  ),
+});
+
+export const AgentQuotaReadResponseMessageSchema = z.object({
+  type: z.literal("agent.quota.read.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
+    quota: AgentQuotaSnapshotSchema,
   }),
 });
 
@@ -6723,6 +7036,8 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
 });
 
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
+  AgentMcpGetRefreshStateResponseMessageSchema,
+  AgentMcpRefreshResponseMessageSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
   SessionEventsSetSubscriptionResponseSchema,
@@ -6735,6 +7050,12 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   PluginCatalogGetResponseSchema,
   PluginListResponseSchema,
   PluginLogsGetResponseSchema,
+  PluginNotificationsListResponseSchema,
+  CredentialsListResponseSchema,
+  CredentialsBeginResponseSchema,
+  CredentialsCompleteResponseSchema,
+  CredentialsReconnectResponseSchema,
+  CredentialsRemoveResponseSchema,
   PluginDirectoryInstallResponseSchema,
   PluginDirectoryInspectResponseSchema,
   PluginSourceInstallResponseSchema,
@@ -6805,6 +7126,9 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentTimelineReplacementMessageSchema,
   AgentTimelineSearchResponseMessageSchema,
   AgentTimelineListPromptsResponseMessageSchema,
+  AgentTimelineListTurnsResponseMessageSchema,
+  AgentTimelineGetFileHistoryResponseMessageSchema,
+  AgentTimelinePurgeResponseMessageSchema,
   ProviderSubagentListResponseMessageSchema,
   ProviderSubagentTimelineResponseMessageSchema,
   ProviderSubagentUpdateMessageSchema,
@@ -6873,6 +7197,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutGithubSetAutoMergeResponseSchema,
   CheckoutCommitsListResponseSchema,
   CheckoutCommitFileDiffResponseSchema,
+  CheckoutFileAtCommitGetResponseSchema,
   CheckoutForgeGetCheckDetailsResponseSchema,
   CheckoutGithubGetCheckDetailsResponseSchema,
   CheckoutPrStatusResponseSchema,
@@ -6912,6 +7237,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   RefreshProvidersSnapshotResponseMessageSchema,
   ProviderDiagnosticResponseMessageSchema,
   ProviderUsageListResponseMessageSchema,
+  AgentQuotaReadResponseMessageSchema,
   ListCommandsResponseSchema,
   ListTerminalsResponseSchema,
   TerminalsChangedSchema,
@@ -7029,6 +7355,16 @@ export type FetchAgentTimelineResponseMessage = z.infer<
 export type AgentTimelineListPromptsResponseMessage = z.infer<
   typeof AgentTimelineListPromptsResponseMessageSchema
 >;
+export type AgentTimelineTurnPayload = z.infer<typeof AgentTimelineTurnPayloadSchema>;
+export type AgentTimelineListTurnsResponseMessage = z.infer<
+  typeof AgentTimelineListTurnsResponseMessageSchema
+>;
+export type AgentTimelineGetFileHistoryResponseMessage = z.infer<
+  typeof AgentTimelineGetFileHistoryResponseMessageSchema
+>;
+export type AgentTimelinePurgeResponseMessage = z.infer<
+  typeof AgentTimelinePurgeResponseMessageSchema
+>;
 export type AgentForkContextResponseMessage = z.infer<typeof AgentForkContextResponseMessageSchema>;
 export type CancelAgentResponseMessage = z.infer<typeof CancelAgentResponseMessageSchema>;
 export type SendAgentMessageResponseMessage = z.infer<typeof SendAgentMessageResponseMessageSchema>;
@@ -7092,6 +7428,8 @@ export type ProviderDiagnosticResponseMessage = z.infer<
 export type ProviderUsageTone = z.infer<typeof ProviderUsageToneSchema>;
 export type ProviderUsageStatus = z.infer<typeof ProviderUsageStatusSchema>;
 export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
+export type AgentQuotaSnapshot = z.infer<typeof AgentQuotaSnapshotSchema>;
+export type AgentQuotaReadResponseMessage = z.infer<typeof AgentQuotaReadResponseMessageSchema>;
 export type ProviderUsageWindow = z.infer<typeof ProviderUsageWindowSchema>;
 export type ProviderUsageBalance = z.infer<typeof ProviderUsageBalanceSchema>;
 export type ProviderUsageDetail = z.infer<typeof ProviderUsageDetailSchema>;
@@ -7232,6 +7570,8 @@ export type CheckoutCommitsListRequest = z.infer<typeof CheckoutCommitsListReque
 export type CheckoutCommitsListResponse = z.infer<typeof CheckoutCommitsListResponseSchema>;
 export type CheckoutCommitFileDiffRequest = z.infer<typeof CheckoutCommitFileDiffRequestSchema>;
 export type CheckoutCommitFileDiffResponse = z.infer<typeof CheckoutCommitFileDiffResponseSchema>;
+export type CheckoutFileAtCommitGetRequest = z.infer<typeof CheckoutFileAtCommitGetRequestSchema>;
+export type CheckoutFileAtCommitGetResponse = z.infer<typeof CheckoutFileAtCommitGetResponseSchema>;
 export type ParsedDiffFile = z.infer<typeof ParsedDiffFileSchema>;
 export type CheckoutPrCreateRequest = z.infer<typeof CheckoutPrCreateRequestSchema>;
 export type CheckoutPrCreateResponse = z.infer<typeof CheckoutPrCreateResponseSchema>;

@@ -150,6 +150,55 @@ function acknowledgeObservation(ws: FakeWebSocket, subscriptionId: string): void
   );
 }
 
+test("session quota refuses old hosts without sending a request", async () => {
+  const old = await connectClient({});
+  const oldSent = old.ws.sent.length;
+  await expect(old.client.agents.ref("agent-1").quota()).rejects.toThrow("Update the host");
+  expect(old.ws.sent).toHaveLength(oldSent);
+  await old.client.close();
+});
+
+test("session quota correlates the public agent handle and surfaces denial", async () => {
+  const { client, ws } = await connectClient({ agentQuotaRead: true });
+  const quota = {
+    provider: "codex",
+    sessionId: "native-1",
+    model: null,
+    serviceTier: null,
+    accountScope: null,
+    observedAt: "2026-09-17T00:00:00Z",
+    ordinaryUsageAllowed: null,
+    limits: [],
+  };
+  const pending = client.agents.ref("agent-1").quota({ requestId: "quota-1" });
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toEqual({
+    type: "agent.quota.read.request",
+    requestId: "quota-1",
+    agentId: "agent-1",
+  });
+  ws.message(
+    sessionMessage({
+      type: "agent.quota.read.response",
+      payload: { requestId: "quota-1", agentId: "agent-1", quota },
+    }),
+  );
+  await expect(pending).resolves.toEqual({ requestId: "quota-1", agentId: "agent-1", quota });
+  const denied = client.agents.ref("agent-1").quota({ requestId: "quota-denied" });
+  ws.message(
+    sessionMessage({
+      type: "rpc_error",
+      payload: {
+        requestId: "quota-denied",
+        requestType: "agent.quota.read.request",
+        code: "access_denied",
+        error: "Both read grants required",
+      },
+    }),
+  );
+  await expect(denied).rejects.toThrow("Both read grants required");
+  await client.close();
+});
+
 async function observeAgents(client: PaseoClient, ws: FakeWebSocket): Promise<string> {
   const ready = client.agents.list({ subscribe: {} });
   acknowledgeObservation(ws, "agents-sdk");
@@ -266,7 +315,9 @@ test("createPaseoApi borrows daemon capabilities without exposing connection own
   expect(Object.keys(paseo).sort()).toEqual([
     "agents",
     "config",
+    "credentials",
     "dispose",
+    "notifications",
     "observeEvents",
     "projects",
     "providers",
@@ -1673,3 +1724,114 @@ test("canceled timeline handles and captured state are collectible while their A
   );
   expect(result.stdout).toContain('"phase":"API alive"');
 }, 20000);
+
+test("quiet MCP refresh gates old hosts and correlates state and adoption outcomes", async () => {
+  const old = await connectClient({});
+  const sent = old.ws.sent.length;
+  await expect(old.client.agents.ref("agent-1").getMcpRefreshState()).rejects.toThrow(
+    "update the host",
+  );
+  expect(old.ws.sent).toHaveLength(sent);
+  await old.client.close();
+  FakeWebSocket.instances.length = 0;
+  const { client, ws } = await connectClient({ agentMcpRefresh: true, agentMcpReconnect: true });
+  const agent = client.agents.ref("agent-1");
+  const state = {
+    provider: "codex",
+    sessionId: "native-1",
+    configRevision: "revision-1",
+    lifecycle: "idle",
+    supported: true,
+    mcpServerNames: ["memory"],
+  };
+  const reading = agent.getMcpRefreshState();
+  const read = parseSentSessionMessage(ws.sent.at(-1));
+  expect(read).toMatchObject({ type: "agent.mcp.get_refresh_state.request", agentId: "agent-1" });
+  ws.message(
+    sessionMessage({
+      type: "agent.mcp.get_refresh_state.response",
+      payload: { agentId: "agent-1", requestId: read.requestId, state },
+    }),
+  );
+  await expect(reading).resolves.toEqual(state);
+  const refreshing = agent.refreshMcp({
+    expected: { provider: "codex", sessionId: "native-1", configRevision: "revision-1" },
+    changes: { memory: { type: "stdio", command: "memory-v2" } },
+    reconnect: true,
+  });
+  const request = parseSentSessionMessage(ws.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "agent.mcp.refresh.request",
+    agentId: "agent-1",
+    changes: { memory: { command: "memory-v2" } },
+    reconnect: true,
+  });
+  const result = {
+    agentId: "agent-1",
+    requestId: request.requestId,
+    outcome: "refused",
+    reason: "busy",
+    state,
+  };
+  ws.message(sessionMessage({ type: "agent.mcp.refresh.response", payload: result }));
+  await expect(refreshing).resolves.toEqual(result);
+  expect(
+    ws.sent.filter(
+      (frame) =>
+        parseSentFrame(frame).message &&
+        parseSentSessionMessage(frame).type === "agent.mcp.refresh.request",
+    ),
+  ).toHaveLength(1);
+  await client.close();
+});
+
+test("quiet MCP reconnect refuses hosts that can only refresh changed configurations", async () => {
+  const { client, ws } = await connectClient({ agentMcpRefresh: true });
+  const sent = ws.sent.length;
+  await expect(
+    client.agents.ref("agent-1").refreshMcp({
+      expected: { provider: "codex", sessionId: "native-1", configRevision: "revision-1" },
+      changes: {},
+      reconnect: true,
+    }),
+  ).rejects.toThrow("same-config MCP reconnect");
+  expect(ws.sent).toHaveLength(sent);
+  await client.close();
+});
+
+test("agent timeline handles expose the turn index behind the host feature", async () => {
+  const old = await connectClient({});
+  const sent = old.ws.sent.length;
+  const oldTimeline = old.client.agents.ref("agent-1").timeline;
+  await expect(oldTimeline.turns()).rejects.toThrow("This needs a newer Fulcra host.");
+  await expect(oldTimeline.fileHistory("src/a.ts")).rejects.toThrow(
+    "This needs a newer Fulcra host.",
+  );
+  await expect(oldTimeline.refetch({ turnId: "turn-1" })).rejects.toThrow(
+    "This needs a newer Fulcra host.",
+  );
+  expect(old.ws.sent).toHaveLength(sent);
+  await old.client.close();
+  FakeWebSocket.instances.length = 0;
+
+  const { client, ws } = await connectClient({ agentTimelineTurnIndex: true });
+  const timeline = client.agents.ref("agent-1").timeline;
+  void timeline.turns({ cursor: 100, limit: 50 }).catch(() => undefined);
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "agent.timeline.list_turns.request",
+    agentId: "agent-1",
+    cursor: 100,
+    limit: 50,
+  });
+  void timeline.fileHistory("src/a.ts").catch(() => undefined);
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "agent.timeline.get_file_history.request",
+    path: "src/a.ts",
+  });
+  void timeline.refetch({ turnId: "turn-1", direction: "after", limit: 0 }).catch(() => undefined);
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "fetch_agent_timeline_request",
+    turnId: "turn-1",
+  });
+  await client.close();
+});

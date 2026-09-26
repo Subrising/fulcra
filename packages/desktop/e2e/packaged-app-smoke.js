@@ -7,7 +7,16 @@ const { setTimeout: delay } = require("node:timers/promises");
 const { chromium } = require("playwright");
 const { extractFile } = require("@electron/asar");
 
-const EXECUTABLE_NAME = "Paseo";
+// Fallback only. electron-builder names the artifacts from ITS OWN productName, which is not
+// required to match this package.json -- and since the Fulcra rename it does not. Callers in the
+// packaging path pass `executableName` from the builder context instead; on macOS the name is read
+// straight off the bundle, which cannot disagree with what was produced.
+const EXECUTABLE_NAME = require("../package.json").productName || "Paseo";
+
+// The .app directory IS the product filename, so nothing here has to be told what it is.
+function macProductName(appPath) {
+  return path.basename(appPath, ".app");
+}
 const SMOKE_TIMEOUT_MS = 60_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const TERMINAL_CAPTURE_ATTEMPTS = 20;
@@ -40,16 +49,16 @@ function assertExecutable(filePath, label) {
   }
 }
 
-function getExecutablePath(appPath) {
+function getExecutablePath(appPath, executableName = EXECUTABLE_NAME) {
   if (process.platform === "darwin") {
-    return path.join(appPath, "Contents", "MacOS", EXECUTABLE_NAME);
+    return path.join(appPath, "Contents", "MacOS", macProductName(appPath));
   }
 
   if (process.platform === "win32") {
-    return path.join(appPath, `${EXECUTABLE_NAME}.exe`);
+    return path.join(appPath, `${executableName}.exe`);
   }
 
-  return path.join(appPath, EXECUTABLE_NAME);
+  return path.join(appPath, executableName);
 }
 
 function getCliShimPath(appPath) {
@@ -65,7 +74,7 @@ function getCliShimPath(appPath) {
 }
 
 function getMacMainExecutablePath(appPath) {
-  return path.join(appPath, "Contents", "MacOS", EXECUTABLE_NAME);
+  return path.join(appPath, "Contents", "MacOS", macProductName(appPath));
 }
 
 function getLaunchCommand(executablePath, args) {
@@ -469,7 +478,32 @@ async function assertPackagedRendererLoaded(page, deadline) {
   }
 }
 
-async function waitForRendererStartedDaemon({
+async function enableDesktopManagedDaemon({ page, stdout, stderr, userData, daemonHome }) {
+  try {
+    const settings = await page.evaluate(() =>
+      window.paseoDesktop.invoke("patch_desktop_settings", {
+        daemon: { manageBuiltInDaemon: true },
+      }),
+    );
+    if (settings?.daemon?.manageBuiltInDaemon !== true) {
+      throw new Error(
+        `Enabling built-in daemon management did not persist. Settings: ${JSON.stringify(settings)}`,
+      );
+    }
+    return await page.evaluate(() => window.paseoDesktop.invoke("start_desktop_daemon"));
+  } catch (error) {
+    // The renderer's own startup path swallows start failures into its splash
+    // state, so an explicit failure here is the only place the reason survives.
+    throw new Error(
+      `Packaged renderer failed to enable and start its desktop-managed daemon: ${error}.\n${formatLogs(
+        { stdout, stderr, userData, daemonHome },
+      )}`,
+      { cause: error },
+    );
+  }
+}
+
+async function waitForDesktopManagedDaemon({
   page,
   daemonHome,
   listen,
@@ -502,7 +536,7 @@ async function waitForRendererStartedDaemon({
   }
 
   throw new Error(
-    `Packaged renderer did not start its desktop-managed daemon. Last status: ${JSON.stringify(lastStatus)}. Last error: ${lastError}.\n${formatLogs({ stdout, stderr, userData, daemonHome })}`,
+    `Packaged renderer did not bring up its desktop-managed daemon after the built-in daemon was enabled. Last status: ${JSON.stringify(lastStatus)}. Last error: ${lastError}.\n${formatLogs({ stdout, stderr, userData, daemonHome })}`,
   );
 }
 
@@ -760,7 +794,78 @@ async function stopCliDaemon({ appPath, env }) {
   });
 }
 
-async function openSmokeWorkspace({ appPath, env, page, daemonHome }) {
+// What the renderer was showing, bounded and printed to the job log. Reads only
+// the route and rendered accessible names: no command arguments, no process
+// environment, no daemon secrets.
+const RENDERER_STATE_TEXT_LIMIT = 600;
+const RENDERER_STATE_NAME_LIMIT = 25;
+
+async function describeRendererState(page) {
+  try {
+    const state = await page.evaluate(
+      ({ textLimit, nameLimit }) => {
+        const root = document.querySelector("#root");
+        const named = Array.from(
+          document.querySelectorAll('[role="button"], button, [role="link"], a, [role="tab"]'),
+        )
+          .map((node) => node.getAttribute("aria-label") ?? node.textContent ?? "")
+          .map((label) => label.replace(/\s+/g, " ").trim().slice(0, 240))
+          .filter(Boolean);
+        return {
+          route: location.pathname,
+          rootText: (root?.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, textLimit),
+          namedCount: named.length,
+          names: Array.from(new Set(named)).slice(0, nameLimit),
+        };
+      },
+      { textLimit: RENDERER_STATE_TEXT_LIMIT, nameLimit: RENDERER_STATE_NAME_LIMIT },
+    );
+    return [
+      `  route: ${state.route}`,
+      `  #root text (first ${RENDERER_STATE_TEXT_LIMIT}): ${state.rootText || "<empty>"}`,
+      `  clickable names (${state.namedCount} found, first ${RENDERER_STATE_NAME_LIMIT} distinct):`,
+      ...state.names.map((name) => `    - ${name}`),
+    ].join("\n");
+  } catch (error) {
+    return `  renderer state unavailable: ${error}`;
+  }
+}
+
+/**
+ * Give the renderer a host before expecting it to show one.
+ *
+ * Enabling the built-in daemon persists the setting and starts the process; it does not add a
+ * host to the app's registry. A packaged profile with no saved hosts therefore sits on the
+ * welcome connection picker, which is correct product behaviour and is where this smoke was
+ * stranded: it went straight from "daemon running" to "click a workspace row" with nothing in
+ * between that could have produced a sidebar.
+ *
+ * Drive the real onboarding instead of seeding storage, so the step under test is the flow a
+ * user actually performs on first launch.
+ */
+async function connectRendererToLocalDaemon({ page, listen, deadline }) {
+  const separator = listen.lastIndexOf(":");
+  const host = listen.slice(0, separator);
+  const port = listen.slice(separator + 1);
+
+  // Already connected from an earlier step or a restored profile: nothing to onboard.
+  if (!new URL(page.url()).pathname.startsWith("/welcome")) return false;
+
+  // testIDs, not labels: welcome-screen.tsx renders this entry point and add-host-modal.tsx
+  // the form, and both are already the selectors the app's own e2e uses.
+  await page.getByTestId("welcome-direct-connection").click();
+  await page.getByTestId("direct-host-input").fill(host);
+  await page.getByTestId("direct-port-input").fill(port);
+  await page.getByTestId("direct-host-submit").click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/welcome"), {
+    timeout: remainingTime(deadline),
+  });
+  console.log(`Packaged desktop smoke: renderer connected to ${listen} through the welcome flow`);
+  return true;
+}
+
+async function openSmokeWorkspace({ appPath, env, page, daemonHome, listen, deadline }) {
+  await connectRendererToLocalDaemon({ page, listen, deadline });
   const projectPath = path.join(daemonHome, "sandbox-smoke-project");
   fs.mkdirSync(projectPath);
   fs.writeFileSync(path.join(projectPath, "README.md"), "Packaged Linux sandbox smoke\n");
@@ -779,7 +884,24 @@ async function openSmokeWorkspace({ appPath, env, page, daemonHome }) {
     ],
     label: "Create packaged smoke workspace",
   });
-  await page.getByRole("button", { name: "Sandbox smoke workspace", exact: true }).click();
+  // The sidebar row's accessible name is a comma-joined composite built by
+  // resolveSidebarWorkspaceAccessibilityLabel: project name, title, host badge,
+  // change request, service and status bucket. An exact match on the bare title
+  // can therefore never succeed. Require the title as a whole comma-separated
+  // segment instead, which still fails if the row is missing or mistitled and
+  // will not match a different workspace whose title merely contains this one.
+  //
+  // A correct locator is not enough on its own: if the renderer is not showing
+  // the workspace sidebar, no row exists to match and the click times out with
+  // nothing to say. Report where the renderer actually was, to the job log,
+  // because the artifact storage quota makes file-only diagnostics unavailable.
+  try {
+    await page.getByRole("button", { name: /(^|,\s)Sandbox smoke workspace(,|$)/ }).click();
+  } catch (error) {
+    console.log(`Packaged desktop smoke: renderer state when the workspace row was not clickable`);
+    console.log(await describeRendererState(page));
+    throw error;
+  }
   await page.waitForURL((url) => url.pathname.endsWith(`/workspace/${workspace.workspaceId}`));
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await page.getByRole("textbox", { name: "Message agent..." }).click();
@@ -821,14 +943,14 @@ async function assertSandboxState({ browser, page, expectedSandbox, stdout, stde
   }
 }
 
-function assertLinuxDesktopIdentity(appPath) {
+function assertLinuxDesktopIdentity(appPath, executableName = EXECUTABLE_NAME) {
   if (process.platform === "linux") {
     const metadata = JSON.parse(
       extractFile(path.join(appPath, "resources", "app.asar"), "package.json").toString(),
     );
-    if (metadata.desktopName !== `${EXECUTABLE_NAME}.desktop`) {
+    if (metadata.desktopName !== `${executableName}.desktop`) {
       throw new Error(
-        `Packaged Linux desktop identity ${JSON.stringify(metadata.desktopName)} does not match ${EXECUTABLE_NAME}.desktop`,
+        `Packaged Linux desktop identity ${JSON.stringify(metadata.desktopName)} does not match ${executableName}.desktop`,
       );
     }
   }
@@ -836,12 +958,13 @@ function assertLinuxDesktopIdentity(appPath) {
 
 async function smokePackagedDesktopApp({
   appPath,
-  executablePath = getExecutablePath(appPath),
+  executableName = EXECUTABLE_NAME,
+  executablePath = getExecutablePath(appPath, executableName),
   launchArgs = [],
   expectedSandbox,
 }) {
   assertExecutable(executablePath, "Packaged app executable");
-  assertLinuxDesktopIdentity(appPath);
+  assertLinuxDesktopIdentity(appPath, executableName);
   await smokeColdCliDaemonStart({ appPath });
 
   const userData = createTempDir("paseo-smoke-user-data-");
@@ -905,7 +1028,9 @@ async function smokePackagedDesktopApp({
     page = await waitForPackagedAppPage(browser, deadline);
     await assertPackagedRendererLoaded(page, deadline);
     console.log("Packaged desktop smoke: real app renderer and preload bridge loaded");
-    const status = await waitForRendererStartedDaemon({
+    console.log("Packaged desktop smoke: confirming built-in daemon management through the settings flow");
+    await enableDesktopManagedDaemon({ page, stdout, stderr, userData, daemonHome });
+    const status = await waitForDesktopManagedDaemon({
       page,
       daemonHome,
       listen,
@@ -914,17 +1039,17 @@ async function smokePackagedDesktopApp({
       userData,
       deadline,
     });
-    console.log("Packaged desktop smoke: renderer-started desktop daemon reported running");
+    console.log("Packaged desktop smoke: desktop-managed daemon reported running");
     await smokeCliShim({ appPath, env });
     await smokeCliTerminal({ appPath, env });
     if (expectedSandbox !== undefined) {
       await assertSandboxState({ browser, page, expectedSandbox, stdout, stderr });
-      await openSmokeWorkspace({ appPath, env, page, daemonHome });
+      await openSmokeWorkspace({ appPath, env, page, daemonHome, listen, deadline });
     }
     await writeSmokeArtifacts({ page, stdout, stderr, userData, daemonHome });
     await stopDaemonForCleanup();
     console.log(
-      `Packaged desktop smoke passed: real renderer and preload loaded; renderer-started desktop daemon pid ${status.pid}, listen ${status.listen}; CLI shim daemon status and terminal smoke succeeded`,
+      `Packaged desktop smoke passed: real renderer and preload loaded; launch started no daemon; opt-in desktop-managed daemon pid ${status.pid}, listen ${status.listen}; CLI shim daemon status and terminal smoke succeeded`,
     );
   } catch (error) {
     await writeSmokeArtifacts({ page, stdout, stderr, userData, daemonHome, error }).catch(

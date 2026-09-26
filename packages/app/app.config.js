@@ -5,10 +5,13 @@ const withAndroidAsyncStorageSize = require("./plugins/with-android-async-storag
 const withAndroidProfileable = require("./plugins/with-android-profileable");
 const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
 const withPasteInput = require("./plugins/with-paste-input");
+const withPersonalDeviceIos = require("./plugins/with-personal-device-ios");
 const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
 const { getNativeReleaseVersion } = require("./native-release-version");
 const appVariant = process.env.APP_VARIANT ?? "production";
-const isFdroidBuild = process.env.PASEO_FDROID_BUILD === "1";
+const isPrivatePreview = appVariant === "private-preview";
+const isPersonalDeviceIos = process.env.ORCA_IOS_PERSONAL_DEVICE === "1";
+const isFdroidBuild = isPrivatePreview || process.env.PASEO_FDROID_BUILD === "1";
 const isProfileBuild = process.env.PASEO_PROFILE_BUILD === "1";
 
 const buildProfile = isFdroidBuild
@@ -44,7 +47,7 @@ const buildProfile = isFdroidBuild
         [
           "expo-notifications",
           {
-            icon: "./assets/images/notification-icon.png",
+            icon: "./assets/images/fulcra-v1/mark.png",
             color: "#20744A",
           },
         ],
@@ -66,28 +69,32 @@ function resolveSecretFile(params) {
 }
 
 const variants = {
+  "private-preview": {
+    name: "Fulcra Preview",
+    packageId: "dev.orca.workspace.preview",
+  },
   production: {
-    name: "Paseo",
-    packageId: "sh.paseo",
+    name: "Fulcra",
+    packageId: "dev.orca.workspace",
     googleServicesFile: resolveSecretFile({
-      envKey: "GOOGLE_SERVICES_FILE_PROD",
-      fallbackRelativePath: "./.secrets/google-services.prod.json",
+      envKey: "ORCA_GOOGLE_SERVICES_FILE_PROD",
+      fallbackRelativePath: "./.secrets/orca-google-services.prod.json",
     }),
     googleServiceInfoPlist: resolveSecretFile({
-      envKey: "GOOGLE_SERVICE_INFO_PLIST_PROD",
-      fallbackRelativePath: "./.secrets/GoogleService-Info.prod.plist",
+      envKey: "ORCA_GOOGLE_SERVICE_INFO_PLIST_PROD",
+      fallbackRelativePath: "./.secrets/Fulcra-GoogleService-Info.prod.plist",
     }),
   },
   development: {
-    name: "Paseo Debug",
-    packageId: "sh.paseo.debug",
+    name: "Fulcra Debug",
+    packageId: "dev.orca.workspace.debug",
     googleServicesFile: resolveSecretFile({
-      envKey: "GOOGLE_SERVICES_FILE_DEBUG",
-      fallbackRelativePath: "./.secrets/google-services.debug.json",
+      envKey: "ORCA_GOOGLE_SERVICES_FILE_DEBUG",
+      fallbackRelativePath: "./.secrets/orca-google-services.debug.json",
     }),
     googleServiceInfoPlist: resolveSecretFile({
-      envKey: "GOOGLE_SERVICE_INFO_PLIST_DEBUG",
-      fallbackRelativePath: "./.secrets/GoogleService-Info.debug.plist",
+      envKey: "ORCA_GOOGLE_SERVICE_INFO_PLIST_DEBUG",
+      fallbackRelativePath: "./.secrets/Fulcra-GoogleService-Info.debug.plist",
     }),
   },
 };
@@ -98,20 +105,25 @@ const nativeReleaseVersion = getNativeReleaseVersion(pkg.version);
 export default {
   expo: {
     name: variant.name,
-    slug: "voice-mobile",
+    slug: "orca",
     version: nativeReleaseVersion.appVersion,
     orientation: "portrait",
-    icon: "./assets/images/icon.png",
-    scheme: "paseo",
-    userInterfaceStyle: "automatic",
+    icon: "./assets/images/fulcra-v1/icon.png",
+    // `fulcra` carries sign-in return links (fulcra://oauth/<flowId>); `orca` stays for existing links.
+    scheme: ["orca", "fulcra"],
+    userInterfaceStyle: isPrivatePreview ? "dark" : "automatic",
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
       infoPlist: {
         NSMicrophoneUsageDescription: "This app needs access to the microphone for voice commands.",
+        NSFaceIDUsageDescription:
+          "Fulcra uses Face ID to confirm that you are the one answering a decision on this device.",
         ITSAppUsesNonExemptEncryption: false,
       },
-      bundleIdentifier: variant.packageId,
+      bundleIdentifier: isPersonalDeviceIos
+        ? process.env.ORCA_IOS_BUNDLE_IDENTIFIER || variant.packageId
+        : variant.packageId,
       ...(variant.googleServiceInfoPlist
         ? { googleServicesFile: variant.googleServiceInfoPlist }
         : {}),
@@ -119,8 +131,8 @@ export default {
     },
     android: {
       adaptiveIcon: {
-        backgroundColor: "#000000",
-        foregroundImage: "./assets/images/android-icon-foreground.png",
+        foregroundImage: "./assets/images/fulcra-v1/adaptive-foreground.png",
+        backgroundColor: "#181B1A",
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
@@ -128,13 +140,14 @@ export default {
       // Allow HTTP connections for local network hosts (required for release builds)
       usesCleartextTraffic: true,
       permissions: buildProfile.androidPermissions,
+      ...(isFdroidBuild ? { blockedPermissions: ["android.permission.CAMERA"] } : {}),
       package: variant.packageId,
       versionCode: nativeReleaseVersion.androidVersionCode,
       ...(variant.googleServicesFile ? { googleServicesFile: variant.googleServicesFile } : {}),
     },
     web: {
       output: "single",
-      favicon: "./assets/images/favicon.png",
+      favicon: "./assets/images/fulcra-v1/icon.png",
     },
     autolinking: {
       searchPaths: ["../../node_modules", "./node_modules"],
@@ -148,16 +161,16 @@ export default {
       [
         "expo-splash-screen",
         {
-          image: "./assets/images/splash-icon.png",
+          image: "./assets/images/fulcra-v1/icon.png",
           imageWidth: 200,
           resizeMode: "contain",
-          backgroundColor: "#ffffff",
+          backgroundColor: "#181B1A",
           dark: {
             backgroundColor: "#000000",
           },
         },
       ],
-      ...buildProfile.notificationPlugins,
+      ...(isPersonalDeviceIos ? [] : buildProfile.notificationPlugins),
       "expo-audio",
       [
         "expo-gradle-jvmargs",
@@ -179,6 +192,7 @@ export default {
       ],
       ...buildProfile.fdroidPlugins,
       ...(isProfileBuild ? [withAndroidProfileable] : []),
+      ...(isPersonalDeviceIos ? [withPersonalDeviceIos] : []),
     ],
     experiments: {
       typedRoutes: true,
@@ -189,10 +203,6 @@ export default {
       fdroidBuild: isFdroidBuild,
       profileBuild: isProfileBuild,
       router: {},
-      eas: {
-        projectId: "0e7f65ce-0367-46c8-a238-2b65963d235a",
-      },
     },
-    owner: "getpaseo",
   },
 };

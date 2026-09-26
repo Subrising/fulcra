@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { ArrowUpRight, Blocks, Check, Settings2 } from "lucide-react-native";
+import { Blocks, Check, Settings2 } from "lucide-react-native";
 import type { AgentSkillOperation, AgentSkillsStatus } from "@getpaseo/protocol/messages";
 import type { TFunction } from "i18next";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,6 @@ import { SettingsSection } from "@/components/settings/headings/settings-section
 import { settingsStyles } from "@/styles/settings";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { confirmDialog } from "@/utils/confirm-dialog";
-import { openExternalUrl } from "@/utils/open-external-url";
 import { SkillSelectionSheet } from "./selection-sheet";
 import { useAgentSkills } from "./use-agent-skills";
 
@@ -23,8 +22,6 @@ const OP_KIND_ORDER: Record<AgentSkillOperation["kind"], number> = {
 const ThemedBlocks = withUnistyles(Blocks);
 const ThemedCheck = withUnistyles(Check);
 const ThemedSettings = withUnistyles(Settings2);
-const ThemedArrowUpRight = withUnistyles(ArrowUpRight);
-const SKILLS_DOCS_URL = "https://paseo.sh/docs/skills";
 const foregroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const mutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -89,33 +86,10 @@ export function AgentSkillsSection({ serverId }: { serverId: string }) {
   );
   const handleOpen = useCallback(() => setIsChoosing(true), []);
   const handleClose = useCallback(() => setIsChoosing(false), []);
-  const handleOpenDocs = useCallback(() => {
-    void openExternalUrl(SKILLS_DOCS_URL);
-  }, []);
-  const docsIcon = useMemo(
-    () => <ThemedArrowUpRight size={ICON_SIZE.sm} uniProps={mutedMapping} />,
-    [],
-  );
-  const trailing = useMemo(
-    () => (
-      <Button
-        variant="ghost"
-        size="sm"
-        leftIcon={docsIcon}
-        textStyle={settingsStyles.sectionHeaderLinkText}
-        style={settingsStyles.sectionHeaderLink}
-        onPress={handleOpenDocs}
-        accessibilityLabel={t("settings.host.skills.openDocs")}
-      >
-        {t("settings.host.skills.docs")}
-      </Button>
-    ),
-    [docsIcon, handleOpenDocs, t],
-  );
 
   if (!skills.connected || !skills.supported) {
     return (
-      <SettingsSection title={t("settings.host.skills.sectionTitle")} trailing={trailing}>
+      <SettingsSection title={t("settings.host.skills.sectionTitle")}>
         <View style={settingsStyles.card} testID="host-agent-skills-unavailable">
           <View style={styles.emptyCard}>
             <Text style={styles.mutedText}>
@@ -130,7 +104,7 @@ export function AgentSkillsSection({ serverId }: { serverId: string }) {
   }
 
   return (
-    <SettingsSection title={t("settings.host.skills.sectionTitle")} trailing={trailing}>
+    <SettingsSection title={t("settings.host.skills.sectionTitle")}>
       <View style={settingsStyles.card} testID="host-agent-skills-card">
         <View style={settingsStyles.row}>
           <View style={settingsStyles.rowContent}>

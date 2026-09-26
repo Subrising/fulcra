@@ -1,4 +1,10 @@
 export const en = {
+  sessionOwnership: {
+    noLeaderYet: "No leader yet",
+    unknownProject: "Project unknown",
+    reportsTo: "Reports to {{leader}}",
+    unknownAccessibility: "Owning project unknown",
+  },
   paneFind: {
     connectionFailure: "Could not search this chat. Check the host connection and retry.",
     historyChangedFailure: "The chat changed while searching. Search again.",
@@ -872,7 +878,7 @@ export const en = {
             "Update isn't available because this branch is already up to date with {{baseRef}}",
           mergePrNoGithub: "Merge PR isn't available right now because GitHub isn't connected",
           archiveNotWorktree:
-            "Archive isn't available here because this workspace was not created as a Paseo worktree",
+            "Archive isn't available here because this workspace was not created as a Fulcra worktree",
           mergePrNoForge:
             "Merge {{noun}} isn't available right now because {{brand}} isn't connected",
           mergePrMissing: "Merge PR isn't available because there isn't a pull request yet",
@@ -1162,7 +1168,7 @@ export const en = {
       discord: "Discord",
       github: "Create GitHub issue",
       whatsNew: "What's new",
-      appName: "Paseo",
+      appName: "Fulcra",
     },
     sections: {
       sessions: "History",
@@ -1309,7 +1315,7 @@ export const en = {
       close: "Close window",
     },
     quitting: {
-      title: "Quitting Paseo...",
+      title: "Quitting Fulcra...",
       detail: "Stopping the local daemon.",
     },
     daemon: {
@@ -1340,20 +1346,20 @@ export const en = {
       },
       management: {
         title: "Manage built-in daemon",
-        hint: "Let Paseo start and stop the built-in daemon",
+        hint: "Let Fulcra start and stop the built-in daemon",
         pauseTitle: "Pause built-in daemon",
         pauseMessage:
           "This will stop the built-in daemon immediately. Running agents and terminals connected to the built-in daemon will be stopped.",
         pauseAndStop: "Pause and stop",
         registrationFailed:
-          "Built-in daemon started, but Paseo could not save the localhost connection. Toggle daemon management off and on again, or add localhost manually.",
+          "Built-in daemon started, but Fulcra could not save the localhost connection. Toggle daemon management off and on again, or add localhost manually.",
         pausedStopFailed:
-          "Built-in daemon management was paused, but Paseo could not stop the daemon.",
+          "Built-in daemon management was paused, but Fulcra could not stop the daemon.",
         updateFailed: "Unable to update built-in daemon management.",
       },
       keepRunning: {
         title: "Keep daemon running after quit",
-        hint: "Daemon keeps running when you quit Paseo",
+        hint: "Daemon keeps running when you quit Fulcra",
       },
       logs: {
         title: "Log file",
@@ -1420,7 +1426,7 @@ export const en = {
     },
     rosetta: {
       title: "Download the Apple Silicon build",
-      runningIntel: "You're running the Intel build of Paseo under Rosetta on Apple Silicon.",
+      runningIntel: "You're running the Intel build of Fulcra under Rosetta on Apple Silicon.",
       highCpu: "This causes high CPU usage. Download the Apple Silicon build to fix it.",
       download: "Download",
     },
@@ -1462,7 +1468,7 @@ export const en = {
         microphone: "Microphone status has not been checked yet.",
       },
       testNotification: {
-        title: "Paseo notification test",
+        title: "Fulcra notification test",
         body: "If you can see this, desktop notifications work.",
         notDelivered: "Notification was not delivered. Check System Settings > Notifications.",
         failed: "Failed to send notification.",
@@ -1471,12 +1477,12 @@ export const en = {
     integrations: {
       cli: {
         statusFailed: "Unable to check CLI install status.",
-        installFailed: "Unable to install the Paseo CLI.",
+        installFailed: "Unable to install the Fulcra CLI.",
       },
     },
   },
   rootError: {
-    title: "Paseo ran into a problem.",
+    title: "Fulcra ran into a problem.",
     body: "Try again to reload the app. If this keeps happening, include the details below when you report it.",
     details: "Details",
   },
@@ -1571,7 +1577,7 @@ export const en = {
     },
   },
   onboarding: {
-    title: "Welcome to Paseo",
+    title: "Welcome to Fulcra",
     subtitle: "Connect your computer to get started",
     actions: {
       settings: "Settings",
@@ -1585,6 +1591,8 @@ export const en = {
     loadingShort: "Loading",
     loadingSelector: "Loading model selector...",
     error: "Error",
+    notInstalled: "Not installed",
+    notInstalledMessage: "{{provider}} is not installed on this host.",
     defaultModel: "Default",
     profiles: "Profiles",
     providers: "Providers",
@@ -1659,7 +1667,7 @@ export const en = {
     },
     direct: {
       title: "Direct connection",
-      helper: "Enter the address of a Paseo server.",
+      helper: "Enter the address of your Fulcra server.",
       fields: {
         host: "Host",
         port: "Port",
@@ -1701,7 +1709,7 @@ export const en = {
     },
     remoteSsh: {
       title: "Remote SSH",
-      helper: "Connect to a Paseo daemon running on the remote host.",
+      helper: "Connect to a Fulcra daemon running on the remote host.",
       fields: {
         target: "SSH host",
       },
@@ -1757,15 +1765,15 @@ export const en = {
       enableDescription:
         "Relay lets this device connect from anywhere. Pairing traffic is end-to-end encrypted.",
       relayDocs: "How relay works",
-      relayDocsAccessibility: "Read how Paseo relay works",
+      relayDocsAccessibility: "Read how Fulcra relay works",
       enableRelay: "Enable relay",
       enablingRelay: "Enabling...",
       notNow: "Not now",
       directConnectionHint:
         "Without relay, connect directly over TCP, Tailscale, or another VPN. No QR code is created.",
-      updateRequired: "Update the host to enable relay from Paseo Desktop.",
+      updateRequired: "Update the host to enable relay from Fulcra Desktop.",
       unavailable: "Pairing offer unavailable.",
-      hint: "Scan this QR code with Paseo on your phone, or copy the link below.",
+      hint: "Scan this QR code with Fulcra on your phone, or copy the link below.",
       securityWarning:
         "Treat this pairing link like a password. Anyone with it can access this daemon.",
       qrUnavailable: "QR code unavailable.",
@@ -1800,7 +1808,7 @@ export const en = {
   serviceUrl: {
     title: "Open service URL",
     message: "Open {{url}}?",
-    inPaseo: "In Paseo",
+    inPaseo: "In Fulcra",
     externalBrowser: "External browser",
     dontAskAgain: "Don't ask again",
   },
@@ -1878,6 +1886,101 @@ export const en = {
       emptyTitle: "No pull request yet",
       emptyDescription: "Create a pull request for this checkout to see its details here.",
     },
+    architectureMap: {
+      label: "Architecture map",
+      subtitle: "Project architecture",
+      tooltip: "Show the project's architecture map",
+      emptyTitle: "No architecture map in this project",
+      emptyDescription: "Fulcra shows maps stored in {{directory}}.",
+      oversized: "Too large to show (over 1 MiB): {{names}}",
+      truncated: "Only the first 20 maps are listed.",
+      listFailed: "Couldn't list architecture maps",
+      reload: "Reload",
+      cannotShow: "This map can't be shown",
+      tooLarge: "The file is larger than 1 MiB.",
+      openFile: "Open file",
+      hiddenCharacters:
+        "Hidden or direction-changing characters were removed from this map's text.",
+      zoomIn: "Zoom in",
+      zoomOut: "Zoom out",
+      fit: "Fit",
+      actualSize: "Actual size",
+      components: "Components",
+      boundaries: "Boundaries",
+      closeDetail: "Close details",
+      detailId: "Id",
+      change: {
+        viewMap: "Map",
+        viewChange: "Change",
+        openFromPullRequest: "Architecture change",
+        openFromPullRequestHint: "Shows what this pull request changes in the system map",
+        title: "What this change does to the system",
+        comparedWith: "Compared with {{base}}",
+        comparedWithStart: "Compared with where this branch started",
+        summaryParts_one: "Touches {{count}} part of the system.",
+        summaryParts_other: "Touches {{count}} parts of the system.",
+        summaryNoParts: "No part of the system map changed.",
+        summaryRearranged: "The map was only rearranged; no part of the system changed.",
+        summaryNewMap: "This change adds the system map.",
+        summaryDeletedMap: "This change deletes the system map.",
+        dependents_one: "{{count}} other part depends on what changed.",
+        dependents_other: "{{count}} other parts depend on what changed.",
+        files_one: "{{count}} file changed.",
+        files_other: "{{count}} files changed.",
+        testsBeside: "{{withTests}} of {{checked}} changed code files have a test beside them.",
+        testsNotChecked_one: "{{count}} more was not checked.",
+        testsNotChecked_other: "{{count}} more were not checked.",
+        staleTitle: "This diagram may be out of date",
+        staleFiles: "This change touches {{files}} files, but the map was not updated with it.",
+        staleSources:
+          "This change edits files the map is drawn from, but the map was not updated with it.",
+        staleAsk: "Ask for the map to be updated in the same pull request.",
+        modeSideBySide: "Side by side",
+        modeChanges: "Changes",
+        modeBefore: "Before",
+        modeAfter: "After",
+        legendAdded: "Added",
+        legendRemoved: "Removed",
+        legendChanged: "Changed",
+        legendUnchanged: "Unchanged",
+        badgeAdded: "New",
+        badgeRemoved: "Removed",
+        badgeChanged: "Changed",
+        noBefore: "There was no map before this change.",
+        noAfter: "This change deletes the map.",
+        touchedTitle: "What changed",
+        dependsTitle: "Also affected",
+        dependsHint: "These parts use something that changed.",
+        statusAdded: "new",
+        statusRemoved: "removed",
+        statusChangedFields: "changed: {{fields}}",
+        statusConnections: "its connections changed",
+        field: {
+          type: "kind",
+          label: "name",
+          sublabel: "description",
+          tag: "note",
+          from: "start",
+          to: "end",
+          style: "look",
+        },
+        renamed:
+          "“{{from}}” looks replaced by “{{to}}” rather than changed. The map gave it a new identity, so its history starts again.",
+        openPullRequest: "Open pull request #{{number}}",
+        unavailableTitle: "This change can't be compared",
+        unavailablePullRequest: "Comparison unavailable for this pull request",
+        unavailablePullRequestDetail:
+          "Fulcra compares a pull request's own commits, and it can't read files at a commit yet. It won't guess from the files on this computer, because an unsaved edit could make the picture wrong.",
+        openPullRequestPlain: "Open the pull request",
+        unavailableCommitRead: "Fulcra couldn't read the map at the pull request's commits.",
+        unavailableNotInPullRequest: "This map isn't in the pull request's commits.",
+        unavailableTooLarge: "The change is too large to compare here.",
+        unavailableMismatch: "The map changed while it was being compared. Reload to try again.",
+        unavailableInvalid: "One side of the map can't be read.",
+        unavailableDiff:
+          "The list of changed files was cut short, so a change to the map may be missing.",
+      },
+    },
     diff: {
       changesLabel: "Changes",
       diffLabel: "Diff",
@@ -1920,8 +2023,8 @@ export const en = {
       other: "used {{count}} other tools",
     },
     paseoCalls: {
-      one: "called Paseo {{count}} time",
-      other: "called Paseo {{count}} times",
+      one: "called Fulcra {{count}} time",
+      other: "called Fulcra {{count}} times",
     },
     and: "and",
   },
@@ -1983,6 +2086,7 @@ export const en = {
       permissions: "Permissions",
       diagnostics: "Diagnostics",
       about: "About",
+      licenses: "Licenses",
     },
     layout: {
       openInSidePane: {
@@ -2037,7 +2141,7 @@ export const en = {
       send: "Send",
       sending: "Sending...",
       sentTitle: "Test notification sent",
-      sentDescription: "Paseo handed the notification to the operating system.",
+      sentDescription: "Fulcra handed the notification to the operating system.",
       sendFailedTitle: "Unable to send test notification",
     },
     hostSections: {
@@ -2117,14 +2221,14 @@ export const en = {
     metadataGeneration: {
       title: "Metadata generation",
       description:
-        "Choose the model Paseo uses for workspace titles, branch names, commit messages, and pull request drafts",
+        "Choose the model Fulcra uses for workspace titles, branch names, commit messages, and pull request drafts",
       selection: "Model selection",
       automatic: "Automatic",
       preferred: "Manual",
-      automaticHint: "Paseo picks a fast available model",
-      preferredHint: "Choose the model Paseo uses",
+      automaticHint: "Fulcra picks a fast available model",
+      preferredHint: "Choose the model Fulcra uses",
       model: "Model",
-      fallbackHint: "If it is unavailable, Paseo falls back to another available model",
+      fallbackHint: "If it is unavailable, Fulcra falls back to another available model",
       docs: "Docs",
       saveError: "Unable to update metadata generation",
     },
@@ -2133,7 +2237,7 @@ export const en = {
       browserData: {
         title: "Browser data",
         siteData: "Cookies and site data",
-        description: "Browser tabs share sign-ins and site data across Paseo.",
+        description: "Browser tabs share sign-ins and site data across Fulcra.",
         clear: "Clear browser data",
         clearing: "Clearing...",
         confirmTitle: "Clear browser data?",
@@ -2160,7 +2264,7 @@ export const en = {
         description: "Where to open URLs from running scripts",
         options: {
           ask: "Ask",
-          inApp: "In Paseo",
+          inApp: "In Fulcra",
           external: "External browser",
         },
       },
@@ -2227,10 +2331,18 @@ export const en = {
         },
       },
     },
+    licenses: {
+      title: "Licenses & acknowledgements",
+      upstreamTitle: "Built on open source",
+      upstreamHint:
+        "Fulcra is a modified fork of Paseo, used under the Apache License 2.0. The notices below are reproduced as that license requires.",
+      noticeTitle: "Attribution notice",
+      licenseTitle: "License text",
+    },
     about: {
       title: "About",
       appVersion: "App version",
-      whatsNewHint: "Release notes for every version",
+      licensesHint: "License and attribution notices for the software Fulcra is built on",
       thisDevice: "This device",
       connectedHosts: "Connected hosts",
       offline: "Offline",
@@ -2245,7 +2357,7 @@ export const en = {
         label: "App updates",
         readyToInstall: "Ready to install: {{version}}",
         installTitle: "Install desktop update",
-        installMessage: "This updates Paseo on this computer",
+        installMessage: "This updates Fulcra on this computer",
         installConfirm: "Install update",
         update: "Update",
         updateTo: "Update to {{version}}",
@@ -2481,11 +2593,11 @@ export const en = {
         uninstallFailed: "Unable to uninstall orchestration skills.",
         saveSelectionFailed: "Unable to save the orchestration skills selection.",
         updateAvailable: "Update available",
-        updateTitle: "Update Paseo skills?",
+        updateTitle: "Update Fulcra skills?",
         updateFallback: "Sync bundled skills to this host.",
-        uninstallTitle: "Uninstall Paseo skills?",
+        uninstallTitle: "Uninstall Fulcra skills?",
         uninstallMessage:
-          "Removes all Paseo orchestration skills from ~/.agents, ~/.claude, ~/.codex on this host.",
+          "Removes all Fulcra orchestration skills from ~/.agents, ~/.claude, ~/.codex on this host.",
         choose: "Choose skills",
         chooseAll: "All skills",
         chooseAllHint: "Keep every bundled skill installed, including ones added later.",
@@ -2517,9 +2629,9 @@ export const en = {
         title: "Orchestration",
         unavailable: "Connect to this host to manage orchestration",
         enableTools: {
-          title: "Enable Paseo tools",
+          title: "Enable Fulcra tools",
           hint: "Agents will be able to manage worktrees, agents and schedules",
-          accessibilityLabel: "Inject Paseo tools",
+          accessibilityLabel: "Inject Fulcra tools",
         },
         systemPrompt: {
           title: "System prompt",
@@ -2622,15 +2734,15 @@ export const en = {
             "This host is not connected. Wait for it to come online before restarting.",
           offlineTitle: "Host offline",
           offlineMessage:
-            "This host is offline. Paseo reconnects automatically-wait until it's back online before restarting.",
+            "This host is offline. Fulcra reconnects automatically-wait until it's back online before restarting.",
           requestFailedTitle: "Error",
           requestFailedMessage:
-            "Failed to send the restart request. Paseo reconnects automatically-try again once the host shows as online.",
+            "Failed to send the restart request. Fulcra reconnects automatically-try again once the host shows as online.",
           dialogFailedMessage: "Unable to open the restart confirmation dialog.",
         },
         update: {
           desktopManagedHint:
-            "This daemon is managed by Paseo Desktop. Update Paseo Desktop on the host.",
+            "This daemon is managed by Fulcra Desktop. Update Fulcra Desktop on the host.",
           title: "Update daemon",
           hint: "Update the daemon to the latest version and restart it",
           confirm: "Update",
@@ -2791,7 +2903,7 @@ export const en = {
         newScript: "New script",
         editScript: "Edit {{name}}",
         runAsService: "Run as a service",
-        serviceHint: "Paseo supervises the process and assigns a port via $PASEO_PORT",
+        serviceHint: "Fulcra supervises the process and assigns a port via $PASEO_PORT",
         actions: {
           add: "Add script",
           edit: "Edit",
@@ -2800,7 +2912,7 @@ export const en = {
       },
       metadata: {
         title: "Metadata generation",
-        info: "Project-specific instructions injected into the AI prompts Paseo uses to generate metadata - use them to enforce your team's conventions like branch naming, commit style, or PR format",
+        info: "Project-specific instructions injected into the AI prompts Fulcra uses to generate metadata - use them to enforce your team's conventions like branch naming, commit style, or PR format",
         branchName: "Branch names",
         branchNamePlaceholder: "Prefix branches with feat/ or fix/, mb/ for personal branches",
         commitMessage: "Commit messages",

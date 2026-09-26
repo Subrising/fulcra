@@ -129,6 +129,10 @@ afterEach(async () => {
 let useAgentInputDraft: typeof import("./input-draft").useAgentInputDraft;
 type DraftRecordForTest = ReturnType<typeof useDraftStore.getState>["drafts"][string];
 
+// The import stays dynamic so IS_REACT_ACT_ENVIRONMENT is set before the module
+// is first evaluated. Pulling in that graph costs several seconds of transform
+// on a cold cache, which overruns the default 10s hook budget once CI runs this
+// file beside another worker. Size the hook to the work it actually does.
 beforeAll(async () => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
     value: true,
@@ -136,7 +140,7 @@ beforeAll(async () => {
   });
 
   ({ useAgentInputDraft } = await import("./input-draft"));
-});
+}, 30_000);
 
 describe("useAgentInputDraft live contract", () => {
   beforeEach(() => {

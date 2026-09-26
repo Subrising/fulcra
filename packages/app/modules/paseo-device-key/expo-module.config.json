@@ -1,0 +1,9 @@
+{
+  "platforms": ["ios", "android"],
+  "ios": {
+    "modules": ["PaseoDeviceKeyModule"]
+  },
+  "android": {
+    "modules": ["sh.paseo.devicekey.PaseoDeviceKeyModule"]
+  }
+}

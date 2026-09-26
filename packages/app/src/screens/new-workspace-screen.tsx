@@ -14,6 +14,7 @@ import type { PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import { ChevronDown, Folder, FolderPlus, GitBranch, GitPullRequest } from "lucide-react-native";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
@@ -59,7 +60,11 @@ import {
   navigateToWorkspace,
   useLastWorkspaceSelection,
 } from "@/stores/navigation-active-workspace-store";
-import { normalizeWorkspaceDescriptor, type WorkspaceDescriptor } from "@/stores/session-store";
+import {
+  normalizeWorkspaceDescriptor,
+  useSessionStore,
+  type WorkspaceDescriptor,
+} from "@/stores/session-store";
 import { useWorkspace } from "@/stores/session-store-hooks";
 import { buildNewWorkspaceDraftKey, generateDraftId } from "@/stores/draft-keys";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
@@ -122,6 +127,10 @@ import {
 } from "./new-workspace-initial-context";
 import { buildNewWorkspaceProjectIconTargets } from "./new-workspace/project-icon-targets";
 import { useNewWorkspaceProjectPicker } from "./new-workspace/project-picker";
+import {
+  equalSidebarConversationLabels,
+  selectSidebarConversationLabels,
+} from "@/hooks/sidebar-conversation-labels";
 import {
   buildTerminalsQueryKey,
   type ListTerminalsPayload,
@@ -594,7 +603,7 @@ function NewWorkspaceProjectPickerOption({
       testID={`new-workspace-project-picker-option-${project.viewKey}`}
       projectViewKey={project.viewKey}
       iconDataUri={projectIconDataByProjectViewKey.get(project.viewKey) ?? null}
-      label={project.projectName}
+      label={option.label}
       description={sourceDirectory}
       selected={selected}
       active={active}
@@ -1735,6 +1744,11 @@ export function NewWorkspaceScreen({
   const { workspace } = creationResult;
   const client = useHostRuntimeClient(selectedServerId);
   const isConnected = useHostRuntimeIsConnected(selectedServerId);
+  const conversationLabels = useStoreWithEqualityFn(
+    useSessionStore,
+    (state) => selectSidebarConversationLabels(state.sessions, [selectedServerId]),
+    equalSidebarConversationLabels,
+  );
   const {
     selectedProject,
     selectedSourceDirectory,
@@ -1750,6 +1764,7 @@ export function NewWorkspaceScreen({
     routeProjectContextViewKey,
     lastActiveProject,
     allowAllProjects: supportsWorkspaceMultiplicity,
+    conversationLabels,
   });
   const projectIconTargets = useMemo(
     () => buildNewWorkspaceProjectIconTargets(projects, selectedServerId),

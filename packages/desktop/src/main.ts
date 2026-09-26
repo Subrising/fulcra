@@ -34,7 +34,6 @@ import {
   registerWindowManager,
   getMainWindowChromeOptions,
   getWindowBackgroundColor,
-  resolveSystemWindowTheme,
   resolveWindowBounds,
   setupWindowResizeEvents,
   setupWindowStatePersistence,
@@ -106,12 +105,14 @@ import {
   type AgentDeepLinkTarget,
 } from "@getpaseo/protocol/agent-deep-link";
 import { AgentNavigationInbox, parseAgentDeepLinkFromArgv } from "./agent-navigation.js";
+import { findOAuthCallbackInArgv, isOAuthCallbackLink } from "./oauth-callback.js";
+import { APP_DISPLAY_NAME } from "./app-display-name.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
 const APP_SCHEME = "paseo";
 const PASEO_DEBUG = process.env.PASEO_DEBUG === "1";
 const DISABLE_SINGLE_INSTANCE_LOCK = process.env.PASEO_DISABLE_SINGLE_INSTANCE_LOCK === "1";
-const APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim() || "Paseo";
+const APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim() || "Fulcra";
 const DESKTOP_WINDOW_CHROME_MODE = resolveDesktopWindowChromeMode({
   platform: process.platform,
   override: process.env.PASEO_DESKTOP_WINDOW_CONTROLS,
@@ -130,7 +131,10 @@ const bootstrapComplete = new Promise<void>((resolve) => {
 });
 let bootstrapIsComplete = false;
 
+// APP_NAME names the userData directory (~/Library/Application Support/Fulcra on macOS) and the
+// safeStorage keychain item ("Fulcra Safe Storage").
 app.setName(APP_NAME);
+app.setAboutPanelOptions({ applicationName: APP_DISPLAY_NAME });
 log.info("[desktop] app startup", {
   version: app.getVersion(),
   platform: process.platform,
@@ -320,7 +324,7 @@ if (forcedUserDataDir) {
     );
     const isWorktree = path.resolve(topLevel, ".git") !== commonDir;
     if (isWorktree) {
-      app.setPath("userData", path.join(app.getPath("appData"), `Paseo-${devWorktreeName}`));
+      app.setPath("userData", path.join(app.getPath("appData"), `Fulcra-${devWorktreeName}`));
       log.info("[worktree] isolated userData for worktree:", devWorktreeName);
     } else {
       devWorktreeName = null;
@@ -344,8 +348,13 @@ if (electronFlags) {
 
 if (process.platform === "linux") {
   // Keep the desktop/dock identity independent of the wrapped Electron filename.
-  app.setDesktopName("Paseo.desktop");
-  if (!app.commandLine.hasSwitch("class")) app.commandLine.appendSwitch("class", "Paseo");
+  //
+  // These must match electron-builder's productName, because it names the generated .desktop file
+  // and its StartupWMClass after it. A mismatch does not fail anything: the window simply stops
+  // associating with its launcher, so Linux shows a generic icon and a second taskbar entry. Both
+  // values here and appImage.executableArgs in electron-builder.yml move together on a rename.
+  app.setDesktopName("Fulcra.desktop");
+  if (!app.commandLine.hasSwitch("class")) app.commandLine.appendSwitch("class", "Fulcra");
   log.info("[linux-sandbox]", {
     enabled: !app.commandLine.hasSwitch("no-sandbox"),
     reason: process.env.PASEO_DESKTOP_SANDBOX_REASON ?? "Chromium default",
@@ -672,7 +681,6 @@ async function createWindow(
   } = {},
 ): Promise<BrowserWindow> {
   const iconPath = await getEffectiveAppIconPath();
-  const systemTheme = resolveSystemWindowTheme();
 
   // Only the first window of a session restores and persists saved geometry.
   // Additional windows (⌘N, second-instance, "Open in new window") open at the
@@ -687,12 +695,13 @@ async function createWindow(
     ? clampWindowStateToWorkAreas(savedWindowState, getWorkAreasPrimaryFirst())
     : null;
 
-  const title = devWorktreeName ? `${APP_NAME} (${devWorktreeName})` : APP_NAME;
+  const title = devWorktreeName ? `${APP_DISPLAY_NAME} (${devWorktreeName})` : APP_DISPLAY_NAME;
   const mainWindow = new BrowserWindow({
     title,
     ...resolveWindowBounds(restoredWindowState),
     show: false,
-    backgroundColor: getWindowBackgroundColor(systemTheme),
+    // The renderer applies the saved theme through updateChrome after loading.
+    backgroundColor: getWindowBackgroundColor("dark"),
     ...(iconPath ? { icon: iconPath } : {}),
     ...getMainWindowChromeOptions({
       mode: DESKTOP_WINDOW_CHROME_MODE,
@@ -855,8 +864,24 @@ function receiveAgentDeepLink(input: string): void {
   });
 }
 
+// Sign-in return links go to the renderer, which hands them to the host that began the sign-in.
+function receiveOAuthCallback(url: string): void {
+  void bootstrapComplete.then(() => {
+    const win =
+      BrowserWindow.getFocusedWindow() ??
+      BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) ??
+      null;
+    win?.webContents.send("paseo:event:oauth-callback", url);
+    return undefined;
+  });
+}
+
 app.on("open-url", (event, url) => {
   event.preventDefault();
+  if (isOAuthCallbackLink(url)) {
+    receiveOAuthCallback(url);
+    return;
+  }
   receiveAgentDeepLink(url);
 });
 
@@ -873,6 +898,11 @@ function setupSingleInstanceLock(): boolean {
   }
 
   app.on("second-instance", (_event, commandLine) => {
+    const oauthCallback = findOAuthCallbackInArgv(commandLine);
+    if (oauthCallback) {
+      receiveOAuthCallback(oauthCallback);
+      return;
+    }
     const agentTarget = parseAgentDeepLinkFromArgv(commandLine);
     if (agentTarget) {
       void bootstrapComplete

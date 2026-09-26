@@ -12,7 +12,6 @@ import {
   waitForTabBar,
   pressNewTabShortcut,
   pressDirectNewTabShortcut,
-  getTabTestIds,
   measureTileTransition,
   sampleTabsDuringTransition,
   expectTabTitleFits,
@@ -197,9 +196,8 @@ test.describe("Tab creation", () => {
 
     await expectComposerVisible(page);
 
-    const tabsAfter = await getTabTestIds(page);
-    const draftCountAfter = tabsAfter.filter((id) => id.includes("draft")).length;
-    expect(draftCountAfter).toBeGreaterThanOrEqual(1);
+    // Same one-shot snapshot as the terminal case below; poll rather than race it.
+    await expect.poll(() => countTabsOfKind(page, "draft")).toBeGreaterThanOrEqual(1);
   });
 
   test("clicking terminal button creates a standalone terminal", async ({ page }) => {
@@ -210,9 +208,12 @@ test.describe("Tab creation", () => {
 
     await expectTerminalSurfaceVisible(page);
 
-    const tabsAfter = await getTabTestIds(page);
-    const terminalTabs = tabsAfter.filter((id) => id.includes("terminal"));
-    expect(terminalTabs.length).toBeGreaterThanOrEqual(1);
+    // The surface can be up before the tab row has rendered the new tab, and
+    // countTabsOfKind takes a single snapshot with no retry of its own, so reading it
+    // straight after the surface returned an empty list. Poll the same predicate
+    // instead of pausing: it settles as soon as the tab appears and still fails
+    // if it never does.
+    await expect.poll(() => countTabsOfKind(page, "terminal")).toBeGreaterThanOrEqual(1);
   });
 
   test("launching a profile from the New tab menu drops its empty prompt argument", async ({

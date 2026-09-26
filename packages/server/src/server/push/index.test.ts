@@ -64,4 +64,28 @@ describe("push notifications", () => {
 
     expect(deliveries).toEqual([]);
   });
+
+  test("reporting send returns the delivery outcome and surfaces a failed hand-over", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-notifications-"));
+    homes.push(home);
+    let result: () => Promise<number> = async () => 1;
+    const pushNotifications = createPushNotifications({
+      logger: createLogger(),
+      filePath: path.join(home, "push-tokens.json"),
+      now: () => Date.parse("2026-08-10T00:00:00.000Z"),
+      deliverReporting: () => result(),
+    });
+
+    await expect(pushNotifications.sendReporting({ title: "t", body: "" })).resolves.toEqual({
+      devices: 0,
+      accepted: 0,
+    });
+    pushNotifications.renew("ExponentPushToken[device]");
+    await expect(pushNotifications.sendReporting({ title: "t", body: "" })).resolves.toEqual({
+      devices: 1,
+      accepted: 1,
+    });
+    result = () => Promise.reject(new Error("Expo push API error 503"));
+    await expect(pushNotifications.sendReporting({ title: "t", body: "" })).rejects.toThrow("503");
+  });
 });

@@ -2,6 +2,12 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ptBR: TranslationResources = {
+  sessionOwnership: {
+    noLeaderYet: "Ainda sem líder",
+    unknownProject: "Projeto desconhecido",
+    reportsTo: "Reporta a {{leader}}",
+    unknownAccessibility: "Projeto proprietário desconhecido",
+  },
   paneFind: {
     connectionFailure:
       "Não foi possível pesquisar nesta conversa. Verifique a conexão com o host e tente novamente.",
@@ -885,7 +891,7 @@ export const ptBR: TranslationResources = {
           mergePrNoGithub:
             "Merge da PR não está disponível agora porque o GitHub não está conectado",
           archiveNotWorktree:
-            "Arquivar não está disponível aqui porque este workspace não foi criado como um worktree do Paseo",
+            "Arquivar não está disponível aqui porque este workspace não foi criado como um worktree do Fulcra",
           mergePrNoForge:
             "Merge da {{noun}} não está disponível agora porque o {{brand}} não está conectado",
           mergePrMissing: "Merge da PR não está disponível porque ainda não há uma pull request",
@@ -1180,7 +1186,7 @@ export const ptBR: TranslationResources = {
       discord: "Discord",
       github: "Criar issue no GitHub",
       whatsNew: "Novidades",
-      appName: "Paseo",
+      appName: "Fulcra",
     },
     sections: {
       sessions: "Histórico",
@@ -1327,7 +1333,7 @@ export const ptBR: TranslationResources = {
       close: "Fechar janela",
     },
     quitting: {
-      title: "Saindo do Paseo...",
+      title: "Saindo do Fulcra...",
       detail: "Parando o daemon local.",
     },
     daemon: {
@@ -1342,20 +1348,20 @@ export const ptBR: TranslationResources = {
       },
       management: {
         title: "Gerenciar daemon integrado",
-        hint: "Permitir que o Paseo inicie e pare o daemon integrado",
+        hint: "Permitir que o Fulcra inicie e pare o daemon integrado",
         pauseTitle: "Pausar daemon integrado",
         pauseMessage:
           "Isso vai parar o daemon integrado imediatamente. Agentes e terminais em execução conectados ao daemon integrado serão interrompidos.",
         pauseAndStop: "Pausar e parar",
         registrationFailed:
-          "O daemon integrado foi iniciado, mas o Paseo não conseguiu salvar a conexão localhost. Desative e reative o gerenciamento do daemon ou adicione localhost manualmente.",
+          "O daemon integrado foi iniciado, mas o Fulcra não conseguiu salvar a conexão localhost. Desative e reative o gerenciamento do daemon ou adicione localhost manualmente.",
         pausedStopFailed:
-          "O gerenciamento do daemon integrado foi pausado, mas o Paseo não conseguiu parar o daemon.",
+          "O gerenciamento do daemon integrado foi pausado, mas o Fulcra não conseguiu parar o daemon.",
         updateFailed: "Não foi possível atualizar o gerenciamento do daemon integrado.",
       },
       keepRunning: {
         title: "Manter daemon em execução ao sair",
-        hint: "O daemon continua em execução quando você sai do Paseo",
+        hint: "O daemon continua em execução quando você sai do Fulcra",
       },
       logs: {
         title: "Arquivo de log",
@@ -1425,7 +1431,7 @@ export const ptBR: TranslationResources = {
     },
     rosetta: {
       title: "Baixar a build para Apple Silicon",
-      runningIntel: "Você está executando a build Intel do Paseo pelo Rosetta no Apple Silicon.",
+      runningIntel: "Você está executando a build Intel do Fulcra pelo Rosetta no Apple Silicon.",
       highCpu: "Isso causa alto uso de CPU. Baixe a build para Apple Silicon para corrigir.",
       download: "Baixar",
     },
@@ -1467,7 +1473,7 @@ export const ptBR: TranslationResources = {
         microphone: "O status do microfone ainda não foi verificado.",
       },
       testNotification: {
-        title: "Teste de notificação do Paseo",
+        title: "Teste de notificação do Fulcra",
         body: "Se você consegue ver isto, as notificações desktop funcionam.",
         notDelivered:
           "A notificação não foi entregue. Verifique Ajustes do Sistema > Notificações.",
@@ -1477,12 +1483,12 @@ export const ptBR: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "Não foi possível verificar o status de instalação da CLI.",
-        installFailed: "Não foi possível instalar a CLI do Paseo.",
+        installFailed: "Não foi possível instalar a CLI do Fulcra.",
       },
     },
   },
   rootError: {
-    title: "O Paseo encontrou um problema.",
+    title: "O Fulcra encontrou um problema.",
     body: "Tente novamente para recarregar o app. Se isso continuar acontecendo, inclua os detalhes abaixo ao relatar o problema.",
     details: "Detalhes",
   },
@@ -1577,7 +1583,7 @@ export const ptBR: TranslationResources = {
     },
   },
   onboarding: {
-    title: "Bem-vindo ao Paseo",
+    title: "Bem-vindo ao Fulcra",
     subtitle: "Conecte seu computador para começar",
     actions: {
       settings: "Configurações",
@@ -1591,6 +1597,8 @@ export const ptBR: TranslationResources = {
     loadingShort: "Carregando",
     loadingSelector: "Carregando seletor de modelos...",
     error: "Erro",
+    notInstalled: "Não instalado",
+    notInstalledMessage: "{{provider}} não está instalado neste host.",
     defaultModel: "Padrão",
     profiles: "Perfis",
     providers: "Provedores",
@@ -1665,7 +1673,7 @@ export const ptBR: TranslationResources = {
     },
     direct: {
       title: "Conexão direta",
-      helper: "Informe o endereço de um servidor Paseo.",
+      helper: "Informe o endereço de um servidor Fulcra.",
       fields: {
         host: "Host",
         port: "Porta",
@@ -1708,7 +1716,7 @@ export const ptBR: TranslationResources = {
     },
     remoteSsh: {
       title: "SSH remoto",
-      helper: "Conecte-se a um daemon Paseo no host remoto.",
+      helper: "Conecte-se a um daemon Fulcra no host remoto.",
       fields: {
         target: "Host SSH",
       },
@@ -1765,15 +1773,15 @@ export const ptBR: TranslationResources = {
       enableDescription:
         "O relay permite conectar este dispositivo de qualquer lugar. O tráfego de pareamento é criptografado de ponta a ponta.",
       relayDocs: "Como o relay funciona",
-      relayDocsAccessibility: "Leia como o relay do Paseo funciona",
+      relayDocsAccessibility: "Leia como o relay do Fulcra funciona",
       enableRelay: "Ativar relay",
       enablingRelay: "Ativando...",
       notNow: "Agora não",
       directConnectionHint:
         "Sem relay, conecte diretamente por TCP, Tailscale ou outra VPN. Nenhum código QR é criado.",
-      updateRequired: "Atualize o host para ativar o relay pelo Paseo Desktop.",
+      updateRequired: "Atualize o host para ativar o relay pelo Fulcra Desktop.",
       unavailable: "Oferta de pareamento indisponível.",
-      hint: "Escaneie este QR code com o Paseo no seu celular ou copie o link abaixo.",
+      hint: "Escaneie este QR code com o Fulcra no seu celular ou copie o link abaixo.",
       securityWarning:
         "Trate este link de pareamento como uma senha. Qualquer pessoa com o link pode acessar este daemon.",
       qrUnavailable: "QR code indisponível.",
@@ -1808,7 +1816,7 @@ export const ptBR: TranslationResources = {
   serviceUrl: {
     title: "Abrir URL do serviço",
     message: "Abrir {{url}}?",
-    inPaseo: "No Paseo",
+    inPaseo: "No Fulcra",
     externalBrowser: "Navegador externo",
     dontAskAgain: "Não perguntar novamente",
   },
@@ -1886,6 +1894,102 @@ export const ptBR: TranslationResources = {
       emptyTitle: "Ainda não há pull request",
       emptyDescription: "Crie um pull request para este checkout para ver os detalhes aqui.",
     },
+    architectureMap: {
+      label: "Mapa de arquitetura",
+      subtitle: "Arquitetura do projeto",
+      tooltip: "Mostrar o mapa de arquitetura do projeto",
+      emptyTitle: "Nenhum mapa de arquitetura neste projeto",
+      emptyDescription: "O Fulcra mostra mapas salvos em {{directory}}.",
+      oversized: "Grande demais para exibir (mais de 1 MiB): {{names}}",
+      truncated: "Somente os 20 primeiros mapas são listados.",
+      listFailed: "Não foi possível listar os mapas de arquitetura",
+      reload: "Recarregar",
+      cannotShow: "Não é possível exibir este mapa",
+      tooLarge: "O arquivo tem mais de 1 MiB.",
+      openFile: "Abrir arquivo",
+      hiddenCharacters:
+        "Caracteres ocultos ou de mudança de direção foram removidos do texto deste mapa.",
+      zoomIn: "Ampliar",
+      zoomOut: "Reduzir",
+      fit: "Ajustar",
+      actualSize: "Tamanho real",
+      components: "Componentes",
+      boundaries: "Limites",
+      closeDetail: "Fechar detalhes",
+      detailId: "Identificador",
+      change: {
+        viewMap: "Mapa",
+        viewChange: "Mudança",
+        openFromPullRequest: "Mudança de arquitetura",
+        openFromPullRequestHint: "Mostra o que este pull request muda no mapa do sistema",
+        title: "O que esta mudança faz no sistema",
+        comparedWith: "Comparado com {{base}}",
+        comparedWithStart: "Comparado com o ponto de partida deste branch",
+        summaryParts_one: "Afeta {{count}} parte do sistema.",
+        summaryParts_other: "Afeta {{count}} partes do sistema.",
+        summaryNoParts: "Nenhuma parte do mapa do sistema mudou.",
+        summaryRearranged: "O mapa foi apenas reorganizado; nenhuma parte do sistema mudou.",
+        summaryNewMap: "Esta mudança adiciona o mapa do sistema.",
+        summaryDeletedMap: "Esta mudança exclui o mapa do sistema.",
+        dependents_one: "{{count}} outra parte depende do que mudou.",
+        dependents_other: "{{count}} outras partes dependem do que mudou.",
+        files_one: "{{count}} arquivo alterado.",
+        files_other: "{{count}} arquivos alterados.",
+        testsBeside:
+          "{{withTests}} de {{checked}} arquivos de código alterados têm um teste ao lado.",
+        testsNotChecked_one: "{{count}} a mais não foi verificado.",
+        testsNotChecked_other: "{{count}} a mais não foram verificados.",
+        staleTitle: "Este diagrama pode estar desatualizado",
+        staleFiles: "Esta mudança afeta {{files}} arquivos, mas o mapa não foi atualizado com ela.",
+        staleSources:
+          "Esta mudança edita arquivos dos quais o mapa é derivado, mas o mapa não foi atualizado com ela.",
+        staleAsk: "Peça que o mapa seja atualizado no mesmo pull request.",
+        modeSideBySide: "Lado a lado",
+        modeChanges: "Mudanças",
+        modeBefore: "Antes",
+        modeAfter: "Depois",
+        legendAdded: "Adicionado",
+        legendRemoved: "Removido",
+        legendChanged: "Alterado",
+        legendUnchanged: "Sem mudança",
+        badgeAdded: "Novo",
+        badgeRemoved: "Removido",
+        badgeChanged: "Alterado",
+        noBefore: "Não havia mapa antes desta mudança.",
+        noAfter: "Esta mudança exclui o mapa.",
+        touchedTitle: "O que mudou",
+        dependsTitle: "Também afetado",
+        dependsHint: "Estas partes usam algo que mudou.",
+        statusAdded: "novo",
+        statusRemoved: "removido",
+        statusChangedFields: "alterado: {{fields}}",
+        statusConnections: "suas conexões mudaram",
+        field: {
+          type: "tipo",
+          label: "nome",
+          sublabel: "descrição",
+          tag: "nota",
+          from: "origem",
+          to: "destino",
+          style: "aparência",
+        },
+        renamed:
+          "“{{from}}” parece ter sido substituído por “{{to}}” em vez de alterado. O mapa deu a ele uma nova identidade, então seu histórico recomeça.",
+        openPullRequest: "Abrir pull request nº {{number}}",
+        unavailableTitle: "Não é possível comparar esta mudança",
+        unavailablePullRequest: "Comparação indisponível para este pull request",
+        unavailablePullRequestDetail:
+          "O Fulcra compara os commits do próprio pull request e ainda não consegue ler arquivos em um commit. Ele não tenta adivinhar a partir dos arquivos deste computador, porque uma edição não salva poderia deixar a imagem errada.",
+        openPullRequestPlain: "Abrir o pull request",
+        unavailableCommitRead: "O Fulcra não conseguiu ler o mapa nos commits do pull request.",
+        unavailableNotInPullRequest: "Este mapa não está nos commits do pull request.",
+        unavailableTooLarge: "A mudança é grande demais para comparar aqui.",
+        unavailableMismatch: "O mapa mudou durante a comparação. Recarregue para tentar de novo.",
+        unavailableInvalid: "Um dos lados do mapa não pode ser lido.",
+        unavailableDiff:
+          "A lista de arquivos alterados foi cortada, então uma mudança no mapa pode estar faltando.",
+      },
+    },
     diff: {
       changesLabel: "Alterações",
       diffLabel: "Diff",
@@ -1928,8 +2032,8 @@ export const ptBR: TranslationResources = {
       other: "usou {{count}} outras ferramentas",
     },
     paseoCalls: {
-      one: "chamou o Paseo {{count}} vez",
-      other: "chamou o Paseo {{count}} vezes",
+      one: "chamou o Fulcra {{count}} vez",
+      other: "chamou o Fulcra {{count}} vezes",
     },
     and: "e",
   },
@@ -1991,6 +2095,7 @@ export const ptBR: TranslationResources = {
       permissions: "Permissões",
       diagnostics: "Diagnósticos",
       about: "Sobre",
+      licenses: "Licenças",
     },
     layout: en.settings.layout,
     editor: {
@@ -2010,7 +2115,7 @@ export const ptBR: TranslationResources = {
       send: "Enviar",
       sending: "Enviando...",
       sentTitle: "Notificação de teste enviada",
-      sentDescription: "O Paseo entregou a notificação ao sistema operacional.",
+      sentDescription: "O Fulcra entregou a notificação ao sistema operacional.",
       sendFailedTitle: "Não foi possível enviar a notificação de teste",
     },
     hostSections: {
@@ -2029,14 +2134,14 @@ export const ptBR: TranslationResources = {
     metadataGeneration: {
       title: "Geração de metadados",
       description:
-        "Escolha o modelo usado pelo Paseo para títulos de espaços de trabalho, nomes de branches, mensagens de commit e rascunhos de pull request",
+        "Escolha o modelo usado pelo Fulcra para títulos de espaços de trabalho, nomes de branches, mensagens de commit e rascunhos de pull request",
       selection: "Seleção de modelo",
       automatic: "Automática",
       preferred: "Manual",
-      automaticHint: "O Paseo escolhe um modelo rápido disponível",
-      preferredHint: "Escolha o modelo que o Paseo usa",
+      automaticHint: "O Fulcra escolhe um modelo rápido disponível",
+      preferredHint: "Escolha o modelo que o Fulcra usa",
       model: "Modelo",
-      fallbackHint: "Se ele não estiver disponível, o Paseo usa outro modelo disponível",
+      fallbackHint: "Se ele não estiver disponível, o Fulcra usa outro modelo disponível",
       docs: "Documentação",
       saveError: "Não foi possível atualizar a geração de metadados",
     },
@@ -2045,7 +2150,7 @@ export const ptBR: TranslationResources = {
       browserData: {
         title: "Dados do navegador",
         siteData: "Cookies e dados de sites",
-        description: "As abas do navegador compartilham logins e dados de sites no Paseo.",
+        description: "As abas do navegador compartilham logins e dados de sites no Fulcra.",
         clear: "Limpar dados do navegador",
         clearing: "Limpando...",
         confirmTitle: "Limpar dados do navegador?",
@@ -2074,7 +2179,7 @@ export const ptBR: TranslationResources = {
         description: "Onde abrir URLs de scripts em execução",
         options: {
           ask: "Perguntar",
-          inApp: "No Paseo",
+          inApp: "No Fulcra",
           external: "Navegador externo",
         },
       },
@@ -2142,10 +2247,18 @@ export const ptBR: TranslationResources = {
         },
       },
     },
+    licenses: {
+      title: "Licenças e agradecimentos",
+      upstreamTitle: "Baseado em código aberto",
+      upstreamHint:
+        "O Fulcra é um fork modificado do Paseo, usado sob a Licença Apache 2.0. Os avisos abaixo são reproduzidos conforme exige essa licença.",
+      noticeTitle: "Aviso de atribuição",
+      licenseTitle: "Texto da licença",
+    },
     about: {
       title: "Sobre",
       appVersion: "Versão do app",
-      whatsNewHint: "Notas de versão de cada release",
+      licensesHint: "Avisos de licença e atribuição do software em que o Fulcra se baseia",
       thisDevice: "Este dispositivo",
       connectedHosts: "Hosts conectados",
       offline: "Offline",
@@ -2160,7 +2273,7 @@ export const ptBR: TranslationResources = {
         label: "Atualizações do app",
         readyToInstall: "Pronta para instalar: {{version}}",
         installTitle: "Instalar atualização desktop",
-        installMessage: "Isso atualiza o Paseo neste computador",
+        installMessage: "Isso atualiza o Fulcra neste computador",
         installConfirm: "Instalar atualização",
         update: "Atualizar",
         updateTo: "Atualizar para {{version}}",
@@ -2391,11 +2504,11 @@ export const ptBR: TranslationResources = {
         title: "Skills de orquestração",
         description: "Ensine seus agentes a orquestrar pela CLI",
         updateAvailable: "Atualização disponível",
-        updateTitle: "Atualizar Paseo skills?",
+        updateTitle: "Atualizar Fulcra skills?",
         updateFallback: "Sincronize as skills incluídas com sua máquina.",
-        uninstallTitle: "Desinstalar Paseo skills?",
+        uninstallTitle: "Desinstalar Fulcra skills?",
         uninstallMessage:
-          "Remove todas as skills de orquestração do Paseo de ~/.agents, ~/.claude e ~/.codex.",
+          "Remove todas as skills de orquestração do Fulcra de ~/.agents, ~/.claude e ~/.codex.",
         choose: "Escolher skills",
         chooseAll: "Todas as skills",
         chooseAllHint:
@@ -2432,9 +2545,9 @@ export const ptBR: TranslationResources = {
         title: "Orquestração",
         unavailable: "Conecte-se a este host para gerenciar a orquestração",
         enableTools: {
-          title: "Ativar ferramentas do Paseo",
+          title: "Ativar ferramentas do Fulcra",
           hint: "Agentes poderão gerenciar worktrees, agentes e agendamentos",
-          accessibilityLabel: "Injetar ferramentas do Paseo",
+          accessibilityLabel: "Injetar ferramentas do Fulcra",
         },
         systemPrompt: {
           title: "Prompt do sistema",
@@ -2539,15 +2652,15 @@ export const ptBR: TranslationResources = {
             "Este host não está conectado. Aguarde até ele ficar online antes de reiniciar.",
           offlineTitle: "Host offline",
           offlineMessage:
-            "Este host está offline. O Paseo reconecta automaticamente. Aguarde ele voltar a ficar online antes de reiniciar.",
+            "Este host está offline. O Fulcra reconecta automaticamente. Aguarde ele voltar a ficar online antes de reiniciar.",
           requestFailedTitle: "Erro",
           requestFailedMessage:
-            "Falha ao enviar a solicitação de reinício. O Paseo reconecta automaticamente. Tente novamente quando o host aparecer como online.",
+            "Falha ao enviar a solicitação de reinício. O Fulcra reconecta automaticamente. Tente novamente quando o host aparecer como online.",
           dialogFailedMessage: "Não foi possível abrir o diálogo de confirmação de reinício.",
         },
         update: {
           desktopManagedHint:
-            "Este daemon é gerenciado pelo Paseo Desktop. Atualize o Paseo Desktop no host.",
+            "Este daemon é gerenciado pelo Fulcra Desktop. Atualize o Fulcra Desktop no host.",
           title: "Atualizar daemon",
           hint: "Atualiza o daemon para a versão mais recente e o reinicia",
           confirm: "Atualizar",
@@ -2709,7 +2822,7 @@ export const ptBR: TranslationResources = {
         newScript: "Novo script",
         editScript: "Editar {{name}}",
         runAsService: "Executar como serviço",
-        serviceHint: "O Paseo supervisiona o processo e atribui uma porta via $PASEO_PORT",
+        serviceHint: "O Fulcra supervisiona o processo e atribui uma porta via $PASEO_PORT",
         actions: {
           add: "Adicionar script",
           edit: "Editar",
@@ -2718,7 +2831,7 @@ export const ptBR: TranslationResources = {
       },
       metadata: {
         title: "Geração de metadados",
-        info: "Instruções específicas do projeto injetadas nos prompts de IA que o Paseo usa para gerar metadados. Use-as para aplicar convenções da sua equipe, como nomes de branch, estilo de commit ou formato de PR",
+        info: "Instruções específicas do projeto injetadas nos prompts de IA que o Fulcra usa para gerar metadados. Use-as para aplicar convenções da sua equipe, como nomes de branch, estilo de commit ou formato de PR",
         branchName: "Nomes de branch",
         branchNamePlaceholder: "Prefixe branches com feat/ ou fix/, mb/ para branches pessoais",
         commitMessage: "Mensagens de commit",

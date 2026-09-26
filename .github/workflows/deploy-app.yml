@@ -3,14 +3,63 @@ name: Deploy App
 on:
   push:
     tags:
+      # Private-preview tags are outside the inherited release contract; see
+      # desktop-release.yml and docs/pipelines.md.
       - "v*"
       - "!v*-beta.*"
+      - "!v*-private-preview"
       - "app-v*"
       - "!app-v*-beta.*"
+      - "!app-v*-private-preview"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  # Seconds, before the ~10-minute install/build/deploy job below. This
+  # workflow publishes the web app to a Cloudflare Pages project. A fork
+  # inherits the workflow but must not inherit the destination, so it deploys
+  # only once this repository names its own target. See docs/pipelines.md.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          DEPLOY_TARGET: ${{ vars.ORCA_DEPLOY_TARGET }}
+          ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          missing=""
+          [ "$DEPLOY_TARGET" = "configured" ] || missing="$missing\n- repository variable \`ORCA_DEPLOY_TARGET\` set to \`configured\`"
+          [ -n "$ACCOUNT_ID" ] || missing="$missing\n- repository variable \`CLOUDFLARE_ACCOUNT_ID\` for this fork's own account"
+          [ -n "$PAGES_PROJECT" ] || missing="$missing\n- repository variable \`CLOUDFLARE_PAGES_PROJECT\` naming this fork's Pages project (the script otherwise deploys to \`paseo-app\`)"
+          [ -n "$API_TOKEN" ] || missing="$missing\n- repository secret \`CLOUDFLARE_API_TOKEN\`"
+
+          if [ -z "$missing" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy target configured for this repository; continuing." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Skipped: web app deployment is not configured for this repository"
+            echo
+            echo "Deployment is intentionally opt-in so a fork cannot publish to the upstream"
+            echo "Cloudflare account it inherited. Still needed:"
+            printf "%b\n" "$missing"
+            echo
+            echo "Nothing is lost by this skip: the app is installed, built and typechecked by CI"
+            echo "on every push and pull request."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
+    needs: [preflight]
+    if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -22,6 +71,10 @@ jobs:
           cache: "npm"
           registry-url: "https://npm.pkg.github.com"
           scope: "@boudra"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
 
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
@@ -37,4 +90,8 @@ jobs:
         run: npm run deploy:web --workspace=@getpaseo/app
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: 10ed39a1dbf316e30abd0c409bed40d6
+          # Account and Pages project both come from repository configuration,
+          # never a hardcoded upstream destination. preflight refuses to run
+          # this job without them.
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}

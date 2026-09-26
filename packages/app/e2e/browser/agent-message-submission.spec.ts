@@ -1147,17 +1147,15 @@ test.describe("Agent message submission", () => {
       page,
       page.getByTestId("assistant-message").last(),
     );
-    const assistantMessageCount = await page.getByTestId("assistant-message").count();
-    const toolCallCount = await page.getByTestId("tool-call-badge").count();
     await composer.press("Enter");
     const userMessage = page.getByTestId("user-message").filter({ hasText: prompt }).last();
     await expect(userMessage).toBeVisible();
-    await expect
-      .poll(async () => page.getByTestId("assistant-message").count())
-      .toBeGreaterThan(assistantMessageCount);
-    await expect
-      .poll(async () => page.getByTestId("tool-call-badge").count())
-      .toBeGreaterThan(toolCallCount);
+    // Virtualization may remove old rows as new output arrives. Require new
+    // response rows after this prompt rather than a growing mounted-row count.
+    await expect(async () => {
+      await expectRenderedBefore(userMessage, page.getByTestId("assistant-message").last());
+      await expectRenderedBefore(userMessage, page.getByTestId("tool-call-badge").last());
+    }).toPass();
     await finishTimelineRowStabilityCheck();
   });
 

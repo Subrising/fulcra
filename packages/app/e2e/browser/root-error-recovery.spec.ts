@@ -1,16 +1,29 @@
 import { createServer, type Server } from "node:http";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { warmupTimeoutMs } from "../support/metro-warmup.mjs";
 
-let server: Server;
+let server: Server | undefined;
 let appUrl: string;
 test.beforeAll(async () => {
   // Compile this separate fixture entrypoint in setup, like the main app warmup.
   // Cold Metro compilation must not consume the recovery interaction's timeout.
-  test.setTimeout(120_000);
+  const timeoutMs = warmupTimeoutMs();
+  test.setTimeout(timeoutMs + 10_000);
   const metroPort = process.env.E2E_METRO_PORT;
   if (!metroPort) throw new Error("E2E_METRO_PORT is required");
-  const bundle = `http://localhost:${metroPort}/packages/app/e2e/support/recovery-app.bundle?platform=web&dev=true&minify=false&hot=false&lazy=true&transform.engine=hermes&transform.routerRoot=src%2Fapp`;
-  const compiled = await fetch(bundle, { signal: AbortSignal.timeout(120_000) });
+  const origin = `http://localhost:${metroPort}`;
+  const documentResponse = await fetch(origin, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!documentResponse.ok)
+    throw new Error(`Metro document failed: HTTP ${documentResponse.status}`);
+  const document = await documentResponse.text();
+  // Reuse the warmed app's transform options. Omitting reactCompiler/profile options
+  // creates a second cold graph of 5,100 modules and blocks concurrent navigations.
+  const bundle = [...document.matchAll(/<script[^>]+src=["']([^"']+)["']/g)]
+    .map((match) => new URL(match[1], origin))
+    .find((url) => url.origin === origin && url.pathname.endsWith(".bundle"));
+  if (!bundle) throw new Error("Metro document has no app bundle");
+  bundle.pathname = "/packages/app/e2e/support/recovery-app.bundle";
+  const compiled = await fetch(bundle, { signal: AbortSignal.timeout(timeoutMs) });
   if (!compiled.ok) throw new Error(`Recovery fixture compilation failed: HTTP ${compiled.status}`);
   await compiled.arrayBuffer();
   server = createServer((_request, response) => {
@@ -19,15 +32,18 @@ test.beforeAll(async () => {
       `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body,#root{height:100%;margin:0}#root{display:flex}</style></head><body><div id="root"></div><script src="${bundle}"></script></body></html>`,
     );
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const fixtureServer = server;
+  await new Promise<void>((resolve) => fixtureServer.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Fixture server did not start");
   appUrl = `http://127.0.0.1:${address.port}`;
 });
 
 test.afterAll(async () => {
+  if (!server) return;
+  const fixtureServer = server;
   await new Promise<void>((resolve, reject) =>
-    server.close((error) => {
+    fixtureServer.close((error) => {
       if (error) {
         reject(error);
         return;

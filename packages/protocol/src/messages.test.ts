@@ -6,7 +6,34 @@ import {
   SessionInboundMessageSchema,
   SessionOutboundMessageSchema,
   WorkspaceProjectDescriptorPayloadSchema,
+  ProviderUsageSchema,
+  AgentQuotaSnapshotSchema,
 } from "./messages.js";
+
+test("session quota retains unknown permission and requires a target agent", () => {
+  const quota = {
+    provider: "codex",
+    sessionId: "native-1",
+    model: null,
+    serviceTier: null,
+    accountScope: null,
+    observedAt: "2026-09-17T00:00:00Z",
+    ordinaryUsageAllowed: null,
+    limits: [],
+  };
+  expect(AgentQuotaSnapshotSchema.parse(quota)).toEqual(quota);
+  expect(
+    SessionInboundMessageSchema.safeParse({ type: "agent.quota.read.request", requestId: "q" })
+      .success,
+  ).toBe(false);
+  const request = { type: "agent.quota.read.request", requestId: "q", agentId: "agent-1" };
+  expect(SessionInboundMessageSchema.parse(request)).toEqual(request);
+  const response = {
+    type: "agent.quota.read.response",
+    payload: { requestId: "q", agentId: "agent-1", quota },
+  };
+  expect(SessionOutboundMessageSchema.parse(response)).toEqual(response);
+});
 
 function workspaceDescriptor(overrides: Record<string, unknown> = {}) {
   return {
@@ -170,6 +197,28 @@ describe("workspace descriptor message compatibility", () => {
 });
 
 describe("provider usage list message contract", () => {
+  test("preserves optional scoped admission while accepting older usage records", () => {
+    const old = {
+      providerId: "codex",
+      displayName: "Codex",
+      status: "available",
+      planLabel: null,
+      windows: [],
+    };
+    expect(ProviderUsageSchema.parse(old)).toEqual(old);
+    const admission = {
+      state: "unknown",
+      accountScope: null,
+      observedAt: "2026-06-19T00:00:00.000Z",
+      reason: "Provider permission unavailable",
+    };
+    expect(ProviderUsageSchema.parse({ ...old, admission })).toEqual({ ...old, admission });
+    expect(
+      ProviderUsageSchema.safeParse({ ...old, admission: { ...admission, state: "ready" } })
+        .success,
+    ).toBe(false);
+  });
+
   test("accepts the usage list request as a namespaced correlated RPC", () => {
     const parsed = SessionInboundMessageSchema.parse({
       type: "provider.usage.list.request",
@@ -274,7 +323,7 @@ describe("diagnostics message contract", () => {
       type: "diagnostics.response",
       payload: {
         requestId: "diag-2",
-        diagnostic: "Paseo diagnostics\n  Status: ok",
+        diagnostic: "Fulcra diagnostics\n  Status: ok",
       },
     });
 

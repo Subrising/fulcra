@@ -439,6 +439,43 @@ describe("DirectorySync session readiness", () => {
     directory.dispose();
   });
 
+  it("hydrates an uncached workspace with route-owned demand and stops refreshing after release", async () => {
+    const serverId = "uncached-workspace-route";
+    const { client, directory } = createDirectory(serverId);
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, client as unknown as DaemonClient, 1);
+    store.updateSessionServerInfo(serverId, {
+      serverId,
+      hostname: null,
+      version: "test",
+      features: { workspaceMultiplicity: true },
+    });
+    await directory.prepareWorkspaceRoute("workspace-1");
+    expect(client.fetchWorkspacesCalls).toBe(0);
+    expect(useSessionStore.getState().sessions[serverId]?.hasHydratedWorkspaces).toBe(false);
+
+    const route = {};
+    directory.setDemand(route, true);
+    await directory.refreshDemand();
+    expect(client.fetchWorkspacesCalls).toBe(1);
+    expect(useSessionStore.getState().sessions[serverId]?.hasHydratedWorkspaces).toBe(true);
+
+    directory.setDemand(route, false);
+    directory.connectionChanged({
+      client: null,
+      status: "offline",
+      source: { clientGeneration: 1, connectionEpoch: 1 },
+    });
+    directory.connectionChanged({
+      client: client as unknown as DaemonClient,
+      status: "online",
+      source: { clientGeneration: 1, connectionEpoch: 2 },
+    });
+    await directory.refreshDemand();
+    expect(client.fetchWorkspacesCalls).toBe(1);
+    directory.dispose();
+  });
+
   it("coalesces overlapping route and full-directory demand", async () => {
     const serverId = "coalesced-directory-demand";
     const { client, directory } = createDirectory(serverId);

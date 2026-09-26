@@ -661,9 +661,13 @@ export async function installDaemonWebSocketGate(page: Page) {
         matches: (message) => readAgentStreamEventType(message) === type,
       });
     },
-    holdNextAgentStreamItem(type: string): void {
+    holdNextAgentStreamItem(
+      type: string,
+      options: { blockAgentStreamFollowers?: boolean } = {},
+    ): void {
       pendingServerMessageHolds.set(agentStreamItemKey(type), {
         matches: (message) => readAgentStreamItemType(message) === type,
+        blockAgentStreamFollowers: options.blockAgentStreamFollowers,
       });
     },
     holdNextToolCall(input: { status: string; command?: string }): void {

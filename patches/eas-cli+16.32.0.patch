@@ -1,0 +1,30 @@
+diff --git a/node_modules/eas-cli/build/commands/upload.js b/node_modules/eas-cli/build/commands/upload.js
+--- a/node_modules/eas-cli/build/commands/upload.js
++++ b/node_modules/eas-cli/build/commands/upload.js
+@@ -8,7 +8,7 @@
+ const fs_extra_1 = tslib_1.__importDefault(require("fs-extra"));
+ const node_stream_zip_1 = tslib_1.__importDefault(require("node-stream-zip"));
+ const path_1 = tslib_1.__importDefault(require("path"));
+-const tar_1 = tslib_1.__importDefault(require("tar"));
++const tar_1 = require("tar");
+ const uuid_1 = require("uuid");
+ const url_1 = require("../build/utils/url");
+ const EasCommand_1 = tslib_1.__importDefault(require("../commandUtils/EasCommand"));
+@@ -214,7 +214,7 @@
+         const tarPath = path_1.default.join((0, paths_1.getTmpDirectory)(), `${(0, uuid_1.v4)()}.tar.gz`);
+         const parentPath = path_1.default.dirname(originalPath);
+         const folderName = path_1.default.basename(originalPath);
+-        await tar_1.default.create({ cwd: parentPath, file: tarPath, gzip: true }, [folderName]);
++        await tar_1.create({ cwd: parentPath, file: tarPath, gzip: true }, [folderName]);
+         filePath = tarPath;
+     }
+     const fileSize = (await fs_extra_1.default.stat(filePath)).size;
+@@ -306,7 +306,7 @@
+         try {
+             let fingerprintHashPromise;
+             let infoPlistPromise;
+-            await tar_1.default.list({
++            await tar_1.list({
+                 file: buildPath,
+                 // eslint-disable-next-line async-protect/async-suffix
+                 onentry: entry => {

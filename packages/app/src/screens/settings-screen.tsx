@@ -28,6 +28,7 @@ import {
   Keyboard,
   Stethoscope,
   Info,
+  Scale,
   Bell,
   Shield,
   Puzzle,
@@ -79,9 +80,9 @@ import { AddRemoteSshHostModal } from "@/components/add-remote-ssh-host-modal";
 import { PairLinkModal } from "@/components/pair-link-modal";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { EditorSection } from "@/screens/settings/editor-section";
+import { LicensesSection } from "@/screens/settings/licenses-section";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { CommunityLinks } from "@/components/community-links";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
@@ -92,7 +93,6 @@ import { isElectronRuntime } from "@/desktop/host";
 import { useDesktopAppUpdater } from "@/desktop/updates/use-desktop-app-updater";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { resolveAppVersion } from "@/utils/app-version";
-import { openChangelog } from "@/changelog";
 import { useAppDiagnosticStore } from "@/diagnostics/store";
 import { settingsStyles } from "@/styles/settings";
 import { THINKING_TONE_NATIVE_PCM_BASE64 } from "@/utils/thinking-tone.native-pcm";
@@ -180,6 +180,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   },
   { id: "diagnostics", labelKey: "settings.sections.diagnostics", icon: Stethoscope },
   { id: "about", labelKey: "settings.sections.about", icon: Info },
+  { id: "licenses", labelKey: "settings.sections.licenses", icon: Scale },
 ];
 
 interface HostSectionItem {
@@ -201,6 +202,13 @@ const HOST_SECTION_ITEMS: HostSectionItem[] = [
   { id: "terminals", labelKey: "settings.hostSections.terminals", icon: SquareTerminal },
   { id: "plugins", labelKey: "settings.hostSections.plugins", icon: Blocks },
 ];
+
+// Sections that render without screen state. Kept out of the switch below, which is at the
+// complexity limit.
+const PROP_FREE_SECTIONS: Partial<Record<SettingsSectionSlug, ComponentType>> = {
+  appearance: AppearanceSection,
+  licenses: LicensesSection,
+};
 
 function renderHostSettingsContent(
   view: Extract<SettingsView, { kind: "host" }>,
@@ -609,34 +617,35 @@ function AboutSection({ appVersion, appVersionText, isDesktopApp }: AboutSection
             </View>
             <Text style={styles.aboutValue}>{appVersionText}</Text>
           </View>
-          <WhatsNewRow />
+          <LicensesRow />
           {isDesktopApp ? <DesktopAppUpdateRow /> : null}
         </View>
       </SettingsSection>
       <ConnectedHostsSection clientVersion={appVersion} />
-      <View style={styles.aboutCommunity}>
-        <CommunityLinks />
-      </View>
     </>
   );
 }
 
-function WhatsNewRow() {
+function LicensesRow() {
   const { t } = useTranslation();
   const { theme } = useUnistyles();
+  const router = useRouter();
+  const openLicenses = useCallback(() => {
+    router.push(buildSettingsSectionRoute("licenses"));
+  }, [router]);
 
   return (
     <Pressable
       style={[settingsStyles.row, settingsStyles.rowBorder]}
-      onPress={openChangelog}
+      onPress={openLicenses}
       accessibilityRole="button"
-      testID="settings-whats-new"
+      testID="settings-licenses-row"
     >
       {({ hovered }: PressableStateCallbackType & { hovered?: boolean }) => (
         <>
           <View style={settingsStyles.rowContent}>
-            <Text style={settingsStyles.rowTitle}>{t("changelog.title")}</Text>
-            <Text style={settingsStyles.rowHint}>{t("settings.about.whatsNewHint")}</Text>
+            <Text style={settingsStyles.rowTitle}>{t("settings.licenses.title")}</Text>
+            <Text style={settingsStyles.rowHint}>{t("settings.about.licensesHint")}</Text>
           </View>
           <ChevronRight
             size={theme.iconSize.sm}
@@ -1520,6 +1529,8 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         );
       }
       if (view.kind === "section") {
+        const PropFreeSection = PROP_FREE_SECTIONS[view.section];
+        if (PropFreeSection) return <PropFreeSection />;
         switch (view.section) {
           case "general":
             return (
@@ -1535,8 +1546,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
                 {isDesktopApp ? <BrowserDataSection /> : null}
               </>
             );
-          case "appearance":
-            return <AppearanceSection />;
           case "editor":
             return isWeb ? <EditorSection /> : null;
           case "shortcuts":
@@ -1735,9 +1744,6 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.palette.red[300],
     fontSize: theme.fontSize.sm,
     marginTop: theme.spacing[1],
-  },
-  aboutCommunity: {
-    marginTop: theme.spacing[4],
   },
   aboutUpdateActions: {
     flexDirection: "row",

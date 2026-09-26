@@ -20,6 +20,31 @@ function writeExecutable(filePath: string, contents: string): void {
   chmodSync(filePath, 0o755);
 }
 
+// The installed Linux layout: the sandbox launcher renames Electron to <name>.bin and puts a
+// shell launcher at <name>, with the CLI shim under resources/bin. `productName` is a
+// parameter because the shim has to keep working across the rename that broke it in the
+// Desktop Packages job — the installed .deb resolved to the renamed /opt/<product> directory while the shim looked for
+// Paseo.
+function createFakePortableBundle(productName: string): { root: string; shimPath: string } {
+  const root = mkdtempSync(join(tmpdir(), "paseo-cli-shim-portable-"));
+  const shimPath = join(root, "resources", "bin", "paseo");
+
+  mkdirSync(dirname(shimPath), { recursive: true });
+  copyFileSync(join(packageRoot, "bin", "paseo"), shimPath);
+  chmodSync(shimPath, 0o755);
+
+  writeExecutable(
+    join(root, `${productName}.bin`),
+    [
+      "#!/bin/sh",
+      'printf "electron env=%s/%s cli=%s\\n" "$ELECTRON_RUN_AS_NODE" "$PASEO_NODE_ENV" "$PASEO_CLI"',
+      'printf "args=%s\\n" "$*"',
+      "",
+    ].join("\n"),
+  );
+  return { root, shimPath };
+}
+
 function createFakeMacBundle(options: { includeHelper: boolean }): {
   root: string;
   shimPath: string;
@@ -119,11 +144,23 @@ describe("desktop packaging", () => {
     expect(runtimeTrace).toContain('"packages/server/dist/server/skills/**"');
   });
 
-  it("registers Paseo agent links with the operating system", () => {
+  // The OS only routes a deep link the installer registered. Name and scheme are asserted as
+  // one block rather than as two independent substrings: a half-finished rename that leaves
+  // the branded title beside the old scheme still registers a handler, just not the one the
+  // app answers to, and two separate toContain calls pass straight through that.
+  it("registers conversation links with the operating system", () => {
     const config = readFileSync(join(packageRoot, "electron-builder.yml"), "utf8");
 
-    expect(config).toContain("name: Paseo agent link");
-    expect(config).toContain("- paseo");
+    // A Windows checkout materialises this file with CRLF, which is what broke the Windows
+    // desktop unit job. Compare on normalised newlines: the claim is that the protocol name
+    // and its scheme travel together under `protocols:`, which is a fact about the YAML, not
+    // about the line endings the checkout happened to use.
+    const normalize = (value: string) => value.replace(/\r\n/g, "\n");
+    const protocols = /^protocols:\n\s+- name: Fulcra conversation link\n\s+schemes:\n\s+- orca$/m;
+    const lf = normalize(config);
+
+    expect(lf).toMatch(protocols);
+    expect(normalize(lf.replace(/\n/g, "\r\n"))).toMatch(protocols);
   });
 
   // electron-builder packs production dependencies declared in package.json into
@@ -162,6 +199,42 @@ describe("desktop packaging", () => {
     }
   });
 
+  // The Desktop Packages job installed the .deb and the bundled CLI could not find its own
+  // Electron: the launcher is named after productName, and the shim only knew the old one.
+  // Both names are covered so neither direction of the rename breaks a packaged CLI.
+  it.each(["Orca", "Paseo"])("resolves the bundled %s launcher on portable layouts", (product) => {
+    if (process.platform === "win32") return;
+
+    const bundle = createFakePortableBundle(product);
+    try {
+      const result = spawnSync(bundle.shimPath, ["--version"], { encoding: "utf8" });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`electron env=1/production cli=${bundle.shimPath}`);
+      expect(result.stdout).toContain("node-entrypoint-runner.js");
+      expect(result.stdout).toContain("node-script");
+      expect(result.stdout).toContain("@getpaseo/cli/dist/index.js");
+      expect(result.stdout).toContain("--version");
+    } finally {
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails portable CLI startup when no bundled launcher exists", () => {
+    if (process.platform === "win32") return;
+
+    const bundle = createFakePortableBundle("Orca");
+    try {
+      rmSync(join(bundle.root, "Orca.bin"));
+      const result = spawnSync(bundle.shimPath, ["--version"], { encoding: "utf8" });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Bundled app executable not found");
+    } finally {
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
   it("fails packaged macOS CLI startup when Helper is missing", () => {
     if (process.platform === "win32") return;
 
@@ -170,7 +243,7 @@ describe("desktop packaging", () => {
       const result = spawnSync(bundle.shimPath, ["--version"], { encoding: "utf8" });
 
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Bundled Paseo Helper executable not found");
+      expect(result.stderr).toContain("Bundled Helper executable not found");
       expect(result.stdout).not.toContain("main-executable");
     } finally {
       rmSync(bundle.root, { recursive: true, force: true });

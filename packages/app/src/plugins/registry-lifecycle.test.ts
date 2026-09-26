@@ -1,5 +1,6 @@
 import { createPluginHosts } from "./hosts";
 import { expect, test } from "vitest";
+import { QueryObserver, skipToken } from "@tanstack/react-query";
 import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { PluginRegistry } from "./registry";
@@ -80,5 +81,32 @@ test("an invalid async client entry is disposed and its rejected continuation is
   );
   await expect.poll(() => h.released).toEqual(["async-entry"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(h.plugins.getSnapshot()).toEqual([]);
+});
+
+test("reconnect disposes the old API scope while restoring only opted-in view state", async () => {
+  const h = registry();
+  const entry = catalog("retained-view", "return function() {};");
+  h.plugins.installCatalog("host", [entry], { client: h.client });
+  const first = h.plugins.getSnapshot()[0]!;
+  const observer = new QueryObserver(first.queryClient, {
+    queryKey: ["view"],
+    queryFn: skipToken,
+    enabled: false,
+    meta: { paseoLocalView: true },
+    initialData: { selected: "book", zoom: 1.25 },
+  });
+  expect(observer.getCurrentResult().data).toEqual({ selected: "book", zoom: 1.25 });
+  first.queryClient.setQueryData(["authority"], { owner: "old" });
+  h.plugins.suspendHost("host");
+  await expect.poll(() => h.released).toEqual(["retained-view"]);
+  expect(first.queryClient.getQueryCache().getAll()).toEqual([]);
+  h.plugins.installCatalog("host", [entry], { client: h.client });
+  const current = h.plugins.getSnapshot()[0]!;
+  expect(current.queryClient).not.toBe(first.queryClient);
+  expect(current.queryClient.getQueryData(["view"])).toEqual({ selected: "book", zoom: 1.25 });
+  expect(current.queryClient.getQueryData(["authority"])).toBeUndefined();
+  h.plugins.removeHost("host");
+  await expect.poll(() => h.released).toEqual(["retained-view", "retained-view"]);
   expect(h.plugins.getSnapshot()).toEqual([]);
 });

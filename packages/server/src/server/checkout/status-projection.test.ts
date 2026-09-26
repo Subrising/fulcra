@@ -45,6 +45,30 @@ describe("checkout status projection", () => {
     expect(CheckoutPrStatusSchema.parse(payload)).toEqual(payload);
   });
 
+  test("carries the PR base and head commits when the forge reports them, and omits them otherwise", () => {
+    const status = {
+      url: "https://github.com/getpaseo/paseo/pull/7",
+      title: "Seven",
+      state: "open",
+      baseRefName: "main",
+      headRefName: "feat/seven",
+      isMerged: false,
+      mergeable: "MERGEABLE" as const,
+      checks: [],
+      checksStatus: "none" as const,
+      reviewDecision: null,
+    };
+    const withOids = normalizeCheckoutPrStatusPayload(
+      { ...status, baseRefOid: "a".repeat(40), headRefOid: "b".repeat(40) },
+      "github",
+    );
+    expect(withOids).toMatchObject({ baseRefOid: "a".repeat(40), headRefOid: "b".repeat(40) });
+    expect(CheckoutPrStatusSchema.parse(withOids)).toMatchObject({ baseRefOid: "a".repeat(40) });
+    const without = normalizeCheckoutPrStatusPayload(status, "gitea");
+    expect(without).not.toHaveProperty("baseRefOid");
+    expect(without).not.toHaveProperty("headRefOid");
+  });
+
   test("projects PR 993 GitHub merge facts without changing top-level status fields", () => {
     const payload = normalizeCheckoutPrStatusPayload(
       {

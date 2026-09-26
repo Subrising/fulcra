@@ -13,6 +13,11 @@ import {
   type ReactNode,
 } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
+import { shallow } from "zustand/shallow";
+import {
+  selectSidebarConversationLabels,
+  type SidebarConversationLabel,
+} from "@/hooks/sidebar-conversation-labels";
 import { useIsFocused } from "@react-navigation/native";
 import { BackHandler, Keyboard, Pressable, Text, View } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
@@ -313,6 +318,7 @@ function getFallbackTabOptionLabel(
     changes: string;
     files: string;
     pullRequest: string;
+    architectureMap: string;
   },
 ): string {
   if (tab.target.kind === "new_tab") {
@@ -342,6 +348,9 @@ function getFallbackTabOptionLabel(
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
   }
+  if (tab.target.kind === "architecture_map") {
+    return labels.architectureMap;
+  }
   if (tab.target.kind === "commit_diff") {
     return tab.target.sha.slice(0, 7);
   }
@@ -360,6 +369,7 @@ function getFallbackTabOptionDescription(
     changes: string;
     files: string;
     pullRequest: string;
+    architectureMap: string;
   },
 ): string {
   if (tab.target.kind === "new_tab") {
@@ -394,6 +404,9 @@ function getFallbackTabOptionDescription(
   }
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
+  }
+  if (tab.target.kind === "architecture_map") {
+    return labels.architectureMap;
   }
   if (tab.target.kind === "plugin") {
     return tab.target.panelId;
@@ -597,6 +610,7 @@ function MobileWorkspaceTabOption({
       changes: t("panels.diff.changesLabel"),
       files: t("panels.files.label"),
       pullRequest: t("panels.pullRequest.label"),
+      architectureMap: t("panels.architectureMap.label"),
     }),
     [t],
   );
@@ -1184,6 +1198,7 @@ function buildWorkspaceHeaderCheckoutState(input: {
 function deriveWorkspaceHeaderFields(input: {
   workspace: WorkspaceDescriptor | null;
   checkoutState: WorkspaceHeaderCheckoutState;
+  conversationLabel: SidebarConversationLabel | null;
 }): WorkspaceHeaderFields {
   const renderState = resolveWorkspaceHeaderRenderState(input);
   if (renderState.kind !== "ready") {
@@ -1555,6 +1570,21 @@ function WorkspaceScreenContent({
     [workspaceId],
   );
   const workspaceDescriptor = useWorkspace(normalizedServerId, normalizedWorkspaceId);
+  const conversationLabel = useStoreWithEqualityFn(
+    useSessionStore,
+    (state) =>
+      isRouteFocused
+        ? (selectSidebarConversationLabels(state.sessions, [normalizedServerId]).get(
+            `${normalizedServerId}:${normalizedWorkspaceId}`,
+          ) ?? null)
+        : null,
+    shallow,
+  );
+  useEffect(() => {
+    if (!isRouteFocused || !normalizedServerId || !normalizedWorkspaceId) return;
+    // Mobile can open a conversation before the sidebar has requested directory data.
+    return getHostRuntimeStore().acquireDirectoryDemand(normalizedServerId);
+  }, [isRouteFocused, normalizedServerId, normalizedWorkspaceId]);
   useEffect(() => {
     if (!normalizedServerId || !normalizedWorkspaceId || workspaceDescriptor) return;
     void getHostRuntimeStore()
@@ -1759,6 +1789,7 @@ function WorkspaceScreenContent({
   } = deriveWorkspaceHeaderFields({
     workspace: workspaceDescriptor,
     checkoutState: workspaceHeaderCheckoutState,
+    conversationLabel,
   });
   const canDetectPullRequestTab = canDetectPullRequest(isRouteFocused, isGitCheckout, isMobile);
   const hasPullRequest = useHasPullRequest({
@@ -2365,6 +2396,7 @@ function WorkspaceScreenContent({
       changes: t("panels.diff.changesLabel"),
       files: t("panels.files.label"),
       pullRequest: t("panels.pullRequest.label"),
+      architectureMap: t("panels.architectureMap.label"),
     }),
     [t],
   );

@@ -93,8 +93,11 @@ describe("create agent preferences", () => {
       providerPreferences: {
         codex: {
           model: "gpt-5.5",
+          modelChosenByUser: true,
           mode: "full-access",
+          modeChosenByUser: true,
           thinkingByModel: { "gpt-5.5": "high" },
+          thinkingChosenByModel: { "gpt-5.5": true },
           featureValues: { fast_mode: true },
         },
       },
@@ -147,7 +150,7 @@ describe("create agent preferences", () => {
       }),
     ).toEqual({
       provider: "pi",
-      providerPreferences: { pi: { model: "anthropic/sonnet" } },
+      providerPreferences: { pi: { model: "anthropic/sonnet", modelChosenByUser: true } },
     });
   });
 
@@ -173,7 +176,109 @@ describe("create agent preferences", () => {
       provider: "mock",
       providerPreferences: {
         pi: { model: "anthropic/sonnet" },
-        mock: { model: "one-minute-stream", mode: "approval-test", featureValues: {} },
+        mock: {
+          model: "one-minute-stream",
+          modelChosenByUser: true,
+          mode: "approval-test",
+          modeChosenByUser: true,
+          featureValues: {},
+        },
+      },
+    });
+  });
+
+  // The marker describes the model CURRENTLY stored, so a write that does not claim the model was chosen
+  // has to clear it. Leaving it would let the next resolved model inherit an earlier pick's authority --
+  // the same ratchet, one step removed -- and the value it pins is exactly the one the host wanted to move.
+  it("clears the chosen marker when a later write does not claim a choice", () => {
+    expect(
+      mergeProviderPreferences({
+        preferences: {
+          providerPreferences: { codex: { model: "gpt-5.5", modelChosenByUser: true } },
+        },
+        provider: "codex",
+        updates: { model: "gpt-5.4" },
+      }).providerPreferences?.codex,
+    ).toEqual({ model: "gpt-5.4" });
+  });
+
+  it("leaves the marker alone when a write touches neither the model nor the marker", () => {
+    expect(
+      mergeProviderPreferences({
+        preferences: {
+          providerPreferences: { codex: { model: "gpt-5.5", modelChosenByUser: true } },
+        },
+        provider: "codex",
+        updates: { thinkingByModel: { "gpt-5.5": "high" } },
+      }).providerPreferences?.codex,
+    ).toEqual({
+      model: "gpt-5.5",
+      modelChosenByUser: true,
+      thinkingByModel: { "gpt-5.5": "high" },
+    });
+  });
+
+  // A profile written by an older build has a model and no marker. It parses, and the resolution path
+  // treats it as "not chosen" -- see resolve-agent-form.test.ts. Nothing here rejects or rewrites it.
+  it("loads a model saved before the marker existed, without inventing one", () => {
+    expect(
+      parseFormPreferences({ providerPreferences: { claude: { model: "claude-opus-5" } } }),
+    ).toEqual({ providerPreferences: { claude: { model: "claude-opus-5" } } });
+  });
+
+  // The same three rules for the mode and the per-model effort. Each marker is separate on purpose: a
+  // single "the user configured something" flag would let choosing a mode revive a model nobody picked.
+  it("clears the chosen marker for a mode a later write does not claim", () => {
+    expect(
+      mergeProviderPreferences({
+        preferences: { providerPreferences: { claude: { mode: "auto", modeChosenByUser: true } } },
+        provider: "claude",
+        updates: { mode: "default" },
+      }).providerPreferences?.claude,
+    ).toEqual({ mode: "default" });
+  });
+
+  it("drops both the mode and its marker when a write erases the mode", () => {
+    expect(
+      mergeProviderPreferences({
+        preferences: { providerPreferences: { claude: { mode: "auto", modeChosenByUser: true } } },
+        provider: "claude",
+        updates: { mode: null },
+      }).providerPreferences?.claude,
+    ).toEqual({});
+  });
+
+  it("marks the effort per model, and one model's effort does not unmark another's", () => {
+    const after = mergeProviderPreferences({
+      preferences: {
+        providerPreferences: {
+          claude: {
+            thinkingByModel: { "claude-opus-5": "high", "claude-opus-5-5": "high" },
+            thinkingChosenByModel: { "claude-opus-5": true, "claude-opus-5-5": true },
+          },
+        },
+      },
+      provider: "claude",
+      // An effort resolved for 5.5 only: it clears 5.5's mark and leaves Opus 5's choice alone.
+      updates: { thinkingByModel: { "claude-opus-5-5": "medium" } },
+    }).providerPreferences?.claude;
+    expect(after?.thinkingByModel).toEqual({
+      "claude-opus-5": "high",
+      "claude-opus-5-5": "medium",
+    });
+    expect(after?.thinkingChosenByModel).toEqual({ "claude-opus-5": true });
+  });
+
+  it("loads a mode and an effort saved before the markers existed, without inventing one", () => {
+    expect(
+      parseFormPreferences({
+        providerPreferences: {
+          claude: { mode: "default", thinkingByModel: { "claude-opus-5": "high" } },
+        },
+      }),
+    ).toEqual({
+      providerPreferences: {
+        claude: { mode: "default", thinkingByModel: { "claude-opus-5": "high" } },
       },
     });
   });

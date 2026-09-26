@@ -8,6 +8,12 @@ import { openSettingsSection } from "../support/helpers/settings";
 
 const PLUGIN_ID = "plugin-theme-e2e";
 
+// The picker is labelled "Theme: <current>", and with no preference stored that is the app
+// default — DEFAULT_THEME_PREFERENCE in src/hooks/use-settings/storage.ts, now "dark". This
+// spec named the old default in two places, so it opened a control that no longer exists and
+// then expected the fallback to land somewhere it no longer lands.
+const DEFAULT_THEME_LABEL = "Theme: Dark";
+
 // Catppuccin Mocha: base, text, surface0, surface1, mauve, subtext0, overlay0.
 const PLUGIN_SOURCE = `export default function contribute(plugin) {
   plugin.addTheme({
@@ -68,7 +74,7 @@ test("applies a contributed theme and falls back when its plugin is gone", async
     await openSettingsSection(page, "appearance");
 
     const sectionTitle = page.getByText("Theme", { exact: true }).first();
-    await page.getByLabel("Theme: System", { exact: true }).click();
+    await page.getByLabel(DEFAULT_THEME_LABEL, { exact: true }).click();
     const mochaItem = page.getByText("Catppuccin Mocha", { exact: true });
     await expect(mochaItem).toBeVisible({ timeout: 30_000 });
     await page.screenshot({
@@ -102,7 +108,7 @@ test("applies a contributed theme and falls back when its plugin is gone", async
 
     await test.step("removing the plugin falls back to the default theme", async () => {
       await client.removePlugin(PLUGIN_ID);
-      await expect(page.getByLabel("Theme: System", { exact: true })).toBeVisible({
+      await expect(page.getByLabel(DEFAULT_THEME_LABEL, { exact: true })).toBeVisible({
         timeout: 30_000,
       });
       await expect(sectionTitle).not.toHaveCSS("color", MOCHA_MUTED_FOREGROUND);

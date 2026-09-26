@@ -1,5 +1,5 @@
 import { warmMetro } from "./metro-warmup.mjs";
-export { warmMetro } from "./metro-warmup.mjs";
+export { lastMetroProgress, warmMetro, warmupTimeoutMs } from "./metro-warmup.mjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { killProcessTree } from "./helpers/spawn-node";
 import { existsSync } from "node:fs";
@@ -125,6 +125,21 @@ export async function waitForMetro(port: number, options: WaitForServerOptions):
   await waitForServer(port, options, probeMetro);
 }
 
+const expectedMetroExits = new WeakSet<ChildProcess>();
+
+// Metro holds the whole graph plus watch state for the life of a shard. Node's default old-space
+// is about 2GB, and a shard died at exactly that ceiling seven minutes in, taking every later
+// navigation with it; the bundler is one process, so the headroom is cheap.
+export function metroNodeOptions(env: NodeJS.ProcessEnv): string {
+  const megabytes = Number(env.E2E_METRO_MAX_OLD_SPACE_MB ?? 4096);
+  if (!Number.isInteger(megabytes) || megabytes <= 0) {
+    throw new Error(
+      `E2E_METRO_MAX_OLD_SPACE_MB must be a positive integer of megabytes, got ${env.E2E_METRO_MAX_OLD_SPACE_MB}`,
+    );
+  }
+  return `${env.NODE_OPTIONS ?? ""} --max-old-space-size=${megabytes}`.trim();
+}
+
 function startMetro(port: number, buffer: ReturnType<typeof createLineBuffer>): ChildProcess {
   const appDir = path.resolve(__dirname, "../..");
   const expoCli = require.resolve("expo/bin/cli");
@@ -134,10 +149,19 @@ function startMetro(port: number, buffer: ReturnType<typeof createLineBuffer>): 
     env: {
       ...process.env,
       BROWSER: "none",
+      NODE_OPTIONS: metroNodeOptions(process.env),
       ...(process.env.E2E_DESKTOP_RUNTIME === "1" ? { PASEO_WEB_PLATFORM: "electron" } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
+  });
+  // A dead bundler makes every later spec fail on an empty page. Name it where it happens.
+  child.on("exit", (code, signal) => {
+    if (expectedMetroExits.has(child)) return;
+    console.error(
+      `[e2e] Metro exited before teardown (code ${code}, signal ${signal}). ` +
+        "Specs after this point navigate to a dead bundler.",
+    );
   });
   const log = (chunk: Buffer, stream: "stdout" | "stderr") => {
     for (const line of chunk.toString().split("\n").filter(Boolean)) {
@@ -177,15 +201,17 @@ export default async function globalSetup() {
       childProcess: metroProcess,
       getRecentOutput: metroOutput.dump,
     });
-    await warmMetro(metroPort);
+    await warmMetro(metroPort, { getRecentOutput: metroOutput.dump });
     process.env.E2E_METRO_PORT = String(metroPort);
     console.log(`[e2e] Metro warmed on port ${metroPort}`);
 
     return async () => {
+      if (metroProcess) expectedMetroExits.add(metroProcess);
       await killProcessTree(metroProcess);
       console.log("[e2e] Metro stopped");
     };
   } catch (error) {
+    if (metroProcess) expectedMetroExits.add(metroProcess);
     await killProcessTree(metroProcess);
     throw error;
   }

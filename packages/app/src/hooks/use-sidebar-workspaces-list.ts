@@ -1,3 +1,9 @@
+import {
+  selectSidebarConversationLabels,
+  equalSidebarConversationLabels,
+  applySidebarConversationLabels,
+  type SidebarConversationLabel,
+} from "./sidebar-conversation-labels";
 import { useCallback, useEffect, useMemo } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
@@ -79,6 +85,7 @@ export function useSidebarProjectStatusBucket(input: {
   return useStoreWithEqualityFn(useSessionStore, selector, Object.is);
 }
 
+const EMPTY_CONVERSATION_LABELS = new Map<string, SidebarConversationLabel>();
 const EMPTY_ORDER: string[] = [];
 const EMPTY_PROJECTS: SidebarProjectEntry[] = [];
 const EMPTY_WORKSPACES: SidebarWorkspacePlacement[] = [];
@@ -139,13 +146,24 @@ export function useSidebarWorkspacesList(options?: {
   const directoryServerIds = useWorkspaceDirectoryServerIds(serverIds);
 
   const hostProjects = useHostProjects(directoryServerIds);
+  const conversationLabels = useStoreWithEqualityFn(
+    useSessionStore,
+    (state) =>
+      isActive
+        ? selectSidebarConversationLabels(state.sessions, serverIds)
+        : EMPTY_CONVERSATION_LABELS,
+    equalSidebarConversationLabels,
+  );
 
   const sidebarModel = useMemo(
     () =>
-      buildSidebarWorkspacePlacementModel({
-        projects: hostProjects,
-      }),
-    [hostProjects],
+      applySidebarConversationLabels(
+        buildSidebarWorkspacePlacementModel({
+          projects: hostProjects,
+        }),
+        conversationLabels,
+      ),
+    [hostProjects, conversationLabels],
   );
 
   const projects = sidebarModel.projects.length > 0 ? sidebarModel.projects : EMPTY_PROJECTS;

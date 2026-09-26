@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { mapCodexToolCallEnvelope, mapCodexToolCallFromThreadItem } from "./tool-call-mapper.js";
+import { mapCodexPatchNotificationToToolCall } from "../codex-app-server-agent.js";
+import { TimelineIndexBuilder, getTimelineFileHistory } from "../../timeline-turn-index.js";
+import type { ToolCallTimelineItem } from "../../agent-sdk-types.js";
 
 function expectMapped<T>(item: T | null): T {
   expect(item).not.toBeNull();
@@ -801,6 +804,8 @@ describe("codex tool-call mapper", () => {
       output: {
         files: [{ path: "src/path-only.ts", kind: "modify" }],
       },
+      // The structured file list survives even though there is nothing to preview.
+      files: [{ path: "src/path-only.ts", kind: "update" }],
     });
   });
 
@@ -1077,5 +1082,207 @@ describe("codex tool-call mapper", () => {
       +++ /dev/null",
       }
     `);
+  });
+});
+
+describe("codex multi-file patches", () => {
+  const diff = (line: string) => `@@ -1 +1 @@\n-old ${line}\n+new ${line}\n`;
+
+  it("keeps every file of a patch in the detail, with the first as filePath", () => {
+    const item = expectMapped(
+      mapCodexToolCallFromThreadItem(
+        {
+          type: "fileChange",
+          id: "codex-multi",
+          status: "completed",
+          changes: [
+            { path: "/tmp/repo/src/a.ts", kind: "update", diff: diff("a") },
+            { path: "/tmp/repo/src/b.ts", kind: "add", diff: diff("b") },
+            { path: "/tmp/repo/src/c.ts", kind: "delete", diff: diff("c") },
+          ],
+        },
+        { cwd: "/tmp/repo" },
+      ),
+    );
+
+    expect(item.detail).toEqual({
+      type: "edit",
+      filePath: "src/a.ts",
+      unifiedDiff: diff("a"),
+      files: [
+        { path: "src/a.ts", kind: "update", unifiedDiff: diff("a") },
+        { path: "src/b.ts", kind: "add", unifiedDiff: diff("b") },
+        { path: "src/c.ts", kind: "delete", unifiedDiff: diff("c") },
+      ],
+    });
+  });
+
+  it("keeps every path when the combined diffs exceed the budget", () => {
+    const big = `@@ -1 +1 @@\n-${"a".repeat(11_000)}\n+${"b".repeat(800)}\n`;
+    const changes = Array.from({ length: 8 }, (_, index) => ({
+      path: `/tmp/repo/src/file-${index}.ts`,
+      kind: "update",
+      diff: big,
+    }));
+    const item = expectMapped(
+      mapCodexToolCallFromThreadItem(
+        { type: "fileChange", id: "codex-big", status: "completed", changes },
+        { cwd: "/tmp/repo" },
+      ),
+    );
+    if (item.detail.type !== "edit") throw new Error("expected an edit detail");
+    const files = item.detail.files ?? [];
+    expect(files.map((file) => file.path)).toEqual(
+      changes.map((_, index) => `src/file-${index}.ts`),
+    );
+    const kept = files.filter((file) => file.unifiedDiff !== undefined);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(files.length);
+    expect(kept.reduce((total, file) => total + file.unifiedDiff!.length, 0)).toBeLessThanOrEqual(
+      64 * 1024,
+    );
+  });
+
+  it("normalizes legacy patch notification files against the cwd", () => {
+    const item = expectMapped(
+      mapCodexToolCallEnvelope({
+        callId: "legacy-patch",
+        name: "apply_patch",
+        input: { path: "/tmp/repo/src/a.ts", patch: diff("a") },
+        output: { success: true },
+        cwd: "/tmp/repo",
+        fileChanges: [
+          { path: "/tmp/repo/src/a.ts", kind: "update", diff: diff("a") },
+          { path: "/tmp/repo/docs/b.md", kind: "add" },
+        ],
+      }),
+    );
+
+    expect(item.detail).toMatchObject({
+      type: "edit",
+      filePath: "src/a.ts",
+      files: [
+        { path: "src/a.ts", kind: "update", unifiedDiff: diff("a") },
+        { path: "docs/b.md", kind: "add" },
+      ],
+    });
+  });
+});
+
+describe("codex file changes without a renderable preview", () => {
+  const cwd = "/tmp/repo";
+  const diff = "@@ -1 +1 @@\n-old\n+new\n";
+
+  function indexed(item: ToolCallTimelineItem) {
+    return TimelineIndexBuilder.fromRows(
+      [{ seq: 1, timestamp: "2026-09-24T00:00:00.000Z", item, turnId: "turn-1" }],
+      cwd,
+    ).toData();
+  }
+
+  function touchedPaths(item: ToolCallTimelineItem, paths: string[]) {
+    const index = indexed(item);
+    return paths.map((file) => getTimelineFileHistory(index, file).touches.map((t) => t.kind));
+  }
+
+  it("keeps every file when the first file has no diff", () => {
+    for (const first of [
+      { path: "/tmp/repo/src/a.ts", kind: "update" },
+      { path: "/tmp/repo/src/a.ts", kind: "update", diff: "" },
+    ]) {
+      const item = expectMapped(
+        mapCodexToolCallFromThreadItem(
+          {
+            type: "fileChange",
+            id: "no-first-diff",
+            status: "completed",
+            changes: [first, { path: "/tmp/repo/src/b.ts", kind: "update", diff }],
+          },
+          { cwd },
+        ),
+      );
+      // Rendering is unchanged: no preview for the first file still falls back to unknown.
+      expect(item.detail.type).toBe("unknown");
+      expect(item.detail).toMatchObject({
+        files: [
+          { path: "src/a.ts", kind: "update" },
+          { path: "src/b.ts", kind: "update", unifiedDiff: diff },
+        ],
+      });
+      expect(touchedPaths(item, ["src/a.ts", "src/b.ts"])).toEqual([["patch"], ["patch"]]);
+    }
+  });
+
+  it("keeps a path-only patch, single or multi-file", () => {
+    const single = expectMapped(
+      mapCodexToolCallFromThreadItem(
+        {
+          type: "fileChange",
+          id: "path-only-single",
+          status: "completed",
+          changes: [{ path: "/tmp/repo/src/only.ts", kind: "add" }],
+        },
+        { cwd },
+      ),
+    );
+    expect(single.detail).toMatchObject({
+      type: "unknown",
+      files: [{ path: "src/only.ts", kind: "add" }],
+    });
+    expect(touchedPaths(single, ["src/only.ts"])).toEqual([["edit"]]);
+
+    const multi = expectMapped(
+      mapCodexToolCallFromThreadItem(
+        {
+          type: "fileChange",
+          id: "path-only-multi",
+          status: "completed",
+          changes: [
+            { path: "/tmp/repo/src/a.ts", kind: "delete" },
+            { path: "/tmp/repo/src/b.ts", kind: "add" },
+          ],
+        },
+        { cwd },
+      ),
+    );
+    expect(touchedPaths(multi, ["src/a.ts", "src/b.ts"])).toEqual([["patch"], ["patch"]]);
+  });
+
+  it("carries legacy patch notifications into the file index end to end", () => {
+    const withDiffs = expectMapped(
+      mapCodexPatchNotificationToToolCall({
+        callId: "legacy-1",
+        cwd,
+        running: false,
+        success: true,
+        changes: [
+          { path: "/tmp/repo/src/a.ts", kind: "update", unified_diff: diff },
+          { path: "/tmp/repo/docs/b.md", kind: "add", unified_diff: diff },
+        ],
+      }),
+    );
+    expect(withDiffs.detail).toMatchObject({
+      type: "edit",
+      filePath: "src/a.ts",
+      files: [
+        { path: "src/a.ts", kind: "update" },
+        { path: "docs/b.md", kind: "add" },
+      ],
+    });
+    expect(touchedPaths(withDiffs, ["src/a.ts", "docs/b.md"])).toEqual([["patch"], ["patch"]]);
+
+    const pathOnly = expectMapped(
+      mapCodexPatchNotificationToToolCall({
+        callId: "legacy-2",
+        cwd,
+        running: false,
+        success: true,
+        changes: {
+          "/tmp/repo/src/c.ts": { type: "update" },
+          "/tmp/repo/src/d.ts": { type: "add" },
+        },
+      }),
+    );
+    expect(touchedPaths(pathOnly, ["src/c.ts", "src/d.ts"])).toEqual([["patch"], ["patch"]]);
   });
 });

@@ -209,6 +209,12 @@ export const TOOL_CALL_ICON_NAMES = [
 
 export type ToolCallIconName = (typeof TOOL_CALL_ICON_NAMES)[number];
 
+export interface ToolCallFileChange {
+  path: string;
+  kind: "add" | "delete" | "update";
+  unifiedDiff?: string;
+}
+
 export type ToolCallDetail =
   | {
       type: "shell";
@@ -226,10 +232,13 @@ export type ToolCallDetail =
     }
   | {
       type: "edit";
+      /** The first changed file, kept for clients that predate `files`. */
       filePath: string;
       oldString?: string;
       newString?: string;
       unifiedDiff?: string;
+      /** Every file in a multi-file patch, in patch order. */
+      files?: ToolCallFileChange[];
     }
   | {
       type: "write";
@@ -306,6 +315,8 @@ export type ToolCallDetail =
       type: "unknown";
       input: unknown;
       output: unknown;
+      /** Files a patch touched when no preview could be rendered; paths stay usable without a diff. */
+      files?: ToolCallFileChange[];
     };
 
 interface ToolCallBase {

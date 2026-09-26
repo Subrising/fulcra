@@ -21,19 +21,22 @@ export function selectDaemonTarget(
       };
     return {
       kind: "instance",
-      home: resolvePaseoHome({ PASEO_HOME: options.home ?? env.PASEO_HOME }),
+      home: resolvePaseoHome({ PASEO_HOME: options.home ?? env.FULCRA_HOME ?? env.PASEO_HOME }),
     };
   }
   if (options.home !== undefined)
     return { kind: "instance", home: resolvePaseoHome({ PASEO_HOME: options.home }) };
   if (options.host !== undefined) return { kind: "endpoint", host: options.host };
-  if (env.PASEO_HOME && env.PASEO_HOST)
+  if ((env.FULCRA_HOME ?? env.PASEO_HOME) && env.PASEO_HOST)
     throw {
       code: "TARGET_AMBIGUOUS",
       message: "PASEO_HOME and PASEO_HOST are both set. Choose --home or --host explicitly.",
     };
   if (env.PASEO_HOST) return { kind: "endpoint", host: env.PASEO_HOST };
-  return { kind: "instance", home: resolvePaseoHome({ PASEO_HOME: env.PASEO_HOME }) };
+  return {
+    kind: "instance",
+    home: resolvePaseoHome({ PASEO_HOME: env.FULCRA_HOME ?? env.PASEO_HOME }),
+  };
 }
 
 export function describeDaemonTarget(target: DaemonTarget): string {

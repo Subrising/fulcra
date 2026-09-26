@@ -7,8 +7,8 @@ import { buildAgentDeepLink, type AgentDeepLinkTarget } from "@getpaseo/protocol
 function findDesktopApp(): string | null {
   if (process.platform === "darwin") {
     const candidates = [
-      "/Applications/Paseo.app",
-      path.join(homedir(), "Applications", "Paseo.app"),
+      "/Applications/Fulcra.app",
+      path.join(homedir(), "Applications", "Fulcra.app"),
     ];
 
     for (const candidate of candidates) {
@@ -22,9 +22,9 @@ function findDesktopApp(): string | null {
 
   if (process.platform === "linux") {
     const candidates = [
-      "/usr/bin/Paseo",
-      "/opt/Paseo/Paseo",
-      path.join(homedir(), "Applications", "Paseo.AppImage"),
+      "/usr/bin/Fulcra",
+      "/opt/Fulcra/Fulcra",
+      path.join(homedir(), "Applications", "Fulcra.AppImage"),
     ];
 
     for (const candidate of candidates) {
@@ -42,7 +42,7 @@ function findDesktopApp(): string | null {
       return null;
     }
 
-    const candidate = path.join(localAppData, "Programs", "Paseo", "Paseo.exe");
+    const candidate = path.join(localAppData, "Programs", "Fulcra", "Fulcra.exe");
     return existsSync(candidate) ? candidate : null;
   }
 
@@ -70,14 +70,12 @@ function spawnDetached(command: string, args: string[]): void {
 
 function launchDesktop(args: string[]): void {
   if (process.env.PASEO_DESKTOP_CLI === "1") {
-    throw new Error("Cannot open Paseo Desktop while running in desktop CLI passthrough mode.");
+    throw new Error("Cannot open Fulcra Desktop while running in desktop CLI passthrough mode.");
   }
 
   const desktopApp = findDesktopApp();
   if (!desktopApp) {
-    throw new Error(
-      "Paseo desktop app not found. Install it from https://github.com/getpaseo/paseo/releases",
-    );
+    throw new Error("Fulcra desktop app not found. Install a Fulcra build, then try again.");
   }
 
   if (process.platform === "darwin") {

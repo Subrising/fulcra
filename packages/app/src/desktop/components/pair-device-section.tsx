@@ -9,7 +9,6 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { ExternalLink } from "@/components/ui/external-link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useFetchQuery } from "@/data/query";
 import { daemonPairingOfferQueryKey } from "@/data/daemon-pairing";
@@ -21,7 +20,6 @@ import {
   type EditingTextInputHandle,
 } from "@/components/ui/text-input";
 
-const RELAY_DOCS_URL = "https://paseo.sh/docs/security";
 const FLEX_ONE_STYLE = { flex: 1 } as const;
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedShieldCheck = withUnistyles(ShieldCheck);
@@ -191,11 +189,6 @@ function RelayConsent(props: PairDeviceBodyProps) {
         <RelayHeroBadge />
         <Text style={styles.consentTitle}>{t("pairing.device.enableTitle")}</Text>
         <Text style={styles.consentDescription}>{t("pairing.device.enableDescription")}</Text>
-        <ExternalLink
-          href={RELAY_DOCS_URL}
-          label={t("pairing.device.relayDocs")}
-          accessibilityLabel={t("pairing.device.relayDocsAccessibility")}
-        />
       </View>
       {props.enableError ? <Alert variant="error" description={props.enableError.message} /> : null}
       {!props.canConfigureRelay ? (

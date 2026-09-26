@@ -4,7 +4,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
-import { experimental_createMCPClient } from "ai";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import pino from "pino";
 
@@ -84,13 +84,16 @@ async function createMcpClient(url: string, authToken?: string): Promise<McpClie
     new URL(url),
     authToken ? { requestInit: { headers: { Authorization: `Bearer ${authToken}` } } } : undefined,
   );
-  const rawClient = await experimental_createMCPClient({ transport });
-  const boundCallTool: McpClient["callTool"] = Reflect.get(rawClient, "callTool").bind(rawClient);
-  return { callTool: boundCallTool, close: () => rawClient.close() };
+  const rawClient = new Client({ name: "paseo-test", version: "1" });
+  await rawClient.connect(transport);
+  return {
+    callTool: ({ name, args }) => rawClient.callTool({ name, arguments: args }),
+    close: () => rawClient.close(),
+  };
 }
 
 interface LaunchRecorder {
-  recordedLaunches: AgentSessionConfig[];
+  recordedLaunches: Map<string, AgentSessionConfig>;
 }
 
 class RecordingAgentClient implements AgentClient {
@@ -112,7 +115,7 @@ class RecordingAgentClient implements AgentClient {
   async createSession(
     ...args: Parameters<AgentClient["createSession"]>
   ): ReturnType<AgentClient["createSession"]> {
-    this.recorder.recordedLaunches.push(args[0]);
+    if (args[1]?.agentId) this.recorder.recordedLaunches.set(args[1].agentId, args[0]);
     return this.inner.createSession(...args);
   }
 
@@ -310,7 +313,7 @@ describe("agent MCP end-to-end (offline)", () => {
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
     const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
     const port = await getAvailablePort();
-    const recorder: LaunchRecorder = { recordedLaunches: [] };
+    const recorder: LaunchRecorder = { recordedLaunches: new Map() };
 
     const daemonConfig: PaseoDaemonConfig = {
       listen: `127.0.0.1:${port}`,
@@ -333,7 +336,7 @@ describe("agent MCP end-to-end (offline)", () => {
     const disabledStaticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-disabled-"));
     const disabledAgentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-disabled-"));
     const disabledPort = await getAvailablePort();
-    const disabledRecorder: LaunchRecorder = { recordedLaunches: [] };
+    const disabledRecorder: LaunchRecorder = { recordedLaunches: new Map() };
     const disabledDaemonConfig: PaseoDaemonConfig = {
       listen: `127.0.0.1:${disabledPort}`,
       paseoHome: disabledPaseoHome,
@@ -369,7 +372,7 @@ describe("agent MCP end-to-end (offline)", () => {
       agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
       expect(agentId).toBeTruthy();
 
-      expect(recorder.recordedLaunches.at(-1)?.mcpServers).toMatchObject({
+      expect(recorder.recordedLaunches.get(agentId!)?.mcpServers).toMatchObject({
         paseo: {
           type: "http",
           url: `http://127.0.0.1:${port}/mcp/agents?callerAgentId=${agentId!}`,
@@ -394,7 +397,10 @@ describe("agent MCP end-to-end (offline)", () => {
         typeof disabledPayload?.agentId === "string" ? disabledPayload.agentId : null;
       expect(disabledAgentId).toBeTruthy();
 
-      expect(disabledRecorder.recordedLaunches.at(-1)?.mcpServers?.paseo).toBeUndefined();
+      expect(disabledRecorder.recordedLaunches.has(disabledAgentId!)).toBe(true);
+      expect(
+        disabledRecorder.recordedLaunches.get(disabledAgentId!)?.mcpServers?.paseo,
+      ).toBeUndefined();
       const disabledAgent = disabledDaemon.agentManager.getAgent(disabledAgentId!);
       expect(disabledAgent?.config.mcpServers?.paseo).toBeUndefined();
     } finally {
@@ -422,7 +428,7 @@ describe("agent MCP end-to-end (offline)", () => {
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
     const agentCwd = await mkdtemp(path.join(os.tmpdir(), "paseo-agent-cwd-"));
     const port = await getAvailablePort();
-    const recorder: LaunchRecorder = { recordedLaunches: [] };
+    const recorder: LaunchRecorder = { recordedLaunches: new Map() };
 
     const daemonConfig: PaseoDaemonConfig = {
       listen: `0.0.0.0:${port}`,
@@ -458,7 +464,7 @@ describe("agent MCP end-to-end (offline)", () => {
       agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
       expect(agentId).toBeTruthy();
 
-      expect(recorder.recordedLaunches.at(-1)?.mcpServers).toMatchObject({
+      expect(recorder.recordedLaunches.get(agentId!)?.mcpServers).toMatchObject({
         paseo: {
           type: "http",
           url: `http://127.0.0.1:${port}/mcp/agents?callerAgentId=${agentId!}`,

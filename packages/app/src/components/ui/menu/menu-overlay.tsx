@@ -19,7 +19,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
-import { Keyframe, runOnJS } from "react-native-reanimated";
+import { FadeIn, Keyframe, runOnJS } from "react-native-reanimated";
 import { StyleSheet } from "react-native-unistyles";
 import { FloatingScrollView, FloatingSurface } from "@/components/ui/floating";
 import { isWeb } from "@/constants/platform";
@@ -47,6 +47,18 @@ const contentEntering = new Keyframe({
   0: { opacity: 0, transform: [{ scale: 0.97 }] },
   100: { opacity: 1, transform: [{ scale: 1 }] },
 }).duration(CONTENT_ENTERING_DURATION_MS);
+
+// Custom web keyframes restore a saved layout at cleanup. If measurement arrives
+// after the animation, that snapshot still has the off-screen measurement position.
+// The built-in fade leaves placement under React's control.
+const webContentEntering = FadeIn.duration(CONTENT_ENTERING_DURATION_MS);
+
+// Web fades in regardless of placement; native must not animate from the off-screen measuring
+// position, so it waits for `placed`.
+function resolveContentEntering(placed: boolean) {
+  if (isWeb) return webContentEntering;
+  return placed ? contentEntering : undefined;
+}
 
 const contentExiting = new Keyframe({
   0: { opacity: 1, transform: [{ scale: 1 }] },
@@ -387,7 +399,7 @@ export function AnchoredSurface({
         dataSet={surfaceDataSet}
         style={styles.content}
         frameStyle={frameStyle}
-        entering={placed ? contentEntering : undefined}
+        entering={resolveContentEntering(placed)}
         exiting={
           !placed || isWeb || !onExited
             ? undefined

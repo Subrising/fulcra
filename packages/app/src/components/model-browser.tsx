@@ -1000,6 +1000,9 @@ function GroupProviderButton({
         </View>
       );
     }
+    if (selection.kind === "unavailable") {
+      return <Text style={styles.drillDownCount}>{t("modelSelector.notInstalled")}</Text>;
+    }
     return (
       <View style={styles.rowStateInline}>
         <ThemedAlertTriangle size={ICON_SIZE.sm} uniProps={foregroundMutedMapping} />
@@ -1024,6 +1027,7 @@ function GroupProviderButton({
   return (
     <ModelBrowserRow
       label={provider.label}
+      labelMuted={selection.kind === "unavailable"}
       leadingSlot={leadingSlot}
       trailingSlot={trailingSlot}
       tone="drillDown"
@@ -1329,6 +1333,16 @@ function ProviderModelBrowserContent({
         </View>
         <Text style={styles.emptyStateText}>{t("modelSelector.loadingShort")}</Text>
       </View>
+    );
+  }
+  if (selection.kind === "unavailable") {
+    return (
+      <ProviderErrorEmptyState
+        providerId={view.providerId}
+        message={t("modelSelector.notInstalledMessage", { provider: provider.label })}
+        onRetryProvider={onRetryProvider}
+        isRetryingProvider={isRetryingProvider}
+      />
     );
   }
   if (selection.kind === "error") {

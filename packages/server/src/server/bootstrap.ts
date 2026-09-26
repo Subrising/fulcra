@@ -121,6 +121,8 @@ import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
 import { createWorkspaceLabelService } from "./workspace-labels/index.js";
 import { createGitHubService } from "../services/github-service.js";
+import { createHostIntegrations } from "./integrations/host-integrations.js";
+import { handlePluginHostCall } from "./plugins/plugin-host-calls.js";
 import { createPaseoWorktree as createRegisteredPaseoWorktree } from "./paseo-worktree-service.js";
 import { createWorkspaceProvisioningService } from "./session/workspace-provisioning/workspace-provisioning-service.js";
 import { createPaseoWorktreeWorkflow } from "./worktree-session.js";
@@ -131,6 +133,10 @@ import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { createSpeechService } from "./speech/speech-runtime.js";
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStorage } from "./agent/agent-storage.js";
+import {
+  FileAgentTimelineStore,
+  type FileAgentTimelineStoreOptions,
+} from "./agent/file-agent-timeline-store.js";
 import { attachAgentStoragePersistence } from "./persistence-hooks.js";
 import { createAgentMcpServer } from "./agent/mcp-server.js";
 import {
@@ -407,6 +413,8 @@ export interface PaseoDaemonConfig {
   agentProfiles?: AgentProfile[];
   skillSelection?: AgentSkillSelection;
   pluginsEnabled?: boolean;
+  // Public OAuth client ids per connector, from config.json `integrations.oauthClientIds`.
+  oauthClientIds?: Record<string, string>;
   plugins?: Record<string, PluginSource>;
   staticDir: string;
   mcpDebug: boolean;
@@ -438,6 +446,7 @@ export interface PaseoDaemonConfig {
   downloadTokenTtlMs?: number;
   agentProviderSettings?: AgentProviderRuntimeSettingsMap;
   providerCatalogRefreshTimeoutMs?: number;
+  timelineRetention?: "keep" | "purge";
   metadataGeneration?: {
     providers?: Array<{
       provider: string;
@@ -481,6 +490,44 @@ export interface PaseoDaemonDependencies {
     daemonStatusRpc?: boolean;
     relayConfig?: boolean;
   };
+  /** Test seam: called at each timeline rollover and retention step; throwing models a crash. */
+  timelineStoreStep?: FileAgentTimelineStoreOptions["onStep"];
+  // Tests pass an in-memory store so no daemon test can reach the OS keychain.
+  credentialBackend?: import("./integrations/credential-backend.js").CredentialBackend | null;
+}
+
+function createTimelineStore(
+  config: PaseoDaemonConfig,
+  dependencies: PaseoDaemonDependencies,
+): FileAgentTimelineStore {
+  return new FileAgentTimelineStore(
+    path.join(config.paseoHome, "native-timeline-journal"),
+    dependencies.timelineStoreStep ? { onStep: dependencies.timelineStoreStep } : {},
+  );
+}
+
+/**
+ * Finishes interrupted retention moves, then finishes each pending delete whose registry record is
+ * already gone. A pending delete whose record remains stays pending: its history reads from the
+ * retained copy until the user deletes the agent again.
+ */
+async function finishTimelineRetention(
+  store: FileAgentTimelineStore,
+  agentStorage: AgentStorage,
+  logger: Logger,
+): Promise<void> {
+  try {
+    const recovered = await store.recoverInterruptedRetention();
+    if (recovered.length > 0)
+      logger.info({ count: recovered.length }, "Finished interrupted timeline retention");
+    for (const agentId of await store.listPendingDeletes()) {
+      if (await agentStorage.get(agentId)) continue;
+      await store.commitRetention(agentId);
+      logger.info({ agentId }, "Finished a delete whose history was already retained");
+    }
+  } catch (error) {
+    logger.error({ err: error }, "Failed to finish interrupted timeline retention");
+  }
 }
 
 function createBootstrapManagedProcessRegistry(
@@ -606,12 +653,34 @@ export async function createPaseoDaemon(
   });
   const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({});
+  const serverId = getOrCreateServerId(config.paseoHome, { logger });
+  let wsServer: VoiceAssistantWebSocketServer | null = null;
+  const hostIntegrations = createHostIntegrations({
+    paseoHome: config.paseoHome,
+    serverId,
+    logger,
+    oauthClientIds: config.oauthClientIds,
+    backend: dependencies.credentialBackend,
+    // Until the WebSocket server exists, a push fails and the outbox retries it.
+    sendPush: (payload) =>
+      wsServer
+        ? wsServer.sendPushNotification(payload)
+        : Promise.reject(new Error("Push is not ready yet")),
+  });
   const pluginRuntime = new PluginService(logger, daemonConfigStore, daemonVersion, {
     managedSources: new ManagedPluginSources(config.paseoHome),
     settingsDirectory: path.join(config.paseoHome, "plugin-settings"),
+    hostCalls: (call) => handlePluginHostCall(hostIntegrations.services, call),
+    hostCapabilities: {
+      notify: hostIntegrations.services.notifications !== undefined,
+      credentials: hostIntegrations.services.credentials !== undefined,
+    },
   });
+  // A plugin-origin session lists only the connectors its loaded manifest declares.
+  hostIntegrations.services.pluginCredentialGrants = (pluginId) =>
+    pluginRuntime.catalog().find((plugin) => plugin.id === pluginId)?.requirements?.credentials ??
+    [];
 
-  const serverId = getOrCreateServerId(config.paseoHome, { logger });
   const daemonKeyPair = await loadOrCreateDaemonKeyPair(config.paseoHome, logger);
   const managedProcesses = createBootstrapManagedProcessRegistry(config, logger);
   // Reconcile the helper-process ledger in the background so it never blocks the
@@ -669,7 +738,6 @@ export async function createPaseoDaemon(
   daemonConfigStore.onFieldChange("app.baseUrl", (value) => {
     appBaseUrl = typeof value === "string" ? value : "https://app.paseo.sh";
   });
-  let wsServer: VoiceAssistantWebSocketServer | null = null;
   let serviceProxyListenTarget: ListenTarget | null = null;
   const scriptHealthMonitor = new ScriptHealthMonitor({
     serviceProxy,
@@ -919,7 +987,12 @@ export async function createPaseoDaemon(
     if (git) configureGitProcessPolicy(git);
   });
   const initialAgentManagerState = providerSnapshotManager.getAgentManagerProviderState();
+  const durableTimelineStore = createTimelineStore(config, dependencies);
+  // A retention interrupted by a crash is finished before any agent reads its history.
+  await finishTimelineRetention(durableTimelineStore, agentStorage, logger);
   const agentManager = new AgentManager({
+    durableTimelineStore,
+    timelineRetention: config.timelineRetention,
     pluginLifecycle: pluginRuntime,
     clients: initialAgentManagerState.clients,
     providerDefinitions: initialAgentManagerState.providerDefinitions,
@@ -1260,7 +1333,8 @@ export async function createPaseoDaemon(
         agentManager,
         agentStorage,
         createAgent,
-        interruptAgent: (agentId) => cancelAgentRunCommand({ agentManager, logger }, agentId),
+        interruptAgent: (agentId) =>
+          cancelAgentRunCommand({ agentManager, agentStorage, logger }, agentId),
         archiveWorkspace: archiveWorkspaceByIdExternal,
         cleanupFailedCreate: (input) =>
           hubAgentLifecycle.cleanupCreatedWorktreeAfterFailedAgentCreate(input),
@@ -1354,6 +1428,18 @@ export async function createPaseoDaemon(
     { elapsed: elapsed() },
     `Agent registry loaded (${persistedRecords.length} record${persistedRecords.length === 1 ? "" : "s"}); agents will initialize on demand`,
   );
+  // Nothing runs a stored `running` turn after a restart, so it is normalised to idle with a durable
+  // interruption marker before any client reads it. No agent is loaded, resumed or prompted here.
+  const interrupted = await agentStorage.normalizeInterruptedTurns(
+    { detectedAt: new Date().toISOString(), bootId: randomUUID() },
+    (agentId) => agentManager.getAgent(agentId) !== null,
+  );
+  if (interrupted.length > 0) {
+    logger.info(
+      { agentIds: interrupted },
+      `Marked ${interrupted.length} interrupted turn(s) idle at boot`,
+    );
+  }
   logger.info(
     "Voice mode configured for agent-scoped resume flow (no dedicated voice assistant provider)",
   );
@@ -1717,6 +1803,7 @@ export async function createPaseoDaemon(
               pluginRuntime,
               orchestrationSkills,
               workspaceLabelService,
+              hostIntegrations.services,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
@@ -1777,6 +1864,7 @@ export async function createPaseoDaemon(
 
   const stop = async () => {
     await pluginRuntime.stopAllPlugins();
+    hostIntegrations.dispose();
     unsubscribePluginProviders();
     await hubRelationships.stop();
     workspaceReconciliation.dispose();

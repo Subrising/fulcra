@@ -495,3 +495,42 @@ export function hostHasConnection(host: HostProfile, connection: HostConnection)
 export function registryHasConnection(hosts: HostProfile[], connection: HostConnection): boolean {
   return hosts.some((host) => hostHasConnection(host, connection));
 }
+
+// Standard secure/plain web ports carry no information in a host display, so
+// "relay.paseo.sh:443" reads as "relay.paseo.sh" while "127.0.0.1:6767" keeps its port.
+export function formatHostEndpoint(endpoint: string): string {
+  return endpoint.replace(/:(?:443|80)$/, "");
+}
+
+// The address a connection reaches, for telling hosts apart in the UI. Never returns a
+// credential: TCP carries an optional password that is deliberately not read here.
+export function describeHostConnection(connection: HostConnection): string | null {
+  switch (connection.type) {
+    case "directTcp":
+      return connection.endpoint ? formatHostEndpoint(connection.endpoint) : null;
+    case "relay":
+      return connection.relayEndpoint ? formatHostEndpoint(connection.relayEndpoint) : null;
+    case "remoteSsh":
+      if (!connection.host) return null;
+      return connection.daemonPort
+        ? `${connection.host}:${connection.daemonPort}`
+        : connection.host;
+    case "directSocket":
+    case "directPipe":
+      return connection.path || null;
+  }
+}
+
+// Two daemons on one machine report the same hostname, so a label alone cannot identify a
+// host. Prefer the connection the host actually uses, then any other that has an address.
+export function describeHostEndpoint(host: {
+  connections: HostConnection[];
+  preferredConnectionId?: string | null;
+}): string | null {
+  const preferred = host.connections.find((entry) => entry.id === host.preferredConnectionId);
+  for (const connection of preferred ? [preferred, ...host.connections] : host.connections) {
+    const described = describeHostConnection(connection);
+    if (described) return described;
+  }
+  return null;
+}

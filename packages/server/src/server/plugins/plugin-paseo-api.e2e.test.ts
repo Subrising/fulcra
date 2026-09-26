@@ -408,3 +408,129 @@ export default function contribute(server: PluginServerContext) {
     await daemon.close();
   }
 }, 60_000);
+
+test("a plugin's own session cannot manage shared accounts and lists only its declared connectors", async () => {
+  const { createMemoryCredentialBackend } = await import("../integrations/credential-backend.js");
+  const paseoHomeRoot = await mkdtemp(path.join(tmpdir(), "paseo-credentials-home-"));
+  const paseoHome = path.join(paseoHomeRoot, ".paseo");
+  roots.push(paseoHomeRoot);
+  const github = "3f7c1f0e-0000-4000-8000-000000000001";
+  const jira = "3f7c1f0e-0000-4000-8000-000000000002";
+  const account = (id: string, connector: string, site: string | null) => ({
+    version: 1,
+    id,
+    connector,
+    site,
+    displayName: `fixture (${connector})`,
+    method: "token",
+    scopes: [],
+    state: "connected",
+    expiresAt: null,
+    lastCheckedAt: "2026-09-24T10:00:00.000Z",
+    createdAt: "2026-09-24T10:00:00.000Z",
+  });
+  await mkdir(path.join(paseoHome, "integrations"), { recursive: true });
+  await writeFile(
+    path.join(paseoHome, "integrations", "accounts.json"),
+    JSON.stringify({
+      version: 1,
+      accounts: [account(github, "github", null), account(jira, "jira", "acme.atlassian.net")],
+      imports: {},
+    }),
+  );
+  const backend = createMemoryCredentialBackend({
+    [`ai.fulcra.credentials/${github}`]: JSON.stringify({
+      accessToken: "fixture-github",
+      scheme: "bearer",
+    }),
+    [`ai.fulcra.credentials/${jira}`]: JSON.stringify({
+      accessToken: "fixture-jira",
+      scheme: "bearer",
+    }),
+  });
+
+  const pluginSource = `import { defineRpc } from "@getpaseo/plugin";
+import { type PluginServerContext } from "@getpaseo/plugin/server";
+import { z } from "zod";
+
+const attempt = defineRpc({ name: "attempt", input: z.object({ accountId: z.string() }), output: z.unknown() });
+
+async function outcome(work: () => Promise<unknown>) {
+  try {
+    return { ok: await work() };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export default function contribute(server: PluginServerContext) {
+  server.handle(attempt, async ({ accountId }, { paseo }) => ({
+    list: await outcome(async () => {
+      const listed = await paseo.credentials.list();
+      return {
+        accounts: listed.accounts.map((entry) => entry.connector),
+        providers: listed.providers.map((entry) => entry.connector),
+      };
+    }),
+    begin: await outcome(() => paseo.credentials.begin({ connector: "github", method: "token" })),
+    reconnect: await outcome(() => paseo.credentials.reconnect({ accountId })),
+    remove: await outcome(() => paseo.credentials.remove(accountId)),
+  }));
+  return () => undefined;
+}`;
+  const pluginDirectories: Record<string, string> = {};
+  for (const [id, requirements] of [
+    ["no-grants", {}],
+    ["github-only", { credentials: ["github"] }],
+  ] as const) {
+    const directory = await mkdtemp(path.join(tmpdir(), `paseo-${id}-`));
+    roots.push(directory);
+    await writeFile(
+      path.join(directory, "paseo-plugin.json"),
+      JSON.stringify({
+        id,
+        requirements: { paseo: `>=${resolveDaemonVersion(import.meta.url)}`, ...requirements },
+      }),
+    );
+    await writeFile(path.join(directory, "index.server.ts"), pluginSource);
+    pluginDirectories[id] = directory;
+  }
+
+  const daemon = await createTestPaseoDaemon({
+    paseoHomeRoot,
+    cleanup: false,
+    credentialBackend: backend,
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws`, appVersion: "0.4.0" });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({ pluginsEnabled: true });
+    for (const directory of Object.values(pluginDirectories)) {
+      await client.installDirectoryPlugin(directory);
+    }
+    const refused = "Plugins cannot manage accounts";
+    const empty = (await client.invokePluginRpc("no-grants", "attempt", {
+      accountId: jira,
+    })) as Record<string, { ok?: unknown; error?: string }>;
+    expect(empty.list).toEqual({ ok: { accounts: [], providers: [] } });
+    for (const operation of ["begin", "reconnect", "remove"]) {
+      expect(empty[operation]?.error).toContain(refused);
+    }
+    const scoped = (await client.invokePluginRpc("github-only", "attempt", {
+      accountId: github,
+    })) as Record<string, { ok?: unknown; error?: string }>;
+    expect(scoped.list).toEqual({ ok: { accounts: ["github"], providers: ["github"] } });
+    expect(scoped.remove?.error).toContain(refused);
+
+    // Nothing changed: the app session still sees both accounts and their secrets.
+    const listed = await client.listCredentials();
+    expect(listed.accounts.map((entry) => entry.id).sort()).toEqual([github, jira]);
+    expect(backend.items.size).toBe(2);
+    // The app session, unlike a plugin session, can disconnect.
+    await expect(client.removeCredential(jira)).resolves.toBe(true);
+    expect(backend.items.has(`ai.fulcra.credentials/${jira}`)).toBe(false);
+  } finally {
+    await client.close().catch(() => undefined);
+    await daemon.close();
+  }
+}, 90_000);

@@ -1,4 +1,8 @@
 import os from "node:os";
+import {
+  createMemoryCredentialBackend,
+  type CredentialBackend,
+} from "../integrations/credential-backend.js";
 import path from "node:path";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 
@@ -6,6 +10,7 @@ import pino from "pino";
 import {
   createPaseoDaemon,
   type PaseoDaemonConfig,
+  type PaseoDaemonDependencies,
   type PaseoOpenAIConfig,
   type PaseoSpeechConfig,
 } from "../bootstrap.js";
@@ -15,6 +20,8 @@ import type { PushNotificationSender } from "../push/index.js";
 import type { AgentProfile } from "@getpaseo/protocol/messages";
 
 interface TestPaseoDaemonOptions {
+  // Never the OS keychain: daemon tests get an in-memory credential store unless they pass one.
+  credentialBackend?: CredentialBackend;
   daemonVersion?: string;
   desktopManaged?: boolean;
   downloadTokenTtlMs?: number;
@@ -50,6 +57,7 @@ interface TestPaseoDaemonOptions {
   autoArchiveAfterMerge?: boolean;
   pluginsEnabled?: PaseoDaemonConfig["pluginsEnabled"];
   plugins?: PaseoDaemonConfig["plugins"];
+  timelineStoreStep?: PaseoDaemonDependencies["timelineStoreStep"];
 }
 
 export interface TestPaseoDaemon {
@@ -104,6 +112,8 @@ export async function createTestPaseoDaemon(
         daemonStatusRpc: options.daemonStatusRpcCapability,
         relayConfig: options.relayConfigCapability,
       },
+      ...(options.timelineStoreStep ? { timelineStoreStep: options.timelineStoreStep } : {}),
+      credentialBackend: options.credentialBackend ?? createMemoryCredentialBackend(),
     });
     try {
       await startDaemonWithTimeout(daemon, TEST_DAEMON_START_TIMEOUT_MS);

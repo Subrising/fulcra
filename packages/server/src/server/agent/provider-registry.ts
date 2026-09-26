@@ -530,6 +530,8 @@ function wrapClientProvider(
         modes: catalog.modes,
       };
     },
+    persistsDefaultModeOnCreate: inner.persistsDefaultModeOnCreate,
+    persistsDefaultThinkingOnCreate: inner.persistsDefaultThinkingOnCreate,
     resolveDefaultModeId: inner.resolveDefaultModeId
       ? async ({ config, env, signal }: ResolveAgentDefaultModeInput) =>
           await inner.resolveDefaultModeId?.({

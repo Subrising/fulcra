@@ -5,6 +5,7 @@ import {
   type ProjectedTimelineRow,
 } from "./timeline-projection.js";
 import type { AgentTimelineItem } from "./agent-sdk-types.js";
+import { isSeqInTurn } from "./timeline-turn-index.js";
 import type {
   AgentTimelineFetchOptions,
   AgentTimelineFetchResult,
@@ -93,11 +94,17 @@ export class InMemoryAgentTimelineStore {
     return this.requireState(agentId).epoch;
   }
 
+  getNextSeq(agentId: string): number {
+    return this.requireState(agentId).nextSeq;
+  }
+
   fetch(agentId: string, options?: AgentTimelineFetchOptions): AgentTimelineFetchResult {
     const state = this.requireState(agentId);
     const direction = options?.direction ?? "tail";
     const cursor = options?.cursor;
-    const rows = state.projection.getRows();
+    const turn = options?.turn;
+    const allRows = state.projection.getRows();
+    const rows = turn ? allRows.filter((row) => isSeqInTurn(turn, row.seqStart)) : allRows;
     const window = { minSeq: state.minSeq, maxSeq: state.nextSeq - 1, nextSeq: state.nextSeq };
     const staleCursor = cursor !== undefined && cursor.epoch !== state.epoch;
     const gap =
@@ -109,7 +116,7 @@ export class InMemoryAgentTimelineStore {
     const reset = staleCursor || gap;
     const page = selectProjectedTimelinePage({
       rows,
-      bounds: window,
+      bounds: turn ? { minSeq: turn.seqStart, maxSeq: turn.seqEnd } : window,
       direction: reset ? "tail" : direction,
       cursorSeq: cursor?.seq,
       limit: options?.limit ?? DEFAULT_TIMELINE_FETCH_LIMIT,

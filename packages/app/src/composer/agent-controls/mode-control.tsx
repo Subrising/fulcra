@@ -280,7 +280,9 @@ export function useLiveAgentModeControl(
         mergeProviderPreferences({
           preferences: current,
           provider: slice.provider,
-          updates: { mode: modeId || undefined },
+          // Picking a mode here is the user choosing one; that is what lets it outrank the provider's own
+          // default on later sessions. See ProviderPreferences.modeChosenByUser.
+          updates: modeId ? { mode: modeId, modeChosenByUser: true } : { mode: undefined },
         }),
       ).catch((error) => {
         console.warn("[AgentModeControl] persist mode preference failed", error);

@@ -38,10 +38,25 @@ export class PushService {
   }
 
   async sendPush(tokens: string[], payload: PushPayload): Promise<void> {
-    if (tokens.length === 0) {
-      return;
-    }
+    await Promise.all(
+      this.batches(tokens, payload).map((batch) =>
+        this.deliverBatch(batch).catch((error: unknown) => {
+          this.logger.error({ err: error }, "Failed to send push notifications");
+        }),
+      ),
+    );
+  }
 
+  // Like sendPush, but reports how many devices Expo accepted and throws when the push service
+  // could not be reached or refused the request, so a caller can retry.
+  async sendPushReporting(tokens: string[], payload: PushPayload): Promise<number> {
+    const accepted = await Promise.all(
+      this.batches(tokens, payload).map((batch) => this.deliverBatch(batch)),
+    );
+    return accepted.reduce((total, count) => total + count, 0);
+  }
+
+  private batches(tokens: string[], payload: PushPayload): ExpoPushMessage[][] {
     const messages: ExpoPushMessage[] = tokens.map((token) => ({
       to: token,
       title: payload.title,
@@ -55,34 +70,31 @@ export class PushService {
     for (let i = 0; i < messages.length; i += MAX_BATCH_SIZE) {
       batches.push(messages.slice(i, i + MAX_BATCH_SIZE));
     }
-
-    await Promise.all(batches.map((batch) => this.sendBatch(batch)));
+    return batches;
   }
 
-  private async sendBatch(messages: ExpoPushMessage[]): Promise<void> {
-    try {
-      const response = await fetch(EXPO_PUSH_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(messages),
-      });
+  // Returns the number of messages Expo accepted; throws on a network or API error.
+  private async deliverBatch(messages: ExpoPushMessage[]): Promise<number> {
+    const response = await fetch(EXPO_PUSH_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(messages),
+    });
 
-      if (!response.ok) {
-        this.logger.error(
-          { status: response.status, statusText: response.statusText },
-          "Expo push API error",
-        );
-        return;
-      }
-
-      const result = (await response.json()) as { data: ExpoPushTicket[] };
-      this.handleTickets(messages, result.data);
-    } catch (error) {
-      this.logger.error({ err: error }, "Failed to send push notifications");
+    if (!response.ok) {
+      this.logger.error(
+        { status: response.status, statusText: response.statusText },
+        "Expo push API error",
+      );
+      throw new Error(`Expo push API error ${response.status}`);
     }
+
+    const result = (await response.json()) as { data: ExpoPushTicket[] };
+    this.handleTickets(messages, result.data);
+    return result.data.filter((ticket) => ticket.status === "ok").length;
   }
 
   private handleTickets(messages: ExpoPushMessage[], tickets: ExpoPushTicket[]): void {

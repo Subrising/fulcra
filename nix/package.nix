@@ -2,7 +2,7 @@
   lib,
   stdenv,
   buildNpmPackage,
-  nodejs_22,
+  nodejs_24,
   python3,
   makeWrapper,
   autoPatchelfHook,
@@ -61,7 +61,11 @@ buildNpmPackage rec {
       && baseName != ".DS_Store";
   };
 
-  nodejs = nodejs_22;
+  # Node 24 (24.13.0 in the pinned nixpkgs) so buildNpmPackage runs npm 11.
+  # npm 10 mis-resolves the root markdown-it override and fails the offline
+  # install. This deliberately differs from .tool-versions, which pins Node 22
+  # for development; see docs/pipelines.md.
+  nodejs = nodejs_24;
 
   # Default hash lives in nix/npm-deps.hash (see arg default above).
   # CI auto-updates that file when package-lock.json changes (see .github/workflows/).

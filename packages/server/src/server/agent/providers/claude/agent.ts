@@ -37,6 +37,12 @@ import {
   resolveConfiguredClaudeModel,
 } from "./models.js";
 import {
+  probeClaudeModels,
+  recordClaudeRuntimeModels,
+  type ClaudeModelProbe,
+  type ClaudeRuntimeModel,
+} from "./model-discovery.js";
+import {
   CLAUDE_DISABLED_THINKING_OPTION_ID,
   CLAUDE_ULTRACODE_THINKING_OPTION_ID,
   parseClaudeCodeVersion,
@@ -405,7 +411,13 @@ interface ClaudeAgentClientOptions {
   resolveBinary?: () => Promise<string>;
   resolveVersion?: (signal?: AbortSignal) => Promise<string>;
   configDir?: string;
+  /** Asks Claude Code for the account's models. Tests inject one; the default spawns the real CLI. */
+  modelProbe?: ClaudeModelProbe;
+  now?: () => number;
 }
+
+// How long a resolved Claude Code version is reused for the catalogue cache key before `--version` reruns.
+const CLAUDE_VERSION_KEY_TTL_MS = 60_000;
 
 interface ClaudeAgentSessionOptions {
   defaults?: { agents?: Record<string, AgentDefinition> };
@@ -517,6 +529,15 @@ interface ClaudeOptionsLogSummary {
 }
 
 const MAX_RECENT_STDERR_CHARS = 4000;
+// Claude Code 2.1.280+ prints this when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB forces every launch to `default`.
+const CLAUDE_FORCED_MODE_STDERR = /Permission mode forced to default[^\n]*/;
+
+// Claude started in a different permission mode than the one it was launched with (the CLI declined it).
+interface ClaudeModeOverride {
+  requestedMode: PermissionMode;
+  enforcedMode: PermissionMode;
+  reason: string | null;
+}
 const STDERR_FLUSH_WAIT_MS = 150;
 const STDERR_FLUSH_POLL_INTERVAL_MS = 10;
 
@@ -1492,6 +1513,11 @@ export function readEventIdentifiers(message: SDKMessage): EventIdentifiers {
 export class ClaudeAgentClient implements AgentClient {
   readonly provider = "claude" as const;
   readonly capabilities = CLAUDE_CAPABILITIES;
+  // A mode-less Claude session starts in `default` (Always Ask) for life, while resolveDefaultModeId says
+  // `auto` where Auto is available. Storing the default at creation closes that gap.
+  readonly persistsDefaultModeOnCreate = true;
+  // Likewise, a session without a thinking option sends no effort; store the model's declared default.
+  readonly persistsDefaultThinkingOnCreate = true;
 
   private readonly defaults?: { agents?: Record<string, AgentDefinition> };
   private readonly logger: Logger;
@@ -1500,6 +1526,9 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly resolveBinary: () => Promise<string>;
   private readonly resolveVersion: (signal?: AbortSignal) => Promise<string>;
   private readonly configDir?: string;
+  private readonly modelProbe: ClaudeModelProbe;
+  private readonly now: () => number;
+  private versionForKey: { version: string | null; at: number } | null = null;
 
   constructor(options: ClaudeAgentClientOptions) {
     this.defaults = options.defaults;
@@ -1511,6 +1540,8 @@ export class ClaudeAgentClient implements AgentClient {
       options.resolveVersion ??
       ((signal) => resolveClaudeCodeVersion(this.runtimeSettings, signal));
     this.configDir = options.configDir;
+    this.modelProbe = options.modelProbe ?? probeClaudeModels;
+    this.now = options.now ?? Date.now;
   }
 
   resolveConfiguredModel(model: AgentModelDefinition): AgentModelDefinition {
@@ -1564,8 +1595,44 @@ export class ClaudeAgentClient implements AgentClient {
   }
 
   async getCatalogCacheKey(_options: FetchCatalogOptions): Promise<string> {
-    // This client discovers through host configuration, independent of project cwd.
-    return "host";
+    // Host-scoped, independent of project cwd, and keyed by the Claude Code version: models come from the
+    // installed CLI, so an upgrade must re-discover them rather than reuse the old catalogue.
+    const version = await this.resolveVersionForKey();
+    return version ? `host:${version}` : "host";
+  }
+
+  private async resolveVersionForKey(): Promise<string | null> {
+    const cached = this.versionForKey;
+    if (cached && this.now() - cached.at < CLAUDE_VERSION_KEY_TTL_MS) return cached.version;
+    let version: string | null = null;
+    try {
+      version = await this.resolveVersion();
+    } catch {
+      version = null;
+    }
+    this.versionForKey = { version, at: this.now() };
+    return version;
+  }
+
+  private async discoverRuntimeModels(
+    context: ProviderRefreshContext | undefined,
+  ): Promise<ClaudeRuntimeModel[] | null> {
+    try {
+      return await runProviderRefreshActivity(context, "models", async () =>
+        this.modelProbe({
+          claudeBinary: await this.resolveBinary(),
+          runtimeSettings: this.runtimeSettings,
+          queryFactory: this.queryFactory,
+          signal: context?.signal,
+        }),
+      );
+    } catch (error) {
+      this.logger.warn(
+        { err: error },
+        "Claude model discovery failed; using the built-in model list",
+      );
+      return null;
+    }
   }
 
   async fetchCatalog(
@@ -1581,9 +1648,12 @@ export class ClaudeAgentClient implements AgentClient {
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to resolve Claude Code version for model catalog");
     }
+    const runtimeModels = await this.discoverRuntimeModels(context);
     const models = await runProviderRefreshActivity(context, "settings", () =>
-      getClaudeModelsWithSettings(this.logger, this.configDir, claudeCodeVersion),
+      getClaudeModelsWithSettings(this.logger, this.configDir, claudeCodeVersion, runtimeModels),
     );
+    // Sessions gate fast mode per model; they read what this discovery found, not the manifest.
+    recordClaudeRuntimeModels(runtimeModels?.length ? models : null);
     const modeCatalog = claudeModeCatalog(
       createProviderEnv({ baseEnv: process.env, runtimeSettings: this.runtimeSettings }),
     );
@@ -2057,7 +2127,12 @@ class ClaudeAgentSession implements AgentSession {
   private readonly permissionClearingSteerUuids = new Set<string>();
   private claudeSessionId: string | null;
   private persistence: AgentPersistenceHandle | null;
+  // The mode this session asks Claude for: configured, or last set by the user. Never replaced by a mode Claude
+  // fell back to on its own, so a CLI-forced downgrade does not carry into later launches.
   private currentMode: PermissionMode;
+  private launchedMode: PermissionMode | null = null;
+  private modeOverride: ClaudeModeOverride | null = null;
+  private pendingModeOverrideNotice: AgentTimelineItem | null = null;
   private planResumeMode: PermissionMode | null = null;
   private availableModes: AgentMode[] = DEFAULT_MODES;
   private toolUseCache = new Map<string, ToolUseCacheEntry>();
@@ -2171,10 +2246,11 @@ class ClaudeAgentSession implements AgentSession {
       sessionId: this.claudeSessionId,
       model: this.lastOptionsModel,
       modeId: this.currentMode ?? null,
-      ...(this.lastRuntimeModel
+      ...(this.lastRuntimeModel || this.modeOverride
         ? {
             extra: {
-              runtimeModel: this.lastRuntimeModel,
+              ...(this.lastRuntimeModel ? { runtimeModel: this.lastRuntimeModel } : {}),
+              ...this.modeOverrideExtra(),
             },
           }
         : {}),
@@ -2198,6 +2274,7 @@ class ClaudeAgentSession implements AgentSession {
       sessionId: this.claudeSessionId,
       model: this.lastOptionsModel,
       modeId: this.currentMode ?? null,
+      ...(this.modeOverride ? { extra: this.modeOverrideExtra() } : {}),
     };
 
     if (!this.claudeSessionId) {
@@ -2421,6 +2498,8 @@ class ClaudeAgentSession implements AgentSession {
       this.planResumeMode = normalized;
     }
     this.currentMode = normalized;
+    this.modeOverride = null;
+    this.cachedRuntimeInfo = null;
   }
 
   async setModel(modelId: string | null): Promise<void> {
@@ -3094,6 +3173,16 @@ class ClaudeAgentSession implements AgentSession {
       return this.query;
     }
 
+    if (this.queryRestartNeeded && !this.query) {
+      // The flag can be set while no query exists — changing thinking or model on a resumed
+      // runtime that has not queried yet. There is nothing to retire, and the query built
+      // below already carries the new option, so clear it here too. Leaving it set makes the
+      // next ensureQuery() caller take the restart branch below, which nulls this.input
+      // synchronously; startTurn() is holding that input and pushes into it right after
+      // startQueryPump(), so the turn dies with "Cannot read properties of null".
+      this.queryRestartNeeded = false;
+    }
+
     if (this.queryRestartNeeded && this.query) {
       const oldQuery = this.query;
       const oldInput = this.input;
@@ -3270,6 +3359,7 @@ class ClaudeAgentSession implements AgentSession {
       sessionBinding.resume = this.claudeSessionId;
     }
 
+    this.launchedMode = this.currentMode;
     const base: ClaudeOptions = {
       cwd: this.config.cwd,
       includePartialMessages: true,
@@ -4246,6 +4336,14 @@ class ClaudeAgentSession implements AgentSession {
           item: sessionUpdate.notice,
         });
       }
+      if (this.pendingModeOverrideNotice) {
+        events.push({
+          type: "timeline",
+          provider: "claude",
+          item: this.pendingModeOverrideNotice,
+        });
+        this.pendingModeOverrideNotice = null;
+      }
       if (sessionUpdate.threadStartedSessionId) {
         events.push({
           type: "thread_started",
@@ -4475,6 +4573,63 @@ class ClaudeAgentSession implements AgentSession {
     events.push(this.buildTurnFailedEvent(errorMessage));
   }
 
+  // Claude reports the mode it actually enforces in every init. When that differs from the mode this launch asked
+  // for, Claude declined it at startup: CLAUDE_CODE_SUBPROCESS_ENV_SCRUB forces `default`, auto can be unavailable
+  // for a model or plan. That is a fact about this launch, not a new configuration. Adopting it used to make the
+  // next launch pass the fallback, so one refusal became permanent. The requested mode stays; the refusal is
+  // logged, shown on the timeline once, and exposed in runtime info. Nothing re-asserts the declined mode.
+  private recordLaunchModeOutcome(reportedMode: PermissionMode, claudeSessionId: string): void {
+    const requestedMode = this.launchedMode ?? this.currentMode;
+    if (reportedMode === requestedMode) {
+      if (this.modeOverride) {
+        this.modeOverride = null;
+        this.cachedRuntimeInfo = null;
+      }
+      return;
+    }
+    const reason = this.recentStderr.match(CLAUDE_FORCED_MODE_STDERR)?.[0] ?? null;
+    const override: ClaudeModeOverride = { requestedMode, enforcedMode: reportedMode, reason };
+    this.logger.warn(
+      {
+        configuredMode: this.config.modeId ?? null,
+        requestedMode,
+        reportedMode,
+        reason,
+        claudeSessionId,
+      },
+      "Claude is enforcing a different permission mode than this launch requested; keeping the requested mode for later launches",
+    );
+    const previous = this.modeOverride;
+    if (
+      !previous ||
+      previous.requestedMode !== override.requestedMode ||
+      previous.enforcedMode !== override.enforcedMode
+    ) {
+      this.pendingModeOverrideNotice = {
+        type: "notification",
+        level: "warning",
+        message:
+          `Claude is running this session in "${reportedMode}" mode, not the requested "${requestedMode}".` +
+          (reason ? ` Claude Code: ${reason}` : ""),
+      };
+    }
+    this.modeOverride = override;
+    this.cachedRuntimeInfo = null;
+  }
+
+  private modeOverrideExtra(): AgentMetadata {
+    if (!this.modeOverride) {
+      return {};
+    }
+    return {
+      permissionModeOverride: {
+        requestedMode: this.modeOverride.requestedMode,
+        enforcedMode: this.modeOverride.enforcedMode,
+        reason: this.modeOverride.reason,
+      },
+    };
+  }
+
   private createClaudeSessionChangedNotice(
     oldSessionId: string,
     newSessionId: string,
@@ -4567,7 +4722,7 @@ class ClaudeAgentSession implements AgentSession {
       notice = this.createClaudeSessionChangedNotice(existingSessionId, newSessionId);
     }
     this.availableModes = DEFAULT_MODES;
-    this.currentMode = message.permissionMode;
+    this.recordLaunchModeOutcome(message.permissionMode, newSessionId);
     if (this.currentMode !== "plan") {
       this.planResumeMode = this.currentMode;
     }

@@ -110,13 +110,4 @@ describe("desktop-updates helpers", () => {
       runningUnderARM64Translation: false,
     });
   });
-
-  it("builds the direct Apple Silicon DMG URL from a version", async () => {
-    const { buildMacAppleSiliconDownloadUrl } = await loadModuleForPlatform("web");
-
-    expect(buildMacAppleSiliconDownloadUrl("v0.1.64")).toBe(
-      "https://github.com/getpaseo/paseo/releases/download/v0.1.64/Paseo-0.1.64-arm64.dmg",
-    );
-    expect(buildMacAppleSiliconDownloadUrl(null)).toBeNull();
-  });
 });

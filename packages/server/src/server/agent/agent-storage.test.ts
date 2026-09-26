@@ -576,3 +576,234 @@ describe("AgentStorage", () => {
     expect(after.some((r) => r.id === agentId)).toBe(false);
   });
 });
+
+// Boot normalisation of dead turns, and the durable interruption marker.
+describe("interrupted-turn normalisation", () => {
+  let dir: string;
+  const logger = createTestLogger();
+  const at = "2026-09-23T22:10:00.000Z";
+  const userAt = "2026-09-23T22:09:00.000Z";
+  const marker = { detectedAt: "2026-09-23T22:30:00.000Z", bootId: "boot-2" };
+  const seed = (id: string, extra: Record<string, unknown>) => ({
+    id,
+    provider: "claude",
+    cwd: "/tmp/project",
+    createdAt: at,
+    updatedAt: at,
+    lastActivityAt: at,
+    lastUserMessageAt: userAt,
+    title: null,
+    labels: {},
+    lastStatus: "running",
+    lastModeId: null,
+    config: null,
+    ...extra,
+  });
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "paseo-interrupted-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("only non-archived, non-internal running/initializing records change, with timestamps byte-identical", async () => {
+    const storage = new AgentStorage(dir, logger);
+    const records = [
+      seed("run", {}),
+      seed("init", { lastStatus: "initializing" }),
+      seed("archived", { archivedAt: at }),
+      seed("internal", { internal: true }),
+      seed("idle", { lastStatus: "idle" }),
+      seed("loaded", {}),
+    ];
+    for (const record of records) await storage.upsert(record as never);
+    const before = new Map((await storage.list()).map((r) => [r.id, structuredClone(r)]));
+    const changed = await storage.normalizeInterruptedTurns(marker, (id) => id === "loaded");
+    expect(changed).toEqual(["init", "run"]);
+    const after = new Map((await new AgentStorage(dir, logger).list()).map((r) => [r.id, r]));
+    for (const id of ["run", "init"]) {
+      const r = after.get(id)!,
+        b = before.get(id)!;
+      expect(r.lastStatus).toBe("idle");
+      expect(r.interruptedTurn).toEqual({
+        previousStatus: b.lastStatus,
+        detectedAt: marker.detectedAt,
+        bootId: "boot-2",
+        lastUserMessageAt: userAt,
+      });
+      expect(r.updatedAt).toBe(b.updatedAt);
+      expect(r.lastUserMessageAt).toBe(b.lastUserMessageAt);
+      expect({ ...r, lastStatus: b.lastStatus, interruptedTurn: undefined }).toEqual({
+        ...b,
+        interruptedTurn: undefined,
+      });
+    }
+    for (const id of ["archived", "internal", "idle", "loaded"])
+      expect(after.get(id)).toEqual(before.get(id));
+    // Idempotent: a second pass finds nothing to do.
+    await expect(
+      storage.normalizeInterruptedTurns(marker, (id) => id === "loaded"),
+    ).resolves.toEqual([]);
+  });
+
+  test("the marker survives snapshot flushes until the agent receives a new user message", async () => {
+    const storage = new AgentStorage(dir, logger);
+    await storage.upsert(seed("agent-1", {}) as never);
+    await storage.normalizeInterruptedTurns(marker);
+    await storage.applySnapshot(
+      createManagedAgent({
+        id: "agent-1",
+        cwd: "/tmp/project",
+        lifecycle: "idle",
+        lastUserMessageAt: new Date(userAt),
+      }),
+    );
+    expect((await storage.get("agent-1"))?.interruptedTurn?.previousStatus).toBe("running");
+    await storage.applySnapshot(
+      createManagedAgent({
+        id: "agent-1",
+        cwd: "/tmp/project",
+        lifecycle: "running",
+        lastUserMessageAt: new Date("2026-09-24T08:00:00.000Z"),
+      }),
+    );
+    const next = await storage.get("agent-1");
+    expect(next?.interruptedTurn).toBeUndefined();
+    expect(next?.lastStatus).toBe("running");
+  });
+
+  test("single-agent normalisation never touches an agent that was loaded in the meantime", async () => {
+    const storage = new AgentStorage(dir, logger);
+    await storage.upsert(seed("agent-2", {}) as never);
+    await expect(
+      storage.normalizeInterruptedTurn("agent-2", marker, () => false),
+    ).resolves.toBeNull();
+    expect((await storage.get("agent-2"))?.lastStatus).toBe("running");
+    await expect(
+      storage.normalizeInterruptedTurn("agent-2", marker, () => true),
+    ).resolves.toMatchObject({ lastStatus: "idle" });
+  });
+});
+
+describe("stored-agent projection backstop", () => {
+  test("an agent no process has loaded never projects running; the marker travels with it", async () => {
+    const { buildStoredAgentPayload } = await import("./agent-projections.js");
+    const base = {
+      id: "agent-x",
+      provider: "claude",
+      cwd: "/tmp/project",
+      createdAt: "2026-09-23T22:10:00.000Z",
+      updatedAt: "2026-09-23T22:10:00.000Z",
+      lastUserMessageAt: null,
+      title: null,
+      labels: {},
+      lastModeId: null,
+      config: null,
+    } as const;
+    for (const lastStatus of ["running", "initializing"] as const)
+      expect(buildStoredAgentPayload({ ...base, lastStatus } as never, ["claude"]).status).toBe(
+        "idle",
+      );
+    for (const lastStatus of ["idle", "error", "closed"] as const)
+      expect(buildStoredAgentPayload({ ...base, lastStatus } as never, ["claude"]).status).toBe(
+        lastStatus,
+      );
+    const marker = {
+      previousStatus: "running",
+      detectedAt: "2026-09-23T22:30:00.000Z",
+      bootId: "b",
+      lastUserMessageAt: null,
+    } as const;
+    expect(
+      buildStoredAgentPayload({ ...base, lastStatus: "idle", interruptedTurn: marker } as never, [
+        "claude",
+      ]).interruptedTurn,
+    ).toEqual(marker);
+    expect(
+      "interruptedTurn" in
+        buildStoredAgentPayload({ ...base, lastStatus: "idle" } as never, ["claude"]),
+    ).toBe(false);
+  });
+});
+
+// Each normalisation re-reads the record inside the write queue; nothing may be written from the
+// snapshot taken when the records were listed.
+describe("interrupted-turn normalisation uses the current record", () => {
+  let dir: string;
+  const logger = createTestLogger();
+  const at = "2026-09-23T22:10:00.000Z";
+  const marker = { detectedAt: "2026-09-23T22:30:00.000Z", bootId: "boot-3" };
+  const seed = (id: string) => ({
+    id,
+    provider: "claude",
+    cwd: "/tmp/project",
+    createdAt: at,
+    updatedAt: at,
+    lastUserMessageAt: at,
+    title: null,
+    labels: {},
+    lastStatus: "running",
+    lastModeId: null,
+    config: null,
+  });
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "paseo-current-record-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  interface Internals {
+    cache: Map<string, Record<string, unknown>>;
+    queueRecordMutation: (id: string, mutate: unknown) => Promise<void>;
+  }
+  // Runs `between` after normalisation has listed and filtered its records but before its queued write reads one:
+  // the window in which another write can land or a record can go away.
+  function interpose(storage: AgentStorage, between: (id: string, internals: Internals) => void) {
+    const internals = storage as unknown as Internals,
+      queue = internals.queueRecordMutation.bind(storage);
+    internals.queueRecordMutation = (id, mutate) => {
+      between(id, internals);
+      return queue(id, mutate);
+    };
+  }
+
+  test("F1a: a change that landed after the listing is kept, not reverted from the stale snapshot", async () => {
+    const storage = new AgentStorage(dir, logger);
+    await storage.upsert(seed("changed") as never);
+    interpose(storage, (id, i) => {
+      i.cache.set(id, { ...i.cache.get(id)!, title: "Renamed meanwhile", archivedAt: null });
+    });
+    await expect(storage.normalizeInterruptedTurns(marker)).resolves.toEqual(["changed"]);
+    const record = await new AgentStorage(dir, logger).get("changed");
+    expect(record?.title).toBe("Renamed meanwhile");
+    expect(record?.lastStatus).toBe("idle");
+  });
+
+  test("F1b: a record that is gone by the time of the write is not resurrected", async () => {
+    const storage = new AgentStorage(dir, logger);
+    await storage.upsert(seed("gone") as never);
+    interpose(storage, (id, i) => {
+      i.cache.delete(id);
+    });
+    await expect(storage.normalizeInterruptedTurns(marker)).resolves.toEqual([]);
+    expect(await storage.get("gone")).toBeNull();
+    // And through the real remove() (its own directory): its delete fence also refuses any queued write.
+    const removedDir = path.join(dir, "removed-case");
+    const other = new AgentStorage(removedDir, logger);
+    await other.upsert(seed("removed") as never);
+    await other.remove("removed");
+    await expect(other.normalizeInterruptedTurns(marker)).resolves.toEqual([]);
+    expect(await new AgentStorage(removedDir, logger).get("removed")).toBeNull();
+  });
+
+  test("F1c: the single-agent path writes from the record current at the write", async () => {
+    const storage = new AgentStorage(dir, logger);
+    await storage.upsert(seed("single") as never);
+    interpose(storage, (id, i) => {
+      i.cache.set(id, { ...i.cache.get(id)!, title: "Renamed meanwhile" });
+    });
+    await expect(
+      storage.normalizeInterruptedTurn("single", marker, () => true),
+    ).resolves.toMatchObject({ title: "Renamed meanwhile", lastStatus: "idle" });
+  });
+});

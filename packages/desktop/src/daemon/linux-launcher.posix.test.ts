@@ -11,6 +11,12 @@ const it = test.runIf(process.platform === "linux");
 const require = createRequire(import.meta.url);
 const afterPack = require("../../scripts/after-pack.js").default;
 
+// scripts/linux-sandbox/index.js renames <appOutDir>/<productName> to .bin and installs the
+// launcher shim in its place, so a fixture that writes any other filename makes afterPack
+// rename a file that is not there. Read the name from the same manifest that script reads:
+// a literal here goes stale on the next product rename and takes all nine cases with it.
+const EXECUTABLE_NAME: string = require("../../package.json").productName;
+
 async function launch(
   options: {
     namespaces?: boolean;
@@ -29,10 +35,10 @@ async function launch(
     mkdirSync(app);
     mkdirSync(commands);
     writeFileSync(
-      join(app, "Paseo"),
+      join(app, EXECUTABLE_NAME),
       `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));\n`,
     );
-    chmodSync(join(app, "Paseo"), 0o755);
+    chmodSync(join(app, EXECUTABLE_NAME), 0o755);
     // The command interface represents the host's userns policy, independent of CI's host.
     writeFileSync(join(commands, "unshare"), `#!/bin/sh\nexit ${options.namespaces ? 0 : 1}\n`);
     chmodSync(join(commands, "unshare"), 0o755);
@@ -47,8 +53,10 @@ async function launch(
     chmodSync(join(app, "chrome-sandbox"), 0o755);
     await afterPack({ appOutDir: app, electronPlatformName: "linux", arch: 1 });
     if (options.rerun) await afterPack({ appOutDir: app, electronPlatformName: "linux", arch: 1 });
-    const executablePath = options.symlink ? join(root, "paseo") : join(app, "Paseo");
-    if (options.symlink) symlinkSync(join(app, "Paseo"), executablePath);
+    // The symlink keeps its own name: it stands in for the ~/.local/bin/paseo CLI symlink,
+    // which still points at the launcher and is not renamed with the product.
+    const executablePath = options.symlink ? join(root, "paseo") : join(app, EXECUTABLE_NAME);
+    if (options.symlink) symlinkSync(join(app, EXECUTABLE_NAME), executablePath);
     const args = options.args ?? ["path with spaces", "$(touch never)", "semi;colon", "*.txt"];
     const result = spawnSync(executablePath, args, {
       encoding: "utf8",
@@ -56,7 +64,7 @@ async function launch(
         ...process.env,
         FORCE_COLOR: undefined,
         PATH: `${commands}:${process.env.PATH}`,
-        APPIMAGE: "/tmp/Paseo.AppImage",
+        APPIMAGE: `/tmp/${EXECUTABLE_NAME}.AppImage`,
         PASEO_DESKTOP_SMOKE: "0",
         ...options.env,
       },

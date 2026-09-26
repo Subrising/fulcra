@@ -5,10 +5,21 @@ Agent chat delivery has two paths:
 1. **Live stream** — `agent_stream` WebSocket messages for immediacy. These may be delta-shaped lifecycle updates.
 2. **Authoritative history** — `fetch_agent_timeline_request` for correctness. This always returns full projected timeline items, never lifecycle deltas.
 
-The daemon retains projected items in memory. Each source event advances the stream sequence,
-then replaces the previous tool state or merges into the current text item. Intermediate payloads
-are never retained for history or catch-up. Provider history is the durable transcript authority
-and rebuilds the projection when an agent resumes.
+The daemon retains projected items in memory and commits source rows to a private journal under
+`$PASEO_HOME/native-timeline-journal`. Restart restores the original epoch, sequence, client message IDs and
+turn IDs. Provider history bootstraps sessions without a journal; it cannot recover old client IDs.
+Explicit reload or rewind replaces the journal and invalidates old cursors. Ordinary close and
+archive retain it, and delete moves it to a retained area; see [session timeline](session-timeline.md).
+The journal refuses malformed, interrupted or externally changed files rather
+than guessing a correspondence from message text. Preserve a refused journal for recovery.
+
+Each append is flushed before publication. Writes are asynchronous and ordered per agent, so a
+slow disk does not block the daemon event loop. Turn completion, close and explicit journal
+replacement wait for pending writes; a failed commit prevents further publication for that
+agent until explicit recovery. One daemon must own the home. A journal file reaching 256 MiB rolls
+over to a new segment rather than trimming; see [session timeline](session-timeline.md#segments).
+Durable append latency and large-session storage must still be assessed before rollout; asynchronous
+IO does not make a disk flush faster.
 
 The invariants are:
 

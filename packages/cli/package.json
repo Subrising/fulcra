@@ -3,6 +3,7 @@
   "version": "0.9.1",
   "description": "Paseo CLI - control your AI coding agents from the command line",
   "bin": {
+    "fulcra": "bin/paseo",
     "paseo": "bin/paseo"
   },
   "files": [

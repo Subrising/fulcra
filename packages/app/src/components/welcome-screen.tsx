@@ -1,16 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View, ScrollView } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import {
-  QrCode,
-  Link2,
-  ClipboardPaste,
-  ExternalLink,
-  Settings,
-  Terminal,
-} from "lucide-react-native";
+import { QrCode, Link2, ClipboardPaste, Settings, Terminal } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { HostProfile } from "@/types/host-connection";
 import { getHostRuntimeStore, isHostRuntimeConnected, useHosts } from "@/runtime/host-runtime";
@@ -20,11 +13,9 @@ import { PairLinkModal } from "./pair-link-modal";
 import { Button } from "@/components/ui/button";
 import { resolveAppVersion } from "@/utils/app-version";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
-import { buildOpenProjectRoute } from "@/utils/host-routes";
-import { PaseoLogo } from "@/components/icons/paseo-logo";
-import { openExternalUrl } from "@/utils/open-external-url";
+import { buildHostRootRoute } from "@/utils/host-routes";
 import { isFdroidBuild } from "@/constants/build-profile";
-import { isWeb, isNative } from "@/constants/platform";
+import { isWeb } from "@/constants/platform";
 import { isElectronRuntime } from "@/desktop/host";
 
 interface WelcomeAction {
@@ -100,17 +91,6 @@ const styles = StyleSheet.create((theme) => ({
   actionTextPrimary: {
     color: theme.colors.accentForeground,
   },
-  setupLink: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  setupLinkText: {
-    color: theme.colors.accent,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
-  },
   versionLabel: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
@@ -179,18 +159,21 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
   const hosts = useHosts();
   const anyOnlineServerId = useAnyHostOnline(hosts.map((h) => h.serverId));
 
-  useEffect(() => {
-    if (!anyOnlineServerId) return;
-    router.replace(buildOpenProjectRoute());
-  }, [anyOnlineServerId, router]);
+  // Retained onboarding screens can remount when appearance changes. Only the
+  // focused welcome screen may redirect when a host becomes available.
+  useFocusEffect(
+    useCallback(() => {
+      if (!anyOnlineServerId) return;
+      router.replace(buildHostRootRoute(anyOnlineServerId));
+    }, [anyOnlineServerId, router]),
+  );
 
-  const finishOnboarding = useCallback(() => {
-    router.replace(buildOpenProjectRoute());
-  }, [router]);
-
-  const handleOpenPaseoSite = useCallback(() => {
-    void openExternalUrl("https://paseo.sh");
-  }, []);
+  const finishOnboarding = useCallback(
+    (serverId: string) => {
+      router.replace(buildHostRootRoute(serverId));
+    },
+    [router],
+  );
 
   const handleOpenSettings = useCallback(() => {
     router.push("/settings");
@@ -207,9 +190,9 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
   }, [router]);
 
   const handleHostSaved = useCallback(
-    ({ profile }: { profile: HostProfile; serverId: string }) => {
+    ({ profile, serverId }: { profile: HostProfile; serverId: string }) => {
       onHostAdded?.(profile);
-      finishOnboarding();
+      finishOnboarding(serverId);
     },
     [onHostAdded, finishOnboarding],
   );
@@ -286,16 +269,12 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
         testID="welcome-screen"
       >
         <View style={styles.content}>
-          <PaseoLogo size={96} />
+          <Text style={[styles.title, { fontSize: 48 }]}>Fulcra</Text>
           <View style={styles.copyBlock}>
-            <Text style={styles.title}>{t("onboarding.title")}</Text>
-            <Text style={styles.subtitle}>{t("onboarding.subtitle")}</Text>
-            {isNative ? (
-              <Pressable style={styles.setupLink} onPress={handleOpenPaseoSite}>
-                <Text style={styles.setupLinkText}>paseo.sh</Text>
-                <ExternalLink size={14} color={theme.colors.accent} />
-              </Pressable>
-            ) : null}
+            <Text style={styles.title}>Your coding agents, in one place.</Text>
+            <Text style={styles.subtitle}>
+              Connect a host to start, follow and direct your AI coding agents.
+            </Text>
           </View>
 
           <View style={styles.actions}>

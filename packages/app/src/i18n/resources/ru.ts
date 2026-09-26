@@ -2,6 +2,12 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ru: TranslationResources = {
+  sessionOwnership: {
+    noLeaderYet: "Руководитель ещё не назначен",
+    unknownProject: "Проект неизвестен",
+    reportsTo: "Подчиняется {{leader}}",
+    unknownAccessibility: "Владеющий проект неизвестен",
+  },
   paneFind: {
     connectionFailure:
       "Не удалось выполнить поиск в чате. Проверьте подключение к хосту и повторите попытку.",
@@ -881,7 +887,7 @@ export const ru: TranslationResources = {
           updateCurrent: "Обновление недоступно: эта ветка уже синхронизирована с {{baseRef}}.",
           mergePrNoGithub: "Слияние PR сейчас недоступно: GitHub не подключён.",
           archiveNotWorktree:
-            "Архивирование недоступно: это рабочее пространство не было создано как worktree Paseo.",
+            "Архивирование недоступно: это рабочее пространство не было создано как worktree Fulcra.",
           mergePrNoForge: "Слияние {{noun}} сейчас недоступно: {{brand}} не подключён.",
           mergePrMissing: "Слияние PR недоступно: PR ещё не создан.",
           mergePrDraft: "Слияние PR недоступно: PR всё ещё является черновиком.",
@@ -1172,7 +1178,7 @@ export const ru: TranslationResources = {
       discord: "Discord",
       github: "Создать issue на GitHub",
       whatsNew: "Что нового",
-      appName: "Paseo",
+      appName: "Fulcra",
     },
     sections: {
       sessions: "История",
@@ -1320,7 +1326,7 @@ export const ru: TranslationResources = {
       close: "Закрыть окно",
     },
     quitting: {
-      title: "Завершение работы Paseo...",
+      title: "Завершение работы Fulcra...",
       detail: "Остановка локального демона.",
     },
     daemon: {
@@ -1335,20 +1341,20 @@ export const ru: TranslationResources = {
       },
       management: {
         title: "Управление встроенным демоном",
-        hint: "Разрешить Paseo запускать и останавливать встроенный демон",
+        hint: "Разрешить Fulcra запускать и останавливать встроенный демон",
         pauseTitle: "Приостановить встроенный демон",
         pauseMessage:
           "Это немедленно остановит встроенный демон. Запущенные агенты и терминалы, подключенные к встроенному демону, будут остановлены.",
         pauseAndStop: "Приостановить управление и остановить демон",
         registrationFailed:
-          "Встроенный демон запущен, но Paseo не удалось сохранить подключение к localhost. Выключите и снова включите управление демоном или добавьте localhost вручную.",
+          "Встроенный демон запущен, но Fulcra не удалось сохранить подключение к localhost. Выключите и снова включите управление демоном или добавьте localhost вручную.",
         pausedStopFailed:
-          "Встроенное управление демоном было приостановлено, но Paseo не смог остановить демон.",
+          "Встроенное управление демоном было приостановлено, но Fulcra не смог остановить демон.",
         updateFailed: "Не удалось изменить настройки управления встроенным демоном.",
       },
       keepRunning: {
         title: "Продолжать работу демона после выхода",
-        hint: "Демон продолжит работать после выхода из Paseo",
+        hint: "Демон продолжит работать после выхода из Fulcra",
       },
       logs: {
         title: "Файл журнала",
@@ -1419,7 +1425,7 @@ export const ru: TranslationResources = {
     },
     rosetta: {
       title: "Загрузите сборку Apple Silicon",
-      runningIntel: "Вы используете сборку Paseo для Intel через Rosetta на Apple Silicon.",
+      runningIntel: "Вы используете сборку Fulcra для Intel через Rosetta на Apple Silicon.",
       highCpu:
         "Из-за этого процессор сильно загружен. Чтобы устранить проблему, скачайте сборку для Apple Silicon.",
       download: "Скачать",
@@ -1464,7 +1470,7 @@ export const ru: TranslationResources = {
         microphone: "Состояние микрофона ещё не проверялось.",
       },
       testNotification: {
-        title: "Тест уведомлений Paseo",
+        title: "Тест уведомлений Fulcra",
         body: "Если вы это видите, уведомления на рабочем столе работают.",
         notDelivered:
           "Уведомление не доставлено. Проверьте раздел «Уведомления» в системных настройках.",
@@ -1474,12 +1480,12 @@ export const ru: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "Не удалось проверить состояние установки CLI.",
-        installFailed: "Не удалось установить Paseo CLI.",
+        installFailed: "Не удалось установить Fulcra CLI.",
       },
     },
   },
   rootError: {
-    title: "В Paseo возникла проблема.",
+    title: "В Fulcra возникла проблема.",
     body: "Попробуйте перезагрузить приложение. Если ошибка повторится, приложите приведённые ниже сведения к отчёту.",
     details: "Подробности",
   },
@@ -1575,7 +1581,7 @@ export const ru: TranslationResources = {
     },
   },
   onboarding: {
-    title: "Добро пожаловать в Paseo",
+    title: "Добро пожаловать в Fulcra",
     subtitle: "Подключите компьютер, чтобы начать",
     actions: {
       settings: "Настройки",
@@ -1589,6 +1595,8 @@ export const ru: TranslationResources = {
     loadingShort: "Загрузка",
     loadingSelector: "Загрузка выбора модели...",
     error: "Ошибка",
+    notInstalled: "Не установлен",
+    notInstalledMessage: "{{provider}} не установлен на этом хосте.",
     defaultModel: "По умолчанию",
     profiles: "Профили",
     providers: "Провайдеры",
@@ -1663,7 +1671,7 @@ export const ru: TranslationResources = {
     },
     direct: {
       title: "Прямое подключение",
-      helper: "Введите адрес сервера Paseo.",
+      helper: "Введите адрес сервера Fulcra.",
       fields: {
         host: "Хост",
         port: "Порт",
@@ -1706,7 +1714,7 @@ export const ru: TranslationResources = {
     },
     remoteSsh: {
       title: "Удалённый SSH",
-      helper: "Подключитесь к демону Paseo на удалённом хосте.",
+      helper: "Подключитесь к демону Fulcra на удалённом хосте.",
       fields: {
         target: "Хост SSH",
       },
@@ -1764,15 +1772,15 @@ export const ru: TranslationResources = {
       enableDescription:
         "Ретранслятор позволяет этому устройству подключаться откуда угодно. Трафик сопряжения защищён сквозным шифрованием.",
       relayDocs: "Как работает ретранслятор",
-      relayDocsAccessibility: "Узнать, как работает ретранслятор Paseo",
+      relayDocsAccessibility: "Узнать, как работает ретранслятор Fulcra",
       enableRelay: "Включить ретранслятор",
       enablingRelay: "Включение ретранслятора...",
       notNow: "Не сейчас",
       directConnectionHint:
         "Без ретранслятора подключайтесь напрямую через TCP, Tailscale или другую VPN. QR-код создаваться не будет.",
-      updateRequired: "Обновите хост, чтобы включить ретранслятор из Paseo Desktop.",
+      updateRequired: "Обновите хост, чтобы включить ретранслятор из Fulcra Desktop.",
       unavailable: "Данные для сопряжения недоступны.",
-      hint: "Отсканируйте этот QR-код с помощью Paseo на телефоне или скопируйте ссылку ниже.",
+      hint: "Отсканируйте этот QR-код с помощью Fulcra на телефоне или скопируйте ссылку ниже.",
       securityWarning:
         "Обращайтесь с этой ссылкой для сопряжения как с паролем. Любой, у кого она есть, может получить доступ к этому демону.",
       qrUnavailable: "QR-код недоступен.",
@@ -1807,7 +1815,7 @@ export const ru: TranslationResources = {
   serviceUrl: {
     title: "Открыть URL сервиса",
     message: "Открыть {{url}}?",
-    inPaseo: "В Paseo",
+    inPaseo: "В Fulcra",
     externalBrowser: "Внешний браузер",
     dontAskAgain: "Больше не спрашивать",
   },
@@ -1886,6 +1894,101 @@ export const ru: TranslationResources = {
       emptyTitle: "PR пока нет",
       emptyDescription: "Создайте PR для этой рабочей копии, чтобы увидеть здесь сведения о нём.",
     },
+    architectureMap: {
+      label: "Карта архитектуры",
+      subtitle: "Архитектура проекта",
+      tooltip: "Показать карту архитектуры проекта",
+      emptyTitle: "В этом проекте нет карты архитектуры",
+      emptyDescription: "Fulcra показывает карты из {{directory}}.",
+      oversized: "Слишком большой для отображения (более 1 МиБ): {{names}}",
+      truncated: "Показаны только первые 20 карт.",
+      listFailed: "Не удалось получить список карт архитектуры",
+      reload: "Перезагрузить",
+      cannotShow: "Эту карту нельзя показать",
+      tooLarge: "Файл больше 1 МиБ.",
+      openFile: "Открыть файл",
+      hiddenCharacters: "Из текста этой карты удалены скрытые символы и символы смены направления.",
+      zoomIn: "Увеличить",
+      zoomOut: "Уменьшить",
+      fit: "По размеру",
+      actualSize: "Реальный размер",
+      components: "Компоненты",
+      boundaries: "Границы",
+      closeDetail: "Закрыть сведения",
+      detailId: "Идентификатор",
+      change: {
+        viewMap: "Карта",
+        viewChange: "Изменение",
+        openFromPullRequest: "Изменение архитектуры",
+        openFromPullRequestHint: "Показывает, что этот пул-реквест меняет на карте системы",
+        title: "Что это изменение делает с системой",
+        comparedWith: "Сравнение с {{base}}",
+        comparedWithStart: "Сравнение с точкой, где началась эта ветка",
+        summaryParts_one: "Затронуто частей системы: {{count}}.",
+        summaryParts_other: "Затронуто частей системы: {{count}}.",
+        summaryNoParts: "Ни одна часть карты системы не изменилась.",
+        summaryRearranged: "Карта только переставлена; ни одна часть системы не изменилась.",
+        summaryNewMap: "Это изменение добавляет карту системы.",
+        summaryDeletedMap: "Это изменение удаляет карту системы.",
+        dependents_one: "Других частей, зависящих от изменённого: {{count}}.",
+        dependents_other: "Других частей, зависящих от изменённого: {{count}}.",
+        files_one: "Изменено файлов: {{count}}.",
+        files_other: "Изменено файлов: {{count}}.",
+        testsBeside: "Тест рядом есть у {{withTests}} из {{checked}} изменённых файлов кода.",
+        testsNotChecked_one: "Не проверено ещё: {{count}}.",
+        testsNotChecked_other: "Не проверено ещё: {{count}}.",
+        staleTitle: "Эта схема может быть устаревшей",
+        staleFiles: "Изменение затрагивает файлов: {{files}}, но карта вместе с ним не обновлена.",
+        staleSources:
+          "Изменение правит файлы, по которым составлена карта, но карта вместе с ним не обновлена.",
+        staleAsk: "Попросите обновить карту в том же пул-реквесте.",
+        modeSideBySide: "Рядом",
+        modeChanges: "Изменения",
+        modeBefore: "До",
+        modeAfter: "После",
+        legendAdded: "Добавлено",
+        legendRemoved: "Удалено",
+        legendChanged: "Изменено",
+        legendUnchanged: "Без изменений",
+        badgeAdded: "Новое",
+        badgeRemoved: "Удалено",
+        badgeChanged: "Изменено",
+        noBefore: "До этого изменения карты не было.",
+        noAfter: "Это изменение удаляет карту.",
+        touchedTitle: "Что изменилось",
+        dependsTitle: "Также затронуто",
+        dependsHint: "Эти части используют что-то изменённое.",
+        statusAdded: "новое",
+        statusRemoved: "удалено",
+        statusChangedFields: "изменено: {{fields}}",
+        statusConnections: "изменились её связи",
+        field: {
+          type: "вид",
+          label: "название",
+          sublabel: "описание",
+          tag: "пометка",
+          from: "начало",
+          to: "конец",
+          style: "оформление",
+        },
+        renamed:
+          "«{{from}}», похоже, заменено на «{{to}}», а не изменено. Карта дала ему новое обозначение, поэтому его история начинается заново.",
+        openPullRequest: "Открыть пул-реквест № {{number}}",
+        unavailableTitle: "Это изменение нельзя сравнить",
+        unavailablePullRequest: "Сравнение для этого пул-реквеста недоступно",
+        unavailablePullRequestDetail:
+          "Fulcra сравнивает коммиты самого пул-реквеста, но пока не умеет читать файлы на определённом коммите. Он не восстанавливает их по файлам на этом компьютере: несохранённая правка могла бы исказить картину.",
+        openPullRequestPlain: "Открыть пул-реквест",
+        unavailableCommitRead: "Fulcra не удалось прочитать карту на коммитах пул-реквеста.",
+        unavailableNotInPullRequest: "Этой карты нет в коммитах пул-реквеста.",
+        unavailableTooLarge: "Изменение слишком большое для сравнения здесь.",
+        unavailableMismatch:
+          "Карта изменилась во время сравнения. Перезагрузите, чтобы попробовать снова.",
+        unavailableInvalid: "Одну из сторон карты не удаётся прочитать.",
+        unavailableDiff:
+          "Список изменённых файлов обрезан, поэтому изменение карты может отсутствовать.",
+      },
+    },
     diff: {
       changesLabel: "Изменения",
       diffLabel: "Дифф",
@@ -1928,8 +2031,8 @@ export const ru: TranslationResources = {
       other: "использованы другие инструменты ({{count}})",
     },
     paseoCalls: {
-      one: "выполнен {{count}} вызов Paseo",
-      other: "выполнены вызовы Paseo ({{count}})",
+      one: "выполнен {{count}} вызов Fulcra",
+      other: "выполнены вызовы Fulcra ({{count}})",
     },
     and: "и",
   },
@@ -1991,6 +2094,7 @@ export const ru: TranslationResources = {
       permissions: "Разрешения",
       diagnostics: "Диагностика",
       about: "О приложении",
+      licenses: "Лицензии",
     },
     layout: en.settings.layout,
     editor: {
@@ -2010,7 +2114,7 @@ export const ru: TranslationResources = {
       send: "Отправить",
       sending: "Отправка...",
       sentTitle: "Тестовое уведомление отправлено",
-      sentDescription: "Paseo передал уведомление операционной системе.",
+      sentDescription: "Fulcra передал уведомление операционной системе.",
       sendFailedTitle: "Не удалось отправить тестовое уведомление",
     },
     hostSections: {
@@ -2029,14 +2133,14 @@ export const ru: TranslationResources = {
     metadataGeneration: {
       title: "Генерация метаданных",
       description:
-        "Выберите модель, которую Paseo будет использовать для названий рабочих пространств и веток, сообщений коммитов и черновиков PR",
+        "Выберите модель, которую Fulcra будет использовать для названий рабочих пространств и веток, сообщений коммитов и черновиков PR",
       selection: "Выбор модели",
       automatic: "Автоматически",
       preferred: "Вручную",
-      automaticHint: "Paseo выбирает быструю доступную модель",
-      preferredHint: "Выберите модель, которую использует Paseo",
+      automaticHint: "Fulcra выбирает быструю доступную модель",
+      preferredHint: "Выберите модель, которую использует Fulcra",
       model: "Модель",
-      fallbackHint: "Если она недоступна, Paseo использует другую доступную модель",
+      fallbackHint: "Если она недоступна, Fulcra использует другую доступную модель",
       docs: "Документация",
       saveError: "Не удалось обновить настройки генерации метаданных",
     },
@@ -2045,7 +2149,7 @@ export const ru: TranslationResources = {
       browserData: {
         title: "Данные браузера",
         siteData: "Файлы cookie и данные сайтов",
-        description: "Вкладки браузера в Paseo используют общие данные входа и данные сайтов.",
+        description: "Вкладки браузера в Fulcra используют общие данные входа и данные сайтов.",
         clear: "Очистить данные браузера",
         clearing: "Очистка...",
         confirmTitle: "Очистить данные браузера?",
@@ -2075,7 +2179,7 @@ export const ru: TranslationResources = {
         description: "Где открывать URL-адреса запущенных скриптов",
         options: {
           ask: "Спрашивать",
-          inApp: "В Paseo",
+          inApp: "В Fulcra",
           external: "Внешний браузер",
         },
       },
@@ -2144,10 +2248,18 @@ export const ru: TranslationResources = {
         },
       },
     },
+    licenses: {
+      title: "Лицензии и благодарности",
+      upstreamTitle: "Основано на открытом ПО",
+      upstreamHint:
+        "Fulcra — изменённый форк Paseo, используемый по лицензии Apache 2.0. Уведомления ниже воспроизводятся, как того требует эта лицензия.",
+      noticeTitle: "Уведомление об авторстве",
+      licenseTitle: "Текст лицензии",
+    },
     about: {
       title: "О приложении",
       appVersion: "Версия приложения",
-      whatsNewHint: "Заметки о выпуске для каждой версии",
+      licensesHint: "Уведомления о лицензиях и авторстве ПО, на котором основан Fulcra",
       thisDevice: "Это устройство",
       connectedHosts: "Подключенные хосты",
       offline: "Оффлайн",
@@ -2155,7 +2267,7 @@ export const ru: TranslationResources = {
       releaseChannel: {
         label: "Канал выпуска",
         description:
-          "Переключитесь на бета-канал, чтобы раньше получать обновления и помогать развивать Paseo.",
+          "Переключитесь на бета-канал, чтобы раньше получать обновления и помогать развивать Fulcra.",
         stable: "Стабильный",
         beta: "Бета",
       },
@@ -2163,7 +2275,7 @@ export const ru: TranslationResources = {
         label: "Обновления приложения",
         readyToInstall: "Версия {{version}} готова к установке",
         installTitle: "Установить обновление настольного приложения",
-        installMessage: "Это обновит Paseo на этом компьютере.",
+        installMessage: "Это обновит Fulcra на этом компьютере.",
         installConfirm: "Установить обновление",
         update: "Обновить",
         updateTo: "Обновить до {{version}}",
@@ -2399,11 +2511,11 @@ export const ru: TranslationResources = {
         unavailable: "Подключитесь к этому хосту, чтобы управлять навыками оркестрации",
         unsupported: "Обновите этот хост, чтобы управлять навыками оркестрации",
         updateAvailable: "Доступно обновление",
-        updateTitle: "Обновить навыки Paseo?",
+        updateTitle: "Обновить навыки Fulcra?",
         updateFallback: "Встроенные навыки будут синхронизированы с этим хостом.",
-        uninstallTitle: "Удалить навыки Paseo?",
+        uninstallTitle: "Удалить навыки Fulcra?",
         uninstallMessage:
-          "Удаляет все навыки оркестрации Paseo из ~/.agents, ~/.claude и ~/.codex на этом хосте.",
+          "Удаляет все навыки оркестрации Fulcra из ~/.agents, ~/.claude и ~/.codex на этом хосте.",
         choose: "Выбрать навыки",
         chooseAll: "Все навыки",
         chooseAllHint: "Устанавливать все встроенные навыки, включая добавленные позже.",
@@ -2439,9 +2551,9 @@ export const ru: TranslationResources = {
         title: "Оркестрация",
         unavailable: "Подключитесь к этому хосту, чтобы управлять оркестрацией.",
         enableTools: {
-          title: "Включить инструменты Paseo",
+          title: "Включить инструменты Fulcra",
           hint: "Агенты смогут управлять worktree, агентами и расписаниями.",
-          accessibilityLabel: "Добавить инструменты Paseo",
+          accessibilityLabel: "Добавить инструменты Fulcra",
         },
         systemPrompt: {
           title: "Системный промпт",
@@ -2546,15 +2658,15 @@ export const ru: TranslationResources = {
             "Этот хост не подключён. Дождитесь его появления в сети перед перезапуском.",
           offlineTitle: "Хост не в сети",
           offlineMessage:
-            "Этот хост не в сети. Paseo переподключится автоматически. Дождитесь подключения перед перезапуском.",
+            "Этот хост не в сети. Fulcra переподключится автоматически. Дождитесь подключения перед перезапуском.",
           requestFailedTitle: "Ошибка",
           requestFailedMessage:
-            "Не удалось отправить запрос на перезапуск. Paseo переподключается автоматически. Повторите попытку, когда хост появится в сети.",
+            "Не удалось отправить запрос на перезапуск. Fulcra переподключается автоматически. Повторите попытку, когда хост появится в сети.",
           dialogFailedMessage: "Не удалось открыть диалог подтверждения перезапуска.",
         },
         update: {
           desktopManagedHint:
-            "Этот демон управляется Paseo Desktop. Обновите Paseo Desktop на хосте.",
+            "Этот демон управляется Fulcra Desktop. Обновите Fulcra Desktop на хосте.",
           title: "Обновить демон",
           hint: "Обновить демон до последней версии и перезапустить его",
           confirm: "Обновить",
@@ -2717,7 +2829,7 @@ export const ru: TranslationResources = {
         newScript: "Новый скрипт",
         editScript: "Изменить {{name}}",
         runAsService: "Запускать как сервис",
-        serviceHint: "Paseo управляет процессом и назначает порт через переменную $PASEO_PORT.",
+        serviceHint: "Fulcra управляет процессом и назначает порт через переменную $PASEO_PORT.",
         actions: {
           add: "Добавить скрипт",
           edit: "Редактировать",
@@ -2726,7 +2838,7 @@ export const ru: TranslationResources = {
       },
       metadata: {
         title: "Генерация метаданных",
-        info: "Инструкции для этого проекта, добавляемые в промпты ИИ, с помощью которых Paseo генерирует метаданные. Используйте их, чтобы соблюдать принятые в команде правила именования веток, оформления коммитов и формата PR.",
+        info: "Инструкции для этого проекта, добавляемые в промпты ИИ, с помощью которых Fulcra генерирует метаданные. Используйте их, чтобы соблюдать принятые в команде правила именования веток, оформления коммитов и формата PR.",
         branchName: "Названия веток",
         branchNamePlaceholder:
           "Добавляйте к веткам префиксы feat/ или fix/, а к личным веткам — mb/",

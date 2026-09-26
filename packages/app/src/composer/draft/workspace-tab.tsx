@@ -52,6 +52,7 @@ import {
 } from "@/workspace-tabs/model";
 import { openWorkspaceChanges } from "@/workspace-tabs/open-supporting-view";
 import { useSettings } from "@/hooks/use-settings";
+import { resolveAutomaticApprovalMode } from "@getpaseo/protocol/provider-manifest";
 
 const EMPTY_PENDING_PERMISSIONS = new Map();
 const DRAFT_CAPABILITIES: AgentCapabilityFlags = {
@@ -106,6 +107,7 @@ function resolveDraftModeIdOverride(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
   modeOptionIds: readonly string[];
   selectedMode: string;
+  provider: string;
 }): { modeId: string } | Record<string, never> {
   const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
   if (autoSubmitConfig?.modeId) {
@@ -115,13 +117,20 @@ function resolveDraftModeIdOverride(input: {
   if (reconciled !== "") {
     return { modeId: reconciled };
   }
-  return {};
+  // Nobody chose a mode, so the session would be born in whatever the provider defaults
+  // to at runtime. Send the adapter's declared automatic-approval mode instead — resolved
+  // from the manifest, checked against what this adapter actually offers, and never
+  // substituted by an unattended mode. Providers that declare none keep today's
+  // behaviour: no modeId, provider default.
+  const automatic = resolveAutomaticApprovalMode(input.provider, modeOptionIds);
+  return automatic.supported && automatic.modeId ? { modeId: automatic.modeId } : {};
 }
 
 function resolveDraftModeId(input: {
   autoSubmitConfig: AutoSubmitConfig | null;
   modeOptionIds: readonly string[];
   selectedMode: string;
+  provider: string;
 }): string | null {
   const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
   if (autoSubmitConfig?.modeId !== undefined) {
@@ -130,6 +139,13 @@ function resolveDraftModeId(input: {
   const reconciled = reconcileSelectedMode(modeOptionIds, selectedMode);
   if (reconciled !== "") {
     return reconciled;
+  }
+  // The draft tab shows this as the session's mode, so it has to be the same answer the
+  // creation request sends. Two resolvers disagreeing is how a session ends up running in
+  // one mode while the UI names another.
+  const automatic = resolveAutomaticApprovalMode(input.provider, modeOptionIds);
+  if (automatic.supported && automatic.modeId) {
+    return automatic.modeId;
   }
   return null;
 }
@@ -183,6 +199,7 @@ async function submitDraftCreateRequest(input: {
     autoSubmitConfig,
     modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
     selectedMode: composerState.selectedMode,
+    provider,
   });
   const config = buildWorkspaceDraftAgentConfig({
     provider,
@@ -236,15 +253,16 @@ function buildDraftAgentSnapshot(input: {
   const model = autoSubmitConfig?.model ?? (composerState.effectiveModelId || null);
   const thinkingOptionId =
     autoSubmitConfig?.thinkingOptionId ?? (composerState.effectiveThinkingOptionId || null);
-  const modeId = resolveDraftModeId({
-    autoSubmitConfig,
-    modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
-    selectedMode: composerState.selectedMode,
-  });
   const provider = autoSubmitConfig?.provider ?? composerState.selectedProvider;
   if (!provider) {
     throw new Error(input.selectModelMessage);
   }
+  const modeId = resolveDraftModeId({
+    autoSubmitConfig,
+    modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
+    selectedMode: composerState.selectedMode,
+    provider,
+  });
   return {
     serverId,
     id: tabId,

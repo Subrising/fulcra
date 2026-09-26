@@ -9,7 +9,7 @@ For terminal output, which is a separate pipeline with separate budgets, see [te
 ```
 provider deltas (every provider streams incrementally)
   → AgentStreamCoalescer (daemon, leading + trailing, ≤1 message per 60ms per agent)
-  → recordTimeline: one canonical row per flushed item
+  → recordTimeline: durable commit, then one canonical row per flushed item
   → agent_stream ws message
   → reducer queue (app, one commit per frame) → session store
   → source-item plugin transforms → native Markdown blocks / tool grouping
@@ -26,7 +26,7 @@ So arrival sets a _target_ and the reveal rate is derived from the backlog inste
 
 ## Invariants
 
-- **The coalescer is leading + trailing.** The first delta after an idle window flushes synchronously; only the rest of the burst waits for the trailing timer. Reverting to trailing-only adds a full window to the first character of every turn. Same shape and the same reason as `TerminalOutputCoalescer`.
+- **The coalescer is leading + trailing.** The first delta after an idle window starts its commit immediately; only the rest of the burst waits for the trailing timer. Publication waits for the asynchronous durable flush, ordered per agent, and a terminal event cannot overtake it. Reverting to trailing-only adds a full window to the first character of every turn. Same shape and the same reason as `TerminalOutputCoalescer`.
 - **The leading flush adds a canonical row, and that is fine.** A burst's first chunk lands as its own timeline row. `mergeAssistantChunks` / `mergeReasoningChunks` in `timeline-projection.ts` join contiguous same-turn rows, and clients read the projected timeline, so history is unaffected. Tests that assert on raw rows have to account for the extra row; tests that assert on what a client sees do not.
 - **The store holds the full text; only the rendered slice is paced.** Copy, selection, the chat outline, and scroll geometry all read the same string the user can see. Pacing the store instead would leave the bottom anchor chasing a content height that is ahead of the reveal.
 - **Markdown blocks belong to presentation, and every assistant message is a block group.**

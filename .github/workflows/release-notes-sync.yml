@@ -3,7 +3,10 @@ name: Release Notes Sync
 on:
   push:
     tags:
+      # Private-preview tags are outside the inherited release contract; see
+      # desktop-release.yml and docs/pipelines.md.
       - "v*"
+      - "!v*-private-preview"
     branches:
       - main
     paths:

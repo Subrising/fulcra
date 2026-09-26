@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import pino from "pino";
 import type { PermissionResult, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
@@ -422,6 +423,9 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         resolveBinary: async () => "/test/claude/bin",
         resolveVersion: async () => "2.1.219",
         configDir: emptyConfigDir,
+        modelProbe: async () => {
+          throw new Error("no Claude Code in unit tests");
+        },
       });
       const { models } = await client.fetchCatalog({
         scope: "workspace",
@@ -469,6 +473,9 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
           throw new Error("unrecognized version output");
         },
         configDir: emptyConfigDir,
+        modelProbe: async () => {
+          throw new Error("no Claude Code in unit tests");
+        },
       });
       const { models } = await client.fetchCatalog({
         scope: "workspace",
@@ -491,6 +498,9 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         resolveBinary: async () => "/test/claude/bin",
         resolveVersion: async () => "2.1.219",
         configDir: emptyConfigDir,
+        modelProbe: async () => {
+          throw new Error("no Claude Code in unit tests");
+        },
       });
       const { models } = await client.fetchCatalog({
         scope: "workspace",
@@ -1742,6 +1752,145 @@ describe("ClaudeAgentSession context window usage", () => {
       model: options?.model,
     });
   }
+
+  // Claude Code 2.1.280 forces every launch to `default` while CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set, and says so
+  // on stderr. The init then reports `default`. That refusal belongs to that launch: the session keeps the mode it
+  // asked for, so the next launch asks again, and the refusal is logged, put on the timeline once and exposed in
+  // runtime info. Adopting the reported mode made one refusal permanent.
+  const FORCED_MODE_STDERR =
+    "\u26a0 Permission mode forced to default \u2014 CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set (allowed_non_write_users hardening). Declare allowedTools explicitly, or set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0 to opt out.";
+
+  function initMessage(permissionMode: string) {
+    return {
+      type: "system",
+      subtype: "init",
+      session_id: "session-1",
+      permissionMode,
+      model: "claude-sonnet-4-6",
+    };
+  }
+
+  async function createForcedModeSession(
+    turns: Array<Array<Record<string, unknown>>>,
+    modeId: string,
+  ) {
+    const warnings: Array<Record<string, unknown>> = [];
+    const capturingLogger = pino(
+      { level: "warn" },
+      {
+        write(line: string) {
+          warnings.push(JSON.parse(line) as Record<string, unknown>);
+        },
+      },
+    );
+    const turnsFactory = createQueryFactoryForTurns(turns);
+    // Like the real CLI, the refusal reaches stderr at startup, before the init message.
+    const queryFactory = vi.fn(
+      (input: {
+        prompt: AsyncIterable<unknown>;
+        options?: { stderr?: (data: string) => void };
+      }) => {
+        input.options?.stderr?.(FORCED_MODE_STDERR);
+        return turnsFactory(input);
+      },
+    );
+    const client = new ClaudeAgentClient({
+      logger: capturingLogger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.createSession({ provider: "claude", cwd: process.cwd(), modeId });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    const nextLaunchMode = async () =>
+      (
+        await (
+          session as unknown as { buildOptions(): Promise<{ permissionMode?: string }> }
+        ).buildOptions()
+      ).permissionMode;
+    return { session, warnings, events, nextLaunchMode };
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const modeNotices = (events: AgentStreamEvent[]) =>
+    events.filter((event) => event.type === "timeline" && event.item.type === "notification");
+
+  test.each(["auto", "acceptEdits", "plan"])(
+    "a %s launch that Claude forces to default keeps %s for later launches and surfaces the refusal",
+    async (modeId) => {
+      const { session, warnings, events, nextLaunchMode } = await createForcedModeSession(
+        [[initMessage("default"), createSuccessResult()]],
+        modeId,
+      );
+      await session.startTurn("turn");
+      await settle();
+
+      expect(await session.getCurrentMode()).toBe(modeId);
+      expect(await nextLaunchMode()).toBe(modeId);
+      expect(warnings.find((entry) => entry.requestedMode === modeId)).toMatchObject({
+        requestedMode: modeId,
+        reportedMode: "default",
+        reason: expect.stringContaining("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set"),
+      });
+      expect(modeNotices(events)).toEqual([
+        {
+          type: "timeline",
+          provider: "claude",
+          turnId: expect.anything(),
+          item: {
+            type: "notification",
+            level: "warning",
+            message: expect.stringContaining(`"default" mode, not the requested "${modeId}"`),
+          },
+        },
+      ]);
+      expect((await session.getRuntimeInfo()).extra).toMatchObject({
+        permissionModeOverride: { requestedMode: modeId, enforcedMode: "default" },
+      });
+
+      await session.close();
+    },
+  );
+
+  test("a repeated refusal is noted on the timeline once; a matching init clears it", async () => {
+    const { session, events } = await createForcedModeSession(
+      [
+        [initMessage("default"), createSuccessResult()],
+        [initMessage("default"), createSuccessResult()],
+        [initMessage("auto"), createSuccessResult()],
+      ],
+      "auto",
+    );
+    await session.run("one");
+    await session.run("two");
+    expect(modeNotices(events)).toHaveLength(1);
+    expect((await session.getRuntimeInfo()).extra).toHaveProperty("permissionModeOverride");
+
+    await session.run("three");
+    expect((await session.getRuntimeInfo()).extra ?? {}).not.toHaveProperty(
+      "permissionModeOverride",
+    );
+    expect(await session.getCurrentMode()).toBe("auto");
+
+    await session.close();
+  });
+
+  test("an explicit mode change replaces a recorded refusal", async () => {
+    const { session, nextLaunchMode } = await createForcedModeSession(
+      [[initMessage("default"), createSuccessResult()]],
+      "auto",
+    );
+    await session.run("turn");
+    await session.setMode("acceptEdits");
+
+    expect(await session.getCurrentMode()).toBe("acceptEdits");
+    expect(await nextLaunchMode()).toBe("acceptEdits");
+    expect((await session.getRuntimeInfo()).extra ?? {}).not.toHaveProperty(
+      "permissionModeOverride",
+    );
+
+    await session.close();
+  });
 
   test("emits canonical task snapshots from Claude TaskCreate results", async () => {
     const session = await createSessionForTest();

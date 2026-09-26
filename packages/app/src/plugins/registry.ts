@@ -6,15 +6,21 @@ import { resolveAppVersion } from "@/utils/app-version";
 import { createPluginClientRuntime } from "./client-runtime";
 import { runPluginClientBundle, type PluginClientRuntime } from "./evaluate";
 import type { InstalledPlugin } from "./types";
+import { PluginReconnectState } from "./reconnect-state";
 
 type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
 
 export class PluginRegistry {
+  private readonly reconnectState = new PluginReconnectState();
   private readonly byHost = new Map<string, InstalledPlugin[]>();
   private readonly listeners = new Set<() => void>();
   private snapshot: InstalledPlugin[] = [];
   private readonly disposed = new WeakSet<InstalledPlugin>();
   private readonly evaluationErrors = new Map<string, string>();
+  // Hosts whose catalog question has been answered, however it was answered: loaded, declared
+  // unsupported, or asked and failed. Routing needs "we do not know yet" to be distinct from
+  // "there is nothing", and it must not stay unknown forever on a host that will never reply.
+  private readonly catalogSettled = new Set<string>();
 
   constructor(
     private readonly dependencies: {
@@ -29,6 +35,16 @@ export class PluginRegistry {
   };
 
   getSnapshot = (): InstalledPlugin[] => this.snapshot;
+
+  isCatalogSettled(serverId: string): boolean {
+    return this.catalogSettled.has(serverId);
+  }
+
+  markCatalogSettled(serverId: string): void {
+    if (this.catalogSettled.has(serverId)) return;
+    this.catalogSettled.add(serverId);
+    this.publish();
+  }
 
   getEvaluationError(serverId: string, pluginId: string): string | undefined {
     return this.evaluationErrors.get(`${serverId}/${pluginId}`);
@@ -96,6 +112,15 @@ export class PluginRegistry {
           timelineTransformers: [],
           timelineRenderers: [],
         };
+        if (entry.id !== options.replacePluginId) {
+          this.reconnectState.restore(
+            serverId,
+            entry.id,
+            entry.clientBundle,
+            entry.requirements?.paseo,
+            installation.queryClient,
+          );
+        }
         runtime = this.dependencies.createRuntime(installation, options.client);
         const evaluated = runPluginClientBundle(entry.id, entry.clientBundle, runtime, () =>
           this.publish(),
@@ -129,7 +154,9 @@ export class PluginRegistry {
         this.evaluationErrors.delete(key);
       }
     }
+    this.reconnectState.removeHost(serverId);
     this.byHost.set(serverId, installed);
+    this.catalogSettled.add(serverId);
     this.publish();
     const installedTimelineBundles = installed
       .filter((plugin) => plugin.timelineTransformers.length > 0)
@@ -140,7 +167,29 @@ export class PluginRegistry {
     );
   }
 
+  suspendHost(serverId: string): void {
+    // Disconnected: whatever we knew is torn down and nothing will arrive until reconnect.
+    this.catalogSettled.delete(serverId);
+    for (const plugin of this.byHost.get(serverId) ?? []) {
+      this.reconnectState.save(
+        serverId,
+        plugin.id,
+        plugin.clientBundle,
+        plugin.requirements?.paseo,
+        plugin.queryClient,
+      );
+    }
+    this.teardownHost(serverId);
+  }
+
   removeHost(serverId: string): void {
+    this.reconnectState.removeHost(serverId);
+    // Plugins are unsupported here. That is an answer, not a pending one.
+    this.catalogSettled.add(serverId);
+    this.teardownHost(serverId);
+  }
+
+  private teardownHost(serverId: string): void {
     const installed = this.byHost.get(serverId);
     if (!installed) return;
     for (const plugin of installed) this.dispose(plugin);
@@ -185,6 +234,14 @@ export function useInstalledPlugins(): InstalledPlugin[] {
     pluginRegistry.subscribe,
     pluginRegistry.getSnapshot,
     pluginRegistry.getSnapshot,
+  );
+}
+
+export function useHostCatalogSettled(serverId: string): boolean {
+  return useSyncExternalStore(
+    pluginRegistry.subscribe,
+    () => pluginRegistry.isCatalogSettled(serverId),
+    () => pluginRegistry.isCatalogSettled(serverId),
   );
 }
 

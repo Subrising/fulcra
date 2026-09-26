@@ -293,6 +293,13 @@ catalog is complete.
 When the same plugin contribution exists on multiple hosts, Paseo shows it once in the sidebar and
 adds a host picker to the screen header. The selected host supplies the bundle, RPC transport, and
 query cache. Explicit SDK targets follow the [host API contract](../public-docs/plugins/reference.md#discover-hosts-and-target-another-host).
+Clients may separately provide optional `navigation.openAgentOnHost({ serverId, agentId })` for
+client-owned navigation to a saved host. Feature-check the method itself on older clients. It returns
+`"requested"` when the global saved-host registry is ready and contains the exact target, even if that
+host is offline or connecting; the existing host-specific loading/error UI handles the connection.
+`"host-unavailable"` means the registry is still loading or the target is absent. No request is queued
+or automatically replayed: the caller can offer an explicit retry. `"requested"` does not confirm that
+a conversation has loaded.
 
 Workspace panels, Command Center items, and client slash commands are client contributions. The
 daemon transports their compiled bundle without interpreting placement or callbacks. Panel props
@@ -511,9 +518,167 @@ Its writer lives with the plugin subprocess, while its directory lives outside m
 so updates and reloads retain values. Settings-change notifications must not enter the catalog
 reload path: that path disposes the plugin and would destroy open drafts after every save.
 
+A settings screen can host account management such as **Settings › Integrations**. It needs no
+extra contribution type: the screen runs in the app's session, where `usePaseo().credentials`
+(`list`, `begin`, `complete`, `reconnect`, `remove`) provides Connect, Reconnect and Disconnect, and
+`openExternalUrl` opens a device or browser sign-in page. These calls fail with "Update the host" on
+a host without `server_info.features.credentials`. `plugin-examples/integrations-dev` is the
+developer test screen for these APIs; it is not product UI.
+
 `server.registerSettings(definition)` returns a server-side handle. Use `read()` for the current
 `ready` or `invalid` state and `subscribe()` for successful saves, resets, and migrations. The
 subscription cleanup belongs in the plugin's contribution cleanup when it outlives the entry.
+
+### Read operator secrets
+
+Keep credentials out of settings: settings are ordinary files. `server.secrets` reads a generic
+password from the host's macOS login keychain, under the service `ai.fulcra.plugin.<runtime id>`.
+The host binds that namespace to the runtime installation ID from `initialize`, so a plugin cannot
+name another plugin's items. The operator stores items with `security add-generic-password -U -s
+ai.fulcra.plugin.<runtime id> -a <name> -w`; keep `-w` last so `security` prompts instead of taking
+the value in argv. `read(name)` returns the value or `null`; `exists(name)` never reads it.
+
+The host withholds any RPC or hook result that contains a secret the plugin read, and redacts it
+from error text. Return nothing derived from a secret anyway; the check matches exact values only.
+The capability is absent on other platforms and on older hosts, so check `server.secrets` before
+use.
+
+`server.secrets` is for values the operator stores by hand. Tracker and forge sign-in belongs to the
+shared credential store below; a plugin that used `server.secrets` for a tracker token moves it once
+with `server.credentials.importLegacy`.
+
+### Notify the user
+
+`server.notify({ key, title, urgency, deepLink? })` adds a notification to the host's in-app list.
+Only `urgency: "now"` also sends a push to the connected Fulcra apps, through the same device tokens
+as agent attention; `today` and `fyi` stay in the list. Declare it in the manifest:
+
+```json
+{ "id": "my-plugin", "requirements": { "paseo": ">=0.9.0", "notify": true } }
+```
+
+The daemon reads that grant from the manifest it loaded and refuses the call without it. The
+notification is a title of at most 120 characters on one line, with no body: a push is visible on a
+locked phone, so never put details, names or secrets in the title. `deepLink` is an app route
+(`/…`) or a `fulcra://` link; web URLs are refused.
+
+A notification is idempotent by `key` within the plugin for 90 days: repeating a key returns the
+original `{ id, duplicate: true }` and does not push again, across daemon restarts and however many
+notifications other plugins send. Use a stable key per event, such as `decision:<id>`. Each plugin
+may create ten new notifications a minute, and a restart does not reset that window.
+
+`notify` resolves only after the notification is saved; if the host cannot save it, the call fails
+and you can retry with the same key. A push goes through a durable outbox: `delivery` moves from
+`pending` to `sent` only when the push service accepts it, is retried with backoff for about two
+hours, and ends `failed` or `no-devices`. Repeating the key of a `failed` push queues it again.
+`pushed` is true only for `sent`. Delivery is at least once.
+
+The host shows the latest 500 in its list; clients read them with `plugin.notifications.list`
+behind `server_info.features.pluginNotifications`. A plugin's own session sees only its own.
+
+### Use a connected account
+
+The shared credential store holds tracker and forge accounts (GitHub, Jira, Bitbucket and their
+self-hosted editions) for the whole host. The user signs in once; plugins and the GitHub PR panels
+use the same accounts. [integrations-auth.md](integrations-auth.md) owns sign-in, storage and the
+provider findings.
+
+A plugin never receives a secret. It asks the host to make a provider API request with an account,
+and the host attaches the credential:
+
+```json
+{ "id": "tracker", "requirements": { "paseo": ">=0.9.0", "credentials": ["github", "jira"] } }
+```
+
+```ts
+const response = await server.credentials?.request(accountId, "jira", {
+  method: "GET",
+  path: `/rest/api/3/issue/${key}`,
+  query: { fields: "summary,status" },
+});
+// response = { status, headers, body }
+```
+
+- **Where it goes.** `path` is relative to the account's provider API base: `api.github.com`
+  (any path), `https://<site>` under `/rest/api/` for Jira and Jira Data Center (plus `/rest/dev-status/` and
+  `/rest/agile/1.0/`, GET only), `api.bitbucket.org`
+  under `/2.0/`, or the Bitbucket Data Center site under `/rest/`. Traversal, encoded separators and
+  query or fragment text in `path` are refused; pass parameters in `query`. Redirects are followed
+  only inside the same API; a redirect to another origin stops the request.
+- **Headers.** You may set `Accept`, `Content-Type`, `If-None-Match`, `If-Modified-Since`,
+  `X-GitHub-Api-Version` and `X-Atlassian-Token`. An `Authorization`, `Cookie`, `Host` or any other
+  header is refused, not dropped.
+- **The answer.** `body` is parsed JSON when the provider answered JSON, otherwise text. `headers`
+  holds `content-type`, `etag`, `last-modified`, `link`, `retry-after` and `x-ratelimit-*`. Every
+  form of the account's secret is replaced by `[redacted]` before the answer leaves the daemon.
+- **Limits.** The daemon checks the connector against `requirements.credentials` from the manifest
+  it loaded and that the account belongs to that connector. Methods other than `GET` also need
+  `requirements.credentialsWrite: true`; trackers are read-only in v1, so no v1 plugin declares it.
+  Each account allows 120 requests a minute across all plugins.
+
+Account management is not a plugin power. From the plugin's own session, `paseo.credentials.list()`
+returns metadata for the declared connectors only, and `begin`, `complete`, `reconnect` and `remove`
+are refused. The daemon knows the session is a plugin's because it created it. Check
+`server.credentials` before use: hosts without an OS credential store, and older hosts, omit it.
+
+## Confirm on the device (`ctx.device`)
+
+`ctx.device` lets plugin client code prove that the owner answered on a device they paired.
+The device holds a P-256 key; the private key is created on the device, never
+leaves it, and is never reachable from the daemon or plugin server code. Plugin server code has no
+`device`, cannot import the client SDK, and no RPC or host call signs.
+
+```ts
+export default function contribute(client: PluginClientContext) {
+  const device = client.device; // undefined in the browser and in older apps
+  // …later, in an answer button:
+  const proof = await device?.sign(payload, "Approve the release?");
+  return () => {};
+}
+```
+
+- `status()` → `{ paired, deviceId?, publicKey?, platform, keyStorage, userPresence }`.
+- `pair({ code? })` asks for Touch ID, Face ID or a fingerprint (a confirmation where the device has
+  none) and only then creates the key. It returns the device id, the public key (base64 SPKI) and
+  the protection level. The host decides whether pairing is allowed; `pair()` does not open a
+  pairing window and does not bypass that decision. The pairing code, when given, is shown in the
+  prompt.
+- On iOS and Android each pairing has its own key; a signature always names the device id of the
+  key that made it, and pair and sign run one at a time.
+- `sign(payload, reason)` signs exactly the choice payload (`decisionId`, `revision`,
+  `optionId`, `digest`, `messageId`, `note`, `at`, `confirmDestructive`), and nothing else, after a
+  prompt that reads "Fulcra: <reason>". The signature is ES256: base64 of the raw 64-byte r‖s over
+  the canonical JSON of the payload (keys sorted, no whitespace). A refused prompt rejects and
+  nothing is signed.
+
+Protection per platform, as `status()` reports it:
+
+| Platform             | `keyStorage`                                           | `userPresence` | What protects the key                                                                                                                                                                                                                               |
+| -------------------- | ------------------------------------------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iPhone / iPad        | `secure-enclave` (`keychain-biometric` on a simulator) | yes            | Secure Enclave key usable only after the enrolled Face ID or Touch ID; re-enrolling invalidates it                                                                                                                                                  |
+| Android              | `android-keystore`                                     | yes            | Keystore key (StrongBox when present) that signs only inside a strong-biometric prompt                                                                                                                                                              |
+| Mac with Touch ID    | `os-protected`                                         | yes            | Key wrapped by the app's own keychain entry; Touch ID before every signature                                                                                                                                                                        |
+| Mac without Touch ID | —                                                      | —              | **Cannot pair**: `pair()` refuses with "Pair from your iPhone, or a Mac with Touch ID" until a login-password (LocalAuthentication) path exists. A key already paired without Touch ID still signs after a dialog and reports `userPresence: false` |
+| Windows              | `os-protected`                                         | no             | Key wrapped with the user's Windows data protection; a confirmation dialog                                                                                                                                                                          |
+| Linux                | `os-protected`, or `software` with no Secret Service   | no             | Secret Service wrapping when one runs; otherwise an owner-only file                                                                                                                                                                                 |
+
+Limits, stated plainly:
+
+- **No attestation.** Without an Apple Developer account there is no App Attest or device
+  attestation, so the host cannot prove a public key came from Fulcra on real hardware. It
+  trusts the key it was given at pairing. That is why first pairing stays off until the owner
+  decides the trust anchor.
+- **The desktop key lives in the app, not in hardware.** On a Mac the private key is decrypted in
+  the app's main process for each signature, after Touch ID. Software running as the same user
+  cannot use it without the keychain granting the app's entry, but a compromised app build could.
+  Electron has no login-password prompt, so a Mac without usable Touch ID cannot pair: a click in a
+  dialog is not user presence. Windows and Linux still pair with a dialog
+  and report `userPresence: false`; the host must not count that as presence.
+- **The renderer can ask.** Any code in the app window, including plugin client code, can request
+  a signature; each request still needs the owner's prompt, and the prompt shows the reason.
+
+The native pieces live in `packages/app/modules/paseo-device-key` (iOS and Android) and
+`packages/desktop/src/features/device-key.ts` (desktop).
 
 ## Contribute a theme
 

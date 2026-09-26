@@ -23,6 +23,12 @@ import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { useArchiveAgent } from "@/hooks/use-archive-agent";
 import { HighlightedText } from "@/components/ui/highlighted-text";
 import { StatusBadge, type StatusBadgeVariant } from "@/components/ui/status-badge";
+import {
+  selectSessionLeaderLabel,
+  selectSessionProjectLabel,
+  type SessionOwnershipLabels,
+} from "@/sessions/session-ownership";
+import { useSessionOwnership } from "@/sessions/use-session-ownership";
 import { findHighlightRanges } from "@/components/ui/highlighted-text-segments";
 
 interface AgentListProps {
@@ -184,7 +190,26 @@ function SessionRow({
   const timeAgo = formatTimeAgo(agent.lastActivityAt);
   const agentKey = `${agent.serverId}:${agent.id}`;
   const isSelected = selectedAgentId === agentKey;
-  const projectName = agent.projectPlacement?.projectName ?? "";
+  // Recorded ownership outranks the placement derived from the workspace join, so
+  // re-placing a workspace cannot appear to move a session between projects. With no
+  // record the row prints the derived placement, exactly as it always has.
+  const ownership = useSessionOwnership({ serverId: agent.serverId, agentId: agent.id });
+  const ownershipLabels = useMemo<SessionOwnershipLabels>(
+    () => ({
+      unknownProject: t("sessionOwnership.unknownProject"),
+      noLeaderYet: t("sessionOwnership.noLeaderYet"),
+      reportsTo: (leader: string) => t("sessionOwnership.reportsTo", { leader }),
+      unknownAccessibility: t("sessionOwnership.unknownAccessibility"),
+    }),
+    [t],
+  );
+  const projectLabel = selectSessionProjectLabel({
+    ownership,
+    placement: agent.projectPlacement,
+    labels: ownershipLabels,
+  });
+  const projectName = projectLabel.text;
+  const leaderLabel = selectSessionLeaderLabel(ownership, ownershipLabels);
   const branch = agent.projectPlacement?.checkout.currentBranch ?? "";
   const workspaceName = agent.projectPlacement?.workspaceName ?? "";
   const ProviderIcon = getProviderIcon(agent.provider, agent.serverId);
@@ -197,6 +222,16 @@ function SessionRow({
       project: findHighlightRanges(search ?? "", projectName),
     }),
     [search, workspaceName, agent.title, branch, projectName],
+  );
+
+  const projectMeta = useMemo(
+    () => ({
+      // Only a derived label is searchable text; a recorded one is not highlighted.
+      ranges: projectLabel.source === "derived" ? ranges.project : undefined,
+      sessionStyle: projectLabel.isUnknown ? styles.sessionMetaUnknown : styles.sessionMetaText,
+      columnStyle: projectLabel.isUnknown ? styles.columnMetaUnknown : styles.columnMeta,
+    }),
+    [projectLabel.source, projectLabel.isUnknown, ranges.project],
   );
 
   const pressableStyle = useCallback(
@@ -269,11 +304,24 @@ function SessionRow({
           <View style={styles.rowMetaRow}>
             <HighlightedText
               text={projectName}
-              ranges={ranges.project}
-              style={styles.sessionMetaText}
+              ranges={projectMeta.ranges}
+              style={projectMeta.sessionStyle}
               numberOfLines={1}
+              accessibilityLabel={projectLabel.accessibilityLabel}
               testID={`agent-row-project-${agent.serverId}-${agent.id}`}
             />
+            {leaderLabel ? (
+              <>
+                <Text style={styles.sessionMetaSeparator}>·</Text>
+                <Text
+                  style={styles.sessionMetaText}
+                  numberOfLines={1}
+                  testID={`agent-row-leader-${agent.serverId}-${agent.id}`}
+                >
+                  {leaderLabel}
+                </Text>
+              </>
+            ) : null}
             <Text style={styles.sessionMetaSeparator}>·</Text>
             <HighlightedText
               text={branch}
@@ -299,9 +347,10 @@ function SessionRow({
         <View style={styles.rowColumns}>
           <HighlightedText
             text={projectName}
-            ranges={ranges.project}
-            style={styles.columnMeta}
+            ranges={projectMeta.ranges}
+            style={projectMeta.columnStyle}
             numberOfLines={1}
+            accessibilityLabel={projectLabel.accessibilityLabel}
             testID={`agent-row-project-${agent.serverId}-${agent.id}`}
           />
           {showHostColumn ? (
@@ -644,6 +693,14 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
   },
+  // Unknown ownership must not read as a quiet placement. Full foreground contrast plus
+  // italics keeps it legible in both themes and distinguishable without colour alone.
+  sessionMetaUnknown: {
+    maxWidth: "100%",
+    fontSize: theme.fontSize.base,
+    color: theme.colors.foreground,
+    fontStyle: "italic",
+  },
   sessionMetaSeparator: {
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
@@ -658,6 +715,13 @@ const styles = StyleSheet.create((theme) => ({
   columnMeta: {
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
+    flexShrink: 0,
+    width: 132,
+  },
+  columnMetaUnknown: {
+    fontSize: theme.fontSize.base,
+    color: theme.colors.foreground,
+    fontStyle: "italic",
     flexShrink: 0,
     width: 132,
   },

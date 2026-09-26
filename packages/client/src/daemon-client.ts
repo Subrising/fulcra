@@ -1,3 +1,8 @@
+import type {
+  AgentMcpRefreshInput,
+  AgentMcpRefreshResult,
+  AgentMcpRefreshState,
+} from "@getpaseo/protocol/messages";
 import { subscribeTimeline, type TimelineMessage } from "./timeline-subscription/index.js";
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
 import {
@@ -94,6 +99,7 @@ import type {
   RefreshProvidersSnapshotResponseMessage,
   ProviderDiagnosticResponseMessage,
   ProviderUsageListResponseMessage,
+  AgentQuotaReadResponseMessage,
   DaemonGetStatusResponse,
   DaemonGetPairingOfferResponse,
   DaemonConfigReloadResponse,
@@ -116,6 +122,15 @@ import type {
   WorkspaceRecoveryState,
   PluginListItem,
   PluginLogEntry,
+  CheckoutFileAtCommitGetResponse,
+  CredentialAccount,
+  CredentialProviderSummary,
+  PluginNotification,
+  SignInCompleteInput,
+  SignInCompleteResult,
+  SignInFlow,
+  SignInMethod,
+  SignInRedirect,
   PluginSourceStatusItem,
   PluginSourceUpdateItem,
   PluginUpdateSelection,
@@ -588,12 +603,16 @@ export interface FetchAgentOptions {
   timeout?: number;
 }
 type LegacyFetchAgentOptions = Omit<FetchAgentOptions, "agentId">;
+export const TIMELINE_TURN_INDEX_UNSUPPORTED = "This needs a newer Fulcra host.";
+
 export interface FetchAgentTimelineOptions {
   direction?: FetchAgentTimelineDirection;
   cursor?: FetchAgentTimelineCursor;
   limit?: number;
   projection?: FetchAgentTimelineProjection;
   mergeWindow?: boolean;
+  /** Restrict the page to one turn from listAgentTimelineTurns. */
+  turnId?: string;
   requestId?: string;
   timeout?: number;
 }
@@ -612,6 +631,16 @@ export type AgentTimelineSearchPayload = Extract<
 export type AgentTimelinePromptIndexPayload = Extract<
   SessionOutboundMessage,
   { type: "agent.timeline.list_prompts.response" }
+>["payload"];
+
+export type AgentTimelineTurnsPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.timeline.list_turns.response" }
+>["payload"];
+
+export type AgentTimelineFileHistoryPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.timeline.get_file_history.response" }
 >["payload"];
 
 export type ProviderSubagentListPayload = Extract<
@@ -975,6 +1004,7 @@ const DEFAULT_RECONNECT_BASE_DELAY_MS = 1500;
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30000;
 const DEFAULT_SESSION_RPC_TIMEOUT_MS = 60_000;
 const PUSH_TOKEN_REVOCATION_TIMEOUT_MS = 2_000;
+const MAX_STARTED_SIGN_IN_FLOWS = 32;
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_LIVENESS_TIMEOUT_MS = 5000;
 const LIVENESS_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -1168,6 +1198,9 @@ export class DaemonClient {
   private lastErrorValue: string | null = null;
   private connectionState: ConnectionState = { status: "idle" };
   private readonly terminalStreams = new TerminalStreamRouter();
+  // Browser sign-in flows this connection started: flow id → expiry (ms). The app sends a
+  // `fulcra://oauth/<flowId>` return link only to the host whose client started the flow.
+  private readonly startedSignInFlows = new Map<string, number>();
   private pendingBinaryFileReads = new Map<string, PendingBinaryFileRead>();
   private activeBinaryFileTransfers = new Map<string, BinaryFileTransferState>();
   private completedBinaryFileReads = new Map<string, FileReadResult>();
@@ -2817,12 +2850,13 @@ export class DaemonClient {
     return status.agent;
   }
 
-  async deleteAgent(agentId: string): Promise<void> {
+  async deleteAgent(agentId: string, options: { purgeHistory?: boolean } = {}): Promise<void> {
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
       type: "delete_agent_request",
       agentId,
       requestId,
+      ...(options.purgeHistory === true ? { purgeHistory: true } : {}),
     });
     await this.sendRequest({
       requestId,
@@ -3101,6 +3135,61 @@ export class DaemonClient {
     return status.agent;
   }
 
+  /** One gate for the timeline index surface, including timeline fetches limited to one turn. */
+  private requireTimelineTurnIndex(): void {
+    // COMPAT(agentTimelineTurnIndex): added in v0.9.2, remove gate after 2027-09-24.
+    if (this.lastServerInfoMessage?.features?.agentTimelineTurnIndex !== true) {
+      throw new Error(TIMELINE_TURN_INDEX_UNSUPPORTED);
+    }
+  }
+
+  private requireAgentMcpRefresh(): void {
+    // COMPAT(agentMcpRefresh): added in v0.8.0; remove gate after 2027-03-18 once daemon floor supports it.
+    if (this.lastServerInfoMessage?.features?.agentMcpRefresh !== true) {
+      throw new Error("This host does not support quiet MCP refresh; update the host first");
+    }
+  }
+
+  async getAgentMcpRefreshState(agentId: string): Promise<AgentMcpRefreshState | null> {
+    this.requireAgentMcpRefresh();
+    const requestId = this.createRequestId();
+    return this.sendRequest({
+      requestId,
+      message: { type: "agent.mcp.get_refresh_state.request", agentId, requestId },
+      options: { skipQueue: true },
+      select: (msg) =>
+        msg.type === "agent.mcp.get_refresh_state.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    }).then((payload) => payload.state);
+  }
+
+  /** No automatic retry: inspect state after a timeout before authorizing another refresh. */
+  async refreshAgentMcp(input: AgentMcpRefreshInput): Promise<AgentMcpRefreshResult> {
+    this.requireAgentMcpRefresh();
+    // COMPAT(agentMcpReconnect): added in v0.8.0; remove gate after 2027-03-18 once daemon floor supports it.
+    if (input.reconnect && this.lastServerInfoMessage?.features?.agentMcpReconnect !== true) {
+      throw new Error(
+        "This host does not support same-config MCP reconnect; update the host first",
+      );
+    }
+    const requestId = this.createRequestId();
+    const message = SessionInboundMessageSchema.parse({
+      ...input,
+      type: "agent.mcp.refresh.request",
+      requestId,
+    });
+    return this.sendRequest({
+      requestId,
+      message,
+      options: { skipQueue: true },
+      select: (msg) =>
+        msg.type === "agent.mcp.refresh.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+  }
+
   async refreshAgent(agentId: string, requestId?: string): Promise<AgentRefreshedStatusPayload> {
     const resolvedRequestId = this.createRequestId(requestId);
     const message = SessionInboundMessageSchema.parse({
@@ -3129,6 +3218,8 @@ export class DaemonClient {
     agentId: string,
     options: FetchAgentTimelineOptions = {},
   ): Promise<FetchAgentTimelinePayload> {
+    // An older host drops turnId and would answer with the whole timeline.
+    if (options.turnId) this.requireTimelineTurnIndex();
     const resolvedRequestId = this.createRequestId(options.requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "fetch_agent_timeline_request",
@@ -3139,6 +3230,7 @@ export class DaemonClient {
       ...(typeof options.limit === "number" ? { limit: options.limit } : {}),
       ...(options.projection ? { projection: options.projection } : {}),
       ...(options.mergeWindow === true ? { mergeWindow: true } : {}),
+      ...(options.turnId ? { turnId: options.turnId } : {}),
     });
 
     const payload = await this.sendRequest({
@@ -3217,6 +3309,89 @@ export class DaemonClient {
       throw new Error(payload.error);
     }
     return payload;
+  }
+
+  async listAgentTimelineTurns(
+    agentId: string,
+    options: { cursor?: number; limit?: number; requestId?: string; timeout?: number } = {},
+  ): Promise<AgentTimelineTurnsPayload> {
+    this.requireTimelineTurnIndex();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.timeline.list_turns.request",
+      agentId,
+      requestId,
+      ...(typeof options.cursor === "number" ? { cursor: options.cursor } : {}),
+      ...(typeof options.limit === "number" ? { limit: options.limit } : {}),
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.timeline.list_turns.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async getAgentTimelineFileHistory(
+    agentId: string,
+    filePath: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<AgentTimelineFileHistoryPayload> {
+    this.requireTimelineTurnIndex();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.timeline.get_file_history.request",
+      agentId,
+      requestId,
+      path: filePath,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.timeline.get_file_history.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  /** Removes the retained timeline history of a deleted agent. */
+  async purgeAgentTimeline(
+    agentId: string,
+    options: { requestId?: string; timeout?: number } = {},
+  ): Promise<{ purged: boolean }> {
+    this.requireTimelineTurnIndex();
+    const requestId = this.createRequestId(options.requestId);
+    const message = SessionInboundMessageSchema.parse({
+      type: "agent.timeline.purge.request",
+      agentId,
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      timeout: options.timeout,
+      options: { skipQueue: true },
+      select: (response) =>
+        response.type === "agent.timeline.purge.response" &&
+        response.payload.requestId === requestId
+          ? response.payload
+          : null,
+    });
+    if (payload.error) throw new Error(payload.error);
+    return { purged: payload.purged };
   }
 
   async listProviderSubagents(
@@ -5160,6 +5335,21 @@ export class DaemonClient {
     });
   }
 
+  async readAgentQuota(
+    agentId: string,
+    options?: { requestId?: string },
+  ): Promise<AgentQuotaReadResponseMessage["payload"]> {
+    // COMPAT(agentQuotaRead): added in v0.8.0; remove after 2027-03-17 once host floor supports it.
+    if (this.getLastServerInfoMessage()?.features?.agentQuotaRead !== true) {
+      throw new Error("Update the host to read session quota.");
+    }
+    return this.sendNamespacedCorrelatedSessionRequest({
+      requestId: options?.requestId,
+      message: { type: "agent.quota.read.request", agentId },
+      timeout: 20_000,
+    });
+  }
+
   async listCommands(options: ListCommandsOptions): Promise<ListCommandsPayload>;
   async listCommands(agentId: string, requestId?: string): Promise<ListCommandsPayload>;
   async listCommands(
@@ -5217,6 +5407,167 @@ export class DaemonClient {
       responseType: "plugin.list.response",
     });
     return payload.plugins;
+  }
+
+  // Shared credential store (gate on server_info.features.credentials). Responses never carry secrets.
+  async listCredentials(): Promise<{
+    accounts: CredentialAccount[];
+    providers: CredentialProviderSummary[];
+  }> {
+    // COMPAT(credentials): added in v0.9.1; remove after 2027-03-24 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.credentials !== true) {
+      throw new Error("Update the host to manage integrations.");
+    }
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "credentials.list.request", requestId },
+      responseType: "credentials.list.response",
+    });
+    return { accounts: payload.accounts, providers: payload.providers };
+  }
+
+  async beginCredentialSignIn(input: {
+    connector: string;
+    method: SignInMethod;
+    site?: string;
+    redirect?: SignInRedirect;
+  }): Promise<SignInFlow> {
+    // COMPAT(credentials): added in v0.9.1; remove after 2027-03-24 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.credentials !== true) {
+      throw new Error("Update the host to manage integrations.");
+    }
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "credentials.begin.request", requestId, ...input },
+      responseType: "credentials.begin.response",
+    });
+    this.rememberSignInFlow(payload.flow);
+    return payload.flow;
+  }
+
+  async completeCredentialSignIn(input: {
+    flowId?: string;
+    input: SignInCompleteInput;
+  }): Promise<SignInCompleteResult> {
+    // COMPAT(credentials): added in v0.9.1; remove after 2027-03-24 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.credentials !== true) {
+      throw new Error("Update the host to manage integrations.");
+    }
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "credentials.complete.request", requestId, ...input },
+      responseType: "credentials.complete.response",
+    });
+    return payload.result;
+  }
+
+  async reconnectCredential(input: {
+    accountId: string;
+    method?: SignInMethod;
+    redirect?: SignInRedirect;
+  }): Promise<SignInFlow> {
+    // COMPAT(credentials): added in v0.9.1; remove after 2027-03-24 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.credentials !== true) {
+      throw new Error("Update the host to manage integrations.");
+    }
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "credentials.reconnect.request", requestId, ...input },
+      responseType: "credentials.reconnect.response",
+    });
+    this.rememberSignInFlow(payload.flow);
+    return payload.flow;
+  }
+
+  /** True while `flowId` is an unexpired browser sign-in this connection started. */
+  ownsSignInFlow(flowId: string): boolean {
+    this.pruneSignInFlows(Date.now());
+    return this.startedSignInFlows.has(flowId);
+  }
+
+  private rememberSignInFlow(flow: SignInFlow): void {
+    if (flow.method !== "browser") return;
+    const expiresAt = Date.parse(flow.expiresAt);
+    // No usable expiry: not recorded, so its return link goes nowhere (fail closed).
+    if (!Number.isFinite(expiresAt)) return;
+    const now = Date.now();
+    this.pruneSignInFlows(now);
+    if (expiresAt <= now) return;
+    if (this.startedSignInFlows.size >= MAX_STARTED_SIGN_IN_FLOWS) {
+      const oldest = this.startedSignInFlows.keys().next().value;
+      if (oldest !== undefined) this.startedSignInFlows.delete(oldest);
+    }
+    this.startedSignInFlows.set(flow.flowId, expiresAt);
+  }
+
+  private pruneSignInFlows(now: number): void {
+    for (const [flowId, expiresAt] of this.startedSignInFlows) {
+      if (expiresAt <= now) this.startedSignInFlows.delete(flowId);
+    }
+  }
+
+  async removeCredential(accountId: string): Promise<boolean> {
+    // COMPAT(credentials): added in v0.9.1; remove after 2027-03-24 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.credentials !== true) {
+      throw new Error("Update the host to manage integrations.");
+    }
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "credentials.remove.request", requestId, accountId },
+      responseType: "credentials.remove.response",
+    });
+    return payload.removed;
+  }
+
+  // Reads one file as it was at a commit, or at the merge base of two commits.
+  // `sha` values must be 40-character commit ids; `path` is repository-relative.
+  async getFileAtCommit(input: {
+    cwd: string;
+    at: { kind: "commit"; sha: string } | { kind: "merge-base"; of: [string, string] };
+    path: string;
+    maxBytes?: number;
+  }): Promise<CheckoutFileAtCommitGetResponse["payload"]> {
+    // COMPAT(checkoutFileAtCommit): added in v0.9.1; remove after 2027-03-25 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.checkoutFileAtCommit !== true) {
+      throw new Error("Update the host to compare a pull request at its own commits.");
+    }
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "checkout.file-at-commit.get.request",
+        requestId,
+        cwd: input.cwd,
+        at: input.at,
+        path: input.path,
+        ...(input.maxBytes !== undefined ? { maxBytes: input.maxBytes } : {}),
+      },
+      responseType: "checkout.file-at-commit.get.response",
+    });
+  }
+
+  // Plugin notification list, newest first (gate on server_info.features.pluginNotifications).
+  async listPluginNotifications(limit?: number): Promise<PluginNotification[]> {
+    // COMPAT(pluginNotifications): added in v0.9.1; remove after 2027-03-24 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.pluginNotifications !== true) {
+      throw new Error("Update the host to list plugin notifications.");
+    }
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "plugin.notifications.list.request",
+        requestId,
+        ...(limit !== undefined ? { limit } : {}),
+      },
+      responseType: "plugin.notifications.list.response",
+    });
+    return payload.notifications;
   }
 
   async getPluginLogs(pluginId: string): Promise<PluginLogEntry[]> {

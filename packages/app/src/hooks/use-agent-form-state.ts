@@ -118,15 +118,37 @@ function buildProviderModelsByProvider(
   return map;
 }
 
-async function persistProviderPreferences(input: {
+export async function persistProviderPreferences(input: {
   provider: AgentProvider;
   formState: FormState;
+  // Only a mode the user picked is a preference. A mode the form merely resolved -- from a provider
+  // default, a voice default, or a previously saved value -- must not be written back as if it were
+  // chosen: doing so ratchets any transient mode (e.g. "default"/ask) into permanent "user intent"
+  // that then outranks the provider's own default on every future session.
+  modeChosenByUser: boolean;
+  // Same rule as the mode, for the same reason and one release later. A model the form merely resolved --
+  // from the host's advertised default, from a profile, from the previously saved value -- was still being
+  // written back as if chosen, so the first session that came up on an older model pinned it into the
+  // profile and it then outranked the host's default forever. Only a model the user picked is a preference.
+  modelChosenByUser: boolean;
+  // And the effort, for the same reason: an effort the form resolved -- the model's own default, or a
+  // value stored before the app told chosen from resolved -- is not a preference. It is keyed by model id,
+  // so it is marked per model too.
+  thinkingChosenByUser: boolean;
   availableModels: AgentModelDefinition[] | null;
   updatePreferences: (
     updates: Partial<FormPreferences> | ((current: FormPreferences) => FormPreferences),
   ) => Promise<FormPreferences>;
 }): Promise<void> {
-  const { provider, formState, availableModels, updatePreferences } = input;
+  const {
+    provider,
+    formState,
+    modeChosenByUser,
+    modelChosenByUser,
+    thinkingChosenByUser,
+    availableModels,
+    updatePreferences,
+  } = input;
   const resolvedModel = resolveEffectiveModel(availableModels, formState.model);
   const modelId = resolvedModel?.id ?? formState.model;
   await updatePreferences((current) =>
@@ -134,10 +156,21 @@ async function persistProviderPreferences(input: {
       preferences: current,
       provider,
       updates: {
-        model: modelId || undefined,
-        mode: formState.modeId || undefined,
-        ...(modelId && formState.thinkingOptionId
-          ? { thinkingByModel: { [modelId]: formState.thinkingOptionId } }
+        // Omitted entirely, not set to undefined, so an earlier explicit choice is left intact.
+        ...(modelChosenByUser && modelId
+          ? { model: modelId, modelChosenByUser: true as const }
+          : {}),
+        ...(modeChosenByUser
+          ? { mode: formState.modeId || undefined, modeChosenByUser: true as const }
+          : {}),
+        // Recorded per model, and only when the user picked it. Writing a resolved effort was the same
+        // ratchet in its third form: a session that happened to come up High wrote High into the profile,
+        // and it then outranked the model's own default effort on every later session.
+        ...(thinkingChosenByUser && modelId && formState.thinkingOptionId
+          ? {
+              thinkingByModel: { [modelId]: formState.thinkingOptionId },
+              thinkingChosenByModel: { [modelId]: true as const },
+            }
           : {}),
       },
     }),
@@ -298,9 +331,9 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
         mergeSelectedComposerPreferences({
           preferences: current,
           provider,
-          updates: {
-            model: nextModelId || undefined,
-          },
+          // From the user, by the action's own name: picking a provider and model is a choice, so the
+          // model it records is allowed to outrank the host's advertised default later.
+          updates: nextModelId ? { model: nextModelId, modelChosenByUser: true } : {},
         }),
       );
     },
@@ -374,9 +407,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
           mergeSelectedComposerPreferences({
             preferences: current,
             provider,
-            updates: {
-              mode: modeId || undefined,
-            },
+            updates: modeId ? { mode: modeId, modeChosenByUser: true } : { mode: undefined },
           }),
         );
       }
@@ -403,9 +434,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
           mergeSelectedComposerPreferences({
             preferences: current,
             provider,
-            updates: {
-              model: nextModelId || undefined,
-            },
+            updates: nextModelId ? { model: nextModelId, modelChosenByUser: true } : {},
           }),
         );
       }
@@ -423,9 +452,8 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
             preferences: current,
             provider,
             updates: {
-              thinkingByModel: {
-                [modelId]: thinkingOptionId,
-              },
+              thinkingByModel: { [modelId]: thinkingOptionId },
+              thinkingChosenByModel: { [modelId]: true },
             },
           }),
         );
@@ -452,10 +480,20 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
     await persistProviderPreferences({
       provider: formState.provider,
       formState,
+      modeChosenByUser: userModified.modeId,
+      modelChosenByUser: userModified.model,
+      thinkingChosenByUser: userModified.thinkingOptionId,
       availableModels,
       updatePreferences: updateCurrentPreferences,
     });
-  }, [availableModels, formState, updateCurrentPreferences]);
+  }, [
+    availableModels,
+    formState,
+    userModified.modeId,
+    userModified.model,
+    userModified.thinkingOptionId,
+    updateCurrentPreferences,
+  ]);
 
   const agentDefinition = formState.provider
     ? providerDefinitionMap.get(formState.provider)

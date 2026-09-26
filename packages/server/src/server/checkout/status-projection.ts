@@ -139,6 +139,8 @@ export function normalizeCheckoutPrStatusPayload(
     repoName: status.repoName,
     baseRefName: status.baseRefName,
     headRefName: status.headRefName,
+    ...(status.baseRefOid ? { baseRefOid: status.baseRefOid } : {}),
+    ...(status.headRefOid ? { headRefOid: status.headRefOid } : {}),
     isMerged: status.isMerged,
     isDraft: status.isDraft ?? false,
     mergeable: status.mergeable ?? "UNKNOWN",

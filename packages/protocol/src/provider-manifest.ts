@@ -15,7 +15,19 @@ export interface AgentModeVisuals {
 export type AgentProviderModeDefinition = Omit<AgentMode, "icon" | "colorTier"> &
   AgentModeVisuals & {
     // Marks the provider's most-permissioned no-prompt mode. Selecting it means tools run without approval; the runtime mechanism is provider-specific.
+    /**
+     * Runs with nobody watching: prompts are skipped outright. Dangerous by nature.
+     * NOT the same as automatic approval — see `isAutomaticApproval`.
+     */
     isUnattended?: boolean;
+    /**
+     * The adapter's own automatic-approval mode: permission decisions are made for the
+     * user by a reviewer the harness supports, at the permissions the adapter already
+     * grants. It must not skip review and must not widen filesystem or network access.
+     * Set this only where the adapter genuinely has such a mode; leaving it unset is the
+     * honest answer and callers report "no automatic mode supported".
+     */
+    isAutomaticApproval?: boolean;
   };
 
 // TODO: `modes` should not be static. Providers (especially ACP) report their
@@ -63,6 +75,7 @@ const CLAUDE_MODES: AgentProviderModeDefinition[] = [
     description: "Uses a model classifier to review permission prompts automatically",
     icon: "ShieldCheck",
     colorTier: "moderate",
+    isAutomaticApproval: true,
   },
   {
     id: "bypassPermissions",
@@ -89,6 +102,7 @@ const CODEX_MODES: AgentProviderModeDefinition[] = [
       "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent.",
     icon: "ShieldCheck",
     colorTier: "moderate",
+    isAutomaticApproval: true,
   },
   {
     id: "full-access",
@@ -203,7 +217,7 @@ export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
     modes: CLAUDE_MODES,
     voice: {
       enabled: true,
-      defaultModeId: "default",
+      defaultModeId: "auto",
       defaultModel: "haiku",
     },
   },
@@ -310,6 +324,57 @@ export function getUnattendedModeId(
 ): string | undefined {
   const definition = definitions.find((entry) => entry.id === provider);
   return definition?.modes.find((mode) => mode.isUnattended)?.id;
+}
+
+/**
+ * Why a provider has no automatic-approval mode. Callers report this rather than
+ * substituting a mode the adapter never declared.
+ */
+export type AutomaticApprovalUnsupportedReason =
+  | "unknown_provider"
+  | "no_declared_mode"
+  | "ambiguous_declaration"
+  | "not_offered_by_adapter";
+
+export interface AutomaticApprovalModeResolution {
+  modeId: string | null;
+  supported: boolean;
+  reason: AutomaticApprovalUnsupportedReason | null;
+}
+
+/**
+ * The single place any creation path asks "what is this provider's automatic-approval
+ * mode?". Every path must use this rather than naming a literal: `auto` means the
+ * classifier on Claude but plain default permissions on Codex, so a hard-coded literal
+ * picks the wrong mode on at least one adapter today.
+ *
+ * Never falls back to an unattended mode. Skipping review is not automatic approval, and
+ * presenting Bypass or Full Access as "Auto" would widen authority under a friendly name.
+ *
+ * `offeredModeIds`, when given, is what the live adapter actually offers; a declared mode
+ * missing from it is refused rather than sent.
+ */
+export function resolveAutomaticApprovalMode(
+  provider: string,
+  offeredModeIds?: readonly string[],
+  definitions: AgentProviderDefinition[] = [
+    ...AGENT_PROVIDER_DEFINITIONS,
+    ...DEV_AGENT_PROVIDER_DEFINITIONS,
+  ],
+): AutomaticApprovalModeResolution {
+  const definition = definitions.find((entry) => entry.id === provider);
+  if (!definition) return { modeId: null, supported: false, reason: "unknown_provider" };
+  const declared = definition.modes.filter((mode) => mode.isAutomaticApproval === true);
+  if (declared.length === 0) return { modeId: null, supported: false, reason: "no_declared_mode" };
+  // Two automatic modes is a manifest bug, not a choice for a creation path to make.
+  if (declared.length > 1) {
+    return { modeId: null, supported: false, reason: "ambiguous_declaration" };
+  }
+  const modeId = declared[0].id;
+  if (offeredModeIds !== undefined && !offeredModeIds.includes(modeId)) {
+    return { modeId: null, supported: false, reason: "not_offered_by_adapter" };
+  }
+  return { modeId, supported: true, reason: null };
 }
 
 export function getModeVisuals(

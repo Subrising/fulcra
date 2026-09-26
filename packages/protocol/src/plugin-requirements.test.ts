@@ -4,7 +4,7 @@ import { assertPluginCompatibility, validatePluginRequirements } from "./plugin-
 describe.each(["daemon", "app"] as const)("plugin requirements on %s", (runtime) => {
   it("rejects legacy manifests on the first breaking release with migration instructions", () => {
     expect(() => assertPluginCompatibility({ id: "legacy", version: "0.8.0", runtime })).toThrow(
-      /legacy.*<0\.8\.0.*0\.8\.0.*https:\/\/paseo.sh\/docs\/plugins\/migration/,
+      /legacy.*<0\.8\.0.*0\.8\.0.*plugin API before 0\.8\. Ask its author to migrate it\./,
     );
   });
 
@@ -51,6 +51,6 @@ describe.each(["daemon", "app"] as const)("plugin requirements on %s", (runtime)
         version,
         runtime,
       }),
-    ).toThrow(`Paseo ${runtime} version is unknown`);
+    ).toThrow(`Fulcra ${runtime} version is unknown`);
   });
 });

@@ -3,13 +3,18 @@ import type { DaemonPermission } from "./index.js";
 
 type InboundOperation = SessionInboundMessage["type"];
 type OutboundOperation = SessionOutboundMessage["type"];
-export type PermissionRequirement = DaemonPermission | readonly DaemonPermission[] | null;
+export type PermissionRequirement =
+  | DaemonPermission
+  | readonly DaemonPermission[]
+  | { all: readonly DaemonPermission[] }
+  | null;
 
 const INBOUND_PERMISSION = {
   abort_request: "workspace.write",
   "agent.config.apply.request": ["workspace.write", "hub.execute"],
   "agent.detach.request": "workspace.write",
   "agent.fork_context.request": "workspace.read",
+  "agent.quota.read.request": { all: ["workspace.read", "daemon.read"] },
   "agent.provider_subagents.list.request": "workspace.read",
   "agent.provider_subagents.timeline.get.request": "workspace.read",
   "agent.rewind.request": "workspace.write",
@@ -20,6 +25,9 @@ const INBOUND_PERMISSION = {
   "agent.skills.uninstall.request": "daemon.manage",
   "agent.timeline.search.request": "workspace.read",
   "agent.timeline.list_prompts.request": "workspace.read",
+  "agent.timeline.list_turns.request": "workspace.read",
+  "agent.timeline.get_file_history.request": "workspace.read",
+  "agent.timeline.purge.request": "workspace.write",
   "agent.timeline.append.request": "workspace.write",
   "browser.host.register.request": ["workspace.write"],
   "subscription.release.request": null,
@@ -41,6 +49,7 @@ const INBOUND_PERMISSION = {
   "chat/read": "workspace.read",
   "chat/wait": "workspace.read",
   "checkout.commits.file_diff.request": "workspace.read",
+  "checkout.file-at-commit.get.request": "workspace.read",
   "checkout.commits.list.request": "workspace.read",
   "checkout.discard_changes.request": "workspace.write",
   "checkout.forge.get_check_details.request": "workspace.read",
@@ -131,6 +140,12 @@ const INBOUND_PERMISSION = {
   "plugin.enable.request": "daemon.manage",
   "plugin.list.request": "daemon.manage",
   "plugin.logs.get.request": "daemon.manage",
+  "plugin.notifications.list.request": "daemon.read",
+  "credentials.list.request": "daemon.manage",
+  "credentials.begin.request": "daemon.manage",
+  "credentials.complete.request": "daemon.manage",
+  "credentials.reconnect.request": "daemon.manage",
+  "credentials.remove.request": "daemon.manage",
   "plugin.reload.request": "daemon.manage",
   "plugin.remove.request": "daemon.manage",
   "plugin.rpc.invoke.request": "daemon.manage",
@@ -154,6 +169,8 @@ const INBOUND_PERMISSION = {
   "push.unregister.request": "workspace.read",
   read_project_config_request: "workspace.read",
   refresh_agent_request: "workspace.write",
+  "agent.mcp.get_refresh_state.request": "workspace.read",
+  "agent.mcp.refresh.request": "workspace.write",
   refresh_providers_snapshot_request: ["daemon.read", "hub.execute"],
   register_push_token: "workspace.read",
   restart_server_request: "daemon.manage",
@@ -214,6 +231,8 @@ const INBOUND_PERMISSION = {
 } as const satisfies Record<InboundOperation, PermissionRequirement>;
 
 const OUTBOUND_PERMISSION = {
+  "agent.mcp.get_refresh_state.response": "workspace.read",
+  "agent.mcp.refresh.response": "workspace.write",
   "agent.create.response": ["workspace.write", "hub.execute"],
   "agent.create.update": ["workspace.write", "hub.execute"],
   "workspace.create.update": "workspace.manage",
@@ -222,6 +241,7 @@ const OUTBOUND_PERMISSION = {
   "agent.config.apply.response": ["workspace.write", "hub.execute"],
   "agent.detach.response": "workspace.write",
   "agent.fork_context.response": "workspace.read",
+  "agent.quota.read.response": { all: ["workspace.read", "daemon.read"] },
   "agent.provider_subagents.list.response": "workspace.read",
   "agent.provider_subagents.timeline.get.response": "workspace.read",
   "agent.provider_subagents.update": "workspace.read",
@@ -233,6 +253,9 @@ const OUTBOUND_PERMISSION = {
   "agent.skills.uninstall.response": "daemon.manage",
   "agent.timeline.search.response": "workspace.read",
   "agent.timeline.list_prompts.response": "workspace.read",
+  "agent.timeline.list_turns.response": "workspace.read",
+  "agent.timeline.get_file_history.response": "workspace.read",
+  "agent.timeline.purge.response": "workspace.read",
   "agent.timeline.append.response": "workspace.write",
   "agent.timeline.replacement": ["workspace.read", "hub.execute"],
   "browser.host.register.response": ["workspace.write"],
@@ -263,6 +286,7 @@ const OUTBOUND_PERMISSION = {
   "chat/read/response": "workspace.read",
   "chat/wait/response": "workspace.read",
   "checkout.commits.file_diff.response": "workspace.read",
+  "checkout.file-at-commit.get.response": "workspace.read",
   "checkout.commits.list.response": "workspace.read",
   "checkout.discard_changes.response": "workspace.write",
   "checkout.forge.get_check_details.response": "workspace.read",
@@ -353,6 +377,12 @@ const OUTBOUND_PERMISSION = {
   "plugin.enable.response": "daemon.manage",
   "plugin.list.response": "daemon.manage",
   "plugin.logs.get.response": "daemon.manage",
+  "plugin.notifications.list.response": "daemon.read",
+  "credentials.list.response": "daemon.manage",
+  "credentials.begin.response": "daemon.manage",
+  "credentials.complete.response": "daemon.manage",
+  "credentials.reconnect.response": "daemon.manage",
+  "credentials.remove.response": "daemon.manage",
   "plugin.reload.response": "daemon.manage",
   "plugin.remove.response": "daemon.manage",
   "plugin.rpc.invoke.response": "daemon.manage",

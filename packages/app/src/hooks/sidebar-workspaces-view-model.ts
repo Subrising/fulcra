@@ -1,3 +1,4 @@
+import { isGeneratedSidebarName } from "./sidebar-conversation-labels";
 import type { PrHint } from "@/git/pr-hint";
 import { selectPrHintFromStatus } from "@/git/pr-hint";
 import { type HostProjectListItem } from "@/projects/host-project-model";
@@ -18,6 +19,8 @@ const EMPTY_PROJECTS: SidebarProjectEntry[] = [];
 export type SidebarStateBucket = WorkspaceDescriptor["status"];
 
 export interface SidebarWorkspacePlacement {
+  conversationName?: string;
+  conversationProjectName?: string;
   workspaceKey: string;
   serverId: string;
   workspaceId: string;
@@ -392,6 +395,20 @@ export function buildSidebarWorkspaceEntries(input: {
       pendingCreateAttempts: input.pendingCreateAttempts,
       workspaceAgentActivity: session.workspaceAgentActivity,
     });
+    if (workspace.projectKind !== "git") {
+      if (
+        placement.conversationName &&
+        workspace.title == null &&
+        isGeneratedSidebarName(workspace.name)
+      )
+        entry.name = placement.conversationName;
+      if (
+        placement.conversationProjectName &&
+        workspace.projectCustomName == null &&
+        isGeneratedSidebarName(projectNameForWorkspace(workspace))
+      )
+        entry.projectName = placement.conversationProjectName;
+    }
     const previousEntry = input.previousEntries?.get(placement.workspaceKey);
     entries.set(
       placement.workspaceKey,

@@ -1,5 +1,5 @@
 import { tmpdir } from "node:os";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { CodexAppServerAgentSession } from "./codex-app-server-agent.js";
 import {
   createFakeCodexAppServer,
@@ -226,6 +226,15 @@ test("manager snapshots capture pending and answered question state before the t
   try {
     await ask();
     const [permission] = session.getPendingPermissions();
+    // `ask()` resolves on a SESSION event. The manager is a separate subscriber, and it is
+    // `onStreamPermissionRequested` that records the pending permission and refreshes the
+    // persistence handle — both on the same synchronous line. Sampling the snapshot straight
+    // after `ask()` can read it before that handler has run, which is why this flaked on a
+    // loaded runner. Waiting on the pending permission is an exact happens-before for the
+    // refresh, not a sleep: once the manager shows it, persistence is already current.
+    await vi.waitFor(() =>
+      expect(manager.getAgent(agent.id)?.pendingPermissions.has(permission.id)).toBe(true),
+    );
     expect(manager.getAgent(agent.id)?.persistence?.metadata?.asyncQuestions).toEqual([
       {
         item: {

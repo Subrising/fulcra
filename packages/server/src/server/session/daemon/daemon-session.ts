@@ -13,6 +13,10 @@ import type { PersistedProjectRecord, PersistedWorkspaceRecord } from "../../wor
 import type { HubRelationshipManagement } from "../../hub/relationship-controller.js";
 import type { DaemonConfigReloadResult } from "../../daemon-config-store.js";
 
+// Comfortably inside the CLI's 1500ms `daemon status` deadline, leaving room for the pid-lock
+// read and the transport round trip.
+const PROVIDER_PROBE_BUDGET_MS = 1_000;
+
 export interface DaemonRuntimeConfig {
   listen: string | null;
   worktreesRoot?: string;
@@ -169,16 +173,53 @@ export class DaemonSession {
     }
   }
 
+  /**
+   * Provider availability is an optional detail on a health answer, and it is not cheap:
+   * listProviderAvailability probes every registered provider, and a probe resolves a launch
+   * command, which can reach the filesystem or spawn a process. The CLI gives `daemon status`
+   * 1500ms (packages/cli/src/commands/daemon/status.ts), so on a loaded host the optional
+   * field ran past the deadline and the caller got no status at all — liveness lost to a
+   * detail. Bound the probe well inside that budget and answer with what was established.
+   *
+   * On expiry providers is empty, which is what this handler already reports when the listing
+   * rejects. Nothing is assumed available, and no cached verdict is invented; the rest of the
+   * status is real and is still delivered.
+   */
+  private async listProviderAvailabilityWithin(
+    budgetMs: number,
+  ): Promise<{ provider: string; available: boolean; error: string | null }[]> {
+    const expired = Symbol("provider-probe-expired");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const probed = await Promise.race([
+        this.listProviderAvailability(),
+        new Promise<typeof expired>((resolve) => {
+          timer = setTimeout(() => resolve(expired), budgetMs);
+        }),
+      ]);
+      if (probed === expired) {
+        this.logger.warn(
+          { budgetMs },
+          "Provider availability probe exceeded its budget; reporting status without it",
+        );
+        return [];
+      }
+      return probed.map((p) => ({
+        provider: p.provider,
+        available: p.available,
+        error: p.error ?? null,
+      }));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async handleGetStatusRequest(
     msg: Extract<SessionInboundMessage, { type: "daemon.get_status.request" }>,
   ): Promise<void> {
     try {
       const pidInfo = await getPidLockInfo(this.paseoHome);
-      const providers = (await this.listProviderAvailability()).map((p) => ({
-        provider: p.provider,
-        available: p.available,
-        error: p.error ?? null,
-      }));
+      const providers = await this.listProviderAvailabilityWithin(PROVIDER_PROBE_BUDGET_MS);
       this.host.emit({
         type: "daemon.get_status.response",
         payload: {
@@ -302,7 +343,7 @@ export class DaemonSession {
         type: "diagnostics.response",
         payload: {
           requestId: msg.requestId,
-          diagnostic: `Paseo diagnostics\n  Error: ${
+          diagnostic: `Fulcra diagnostics\n  Error: ${
             error instanceof Error ? error.message : String(error)
           }`,
         },

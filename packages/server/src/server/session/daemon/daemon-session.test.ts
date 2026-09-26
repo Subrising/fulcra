@@ -1,7 +1,7 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import pino from "pino";
 import {
   DaemonSession,
@@ -245,6 +245,65 @@ describe("DaemonSession", () => {
         },
       },
     ]);
+  });
+
+  // The CLI gives `daemon status` 1500ms. Provider probes can spawn processes, and on a loaded
+  // host they overran that deadline, so the caller got no status at all. Liveness must not be
+  // lost to an optional detail.
+  test("status still answers when the provider probe never settles", async () => {
+    // Deterministic: the budget is proven by advancing a fake clock, never by measuring
+    // elapsed wall time. A duration assertion here would be flaky under exactly the load
+    // this fix exists to survive.
+    vi.useFakeTimers();
+    try {
+      let probeEntered!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        probeEntered = resolve;
+      });
+      const { subsystem, emitted } = makeSubsystem({
+        serverId: "srv-1",
+        daemonVersion: "1.2.3",
+        daemonRuntimeConfig: { listen: "127.0.0.1:6767", getRelayConfig: () => null },
+        listProviderAvailability: () => {
+          probeEntered();
+          return new Promise<ProviderAvailability[]>(() => {});
+        },
+      });
+
+      const handled = subsystem.handleGetStatusRequest({
+        type: "daemon.get_status.request",
+        requestId: "s-3",
+      });
+
+      // getPidLockInfo is real IO and resolves off the faked timer queue; waiting on the
+      // latch means the probe has started and its budget timer is armed.
+      await entered;
+      expect(emitted).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await handled;
+
+      expect(emitted).toEqual([
+        {
+          type: "daemon.get_status.response",
+          payload: {
+            requestId: "s-3",
+            serverId: "srv-1",
+            version: "1.2.3",
+            pid: process.pid,
+            nodePath: process.execPath,
+            startedAt: null,
+            listen: "127.0.0.1:6767",
+            relay: null,
+            // Empty, never assumed available: the probe established nothing. Every other
+            // field is real and is still delivered, unlike the listing-rejects path above.
+            providers: [],
+          },
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("pairing offer is empty when relay is disabled", async () => {

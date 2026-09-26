@@ -1,0 +1,9 @@
+{
+  "id": "integrations-dev",
+  "description": "Developer test screen for the shared credential store and plugin notifications.",
+  "requirements": {
+    "paseo": ">=0.9.0",
+    "notify": true,
+    "credentials": ["github", "jira", "jira-dc", "bitbucket", "bitbucket-dc"]
+  }
+}

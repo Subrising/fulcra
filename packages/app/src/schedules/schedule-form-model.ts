@@ -120,6 +120,16 @@ export interface ScheduleFormState {
 
 export interface ScheduleFormModel {
   getState: () => ScheduleFormState;
+  // Whether the user actually picked the mode, as opposed to the form resolving one from a saved
+  // preference or a provider default. Only a real choice may be written back as a preference; see
+  // persistProviderPreferences. Exposed as a getter rather than on the state because it is read at
+  // submit time, not rendered.
+  getModeChosenByUser: () => boolean;
+  // Same question for the model, and it needs asking for the same reason: a model the form resolved --
+  // from the host's advertised default or from a saved value -- is not a model the user wanted, and
+  // writing it back as a preference pins it for every future session.
+  getModelChosenByUser: () => boolean;
+  getThinkingChosenByUser: () => boolean;
   subscribe: (listener: () => void) => () => void;
   close: () => void;
   applyHosts: (hosts: readonly ScheduleFormHost[]) => void;
@@ -938,6 +948,9 @@ export function openScheduleForm(snapshot: ScheduleFormSnapshot): ScheduleFormMo
 
   return {
     getState: () => state,
+    getModeChosenByUser: () => userModified.modeId,
+    getModelChosenByUser: () => userModified.model,
+    getThinkingChosenByUser: () => userModified.thinkingOptionId,
     subscribe(listener) {
       if (closed) {
         return () => {};
@@ -1065,7 +1078,11 @@ export function openScheduleForm(snapshot: ScheduleFormSnapshot): ScheduleFormMo
         ...userModified,
         provider: true,
         model: true,
-        modeId: true,
+        // Picking a model is not picking a mode: selectedMode below comes from pickModeForProvider,
+        // which resolves one. Marking it chosen here made getModeChosenByUser true for everyone --
+        // a user always picks a model -- so the resolved mode was written back as intent anyway.
+        // A choice for the previous provider is not one for this provider either, so it resets.
+        modeId: state.selectedProvider === provider && userModified.modeId,
         thinkingOptionId: true,
       };
       publish({

@@ -128,7 +128,7 @@ function resolveScheduleTarget(args: {
     if (!currentAgentId) {
       throw {
         code: "INVALID_TARGET",
-        message: "--target self requires running inside a Paseo agent",
+        message: "--target self requires running inside a Fulcra agent",
       } satisfies CommandError;
     }
     return { type: "self", agentId: currentAgentId };

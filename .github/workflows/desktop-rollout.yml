@@ -46,6 +46,10 @@ jobs:
           registry-url: "https://npm.pkg.github.com"
           scope: "@boudra"
 
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
       - name: Install JS dependencies
         run: node scripts/npm-retry.mjs ci
         env:

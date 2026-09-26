@@ -2,16 +2,16 @@
 
 ## App variants
 
-Controlled by `APP_VARIANT` in `packages/app/app.config.js` (vanilla Expo, no custom Gradle plugin):
+Controlled by `APP_VARIANT` in `packages/app/app.config.js`:
 
-| Variant       | App name    | Package ID       |
-| ------------- | ----------- | ---------------- |
-| `production`  | Paseo       | `sh.paseo`       |
-| `development` | Paseo Debug | `sh.paseo.debug` |
+| Variant       | App name     | Package ID                 |
+| ------------- | ------------ | -------------------------- |
+| `production`  | Fulcra       | `dev.orca.workspace`       |
+| `development` | Fulcra Debug | `dev.orca.workspace.debug` |
+| `private-preview` | Fulcra Preview | `dev.orca.workspace.preview` (source-only profile) |
 
-EAS profiles: `development`, `production`, and `production-apk` in `packages/app/eas.json`.
-
-`development` uses Android `debug`.
+The package IDs are kept from an earlier name so existing installs upgrade in place. The
+`android:development` and `android:production` commands below also **install** their builds.
 
 ## Version codes
 
@@ -75,10 +75,10 @@ For a production-ID release APK that local Android profiling tools can attach to
 PASEO_PROFILE_BUILD=1 npm run android:production
 ```
 
-This keeps the `sh.paseo` package id, release Hermes bundle, and release optimizations. It adds
+This keeps the `dev.orca.workspace` package id, release Hermes bundle, and release optimizations. It adds
 `<profileable android:shell="true" />` and enables local Android trace markers for workspace mounts
 and daemon WebSocket traffic. The markers contain message types and sizes, never payload contents,
-and emit only while a system trace records the `sh.paseo` app (`perfetto -a sh.paseo ...`).
+and emit only while a system trace records the `dev.orca.workspace` app (`perfetto -a dev.orca.workspace ...`).
 
 Or from `packages/app`:
 
@@ -199,32 +199,8 @@ Keep `react` and `react-dom` pinned to the React version embedded by the current
 adb exec-out screencap -p > screenshot.png
 ```
 
-## Cloud build + submit (EAS)
+## Inherited release automation
 
-Stable tag pushes like `v0.1.0` trigger:
-
-- The EAS GitHub app on Expo servers (iOS + Android production builds + store submit). There is no workflow file in this repo for it.
-- `.github/workflows/android-apk-release.yml` on GitHub Actions (APK asset on GitHub Release).
-
-iOS auto-submits to App Store review via a Fastlane lane after EAS uploads to TestFlight. Android auto-submits to the Play Store via EAS-managed credentials.
-
-Beta tags like `v0.1.1-beta.1` only trigger the GitHub APK workflow. They publish a GitHub prerelease APK for testing and do not submit to the stores.
-
-`android-v*` tags also trigger only the GitHub APK workflow — useful when you want to ship an APK without going through stores. The GitHub APK workflow supports `workflow_dispatch` with an existing `tag` input so you can rebuild without cutting a new tag.
-
-### Useful commands
-
-```bash
-cd packages/app
-
-# Recent builds
-npx eas build:list --limit 10 --non-interactive --json | jq '.[] | {platform, status, appVersion, gitCommitHash}'
-
-# Inspect a build (the printed `Logs` URL opens the build's Expo dashboard page,
-# which has a Submissions section showing the auto-submit to the Play Store).
-npx eas build:view <build-id>
-```
-
-The Play Console (Internal testing → Production tracks) is the final confirmation that the binary reached the store.
-
-See [docs/release.md](release.md) for the full mobile-build babysitting flow.
+`eas.json`, `android-apk-release.yml`, and the tag-based release workflows are inherited from
+Paseo. Do not connect upstream Expo or store credentials to them; Fulcra has no configured store
+submission, and public store releases need their own release setup.
