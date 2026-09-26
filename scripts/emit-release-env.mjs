@@ -41,6 +41,7 @@ const entries = [
   ["IS_BETA", info.isBeta ? "true" : "false"],
   ["RELEASE_TYPE", info.releaseType],
   ["RELEASE_CHANNEL", info.releaseChannel],
+  ["RELEASE_BUILDER_CHANNEL", info.builderChannel ?? ""],
   ["DESKTOP_VERSION", info.version],
   ["IS_SMOKE_TAG", info.isSmokeTag ? "true" : "false"],
 ];

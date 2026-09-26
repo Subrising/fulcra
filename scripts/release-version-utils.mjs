@@ -83,6 +83,10 @@ export function getReleaseInfoFromSourceTag(sourceTag) {
     betaNumber: parsed.betaNumber,
     releaseType: parsed.isPrerelease ? "prerelease" : "release",
     releaseChannel: parsed.isBeta ? "beta" : "latest",
+    // electron-builder 26 only accepts alpha|beta|dev|rc|stable for publish.channel. Its default channel
+    // is "latest", which names the stable update files (latest.yml, latest-mac.yml, latest-linux.yml), so
+    // stable builds leave the option unset and only prereleases pass a channel.
+    builderChannel: parsed.isBeta ? "beta" : null,
     isSmokeTag: sourceTag.includes("gha-smoke"),
   };
 }
