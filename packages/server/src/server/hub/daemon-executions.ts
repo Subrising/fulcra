@@ -235,6 +235,7 @@ export class DaemonExecutions implements HubExecutionAgents {
         } finally {
           if (createdAgentId) {
             await this.agentStorage.remove(createdAgentId);
+            this.agentManager.trustedPlugins.deleteKnownAgent(createdAgentId);
           }
         }
       }

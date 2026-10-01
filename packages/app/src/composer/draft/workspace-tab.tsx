@@ -23,6 +23,10 @@ import type { Agent } from "@/stores/session-store";
 import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { useWorkspaceDraftSubmissionStore } from "@/stores/workspace-draft-submission-store";
 import { useAgentControlCommandCenterActions } from "@/command-center/agent-control-registration";
+import type { SessionRole } from "@getpaseo/protocol/session-roles";
+import { mergeRoleInitialValues, roleLabelOption } from "@/provider-selection/role-defaults";
+import { RolePicker } from "@/composer/draft/role-picker";
+import { useDraftRole } from "@/composer/draft/use-draft-role";
 import { encodeImages } from "@/utils/encode-images";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { shouldAutoFocusWorkspaceDraftComposer } from "@/screens/workspace/workspace-draft-pane-focus";
@@ -171,6 +175,8 @@ async function submitDraftCreateRequest(input: {
   };
   hostDisconnectedMessage: string;
   selectModelMessage: string;
+  /** What the session is for; null sends no label, exactly as before roles existed. */
+  role?: SessionRole | null;
 }): Promise<{ agentId: string | null; result: AgentSnapshotPayload }> {
   const {
     attempt,
@@ -219,6 +225,7 @@ async function submitDraftCreateRequest(input: {
     workspaceId,
     initialPrompt: text,
     clientMessageId: attempt.clientMessageId,
+    ...roleLabelOption(input.role),
     ...(imagesData && imagesData.length > 0 ? { images: imagesData } : {}),
     ...(attachmentsArray && attachmentsArray.length > 0 ? { attachments: attachmentsArray } : {}),
   };
@@ -356,9 +363,13 @@ export function WorkspaceDraftAgentTab({
     workspaceDirectory,
     initialSetup: draftSetup,
   });
-  const draftInitialValues = buildDraftInitialValues({
-    initialSetup: draftSetup,
-  });
+  // What the session is for. The role's model and effort enter as initial values, so they
+  // outrank the remembered preference and yield to anything the setup or the user set.
+  const draftRole = useDraftRole(serverId, draftSetup?.provider ?? null);
+  const draftInitialValues = mergeRoleInitialValues(
+    buildDraftInitialValues({ initialSetup: draftSetup }),
+    draftRole.values,
+  );
   const draftStoreKey = useMemo(
     () =>
       buildDraftStoreKey({
@@ -523,6 +534,7 @@ export function WorkspaceDraftAgentTab({
         composerState,
         hostDisconnectedMessage: t("workspace.terminal.hostDisconnected"),
         selectModelMessage: t("workspaceSetup.errors.selectModel"),
+        role: draftRole.selected,
       });
     },
     onCreateSuccess: ({ result }) => {
@@ -657,6 +669,12 @@ export function WorkspaceDraftAgentTab({
       ) : (
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.configScrollContent}>
           <View style={styles.configSection}>
+            <RolePicker
+              role={draftRole}
+              modelsByProvider={composerState.allProviderModels}
+              currentProvider={composerState.selectedProvider}
+              disabled={isSubmitting}
+            />
             {formErrorMessage ? (
               <View style={styles.errorContainer}>
                 <Text style={styles.errorText}>{formErrorMessage}</Text>

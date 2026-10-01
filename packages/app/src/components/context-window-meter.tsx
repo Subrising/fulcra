@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, UnistylesRuntime } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProviderUsageTooltipSection } from "@/provider-usage/tooltip-section";
@@ -14,6 +14,8 @@ interface ContextWindowMeterProps {
   totalCostUsd?: number | null;
   showPercentage?: boolean;
   serverId?: string;
+  /** The session this meter belongs to: its usage is the account it runs on (Fulcra account pool). */
+  agentId?: string;
   /** The Paseo provider key, e.g. "claude", "gemini", "codex" */
   provider?: string | null;
   /** Reserve the meter footprint and show a loading ring while usage is pending. */
@@ -61,7 +63,7 @@ function formatSessionCost(value: number): string | null {
 
 function getMeterColors(
   percentage: number,
-  theme: ReturnType<typeof useUnistyles>["theme"],
+  theme: ReturnType<typeof UnistylesRuntime.getTheme>,
 ): { progress: string; track: string } {
   const track = theme.colors.surface3;
   if (percentage > 90) {
@@ -102,19 +104,23 @@ export function ContextWindowMeter({
   totalCostUsd,
   showPercentage = false,
   serverId,
+  agentId,
   provider,
   pending = false,
   glyphSize,
 }: ContextWindowMeterProps) {
-  const { theme } = useUnistyles();
+  const theme = UnistylesRuntime.getTheme();
   const { t } = useTranslation();
   const [isTooltipOpen, setIsTooltipOpen] = useState(false);
   const { view: providerUsageView, refresh: refreshProviderUsage } = useProviderUsage(
     serverId ?? null,
-    { enabled: isTooltipOpen },
+    { enabled: isTooltipOpen, agentId: agentId ?? null, accounts: true },
   );
   const percentage =
     maxTokens !== null && usedTokens !== null ? getUsagePercentage(maxTokens, usedTokens) : null;
+  const handleRefreshAccounts = useCallback(() => {
+    void refreshProviderUsage({ force: true }).catch(() => {});
+  }, [refreshProviderUsage]);
   const handleTooltipOpenChange = useCallback(
     (nextOpen: boolean) => {
       setIsTooltipOpen(nextOpen);
@@ -233,7 +239,11 @@ export function ContextWindowMeter({
               {t("contextWindow.sessionCost", { cost: formattedSessionCost })}
             </Text>
           ) : null}
-          <ProviderUsageTooltipSection view={providerUsageView} activeProviderId={provider} />
+          <ProviderUsageTooltipSection
+            view={providerUsageView}
+            activeProviderId={provider}
+            onRefreshAccounts={handleRefreshAccounts}
+          />
         </View>
       </TooltipContent>
     </Tooltip>

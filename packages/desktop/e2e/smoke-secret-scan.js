@@ -17,7 +17,7 @@ const path = require("node:path");
 
 // Known credential shapes. Each one is specific enough that a hit in a UI transcript is a leak,
 // not a false positive: generic "long random string" shapes are deliberately left out because
-// session and request ids would trip them. Literal secrets (deployment secrets) are
+// session and request ids would trip them. Literal secrets (controller/operator secrets) are
 // matched by value instead, which is exact.
 const SECRET_PATTERNS = [
   { name: "anthropic-api-key", re: /sk-ant-[A-Za-z0-9_-]{20,}/g },

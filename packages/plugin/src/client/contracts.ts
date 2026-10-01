@@ -39,6 +39,13 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly workspaceId: string;
       readonly serverId?: string;
     }) => void;
+    /** Opens the app's architecture comparison. Absent on older apps. Exactly one selector is required. */
+    readonly openArchitectureChange?: (input: {
+      readonly workspaceId: string;
+      readonly serverId?: string;
+      readonly pullRequest?: number;
+      readonly commit?: { readonly base: string; readonly head: string };
+    }) => void;
     readonly openAgent: (input: { readonly agentId: string; readonly serverId?: string }) => void;
     readonly openWorkspace: (input: {
       readonly workspaceId: string;
@@ -93,7 +100,7 @@ export interface PluginClientOpenPanelOptions extends PluginOpenPanelOptions {
   agentId?: string;
 }
 
-// The answering device's key. The private key never leaves the device and is
+// The answering device's key (CONTRACTS §3.6). The private key never leaves the device and is
 // never reachable from the daemon or plugin server code; plugin client code gets status, pairing
 // and choice signatures, each confirmed by the user on the device.
 export type PluginDevicePlatform = "macos" | "ios" | "android" | "windows" | "linux";
@@ -124,7 +131,7 @@ export interface PluginDevicePairResult {
   userPresence: boolean;
 }
 
-// Exactly the choice payload; anything else is refused before any prompt.
+// Exactly the §3.6 choice payload; anything else is refused before any prompt.
 export interface PluginChoicePayload {
   decisionId: string;
   revision: number;

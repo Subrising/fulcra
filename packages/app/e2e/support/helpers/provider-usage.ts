@@ -1,10 +1,12 @@
 import type { Page } from "@playwright/test";
-import type { ProviderUsage } from "@getpaseo/protocol/messages";
+import type { ProviderUsage, ProviderUsageListResponseMessage } from "@getpaseo/protocol/messages";
 import { daemonWsRoutePattern } from "./daemon-port";
 
 interface ProviderUsageFixturePayload {
   fetchedAt: string;
+  error?: string;
   providers: ProviderUsage[];
+  accounts?: ProviderUsageListResponseMessage["payload"]["accounts"];
 }
 
 export interface ProviderUsageFixture {
@@ -69,6 +71,7 @@ function withProviderUsageFeature(message: WebSocketMessage): string | null {
             ? payload.features
             : {}),
           providerUsageList: true,
+          pooledAccountUsageList: true,
         },
       },
     },
@@ -113,6 +116,25 @@ export async function installProviderUsageFixture(
           throw new Error("provider.usage.list.request missing requestId");
         }
         const payload = payloadForRequest();
+        if (payload.error) {
+          notifyWaiters();
+          ws.send(
+            JSON.stringify({
+              type: "session",
+              message: {
+                type: "rpc_error",
+                payload: {
+                  requestId,
+                  requestType: "provider.usage.list.request",
+                  error: payload.error,
+                  code: "provider_usage_list_failed",
+                },
+              },
+            }),
+          );
+          return;
+        }
+
         notifyWaiters();
         ws.send(
           JSON.stringify({
@@ -123,6 +145,7 @@ export async function installProviderUsageFixture(
                 requestId,
                 fetchedAt: payload.fetchedAt,
                 providers: payload.providers,
+                ...(payload.accounts ? { accounts: payload.accounts } : {}),
               },
             },
           }),

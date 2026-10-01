@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Device keys and choice proofs (proof that the user answered). Shared by the app,
+// Device keys and choice proofs (CONTRACTS §3.6 "Proof that the owner answered"). Shared by the app,
 // the desktop main process and the plugin SDK types. Runtime-neutral: no Node or DOM APIs, so the
 // same canonical bytes are produced on iOS/Android (Hermes), in Electron and in Node.
 

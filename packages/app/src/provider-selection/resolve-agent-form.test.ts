@@ -16,6 +16,7 @@ import {
   type ProviderModelsByProvider,
   type UserModifiedFields,
 } from "./resolve-agent-form";
+import { mergeRoleInitialValues, roleInitialValues } from "./role-defaults";
 import type { FormPreferences } from "@/create-agent-preferences/preferences";
 import { buildProviderDefinitions } from "@/utils/provider-definitions";
 import { AGENT_PROVIDER_DEFINITIONS } from "@getpaseo/protocol/provider-manifest";
@@ -399,7 +400,7 @@ describe("buildProviderDefinitions", () => {
   });
 });
 
-// A fresh draft starts on the host's own defaults instead of "Select model". Everything below comes from
+// J6: a fresh draft starts on the host's own defaults instead of "Select model". Everything below comes from
 // the host's provider snapshot; nothing names a provider, model, mode or effort in the app.
 const J6_CLAUDE_MODELS: AgentModelDefinition[] = [
   {
@@ -499,7 +500,7 @@ function j6Resolve(input: {
   };
 }
 
-describe("fresh draft defaults", () => {
+describe("J6: fresh draft defaults", () => {
   it("a fresh draft starts on the host's first provider with its default model, mode and effort", () => {
     const { form, effectiveModelId, effectiveThinkingOptionId } = j6Resolve({
       hostOrder: ["claude", "codex"],
@@ -1129,6 +1130,76 @@ describe("resolveAgentForm", () => {
       expect(next.form.thinkingOptionId).toBe("low");
     });
 
+    it("role defaults outrank a remembered, chosen model and effort; explicit setup values outrank the role", () => {
+      const models: AgentModelDefinition[] = [
+        { ...CODEX_MODELS[0], isDefault: false },
+        {
+          provider: "codex",
+          id: "gpt-5.4-codex",
+          label: "gpt-5.4-codex",
+          isDefault: true,
+          thinkingOptions: [
+            { id: "low", label: "low" },
+            { id: "high", label: "high", isDefault: true },
+          ],
+        },
+      ];
+      const remembered: FormPreferences = {
+        provider: "codex",
+        providerPreferences: {
+          codex: {
+            model: "gpt-5.3-codex",
+            modelChosenByUser: true,
+            thinkingByModel: { "gpt-5.3-codex": "low", "gpt-5.4-codex": "low" },
+            thinkingChosenByModel: { "gpt-5.3-codex": true, "gpt-5.4-codex": true },
+          },
+        },
+      };
+      const table = {
+        roles: {
+          implementation: {
+            provider: "codex",
+            providers: {
+              codex: {
+                status: "offered" as const,
+                configured: { model: "gpt-5.4-codex", thinkingOptionId: "high" },
+                effective: { model: "gpt-5.4-codex", thinkingOptionId: "high" },
+              },
+            },
+          },
+        },
+      };
+      const role = roleInitialValues({ role: "implementation", table, provider: null });
+      const resolve = (initialValues: Parameters<typeof mergeRoleInitialValues>[0]) =>
+        resolveAgentForm(makeState(), {
+          type: "COMPLETE_RESOLUTION",
+          initialValues: mergeRoleInitialValues(initialValues, role),
+          preferences: remembered,
+          providerModelsByProvider: makeProviderModelsByProvider([["codex", models]]),
+          allowedProviderMap: bothProviderMap,
+        }).form;
+
+      expect(resolve(undefined)).toMatchObject({
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        thinkingOptionId: "high",
+      });
+      expect(resolve({ model: "gpt-5.3-codex", thinkingOptionId: "xhigh" })).toMatchObject({
+        model: "gpt-5.3-codex",
+        thinkingOptionId: "xhigh",
+      });
+      // No role: the remembered choice, exactly as before.
+      expect(
+        resolveAgentForm(makeState(), {
+          type: "COMPLETE_RESOLUTION",
+          initialValues: undefined,
+          preferences: remembered,
+          providerModelsByProvider: makeProviderModelsByProvider([["codex", models]]),
+          allowedProviderMap: bothProviderMap,
+        }).form,
+      ).toMatchObject({ model: "gpt-5.3-codex", thinkingOptionId: "low" });
+    });
+
     it("keeps a user model change after resolution has completed", () => {
       const alternateModels: AgentModelDefinition[] = [
         ...CODEX_MODELS,
@@ -1480,7 +1551,7 @@ it("owns input readiness, reopening and user edits in the reducer", () => {
   expect(state.form).toMatchObject({ provider: "codex", model: "astra" });
 });
 
-// The defect, as measured: a new chat opened on the previous Opus release while the host
+// The defect, as the owner measured it: a new chat opened on the previous Opus release while the host
 // advertised the current one as its default, and picking the newer model by hand did not stick. The
 // profile held a model nobody had chosen -- every submit used to write the resolved model back -- and a
 // saved model outranks the host's default by design. So the host could advertise whatever it liked and

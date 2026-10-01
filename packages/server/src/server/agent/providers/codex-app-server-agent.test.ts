@@ -1,3 +1,4 @@
+import { registerNativeEvidenceSink } from "../../native-evidence-origin.js";
 import { describe, expect, test, vi } from "vitest";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -172,8 +173,16 @@ function createSession(
   return session;
 }
 
-function createProviderWithFakeAppServer(appServer: FakeCodexAppServer): CodexAppServerAgentClient {
-  const provider = new CodexAppServerAgentClient(createTestLogger());
+function createProviderWithFakeAppServer(
+  appServer: FakeCodexAppServer,
+  options?: {
+    runtimeSettings?: ConstructorParameters<typeof CodexAppServerAgentClient>[1];
+    customProvider?: { id: string; label: string; extends: string };
+  },
+): CodexAppServerAgentClient {
+  const provider = new CodexAppServerAgentClient(createTestLogger(), options?.runtimeSettings, {
+    customProvider: options?.customProvider,
+  });
   const internals = castInternals<{
     goalsEnabledPromise: Promise<boolean> | null;
     autoReviewEnabledPromise: Promise<boolean> | null;
@@ -631,6 +640,111 @@ process.stdin.on("data", (chunk) => {
   }
 }
 
+async function withCustomCodexProviderHome<T>(
+  run: (input: {
+    session: AgentSession;
+    readCaptured: () => CapturedFakeCodexRecord[];
+  }) => Promise<T>,
+): Promise<T> {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "codex-provider-home-"));
+  const daemonCodexHome = path.join(tempDir, "daemon-codex-home");
+  const providerCodexHome = path.join(tempDir, "provider-codex-home");
+  const fakeAppServerPath = path.join(tempDir, "fake-codex-app-server.cjs");
+  const capturedRequestsPath = path.join(tempDir, "requests.jsonl");
+  mkdirSync(path.join(daemonCodexHome, "prompts"), { recursive: true });
+  mkdirSync(path.join(providerCodexHome, "prompts"), { recursive: true });
+  writeFileSync(
+    path.join(daemonCodexHome, "prompts", "probe-default.md"),
+    "---\ndescription: Daemon home prompt\n---\nfrom the daemon home\n",
+  );
+  writeFileSync(
+    path.join(providerCodexHome, "prompts", "probe-profile.md"),
+    "---\ndescription: Provider home prompt\n---\nfrom the provider home\n",
+  );
+  writeFileSync(
+    fakeAppServerPath,
+    `
+const fs = require("node:fs");
+
+const capturePath = process.env.PASEO_FAKE_CODEX_CAPTURE;
+let buffer = "";
+
+fs.appendFileSync(capturePath, JSON.stringify({ kind: "env", CODEX_HOME: process.env.CODEX_HOME }) + "\\n");
+
+function resultFor(method) {
+  if (method === "collaborationMode/list") return { data: [] };
+  if (method === "skills/list") return { data: [] };
+  if (method === "model/list") return { data: [{ id: "profile-model", isDefault: true }] };
+  if (method === "thread/start") return { thread: { id: "thread-1" } };
+  return {};
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer += chunk.toString();
+  for (;;) {
+    const newlineIndex = buffer.indexOf("\\n");
+    if (newlineIndex === -1) break;
+    const line = buffer.slice(0, newlineIndex).trim();
+    buffer = buffer.slice(newlineIndex + 1);
+    if (!line) continue;
+    const message = JSON.parse(line);
+    fs.appendFileSync(capturePath, JSON.stringify({ kind: "request", method: message.method, params: message.params }) + "\\n");
+    process.stdout.write(JSON.stringify({ id: message.id, result: resultFor(message.method) }) + "\\n");
+  }
+});
+`,
+  );
+
+  vi.stubEnv("CODEX_HOME", daemonCodexHome);
+  const registry = buildProviderRegistry(createTestLogger(), {
+    providerOverrides: {
+      "profile-codex": {
+        extends: "codex",
+        label: "Profile Codex",
+        command: [process.execPath, fakeAppServerPath],
+        env: {
+          CODEX_HOME: providerCodexHome,
+          PASEO_FAKE_CODEX_CAPTURE: capturedRequestsPath,
+        },
+      },
+    },
+  });
+  const session = await registry["profile-codex"].createClient(createTestLogger()).createSession({
+    provider: "profile-codex",
+    cwd: tempDir,
+    modeId: "auto",
+  });
+
+  try {
+    return await run({
+      session,
+      readCaptured: () =>
+        readFileSync(capturedRequestsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as CapturedFakeCodexRecord),
+    });
+  } finally {
+    await session.close();
+    vi.unstubAllEnvs();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function listPromptCommandsFromCustomCodexHome(): Promise<string[]> {
+  return withCustomCodexProviderHome(async ({ session }) => {
+    const commands = await session.listCommands!();
+    return commands.map((command) => command.name).filter((name) => name.startsWith("prompts:"));
+  });
+}
+
+async function runPromptFromCustomCodexHome(prompt: string): Promise<CapturedFakeCodexRecord[]> {
+  return withCustomCodexProviderHome(async ({ session, readCaptured }) => {
+    await session.startTurn(prompt);
+    return readCaptured();
+  });
+}
+
 function capturedThreadStartConfig(records: CapturedFakeCodexRecord[]): unknown {
   const threadStart = records.find((record) => record.method === "thread/start");
   const params = threadStart?.params as Record<string, unknown> | undefined;
@@ -766,6 +880,126 @@ describe("Codex app-server provider", () => {
     });
   });
 
+  // FIX-8 W3 (gate M): a session whose pins arrive as provider options (the controller's creates) sends them at the top
+  // level of thread/start and turn/start too, so the launch visibly carries approval never + danger-full-access.
+  test("provider-option pins are sent as the thread and turn policy", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const session = createSession({
+      modeId: "full-access",
+      thinkingOptionId: "medium",
+      providerOptions: { approval_policy: "never", sandbox_mode: "danger-full-access" },
+    });
+    session.currentThreadId = null;
+    session.activeForegroundTurnId = null;
+    session.client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") return { thread: { id: "pinned-thread" } };
+        if (method === "turn/start") return {};
+        throw new Error(`Unexpected request: ${method}`);
+      }),
+    };
+
+    await session.startTurn("trigger thread creation");
+
+    expect(requests.find((r) => r.method === "thread/start")?.params).toMatchObject({
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    expect(requests.find((r) => r.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    });
+  });
+
+  test("Default Permissions pins the user as approvals reviewer on thread/start", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const session = createSession(
+      { modeId: "auto", thinkingOptionId: "medium" },
+      { autoReviewEnabled: true },
+    );
+    session.currentThreadId = null;
+    session.activeForegroundTurnId = null;
+    session.client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") {
+          return { thread: { id: "default-mode-thread" } };
+        }
+        if (method === "turn/start") {
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      }),
+    };
+
+    await session.startTurn("trigger thread creation");
+
+    const startCall = requests.find((req) => req.method === "thread/start");
+    expect(startCall?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      approvalsReviewer: "user",
+    });
+  });
+
+  test("switching from auto-review back to Default returns approvals to the user", async () => {
+    const session = createSession({ modeId: "auto-review" }, { autoReviewEnabled: true });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/loaded/list") {
+        return { data: ["test-thread"] };
+      }
+      if (method === "turn/start") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    session.activeForegroundTurnId = null;
+    session.client = createStub<CodexClientLike>({ request });
+
+    await session.setMode("auto");
+    await session.startTurn("needs approval");
+
+    const turnStartCall = request.mock.calls.find(([method]) => method === "turn/start");
+    expect(turnStartCall?.[1]).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  test("Read-only pins the user as approvals reviewer on thread/start", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const session = createSession(
+      { modeId: "read-only", thinkingOptionId: "medium" },
+      { autoReviewEnabled: true },
+    );
+    session.currentThreadId = null;
+    session.activeForegroundTurnId = null;
+    session.client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") {
+          return { thread: { id: "read-only-thread" } };
+        }
+        if (method === "turn/start") {
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      }),
+    };
+
+    await session.startTurn("trigger thread creation");
+
+    const startCall = requests.find((req) => req.method === "thread/start");
+    expect(startCall?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
+  });
+
   test("setMode and setThinkingOption return a next-turn notice while a turn is active", async () => {
     const session = createSession({ modeId: "auto", thinkingOptionId: "medium" });
 
@@ -856,6 +1090,7 @@ describe("Codex app-server provider", () => {
     const turnStart = request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(turnStart).not.toHaveProperty("approvalPolicy");
     expect(turnStart).not.toHaveProperty("sandboxPolicy");
+    expect(turnStart).not.toHaveProperty("approvalsReviewer");
   });
 
   test("carries the complete native workspace-write policy including writable roots", async () => {
@@ -1851,6 +2086,79 @@ describe("Codex app-server provider", () => {
     await session.close();
   });
 
+  test.each(["legacy", "paginated"] as const)(
+    "rewinds a %s thread onto a fork that keeps the custom provider and runtime MCP servers",
+    async (historyMode) => {
+      const appServer = createFakeCodexAppServer(
+        historyMode === "paginated"
+          ? {
+              "thread/read": () => ({
+                thread: { id: "thread-1", historyMode: "paginated", turns: [] },
+              }),
+            }
+          : undefined,
+      );
+      const customCodexConfig = {
+        model_provider: "codex-custom",
+        model_providers: {
+          "codex-custom": {
+            name: "Custom Codex",
+            base_url: "https://custom-relay.example.com/v1",
+            env_key: "OPENAI_API_KEY",
+            requires_openai_auth: false,
+            wire_api: "responses",
+          },
+        },
+      };
+      const session = new CodexAppServerAgentSession(
+        createConfig({
+          cwd: "/workspace/project",
+          mcpServers: {
+            paseo: { type: "http", url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1" },
+          },
+        }),
+        null,
+        createTestLogger(),
+        async () => appServer.child,
+        { customCodexConfig },
+      );
+
+      await session.startTurn("remember first");
+      emitCodexUserMessage(appServer, {
+        id: "codex-first",
+        text: "remember first",
+        turnId: "turn-first",
+      });
+      appServer.completeTurn();
+      await session.startTurn("remember second");
+      emitCodexUserMessage(appServer, {
+        id: "codex-second",
+        text: "remember second",
+        turnId: "turn-second",
+      });
+      appServer.completeTurn();
+
+      await session.revertConversation({ messageId: "codex-first" });
+
+      const forkConfigs = appServer
+        .requests()
+        .filter((request) => request.method === "thread/fork")
+        .map((request) => (request.params as { config?: unknown }).config);
+      expect(forkConfigs).toEqual([
+        expect.objectContaining({
+          ...customCodexConfig,
+          mcp_servers: {
+            paseo: expect.objectContaining({
+              url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+            }),
+          },
+        }),
+      ]);
+      appServer.assertNoErrors();
+      await session.close();
+    },
+  );
+
   test("correlates a Codex user message with the submitting client message", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
@@ -2007,7 +2315,9 @@ describe("Codex app-server provider", () => {
     };
 
     try {
-      await expect(listCodexSkills(cwd, workspaceGitService)).resolves.toContainEqual({
+      await expect(
+        listCodexSkills(cwd, path.join(tempDir, "codex-home"), workspaceGitService),
+      ).resolves.toContainEqual({
         name: "shipper",
         description: "Ship changes carefully.",
         argumentHint: "",
@@ -2266,6 +2576,22 @@ describe("Codex app-server provider", () => {
       argumentHint: "",
       kind: "skill",
     });
+  });
+
+  test("lists custom prompts from the CODEX_HOME a custom provider runs Codex with", async () => {
+    await expect(listPromptCommandsFromCustomCodexHome()).resolves.toEqual([
+      "prompts:probe-profile",
+    ]);
+  });
+
+  test("runs a custom prompt from the CODEX_HOME a custom provider runs Codex with", async () => {
+    const records = await runPromptFromCustomCodexHome("/prompts:probe-profile");
+
+    expect(records.find((record) => record.kind === "env")?.CODEX_HOME).toMatch(
+      /provider-codex-home$/,
+    );
+    const turnStart = records.find((record) => record.method === "turn/start");
+    expect(JSON.stringify(turnStart?.params)).toContain("from the provider home");
   });
 
   test("deduplicates Codex skill slash commands returned from multiple skill roots", async () => {
@@ -6238,6 +6564,55 @@ describe("Codex importable sessions", () => {
     appServer.assertNoErrors();
   });
 
+  // Codex filters thread/list by model provider: with no `modelProviders` it
+  // returns only threads of the provider its own config selects, an empty
+  // list returns every provider, and a list returns only those providers.
+  function providerFilteringThreadListHandler(threads: Array<Record<string, unknown>>) {
+    return (input: unknown) => {
+      const { modelProviders } = (input ?? {}) as { modelProviders?: string[] };
+      const included = (thread: Record<string, unknown>) => {
+        if (modelProviders === undefined) return thread.modelProvider === "openai";
+        if (modelProviders.length === 0) return true;
+        return modelProviders.includes(String(thread.modelProvider));
+      };
+      return { data: threads.filter(included), nextCursor: null };
+    };
+  }
+
+  const threadsByModelProvider = [
+    { id: "stock-thread", cwd: "/workspace/project-a", modelProvider: "openai", updatedAt: 2 },
+    { id: "custom-thread", cwd: "/workspace/project-a", modelProvider: "my-codex", updatedAt: 1 },
+  ];
+
+  test("a custom Codex provider lists the threads it created", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/list": providerFilteringThreadListHandler(threadsByModelProvider),
+    });
+    const provider = createProviderWithFakeAppServer(appServer, {
+      runtimeSettings: {
+        env: { OPENAI_BASE_URL: "https://llm.example.test/v1", OPENAI_API_KEY: "test-key" },
+      },
+      customProvider: { id: "my-codex", label: "My Codex", extends: "codex" },
+    });
+
+    const sessions = await provider.listImportableSessions({ cwd: "/workspace/project-a" });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual(["custom-thread"]);
+    appServer.assertNoErrors();
+  });
+
+  test("stock Codex keeps listing only its own threads", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/list": providerFilteringThreadListHandler(threadsByModelProvider),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const sessions = await provider.listImportableSessions({ cwd: "/workspace/project-a" });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual(["stock-thread"]);
+    appServer.assertNoErrors();
+  });
+
   test("listImportableSessions uses thread list metadata without hydrating thread history", async () => {
     const allThreads = [
       {
@@ -6387,3 +6762,329 @@ describe("Codex denied plan approvals", () => {
     });
   });
 });
+
+test("U8 account usage label follows create and resume launch context", async () => {
+  const a = createFakeCodexAppServer({});
+  const alpha = await createProviderWithFakeAppServer(a).createSession(createConfig(), {
+    env: { FULCRA_ACCOUNT_NAME: "Alpha" },
+  });
+  expect(alpha.usageSourceLabel?.()).toBe("Alpha");
+  await alpha.startTurn("seed the retained thread");
+  const handle = alpha.describePersistence();
+  expect(handle).toBeTruthy();
+  await alpha.close();
+  const b = createFakeCodexAppServer({});
+  const beta = await createProviderWithFakeAppServer(b).resumeSession(handle!, createConfig(), {
+    env: { FULCRA_ACCOUNT_NAME: "Beta" },
+  });
+  expect(beta.usageSourceLabel?.()).toBe("Beta");
+  expect(beta.id).toBe(handle!.sessionId);
+  await beta.close();
+  a.assertNoErrors();
+  b.assertNoErrors();
+});
+
+describe("native queued provider preparation", () => {
+  async function fixture() {
+    const { createCodexAppServerChildProcess } =
+      await import("./codex/test-utils/fake-app-server.js");
+    const { createNativeQueuedDispatch, nativeQueuedAcceptance, supportsNativeQueuedProvider } =
+      await import("../native-queued-dispatch.js");
+    const { NATIVE_QUEUED_FINAL, CODEX_TURN_ADMISSION } = await import("../agent-sdk-types.js");
+    const session = createSession();
+    const child = createCodexAppServerChildProcess();
+    const client = new CodexAppServerClient(child, createTestLogger());
+    Reflect.set(session, "client", client);
+    Reflect.set(session, "activeForegroundTurnId", null);
+    const connect = vi
+      .spyOn(session as unknown as { connect(): Promise<unknown> }, "connect")
+      .mockResolvedValue(undefined);
+    const load = vi
+      .spyOn(session as unknown as { ensureThreadLoaded(): Promise<unknown> }, "ensureThreadLoaded")
+      .mockResolvedValue(undefined);
+    const build = vi
+      .spyOn(
+        session as unknown as { buildTurnStartParams(): Promise<unknown> },
+        "buildTurnStartParams",
+      )
+      .mockResolvedValue({
+        params: {
+          threadId: "test-thread",
+          model: "gpt-5.4",
+          input: [{ type: "text", text: "queued" }],
+        },
+      });
+    const quota = vi
+      .spyOn(session as unknown as { getQuota(): Promise<unknown> }, "getQuota")
+      .mockResolvedValue({
+        provider: "codex",
+        sessionId: "test-thread",
+        model: "gpt-5.4",
+        serviceTier: null,
+        accountScope: "fixture",
+        observedAt: new Date().toISOString(),
+        ordinaryUsageAllowed: true,
+        limits: [],
+      });
+    let valid = true;
+    const capability = createNativeQueuedDispatch(() => {
+      if (!valid) throw new Error("source revoked");
+    });
+    const writes: Array<Record<string, unknown>> = [];
+    child.stdin.on("data", (chunk) => writes.push(JSON.parse(String(chunk))));
+    return {
+      session,
+      child,
+      client,
+      connect,
+      load,
+      build,
+      quota,
+      capability,
+      writes,
+      nativeQueuedAcceptance,
+      supportsNativeQueuedProvider,
+      revoke() {
+        valid = false;
+      },
+      options(hooks: boolean) {
+        return {
+          [NATIVE_QUEUED_FINAL]: capability,
+          ...(hooks ? { [CODEX_TURN_ADMISSION]: () => true as const } : {}),
+        };
+      },
+      cleanup() {
+        child.stdout.end();
+        child.stderr.end();
+        child.stdin.end();
+      },
+    };
+  }
+  test.each([false, true])(
+    "successful native response supplies its actual ID with quota hooks=%s",
+    async (hooks) => {
+      const f = await fixture();
+      f.child.stdin.on("data", (chunk) => {
+        const request = JSON.parse(String(chunk));
+        f.child.stdout.write(
+          JSON.stringify({
+            id: request.id,
+            result: { turn: { id: "actual-native-id", status: "inProgress", error: null } },
+          }) + "\n",
+        );
+      });
+      try {
+        expect(f.supportsNativeQueuedProvider(f.session)).toBe(true);
+        await f.session.startTurn("queued", f.options(hooks));
+        expect(f.nativeQueuedAcceptance(f.capability)).toBe("actual-native-id");
+        expect(f.writes).toHaveLength(1);
+      } finally {
+        f.cleanup();
+      }
+    },
+  );
+  const stages = ["connect", "load", "build", "quota"] as const;
+  const mutations = ["source", "native-id", "client", "cancel", "close", "permission"] as const;
+  test.each(stages.flatMap((stage) => mutations.map((mutation) => ({ stage, mutation }))))(
+    "held $stage then $mutation produces zero transport requests",
+    async ({ stage, mutation }) => {
+      const f = await fixture();
+      const gate = deferred<void>();
+      let entered = false;
+      let original: unknown;
+      if (stage === "quota") original = await f.session.getQuota!();
+      if (stage === "build")
+        original = {
+          params: {
+            threadId: "test-thread",
+            model: "gpt-5.4",
+            input: [{ type: "text", text: "queued" }],
+          },
+        };
+      f[stage].mockImplementation(async () => {
+        entered = true;
+        await gate.promise;
+        return original;
+      });
+      const pending = f.session.startTurn("queued", f.options(stage === "quota"));
+      const denied = expect(pending).rejects.toThrow();
+      await vi.waitFor(() => expect(entered).toBe(true));
+      if (mutation === "source") f.revoke();
+      if (mutation === "native-id") Reflect.set(f.session, "currentThreadId", "replaced-native-id");
+      if (mutation === "client") Reflect.set(f.session, "client", null);
+      if (mutation === "cancel")
+        Reflect.get(f.session, "pendingForegroundStart").cancelRequested = true;
+      if (mutation === "close") Reflect.set(f.session, "closed", true);
+      if (mutation === "permission")
+        Reflect.get(f.session, "pendingPermissions").set("new-permission", {});
+      gate.resolve();
+      try {
+        await denied;
+        expect(f.writes).toHaveLength(0);
+        expect(f.nativeQueuedAcceptance(f.capability)).toBeUndefined();
+      } finally {
+        f.cleanup();
+      }
+    },
+  );
+  test.each(["/rewind", "/some-command", [{ type: "text", text: "attachment form" }]])(
+    "queued out-of-band or attachment input %j cannot prepare or write",
+    async (prompt) => {
+      const f = await fixture();
+      try {
+        await expect(f.session.startTurn(prompt as never, f.options(false))).rejects.toThrow(
+          "unavailable",
+        );
+        expect(f.connect).not.toHaveBeenCalled();
+        expect(f.writes).toHaveLength(0);
+      } finally {
+        f.cleanup();
+      }
+    },
+  );
+});
+
+test.each(["accepted", "native-replace", "new-turn", "close"])(
+  "native evidence captured transport %s fences held preparation before image materialization",
+  async (mutation) => {
+    const server = createFakeCodexAppServer();
+    const { session } = await startPublicSteeringSession(server);
+    let entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const publish = vi.fn(async () => {});
+    registerNativeEvidenceSink(session, () => ({
+      prepare: async () => {
+        entered();
+        await held;
+        return true;
+      },
+      requireCurrent: () => {},
+      publish,
+    }));
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    server.child.stdout.write(
+      `${JSON.stringify({ method: "item/completed", params: { threadId: "thread-1", turnId: "native-A", item: { id: "native-production", type: "imageGeneration", status: "completed", result: "data:image/png;base64,aGVsbG8=" } } })}\n`,
+    );
+    await waiting;
+    if (mutation === "native-replace") Reflect.set(session, "currentThreadId", "replaced-thread");
+    if (mutation === "new-turn") Reflect.set(session, "currentTurnId", "new-turn");
+    if (mutation === "close") server.disconnect();
+    release();
+    if (mutation === "accepted") {
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+      expect(publish.mock.calls[0]).toMatchObject([
+        {
+          kind: "produced_artifact",
+          basis: "host_materialized_native_generation",
+          size: 5,
+          contentAvailable: false,
+        },
+      ]);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "timeline" &&
+            event.item.type === "assistant_message" &&
+            event.item.text.startsWith("![Image]"),
+        ),
+      ).toBe(true);
+      server.child.stdout.write(
+        `${JSON.stringify({ method: "item/completed", params: { threadId: "thread-1", turnId: "native-A", item: { id: "native-production", type: "imageGeneration", status: "completed", result: "data:image/png;base64,aGVsbG8=" } } })}\n`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(publish).toHaveBeenCalledTimes(1);
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(publish).not.toHaveBeenCalled();
+      expect(
+        events.some(
+          (event) =>
+            event.type === "timeline" &&
+            event.item.type === "assistant_message" &&
+            event.item.text.startsWith("![Image]"),
+        ),
+      ).toBe(false);
+    }
+    await session.close();
+  },
+);
+
+test.each(
+  [true, false].flatMap((linked) =>
+    ["imageGeneration", "fileChange", "commandExecution"].map((type) => ({ linked, type })),
+  ),
+)(
+  "native completion terminal ordering %j survives same-buffer turn completion",
+  async ({ linked, type }) => {
+    const server = createFakeCodexAppServer();
+    const { session } = await startPublicSteeringSession(server);
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let finishPublication!: () => void;
+    const publicationHeld = new Promise<void>((r) => {
+      finishPublication = r;
+    });
+    const publish = vi.fn(async () => {
+      await publicationHeld;
+    });
+    if (linked)
+      registerNativeEvidenceSink(session, () => ({
+        prepare: async () => {
+          await held;
+          return true;
+        },
+        requireCurrent: () => {},
+        publish,
+      }));
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    const completion = {
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "native-A",
+        item: {
+          id: "ordering-image",
+          type,
+          status: "completed",
+          result: "data:image/png;base64,b3JkZXJpbmc=",
+          changes: [{ path: "proof.txt", kind: "add", diff: "+proof" }],
+          command: "true",
+          exitCode: 0,
+          aggregatedOutput: "",
+        },
+      },
+    };
+    const terminal = {
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "native-A", status: "completed" } },
+    };
+    server.child.stdout.write(JSON.stringify(completion) + "\n" + JSON.stringify(terminal) + "\n");
+    await new Promise((r) => setTimeout(r, 0));
+    if (linked) {
+      expect(Reflect.get(session, "currentTurnId")).toBe("native-A");
+      release();
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+      expect(Reflect.get(session, "currentTurnId")).toBe("native-A");
+      finishPublication();
+    }
+    await vi.waitFor(() =>
+      expect(
+        events.some(
+          (e) =>
+            e.type === "timeline" &&
+            (type !== "imageGeneration" ||
+              (e.item.type === "assistant_message" && e.item.text.startsWith("![Image]"))),
+        ),
+      ).toBe(true),
+    );
+    await vi.waitFor(() => expect(Reflect.get(session, "currentTurnId")).toBeNull());
+    await session.close();
+  },
+);

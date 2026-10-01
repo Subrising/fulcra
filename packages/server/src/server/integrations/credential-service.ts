@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AccountsStore, CredentialAccount } from "./accounts-store.js";
 import { CREDENTIALS_SERVICE, type CredentialBackend } from "./credential-backend.js";
+import type { HostGithubIdentity, HostGithubSignIn } from "./host-github-sign-in.js";
 import {
   PROVIDERS,
   authorizationHeader,
@@ -30,7 +31,7 @@ import {
   type CredentialResponse,
 } from "./credential-request.js";
 
-// The shared credential store. Metadata goes through the accounts store; secrets
+// The shared credential store (CONTRACTS §7.2). Metadata goes through the accounts store; secrets
 // go only to the OS credential store under `ai.fulcra.credentials/<account id>`. Plugins and the forge
 // layer read the same accounts. Plugins never receive a secret: they make host-mediated requests.
 
@@ -82,6 +83,8 @@ export interface CredentialServiceOptions {
   providers?: readonly ProviderDefinition[];
   openLoopback?: (onCallback: (url: string) => void) => Promise<LoopbackListener>;
   onAccountsChanged?: () => void;
+  // This Mac's own `gh` login (U7 W4), listed as a GitHub account so the app knows who "you" are.
+  hostSignIn?: HostGithubSignIn;
 }
 
 const PLUGIN_ID = /^[a-z][a-z0-9-]*$/;
@@ -137,7 +140,49 @@ export class CredentialService {
   // -- Host API -------------------------------------------------------------------------------
 
   async list(): Promise<{ accounts: CredentialAccount[]; providers: ProviderSummary[] }> {
-    return { accounts: await this.options.accounts.list(), providers: this.providerSummaries() };
+    const stored = await this.options.accounts.list();
+    return {
+      accounts: [...stored, ...(await this.hostSignInAccounts(stored))],
+      providers: this.providerSummaries(),
+    };
+  }
+
+  // This Mac's GitHub sign-in, as `cli` accounts that exist only in this list: never stored, with no
+  // secret, so requests, Disconnect, Reconnect and the forge token never find them (gh keeps using
+  // its own login for those). A connected account the user added for the same site wins.
+  private async hostSignInAccounts(stored: CredentialAccount[]): Promise<CredentialAccount[]> {
+    let state: Awaited<ReturnType<HostGithubSignIn["read"]>> | undefined;
+    try {
+      state = await this.options.hostSignIn?.read();
+    } catch {
+      return [];
+    }
+    if (state?.status !== "signed-in") return [];
+    const siteKey = (site: string | null) => (site ?? "github.com").toLowerCase();
+    const manual = new Set(
+      stored
+        .filter((account) => account.connector === "github" && account.state === "connected")
+        .map((account) => siteKey(account.site)),
+    );
+    const at = new Date(this.now()).toISOString();
+    return state.identities
+      .filter((identity) => !manual.has(siteKey(identity.site)))
+      .map(
+        (identity): CredentialAccount => ({
+          version: 1,
+          id: hostSignInAccountId(identity),
+          connector: "github",
+          site: identity.site,
+          // The bare login: it is what GitHub items name as their assignee.
+          displayName: identity.login,
+          method: "cli",
+          scopes: [],
+          state: "connected",
+          expiresAt: null,
+          lastCheckedAt: at,
+          createdAt: at,
+        }),
+      );
   }
 
   providerSummaries(): ProviderSummary[] {
@@ -243,7 +288,7 @@ export class CredentialService {
 
   // -- Plugin access ------------------------------------------------------------------------------
 
-  // A host-mediated provider request. The caller is the daemon, which passes
+  // A host-mediated provider request (CONTRACTS §7.2 v1.7). The caller is the daemon, which passes
   // the connectors and write permission from the plugin's manifest; the plugin supplies neither.
   // The credential is attached here and scrubbed from the answer, so it never reaches the plugin.
   async request(input: {
@@ -594,4 +639,13 @@ export class CredentialService {
     this.accountsChanged();
     return account;
   }
+}
+
+// A stable id per site and GitHub user, shaped as a UUID like stored accounts' ids.
+function hostSignInAccountId(identity: HostGithubIdentity): string {
+  const hex = createHash("sha256")
+    .update(`fulcra-host-github-sign-in:${identity.site ?? "github.com"}:${identity.id}`)
+    .digest("hex");
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

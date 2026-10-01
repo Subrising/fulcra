@@ -6,7 +6,7 @@ import {
   resolveDaemonTarget,
 } from "./client.js";
 
-const MAGIC_DNS = "workstation.example-net.ts.net";
+const MAGIC_DNS = "fixture-host.tail000000.ts.net";
 
 // What the OS resolver is actually asked for. The regression was not a DNS problem at all: a URL-form
 // endpoint kept its scheme through normalizeDaemonHost and was wrapped again as

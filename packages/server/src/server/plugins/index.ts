@@ -1,3 +1,5 @@
+import type { TrustedPlugins } from "./trusted.js";
+import type { ManagementInvocation } from "./management.js";
 import type { PluginLifecycle } from "./lifecycle/index.js";
 import type { PluginHostCall } from "./plugin-host-calls.js";
 import path from "node:path";
@@ -30,10 +32,18 @@ import { readPluginProviderIcon } from "./provider-icon.js";
 const BUILTIN_PROVIDER_ID_SET: ReadonlySet<string> = new Set(BUILTIN_PROVIDER_IDS);
 
 interface PluginRuntimePort {
+  managementTarget?: PluginRuntime["managementTarget"];
   emit?: PluginLifecycle["emit"];
   before?: PluginLifecycle["before"];
   catalog: PluginRuntime["catalog"];
-  invoke(pluginId: string, method: string, input: unknown): Promise<unknown>;
+  readonly catalogPaging?: PluginRuntime["catalogPaging"];
+  invoke(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    management?: ManagementInvocation,
+    options?: { readOnlyCaller?: boolean },
+  ): Promise<unknown>;
   getLogs(pluginId: string): PluginLogEntry[];
   clearLogs(pluginId: string): void;
   getProviderRegistrations?(pluginId: string): readonly PluginProviderMetadata[];
@@ -48,6 +58,7 @@ interface PluginRuntimePort {
 }
 
 interface PluginServiceDependencies {
+  trustedBundles?: TrustedPlugins;
   settingsDirectory?: string;
   hostCalls?: (call: PluginHostCall) => Promise<unknown>;
   hostCapabilities?: { notify: boolean; credentials: boolean };
@@ -75,6 +86,7 @@ export class PluginService {
   private readonly providerListeners = new Set<() => void>();
   private lifecycle = Promise.resolve();
   private globalStartsBlocked = true;
+  private readonly distributionStarts = new Set<string>();
   private started = false;
   private readonly settingsListeners = new Set<(pluginId: string, settingsId: string) => void>();
 
@@ -88,6 +100,7 @@ export class PluginService {
     this.runtime =
       dependencies.runtime ??
       new PluginRuntime(logger, daemonVersion, {
+        trustedBundles: dependencies.trustedBundles,
         settingsDirectory: dependencies.settingsDirectory,
         hostCalls: dependencies.hostCalls,
         hostCapabilities: dependencies.hostCapabilities,
@@ -199,12 +212,18 @@ export class PluginService {
     return this.runtime.catalog();
   }
 
+  catalogPaging(): PluginRuntime["catalogPaging"] | undefined {
+    return this.runtime.catalogPaging;
+  }
+
   async installDirectory(input: { path: string; id?: string }): Promise<PluginListItem> {
     return this.enqueue(async () => {
       const directory = path.resolve(input.path);
       const manifest = await readPluginManifest(directory);
       assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
       const pluginId = PluginIdSchema.parse(input.id ?? manifest.id);
+      this.refuseTrustedInstall(pluginId);
+      this.refuseTrustedInstall(manifest.id);
       if (this.configStore.get().plugins?.[pluginId]) {
         throw new Error(
           `Plugin ID "${pluginId}" is already configured; choose another ID with --id`,
@@ -259,6 +278,8 @@ export class PluginService {
       try {
         await this.checkRequirements(candidate.directory);
         pluginId = PluginIdSchema.parse(input.id ?? candidate.defaultId);
+        this.refuseTrustedInstall(pluginId);
+        this.refuseTrustedInstall((await readPluginManifest(candidate.directory)).id);
         if (this.configStore.get().plugins?.[pluginId]) {
           throw new Error(
             `Plugin ID "${pluginId}" is already configured; choose another ID with --id`,
@@ -371,7 +392,24 @@ export class PluginService {
     });
   }
 
+  /** Embedding-host-only startup path, never exposed as an ordinary RPC. */
+  async enableBundledPlugin(pluginId: string, directory: string): Promise<void> {
+    const verified = await this.dependencies.trustedBundles?.verifyBundledDirectory(
+      pluginId,
+      directory,
+    );
+    if (!verified) throw Error("Verified distribution bundle required");
+    this.distributionStarts.add(pluginId);
+    try {
+      await this.startExplicit(pluginId, verified);
+    } catch (error) {
+      this.distributionStarts.delete(pluginId);
+      throw error;
+    }
+  }
+
   async enablePlugin(pluginId: string): Promise<PluginListItem> {
+    this.refuseTrustedInstall(pluginId);
     const source = this.requireSource(pluginId);
     this.patchSource(pluginId, { ...source, enabled: true });
     this.errors.delete(pluginId);
@@ -417,11 +455,26 @@ export class PluginService {
     });
   }
 
-  invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown> {
-    return this.runtime.invoke(pluginId, method, input);
+  private refuseTrustedInstall(id: string): void {
+    if (this.dependencies.trustedBundles?.claimsBundle(id))
+      throw new Error("Trusted bundle IDs are distribution-owned");
+  }
+  managementTarget(pluginId: string) {
+    return this.runtime.managementTarget?.(pluginId);
+  }
+
+  invokePluginRpc(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    management?: ManagementInvocation,
+    options?: { readOnlyCaller?: boolean },
+  ): Promise<unknown> {
+    return this.runtime.invoke(pluginId, method, input, management, options);
   }
 
   async stopAllPlugins(): Promise<void> {
+    this.distributionStarts.clear();
     this.globalStartsBlocked = true;
     const stopping = this.stopAll();
     await this.enqueue(async () => {
@@ -475,10 +528,11 @@ export class PluginService {
   private canPublish(pluginId: string): boolean {
     const config = this.configStore.get();
     return (
-      !this.globalStartsBlocked &&
-      config.pluginsEnabled === true &&
-      config.plugins?.[pluginId]?.enabled !== false &&
-      config.plugins?.[pluginId] !== undefined
+      this.distributionStarts.has(pluginId) ||
+      (!this.globalStartsBlocked &&
+        config.pluginsEnabled === true &&
+        config.plugins?.[pluginId]?.enabled !== false &&
+        config.plugins?.[pluginId] !== undefined)
     );
   }
 

@@ -1,5 +1,5 @@
 import { router, usePathname } from "expo-router";
-import { useCallback } from "react";
+import React, { useCallback } from "react";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { resolvePluginIcon } from "./icons";
 import { buildPluginSurfaceRoute, hostIdFromPathname } from "./routes";
@@ -48,8 +48,13 @@ export function PluginSidebarItemRow({
   }, [group.key, onBeforeNavigate, route, target.plugin.serverId]);
   return (
     <SidebarHeaderRow
-      icon={resolvePluginIcon(group.icon)}
-      label={group.title}
+      icon={resolvePluginIcon(target.untrusted ? "ShieldAlert" : group.icon)}
+      label={target.untrusted ? `${group.title} · Not trusted` : group.title}
+      accessibilityLabel={
+        target.untrusted
+          ? `${group.title}. Plugin not trusted on this Mac. Open for update instructions.`
+          : group.title
+      }
       onPress={navigate}
       isActive={isActive}
       testID={`plugin-sidebar-${group.pluginId}-${group.contributionId}`}

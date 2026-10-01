@@ -83,37 +83,39 @@ export async function archiveIfSafe(input: {
       return;
     }
 
-    await deps.archiveByScope(
-      {
-        paseoHome: options.paseoHome,
-        paseoWorktreesBaseRoot: options.paseoWorktreesBaseRoot,
-        github: options.github,
-        workspaceGitService: options.workspaceGitService,
-        agentManager: options.agentManager,
-        agentStorage: options.agentStorage,
-        findWorkspaceIdForCwd: options.findWorkspaceIdForCwd,
-        listActiveWorkspaces: options.listActiveWorkspaces,
-        archiveWorkspaceRecord: (workspaceIdToArchive) =>
-          options.archiveWorkspaceRecord(workspaceIdToArchive, {
-            autoArchivedChangeRequestUrl: pullRequest.url,
-          }),
-        emitWorkspaceUpdatesForWorkspaceIds: options.emitWorkspaceUpdatesForWorkspaceIds,
-        markWorkspaceArchiving: options.markWorkspaceArchiving,
-        clearWorkspaceArchiving: options.clearWorkspaceArchiving,
-        killTerminalsForWorkspace: (workspaceIdToKill) =>
-          deps.killTerminalsForWorkspace(
-            {
-              terminalManager: options.terminalManager,
-              sessionLogger: log,
-            },
-            workspaceIdToKill,
-          ),
-        sessionLogger: log,
-      },
-      {
-        scope: { kind: "workspace", workspaceId },
-        requestId: "auto-archive-on-merge",
-      },
+    await options.agentManager.trustedPlugins.daemon(() =>
+      deps.archiveByScope(
+        {
+          paseoHome: options.paseoHome,
+          paseoWorktreesBaseRoot: options.paseoWorktreesBaseRoot,
+          github: options.github,
+          workspaceGitService: options.workspaceGitService,
+          agentManager: options.agentManager,
+          agentStorage: options.agentStorage,
+          findWorkspaceIdForCwd: options.findWorkspaceIdForCwd,
+          listActiveWorkspaces: options.listActiveWorkspaces,
+          archiveWorkspaceRecord: (workspaceIdToArchive) =>
+            options.archiveWorkspaceRecord(workspaceIdToArchive, {
+              autoArchivedChangeRequestUrl: pullRequest.url,
+            }),
+          emitWorkspaceUpdatesForWorkspaceIds: options.emitWorkspaceUpdatesForWorkspaceIds,
+          markWorkspaceArchiving: options.markWorkspaceArchiving,
+          clearWorkspaceArchiving: options.clearWorkspaceArchiving,
+          killTerminalsForWorkspace: (workspaceIdToKill) =>
+            deps.killTerminalsForWorkspace(
+              {
+                terminalManager: options.terminalManager,
+                sessionLogger: log,
+              },
+              workspaceIdToKill,
+            ),
+          sessionLogger: log,
+        },
+        {
+          scope: { kind: "workspace", workspaceId },
+          requestId: "auto-archive-on-merge",
+        },
+      ),
     );
     log.info(
       { workspaceId, cwd, branch: pullRequest.headRefName, pullRequestUrl: pullRequest.url },

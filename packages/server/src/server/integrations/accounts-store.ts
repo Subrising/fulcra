@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { writePrivateFileAtomicSync } from "../private-files.js";
 
-// Account metadata for the shared credential store. This file never holds a secret:
+// Account metadata for the shared credential store (CONTRACTS §7.2). This file never holds a secret:
 // tokens live in the OS credential store under the account id.
 export const ConnectorIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,31}$/);
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { normalizeAgentSnapshot, projectAgentSnapshot } from "./agent-snapshots";
+import { runtimeUsageRevision } from "@/provider-usage/runtime-snapshot";
 
 function createSnapshot(
   input: Partial<Omit<AgentSnapshotPayload, "labels">> & {
@@ -114,4 +115,25 @@ describe("normalizeAgentSnapshot", () => {
     expect(empty.parentAgentId).toBeNull();
     expect(nonString.parentAgentId).toBeNull();
   });
+});
+
+it("retains existing live runtime identity for usage fencing without persisting it", () => {
+  const first = {
+    ...createSnapshot({ labels: { "fulcra.account-name": "A" } }),
+    runtimeInstanceId: "runtime-A1",
+  };
+  const agent = normalizeAgentSnapshot(first, "host");
+  const revision = runtimeUsageRevision([agent], agent.id, false);
+  expect(agent.runtimeInstanceId).toBe("runtime-A1");
+  expect(projectAgentSnapshot(agent)).not.toHaveProperty("runtimeInstanceId");
+  expect(runtimeUsageRevision([{ ...agent, updatedAt: new Date(99999999) }], agent.id, false)).toBe(
+    revision,
+  );
+  const secondA = normalizeAgentSnapshot({ ...first, runtimeInstanceId: "runtime-A3" }, "host");
+  expect(runtimeUsageRevision([secondA], agent.id, false)).not.toBe(revision);
+  const legacy = normalizeAgentSnapshot(createSnapshot(), "host");
+  expect(legacy.runtimeInstanceId).toBeUndefined();
+  expect(runtimeUsageRevision([legacy], legacy.id, false)).not.toBe(
+    runtimeUsageRevision([{ ...legacy, updatedAt: new Date(1) }], legacy.id, false),
+  );
 });

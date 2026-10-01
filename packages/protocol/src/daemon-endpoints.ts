@@ -1,3 +1,5 @@
+import { parseConnectionOffer, type ConnectionOffer } from "./connection-offer.js";
+
 export interface HostPortParts {
   host: string;
   port: number;
@@ -10,6 +12,67 @@ export interface ConnectionUriParts extends HostPortParts {
 
 export interface ParsedConnectionUri extends ConnectionUriParts {
   password?: string;
+}
+
+export interface ParsedRelayConnectionUri {
+  offer: ConnectionOffer;
+  password?: string;
+}
+
+export function parseRelayConnectionUri(input: string): ParsedRelayConnectionUri {
+  const trimmed = input.trim();
+  const connectIndex = trimmed.indexOf("#connect=");
+  const uri =
+    connectIndex >= 0
+      ? decodeURIComponent(trimmed.slice(connectIndex + "#connect=".length))
+      : trimmed;
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    throw new Error("Invalid relay connection URI");
+  }
+  if (url.protocol !== "relay:" || !url.hostname || !url.port || url.username || url.password) {
+    throw new Error("Invalid relay connection URI");
+  }
+  const serverId = decodeURIComponent(url.pathname.slice(1));
+  const key = url.searchParams.get("key");
+  if (!serverId || !key || serverId.includes("/")) {
+    throw new Error("Relay connection URI requires a server id and key");
+  }
+  const endpoint = normalizeHostPort(url.host);
+  const password = url.searchParams.get("password") || undefined;
+  return {
+    offer: parseConnectionOffer({
+      v: Number(url.searchParams.get("v")),
+      serverId,
+      daemonPublicKeyB64: key,
+      relay: { endpoint, useTls: url.searchParams.get("ssl") === "true" },
+      pairing: {
+        id: url.searchParams.get("pairingId"),
+        secret: url.searchParams.get("pairingSecret"),
+        expiresAt: url.searchParams.get("pairingExpiresAt"),
+      },
+      ...(url.searchParams.has("hostLabel")
+        ? { hostLabel: url.searchParams.get("hostLabel") }
+        : {}),
+    }),
+    ...(password ? { password } : {}),
+  };
+}
+
+export function serializeRelayConnectionUri(parts: ParsedRelayConnectionUri): string {
+  const offer = parseConnectionOffer(parts.offer);
+  const url = new URL(`relay://${offer.relay.endpoint}/${encodeURIComponent(offer.serverId)}`);
+  url.searchParams.set("v", String(offer.v));
+  url.searchParams.set("key", offer.daemonPublicKeyB64);
+  url.searchParams.set("pairingId", offer.pairing.id);
+  url.searchParams.set("pairingSecret", offer.pairing.secret);
+  url.searchParams.set("pairingExpiresAt", offer.pairing.expiresAt);
+  if (offer.hostLabel !== undefined) url.searchParams.set("hostLabel", offer.hostLabel);
+  if (offer.relay.useTls) url.searchParams.set("ssl", "true");
+  if (parts.password) url.searchParams.set("password", parts.password);
+  return url.toString();
 }
 
 export type RelayRole = "server" | "client";
@@ -247,4 +310,23 @@ export function isRelayClientWebSocketUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function isLocalRelayEndpoint(endpoint: string): boolean {
+  const { host } = parseHostPort(endpoint);
+  if (host === "localhost" || host === "::1" || host.endsWith(".local")) return true;
+  const parts = host.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+    return false;
+  return (
+    parts[0] === 127 ||
+    parts[0] === 10 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168)
+  );
+}
+export function relayUsesTls(endpoint: string, requested?: boolean): boolean {
+  const local = isLocalRelayEndpoint(endpoint);
+  if (requested === false && !local) throw new Error("This relay isn't using a secure connection");
+  return requested ?? !local;
 }

@@ -17,6 +17,34 @@ async function createPaseoHome(config: unknown): Promise<string> {
 }
 
 describe("daemon relay config", () => {
+  test("defaults to the existing relay and honours the no-relay launch override", async () => {
+    const home = await createPaseoHome({ version: 1, daemon: { relay: { enabled: true } } });
+    const resolved = loadConfig(home, { env: {} });
+    expect(resolved.relayEndpoint).toBe("relay.paseo.sh:443");
+    expect(resolved.appBaseUrl).toBeUndefined();
+    expect(loadConfig(home, { env: {}, cli: { relayEnabled: false } }).relayEnabled).toBe(false);
+  });
+  test("refuses plaintext with the default public relay", async () => {
+    const home = await createPaseoHome({ version: 1, daemon: { relay: { enabled: true } } });
+    expect(() => loadConfig(home, { env: { PASEO_RELAY_USE_TLS: "false" } })).toThrow(
+      "secure connection",
+    );
+  });
+  test("environment endpoint wins and public plaintext is refused", async () => {
+    const home = await createPaseoHome({
+      version: 1,
+      daemon: { relay: { enabled: true, endpoint: "saved.example.com:443" } },
+    });
+    expect(
+      loadConfig(home, { env: { PASEO_RELAY_ENDPOINT: "other.example.com:443" } }).relayEndpoint,
+    ).toBe("other.example.com:443");
+    expect(() =>
+      loadConfig(home, {
+        env: { PASEO_RELAY_ENDPOINT: "other.example.com:80", PASEO_RELAY_USE_TLS: "false" },
+      }),
+    ).toThrow("secure connection");
+  });
+
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
@@ -129,7 +157,10 @@ describe("daemon relay config", () => {
   });
 
   test("PASEO_RELAY_PUBLIC_USE_TLS overrides relayUseTls for public side", async () => {
-    const home = await createPaseoHome({ version: 1, daemon: { relay: {} } });
+    const home = await createPaseoHome({
+      version: 1,
+      daemon: { relay: { endpoint: "127.0.0.1:8787" } },
+    });
     const config = loadConfig(home, {
       env: { PASEO_RELAY_USE_TLS: "false", PASEO_RELAY_PUBLIC_USE_TLS: "true" },
     });
@@ -138,7 +169,10 @@ describe("daemon relay config", () => {
   });
 
   test("relayPublicUseTls falls back to relayUseTls when only PASEO_RELAY_USE_TLS is set", async () => {
-    const home = await createPaseoHome({ version: 1, daemon: { relay: {} } });
+    const home = await createPaseoHome({
+      version: 1,
+      daemon: { relay: { endpoint: "127.0.0.1:8787" } },
+    });
     const config = loadConfig(home, { env: { PASEO_RELAY_USE_TLS: "false" } });
     expect(config.relayUseTls).toBe(false);
     expect(config.relayPublicUseTls).toBe(false);
@@ -147,7 +181,7 @@ describe("daemon relay config", () => {
   test("persisted publicUseTls overrides relayUseTls fallback", async () => {
     const home = await createPaseoHome({
       version: 1,
-      daemon: { relay: { useTls: false, publicUseTls: true } },
+      daemon: { relay: { endpoint: "127.0.0.1:8787", useTls: false, publicUseTls: true } },
     });
     const config = loadConfig(home, { env: {} });
     expect(config.relayUseTls).toBe(false);

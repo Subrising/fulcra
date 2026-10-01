@@ -1,0 +1,33 @@
+{
+  "errors": [],
+  "detail": [
+    {
+      "repositories": [
+        {
+          "name": "app",
+          "url": "https://github.com/acme/app",
+          "commits": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "displayId": "aaaaaaa",
+              "message": "ACME-12 fix sign-in"
+            },
+            {
+              "id": "not-a-sha",
+              "message": "x"
+            }
+          ]
+        },
+        {
+          "name": "mirror",
+          "url": "https://evil.example.com/acme/app",
+          "commits": [
+            {
+              "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

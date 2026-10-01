@@ -94,6 +94,10 @@ class FakeChildProcess extends EventEmitter {
     return true;
   }
 
+  public complete(): void {
+    this.finishClose({ exitCode: 0, signal: null });
+  }
+
   public dispose(): void {
     this.clearTimers();
     if (!this.exited) {
@@ -232,6 +236,62 @@ describe("runGitCommand", () => {
     fakeSpawnController.reset();
     vi.resetModules();
     vi.unstubAllEnvs();
+  });
+
+  it("refuses a revoked pre-spawn guard after held scheduler admission without spawning", async () => {
+    const { runGitCommand, startGitCommandMetrics, stopGitCommandMetrics } =
+      await loadRunGitCommand(1);
+    startGitCommandMetrics();
+    enqueueSpawnBehaviors({ delayMs: 5_000 });
+    const blocker = runGitCommand(["status"], { cwd: process.cwd() });
+    await vi.waitFor(() => expect(fakeSpawnController.processes).toHaveLength(1));
+    let admitted = true;
+    const beforeSpawn = vi.fn(() => {
+      if (!admitted) throw new Error("Original authority revoked");
+    });
+    const selected = runGitCommand(["stash", "apply", "a".repeat(40)], {
+      cwd: process.cwd(),
+      beforeSpawn,
+    });
+    const refusal = expect(selected).rejects.toThrow("Original authority revoked");
+    expect(beforeSpawn).not.toHaveBeenCalled();
+    admitted = false;
+    fakeSpawnController.processes[0]!.complete();
+    await blocker;
+    await refusal;
+    expect(beforeSpawn).toHaveBeenCalledTimes(1);
+    expect(fakeSpawnController.processes).toHaveLength(1);
+    // A refused start must release the scheduler slot and settle failed accounting.
+    await runGitCommand(["status"], { cwd: process.cwd() });
+    expect(fakeSpawnController.processes).toHaveLength(2);
+    expect(stopGitCommandMetrics()).toMatchObject({
+      submitted: 3,
+      started: 3,
+      completed: 3,
+      active: 0,
+      pending: 0,
+      failed: 1,
+    });
+  });
+
+  it("runs a valid pre-spawn guard once after held scheduler admission", async () => {
+    const { runGitCommand } = await loadRunGitCommand(1);
+    enqueueSpawnBehaviors({ delayMs: 5_000 });
+    const blocker = runGitCommand(["status"], { cwd: process.cwd() });
+    await vi.waitFor(() => expect(fakeSpawnController.processes).toHaveLength(1));
+    const beforeSpawn = vi.fn(() => {
+      expect(fakeSpawnController.processes).toHaveLength(1);
+    });
+    const selected = runGitCommand(["stash", "apply", "b".repeat(40)], {
+      cwd: process.cwd(),
+      beforeSpawn,
+    });
+    expect(beforeSpawn).not.toHaveBeenCalled();
+    fakeSpawnController.processes[0]!.complete();
+    await blocker;
+    await expect(selected).resolves.toMatchObject({ exitCode: 0 });
+    expect(beforeSpawn).toHaveBeenCalledTimes(1);
+    expect(fakeSpawnController.processes).toHaveLength(2);
   });
 
   it("throttles concurrent git commands to the configured limit", async () => {

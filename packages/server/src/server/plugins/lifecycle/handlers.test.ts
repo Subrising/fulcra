@@ -98,3 +98,20 @@ test("session-open hooks reject changes to session identity instead of silently 
     ),
   ).rejects.toThrow("agent.session_open hooks can only change env");
 });
+
+test("agent.create hooks receive the creation's labels and can fill an absent model from them", async () => {
+  const hooks = new PluginHookHandlers(() => {});
+  hooks.before("agent.create", ({ request }) => {
+    if (request.labels?.["fulcra.role"] !== "implementation" || request.config.model)
+      return request;
+    return { ...request, config: { ...request.config, model: "claude-sonnet-5-5" } };
+  });
+  const input = {
+    config: { provider: "claude", cwd: "/project" },
+    labels: { "fulcra.role": "implementation" },
+  };
+  expect(await hooks.invoke("operation", "before", "agent.create", input, paseo)).toMatchObject({
+    config: { provider: "claude", cwd: "/project", model: "claude-sonnet-5-5" },
+    labels: { "fulcra.role": "implementation" },
+  });
+});

@@ -56,7 +56,7 @@ test("opens troubleshooting and the licence notices", async ({ page }) => {
   await test.step("opens the upstream licence and attribution notices", async () => {
     await page.getByTestId("sidebar-help-licenses").click();
     await expect(page.getByTestId("settings-licenses-notice")).toContainText(
-      "Fulcra is based on Paseo (Apache-2.0) by Mohamed Boudra.",
+      "This product is a modified fork of Paseo.",
     );
     await expect(page.getByTestId("settings-licenses-license")).toContainText("Apache License");
   });

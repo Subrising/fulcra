@@ -1,3 +1,4 @@
+export type * from "./trusted.js";
 export type {
   PluginCredentialRequest,
   PluginCredentialResponse,
@@ -21,3 +22,5 @@ export type {
   PluginBeforeRequests,
   PluginLifecycleRegistration,
 } from "./lifecycle.js";
+
+export type * from "./management.js";

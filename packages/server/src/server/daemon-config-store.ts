@@ -1,3 +1,4 @@
+import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
 import {
   loadPersistedConfig,
   savePersistedConfig,
@@ -340,6 +341,33 @@ export class DaemonConfigStore {
     this.reloadSource = options.reloadSource;
     this.startupPersisted = options.startupPersisted ?? loadPersistedConfig(paseoHome, this.logger);
     this.lastKnownPersisted = this.startupPersisted;
+  }
+
+  public setRelayEndpoint(endpoint: string | null, useTls: boolean): void {
+    endpoint ??= DEFAULT_RELAY_ENDPOINT;
+    if (
+      !this.relayEnabledMutable ||
+      process.env.PASEO_RELAY_ENDPOINT !== undefined ||
+      process.env.PASEO_RELAY_USE_TLS !== undefined
+    )
+      throw new Error("Relay is controlled by a daemon launch override");
+    const persisted = loadPersistedConfig(this.paseoHome, this.logger);
+    persisted.daemon ??= {};
+    persisted.daemon.relay = { ...persisted.daemon.relay, endpoint: endpoint ?? "", useTls };
+    savePersistedConfig(this.paseoHome, persisted, this.logger);
+    this.lastKnownPersisted = persisted;
+    this.current = {
+      ...this.current,
+      relay: {
+        ...this.current.relay,
+        enabled: this.current.relay?.enabled ?? false,
+        endpoint,
+        useTls,
+      },
+    };
+    for (const handler of this.fieldChangeHandlers.get("relay.endpoint") ?? [])
+      handler({ endpoint, useTls });
+    for (const listener of this.changeListeners) listener(this.current, { removedProviders: [] });
   }
 
   public get(): MutableDaemonConfig {

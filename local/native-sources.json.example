@@ -1,0 +1,17 @@
+{
+  "reviewed": {
+    "head": "<COMMIT>",
+    "durableFiles": {
+      "src/server/agent/agent-manager.ts": "<SHA256>",
+      "src/server/agent/file-agent-timeline-store.ts": "<SHA256>",
+      "dist/server/server/agent/agent-manager.js": "<SHA256>",
+      "dist/server/server/agent/file-agent-timeline-store.js": "<SHA256>",
+      "src/server/agent/agent-prompt.ts": "<SHA256>",
+      "dist/server/server/agent/agent-prompt.js": "<SHA256>",
+      "src/server/session.ts": "<SHA256>",
+      "src/server/agent/lifecycle-command.ts": "<SHA256>",
+      "dist/server/server/session.js": "<SHA256>",
+      "dist/server/server/agent/lifecycle-command.js": "<SHA256>"
+    }
+  }
+}

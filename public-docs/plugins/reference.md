@@ -805,7 +805,7 @@ Modal children keep the plugin runtime context. `usePaseo`, `useRpc`, `useWorksp
 
 ### Coordinated pan surfaces
 
-Fulcra adds `PanScrollView` and `PanSurface` to the existing
+Fulcra's Paseo fork adds `PanScrollView` and `PanSurface` to the existing
 `@getpaseo/plugin/client/react-native` module. Use them together for a draggable
 canvas inside a scrolling page. Ordinary `ScrollView` behavior is unchanged.
 

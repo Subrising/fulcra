@@ -1,5 +1,16 @@
-import { expect, test } from "vitest";
-import { CODEX_TURN_ADMISSION, type AgentRunOptions } from "../../agent-sdk-types.js";
+import {
+  createNativeQueuedDispatch,
+  nativeQueuedAcceptance,
+  isNativeQueuedRefusal,
+  validateNativeQueuedDispatch,
+} from "../../native-queued-dispatch.js";
+import { CodexQuotaError } from "./quota.js";
+import { expect, test, vi } from "vitest";
+import {
+  CODEX_TURN_ADMISSION,
+  NATIVE_QUEUED_FINAL,
+  type AgentRunOptions,
+} from "../../agent-sdk-types.js";
 import { CodexAppServerAgentSession } from "../codex-app-server-agent.js";
 import { createFakeCodexAppServer } from "./test-utils/fake-app-server.js";
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
@@ -10,6 +21,7 @@ function fixture(
     ordinaryUsageAllowed: true,
     rateLimits: {},
   }),
+  turnStart?: () => unknown,
 ) {
   const server = createFakeCodexAppServer({
     "thread/start": () => ({
@@ -19,6 +31,7 @@ function fixture(
     }),
     "thread/loaded/list": () => ({ data: ["owned-thread"] }),
     "account/rateLimits/read": quota,
+    ...(turnStart ? { "turn/start": turnStart } : {}),
   });
   const session = new CodexAppServerAgentSession(
     { provider: "codex", cwd: "/tmp/owned-turn-fence", model: "gpt-5.6-sol", modeId: "read-only" },
@@ -293,6 +306,523 @@ test("cancellation inside admission is checked before the synchronous transport 
       }),
     ).rejects.toThrow(/interrupted/);
     await interrupted;
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+function capturedAdmission(
+  overrides: Partial<import("../../agent-sdk-types.js").CapturedCodexAdmission> = {},
+): import("../../agent-sdk-types.js").CapturedCodexAdmission {
+  return {
+    operation: Object.freeze({
+      operationId: "11111111-1111-4111-8111-111111111111",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      kind: "prompt",
+      messageId: "orca-control:example",
+      payloadDigest: "a".repeat(64) as import("@getpaseo/protocol/trusted-input").Sha256,
+      attemptId: "33333333-3333-4333-8333-333333333333",
+      pluginId: "orca-organization-next",
+    }),
+    instanceId: "44444444-4444-4444-8444-444444444444",
+    validate: () => undefined,
+    check: () => true,
+    onQuotaReadFailure: () => undefined,
+    ...overrides,
+  };
+}
+
+test.each(["unavailable", "read_failed", "invalid_reply"] as const)(
+  "P5: %s calls the bound failure callback and always refuses transport",
+  async (code) => {
+    const f = fixture();
+    const failures: unknown[] = [];
+    const admission = capturedAdmission({
+      onQuotaReadFailure: (turn, failure) => {
+        failures.push({ turn, failure });
+      },
+    });
+    vi.spyOn(f.session, "getQuota").mockRejectedValue(new CodexQuotaError(code));
+    try {
+      await expect(
+        f.session.startTurn("work", { [CODEX_TURN_ADMISSION]: admission }),
+      ).rejects.toThrow("admission_refused");
+      expect(failures).toEqual([
+        {
+          turn: {
+            operation: admission.operation,
+            instanceId: admission.instanceId,
+            nativeSessionId: "owned-thread",
+            model: "gpt-5.6-sol",
+            serviceTier: null,
+          },
+          failure: { code, nativeDispatched: false },
+        },
+      ]);
+      expect(f.submissions()).toEqual([]);
+    } finally {
+      await f.session.close();
+    }
+  },
+);
+
+test("P5: callback throw or attempted allow cannot turn a quota failure into dispatch", async () => {
+  for (const callback of [
+    () => {
+      throw new Error("receipt write failed");
+    },
+    () => true,
+  ]) {
+    const f = fixture();
+    vi.spyOn(f.session, "getQuota").mockRejectedValue(new CodexQuotaError("read_failed"));
+    try {
+      await expect(
+        f.session.startTurn("work", {
+          [CODEX_TURN_ADMISSION]: capturedAdmission({ onQuotaReadFailure: callback }),
+        }),
+      ).rejects.toThrow("admission_refused");
+      expect(f.submissions()).toEqual([]);
+    } finally {
+      await f.session.close();
+    }
+  }
+});
+
+test("P5: instance or journal-attempt replacement during quota await refuses before callbacks", async () => {
+  for (const reason of ["instance", "attempt"]) {
+    let valid = true;
+    let checks = 0;
+    let failures = 0;
+    const f = fixture(() => {
+      valid = false;
+      return { accountId: "owned-account", ordinaryUsageAllowed: true, rateLimits: {} };
+    });
+    const admission = capturedAdmission({
+      validate: () => {
+        if (!valid) throw Error(reason + " changed");
+      },
+      check: () => {
+        checks++;
+        return true;
+      },
+      onQuotaReadFailure: () => {
+        failures++;
+      },
+    });
+    try {
+      await expect(
+        f.session.startTurn("work", { [CODEX_TURN_ADMISSION]: admission }),
+      ).rejects.toThrow(reason + " changed");
+      expect(checks).toBe(0);
+      expect(failures).toBe(0);
+      expect(f.submissions()).toEqual([]);
+    } finally {
+      await f.session.close();
+    }
+  }
+});
+
+test("P5: admission re-entrancy invalidates live identity immediately before transport", async () => {
+  const f = fixture();
+  let valid = true;
+  try {
+    await expect(
+      f.session.startTurn("work", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission({
+          validate: () => {
+            if (!valid) throw Error("instance changed");
+          },
+          check: () => {
+            valid = false;
+            return true;
+          },
+        }),
+      }),
+    ).rejects.toThrow("instance changed");
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("P5: lost acknowledgement after submission is never reported as no-dispatch quota failure", async () => {
+  let failureCallbacks = 0;
+  let admissionChecks = 0;
+  const f = fixture(undefined, () => {
+    queueMicrotask(() => f.server.disconnect());
+    return new Promise(() => {});
+  });
+  try {
+    await expect(
+      f.session.startTurn("work", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission({
+          check: () => {
+            admissionChecks++;
+            return true;
+          },
+          onQuotaReadFailure: () => {
+            failureCallbacks++;
+          },
+        }),
+      }),
+    ).rejects.toThrow();
+    expect(f.submissions()).toHaveLength(1);
+    expect(admissionChecks).toBe(1);
+    expect(failureCallbacks).toBe(0);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: stable account epoch permits one same-intent quota refresh and real first-create", async () => {
+  let reads = 0;
+  const check = vi.fn(() => true as const);
+  const f = fixture(async () => {
+    if (++reads === 1) await f.session.setModel("gpt-5.6-sol");
+    return allowed;
+  });
+  try {
+    await f.session.startTurn("Same original text", {
+      [CODEX_TURN_ADMISSION]: capturedAdmission({ check }),
+    });
+    expect(reads).toBe(2);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(f.submissions()).toHaveLength(1);
+    expect(f.server.requests().filter((r) => r.method === "thread/start")).toHaveLength(1);
+    expect(f.submissions()[0].params).toMatchObject({
+      threadId: "owned-thread",
+      model: "gpt-5.6-sol",
+    });
+    f.server.assertNoErrors();
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: a second stale preparation refuses finitely without policy or write", async () => {
+  let reads = 0;
+  const check = vi.fn(() => true as const);
+  const f = fixture(async () => {
+    reads++;
+    await f.session.setModel("gpt-5.6-sol");
+    return allowed;
+  });
+  try {
+    await expect(
+      f.session.startTurn("Same text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
+    ).rejects.toThrow(/session_changed/);
+    expect(reads).toBe(2);
+    expect(check).not.toHaveBeenCalled();
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: actual same-thread/model account notification refuses with zero writes", async () => {
+  let reads = 0;
+  const check = vi.fn(() => true as const);
+  const f = fixture(() => {
+    reads++;
+    f.server.child.stdout.write(JSON.stringify({ method: "account/updated", params: {} }) + "\n");
+    return allowed;
+  });
+  try {
+    await expect(
+      f.session.startTurn("Same text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
+    ).rejects.toThrow(/session_changed/);
+    expect(reads).toBe(1);
+    expect(check).not.toHaveBeenCalled();
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: fresh authority revocation after stale read prevents another read", async () => {
+  let reads = 0,
+    valid = true;
+  const f = fixture(async () => {
+    reads++;
+    await f.session.setModel("gpt-5.6-sol");
+    valid = false;
+    return allowed;
+  });
+  try {
+    await expect(
+      f.session.startTurn("Same text", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission({
+          validate: () => {
+            if (!valid) throw Error("Fresh authority revoked");
+          },
+        }),
+      }),
+    ).rejects.toThrow("Fresh authority revoked");
+    expect(reads).toBe(1);
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: genuine policy refusal never re-enters quota preparation", async () => {
+  let reads = 0;
+  const f = fixture(() => {
+    reads++;
+    return allowed;
+  });
+  const check = vi.fn(() => false as const);
+  try {
+    await expect(
+      f.session.startTurn("Same text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
+    ).rejects.toThrow();
+    expect(reads).toBe(1);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: existing queued thread retains the original one-use capability", async () => {
+  let reads = 0;
+  const f = fixture(
+    async () => {
+      if (++reads === 1) await f.session.setModel("gpt-5.6-sol");
+      return allowed;
+    },
+    () => ({
+      threadId: "owned-thread",
+      turn: { id: "native-owned-turn", status: "inProgress", error: null },
+    }),
+  );
+  const capability = createNativeQueuedDispatch(() => undefined);
+  try {
+    await f.session.getRuntimeInfo();
+    await f.session.startTurn("Same queued text", {
+      [CODEX_TURN_ADMISSION]: capturedAdmission(),
+      [NATIVE_QUEUED_FINAL]: capability,
+    });
+    expect(reads).toBe(2);
+    expect(f.submissions()).toHaveLength(1);
+    expect(nativeQueuedAcceptance(capability)).toBe("native-owned-turn");
+    expect(() => validateNativeQueuedDispatch(capability)).toThrow("already attempted");
+    expect(f.server.requests().filter((r) => r.method === "thread/start")).toHaveLength(1);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: queued missing-thread creation stays refused before any preparation", async () => {
+  const f = fixture();
+  const capability = createNativeQueuedDispatch(() => undefined);
+  try {
+    const error = await f.session
+      .startTurn("Queued text", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission(),
+        [NATIVE_QUEUED_FINAL]: capability,
+      })
+      .catch((rejection) => rejection);
+    expect(isNativeQueuedRefusal(error)).toBe(true);
+    expect(f.server.requests()).toEqual([]);
+    expect(nativeQueuedAcceptance(capability)).toBeUndefined();
+    expect(() => validateNativeQueuedDispatch(capability)).not.toThrow();
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: queued source revocation before refresh preserves true refusal and zero write", async () => {
+  let valid = true,
+    reads = 0;
+  const f = fixture(async () => {
+    reads++;
+    await f.session.setModel("gpt-5.6-sol");
+    valid = false;
+    return allowed;
+  });
+  const capability = createNativeQueuedDispatch(() => {
+    if (!valid) throw Error("source revoked");
+  });
+  try {
+    await f.session.getRuntimeInfo();
+    const error = await f.session
+      .startTurn("Queued text", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission(),
+        [NATIVE_QUEUED_FINAL]: capability,
+      })
+      .catch((rejection) => rejection);
+    expect(isNativeQueuedRefusal(error)).toBe(true);
+    expect(reads).toBe(1);
+    expect(f.submissions()).toEqual([]);
+    expect(nativeQueuedAcceptance(capability)).toBeUndefined();
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: refreshed queued lost acknowledgement remains ambiguous with one write", async () => {
+  let reads = 0;
+  const failure = vi.fn();
+  const f = fixture(
+    async () => {
+      if (++reads === 1) await f.session.setModel("gpt-5.6-sol");
+      return allowed;
+    },
+    () => {
+      queueMicrotask(() => f.server.disconnect());
+      return new Promise(() => {});
+    },
+  );
+  const capability = createNativeQueuedDispatch(() => undefined);
+  try {
+    await f.session.getRuntimeInfo();
+    const error = await f.session
+      .startTurn("Queued text", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission({ onQuotaReadFailure: failure }),
+        [NATIVE_QUEUED_FINAL]: capability,
+      })
+      .catch((rejection) => rejection);
+    expect(error).toBeInstanceOf(Error);
+    expect(isNativeQueuedRefusal(error)).toBe(false);
+    expect(reads).toBe(2);
+    expect(f.submissions()).toHaveLength(1);
+    expect(failure).not.toHaveBeenCalled();
+    expect(nativeQueuedAcceptance(capability)).toBeUndefined();
+    expect(() => validateNativeQueuedDispatch(capability)).toThrow("already attempted");
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: pending native permission prevents a refresh", async () => {
+  let reads = 0;
+  const f = fixture(async () => {
+    reads++;
+    await f.session.setModel("gpt-5.6-sol");
+    f.server.requestCommandApproval({
+      itemId: "approval",
+      threadId: "owned-thread",
+      turnId: "pending",
+      command: "fixture",
+      cwd: "/tmp/owned-turn-fence",
+      reason: "fixture approval",
+    });
+    return allowed;
+  });
+  try {
+    await expect(
+      f.session.startTurn("Text", { [CODEX_TURN_ADMISSION]: capturedAdmission() }),
+    ).rejects.toThrow(/permission attention/);
+    expect(reads).toBe(1);
+    expect(f.submissions()).toEqual([]);
+    expect(f.session.getPendingPermissions()).toHaveLength(1);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test.each(["model", "tier", "options"] as const)(
+  "local reprepare: %s retarget refuses without a second quota read",
+  async (kind) => {
+    let reads = 0;
+    const options: AgentRunOptions = {
+      outputSchema: { type: "object" },
+      [CODEX_TURN_ADMISSION]: capturedAdmission(),
+    };
+    const f = fixture(async () => {
+      reads++;
+      if (kind === "model") await f.session.setModel("gpt-5.5");
+      if (kind === "tier") await f.session.setFeature("fast_mode", true);
+      if (kind === "options") {
+        await f.session.setModel("gpt-5.6-sol");
+        options.outputSchema = { type: "string" };
+      }
+      return allowed;
+    });
+    try {
+      await expect(f.session.startTurn("Original text", options)).rejects.toThrow(
+        /session_changed/,
+      );
+      expect(reads).toBe(1);
+      expect(f.submissions()).toEqual([]);
+    } finally {
+      await f.session.close();
+    }
+  },
+);
+
+test("local reprepare: account notification from the policy callback refuses final submission without retry", async () => {
+  let reads = 0;
+  const f = fixture(() => {
+    reads++;
+    return allowed;
+  });
+  const check = vi.fn(() => {
+    f.server.child.stdout.write(JSON.stringify({ method: "account/updated", params: {} }) + "\n");
+    return true as const;
+  });
+  try {
+    await expect(
+      f.session.startTurn("Text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
+    ).rejects.toThrow(/session_changed/);
+    expect(reads).toBe(1);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: refreshed read failure reports genuine refusal without another preparation", async () => {
+  let reads = 0;
+  const failure = vi.fn();
+  const check = vi.fn(() => true as const);
+  const f = fixture(async () => {
+    if (++reads === 1) {
+      await f.session.setModel("gpt-5.6-sol");
+      return allowed;
+    }
+    return { malformed: true };
+  });
+  try {
+    await expect(
+      f.session.startTurn("Original text", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission({ check, onQuotaReadFailure: failure }),
+      }),
+    ).rejects.toThrow(/admission_refused/);
+    expect(reads).toBe(2);
+    expect(check).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: a genuine validation refusal using session_changed is never swallowed", async () => {
+  let reads = 0;
+  const f = fixture(() => {
+    reads++;
+    return { malformed: true };
+  });
+  const check = vi.fn(() => true as const);
+  const admission = capturedAdmission({
+    check,
+    validate: () => {
+      if (reads > 0) {
+        void f.session.setModel("gpt-5.6-sol");
+        throw new CodexQuotaError("session_changed");
+      }
+    },
+  });
+  try {
+    await expect(
+      f.session.startTurn("Original text", { [CODEX_TURN_ADMISSION]: admission }),
+    ).rejects.toThrow(/session_changed/);
+    expect(reads).toBe(1);
+    expect(check).not.toHaveBeenCalled();
     expect(f.submissions()).toEqual([]);
   } finally {
     await f.session.close();

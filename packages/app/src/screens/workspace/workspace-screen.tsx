@@ -44,6 +44,7 @@ import { SplitContainer } from "@/components/split-container";
 import { RetainedPanel } from "@/components/retained-panel";
 import { WorkspaceActions } from "@/git/workspace-actions";
 import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
+import { ContextButton } from "@/context/launcher";
 import { WorkspaceScriptsButton } from "@/screens/workspace/workspace-scripts-button";
 import { ImportSessionSheet } from "@/components/import-session-sheet";
 import { useNavigateToImportedAgent } from "@/hooks/use-import-session";
@@ -348,6 +349,7 @@ function getFallbackTabOptionLabel(
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
   }
+  if (tab.target.kind === "context") return "Context";
   if (tab.target.kind === "architecture_map") {
     return labels.architectureMap;
   }
@@ -405,6 +407,7 @@ function getFallbackTabOptionDescription(
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
   }
+  if (tab.target.kind === "context") return "Context";
   if (tab.target.kind === "architecture_map") {
     return labels.architectureMap;
   }
@@ -3791,6 +3794,7 @@ function WorkspaceScreenContent({
     () => (
       <View style={styles.headerRight}>
         <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
+        <ContextButton serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
         {!isMobile && workspaceDescriptor && workspaceDescriptor.scripts.length > 0 ? (
           <WorkspaceScriptsButton
             serverId={normalizedServerId}
@@ -3813,7 +3817,11 @@ function WorkspaceScreenContent({
         ) : null}
         {!isMobile && workspaceDirectory ? (
           <>
-            <WorkspaceActions serverId={normalizedServerId} cwd={workspaceDirectory} />
+            <WorkspaceActions
+              serverId={normalizedServerId}
+              workspaceId={normalizedWorkspaceId}
+              cwd={workspaceDirectory}
+            />
             <WorkspaceHeaderExplorerToggle
               owner={explorerToggleOwner}
               onPress={handleToggleExplorerSidebar}

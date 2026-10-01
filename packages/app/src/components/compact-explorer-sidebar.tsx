@@ -48,6 +48,8 @@ import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
 import { mutedIconColorMapping } from "@/components/ui/icon-button-chrome";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 
+import { ContextContent } from "@/context/content";
+
 const ThemedX = withUnistyles(X);
 
 function logExplorerSidebar(_event: string, _details: Record<string, unknown>): void {}
@@ -352,7 +354,7 @@ function ExplorerSidebarContent({
   const resolvedTab: ExplorerTab = requestedTab === "pr" && !showPrTab ? "changes" : requestedTab;
   const prTabLabel = formatPrTabLabel(prPane.prNumber);
   const availableTabs = useMemo<ExplorerTab[]>(() => {
-    const tabs: ExplorerTab[] = isGit ? ["changes", "files"] : ["files"];
+    const tabs: ExplorerTab[] = isGit ? ["changes", "files", "context"] : ["files", "context"];
     if (isGit && showPrTab) tabs.push("pr");
     return tabs;
   }, [isGit, showPrTab]);
@@ -384,6 +386,15 @@ function ExplorerSidebarContent({
             onTabPress={onTabPress}
             testID="explorer-tab-files"
           />
+          {workspaceId ? (
+            <ExplorerTabButton
+              tab="context"
+              active={resolvedTab === "context"}
+              label={t("context.title", { defaultValue: "Context" })}
+              onTabPress={onTabPress}
+              testID="explorer-tab-context"
+            />
+          ) : null}
           {isGit && showPrTab && (
             <ExplorerTabButton
               tab="pr"
@@ -419,6 +430,16 @@ function ExplorerSidebarContent({
 
       {/* Content based on active tab */}
       <View style={styles.contentArea} testID="explorer-content-area">
+        {mountedTabIds.has("context") && workspaceId ? (
+          <RetainedPanel active={isOpen && resolvedTab === "context"}>
+            <CompactContextContent
+              serverId={serverId}
+              workspaceId={workspaceId}
+              onOpenExplorer={onTabPress}
+              closeAfterOpen={isCompact}
+            />
+          </RetainedPanel>
+        ) : null}
         {mountedTabIds.has("changes") ? (
           <RetainedPanel active={resolvedTab === "changes"}>
             <ChangedFilesPane
@@ -572,3 +593,33 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 0,
   },
 }));
+
+function CompactContextContent({
+  serverId,
+  workspaceId,
+  onOpenExplorer,
+  closeAfterOpen,
+}: {
+  serverId: string;
+  workspaceId: string;
+  onOpenExplorer: (view: ExplorerTab) => void;
+  closeAfterOpen: boolean;
+}) {
+  const openTab = useWorkspaceLayoutStore((state) => state.openTab);
+  const showMobileAgent = usePanelStore((state) => state.showMobileAgent);
+  const openTarget = useCallback(
+    (target: import("@/workspace-tabs/model").WorkspaceTabTarget) => {
+      openTab({ workspaceKey: `${serverId}:${workspaceId}`, target, intent: "reveal" });
+      if (closeAfterOpen) showMobileAgent();
+    },
+    [openTab, serverId, workspaceId, closeAfterOpen, showMobileAgent],
+  );
+  return (
+    <ContextContent
+      serverId={serverId}
+      workspaceId={workspaceId}
+      onOpenExplorer={onOpenExplorer}
+      onOpenTarget={openTarget}
+    />
+  );
+}

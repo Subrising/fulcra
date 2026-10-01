@@ -17,7 +17,7 @@ import { getClaudeManifestModels, normalizeClaudeRuntimeModelId } from "./model-
 import { resolveObservedClaudeModelId } from "./models.js";
 import type { ClaudeQueryFactory, ClaudeQueryInput } from "./query.js";
 
-// What Claude Code 2.1.280 reported in a sample run (aliases, resolved models and capabilities).
+// What Claude Code 2.1.280 reported for a subscription account on 2026-09-24 (X6-REPORT.md §1).
 const MEASURED_ROWS: ClaudeRuntimeModel[] = [
   {
     value: "default",
@@ -76,7 +76,7 @@ afterEach(async () => {
 });
 
 async function emptyConfigDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-config-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "x6-claude-config-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -99,7 +99,7 @@ function merge(rows: ClaudeRuntimeModel[]) {
   });
 }
 
-describe("probe success — Claude Code decides which models exist", () => {
+describe("X6: probe success — Claude Code decides which models exist", () => {
   it("builds the catalog from the probe, not the 15-entry manifest", async () => {
     const { models } = await catalogWith(async () => MEASURED_ROWS);
 
@@ -109,14 +109,14 @@ describe("probe success — Claude Code decides which models exist", () => {
       "claude-sonnet-5",
       "claude-haiku-4-5",
     ]);
-    // The host's default is what Claude Code calls "default", with its model's default effort.
+    // The host's default is what Claude Code calls "default", with its model's default effort (X2/X4).
     const defaultModel = models.find((model) => model.isDefault);
     expect(defaultModel?.id).toBe("claude-opus-5-5");
     expect(defaultModel?.defaultThinkingOptionId).toBe("medium");
   });
 });
 
-describe("probe failure — the manifest is the full fallback", () => {
+describe("X6: probe failure — the manifest is the full fallback", () => {
   it("returns the manifest when discovery throws", async () => {
     const { models } = await catalogWith(async () => {
       throw new Error("Claude model probe timed out after 20000ms");
@@ -132,7 +132,7 @@ describe("probe failure — the manifest is the full fallback", () => {
   });
 });
 
-describe("aliases are deduped by the model they resolve to", () => {
+describe("X6: aliases are deduped by the model they resolve to", () => {
   it("folds 'default' and 'opus[1m]' into one Opus 5.5 entry that keeps both names", () => {
     const models = merge(MEASURED_ROWS);
     const opus = models.filter((model) => model.id === "claude-opus-5-5");
@@ -148,7 +148,7 @@ describe("aliases are deduped by the model they resolve to", () => {
   });
 });
 
-describe("an id the manifest does not know is kept raw", () => {
+describe("X6: an id the manifest does not know is kept raw", () => {
   const NEW_OPUS: ClaudeRuntimeModel = {
     value: "claude-opus-5-6",
     displayName: "Opus 5.6",
@@ -181,7 +181,7 @@ describe("an id the manifest does not know is kept raw", () => {
   });
 });
 
-describe("overlay precedence — runtime capabilities win, the manifest fills gaps", () => {
+describe("X6: overlay precedence — runtime capabilities win, the manifest fills gaps", () => {
   it("takes effort levels from the runtime even where the manifest lists more", () => {
     const [opus] = merge([
       { ...MEASURED_ROWS[1]!, supportedEffortLevels: ["low", "medium", "high"] },
@@ -221,7 +221,7 @@ describe("overlay precedence — runtime capabilities win, the manifest fills ga
   });
 });
 
-describe("the catalogue cache follows the Claude Code version", () => {
+describe("X6: the catalogue cache follows the Claude Code version", () => {
   it("changes the cache key when the CLI version changes, and not before the version is rechecked", async () => {
     let version = "2.1.280";
     let now = 0;
@@ -264,7 +264,7 @@ describe("the catalogue cache follows the Claude Code version", () => {
   });
 });
 
-describe("the probe is catalog-only and bounded", () => {
+describe("X6: the probe is catalog-only and bounded", () => {
   function fakeQuery(supportedModels: () => Promise<ClaudeRuntimeModel[]>) {
     const calls = { closed: 0, input: undefined as ClaudeQueryInput | undefined };
     const factory = ((input: ClaudeQueryInput) => {

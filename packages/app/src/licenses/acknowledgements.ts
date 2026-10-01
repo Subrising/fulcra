@@ -1,5 +1,5 @@
-// Third-party acknowledgements for the Licenses/Acknowledgements screen (notices live there,
-// never as branding). Entries are plain text; the screen renders them
+// Third-party acknowledgements for the Licenses/Acknowledgements screen (prime decision J1:
+// notices live there, never as branding). Entries are plain text; the screen renders them
 // as-is. An entry that ships third-party code must carry that code's licence text; a
 // courtesy credit, such as Archify below, carries none because no Archify code ships.
 

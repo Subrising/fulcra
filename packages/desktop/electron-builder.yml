@@ -1,9 +1,9 @@
 npmRebuild: false
-appId: app.fulcra.desktop
+appId: dev.orca.workspace.desktop
 productName: Fulcra
 executableName: Fulcra
 protocols:
-  - name: Fulcra conversation link
+  - name: Orca conversation link
     schemes:
       - orca
   - name: Fulcra sign-in link
@@ -15,11 +15,19 @@ directories:
   output: release
 files:
   - dist/**/*
+  # Skills are filesystem data, so include them explicitly in the server catalog.
+  - from: ../../skills
+    to: node_modules/@getpaseo/server/dist/server/skills
+    filter:
+      - "**/*"
   - "!**/*.map"
+  - "!**/*.tsbuildinfo"
   - "!node_modules/@getpaseo/*/src/**"
   - "!node_modules/@getpaseo/**/*.test.*"
   - "!node_modules/@getpaseo/**/*.spec.*"
   - "!node_modules/@getpaseo/server/dist/server/web-ui/**"
+  # Development-only conversation processor carries recorded debug fixture names.
+  - "!node_modules/@getpaseo/server/scripts/process-conversation.ts"
   # Workspace packages are symlinked, so anything a dev generates inside them
   # lands in the asar. CI never has these; a local .debug run adds gigabytes.
   - "!node_modules/@getpaseo/*/.debug/**"
@@ -30,11 +38,13 @@ asarUnpack:
   - dist/daemon/node-entrypoint-runner.js
   - node_modules/@getpaseo/server/dist/server/terminal/shell-integration/**/*
 extraResources:
+  - from: bundled-plugins
+    to: bundled-plugins
   - from: ../app/dist
     to: app-dist
   - from: assets/editor-targets
     to: editor-target-icons
-# Fulcra has no public update feed yet. Never publish into the upstream project.
+# Orca has no public update feed yet. Never publish into the upstream project.
 publish: null
 mac:
   artifactName: "Fulcra-${version}-${arch}.${ext}"

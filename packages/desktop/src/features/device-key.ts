@@ -12,7 +12,7 @@ import {
 } from "@getpaseo/protocol/device-proof";
 import { z } from "zod";
 
-// The desktop device key. The P-256 private key is generated and used only in this
+// The desktop device key (CONTRACTS §3.6). The P-256 private key is generated and used only in this
 // main process; the renderer, the daemon and plugins receive the public key and signatures only.
 // At rest it is wrapped with Electron safeStorage: on macOS that key lives in the app's own
 // keychain entry, on Windows in DPAPI, on Linux in the Secret Service when one is running. Each
@@ -26,7 +26,7 @@ export class DevicePromptRefusedError extends Error {
   }
 }
 
-// Pairing needs OS user presence (Touch ID, or the login password
+// CONTRACTS v1.12/13 §3.6 rule 3: pairing needs OS user presence (Touch ID, or the login password
 // through LocalAuthentication). Electron offers Touch ID only, so a Mac without usable Touch ID
 // cannot pair until a login-password path exists; a click in a dialog never pairs a Mac.
 export const MAC_PAIRING_UNAVAILABLE = "Pair from your iPhone, or a Mac with Touch ID";
@@ -157,7 +157,7 @@ export function createDesktopDeviceKey(host: DesktopDeviceKeyPlatform) {
     },
 
     // The key is generated only after the user confirms. Pairing again replaces the key; the
-    // verifier treats the result as a new device.
+    // controller treats the result as a new device.
     async pair(input: unknown): Promise<DevicePairResult> {
       const { code } = PairInputSchema.parse(input ?? {});
       const current = protection();

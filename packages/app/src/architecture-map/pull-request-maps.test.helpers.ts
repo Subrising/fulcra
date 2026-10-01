@@ -5,7 +5,7 @@ import {
   type PullRequestMaps,
 } from "./architecture-change";
 
-// A pull request's Before/After are the maps at its own commits: the forge's
+// A pull request's Before/After are the maps at its own commits (CONTRACTS v1.16): the forge's
 // base and head commits, read through the host's `checkout.file-at-commit.get`. Tests build their
 // changes the same way, with a fake host that answers from the committed texts it was given.
 export const BASE_COMMIT = "1111111111111111111111111111111111111111";
@@ -15,13 +15,14 @@ type At = { kind: "commit"; sha: string } | { kind: "merge-base"; of: [string, s
 
 /** A fake `checkout.file-at-commit.get`: the merge base answers `baseText`, the head `headText`. */
 export function fakeFileAtCommit(baseText: string | null, headText: string | null) {
+  function textAt(at: At): string | null | undefined {
+    if (at.kind === "merge-base" && at.of[0] === BASE_COMMIT && at.of[1] === HEAD_COMMIT)
+      return baseText;
+    if (at.kind === "commit" && at.sha === HEAD_COMMIT) return headText;
+    return undefined;
+  }
   return (at: At): FileAtCommitAnswer => {
-    const text =
-      at.kind === "merge-base" && at.of[0] === BASE_COMMIT && at.of[1] === HEAD_COMMIT
-        ? baseText
-        : at.kind === "commit" && at.sha === HEAD_COMMIT
-          ? headText
-          : undefined;
+    const text = textAt(at);
     if (text === undefined) return { status: "error", encoding: "none", error: "unknown commit" };
     if (text === null) return { status: "missing", encoding: "none" };
     return { status: "ok", encoding: "utf-8", content: text };

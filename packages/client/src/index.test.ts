@@ -98,6 +98,7 @@ function parseSentFrame(
 async function connectClient(
   features: Record<string, boolean> = {
     providerUsageList: true,
+    pooledAccountUsageList: true,
     providersSnapshotCwd: true,
     ownedSubscriptions: true,
   },
@@ -1365,10 +1366,16 @@ test("provider actions delegate to existing provider RPCs and local snapshot upd
   });
   const usagePromise = client.providers.listUsage({
     requestId: "provider-usage-request",
+    agentId: "session-work",
+    accounts: true,
+    refresh: true,
   });
   expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
     type: "provider.usage.list.request",
     requestId: "provider-usage-request",
+    agentId: "session-work",
+    accounts: true,
+    refresh: true,
   });
   ws.message(
     sessionMessage({
@@ -1494,6 +1501,16 @@ test("provider usage requires the advertised host capability", async () => {
   );
   expect(ws.sent).toHaveLength(sentBeforeUsage);
 
+  await client.close();
+});
+
+test("pooled account usage refuses an older host before sending an RPC", async () => {
+  const { client, ws } = await connectClient({ providerUsageList: true });
+  const sent = ws.sent.length;
+  await expect(client.providers.listUsage({ accounts: true })).rejects.toThrow(
+    "Update the host to see usage by account.",
+  );
+  expect(ws.sent).toHaveLength(sent);
   await client.close();
 });
 

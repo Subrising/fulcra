@@ -1,0 +1,24 @@
+{
+  "name": "@fulcra/command-centre",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "verify:portable": "node tools/no-machine-ties.mjs",
+    "build:portable": "node tools/build-portable.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "bcryptjs": "3.0.2",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

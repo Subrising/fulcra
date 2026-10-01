@@ -1,8 +1,21 @@
+import { checkNativeReportOriginPublication } from "./report-origin.js";
+import type { NativeReportOrigin } from "./report-origin.js";
+import { startInsightsRecorder } from "../utils/insights/recorder.js";
+import { setHostAutomations } from "./automations/automation-service.js";
+import { startHostAutomations } from "./automations/start-host-automations.js";
+import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
+import { registerNativeRadiusScratch } from "./plugins/native-radius-scratch.js";
+import { consumeManagementDispatch } from "./plugins/management.js";
+import { controllerDistribution, type TrustedPlugins } from "./plugins/trusted.js";
+import { ControllerChannel } from "./plugins/controller-channel.js";
+import { createControllerService } from "./plugins/controller-service.js";
+import { initializeTrustedPlugins } from "./plugins/trusted-bootstrap.js";
+import { daemonBootDenyRules, recordDaemonBoot } from "./plugins/daemon-boot.js";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
 import { createServer as createHTTPServer, type IncomingMessage, type ServerResponse } from "http";
 import { constants, existsSync, unlinkSync } from "fs";
-import { open, rm } from "fs/promises";
+import { open, rm, stat } from "fs/promises";
 import { randomUUID } from "node:crypto";
 import { hostname as getHostname } from "node:os";
 import path from "node:path";
@@ -10,6 +23,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
+
+function getNativeReportGrantDirectory(distribution: ReturnType<typeof controllerDistribution>) {
+  return distribution?.reportGrantDirectory;
+}
 
 export type ListenTarget =
   | { type: "tcp"; host: string; port: number }
@@ -120,7 +137,7 @@ export async function fanOutReconciledWorkspaceUpdates(input: {
 import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
 import { createWorkspaceLabelService } from "./workspace-labels/index.js";
-import { createGitHubService } from "../services/github-service.js";
+import { createGitHubService, runGitHubCli } from "../services/github-service.js";
 import { createHostIntegrations } from "./integrations/host-integrations.js";
 import { handlePluginHostCall } from "./plugins/plugin-host-calls.js";
 import { createPaseoWorktree as createRegisteredPaseoWorktree } from "./paseo-worktree-service.js";
@@ -205,12 +222,14 @@ import {
   type ManagedProcessRegistry,
 } from "./managed-processes/managed-processes.js";
 import { terminateWithTreeKill } from "../utils/tree-kill.js";
+import { withTimeout } from "../utils/promise-timeout.js";
 import { isHostnameAllowed, type HostnamesConfig } from "./hostnames.js";
 import {
   createRequireBearerMiddleware,
   isAgentMcpRequestAuthorized,
   type DaemonAuthConfig,
 } from "./auth.js";
+import { deleteLocalCredential, writeLocalCredential } from "./local-credential.js";
 import { createWebUiMiddleware } from "./web-ui.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMutationService } from "./session/git-mutation/git-mutation-service.js";
@@ -390,6 +409,8 @@ export type DaemonLifecycleIntent =
     };
 
 export interface PaseoDaemonConfig {
+  /** Immutable distribution input from the embedding host, never config.json. */
+  bundledPluginsDirectory?: string;
   listen: string;
   paseoHome: string;
   daemonVersion?: string;
@@ -424,6 +445,7 @@ export interface PaseoDaemonConfig {
   relayEnabled?: boolean;
   relayEnabledMutable?: boolean;
   relayEndpoint?: string;
+  relayPairingOfferTtlSeconds?: number;
   relayPublicEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
@@ -479,6 +501,7 @@ export interface PaseoDaemon {
   start(): Promise<void>;
   stop(): Promise<void>;
   getListenTarget(): ListenTarget | null;
+  getServerId(): string;
 }
 
 export interface PaseoDaemonDependencies {
@@ -494,6 +517,8 @@ export interface PaseoDaemonDependencies {
   timelineStoreStep?: FileAgentTimelineStoreOptions["onStep"];
   // Tests pass an in-memory store so no daemon test can reach the OS keychain.
   credentialBackend?: import("./integrations/credential-backend.js").CredentialBackend | null;
+  // Tests pass null (or a stub) so no daemon test reads this Mac's own `gh` login.
+  hostGithubSignIn?: import("./integrations/host-github-sign-in.js").HostGithubSignIn | null;
 }
 
 function createTimelineStore(
@@ -571,11 +596,23 @@ function resolveExpressTrustProxySetting(config: PaseoDaemonConfig): true | stri
   return config.trustedProxies ?? ["loopback"];
 }
 
+function initialRelayConfig(config: PaseoDaemonConfig): MutableDaemonConfig["relay"] {
+  return {
+    enabled: config.relayEnabled ?? true,
+    endpoint: config.relayEndpoint ?? DEFAULT_RELAY_ENDPOINT,
+    useTls: config.relayUseTls ?? true,
+    endpointMutable:
+      config.relayEnabledMutable !== false &&
+      process.env.PASEO_RELAY_ENDPOINT === undefined &&
+      process.env.PASEO_RELAY_USE_TLS === undefined,
+  };
+}
+
 function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDaemonConfig {
   const providers = config.providerOverrides ?? {};
 
   const initialConfig: MutableDaemonConfig = {
-    relay: { enabled: config.relayEnabled ?? true },
+    relay: initialRelayConfig(config),
     mcp: {
       enabled: config.mcpEnabled ?? true,
       injectIntoAgents: config.mcpInjectIntoAgents ?? true,
@@ -584,7 +621,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     cors: { allowedOrigins: config.corsAllowedOrigins },
     trustedProxies: config.trustedProxies ?? ["loopback"],
     git: config.git ?? resolveGitProcessPolicy({ env: process.env }),
-    app: { baseUrl: config.appBaseUrl ?? "https://app.paseo.sh" },
+    app: { baseUrl: config.appBaseUrl ?? "" },
     ...(config.providerCatalogRefreshTimeoutMs !== undefined
       ? { catalogRefreshTimeoutMs: config.providerCatalogRefreshTimeoutMs }
       : {}),
@@ -661,13 +698,39 @@ export async function createPaseoDaemon(
     logger,
     oauthClientIds: config.oauthClientIds,
     backend: dependencies.credentialBackend,
+    hostSignIn: dependencies.hostGithubSignIn,
     // Until the WebSocket server exists, a push fails and the outbox retries it.
     sendPush: (payload) =>
       wsServer
         ? wsServer.sendPushNotification(payload)
         : Promise.reject(new Error("Push is not ready yet")),
   });
+  const agentStorage = new AgentStorage(config.agentStoragePath, logger);
+  const trustedPlugins: TrustedPlugins = await initializeTrustedPlugins(
+    agentStorage,
+    config.bundledPluginsDirectory,
+    config.paseoHome,
+    {
+      // Lifecycle status and authenticated Retry remain available while the child is down.
+      // ControllerChannel/supervisor still refuse operational dispatch until ready.
+      enabled: () => controllerDistribution(trustedPlugins) !== undefined,
+      validate: (command) => {
+        const distribution = controllerDistribution(trustedPlugins);
+        if (!distribution) throw Error("Command Centre distribution unavailable");
+        return distribution.validate(command);
+      },
+      // D13: read-only management runs only what the distribution classifies as a read; none without a classifier.
+      isRead: (command) => controllerDistribution(trustedPlugins)?.isRead?.(command) === true,
+    },
+  );
+  const distribution = controllerDistribution(trustedPlugins);
+  registerNativeRadiusScratch(trustedPlugins.management, distribution);
+  // Every boot records itself before admitting input, with or without the controller distribution, so the
+  // owned controller's per-boot chain cannot step over a boot that ran without it (W1 row 9).
+  const previousBoot = recordDaemonBoot(config.paseoHome, trustedPlugins.boot);
+  trustedPlugins.denyToAgents(daemonBootDenyRules(config.paseoHome));
   const pluginRuntime = new PluginService(logger, daemonConfigStore, daemonVersion, {
+    trustedBundles: trustedPlugins,
     managedSources: new ManagedPluginSources(config.paseoHome),
     settingsDirectory: path.join(config.paseoHome, "plugin-settings"),
     hostCalls: (call) => handlePluginHostCall(hostIntegrations.services, call),
@@ -731,12 +794,12 @@ export async function createPaseoDaemon(
   const scriptRuntimeStore = new WorkspaceScriptRuntimeStore();
   const workspaceSetupRuntime = new WorkspaceSetupRuntime();
   let configuredHostnames = config.hostnames ?? config.allowedHosts;
-  let appBaseUrl = config.appBaseUrl ?? "https://app.paseo.sh";
+  let appBaseUrl = config.appBaseUrl ?? "";
   daemonConfigStore.onFieldChange("hostnames", (value) => {
     configuredHostnames = value as HostnamesConfig | undefined;
   });
   daemonConfigStore.onFieldChange("app.baseUrl", (value) => {
-    appBaseUrl = typeof value === "string" ? value : "https://app.paseo.sh";
+    appBaseUrl = typeof value === "string" ? value : "";
   });
   let serviceProxyListenTarget: ListenTarget | null = null;
   const scriptHealthMonitor = new ScriptHealthMonitor({
@@ -830,8 +893,10 @@ export async function createPaseoDaemon(
   // remain protected.
   mountWebUi(app, config, logger);
 
+  let localCredential: string | null = null;
+  const daemonAuth = { ...config.auth, localCredential: () => localCredential };
   app.use(
-    createRequireBearerMiddleware(config.auth, (context) => {
+    createRequireBearerMiddleware(daemonAuth, (context) => {
       logger.warn(context, "Rejected HTTP request with invalid daemon password");
     }),
   );
@@ -924,7 +989,6 @@ export async function createPaseoDaemon(
     serviceProxyListenTarget = parseListenString(config.serviceProxy.standaloneListen);
   }
 
-  const agentStorage = new AgentStorage(config.agentStoragePath, logger);
   const projectRegistry = new FileBackedProjectRegistry(
     path.join(config.paseoHome, "projects", "projects.json"),
     logger,
@@ -959,6 +1023,7 @@ export async function createPaseoDaemon(
     projectRegistry,
     workspaceRegistry,
     workspaceGitService,
+    isDirectory: async (target) => (await stat(target).catch(() => null))?.isDirectory() ?? false,
     logger,
   });
   const agentProviderRuntime = await createAgentProviderRuntime({
@@ -991,9 +1056,13 @@ export async function createPaseoDaemon(
   // A retention interrupted by a crash is finished before any agent reads its history.
   await finishTimelineRetention(durableTimelineStore, agentStorage, logger);
   const agentManager = new AgentManager({
+    reportRegistryFile: path.join(config.paseoHome, "agent-requests", "report-authority.json"),
+    reportGrantDirectory: getNativeReportGrantDirectory(distribution),
     durableTimelineStore,
     timelineRetention: config.timelineRetention,
     pluginLifecycle: pluginRuntime,
+    trustedPlugins,
+    mcpRefreshAdmission: (agent) => trustedPlugins.mcpRefresh(agent),
     clients: initialAgentManagerState.clients,
     providerDefinitions: initialAgentManagerState.providerDefinitions,
     registry: agentStorage,
@@ -1006,6 +1075,8 @@ export async function createPaseoDaemon(
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     logger,
   });
+  // Display-only background-job sample for providers without a task protocol (MULTIHOST-DESIGN §6).
+  agentManager.startBackgroundWorkSampling();
   const syncPluginProviders = () => {
     agentManager.updateProviderRegistry(
       providerSnapshotManager.replacePluginProviders(pluginRuntime.getProviderRegistrations()),
@@ -1019,7 +1090,6 @@ export async function createPaseoDaemon(
     agentManager,
     agentStorage,
   );
-  await agentStorage.initialize();
   logger.info({ elapsed: elapsed() }, "Agent storage initialized");
   await bootstrapWorkspaceRegistries({
     serverId,
@@ -1422,13 +1492,31 @@ export async function createPaseoDaemon(
     }
   });
   logger.info({ elapsed: elapsed() }, "Schedule service initialized");
+  // Insights (blocked time, usage-limit stops): listens to agent events and appends to a small log; never acts.
+  await startInsightsRecorder({
+    paseoHome: config.paseoHome,
+    subscribe: (listener) => agentManager.subscribe(listener),
+    onError: (error) => logger.warn({ err: error }, "Insights recorder could not start"),
+  });
+  // Automations ("when X, do Y") drive the Schedule service above; see automations/automation-service.ts.
+  const automationService = await startHostAutomations({
+    paseoHome: config.paseoHome,
+    schedules: scheduleService,
+    projects: projectRegistry,
+    workspaces: workspaceRegistry,
+    agents: agentStorage,
+    subscribe: (listener) => agentManager.subscribe(listener),
+    templates: () => daemonConfigStore.get().agentProfiles,
+    runGh: (args, options) => runGitHubCli(args, options),
+    onError: (error) => logger.warn({ err: error }, "Automations: an automation step failed"),
+  });
   logger.info({ elapsed: elapsed() }, "Loading persisted agent registry");
   const persistedRecords = await agentStorage.list();
   logger.info(
     { elapsed: elapsed() },
     `Agent registry loaded (${persistedRecords.length} record${persistedRecords.length === 1 ? "" : "s"}); agents will initialize on demand`,
   );
-  // Nothing runs a stored `running` turn after a restart, so it is normalised to idle with a durable
+  // Orca R3a. Nothing runs a stored `running` turn after a restart, so it is normalised to idle with a durable
   // interruption marker before any client reads it. No agent is loaded, resumed or prompted here.
   const interrupted = await agentStorage.normalizeInterruptedTurns(
     { detectedAt: new Date().toISOString(), bootId: randomUUID() },
@@ -1504,6 +1592,7 @@ export async function createPaseoDaemon(
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
     callerAgentId: runtime.callerAgentId,
+    nativeReportOrigin: runtime.nativeReportOrigin,
     enableVoiceTools: runtime.enableVoiceTools,
     voiceOnly: runtime.voiceOnly,
     resolveSpeakHandler: (agentId) => wsServer?.resolveVoiceSpeakHandler(agentId) ?? null,
@@ -1524,10 +1613,14 @@ export async function createPaseoDaemon(
   {
     const agentMcpRoute = "/mcp/agents";
 
-    const createAgentMcpSession = async (callerAgentId?: string) => {
+    const createAgentMcpSession = async (
+      callerAgentId?: string,
+      nativeReportOrigin?: NativeReportOrigin,
+    ) => {
       const agentMcpServer = await createAgentMcpServer(
         createAgentToolHostDependencies({
           callerAgentId,
+          nativeReportOrigin,
           paseoToolPolicy: callerAgentId
             ? agentManager.getPaseoToolPolicy(callerAgentId)
             : undefined,
@@ -1611,7 +1704,27 @@ export async function createPaseoDaemon(
         } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
           callerAgentId = callerAgentIdRaw[0];
         }
-        const { server, transport } = await createAgentMcpSession(callerAgentId);
+        const nativeReportOrigin = agentManager.nativeReportMcpOrigin(
+          callerAgentId,
+          req.header("x-paseo-report-origin"),
+        );
+        if (nativeReportOrigin) {
+          // SDK preparation/serialization may await. Fence inside the actual synchronous HTTP write, not before SDK send.
+          const write = res.write.bind(res),
+            end = res.end.bind(res);
+          res.write = ((...args: Parameters<typeof res.write>) => {
+            checkNativeReportOriginPublication(nativeReportOrigin);
+            return write(...args);
+          }) as typeof res.write;
+          res.end = ((...args: Parameters<typeof res.end>) => {
+            checkNativeReportOriginPublication(nativeReportOrigin);
+            return end(...args);
+          }) as typeof res.end;
+        }
+        const { server, transport } = await createAgentMcpSession(
+          callerAgentId,
+          nativeReportOrigin,
+        );
         res.on("close", () => {
           void transport.close();
           void server.close();
@@ -1659,6 +1772,7 @@ export async function createPaseoDaemon(
   const start = async () => {
     let mainStarted = false;
     try {
+      localCredential = await writeLocalCredential(config.paseoHome);
       if (serviceProxyListenTarget) {
         const boundServiceProxyTarget = await serviceProxy.startStandalone({
           listenTarget: serviceProxyListenTarget,
@@ -1706,9 +1820,9 @@ export async function createPaseoDaemon(
               agentManager.setAppendSystemPrompt(typeof value === "string" ? value : "");
             });
             const relayEnabled = config.relayEnabled ?? true;
-            const relayEndpoint = config.relayEndpoint ?? "relay.paseo.sh:443";
+            const relayEndpoint = config.relayEndpoint ?? DEFAULT_RELAY_ENDPOINT;
             const relayPublicEndpoint = config.relayPublicEndpoint ?? relayEndpoint;
-            const relayUseTls = config.relayUseTls ?? relayEndpoint === "relay.paseo.sh:443";
+            const relayUseTls = config.relayUseTls ?? true;
             const relayPublicUseTls = config.relayPublicUseTls ?? relayUseTls;
             if (boundListenTarget.type === "tcp") {
               logger.info(
@@ -1752,7 +1866,7 @@ export async function createPaseoDaemon(
                 startPaused: true,
               },
               workspaceAutoName,
-              config.auth,
+              daemonAuth,
               speechService,
               terminalManager,
               {
@@ -1807,10 +1921,62 @@ export async function createPaseoDaemon(
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
+            if (distribution && config.bundledPluginsDirectory) {
+              await pluginRuntime.enableBundledPlugin(
+                "orca-organization-next",
+                path.join(config.bundledPluginsDirectory, "orca-organization-next"),
+              );
+              distribution.start({
+                intercomRateSettingsFile: path.join(
+                  config.paseoHome,
+                  "agent-requests",
+                  "report-authority.json.rates.json",
+                ),
+                boot: trustedPlugins.boot,
+                previousBoot,
+                consumeManagement: consumeManagementDispatch,
+                createChannel(child, send, emit, issue) {
+                  let service: ReturnType<typeof createControllerService> | undefined;
+                  const channel = new ControllerChannel({
+                    child,
+                    issue,
+                    send,
+                    reports: (request) => agentManager.reportInboxRequest(request),
+                    rpc: (frame) => {
+                      if (!service) throw Error("Controller service not attached");
+                      return service.then((value) => value.dispatch(frame));
+                    },
+                    revoke: () => trustedPlugins.revokeProvenance("orca-organization-next"),
+                    closeTransport: () => {
+                      void service?.then(
+                        (value) => value.close(),
+                        () => {},
+                      );
+                    },
+                  });
+                  service = createControllerService(wsServer!, {
+                    epoch: channel.epoch,
+                    emit,
+                    revoke: () => channel.close(),
+                    log: (reason) => logger.warn({ reason }, "Controller service closed"),
+                  });
+                  void service.catch(() => channel.close());
+                  return Object.assign(channel, {
+                    serviceReady() {
+                      void service?.then(
+                        (value) => value.ready(),
+                        () => channel.close(),
+                      );
+                    },
+                  });
+                },
+              });
+            }
             wsServer.beginAcceptingConnections();
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,
+                pairingOfferTtlSeconds: config.relayPairingOfferTtlSeconds,
                 endpoint: relayEndpoint,
                 publicEndpoint: relayPublicEndpoint,
                 useTls: relayUseTls,
@@ -1823,9 +1989,16 @@ export async function createPaseoDaemon(
               },
               serverId,
               daemonKeyPair: daemonKeyPair.keyPair,
+              paseoHome: config.paseoHome,
             });
             daemonConfigStore.onFieldChange("relay.enabled", (value) => {
               relayRuntime?.setEnabled(value === true);
+            });
+            daemonConfigStore.onFieldChange("relay.endpoint", (value) => {
+              const next = value as { endpoint: string | null; useTls: boolean };
+              void relayRuntime
+                ?.setEndpoint(next.endpoint, next.useTls)
+                .catch((error) => logger.error({ err: error }, "Relay endpoint change failed"));
             });
             await hubRelationships.start();
           };
@@ -1850,10 +2023,14 @@ export async function createPaseoDaemon(
       speechService.start();
       scriptHealthMonitor.start();
     } catch (error) {
+      localCredential = null;
+      await deleteLocalCredential(config.paseoHome);
       unsubscribePluginProviders();
+      await distribution?.stop().catch(() => undefined);
       await pluginRuntime.stopAllPlugins().catch(() => undefined);
       await serviceProxy.stopStandalone().catch(() => undefined);
       await agentProviderRuntime.shutdown().catch(() => undefined);
+      trustedPlugins.close();
       if (mainStarted) {
         httpServer.closeAllConnections();
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));
@@ -1863,8 +2040,11 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
-    await pluginRuntime.stopAllPlugins();
+    await distribution?.stop();
     hostIntegrations.dispose();
+    localCredential = null;
+    await deleteLocalCredential(config.paseoHome);
+    // Keep registrations stable until the provider sessions close; stop plugins below.
     unsubscribePluginProviders();
     await hubRelationships.stop();
     workspaceReconciliation.dispose();
@@ -1872,13 +2052,27 @@ export async function createPaseoDaemon(
     // Freeze both ingress and registration before taking the agent closure snapshot.
     wsServer?.prepareForShutdown();
     agentManager.prepareForShutdown();
-    await closeAllAgents(logger, agentManager);
+    await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager));
     await agentManager.flushForShutdown().catch(() => undefined);
     detachAgentStoragePersistence();
     await agentStorage.flush().catch(() => undefined);
     await agentProviderRuntime.shutdown();
+    // W1 row 9: seal this boot at the end of the orderly shutdown, synchronously before the host closes, so no
+    // input can be admitted after the counters are captured. A boot that never gets here has no seal.
+    try {
+      distribution?.sealBoot?.({
+        boot: trustedPlugins.boot,
+        humanAt: trustedPlugins.humanInputSnapshot(),
+      });
+    } catch (err) {
+      logger.warn({ err }, "Failed to seal the daemon boot record");
+    }
+    trustedPlugins.close();
+    await pluginRuntime.stopAllPlugins();
     terminalManager.killAll();
     await speechService.stop();
+    automationService?.stop();
+    setHostAutomations(null);
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);
     if (wsServer) {
@@ -1913,15 +2107,28 @@ export async function createPaseoDaemon(
     start,
     stop,
     getListenTarget: () => boundListenTarget,
+    getServerId: () => serverId,
   };
 }
+
+/**
+ * Closing an agent asks its provider to close the session and waits for the
+ * answer. A provider that never answers must not hold the daemon open, so a
+ * close that outlives this deadline is abandoned; `agentProviderRuntime`
+ * shutdown runs next and rejects the request that was still pending.
+ */
+const AGENT_CLOSE_TIMEOUT_MS = 5_000;
 
 async function closeAllAgents(logger: Logger, agentManager: AgentManager): Promise<void> {
   const agents = agentManager.listAgents();
   await Promise.all(
     agents.map(async (agent) => {
       try {
-        await agentManager.closeAgent(agent.id);
+        await withTimeout({
+          promise: agentManager.closeAgent(agent.id),
+          timeoutMs: AGENT_CLOSE_TIMEOUT_MS,
+          label: `close agent ${agent.id}`,
+        });
       } catch (err) {
         logger.error({ err, agentId: agent.id }, "Failed to close agent");
       }

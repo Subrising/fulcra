@@ -1,0 +1,3 @@
+[
+  {"guard":"<SHA256>","entry":"/path/to/activation.mjs","files":{"/path/to/activation.mjs":"<SHA256>"}}
+]

@@ -7,7 +7,9 @@ export interface SidebarWorkspaceGroup {
   key: string;
   label: string;
   rows: SidebarWorkspaceEntry[];
-  leading: { kind: "status"; bucket: StatusBucket };
+  leading: { kind: "status"; bucket: StatusBucket } | { kind: "offline" };
+  /** Rows per host, by name, when the group spans more than one host (J15/MH4). */
+  hostCounts?: ReadonlyArray<{ serverId: string; name: string; count: number }>;
 }
 
 export function statusWorkspaceGroups(groups: readonly StatusGroup[]): SidebarWorkspaceGroup[] {

@@ -1,4 +1,7 @@
 export const CLIENT_CAPS = {
+  // Closed permission enums shipped before this capability. Gate new permission output.
+  commandCentrePermission: "command_centre_permission",
+  helloRejection: "hello_rejection",
   // COMPAT(ownedSubscriptions): added in v0.8.0, remove legacy ownership after 2027-03-09.
   ownedSubscriptions: "owned_subscriptions",
   // Clients outside the Paseo app version series can explicitly accept provider IDs.

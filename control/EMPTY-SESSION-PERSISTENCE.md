@@ -1,0 +1,13 @@
+# AIN80 — persist new empty Codex sessions
+
+New Paseo Codex sessions can receive a native ID before Codex stores a resumable rollout. A host restart then loses the native conversation behind that ID even though Paseo retains its saved record. Actual isolated codex-cli 0.154.0 probes demonstrate this; naming a default-format thread alone does not fix it.
+
+Use the installed experimental protocol's explicit legacy history format and set the new thread's metadata name to its native ID. A full-history read must then confirm that same ID and empty turns before creation succeeds. Actual legacy-format naming persisted an empty thread and resumed the identical ID without starting a model turn. The native ID as initial name is deliberately plain metadata; Paseo retains its own display title.
+
+The patch applies to newly created non-ephemeral sessions only. Resumed sessions retain their history format/name, and ephemeral sessions stay ephemeral. Failed naming or confirmation retains the returned ID; subsequent calls retry persistence against that identity, not thread/start. A shared in-flight promise prevents duplicate metadata work during same-ID retries. Existing provider serialization still owns initial connection. There is no artificial user prompt, model invocation, credential copy or global Codex change.
+
+Source is a small deterministic patch against provider SHA256909d17200e4fed6395b04fc21ec3e0f381d5ebe3b487113310a3c8414e6b6631 from installed @getpaseo/server0.8.0. Unknown upstream bytes refuse patch application. Keep the pristine provider, generated diff and resulting hash with the release. On upstream update, port the small patch to a reviewed new base and rerun native create/restart/resume tests. This is a reproducible patch series, not yet a full upstream-synchronized source fork.
+
+The already-lost AIN74 canary is not repaired by this prospective fix. Its original saved identity remains preserved and explicitly unavailable. Independent Claude tests/reviews remain deferred under the user's sequencing; no pre-code independent challenge is claimed.
+
+Deployment must stop only the owned Mini controller and Paseo through their launchd/native lifecycle; preserve current session/config/journal files, existing admission modules and the repaired dependency record. Pin the changed provider in a new service profile. Save a transaction with the exact before/after provider and dependency-manifest bytes; reconcile interrupted changes only with services stopped. Rollback restores those exact deployment bytes against current session state, never a prior journal. No main OpenClaw restart, remote-owner change, or Radius operation is part of this change.

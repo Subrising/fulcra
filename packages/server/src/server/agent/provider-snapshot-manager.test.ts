@@ -364,7 +364,7 @@ describe("ProviderSnapshotManager public surface", () => {
       expect(claude?.status).toBe("loading");
       expect(claude?.label).toBe("Claude");
       expect(claude?.defaultModeId).toBe("auto");
-      expect(codex?.defaultModeId).toBe("auto-review");
+      expect(codex?.defaultModeId).toBe("full-access");
     } finally {
       manager.destroy();
     }
@@ -1721,16 +1721,20 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
     try {
       const before = manager.getAgentManagerProviderState().clients;
       for (const provider of ["codex", "claude", "codex-2"]) {
-        expect(
-          await before[provider]!.getCatalogCacheKey?.({ scope: "global", force: false }),
-        ).toBe("host");
+        // Host-scoped and independent of the project. Claude's key also carries the installed Claude Code
+        // version ("host:<version>") when one is found on this machine.
+        const globalKey = await before[provider]!.getCatalogCacheKey?.({
+          scope: "global",
+          force: false,
+        });
+        expect(globalKey).toMatch(provider === "claude" ? /^host(:.+)?$/ : /^host$/);
         expect(
           await before[provider]!.getCatalogCacheKey?.({
             scope: "workspace",
             cwd: resolveSnapshotCwd("/project"),
             force: true,
           }),
-        ).toBe("host");
+        ).toBe(globalKey);
       }
       const unchanged = manager.applyMutableProviderConfig(config, { replace: true }).clients;
       expect(unchanged.codex).toBe(before.codex);

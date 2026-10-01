@@ -79,7 +79,8 @@ export function HostPickerOption({
   testID,
 }: HostPickerOptionProps): ReactElement {
   const { theme } = useUnistyles();
-  const activeConnection = useHostRuntimeSnapshot(serverId)?.activeConnection ?? null;
+  const snapshot = useHostRuntimeSnapshot(serverId);
+  const activeConnection = snapshot?.activeConnection ?? null;
   // A live connection is the most accurate address. When there is none and the label is
   // shared with another host, fall back to the saved endpoint so the rows stay tellable
   // apart while offline.
@@ -117,8 +118,8 @@ export function HostPickerOption({
 
   return (
     <ComboboxItem
-      label={label}
-      description={connectionLabel}
+      label={snapshot?.pairingRequired && label === serverId ? "Unnamed host" : label}
+      description={snapshot?.pairingRequired ? "Pair again to reconnect" : connectionLabel}
       leadingSlot={leadingSlot}
       trailingSlot={trailingSlot}
       selected={selected}

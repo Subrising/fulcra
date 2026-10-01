@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
+import { SESSION_ROLES, type SessionRole } from "@getpaseo/protocol/session-roles";
 
 const featureValuesSchema = z.record(z.string(), z.union([z.boolean(), z.string(), z.null()]));
 
@@ -69,6 +70,13 @@ export interface FormPreferences {
   favoriteModels?: Array<{ provider: string; modelId: string }>;
   isolation?: "local" | "worktree";
   launchTarget?: LaunchTarget;
+  /**
+   * What the next new session is for (Planning / Orchestration / Implementation). Absent is
+   * "no role": the form and the created session are exactly as before roles existed.
+   */
+  role?: SessionRole;
+  /** R1 W3-1: set once the user picks a role (or No role); until then a new draft is Implementation. */
+  roleChosen?: true;
 }
 
 const providerPreferencesSchema: z.ZodType<ProviderPreferences> = z.strictObject({
@@ -104,6 +112,10 @@ export const FormPreferencesSchema = z.strictObject({
   // What the New workspace composer submits to: the chat agent (default) or a
   // terminal profile. See `@/new-workspace-launch` for resolution/fallback.
   launchTarget: launchTargetSchema.optional(),
+  // A role this build does not know (written by a newer one) reads as no role rather than
+  // discarding every other preference with it.
+  role: z.enum(SESSION_ROLES).optional().catch(undefined),
+  roleChosen: z.literal(true).optional().catch(undefined),
 }) satisfies z.ZodType<FormPreferences>;
 
 const LegacyProviderPreferencesSchema = z.strictObject({

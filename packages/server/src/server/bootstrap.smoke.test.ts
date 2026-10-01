@@ -12,8 +12,11 @@ import { loadConfig } from "./config.js";
 import { AgentManagerShuttingDownError } from "./agent/agent-manager.js";
 import { FileAgentTimelineStore } from "./agent/file-agent-timeline-store.js";
 import { hashDaemonPassword } from "./auth.js";
+import { ConnectionOfferV3Schema } from "@getpaseo/protocol/connection-offer";
 import { generateLocalPairingOffer } from "./pairing-offer.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
+import { createPersistedProjectRecord } from "./workspace-registry.js";
+import { execFileSync } from "node:child_process";
 import { createTestAgentClients } from "./test-utils/fake-agent-client.js";
 import { DaemonClient } from "./test-utils/daemon-client.js";
 import { isPlatform } from "../test-utils/platform.js";
@@ -80,6 +83,50 @@ describe("paseo daemon bootstrap", () => {
       await daemonHandle.close();
     }
   });
+
+  // L48: a plain home (no Command Centre, no schedules) whose project root blocks on open, the way a folder under
+  // macOS privacy protection (e.g. ~/Documents) does while its access prompt is pending for a new build.
+  test.skipIf(isPlatform("win32"))(
+    "starts on a plain home whose project root blocks on open",
+    async () => {
+      const paseoHomeRoot = await mkdtemp(path.join(os.tmpdir(), "paseo-plain-home-"));
+      const roots = await mkdtemp(path.join(os.tmpdir(), "paseo-plain-roots-"));
+      const blockedRoot = path.join(roots, "blocked-root");
+      const plainRoot = path.join(roots, "plain-root");
+      execFileSync("mkfifo", [blockedRoot]);
+      await mkdir(plainRoot);
+      await mkdir(path.join(paseoHomeRoot, ".paseo", "projects"), { recursive: true });
+      const createdAt = "2026-09-30T00:00:00.000Z";
+      await writeFile(
+        path.join(paseoHomeRoot, ".paseo", "projects", "projects.json"),
+        JSON.stringify(
+          [blockedRoot, plainRoot].map((rootPath, index) =>
+            createPersistedProjectRecord({
+              projectId: `prj_plain_home_${index}`,
+              rootPath,
+              kind: "non_git",
+              displayName: path.basename(rootPath),
+              createdAt,
+              updatedAt: createdAt,
+            }),
+          ),
+        ),
+      );
+      const daemonHandle = await createTestPaseoDaemon({ paseoHomeRoot });
+      try {
+        const response = await fetch(`http://127.0.0.1:${daemonHandle.port}/api/health`, {
+          headers: daemonHandle.agentMcpAuthHeader
+            ? { Authorization: daemonHandle.agentMcpAuthHeader }
+            : undefined,
+        });
+        expect(response.ok).toBe(true);
+      } finally {
+        await daemonHandle.close();
+        await rm(roots, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
 
   test("retains native journals while removing only obsolete timeline files at startup", async () => {
     const paseoHomeRoot = await mkdtemp(path.join(os.tmpdir(), "paseo-timeline-cleanup-"));
@@ -330,9 +377,12 @@ describe("paseo daemon bootstrap", () => {
         }),
       ).rejects.toThrow(/disabled/i);
       expect((await client.getDaemonStatus()).relay?.enabled).toBe(true);
-      expect((await client.getDaemonPairingOffer()).url).toContain(
-        "https://after.example.test/#offer=",
+      const offerUrl = (await client.getDaemonPairingOffer()).url;
+      expect(offerUrl).toMatch(/^fulcra:\/\/pair#offer=/);
+      const offer = ConnectionOfferV3Schema.parse(
+        JSON.parse(Buffer.from(offerUrl!.split("#offer=")[1]!, "base64url").toString()),
       );
+      expect(offer.relay).toEqual({ endpoint: "127.0.0.1:9", useTls: false });
     } finally {
       configureGitProcessPolicy(DEFAULT_GIT_PROCESS_POLICY);
       await client?.close().catch(() => undefined);
@@ -958,7 +1008,12 @@ export default function contribute(plugin: unknown) {
           includeQr: false,
         });
         expect(pairing.relayEnabled).toBe(true);
-        expect(pairing.url?.startsWith("https://app.paseo.sh/#offer=")).toBe(true);
+        expect(pairing.url?.startsWith("fulcra://pair#offer=")).toBe(true);
+        const offer = ConnectionOfferV3Schema.parse(
+          JSON.parse(Buffer.from(pairing.url!.split("#offer=")[1]!, "base64url").toString()),
+        );
+        expect(offer.v).toBe(3);
+        expect(offer.pairing.id).toBeTruthy();
       } finally {
         await daemon.stop().catch(() => undefined);
         await daemon.agentManager.flush().catch(() => undefined);

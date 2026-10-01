@@ -1,6 +1,6 @@
 {
   "name": "@getpaseo/app",
-  "version": "0.9.1",
+  "version": "0.10.2",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -107,6 +107,7 @@
     "markdown-it": "15.0.2",
     "mermaid": "^11.16.1",
     "mnemonic-id": "^3.2.7",
+    "nanoid": "3.3.18",
     "qrcode": "^1.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",

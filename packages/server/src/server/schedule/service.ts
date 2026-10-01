@@ -201,6 +201,7 @@ function buildRunOutput(params: {
 
 type ScheduleAgentManager = Pick<
   AgentRunController,
+  | "withInput"
   | "getAgent"
   | "reloadAgentSession"
   | "tryRunOutOfBand"
@@ -211,6 +212,7 @@ type ScheduleAgentManager = Pick<
 > &
   Pick<
     AgentManager,
+    | "trustedPlugins"
     | "createAgent"
     | "getRegisteredProviderIds"
     | "hydrateTimelineFromProvider"
@@ -264,8 +266,8 @@ export class ScheduleService {
   private tickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: ScheduleServiceOptions) {
-    this.store = new ScheduleStore(join(options.paseoHome, "schedules"));
     this.logger = options.logger.child({ module: "schedule-service" });
+    this.store = new ScheduleStore(join(options.paseoHome, "schedules"), this.logger);
     this.agentManager = options.agentManager;
     this.agentStorage = options.agentStorage;
     this.createAgent = options.createAgent;
@@ -322,17 +324,18 @@ export class ScheduleService {
     const now = this.now();
     const runOnCreate = input.runOnCreate ?? input.cadence.type === "every";
     const nextRunAt = runOnCreate ? now : computeNextRunAt(input.cadence, now);
+    const paused = input.paused === true;
     return {
       name: fields.name,
       prompt: fields.prompt,
       cadence: input.cadence,
       target: fields.target,
-      status: "active",
+      status: paused ? "paused" : "active",
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
-      nextRunAt: nextRunAt.toISOString(),
+      nextRunAt: paused ? null : nextRunAt.toISOString(),
       lastRunAt: null,
-      pausedAt: null,
+      pausedAt: paused ? now.toISOString() : null,
       expiresAt: input.expiresAt ?? null,
       maxRuns: normalizeMaxRuns(input.maxRuns),
       runs: [],
@@ -692,47 +695,53 @@ export class ScheduleService {
     now: Date,
     options?: { manual?: boolean },
   ): Promise<void> {
-    const manual = options?.manual === true;
-    this.runningScheduleIds.add(schedule.id);
-    const runId = randomUUID();
-    const runningRun: ScheduleRun = {
-      id: runId,
-      scheduledFor: manual ? now.toISOString() : (schedule.nextRunAt ?? now.toISOString()),
-      startedAt: now.toISOString(),
-      endedAt: null,
-      status: "running",
-      agentId: null,
-      output: null,
-      error: null,
-    };
-    const scheduleWithRun = await this.appendRunningRun(schedule.id, runningRun);
-
-    try {
-      const result = await this.runner(scheduleWithRun, runId);
-      await this.finishRun({
-        scheduleId: schedule.id,
-        runId,
-        status: "succeeded",
-        agentId: result.agentId,
-        output: result.output,
-        error: null,
-        targetGone: false,
-        manual,
-      });
-    } catch (error) {
-      await this.finishRun({
-        scheduleId: schedule.id,
-        runId,
-        status: "failed",
+    const run = async () => {
+      const manual = options?.manual === true;
+      this.runningScheduleIds.add(schedule.id);
+      const runId = randomUUID();
+      const runningRun: ScheduleRun = {
+        id: runId,
+        scheduledFor: manual ? now.toISOString() : (schedule.nextRunAt ?? now.toISOString()),
+        startedAt: now.toISOString(),
+        endedAt: null,
+        status: "running",
         agentId: null,
         output: null,
-        error: error instanceof Error ? error.message : String(error),
-        targetGone: error instanceof ScheduleTargetGoneError,
-        manual,
-      });
-    } finally {
-      this.runningScheduleIds.delete(schedule.id);
-    }
+        error: null,
+      };
+      const scheduleWithRun = await this.appendRunningRun(schedule.id, runningRun);
+
+      try {
+        const result = await this.runner(scheduleWithRun, runId);
+        await this.finishRun({
+          scheduleId: schedule.id,
+          runId,
+          status: "succeeded",
+          agentId: result.agentId,
+          output: result.output,
+          error: null,
+          targetGone: false,
+          manual,
+        });
+      } catch (error) {
+        await this.finishRun({
+          scheduleId: schedule.id,
+          runId,
+          status: "failed",
+          agentId: null,
+          output: null,
+          error: error instanceof Error ? error.message : String(error),
+          targetGone: error instanceof ScheduleTargetGoneError,
+          manual,
+        });
+      } finally {
+        this.runningScheduleIds.delete(schedule.id);
+      }
+    };
+    // Existing-agent prompts are human-authored, including unattended cron runs.
+    return schedule.target.type === "agent"
+      ? this.agentManager.trustedPlugins.rpc(undefined, run)
+      : this.agentManager.trustedPlugins.daemon(run);
   }
 
   private async appendRunningRun(
@@ -908,7 +917,7 @@ export class ScheduleService {
         mode: config.modeId,
         thinking: config.thinkingOptionId,
         features: config.featureValues,
-        unattended: true,
+        unattended: isUnattendedScheduleRun(config),
         promptFailure: "return-error",
         background: true,
         notifyOnFinish: false,
@@ -996,6 +1005,13 @@ export class ScheduleService {
       throw error;
     }
   }
+}
+
+/** Schedules run unattended unless their target says otherwise (automations do: they ask before acting). */
+function isUnattendedScheduleRun(
+  config: Extract<ScheduleTarget, { type: "new-agent" }>["config"],
+): boolean {
+  return config.unattended ?? true;
 }
 
 function buildScheduleAgentConfig(

@@ -13,7 +13,21 @@ import { extname, resolve } from "node:path";
 /** Result type for agent send command */
 export interface AgentSendResult {
   agentId: string;
-  status: "sent" | "completed" | "timeout" | "permission" | "error";
+  status:
+    | "sent"
+    | "completed"
+    | "timeout"
+    | "permission"
+    | "error"
+    | "queued"
+    | "dispatching"
+    | "delivered"
+    | "refused"
+    | "cancelled"
+    | "uncertain";
+  messageId?: string;
+  pendingCount?: number;
+  providerTurnId?: string;
   message: string;
 }
 
@@ -29,6 +43,8 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 
 export interface AgentSendOptions extends CommandOptions {
   wait?: boolean;
+  nativeQueue?: boolean;
+  messageId?: string;
   image?: string[];
   prompt?: string;
   promptFile?: string;
@@ -42,6 +58,14 @@ export function addSendOptions(cmd: Command): Command {
     .option("--prompt <text>", "Provide the message inline as a flag")
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
+    .option(
+      "--native-queue",
+      "Request native queue; requires an authenticated delegated operation, grants no authority",
+    )
+    .option(
+      "--message-id <id>",
+      "Stable message ID required by --native-queue; retain it on uncertainty",
+    )
     .option("--no-wait", "Return immediately without waiting for completion");
 }
 
@@ -162,6 +186,54 @@ function buildSendResult(agentIdArg: string, state: SendWaitState): AgentSendRes
   return { agentId, status: "completed", message: "Agent completed processing the message" };
 }
 
+function validateNativeQueueOptions(
+  options: AgentSendOptions,
+  nativeQueue: boolean,
+): string | undefined {
+  const messageId = options.messageId;
+  if (nativeQueue && (!messageId || messageId.length > 256 || messageId.trim() !== messageId)) {
+    throw {
+      code: "NATIVE_QUEUE_INVALID",
+      message: "--native-queue requires a stable nonblank --message-id",
+    } satisfies CommandError;
+  }
+  if (!nativeQueue && messageId !== undefined) {
+    throw {
+      code: "NATIVE_QUEUE_INVALID",
+      message: "--message-id requires --native-queue",
+    } satisfies CommandError;
+  }
+  if (nativeQueue && options.image?.length) {
+    throw {
+      code: "NATIVE_QUEUE_INVALID",
+      message: "Native queue does not accept images",
+    } satisfies CommandError;
+  }
+  return messageId;
+}
+
+function buildNativeSendResult(
+  agentId: string,
+  receipt: Awaited<
+    ReturnType<Awaited<ReturnType<typeof connectToDaemon>>["sendNativeQueuedMessage"]>
+  >,
+): AgentSendResult {
+  let message = `Native delivery receipt: ${receipt.state}; not task completion`;
+  if (receipt.state === "queued")
+    message = "Message queued; not yet delivered or provider accepted";
+  if (receipt.state === "uncertain")
+    message =
+      "Delivery uncertain; retain the draft and this message ID, do not automatically resend";
+  return {
+    agentId,
+    status: receipt.state,
+    messageId: receipt.messageId,
+    pendingCount: receipt.pendingCount,
+    ...(receipt.providerTurnId ? { providerTurnId: receipt.providerTurnId } : {}),
+    message,
+  };
+}
+
 export async function runSendCommand(
   agentIdArg: string,
   prompt: string | undefined,
@@ -178,15 +250,35 @@ export async function runSendCommand(
     throw error;
   }
 
+  const nativeQueue = options.nativeQueue === true;
+  const messageId = validateNativeQueueOptions(options, nativeQueue);
   const promptInput = await resolvePromptInput({
     promptArgument: prompt,
     promptOption: options.prompt,
     promptFile: options.promptFile,
   });
 
+  if (nativeQueue && promptInput.trimStart().startsWith("/")) {
+    throw {
+      code: "NATIVE_QUEUE_INVALID",
+      message: "Native queue does not accept slash commands",
+    } satisfies CommandError;
+  }
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
+    if (nativeQueue) {
+      const receipt = await client.sendNativeQueuedMessage(agentIdArg, promptInput, {
+        messageId: messageId!,
+      });
+      // Cleanup failure cannot replace an authoritative native delivery receipt.
+      await client.close().catch(() => {});
+      return {
+        type: "single",
+        data: buildNativeSendResult(agentIdArg, receipt),
+        schema: agentSendSchema,
+      };
+    }
     // Read image files if provided
     const images =
       options.image && options.image.length > 0 ? await readImageFiles(options.image) : undefined;

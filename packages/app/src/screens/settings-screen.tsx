@@ -1,3 +1,4 @@
+import { CommandCentreSection } from "@/desktop/components/desktop-updates-section";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
@@ -8,7 +9,6 @@ import {
   View,
   type PressableStateCallbackType,
 } from "react-native";
-import { EditingTextInput as TextInput } from "@/components/ui/text-input";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,7 +28,6 @@ import {
   Keyboard,
   Stethoscope,
   Info,
-  Scale,
   Bell,
   Shield,
   Puzzle,
@@ -36,10 +35,12 @@ import {
   FolderGit2,
   SquareTerminal,
   Code2,
+  Globe,
+  PanelLeft,
+  MessageSquare,
   Smartphone,
   Sparkles,
   Blocks,
-  PanelsTopLeft,
   ChevronRight,
 } from "lucide-react-native";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
@@ -52,14 +53,15 @@ import { ScreenTitle } from "@/components/headers/screen-title";
 import { HeaderIconBadge } from "@/components/headers/header-icon-badge";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { AppearanceSection } from "@/screens/settings/appearance/appearance-section";
-import { LayoutSection } from "@/screens/settings/layout/layout-section";
+import { OpenLocationSection } from "@/screens/settings/open-location/open-location-section";
+import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
+import { ChatSection } from "@/screens/settings/chat/chat-section";
+import { SidebarNavSection } from "@/screens/settings/sidebar/sidebar-nav-section";
+import { SendingSection } from "@/screens/settings/general/sending-section";
 import {
   useAppSettings,
   useSettings,
-  parseTerminalScrollbackLines,
   type AppSettings,
-  type SendBehavior,
-  type ServiceUrlBehavior,
   type Settings as EffectiveSettings,
 } from "@/hooks/use-settings";
 import { useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
@@ -144,43 +146,78 @@ import { isNative, isWeb } from "@/constants/platform";
 interface SidebarSectionItem {
   id: SettingsSectionSlug;
   labelKey: string;
-  icon: ComponentType<{ size: number; color: string }>;
+  icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
   desktopOnly?: boolean;
   webOnly?: boolean;
+  /** The page body, for pages that need nothing from the settings screen. */
+  Content?: ComponentType;
 }
 
 const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   { id: "general", labelKey: "settings.sections.general", icon: Settings },
-  { id: "appearance", labelKey: "settings.sections.appearance", icon: Palette },
   {
-    id: "layout",
-    labelKey: "settings.sections.layout",
-    icon: PanelsTopLeft,
-    desktopOnly: true,
+    id: "appearance",
+    labelKey: "settings.sections.appearance",
+    icon: Palette,
+    Content: AppearanceSection,
   },
-  { id: "editor", labelKey: "settings.sections.editor", icon: Code2, webOnly: true },
-  { id: "shortcuts", labelKey: "settings.sections.shortcuts", icon: Keyboard, desktopOnly: true },
+  {
+    id: "sidebar",
+    labelKey: "settings.sections.sidebar",
+    icon: PanelLeft,
+    Content: SidebarNavSection,
+  },
+  { id: "chat", labelKey: "settings.sections.chat", icon: MessageSquare, Content: ChatSection },
+  {
+    id: "terminal",
+    labelKey: "settings.sections.terminal",
+    icon: SquareTerminal,
+    Content: TerminalSection,
+  },
+  {
+    id: "browser",
+    labelKey: "settings.sections.browser",
+    icon: Globe,
+    desktopOnly: true,
+    Content: BrowserDataSection,
+  },
+  {
+    id: "editor",
+    labelKey: "settings.sections.editor",
+    icon: Code2,
+    webOnly: true,
+    Content: EditorSection,
+  },
+  {
+    id: "shortcuts",
+    labelKey: "settings.sections.shortcuts",
+    icon: Keyboard,
+    desktopOnly: true,
+    Content: KeyboardShortcutsSection,
+  },
   {
     id: "integrations",
     labelKey: "settings.sections.integrations",
     icon: Puzzle,
     desktopOnly: true,
+    Content: IntegrationsSection,
   },
   {
     id: "notifications",
     labelKey: "settings.sections.notifications",
     icon: Bell,
     desktopOnly: true,
+    Content: DesktopNotificationsSection,
   },
   {
     id: "permissions",
     labelKey: "settings.sections.permissions",
     icon: Shield,
     desktopOnly: true,
+    Content: DesktopPermissionsSection,
   },
   { id: "diagnostics", labelKey: "settings.sections.diagnostics", icon: Stethoscope },
   { id: "about", labelKey: "settings.sections.about", icon: Info },
-  { id: "licenses", labelKey: "settings.sections.licenses", icon: Scale },
 ];
 
 interface HostSectionItem {
@@ -206,7 +243,9 @@ const HOST_SECTION_ITEMS: HostSectionItem[] = [
 // Sections that render without screen state. Kept out of the switch below, which is at the
 // complexity limit.
 const PROP_FREE_SECTIONS: Partial<Record<SettingsSectionSlug, ComponentType>> = {
-  appearance: AppearanceSection,
+  ...Object.fromEntries(
+    SIDEBAR_SECTION_ITEMS.filter((item) => item.Content).map((item) => [item.id, item.Content]),
+  ),
   licenses: LicensesSection,
 };
 
@@ -244,10 +283,6 @@ function renderHostSettingsContent(
 // Trigger + sidebar style helpers
 // ---------------------------------------------------------------------------
 
-function themeTriggerStyle({ pressed }: PressableStateCallbackType) {
-  return [styles.themeTrigger, pressed && { opacity: 0.85 }];
-}
-
 function sidebarItemStyle({ hovered }: PressableStateCallbackType & { hovered?: boolean }) {
   return [sidebarStyles.item, Boolean(hovered) && sidebarStyles.itemHovered];
 }
@@ -260,29 +295,10 @@ function selectedSidebarItemStyle({ hovered }: PressableStateCallbackType & { ho
   ];
 }
 
-function getSendBehaviorOptions(t: TFunction) {
-  return [
-    { value: "interrupt" as const, label: t("settings.general.defaultSend.options.interrupt") },
-    { value: "steer" as const, label: t("settings.general.defaultSend.options.steer") },
-    { value: "queue" as const, label: t("settings.general.defaultSend.options.queue") },
-  ];
-}
-
-function getServiceUrlBehaviorLabel(t: TFunction, value: ServiceUrlBehavior): string {
-  const labels: Record<ServiceUrlBehavior, string> = {
-    ask: t("settings.general.serviceUrls.options.ask"),
-    "in-app": t("settings.general.serviceUrls.options.inApp"),
-    external: t("settings.general.serviceUrls.options.external"),
-  };
-  return labels[value];
-}
-
 function getActiveLocale(language: string | undefined): SupportedLocale {
   const parsed = parseAppLanguage(language);
   return parsed && parsed !== "system" ? parsed : "en";
 }
-
-const SERVICE_URL_BEHAVIOR_VALUES: ServiceUrlBehavior[] = ["ask", "in-app", "external"];
 
 // ---------------------------------------------------------------------------
 // Section components
@@ -290,52 +306,7 @@ const SERVICE_URL_BEHAVIOR_VALUES: ServiceUrlBehavior[] = ["ask", "in-app", "ext
 
 interface GeneralSectionProps {
   settings: AppSettings;
-  isDesktopApp: boolean;
-  handleSendBehaviorChange: (behavior: SendBehavior) => void;
-  handleServiceUrlBehaviorChange: (behavior: ServiceUrlBehavior) => void;
   handleLanguageChange: (language: AppLanguage) => void;
-  handleTerminalScrollbackLinesChange: (lines: number) => void;
-}
-
-interface ServiceUrlBehaviorMenuItemProps {
-  value: ServiceUrlBehavior;
-  label: string;
-  selected: boolean;
-  onChange: (value: ServiceUrlBehavior) => void;
-}
-
-interface SendBehaviorMenuItemProps {
-  value: SendBehavior;
-  label: string;
-  selected: boolean;
-  onChange: (value: SendBehavior) => void;
-}
-
-function SendBehaviorMenuItem({ value, label, selected, onChange }: SendBehaviorMenuItemProps) {
-  const handleSelect = useCallback(() => {
-    onChange(value);
-  }, [onChange, value]);
-  return (
-    <DropdownMenuItem selected={selected} onSelect={handleSelect}>
-      {label}
-    </DropdownMenuItem>
-  );
-}
-
-function ServiceUrlBehaviorMenuItem({
-  value,
-  label,
-  selected,
-  onChange,
-}: ServiceUrlBehaviorMenuItemProps) {
-  const handleSelect = useCallback(() => {
-    onChange(value);
-  }, [onChange, value]);
-  return (
-    <DropdownMenuItem selected={selected} onSelect={handleSelect}>
-      {label}
-    </DropdownMenuItem>
-  );
 }
 
 interface LanguageMenuItemProps {
@@ -362,21 +333,9 @@ function LanguageMenuItem({ value, activeLocale, selected, onChange }: LanguageM
   );
 }
 
-function GeneralSection({
-  settings,
-  isDesktopApp,
-  handleSendBehaviorChange,
-  handleServiceUrlBehaviorChange,
-  handleLanguageChange,
-  handleTerminalScrollbackLinesChange,
-}: GeneralSectionProps) {
+function GeneralSection({ settings, handleLanguageChange }: GeneralSectionProps) {
   const { t, i18n } = useTranslation();
   const activeLocale = getActiveLocale(i18n.language);
-  const sendBehaviorOptions = useMemo(() => getSendBehaviorOptions(t), [t]);
-  const selectedSendBehaviorLabel =
-    sendBehaviorOptions.find((option) => option.value === settings.sendBehavior)?.label ??
-    settings.sendBehavior;
-  const sendBehaviorDescriptionKey = `settings.general.defaultSend.descriptions.${settings.sendBehavior}`;
   const selectedLanguageOption = LANGUAGE_OPTIONS.find(
     (option) => option.value === settings.language,
   );
@@ -387,72 +346,17 @@ function GeneralSection({
         t(selectedLanguageOption.labelKey),
       )
     : settings.language;
-  const [terminalScrollbackValue, setTerminalScrollbackValue] = useState(
-    String(settings.terminalScrollbackLines),
-  );
-
-  const handleTerminalScrollbackChangeText = useCallback((value: string) => {
-    setTerminalScrollbackValue(value.replace(/[^\d]/g, ""));
-  }, []);
-
-  const commitTerminalScrollback = useCallback(() => {
-    const parsed = parseTerminalScrollbackLines(terminalScrollbackValue);
-    const nextValue = parsed ?? settings.terminalScrollbackLines;
-    setTerminalScrollbackValue(String(nextValue));
-    if (nextValue !== settings.terminalScrollbackLines) {
-      handleTerminalScrollbackLinesChange(nextValue);
-    }
-  }, [
-    handleTerminalScrollbackLinesChange,
-    settings.terminalScrollbackLines,
-    terminalScrollbackValue,
-  ]);
-
-  useEffect(() => {
-    setTerminalScrollbackValue(String(settings.terminalScrollbackLines));
-  }, [settings.terminalScrollbackLines]);
-
   return (
     <SettingsSection title={t("settings.general.title")}>
       <View style={settingsStyles.card}>
         <View style={settingsStyles.row}>
           <View style={settingsStyles.rowContent}>
-            <Text style={settingsStyles.rowTitle}>{t("settings.general.defaultSend.label")}</Text>
-            <Text style={settingsStyles.rowHint}>{t(sendBehaviorDescriptionKey)}</Text>
-          </View>
-          <DropdownMenu>
-            <DropdownTrigger
-              accessibilityRole="button"
-              accessibilityLabel={`${t("settings.general.defaultSend.label")}: ${selectedSendBehaviorLabel}`}
-              style={themeTriggerStyle}
-            >
-              <Text style={styles.themeTriggerText}>{selectedSendBehaviorLabel}</Text>
-            </DropdownTrigger>
-            <DropdownMenuContent side="bottom" align="end" width={200}>
-              {sendBehaviorOptions.map((option) => (
-                <SendBehaviorMenuItem
-                  key={option.value}
-                  value={option.value}
-                  label={option.label}
-                  selected={settings.sendBehavior === option.value}
-                  onChange={handleSendBehaviorChange}
-                />
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </View>
-        <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
-          <View style={settingsStyles.rowContent}>
             <Text style={settingsStyles.rowTitle}>{t("settings.general.language.label")}</Text>
             <Text style={settingsStyles.rowHint}>{t("settings.general.language.description")}</Text>
           </View>
           <DropdownMenu>
-            <DropdownTrigger
-              accessibilityRole="button"
-              accessibilityLabel={selectedLanguageLabel}
-              style={themeTriggerStyle}
-            >
-              <Text style={styles.themeTriggerText}>{selectedLanguageLabel}</Text>
+            <DropdownTrigger accessibilityRole="button" accessibilityLabel={selectedLanguageLabel}>
+              {selectedLanguageLabel}
             </DropdownTrigger>
             <DropdownMenuContent side="bottom" align="end" width={300}>
               {LANGUAGE_OPTIONS.map((option) => (
@@ -466,55 +370,6 @@ function GeneralSection({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        </View>
-        {isDesktopApp ? (
-          <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
-            <View style={settingsStyles.rowContent}>
-              <Text style={settingsStyles.rowTitle}>{t("settings.general.serviceUrls.label")}</Text>
-              <Text style={settingsStyles.rowHint}>
-                {t("settings.general.serviceUrls.description")}
-              </Text>
-            </View>
-            <DropdownMenu>
-              <DropdownTrigger style={themeTriggerStyle}>
-                <Text style={styles.themeTriggerText}>
-                  {getServiceUrlBehaviorLabel(t, settings.serviceUrlBehavior)}
-                </Text>
-              </DropdownTrigger>
-              <DropdownMenuContent side="bottom" align="end" width={200}>
-                {SERVICE_URL_BEHAVIOR_VALUES.map((value) => (
-                  <ServiceUrlBehaviorMenuItem
-                    key={value}
-                    value={value}
-                    label={getServiceUrlBehaviorLabel(t, value)}
-                    selected={settings.serviceUrlBehavior === value}
-                    onChange={handleServiceUrlBehaviorChange}
-                  />
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </View>
-        ) : null}
-        <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
-          <View style={settingsStyles.rowContent}>
-            <Text style={settingsStyles.rowTitle}>
-              {t("settings.general.terminalScrollback.label")}
-            </Text>
-            <Text style={settingsStyles.rowHint}>
-              {t("settings.general.terminalScrollback.description")}
-            </Text>
-          </View>
-          <TextInput
-            initialValue={terminalScrollbackValue}
-            onChangeText={handleTerminalScrollbackChangeText}
-            onBlur={commitTerminalScrollback}
-            onSubmitEditing={commitTerminalScrollback}
-            keyboardType="number-pad"
-            inputMode="numeric"
-            selectTextOnFocus
-            style={styles.terminalScrollbackInput}
-            accessibilityLabel={t("settings.general.terminalScrollback.accessibilityLabel")}
-          />
         </View>
       </View>
     </SettingsSection>
@@ -1274,30 +1129,9 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     });
   }, [view, selectedSettingsHostServerId, localServerId, hosts, sortedHosts]);
 
-  const handleSendBehaviorChange = useCallback(
-    (behavior: SendBehavior) => {
-      void updateSettings({ sendBehavior: behavior });
-    },
-    [updateSettings],
-  );
-
-  const handleServiceUrlBehaviorChange = useCallback(
-    (behavior: ServiceUrlBehavior) => {
-      void updateSettings({ serviceUrlBehavior: behavior });
-    },
-    [updateSettings],
-  );
-
   const handleLanguageChange = useCallback(
     (language: AppLanguage) => {
       void updateSettings({ language });
-    },
-    [updateSettings],
-  );
-
-  const handleTerminalScrollbackLinesChange = useCallback(
-    (terminalScrollbackLines: number) => {
-      void updateSettings({ terminalScrollbackLines });
     },
     [updateSettings],
   );
@@ -1502,84 +1336,78 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     return null;
   })();
 
-  let content: ReactNode;
-  if (view.kind === "section" && view.section === "layout") {
-    content = isDesktopApp ? <LayoutSection /> : null;
-  } else {
-    content = (() => {
-      if (view.kind === "plugin")
-        return (
-          <PluginSettingsContent
-            serverId={view.serverId}
-            pluginId={view.pluginId}
-            screenId={view.screenId}
-          />
-        );
-      if (view.kind === "host") {
-        return renderHostSettingsContent(view, handleHostRemoved);
+  const content = (() => {
+    if (view.kind === "plugin")
+      return (
+        <PluginSettingsContent
+          serverId={view.serverId}
+          pluginId={view.pluginId}
+          screenId={view.screenId}
+        />
+      );
+    if (view.kind === "host") {
+      return renderHostSettingsContent(view, handleHostRemoved);
+    }
+    if (view.kind === "project") {
+      return (
+        <ProjectSettingsScreen
+          serverId={view.serverId}
+          projectId={view.projectId}
+          onBackToProjects={handleBackFromDetail}
+          showBackToProjects={!isCompactLayout}
+        />
+      );
+    }
+    if (view.kind === "section") {
+      const PropFreeSection = PROP_FREE_SECTIONS[view.section];
+      if (PropFreeSection) return <PropFreeSection />;
+      switch (view.section) {
+        case "general":
+          return (
+            <>
+              <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
+              <SendingSection />
+              {isDesktopApp ? (
+                <>
+                  <OpenLocationSection />
+                  <CommandCentreSection />
+                </>
+              ) : null}
+            </>
+          );
+        case "editor":
+          return isWeb ? <EditorSection /> : null;
+        case "shortcuts":
+          return isDesktopApp ? <KeyboardShortcutsSection /> : null;
+        case "integrations":
+          return isDesktopApp ? <IntegrationsSection /> : null;
+        case "notifications":
+          return isDesktopApp ? <DesktopNotificationsSection /> : null;
+        case "permissions":
+          return isDesktopApp ? <DesktopPermissionsSection /> : null;
+        case "diagnostics":
+          return (
+            <DiagnosticsSection
+              useLegacyTerminalRenderer={settings.useLegacyTerminalRenderer}
+              onUseLegacyTerminalRendererChange={handleUseLegacyTerminalRendererChange}
+              voiceAudioEngine={voiceAudioEngine}
+              isPlaybackTestRunning={isPlaybackTestRunning}
+              playbackTestResult={playbackTestResult}
+              handlePlaybackTest={handlePlaybackTest}
+            />
+          );
+        case "about":
+          return (
+            <AboutSection
+              appVersion={appVersion}
+              appVersionText={appVersionText}
+              isDesktopApp={isDesktopApp}
+            />
+          );
       }
-      if (view.kind === "project") {
-        return (
-          <ProjectSettingsScreen
-            serverId={view.serverId}
-            projectId={view.projectId}
-            onBackToProjects={handleBackFromDetail}
-            showBackToProjects={!isCompactLayout}
-          />
-        );
-      }
-      if (view.kind === "section") {
-        const PropFreeSection = PROP_FREE_SECTIONS[view.section];
-        if (PropFreeSection) return <PropFreeSection />;
-        switch (view.section) {
-          case "general":
-            return (
-              <>
-                <GeneralSection
-                  settings={settings}
-                  isDesktopApp={isDesktopApp}
-                  handleSendBehaviorChange={handleSendBehaviorChange}
-                  handleServiceUrlBehaviorChange={handleServiceUrlBehaviorChange}
-                  handleLanguageChange={handleLanguageChange}
-                  handleTerminalScrollbackLinesChange={handleTerminalScrollbackLinesChange}
-                />
-                {isDesktopApp ? <BrowserDataSection /> : null}
-              </>
-            );
-          case "editor":
-            return isWeb ? <EditorSection /> : null;
-          case "shortcuts":
-            return isDesktopApp ? <KeyboardShortcutsSection /> : null;
-          case "integrations":
-            return isDesktopApp ? <IntegrationsSection /> : null;
-          case "notifications":
-            return isDesktopApp ? <DesktopNotificationsSection /> : null;
-          case "permissions":
-            return isDesktopApp ? <DesktopPermissionsSection /> : null;
-          case "diagnostics":
-            return (
-              <DiagnosticsSection
-                useLegacyTerminalRenderer={settings.useLegacyTerminalRenderer}
-                onUseLegacyTerminalRendererChange={handleUseLegacyTerminalRendererChange}
-                voiceAudioEngine={voiceAudioEngine}
-                isPlaybackTestRunning={isPlaybackTestRunning}
-                playbackTestResult={playbackTestResult}
-                handlePlaybackTest={handlePlaybackTest}
-              />
-            );
-          case "about":
-            return (
-              <AboutSection
-                appVersion={appVersion}
-                appVersionText={appVersionText}
-                isDesktopApp={isDesktopApp}
-              />
-            );
-        }
-      }
-      return null;
-    })();
-  }
+    }
+    return null;
+  })();
 
   if (settingsLoading) {
     return (

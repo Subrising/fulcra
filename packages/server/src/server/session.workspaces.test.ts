@@ -78,6 +78,7 @@ import {
   type PersistedWorkspaceRecord,
   type WorkspaceMutation,
 } from "./workspace-registry.js";
+import { withTrustedSurface } from "./test-utils/trusted-surface.js";
 
 const REPO_CWD = path.resolve("/tmp/repo");
 const UNREGISTERED_CWD = path.resolve("/tmp/unregistered");
@@ -587,6 +588,7 @@ function createSessionForWorkspaceTests(
     listProviderSubagentActivity: () => [],
     getAgent: () => null,
     archiveAgent: async () => ({ archivedAt: new Date().toISOString() }),
+    preflightArchiveDescendants: vi.fn(async () => undefined),
     archiveSnapshot: async () => ({}),
     unarchiveSnapshot: async () => true,
     clearAgentAttention: async () => {},
@@ -842,13 +844,13 @@ test("agent updates preserve queued live transitions across stored metadata read
       emittedAgentUpdates.push(message.payload);
       if (emittedAgentUpdates.length === 2) twoUpdatesEmitted.resolve();
     },
-    agentManager: {
+    agentManager: withTrustedSurface({
       subscribe: (listener: (event: AgentManagerEvent) => void) => {
         forwardAgentEvent = listener;
         return () => {};
       },
       getAgent: () => idle,
-    },
+    }),
     agentStorage: {
       get: async () => {
         storageReadCount += 1;
@@ -1593,6 +1595,7 @@ test("archive emits an authoritative agent_update upsert for subscribed clients"
           });
           return { archivedAt };
         },
+        preflightArchiveDescendants: vi.fn(async () => undefined),
         archiveSnapshot: async (_agentId: string, archivedAt: string) => {
           Object.assign(archivedRecord, { archivedAt, updatedAt: archivedAt });
           return archivedRecord;
@@ -1831,11 +1834,11 @@ test("workspace mark unread selects the newest finished workspace root", async (
   const markedAgentIds: string[] = [];
   const session = createSessionForWorkspaceTests({
     onMessage: (message) => emitted.push(message),
-    agentManager: {
+    agentManager: withTrustedSurface({
       markAgentUnread: async (agentId: string) => {
         markedAgentIds.push(agentId);
       },
-    },
+    }),
   });
 
   session.workspaceRegistry.list = async () => [workspace];
@@ -2167,7 +2170,7 @@ test("close_items_request archives agents and kills terminals in one batch", asy
     requestId: "req-close-items",
   });
 
-  expect(cancelAgentRun).toHaveBeenCalledWith("agent-1");
+  expect(cancelAgentRun).toHaveBeenCalledWith("agent-1", undefined);
   expect(killTerminal).toHaveBeenCalledWith("term-1");
   expect(emitted.find((message) => message.type === "close_items_response")?.payload).toEqual({
     agents: [{ agentId: "agent-1", archivedAt }],
@@ -2248,6 +2251,7 @@ test("close_items_request archives stored agents that are not currently loaded",
           liveRecord.updatedAt = liveArchivedAt;
           return { archivedAt: liveArchivedAt };
         },
+        preflightArchiveDescendants: vi.fn(async () => undefined),
         archiveSnapshot: async (_agentId: string, archivedAt: string) => {
           storedRecord.archivedAt = archivedAt;
           storedRecord.updatedAt = archivedAt;
@@ -8440,7 +8444,7 @@ test("overlapping workspace rebuilds publish the newest provider subagent status
   const session = createSessionForWorkspaceTests({
     onMessage: (message) => emitted.push(message),
     agentStorage: { list: async () => [] },
-    agentManager: {
+    agentManager: withTrustedSurface({
       subscribe: (nextListener: (event: AgentManagerEvent) => void) => {
         listener = nextListener;
         return () => {};
@@ -8448,7 +8452,7 @@ test("overlapping workspace rebuilds publish the newest provider subagent status
       listAgents: () => [parent],
       listProviderSubagentActivity: () => providerSubagents,
       getAgent: (agentId: string) => (agentId === parent.id ? parent : null),
-    },
+    }),
   });
 
   await session.handleMessage({

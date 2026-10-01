@@ -5,30 +5,36 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { PluginCatalogSync } from "./catalog-sync";
 const state = vi.hoisted(() => ({
+  prepare: vi.fn(async (entries: unknown[]) => entries),
   connected: false,
+  paging: false,
   // Null is the cold-start value: connected, features not sent yet.
   supported: null as boolean | null,
   registry: {
     suspendHost: vi.fn(),
     removeHost: vi.fn(),
     installCatalog: vi.fn(),
+    markCatalogSettled: vi.fn(),
     getSnapshot: () => [],
   },
 }));
 vi.mock("@/runtime/host-runtime", () => ({ useHostRuntimeIsConnected: () => state.connected }));
 vi.mock("@/runtime/host-features", () => ({
-  useHostFeatureAvailability: () => state.supported,
+  useHostFeatureAvailability: (_server: string, feature: string) =>
+    feature === "pluginCatalogPaging" ? state.paging : state.supported,
 }));
+vi.mock("./bundle-trust", () => ({ preparePluginCatalog: state.prepare }));
 vi.mock("./registry", () => ({ pluginRegistry: state.registry }));
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   state.connected = false;
+  state.paging = false;
   state.supported = null;
 });
 
 it("suspends before feature knowledge arrives, fences late catalogs, and removes unsupported/deleted hosts", async () => {
-  const resolves: ((catalog: { id: string; clientBundle: string }[]) => void)[] = [];
+  const resolves: ((catalog: { plugins: { id: string; clientBundle: string }[] }) => void)[] = [];
   // The component observes catalog/settings events and releases the observation
   // on cleanup; `release` stands in for the old `on()` unsubscribe.
   const release = vi.fn(() => Promise.resolve());
@@ -49,9 +55,10 @@ it("suspends before feature knowledge arrives, fences late catalogs, and removes
   );
   expect(resolves).toHaveLength(1);
   state.connected = false;
+  state.paging = false;
   state.supported = false;
   view.rerender(React.createElement(PluginCatalogSync, { serverId: "host", client }));
-  await act(async () => resolves[0]!([{ id: "stale", clientBundle: "old" }]));
+  await act(async () => resolves[0]!({ plugins: [{ id: "stale", clientBundle: "old" }] }));
   expect(state.registry.installCatalog).not.toHaveBeenCalled();
   expect(release).toHaveBeenCalledOnce();
   state.connected = true;
@@ -60,7 +67,7 @@ it("suspends before feature knowledge arrives, fences late catalogs, and removes
     view.rerender(React.createElement(PluginCatalogSync, { serverId: "host", client })),
   );
   const fresh = [{ id: "fresh", clientBundle: "new" }];
-  await act(async () => resolves[1]!(fresh));
+  await act(async () => resolves[1]!({ plugins: fresh }));
   expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("host", fresh, {
     client,
     replacePluginId: undefined,
@@ -88,4 +95,89 @@ it("waits instead of settling the catalog while the host has not reported featur
   expect(state.registry.suspendHost).toHaveBeenCalledWith("host");
   expect(state.registry.removeHost).not.toHaveBeenCalled();
   expect(client.getPluginCatalog).not.toHaveBeenCalled();
+});
+
+it("m2 installs only prepared catalog entries after preparation completes", async () => {
+  state.connected = true;
+  state.supported = true;
+  const raw = [{ id: "example", clientBundle: "raw" }],
+    prepared = [Object.freeze({ ...raw[0] })];
+  let finish!: (value: unknown[]) => void;
+  state.prepare.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const client = {
+    getPluginCatalog: vi.fn(async () => ({ plugins: raw })),
+    observeEvents: () => ({
+      subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+      release: async () => {},
+    }),
+  } as unknown as DaemonClient;
+  await act(async () => {
+    render(React.createElement(PluginCatalogSync, { serverId: "host", client }));
+  });
+  expect(state.prepare).toHaveBeenCalledWith(raw);
+  expect(state.registry.installCatalog).not.toHaveBeenCalled();
+  await act(async () => {
+    finish(prepared);
+  });
+  expect(state.registry.installCatalog.mock.calls[0][1]).toBe(prepared);
+  expect(state.registry.installCatalog.mock.calls[0][1]).not.toBe(raw);
+});
+
+it("uses the explicit paging method only and cancels a held read on disconnect", async () => {
+  state.connected = true;
+  state.supported = true;
+  state.paging = true;
+  let finish!: (value: { plugins: { id: string; clientBundle: string }[] }) => void;
+  let signal: AbortSignal | undefined;
+  const paged = vi.fn((options: { signal?: AbortSignal }) => {
+    signal = options.signal;
+    return new Promise<{ plugins: { id: string; clientBundle: string }[] }>((resolve) => {
+      finish = resolve;
+    });
+  });
+  const client = {
+    getPluginCatalog: vi.fn(),
+    getPagedPluginCatalog: paged,
+    observeEvents: () => ({
+      subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+      release: async () => {},
+    }),
+  } as unknown as DaemonClient;
+  const view = render(React.createElement(PluginCatalogSync, { serverId: "host", client }));
+  await act(async () => {});
+  expect(paged).toHaveBeenCalledOnce();
+  expect(client.getPluginCatalog).not.toHaveBeenCalled();
+  state.connected = false;
+  view.rerender(React.createElement(PluginCatalogSync, { serverId: "host", client }));
+  expect(signal?.aborted).toBe(true);
+  await act(async () => finish({ plugins: [{ id: "late", clientBundle: "never evaluated" }] }));
+  expect(state.prepare).not.toHaveBeenCalled();
+  expect(state.registry.installCatalog).not.toHaveBeenCalled();
+});
+it("paging refusal suspends prior surfaces and never falls back to the legacy bulk read", async () => {
+  state.connected = true;
+  state.supported = true;
+  state.paging = true;
+  const client = {
+    getPluginCatalog: vi.fn(),
+    getPagedPluginCatalog: vi.fn(async () => {
+      throw new Error("read_revoked");
+    }),
+    observeEvents: () => ({
+      subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+      release: async () => {},
+    }),
+  } as unknown as DaemonClient;
+  await act(async () => {
+    render(React.createElement(PluginCatalogSync, { serverId: "host", client }));
+  });
+  expect(client.getPluginCatalog).not.toHaveBeenCalled();
+  expect(state.registry.suspendHost).toHaveBeenCalledWith("host");
+  expect(state.registry.markCatalogSettled).toHaveBeenCalledWith("host");
+  expect(state.registry.installCatalog).not.toHaveBeenCalled();
 });

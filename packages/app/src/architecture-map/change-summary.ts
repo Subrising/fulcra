@@ -1,7 +1,8 @@
 import { ARCHITECTURE_MAP_DIRECTORY, ARCHITECTURE_MAP_SUFFIX } from "./discovery";
 import type { ArchitectureMapModel } from "./ir-model";
 
-// The rules behind the Change view's warnings and counts: a change is significant when it touches
+// The rules behind the Change view's warnings and counts. They match the control repo's ADW gate
+// (orca-architecture-map/validate.mjs --since): a change is significant when it touches
 // SIGNIFICANT_FILES or more files (map files not counted), or any file a map cites as its source;
 // a significant change that changed no map file leaves the diagram possibly out of date.
 
@@ -77,8 +78,8 @@ export function parentDirectory(path: string): string {
 
 /**
  * The quick check this view can make without reading the whole project: a test file named after
- * the changed file sits beside it ("cart.ts" and "cart.test.ts"). It only claims what it looked at;
- * a full import-graph check needs the whole project.
+ * the changed file sits beside it ("cart.ts" and "cart.test.ts"). The decision summary uses the
+ * full import-graph check from the control repo; this one only claims what it looked at.
  */
 export function hasTestBeside(path: string, siblingNames: readonly string[]): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);

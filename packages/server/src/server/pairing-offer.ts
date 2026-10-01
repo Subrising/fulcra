@@ -1,11 +1,15 @@
+import os from "node:os";
+import { OfferStore } from "./pairing/offer-store.js";
+import { DEFAULT_RELAY_ENDPOINT, relayUsesTls } from "@getpaseo/protocol/daemon-endpoints";
 import type { Logger } from "pino";
 
-import { createConnectionOfferV2, encodeOfferToFragmentUrl } from "./connection-offer.js";
+import { createConnectionOfferV3, encodeOfferToFragmentUrl } from "./connection-offer.js";
 import { loadOrCreateDaemonKeyPair } from "./daemon-keypair.js";
 import { renderPairingQr } from "./pairing-qr.js";
 import { getOrCreateServerId } from "./server-id.js";
 
 export interface LocalPairingOffer {
+  reason?: "relay_unconfigured";
   relayEnabled: boolean;
   url: string | null;
   qr: string | null;
@@ -18,7 +22,8 @@ export async function generateLocalPairingOffer(args: {
   relayPublicEndpoint?: string;
   relayUseTls?: boolean;
   relayPublicUseTls?: boolean;
-  appBaseUrl?: string;
+  appBaseUrl?: string | null;
+  pairingOfferTtlSeconds?: number;
   includeQr?: boolean;
   logger?: Logger;
 }): Promise<LocalPairingOffer> {
@@ -31,15 +36,19 @@ export async function generateLocalPairingOffer(args: {
     };
   }
 
-  const relayEndpoint = args.relayEndpoint ?? "relay.paseo.sh:443";
+  const relayEndpoint = args.relayEndpoint ?? DEFAULT_RELAY_ENDPOINT;
+  if (!relayEndpoint)
+    return { relayEnabled: false, reason: "relay_unconfigured", url: null, qr: null };
   const relayPublicEndpoint = args.relayPublicEndpoint ?? relayEndpoint;
-  const relayUseTls = args.relayUseTls ?? relayEndpoint === "relay.paseo.sh:443";
+  const relayUseTls = relayUsesTls(relayEndpoint, args.relayUseTls);
   const relayPublicUseTls = args.relayPublicUseTls ?? relayUseTls;
-  const appBaseUrl = args.appBaseUrl ?? "https://app.paseo.sh";
+  const appBaseUrl = "fulcra://pair";
   const serverId = getOrCreateServerId(args.paseoHome, { logger: args.logger });
   const daemonKeyPair = await loadOrCreateDaemonKeyPair(args.paseoHome, args.logger);
-  const offer = await createConnectionOfferV2({
+  const offer = await createConnectionOfferV3({
     serverId,
+    pairing: new OfferStore(args.paseoHome).mint(args.pairingOfferTtlSeconds),
+    hostLabel: os.hostname().slice(0, 64),
     daemonPublicKeyB64: daemonKeyPair.publicKeyB64,
     relay: { endpoint: relayPublicEndpoint, useTls: relayPublicUseTls },
   });
@@ -56,8 +65,8 @@ export async function generateLocalPairingOffer(args: {
   let qr: string | null = null;
   try {
     qr = await renderPairingQr(url);
-  } catch (error) {
-    args.logger?.debug({ error }, "Failed to render pairing QR");
+  } catch {
+    args.logger?.debug("Failed to render pairing QR");
   }
 
   return {
@@ -66,3 +75,7 @@ export async function generateLocalPairingOffer(args: {
     qr,
   };
 }
+
+export { rotateOfflineRelayIdentity } from "./pairing/rotate-identity.js";
+
+export { revokeOfflineDevice } from "./pairing/revoke-offline.js";

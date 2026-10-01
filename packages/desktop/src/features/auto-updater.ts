@@ -102,7 +102,7 @@ export function shouldAdmitToRollout(args: {
 // This fork publishes no update feed (electron-builder.yml sets `publish: null`), so update checks
 // must not fall through to the upstream one -- doing so would offer, and then install, upstream Paseo
 // over a Fulcra install. Keyed on a list rather than the current product name: the guard was written as
-// `app.getName() === <old name>` and silently stopped firing the moment the product was renamed, which is a
+// `app.getName() === "Orca"` and silently stopped firing the moment the product was renamed, which is a
 // runtime-only failure on a user's machine. Every name this fork has shipped under stays listed.
 const FORK_APP_NAMES = new Set(["Fulcra", "Orca"]);
 const hasNoUpdateFeed = () => FORK_APP_NAMES.has(app.getName());

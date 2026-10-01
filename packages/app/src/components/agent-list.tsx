@@ -1,3 +1,5 @@
+import { SessionAccountInfo } from "@/sessions/session-account-info";
+import { sessionAccount } from "@/sessions/session-account";
 import {
   View,
   Text,
@@ -30,6 +32,7 @@ import {
 } from "@/sessions/session-ownership";
 import { useSessionOwnership } from "@/sessions/use-session-ownership";
 import { findHighlightRanges } from "@/components/ui/highlighted-text-segments";
+import { historyRowLabels, type HistoryRowLabels } from "./agent-list-labels";
 
 interface AgentListProps {
   agents: AggregatedAgent[];
@@ -208,20 +211,27 @@ function SessionRow({
     placement: agent.projectPlacement,
     labels: ownershipLabels,
   });
-  const projectName = projectLabel.text;
+  // Names never ids: a folder named by an id never leads, and the title shows instead (MH4).
+  const labels = historyRowLabels({
+    workspaceName: agent.projectPlacement?.workspaceName,
+    projectName: projectLabel.text,
+    title: agent.title,
+    fallbackTitle: t("agentList.fallbackTitle"),
+  });
+  const projectName = projectLabel.isUnknown ? projectLabel.text : labels.project;
   const leaderLabel = selectSessionLeaderLabel(ownership, ownershipLabels);
   const branch = agent.projectPlacement?.checkout.currentBranch ?? "";
-  const workspaceName = agent.projectPlacement?.workspaceName ?? "";
+  const workspaceName = labels.lead?.kind === "workspace" ? labels.lead.text : "";
   const ProviderIcon = getProviderIcon(agent.provider, agent.serverId);
   const pendingPermissionCount = agent.pendingPermissionCount ?? 0;
   const ranges = useMemo(
     () => ({
       workspace: findHighlightRanges(search ?? "", workspaceName),
-      title: findHighlightRanges(search ?? "", agent.title ?? ""),
+      title: findHighlightRanges(search ?? "", labels.title),
       branch: findHighlightRanges(search ?? "", branch),
       project: findHighlightRanges(search ?? "", projectName),
     }),
-    [search, workspaceName, agent.title, branch, projectName],
+    [search, workspaceName, labels.title, branch, projectName],
   );
 
   const projectMeta = useMemo(
@@ -260,7 +270,7 @@ function SessionRow({
         <ProviderIcon size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
       </View>
       <HighlightedText
-        text={agent.title || t("agentList.fallbackTitle")}
+        text={labels.title}
         ranges={ranges.title}
         style={styles.sessionTitle}
         numberOfLines={1}
@@ -279,19 +289,16 @@ function SessionRow({
     >
       <View style={styles.rowContent}>
         <View style={styles.rowTitleRow}>
-          <HighlightedText
-            text={workspaceName || projectName}
-            ranges={workspaceName ? ranges.workspace : ranges.project}
-            style={styles.workspaceTitleText}
-            numberOfLines={1}
+          <HistoryRowHeading
+            lead={labels.lead}
+            leadRanges={labels.lead?.kind === "workspace" ? ranges.workspace : ranges.project}
+            isMobile={isMobile}
+            chevronSize={theme.iconSize.xs}
+            chevronColor={theme.colors.foregroundMuted}
             testID={`agent-row-workspace-${agent.serverId}-${agent.id}`}
-          />
-          {!isMobile ? (
-            <>
-              <ChevronRight size={theme.iconSize.xs} color={theme.colors.foregroundMuted} />
-              {agentTitle}
-            </>
-          ) : null}
+          >
+            {agentTitle}
+          </HistoryRowHeading>
           <SessionRowBadges
             agent={agent}
             archivedIcon={archivedIcon}
@@ -299,7 +306,11 @@ function SessionRow({
             showDesktopAttention={showDesktopAttention}
           />
         </View>
-        {isMobile ? agentTitle : null}
+        {isMobile && labels.lead ? agentTitle : null}
+        <SessionAccountInfo
+          account={sessionAccount(agent)}
+          testID={`agent-row-account-${agent.serverId}-${agent.id}`}
+        />
         {isMobile ? (
           <View style={styles.rowMetaRow}>
             <HighlightedText
@@ -322,12 +333,9 @@ function SessionRow({
                 </Text>
               </>
             ) : null}
-            <Text style={styles.sessionMetaSeparator}>·</Text>
-            <HighlightedText
-              text={branch}
+            <BranchMeta
+              branch={branch}
               ranges={ranges.branch}
-              style={styles.sessionMetaText}
-              numberOfLines={1}
               testID={`agent-row-branch-${agent.serverId}-${agent.id}`}
             />
             <Text style={styles.sessionMetaSeparator}>·</Text>
@@ -805,3 +813,70 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
   },
 }));
+
+/**
+ * The row's heading: a real folder or project name, then the title; or the title alone when the
+ * folder is only an id (MH4, names never ids). On a phone the title sits on its own line under a lead.
+ */
+function HistoryRowHeading({
+  lead,
+  leadRanges,
+  isMobile,
+  children,
+  chevronSize,
+  chevronColor,
+  testID,
+}: {
+  lead: HistoryRowLabels["lead"];
+  leadRanges: ReturnType<typeof findHighlightRanges>;
+  isMobile: boolean;
+  /** The session title line. */
+  children: ReactElement;
+  chevronSize: number;
+  chevronColor: string;
+  testID: string;
+}) {
+  if (!lead) return children;
+  return (
+    <>
+      <HighlightedText
+        text={lead.text}
+        ranges={leadRanges}
+        style={styles.workspaceTitleText}
+        numberOfLines={1}
+        testID={testID}
+      />
+      {isMobile ? null : (
+        <>
+          <ChevronRight size={chevronSize} color={chevronColor} />
+          {children}
+        </>
+      )}
+    </>
+  );
+}
+
+/** "· branch" on a phone's meta line, or nothing when the folder has no branch (no stray separator). */
+function BranchMeta({
+  branch,
+  ranges,
+  testID,
+}: {
+  branch: string;
+  ranges: ReturnType<typeof findHighlightRanges>;
+  testID: string;
+}) {
+  if (!branch) return null;
+  return (
+    <>
+      <Text style={styles.sessionMetaSeparator}>·</Text>
+      <HighlightedText
+        text={branch}
+        ranges={ranges}
+        style={styles.sessionMetaText}
+        numberOfLines={1}
+        testID={testID}
+      />
+    </>
+  );
+}

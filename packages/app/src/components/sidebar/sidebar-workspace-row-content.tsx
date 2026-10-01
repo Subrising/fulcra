@@ -29,6 +29,7 @@ import { StatusRing } from "@/components/status-ring";
 import { resolveSidebarWorkspacePrimaryLabel } from "@/components/sidebar/sidebar-workspace-title";
 import { TrailingActionScrim } from "@/components/ui/trailing-action-scrim";
 import { useWorkspaceLabelDefinitions } from "@/workspace-labels";
+import { BackgroundWorkBadge } from "./background-work-badge";
 
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const needsInputColorMapping = (theme: Theme) => ({
@@ -135,8 +136,19 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
     [isHovered, isCreating],
   );
 
+  // A row from an unreachable host is its last-known state: dimmed, and marked for tests and screen
+  // readers. It stays pressable so its cached view can still be opened.
+  const offline = workspace.hostOffline === true;
+  const rowContentStyle = useMemo(
+    () => [styles.workspaceRowContent, offline && styles.workspaceRowOffline],
+    [offline],
+  );
   return (
-    <View style={styles.workspaceRowContent}>
+    <View
+      style={rowContentStyle}
+      testID={offline ? `sidebar-row-offline-${workspace.workspaceKey}` : undefined}
+      accessibilityHint={offline ? "Host offline. Showing the last known state." : undefined}
+    >
       <View style={styles.workspaceRowMain}>
         {leadingProjectName ? (
           <ProjectStatusIndicator
@@ -171,6 +183,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             serviceSummary={serviceSummary}
             labels={labels}
           />
+          <BackgroundWorkBadge count={workspace.backgroundWorkCount} />
         </View>
       </View>
       {showShortcutBadge && shortcutNumber !== null ? (
@@ -458,6 +471,9 @@ export function SidebarWorkspaceTrailingActionOverlay({
 const styles = StyleSheet.create((theme) => ({
   workspaceRowContent: {
     position: "relative",
+  },
+  workspaceRowOffline: {
+    opacity: 0.55,
   },
   workspaceRowMain: {
     flexDirection: "row",

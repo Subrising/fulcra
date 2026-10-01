@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClientConfig } from "@getpaseo/client/internal/daemon-client";
+import { DaemonAuthenticationError } from "@getpaseo/client/internal/daemon-client";
 import type { DaemonConnectionDependencies, DaemonProbeClient } from "./test-daemon-connection";
 
 class FakeDaemonClient implements DaemonProbeClient {
@@ -66,6 +67,13 @@ class FakeDaemonProbe {
     return this.createdClients.map((client) => client.config);
   }
 }
+
+// Module compilation is fixture setup, not part of the fake connection deadline.
+// Keep the per-case timeout and all transport/security assertions unchanged.
+beforeAll(async () => {
+  vi.stubGlobal("__DEV__", false);
+  await import("./test-daemon-connection");
+});
 
 describe("test-daemon-connection connectToDaemon", () => {
   let probe: FakeDaemonProbe;
@@ -169,16 +177,15 @@ describe("test-daemon-connection connectToDaemon", () => {
     });
   });
 
-  it("passes direct TCP connection passwords into the client config", async () => {
+  it("passes the host password into the client config", async () => {
     const { connectToDaemon } = await import("./test-daemon-connection");
     const result = await connectToDaemon(
       {
         id: "direct:lan:6767",
         type: "directTcp",
         endpoint: "lan:6767",
-        password: "shared-secret",
       },
-      undefined,
+      { password: "shared-secret" },
       probe.deps,
     );
     await result.client.close();
@@ -242,7 +249,7 @@ describe("test-daemon-connection connectToDaemon", () => {
   it("surfaces auth rejection as an incorrect password", async () => {
     const { connectToDaemon } = await import("./test-daemon-connection");
     probe.failNextConnection(
-      new Error("Transport closed (code 4001)"),
+      new DaemonAuthenticationError("incorrect_password"),
       "Transport closed (code 4001)",
     );
 
@@ -252,13 +259,13 @@ describe("test-daemon-connection connectToDaemon", () => {
           id: "direct:lan:6767",
           type: "directTcp",
           endpoint: "lan:6767",
-          password: "wrong-secret",
         },
-        undefined,
+        { password: "wrong-secret" },
         probe.deps,
       ),
     ).rejects.toMatchObject({
       message: "Incorrect password",
+      authFailureReason: "incorrect_password",
     });
   });
 
@@ -272,13 +279,31 @@ describe("test-daemon-connection connectToDaemon", () => {
           id: "direct:lan:6767",
           type: "directTcp",
           endpoint: "lan:6767",
-          password: "shared-secret",
         },
-        undefined,
+        { password: "shared-secret" },
         probe.deps,
       ),
     ).rejects.toMatchObject({
       message: "Transport error",
     });
   });
+});
+
+it("REPAIR preserves authenticated pairing refusal through the probe boundary", async () => {
+  const { connectAndProbe } = await import("./test-daemon-connection");
+  const { PairingRequiredError } = await import("@getpaseo/client/internal/daemon-client");
+  const closed = vi.fn(async () => {});
+  const result = connectAndProbe({ url: "ws://fixture", clientId: "fixture" }, 1000, {
+    createClient: () => ({
+      pairingRequired: "pairing-upgraded" as const,
+      lastError: "Pair this host again",
+      connect: async () => {
+        throw new Error("Connection refused");
+      },
+      close: closed,
+      getLastServerInfoMessage: () => null,
+    }),
+  });
+  await expect(result).rejects.toBeInstanceOf(PairingRequiredError);
+  expect(closed).toHaveBeenCalledTimes(1);
 });

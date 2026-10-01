@@ -110,6 +110,7 @@ import {
   useHostRuntimeIsConnected,
   useHosts,
 } from "@/runtime/host-runtime";
+import { isPairingBundle, pairEveryOffer, parsePairingBundle } from "@/relay/pairing-bundle";
 import { getDaemonStartService } from "@/runtime/daemon-start-service";
 import { usePanelStore } from "@/stores/panel-store";
 import { flushDraftPersistStorage } from "@/stores/draft-store";
@@ -709,6 +710,28 @@ function OfferLinkListener({
     let cancelled = false;
     const handleUrl = (url: string | null) => {
       if (!url) return;
+      if (isPairingBundle(url)) {
+        // Pair once, see every Mac: pair with each host in the link; one failing never stops the others.
+        let offers;
+        try {
+          offers = parsePairingBundle(url);
+        } catch (error) {
+          console.warn("[Linking] Failed to read pairing link", error);
+          return;
+        }
+        void pairEveryOffer(offers, (offer) =>
+          getHostRuntimeStore().upsertConnectionFromOffer(offer),
+        )
+          .then((results) => {
+            if (cancelled) return;
+            for (const r of results.filter((x) => !x.ok))
+              console.warn("[Linking] Could not pair with a host from the link", r.label, r.error);
+            if (results.some((r) => r.ok)) router.replace(buildOpenProjectRoute());
+            return;
+          })
+          .catch(() => undefined);
+        return;
+      }
       if (!url.includes("#offer=")) return;
       void upsertDaemonFromOfferUrl(url)
         .then((profile) => {
@@ -871,6 +894,8 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
       pathname === "/new" ||
       pathname === "/sessions" ||
       pathname === "/schedules" ||
+      pathname === "/insights" ||
+      pathname === "/automations" ||
       routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
@@ -903,6 +928,8 @@ function RootStack() {
         <Stack.Screen name="open-project" />
         <Stack.Screen name="sessions" />
         <Stack.Screen name="schedules" />
+        <Stack.Screen name="insights" />
+        <Stack.Screen name="automations" />
         <Stack.Screen name="pair-scan" />
         <Stack.Screen name="oauth/[flowId]" />
       </Stack.Protected>

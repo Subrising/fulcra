@@ -86,7 +86,7 @@ afterEach(() => {
 describe("Mermaid sandbox runtime", () => {
   it("keeps YAML merge tags disabled and renders after rejected frontmatter", async () => {
     const frame = await mountRuntime();
-    const ordinary = "---\ntitle: Product delivery\n---\nflowchart LR\nPlan --> Review";
+    const ordinary = "---\ntitle: Orca delivery\n---\nflowchart LR\nPlan --> Review";
     const implicit =
       "---\ntitle: Literal merge key\nbase: &base {title: Replaced}\n<<: *base\n---\nflowchart LR\nPlan --> Review";
     const explicit =

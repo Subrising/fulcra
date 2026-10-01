@@ -36,6 +36,8 @@ export function withRuntimePaseoMcpServer(params: {
    * this header the agent's MCP requests are rejected when a password is set.
    */
   mcpAuthToken: string | null;
+  /** Host-issued particular-launch witness; confers no ordinary action authority. Never persisted. */
+  nativeReportWitness?: string;
 }): AgentSessionConfig {
   const storedConfig = stripInternalPaseoMcpServer(params.config);
   if (!params.mcpBaseUrl || storedConfig.mcpServers?.[PASEO_MCP_SERVER_NAME]) {
@@ -48,8 +50,15 @@ export function withRuntimePaseoMcpServer(params: {
       [PASEO_MCP_SERVER_NAME]: {
         type: "http",
         url: `${params.mcpBaseUrl}?callerAgentId=${params.agentId}`,
-        ...(params.mcpAuthToken
-          ? { headers: { Authorization: `Bearer ${params.mcpAuthToken}` } }
+        ...(params.mcpAuthToken || params.nativeReportWitness
+          ? {
+              headers: {
+                ...(params.mcpAuthToken ? { Authorization: `Bearer ${params.mcpAuthToken}` } : {}),
+                ...(params.nativeReportWitness
+                  ? { "X-Paseo-Report-Origin": params.nativeReportWitness }
+                  : {}),
+              },
+            }
           : {}),
       },
       ...storedConfig.mcpServers,

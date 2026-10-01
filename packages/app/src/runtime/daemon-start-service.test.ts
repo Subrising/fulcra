@@ -316,10 +316,21 @@ describe("upsertDesktopDaemonConnection", () => {
     ]);
   });
 
-  it("does not add localhost when desktop bootstrap finds its server id already registered", async () => {
+  it("refreshes localhost when desktop bootstrap finds its server id already registered", async () => {
     const fake = createFakeStore([makeRelayOnlyHost("srv_desktop")]);
 
     const result = await upsertDesktopDaemonConnection(fake.store, makeStatus());
+
+    expect(result).toEqual({ ok: true });
+    expect(fake.upserts).toEqual([
+      { listenAddress: "127.0.0.1:6767", serverId: "srv_desktop", hostname: "desktop" },
+    ]);
+  });
+
+  it("keeps an already registered host without waiting for a listen address", async () => {
+    const fake = createFakeStore([makeRelayOnlyHost("srv_desktop")]);
+
+    const result = await upsertDesktopDaemonConnection(fake.store, makeStatus({ listen: null }));
 
     expect(result).toEqual({ ok: true });
     expect(fake.upserts).toEqual([]);
@@ -358,4 +369,26 @@ describe("upsertDesktopDaemonConnection", () => {
     expect(result.ok ? "" : result.error).toContain("unsupported listen address");
     expect(fake.upserts).toEqual([]);
   });
+});
+
+it("IR-2 starting fails visibly without probing the daemon", async () => {
+  const fake = createFakeStore();
+  const result = await upsertDesktopDaemonConnection(
+    fake.store,
+    makeStatus({ status: "starting" }),
+  );
+  expect(result).toEqual({
+    ok: false,
+    error: "Desktop daemon is starting. Retry when it is ready.",
+  });
+  expect(fake.upserts).toEqual([]);
+});
+it("IR-3 refreshes the endpoint even for a restored host", async () => {
+  const fake = createFakeStore([makeRelayOnlyHost("srv_desktop")]);
+  expect(
+    await upsertDesktopDaemonConnection(fake.store, makeStatus({ listen: "127.0.0.1:7878" })),
+  ).toEqual({ ok: true });
+  expect(fake.upserts).toEqual([
+    { listenAddress: "127.0.0.1:7878", serverId: "srv_desktop", hostname: "desktop" },
+  ]);
 });

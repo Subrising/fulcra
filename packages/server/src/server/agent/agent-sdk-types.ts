@@ -1,3 +1,10 @@
+import type { TrustedCodexTurnV11, QuotaReadFailureV11 } from "@getpaseo/plugin/server";
+import type {
+  AccountCredential,
+  AccountUsageReading,
+} from "../../services/quota-fetcher/account-usage-types.js";
+import type { TrustedOperationV11 } from "@getpaseo/protocol/trusted-input";
+import type { TrustedOperationHandle } from "../plugins/trusted.js";
 import type {
   AgentProviderNotice,
   AgentTaskItem,
@@ -6,6 +13,7 @@ import type {
   ToolPolicy,
 } from "@getpaseo/protocol/agent-types";
 import type { AgentAttachment, AgentQuotaSnapshot } from "@getpaseo/protocol/messages";
+import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type { AgentProviderNotice, AgentTaskItem };
@@ -210,11 +218,24 @@ export type AgentPromptContentBlock =
 
 export type AgentPromptInput = string | AgentPromptContentBlock[];
 
-// Daemon-only capability: symbol keys cannot arrive through wire JSON. Codex startTurn only.
+// Daemon-only handle, additionally branded by native-queued-dispatch; wire JSON cannot mint it.
+export const NATIVE_QUEUED_FINAL = Symbol("native-queued-final");
+export const FINAL_INPUT_CHECK = Symbol("final-input-check");
+export const TRUSTED_OPERATION = Symbol("trusted-operation");
 export const CODEX_TURN_ADMISSION = Symbol("codex-turn-admission");
 
+export interface CapturedCodexAdmission {
+  readonly operation: TrustedOperationV11;
+  readonly instanceId: string;
+  validate(): void;
+  check(turn: TrustedCodexTurnV11, quota: AgentQuotaSnapshot): true;
+  onQuotaReadFailure(turn: TrustedCodexTurnV11, failure: QuotaReadFailureV11): void;
+}
 export interface AgentRunOptions {
-  [CODEX_TURN_ADMISSION]?: (quota: AgentQuotaSnapshot) => true;
+  [FINAL_INPUT_CHECK]?: object;
+  [NATIVE_QUEUED_FINAL]?: () => void;
+  [TRUSTED_OPERATION]?: TrustedOperationHandle;
+  [CODEX_TURN_ADMISSION]?: ((quota: AgentQuotaSnapshot) => true) | CapturedCodexAdmission;
   outputSchema?: unknown;
   resumeFrom?: AgentPersistenceHandle;
   maxThinkingTokens?: number;
@@ -488,6 +509,15 @@ export type AgentStreamEvent =
       type: "provider_subagent";
       provider: AgentProvider;
       event: import("./provider-subagents/store.js").ProviderSubagentInputEvent;
+    }
+  | {
+      /**
+       * Display only (MULTIHOST-DESIGN §6): the provider's count of background jobs changed. Handled
+       * outside turn logic; it never changes the agent's status or reaches a waiter.
+       */
+      type: "background_work_changed";
+      provider: AgentProvider;
+      backgroundWork: AgentBackgroundWork | null;
     };
 
 export function getAgentStreamEventTurnId(event: AgentStreamEvent): string | undefined {
@@ -659,10 +689,13 @@ export interface AgentCreateSessionOptions {
   persistSession?: boolean;
 }
 
+/** What a resumed session is for: driving the agent, or reading what it already did. */
+export type AgentResumePurpose = "interactive" | "history";
+
 /** Runtime-only intent for a persisted-session resume. Never persist this option. */
 export interface AgentResumeSessionOptions {
   /** Defaults to interactive. History loading may be read-only for archived native sessions. */
-  purpose?: "interactive" | "history";
+  purpose?: AgentResumePurpose;
 }
 
 /**
@@ -678,14 +711,33 @@ export interface AgentSession {
   readonly id: string | null;
   readonly capabilities: AgentCapabilityFlags;
   readonly features?: AgentFeature[];
+  /** New provider-owned rows to commit on registration. streamHistory must also
+   * replay them at their original timestamps; restored sessions omit old rows. */
+  readonly initialTimeline?: ImportedTimelineEntry[];
   run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult>;
   startTurn(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<{ turnId: string }>;
   steerActiveTurn?(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult>;
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
+  /**
+   * The provider process's pid, for the display-only background-job sample of providers without a
+   * task protocol (agent/background-work). Absent or null when there is no such process.
+   */
+  getProcessId?(): number | null;
   getRuntimeInfo(): Promise<AgentRuntimeInfo>;
   /** Read the attached provider without connecting, creating a thread or starting a turn. */
   getQuota?(): Promise<AgentQuotaSnapshot>;
+  /** Non-secret account label captured by this runtime at launch, never read from a mutable assignment. */
+  usageSourceLabel?(): string | null;
+  /** Fulcra account pool: the credential this session was launched with and its account label (daemon-internal). */
+  usageCredential?(): {
+    credential: AccountCredential;
+    label: string | null;
+    /** Fulcra's id for the account (not a secret). */
+    accountId?: string | null;
+    /** The last rate-limit reading this session's own traffic produced (free; update-7c). */
+    observation?: AccountUsageReading | null;
+  } | null;
   getAvailableModes(): Promise<AgentMode[]>;
   getCurrentMode(): Promise<string | null>;
   setMode(modeId: string): Promise<void | AgentProviderNotice>;
@@ -790,10 +842,17 @@ export interface AgentClient {
    *
    * Opt-in, and only right for a provider whose "no mode" fallback is NOT its declared default. Claude
    * falls back to `default` (Always Ask) while its catalog default is `auto`, so a mode-less session is
-   * stuck in Always Ask for life. Codex must not opt in: a mode-less Codex session defers approval and
-   * sandbox to the user's own Codex config, and storing a mode would make the daemon override it.
+   * stuck in Always Ask for life. Codex opts in too (update-7 W3): a new Codex session takes its built-in default
+   * (full-access, FIX-8 B), or the host's Fulcra default via the plugin hook, rather than deferring approval and
+   * sandbox to the user's own Codex config.
    */
   readonly persistsDefaultModeOnCreate?: boolean;
+  /**
+   * Update-7 W3 (R1 P-1): the mode an `internal` helper agent runs in when it names none. Internal creates skip
+   * plugin hooks and are fed untrusted text (branch names, commit and PR text), so this must never be an
+   * unattended mode.
+   */
+  readonly internalModeId?: string;
   /**
    * Store the created model's default thinking option on a session created without one.
    *

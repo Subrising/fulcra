@@ -181,7 +181,7 @@ describe("desktop device key (Electron main process)", () => {
   });
 });
 
-describe("Mac pairing needs Touch ID", () => {
+describe("Mac pairing needs Touch ID (CONTRACTS §3.6 rule 3, R-D-3)", () => {
   it("Touch ID unavailable: pairing refuses with a clear result, shows no dialog and writes no key", async () => {
     const { key, prompts, storePath } = desktop({ platform: "darwin", touchId: false });
     const error = await key.pair({ code: "123456" }).catch((caught: unknown) => caught);

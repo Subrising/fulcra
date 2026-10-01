@@ -1,3 +1,4 @@
+import { sessionDisplayName } from "@/utils/session-display-name";
 import { isGeneratedSidebarName } from "./sidebar-conversation-labels";
 import type { PrHint } from "@/git/pr-hint";
 import { selectPrHintFromStatus } from "@/git/pr-hint";
@@ -8,7 +9,7 @@ import type {
   WorkspaceStructureHostPlacement,
   WorkspaceStructureProject,
 } from "@/projects/workspace-structure";
-import { projectDisplayNameFromProjectId } from "@/utils/project-display-name";
+import { projectDisplayName, projectDisplayNameFromProjectId } from "@/utils/project-display-name";
 import { aggregateSidebarStateBuckets } from "@/utils/sidebar-agent-state";
 import { shortenPath } from "@/utils/shorten-path";
 import type { WorkspaceAgentActivity } from "@/utils/workspace-agent-activity";
@@ -55,10 +56,18 @@ export interface SidebarWorkspaceEntry extends SidebarStatusWorkspacePlacement {
   archiveUnpushedCommitCount: number | null;
   scripts: WorkspaceDescriptor["scripts"];
   hasRunningScripts: boolean;
+  /** Display-only: background jobs the host reports for this workspace (0 when none or unknown). */
+  backgroundWorkCount: number;
+  /**
+   * Set by the sidebar model, never by the host: the workspace's host is offline, so its status is
+   * the last one seen and must not be presented as current.
+   */
+  hostOffline?: boolean;
 }
 
 export interface SidebarProjectEntry {
   viewKey: string;
+  projectCustomName?: string | null;
   projectName: string;
   projectKind: WorkspaceStructureProject["projectKind"];
   iconWorkingDir: string;
@@ -160,14 +169,18 @@ export function createSidebarWorkspaceEntry(input: {
     serverId: input.serverId,
     workspaceId: input.workspace.id,
     projectViewKey,
-    projectName: projectNameForWorkspace(input.workspace),
+    projectName: projectDisplayName(
+      input.workspace.projectDisplayName ??
+        projectDisplayNameFromProjectId(input.workspace.projectId),
+      input.workspace.projectCustomName,
+    ),
     projectRootPath: input.workspace.projectRootPath,
     workspaceDirectory: input.workspace.workspaceDirectory,
     workspaceDirectoryLabel:
       input.workspace.worktreeSlug ?? shortenPath(input.workspace.workspaceDirectory),
     projectKind: input.workspace.projectKind,
     workspaceKind: input.workspace.workspaceKind,
-    name: input.workspace.name,
+    name: sessionDisplayName(input.workspace.name, input.workspace.title),
     title: input.workspace.title ?? null,
     pinnedAt: input.workspace.pinnedAt,
     labels: input.workspace.labels ?? EMPTY_WORKSPACE_LABELS,
@@ -184,6 +197,7 @@ export function createSidebarWorkspaceEntry(input: {
     archiveUnpushedCommitCount: input.workspace.gitRuntime?.aheadOfOrigin ?? null,
     scripts: input.workspace.scripts,
     hasRunningScripts: input.workspace.scripts.some((script) => script.lifecycle === "running"),
+    backgroundWorkCount: input.workspace.backgroundWorkCount ?? 0,
   };
 }
 
@@ -395,20 +409,18 @@ export function buildSidebarWorkspaceEntries(input: {
       pendingCreateAttempts: input.pendingCreateAttempts,
       workspaceAgentActivity: session.workspaceAgentActivity,
     });
-    if (workspace.projectKind !== "git") {
-      if (
-        placement.conversationName &&
-        workspace.title == null &&
-        isGeneratedSidebarName(workspace.name)
-      )
-        entry.name = placement.conversationName;
-      if (
-        placement.conversationProjectName &&
-        workspace.projectCustomName == null &&
-        isGeneratedSidebarName(projectNameForWorkspace(workspace))
-      )
-        entry.projectName = placement.conversationProjectName;
-    }
+    if (
+      placement.conversationName &&
+      workspace.title == null &&
+      isGeneratedSidebarName(workspace.name)
+    )
+      entry.name = placement.conversationName;
+    if (
+      placement.conversationProjectName &&
+      workspace.projectCustomName == null &&
+      isGeneratedSidebarName(projectNameForWorkspace(workspace))
+    )
+      entry.projectName = placement.conversationProjectName;
     const previousEntry = input.previousEntries?.get(placement.workspaceKey);
     entries.set(
       placement.workspaceKey,
@@ -453,6 +465,7 @@ export function buildSidebarProjectsFromStructure(input: {
       viewKey: project.viewKey,
       projectKey: project.projectKey,
       projectName: project.projectName,
+      projectCustomName: project.projectCustomName,
       projectKind: project.projectKind,
       iconWorkingDir: project.iconWorkingDir,
       hosts: project.hosts,
@@ -471,6 +484,7 @@ export function buildSidebarProjectsFromHostProjects(input: {
   return input.projects.map((project) => ({
     viewKey: project.viewKey,
     projectName: project.projectName,
+    projectCustomName: project.projectCustomName,
     projectKind: project.projectKind,
     iconWorkingDir: project.iconWorkingDir,
     hosts: project.hosts,

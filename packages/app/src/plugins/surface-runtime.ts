@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import type { InstalledPlugin } from "./types";
 import { createPaseoApi, type PaseoApi } from "@getpaseo/client";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import {
+  activeConnectionOfClient,
+  CommandCentreNeedsDirectConnectionError,
+  needsDirectConnection,
+} from "./command-centre-connection";
 
 export interface PluginSurfaceRuntime {
   paseo: PaseoApi;
@@ -15,7 +20,11 @@ export function createPluginSurfaceRuntime(
   if (!client || plugin.lifetime.signal.aborted) return null;
   return {
     paseo: createPaseoApi(client, { signal: plugin.lifetime.signal }),
-    invoke: (method, input) => client.invokePluginRpc(plugin.id, method, input),
+    invoke: (method, input) =>
+      // L46: never send a Command Centre read the relay cannot authenticate; say why instead.
+      needsDirectConnection(plugin.id, activeConnectionOfClient(client), client)
+        ? Promise.reject(new CommandCentreNeedsDirectConnectionError())
+        : client.invokePluginRpc(plugin.id, method, input),
   };
 }
 

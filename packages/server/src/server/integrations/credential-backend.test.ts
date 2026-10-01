@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -118,17 +119,17 @@ describe("macOS keychain backend (fake helper)", () => {
 
   it("reads legacy plugin items with /usr/bin/security and never writes them", async () => {
     const { items, runner } = fakeHelper();
-    items.set("ai.fulcra.plugin.organization/jira:token", "legacy-value");
+    items.set("ai.fulcra.plugin.orca-organization/jira:token", "legacy-value");
     const backend = createMacosKeychainBackend(runner.run);
-    await expect(backend.get("ai.fulcra.plugin.organization", "jira:token")).resolves.toBe(
+    await expect(backend.get("ai.fulcra.plugin.orca-organization", "jira:token")).resolves.toBe(
       "legacy-value",
     );
     expect(runner.calls[0].file).toBe(SECURITY_BINARY);
     await expect(
-      backend.set("ai.fulcra.plugin.organization", "jira:token", "x"),
+      backend.set("ai.fulcra.plugin.orca-organization", "jira:token", "x"),
     ).rejects.toThrow("read-only");
     await expect(
-      backend.delete("ai.fulcra.plugin.organization", "jira:token"),
+      backend.delete("ai.fulcra.plugin.orca-organization", "jira:token"),
     ).rejects.toThrow("read-only");
   });
 
@@ -280,27 +281,44 @@ describe("platform selection and memory backend", () => {
 
 // One real round-trip through the login keychain, on a throwaway item in the ai.fulcra.test.*
 // namespace that the test deletes. It never touches ai.fulcra.credentials or any existing item.
-describe.runIf(process.platform === "darwin")("macOS keychain backend (real keychain)", () => {
-  it("stores, reads, overwrites and deletes 4 KB tokens plus refresh JSON on a throwaway ai.fulcra.test item", async () => {
-    const service = `ai.fulcra.test.backend-${randomUUID().slice(0, 8)}`;
-    const account = randomUUID();
-    const backend = createMacosKeychainBackend(runCommand);
-    const large = JSON.stringify({
-      accessToken: `CANARY-${"a".repeat(4089)}`,
-      refreshToken: `CANARY-${"r".repeat(4089)}`,
-      email: "fixture@example.test",
-      scheme: "basic",
-      note: "é漢字",
-    });
-    try {
+// It needs an unlocked login keychain; the read-only probe skips it on hosts without one (SSH and CI
+// sessions report "User interaction is not allowed").
+function loginKeychainUnlocked(): boolean {
+  if (process.platform !== "darwin") return false;
+  try {
+    execFileSync("security", ["show-keychain-info"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const realKeychain = loginKeychainUnlocked();
+describe.runIf(realKeychain)(
+  realKeychain
+    ? "macOS keychain backend (real keychain)"
+    : "macOS keychain backend (real keychain; skipped: no unlocked login keychain on this host)",
+  () => {
+    it("stores, reads, overwrites and deletes 4 KB tokens plus refresh JSON on a throwaway ai.fulcra.test item", async () => {
+      const service = `ai.fulcra.test.j5b-${randomUUID().slice(0, 8)}`;
+      const account = randomUUID();
+      const backend = createMacosKeychainBackend(runCommand);
+      const large = JSON.stringify({
+        accessToken: `CANARY-${"a".repeat(4089)}`,
+        refreshToken: `CANARY-${"r".repeat(4089)}`,
+        email: "fixture@example.test",
+        scheme: "basic",
+        note: "é漢字",
+      });
+      try {
+        await expect(backend.get(service, account)).resolves.toBeNull();
+        await backend.set(service, account, large);
+        await expect(backend.get(service, account)).resolves.toBe(large);
+        await backend.set(service, account, SECRET);
+        await expect(backend.get(service, account)).resolves.toBe(SECRET);
+      } finally {
+        await backend.delete(service, account);
+      }
       await expect(backend.get(service, account)).resolves.toBeNull();
-      await backend.set(service, account, large);
-      await expect(backend.get(service, account)).resolves.toBe(large);
-      await backend.set(service, account, SECRET);
-      await expect(backend.get(service, account)).resolves.toBe(SECRET);
-    } finally {
-      await backend.delete(service, account);
-    }
-    await expect(backend.get(service, account)).resolves.toBeNull();
-  }, 60_000);
-});
+    }, 60_000);
+  },
+);

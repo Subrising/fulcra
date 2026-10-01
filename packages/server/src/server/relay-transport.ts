@@ -1,3 +1,4 @@
+import type { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 /// <reference lib="dom" />
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
@@ -6,7 +7,7 @@ import {
   createDaemonChannel,
   type Transport as RelayTransport,
   type KeyPair,
-} from "@getpaseo/relay/e2ee";
+} from "@getpaseo/client/relay-v3";
 import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
 import type { ExternalSocketMetadata } from "./websocket-server.js";
 import { createEncryptedRelaySocket } from "./websocket/encrypted-relay-socket.js";
@@ -18,6 +19,7 @@ export interface RelayTransportOptions {
   relayUseTls: boolean;
   serverId: string;
   daemonKeyPair?: KeyPair;
+  deviceGate?: RelayDeviceGate;
   createWebSocket?: RelayWebSocketFactory;
 }
 
@@ -59,7 +61,9 @@ const CONTROL_READY_TIMEOUT_MS = 8_000;
 const RELAY_WEBSOCKET_OPTIONS = { handshakeTimeout: 10_000, perMessageDeflate: false } as const;
 
 function createDefaultRelayWebSocket(url: string): RelayWebSocketLike {
-  return new WebSocket(url, RELAY_WEBSOCKET_OPTIONS);
+  return new WebSocket(url, {
+    ...RELAY_WEBSOCKET_OPTIONS,
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -113,6 +117,7 @@ export function startRelayTransport({
   relayUseTls,
   serverId,
   daemonKeyPair,
+  deviceGate,
   createWebSocket = createDefaultRelayWebSocket,
 }: RelayTransportOptions): RelayTransportController {
   const relayLogger = logger.child({ module: "relay-transport" });
@@ -379,16 +384,18 @@ export function startRelayTransport({
         externalSessionKey: `session:${connectionId}`,
         relayConnectionId: connectionId,
       };
-      if (daemonKeyPair) {
+      if (daemonKeyPair && deviceGate) {
         void attachEncryptedSocket(
           socket,
           daemonKeyPair,
           relayLogger.child({ connectionId }),
           attachSocket,
           externalMetadata,
+          deviceGate,
+          serverId,
         );
       } else {
-        void attachSocket(socket, externalMetadata);
+        socket.close(4403, "Not paired");
       }
     });
 
@@ -418,40 +425,77 @@ async function attachEncryptedSocket(
   daemonKeyPair: KeyPair,
   logger: pino.Logger,
   attachSocket: (ws: RelaySocketLike, metadata?: ExternalSocketMetadata) => Promise<void>,
-  metadata?: ExternalSocketMetadata,
+  metadata: ExternalSocketMetadata,
+  deviceGate: RelayDeviceGate,
+  serverId: string,
 ): Promise<void> {
   try {
     const relayTransport = createRelayTransportAdapter(socket, logger);
     const emitter = new EventEmitter();
     const pendingMessages: Array<string | ArrayBuffer> = [];
     let attached = false;
-    const emitMessage = (data: string | ArrayBuffer) => {
-      if (attached) {
-        emitter.emit("message", data);
-        return;
+    let admitting = false;
+    let channel: Awaited<ReturnType<typeof createDaemonChannel>> | undefined;
+    let encryptedSocket: ReturnType<typeof createEncryptedRelaySocket> | undefined;
+    const timeout = setTimeout(() => socket.close(4403, "Not paired"), 15000);
+    socket.once("close", () => clearTimeout(timeout));
+    const drain = async () => {
+      if (admitting || attached || !channel || !encryptedSocket || !pendingMessages.length) return;
+      admitting = true;
+      try {
+        const first = pendingMessages.shift();
+        if (typeof first !== "string" || !channel.devicePublicKeyB64) throw new Error("Not paired");
+        const result = deviceGate.admit(channel.devicePublicKeyB64, JSON.parse(first));
+        // The decrypted first frame proves possession of both session secrets.
+        // attachSocket synchronously records the identity before its first await.
+        await attachSocket(encryptedSocket, { ...metadata, admission: result.admission });
+        if (result.claimed)
+          await channel.send(
+            JSON.stringify({
+              type: "pairing.claimed",
+              deviceId: result.admission.deviceId,
+              hostLabel: "Unnamed host",
+            }),
+          );
+        attached = true;
+        clearTimeout(timeout);
+        if (!result.claimed) emitter.emit("message", first);
+        for (const message of pendingMessages.splice(0)) emitter.emit("message", message);
+      } catch {
+        // Never log the decrypted claim, secret or device key.
+        logger.warn("Relay device admission refused");
+        clearTimeout(timeout);
+        channel.close(4403, "Not paired");
       }
-      pendingMessages.push(data);
     };
-    const channel = await createDaemonChannel(relayTransport, daemonKeyPair, {
-      onmessage: emitMessage,
-      onclose: (code, reason) => emitter.emit("close", code, reason),
-      onerror: (error) => {
-        logger.warn({ err: error }, "relay_e2ee_error");
-        emitter.emit("error", error);
+    channel = await createDaemonChannel(
+      relayTransport,
+      daemonKeyPair,
+      {
+        onmessage: (data) => {
+          if (attached) {
+            emitter.emit("message", data);
+            return;
+          }
+          if (pendingMessages.length >= 16) {
+            socket.close(4403, "Not paired");
+            return;
+          }
+          pendingMessages.push(data);
+          void drain();
+        },
+        onclose: (code, reason) => emitter.emit("close", code, reason),
+        onerror: () => socket.close(4403, "Not paired"),
       },
-    });
-    const encryptedSocket = createEncryptedRelaySocket({
+      serverId,
+    );
+    encryptedSocket = createEncryptedRelaySocket({
       channel,
       emitter,
       getTransportBufferedAmount: () => socket.bufferedAmount,
       terminateTransport: () => socket.terminate(),
     });
-    await attachSocket(encryptedSocket, metadata);
-    attached = true;
-    for (const message of pendingMessages) {
-      emitter.emit("message", message);
-    }
-    pendingMessages.length = 0;
+    await drain();
   } catch (error) {
     logger.warn({ err: error }, "relay_e2ee_handshake_failed");
     try {

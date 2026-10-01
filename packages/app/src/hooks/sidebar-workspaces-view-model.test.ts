@@ -942,3 +942,69 @@ describe("deriveProjectStatusBucket", () => {
     ).toBe("done");
   });
 });
+
+import { selectSidebarSessionRows, equalSidebarSessionRows } from "./sidebar-session-model";
+
+describe("all-session sidebar identity projection", () => {
+  const projectedAgent = (id: string, extra: Partial<Agent> = {}) =>
+    ({
+      id,
+      title: "Same name",
+      status: "idle",
+      provider: "codex",
+      workspaceId: "shared",
+      archivedAt: null,
+      labels: {},
+      pendingPermissions: [],
+      ...extra,
+    }) as Agent;
+  it("enumerates each nonclosed unarchived session despite one workspace, parents and missing placement", () => {
+    const agents = new Map(
+      [
+        projectedAgent("one"),
+        projectedAgent("child", { parentAgentId: "one" }),
+        projectedAgent("unplaced", { workspaceId: undefined }),
+        projectedAgent("closed", { status: "closed" }),
+        projectedAgent("archived", { archivedAt: new Date("2026-10-01T00:00:00.000Z") }),
+      ].map((a) => [a.id, a]),
+    );
+    const rows = selectSidebarSessionRows({ host: { agents } }, ["host"]);
+    expect(rows.map((row) => row.agentId).sort()).toEqual(["child", "one", "unplaced"]);
+    expect(rows.map((row) => row.title)).toEqual(["Same name", "Same name", "Same name"]);
+    expect(rows.find((row) => row.agentId === "unplaced")?.workspaceId).toBeNull();
+  });
+  it("counts unique host/session identities rather than names, accounts or repeated hosts", () => {
+    const a = projectedAgent("same-id", { labels: { "fulcra.account-name": "Same account" } });
+    const rows = selectSidebarSessionRows(
+      { a: { agents: new Map([[a.id, a]]) }, b: { agents: new Map([[a.id, a]]) } },
+      ["a", "a", "b"],
+    );
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.key)).size).toBe(2);
+  });
+  it("uses only each own live account label and reacts to switch/removal", () => {
+    const parent = projectedAgent("parent", { labels: { "fulcra.account-name": "Parent" } });
+    const child = projectedAgent("child", { parentAgentId: "parent" });
+    const projectRows = (a: Agent) =>
+      selectSidebarSessionRows(
+        {
+          host: {
+            agents: new Map([
+              [parent.id, parent],
+              [a.id, a],
+            ]),
+          },
+        },
+        ["host"],
+      );
+    const initial = projectRows(child);
+    expect(initial.find((row) => row.agentId === "child")?.account?.name).toBeNull();
+    const switched = projectRows({ ...child, labels: { "fulcra.account-name": "Child B" } });
+    expect(switched.find((row) => row.agentId === "child")?.account?.name).toBe("Child B");
+    expect(equalSidebarSessionRows(initial, switched)).toBe(false);
+    expect(equalSidebarSessionRows(initial, projectRows({ ...child, updatedAt: new Date() }))).toBe(
+      true,
+    );
+    expect(equalSidebarSessionRows(switched, projectRows({ ...child, labels: {} }))).toBe(false);
+  });
+});

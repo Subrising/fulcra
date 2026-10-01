@@ -1,0 +1,6 @@
+{
+  "id": "orca-organization-next",
+  "requirements": {
+    "paseo": ">=0.8.0"
+  }
+}

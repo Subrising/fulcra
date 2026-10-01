@@ -15,3 +15,6 @@ export const SvgFromXml = Stub;
 export const SvgUri = Stub;
 export const SvgXml = Stub;
 export const Use = Stub;
+
+export const Polygon = Stub;
+export const Text = Stub;

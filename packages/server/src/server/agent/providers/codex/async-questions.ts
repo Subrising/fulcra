@@ -72,6 +72,45 @@ export function codexAsyncQuestionToTimeline(item: unknown): ToolCallTimelineIte
   return parsed.success ? toTimeline({ item: parsed.data }) : null;
 }
 
+const MAX_ANSWER_LENGTH = 16384;
+
+/**
+ * L54: the answers callers really send, read strictly. The app's question form (and the Command Centre controller)
+ * key answers by header ("Question 1"); an agent answering through respond_to_permission tends to key them by the
+ * question text (as Claude's AskUserQuestion accepts) or send them in order. A multi-select answer may be a list of
+ * labels. Every question needs a non-empty string answer; anything else is refused with a plain message, never a
+ * schema error, and the question stays pending.
+ */
+function readAnswers(record: QuestionRecord, answers: unknown): string[] {
+  const keyed =
+    answers !== null && typeof answers === "object" && !Array.isArray(answers)
+      ? (answers as Record<string, unknown>)
+      : null;
+  if (!keyed && !Array.isArray(answers)) throw new Error("Answer the question, or dismiss it");
+  return record.item.questions.map((question, index) => {
+    const raw = Array.isArray(answers)
+      ? answers[index]
+      : (keyed![`Question ${index + 1}`] ?? keyed![question.title] ?? keyed![String(index)]);
+    const text = answerText(raw);
+    if (!text) throw new Error(`Answer Question ${index + 1} before submitting`);
+    if (text.length > MAX_ANSWER_LENGTH)
+      throw new Error(`Answer Question ${index + 1} is too long`);
+    return text;
+  });
+}
+
+function answerText(raw: unknown): string | null {
+  if (typeof raw === "string") return raw.trim() || null;
+  const labels = z.array(z.string()).safeParse(raw);
+  if (!labels.success) return null;
+  return (
+    labels.data
+      .map((label) => label.trim())
+      .filter(Boolean)
+      .join(", ") || null
+  );
+}
+
 /** Codex emits these as completed messages; the outstanding answer belongs to the session. */
 export class CodexAsyncQuestions {
   private readonly records = new Map<string, QuestionRecord>();
@@ -112,12 +151,7 @@ export class CodexAsyncQuestions {
     let resolution: QuestionRecord["resolution"] = "dismissed";
     let prompt: string | undefined;
     if (response.behavior === "allow") {
-      const answers = z.record(z.string(), z.string()).parse(response.updatedInput?.answers);
-      resolution = record.item.questions.map((_, index) => {
-        const answer = answers[`Question ${index + 1}`]?.trim();
-        if (!answer) throw new Error(`Answer Question ${index + 1} before submitting`);
-        return answer;
-      });
+      resolution = readAnswers(record, response.updatedInput?.answers);
       const values = resolution;
       prompt =
         "Answers to your questions:\n\n" +

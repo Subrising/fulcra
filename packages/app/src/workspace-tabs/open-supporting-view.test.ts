@@ -19,6 +19,7 @@ import {
   autoOpenWorkspacePullRequest,
   openComposerChanges,
   openWorkspaceChanges,
+  openWorkspaceContext,
   openWorkspacePullRequest,
 } from "@/workspace-tabs/open-supporting-view";
 
@@ -327,5 +328,42 @@ describe("automatic PR placement", () => {
         "explorer",
       )!.tabIds,
     ).toEqual(["files", "pull_request"]);
+  });
+});
+
+describe("openWorkspaceContext", () => {
+  const input = {
+    isCompact: false,
+    supportsPaneSplits: true,
+    workspaceKey: WORKSPACE_KEY,
+    checkout: CHECKOUT,
+  };
+  it("opens one ordinary side tab and focuses a user-moved tab in place", () => {
+    const tabId = openWorkspaceContext(input);
+    expect(tabId).toBe("context");
+    const store = useWorkspaceLayoutStore.getState();
+    const side = store.sidePaneIdByWorkspace[WORKSPACE_KEY];
+    expect(side).toBeTruthy();
+    store.openTab({
+      workspaceKey: WORKSPACE_KEY,
+      target: { kind: "context" },
+      intent: "reveal",
+      placement: { mode: "pane", paneId: "main" },
+    });
+    const moved = useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY];
+    expect(findPaneById(moved.root, "main")?.tabIds).toContain("context");
+    expect(openWorkspaceContext(input)).toBe("context");
+    const reopened = useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY];
+    expect(findPaneById(reopened.root, "main")?.tabIds).toContain("context");
+    expect(
+      collectAllTabs(reopened.root).filter((tab) => tab.target.kind === "context"),
+    ).toHaveLength(1);
+    expect(useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY]).toBe(side);
+  });
+  it("uses the existing compact destination without a new pane", () => {
+    openWorkspaceContext({ ...input, isCompact: true });
+    expect(usePanelStore.getState().mobilePanel.target).toBe("file-explorer");
+    expect(usePanelStore.getState().explorerTab).toBe("context");
+    expect(useWorkspaceLayoutStore.getState().sidePaneIdByWorkspace[WORKSPACE_KEY]).toBeUndefined();
   });
 });

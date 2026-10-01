@@ -23,3 +23,38 @@ export async function writeFileAtomic(
 export async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
   await writeFileAtomic(filePath, JSON.stringify(value, null, 2));
 }
+
+/** Commit an admission/attempt before acknowledging it or invoking a provider. */
+export async function writeJsonFileDurable(
+  filePath: string,
+  value: unknown,
+  requireEffect?: () => void,
+): Promise<void> {
+  const directory = path.dirname(filePath);
+  requireEffect?.();
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+  try {
+    requireEffect?.();
+    const file = await fs.open(temporary, "wx", 0o600);
+    try {
+      requireEffect?.();
+      await file.writeFile(JSON.stringify(value));
+      requireEffect?.();
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    requireEffect?.();
+    await fs.rename(temporary, filePath);
+    const parent = await fs.open(directory, "r");
+    try {
+      requireEffect?.();
+      await parent.sync();
+    } finally {
+      await parent.close();
+    }
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}

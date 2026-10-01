@@ -1,3 +1,5 @@
+import type { ManagementPrincipalV11 } from "@getpaseo/protocol/controller-management";
+import { DaemonPermissionSchema } from "@getpaseo/protocol/messages";
 import type {
   ProviderConnectRequest,
   ProviderCatalogOptions,
@@ -31,9 +33,27 @@ export type PluginProcessRequest =
       providerId: string;
       options: ProviderCatalogOptions;
     }
-  | { type: "hook"; requestId: string; kind: "event" | "before"; name: string; input: unknown }
+  | {
+      type: "hook";
+      requestId: string;
+      kind: "event" | "before";
+      name: string;
+      input: unknown;
+    }
   | { type: "hook.cancel"; requestId: string }
-  | { type: "invoke"; requestId: string; method: string; input: unknown }
+  | {
+      type: "invoke";
+      requestId: string;
+      method: string;
+      input: unknown;
+      management?: {
+        invocationId: string;
+        principal: ManagementPrincipalV11;
+        readOnly?: true;
+        // U7: the caller may manage accounts (set by the host only).
+        accountsManage?: true;
+      };
+    }
   | {
       type: "provider.connect";
       providerId: string;
@@ -49,7 +69,12 @@ export type PluginProcessRequest =
   | { type: "provider.close"; connectionId: string }
   | { type: "shutdown" }
   | { type: "host.result"; callId: string; output: unknown }
-  | { type: "host.error"; callId: string; error: string }
+  | {
+      type: "host.error";
+      callId: string;
+      error: string;
+      code?: "uncertain" | "unavailable" | "invalid" | "expired" | "unauthorised" | "refused";
+    }
   | { type: "paseo_frame"; data: string | Uint8Array; isBinary: boolean }
   | { type: "paseo_close" };
 
@@ -63,12 +88,32 @@ export const PLUGIN_HOST_CALL_METHODS = [
 export type PluginHostCallMethod = (typeof PLUGIN_HOST_CALL_METHODS)[number];
 
 export type PluginProcessMessage =
+  | {
+      type: "management.invoke";
+      callId: string;
+      invocationId: string;
+      command: unknown;
+    }
+  // U7: audit a remote account action against an open management invocation (the host adds device and time).
+  | {
+      type: "management.audit";
+      callId: string;
+      invocationId: string;
+      entry: unknown;
+    }
   | { type: "settings.changed"; settingsId: string }
-  | { type: "host.call"; callId: string; method: PluginHostCallMethod; input: unknown }
+  | {
+      type: "host.call";
+      callId: string;
+      method: PluginHostCallMethod;
+      input: unknown;
+    }
   | { type: "hooks.changed"; hooks: { events: string[]; before: string[] } }
   | {
       type: "ready";
       methods: string[];
+      /** D13: the methods registered as reads (optional: an older plugin process sends none). */
+      readMethods?: string[];
       providers: PluginProviderMetadata[];
       hooks?: { events: string[]; before: string[] };
     }
@@ -93,6 +138,15 @@ export type PluginProcessMessage =
   | { type: "provider.closed"; connectionId: string; error?: string }
   | { type: "paseo_frame"; data: string | Uint8Array; isBinary: boolean }
   | { type: "paseo_close" };
+
+const principalSchema = z
+  .object({
+    id: z.string().min(1),
+    authentication: z.enum(["daemon-password", "paired-device", "protected-local-ipc"]),
+    deviceId: z.string().nullable(),
+    permissions: z.array(DaemonPermissionSchema),
+  })
+  .strict();
 
 const hooksSchema = z.object({ events: z.array(z.string()), before: z.array(z.string()) }).strict();
 
@@ -162,6 +216,15 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
     z
       .object({
         type: z.literal("invoke"),
+        management: z
+          .object({
+            invocationId: z.string().uuid(),
+            principal: principalSchema,
+            readOnly: z.literal(true).optional(),
+            accountsManage: z.literal(true).optional(),
+          })
+          .strict()
+          .optional(),
         requestId: z.string().min(1),
         method: z.string().min(1),
         input: z.unknown(),
@@ -189,7 +252,14 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
       .object({ type: z.literal("host.result"), callId: z.string().min(1), output: z.unknown() })
       .strict(),
     z
-      .object({ type: z.literal("host.error"), callId: z.string().min(1), error: z.string() })
+      .object({
+        type: z.literal("host.error"),
+        callId: z.string().min(1),
+        error: z.string(),
+        code: z
+          .enum(["uncertain", "unavailable", "invalid", "expired", "unauthorised", "refused"])
+          .optional(),
+      })
       .strict(),
     z.object({ type: z.literal("paseo_frame"), ...frameFields }).strict(),
     z.object({ type: z.literal("paseo_close") }).strict(),
@@ -199,6 +269,22 @@ export const PluginProcessRequestSchema: z.ZodType<PluginProcessRequest> = z.dis
 export const PluginProcessMessageSchema: z.ZodType<PluginProcessMessage> = z.discriminatedUnion(
   "type",
   [
+    z
+      .object({
+        type: z.literal("management.invoke"),
+        callId: z.string().min(1).max(64),
+        invocationId: z.string().uuid(),
+        command: z.unknown(),
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("management.audit"),
+        callId: z.string().min(1).max(64),
+        invocationId: z.string().uuid(),
+        entry: z.unknown(),
+      })
+      .strict(),
     z.object({ type: z.literal("settings.changed"), settingsId: z.string() }).strict(),
     z
       .object({
@@ -213,6 +299,8 @@ export const PluginProcessMessageSchema: z.ZodType<PluginProcessMessage> = z.dis
       .object({
         type: z.literal("ready"),
         methods: z.array(z.string()),
+        // D13: the methods registered as reads (a plugin process from the same build sends it).
+        readMethods: z.array(z.string()).optional(),
         providers: z.array(providerMetadataSchema),
         hooks: hooksSchema.optional(),
       })

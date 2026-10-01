@@ -1,0 +1,15 @@
+{
+  "errors": [],
+  "detail": [
+    {
+      "pullRequests": [
+        {
+          "id": "#5",
+          "name": "Sign-in fix",
+          "url": "https://bitbucket.org/acme/web/pull-requests/5",
+          "status": "OPEN"
+        }
+      ]
+    }
+  ]
+}

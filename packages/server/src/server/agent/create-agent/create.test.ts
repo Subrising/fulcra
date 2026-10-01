@@ -1,3 +1,5 @@
+import { TrustedPlugins } from "../../plugins/trusted.js";
+import type { TrustedInputKind } from "@getpaseo/plugin/server";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +15,7 @@ import { createAgentCommand } from "./create.js";
 import type { ManagedAgent } from "../agent-manager.js";
 
 const logger = createTestLogger();
+const noOperation = () => undefined;
 
 function createRealAgentManager(storage: AgentStorage): AgentManager {
   return new AgentManager({
@@ -66,6 +69,12 @@ test("session create forwards clientMessageId to the initial prompt run options"
   const streamAgent = vi.fn(() => (async function* noop() {})());
   const dependencies: Parameters<typeof createAgentCommand>[0] = {
     agentManager: {
+      withInput: <T>(
+        id: string,
+        kind: TrustedInputKind,
+        messageId: string | undefined,
+        operation: () => T,
+      ) => new TrustedPlugins().input({ ...snapshot, id }, kind, messageId, operation),
       createAgent: vi.fn(async () => snapshot),
       getAgent: vi.fn(() => snapshot),
       tryRunOutOfBand: vi.fn(() => false),
@@ -470,4 +479,166 @@ test("session create keeps an explicit title after the initial prompt settles", 
   } finally {
     await removeRealAgentManagerWorkdir({ agentManager, storage, workdir });
   }
+});
+
+test("controller-created session attributes its first prompt to an agent-bound token", async () => {
+  const authority = new TrustedPlugins();
+  let sdk!: import("@getpaseo/plugin/server").LegacyTrustedPluginServer;
+  const seen: import("@getpaseo/plugin/server").TrustedInput[] = [];
+  authority.register("fixture-controller", true, (server) => {
+    sdk = server;
+    server.admission.onInput((_agent, input) => {
+      seen.push(input);
+      return input.source === "plugin" || input.source === "daemon" ? "allow" : "deny";
+    });
+  });
+  const workdir = mkdtempSync(join(tmpdir(), "attributed-create-"));
+  const storage = new AgentStorage(workdir, logger);
+  const manager = new AgentManager({
+    clients: createTestAgentClients(),
+    registry: storage,
+    logger,
+    trustedPlugins: authority,
+  });
+  const agentId = "11111111-2222-4333-8444-555555555555";
+  const unsubscribe = manager.subscribe(
+    () => {
+      authority.input(
+        { id: "fixture-parent", provider: "codex" },
+        "prompt",
+        undefined,
+        () => undefined,
+      );
+    },
+    { replayState: false },
+  );
+  try {
+    const token = sdk.issueProvenance({ agentId, kind: "prompt", messageId: "first-prompt" });
+    const result = await authority.rpc(token, () =>
+      createAgentCommand(
+        {
+          agentManager: manager,
+          agentStorage: storage,
+          logger,
+          providerSnapshotManager: createProviderSnapshotManagerStub().manager,
+        },
+        {
+          kind: "session",
+          agentId,
+          config: { provider: "codex", cwd: workdir },
+          workspaceId: "fixture-workspace",
+          initialPrompt: "Fixture plan",
+          clientMessageId: "first-prompt",
+          labels: {},
+          provisionalTitle: null,
+          firstAgentContext: { attachments: [] },
+          buildSessionConfig: async (config) => ({ sessionConfig: config }),
+        },
+      ),
+    );
+    expect(result.snapshot.id).toBe(agentId);
+    expect(result.initialPromptStarted).toBe(true);
+    expect(
+      seen.some(
+        (input) => input.kind === "prompt" && input.provenance?.pluginId === "fixture-controller",
+      ),
+    ).toBe(true);
+    expect(authority.sequence(agentId).humanAt).toBe(0);
+    expect(authority.sequence("fixture-parent").humanAt).toBe(0);
+    expect(seen.some((input) => input.source === "daemon")).toBe(true);
+    expect(() =>
+      authority.rpc(token, () =>
+        authority.input(result.snapshot, "prompt", "first-prompt", noOperation),
+      ),
+    ).toThrow(/provenance/);
+  } finally {
+    unsubscribe();
+    await removeRealAgentManagerWorkdir({ agentManager: manager, storage, workdir });
+    authority.close();
+  }
+});
+
+// Update-7 W3, R1 P-8 (re-check 2): `paseo run` from inside a session creates through the SESSION path. The caller must
+// reach the provider's create config as `parent`, so a restricted session's children start restricted before any host
+// hook sees them. Here the stub runs the real Claude/Codex resolver, and resolves the parent as the snapshot manager does.
+test("paseo run from a Claude plan/default session: Codex and Claude children start restricted", async () => {
+  const { resolveOwnDefaultCreateConfig } = await import("../create-agent-mode.js");
+  const MODES: Record<string, Array<{ id: string; label: string; isUnattended?: boolean }>> = {
+    claude: [
+      { id: "default", label: "default" },
+      { id: "acceptEdits", label: "acceptEdits" },
+      { id: "plan", label: "plan" },
+      { id: "auto", label: "auto" },
+      { id: "bypassPermissions", label: "bypassPermissions", isUnattended: true },
+    ],
+    codex: [
+      { id: "auto", label: "auto" },
+      { id: "auto-review", label: "auto-review" },
+      { id: "full-access", label: "full-access", isUnattended: true },
+    ],
+  };
+  const started = async (callerMode: string | null, provider: "claude" | "codex") => {
+    const lead = {
+      id: "lead-1",
+      provider: "claude",
+      currentModeId: callerMode,
+      cwd: "/tmp/paseo-create-test",
+    } as unknown as ManagedAgent;
+    const createAgent = vi.fn(
+      async (config: { provider: string }) =>
+        ({
+          id: "child-1",
+          provider: config.provider,
+          cwd: "/tmp/paseo-create-test",
+          runtimeInfo: null,
+        }) as unknown as ManagedAgent,
+    );
+    const stub = createProviderSnapshotManagerStub();
+    stub.resolveCreateConfig.mockImplementation(async (input) => {
+      const parent = input.parent
+        ? {
+            provider: input.parent.provider,
+            modeId: input.parent.currentModeId ?? null,
+            isUnattended: false,
+          }
+        : null;
+      return resolveOwnDefaultCreateConfig({
+        provider: input.provider,
+        requestedMode: input.requestedMode,
+        featureValues: input.featureValues,
+        parent,
+        unattended: input.unattended,
+        availableModes: MODES[input.provider],
+      });
+    });
+    await createAgentCommand(
+      {
+        agentManager: {
+          createAgent,
+          getAgent: vi.fn((id: string) => (id === "lead-1" ? lead : null)),
+        } as unknown as Parameters<typeof createAgentCommand>[0]["agentManager"],
+        agentStorage: {} as Parameters<typeof createAgentCommand>[0]["agentStorage"],
+        logger: createTestLogger(),
+        providerSnapshotManager: stub.manager,
+      },
+      {
+        kind: "session",
+        config: { provider, cwd: "/tmp/paseo-create-test" },
+        workspaceId: "ws-create-test",
+        labels: { "paseo.parent-agent-id": "lead-1" },
+        parentAgentId: "lead-1",
+        provisionalTitle: null,
+        firstAgentContext: { attachments: [] },
+        buildSessionConfig: async (config) => ({ sessionConfig: config }),
+      },
+    );
+    const call = createAgent.mock.calls[0] as [{ modeId?: string }] | undefined;
+    return call?.[0].modeId;
+  };
+  expect(await started("plan", "codex")).toBe("auto-review");
+  expect(await started("plan", "claude")).toBe("plan");
+  expect(await started("default", "codex")).toBe("auto-review");
+  expect(await started("default", "claude")).toBe("default");
+  // An automatic caller's child is left to the host default (Fulcra's hook applies the owner default and its cap).
+  expect(await started("auto", "codex")).toBeUndefined();
 });

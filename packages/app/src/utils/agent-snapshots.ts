@@ -106,6 +106,7 @@ export function normalizeAgentSnapshot(snapshot: AgentSnapshotPayload, serverId:
 
   return {
     serverId,
+    runtimeInstanceId: snapshot.runtimeInstanceId,
     id: snapshot.id,
     provider: snapshot.provider,
     status: snapshot.status,

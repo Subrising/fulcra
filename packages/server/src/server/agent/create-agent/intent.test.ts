@@ -18,9 +18,57 @@ describe("resolveCreateAgentIntent", () => {
       parentAgentId: "parent-agent",
       labels: {
         purpose: "review",
+        "fulcra.role": "implementation",
         [PARENT_AGENT_ID_LABEL]: "parent-agent",
       },
     });
+  });
+
+  it("update-7: a child inherits its caller's task and project, and is an implementation worker unless it names a role", async () => {
+    const base = {
+      caller: {
+        id: "lead",
+        cwd: "/lead",
+        workspaceId: "ws-lead",
+        labels: {
+          task: "task-1",
+          "fulcra.project": "proj-1",
+          owner: "orca-control",
+          "fulcra.role": "orchestration",
+        },
+      },
+      resolveWorkspace: async (workspaceId: string) => ({ workspaceId, cwd: "/x" }),
+      createWorkspace: async () => ({ workspaceId: "ws-new", cwd: "/new" }),
+    };
+    const child = await resolveCreateAgentIntent(base);
+    expect(child.labels).toEqual({
+      task: "task-1",
+      "fulcra.project": "proj-1",
+      "fulcra.role": "implementation",
+      [PARENT_AGENT_ID_LABEL]: "lead",
+    });
+    const reviewer = await resolveCreateAgentIntent({
+      ...base,
+      labels: { "fulcra.role": "review", task: "task-2" },
+    });
+    expect(reviewer.labels).toMatchObject({
+      "fulcra.role": "review",
+      task: "task-2",
+      "fulcra.project": "proj-1",
+      [PARENT_AGENT_ID_LABEL]: "lead",
+    });
+    // No caller (the UI, the controller): nothing inherited, no role imposed.
+    const top = await resolveCreateAgentIntent({ ...base, caller: null, labels: { purpose: "x" } });
+    expect(top.labels).toEqual({ purpose: "x" });
+    // A caller's parent label is never inherited: the child's parent is the caller itself.
+    const nested = await resolveCreateAgentIntent({
+      ...base,
+      caller: {
+        ...base.caller,
+        labels: { ...base.caller.labels, [PARENT_AGENT_ID_LABEL]: "prime" },
+      },
+    });
+    expect(nested.labels[PARENT_AGENT_ID_LABEL]).toBe("lead");
   });
 
   it("defaults an agent caller to its workspace without creating one", async () => {

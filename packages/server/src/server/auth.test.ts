@@ -1,4 +1,7 @@
 import { describe, expect, test } from "vitest";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   extractHttpBearerToken,
@@ -7,25 +10,33 @@ import {
   hashDaemonPassword,
   isAgentMcpRequestAuthorized,
   isBearerTokenValidAsync,
-  isBearerTokenValid,
+  selectDaemonProtocol,
   shouldBypassBearerAuth,
 } from "./auth.js";
+import {
+  DAEMON_PLAIN_PROTOCOL,
+  daemonAuthorizationHeader,
+  daemonAuthProtocols,
+} from "@getpaseo/protocol/daemon-credential";
+import { resolveSessionAdmission } from "./session-admission-auth.js";
+import {
+  deleteLocalCredential,
+  readLocalCredentialForTarget,
+  writeLocalCredential,
+} from "./local-credential.js";
 
 const CORRECT_PASSWORD_HASH = "$2b$12$OLxyuuP9uLK30Uzc4wQX0O6liuU/Q1t5P2b0Ebf36mULvpVK3DRZW";
 
 describe("daemon bearer validator", () => {
-  test("allows any token when no password is configured", () => {
-    expect(isBearerTokenValid({ password: undefined, token: null })).toBe(true);
-    expect(isBearerTokenValid({ password: undefined, token: "anything" })).toBe(true);
+  test("allows any token when no password is configured", async () => {
+    expect(await isBearerTokenValidAsync({ password: undefined, token: null })).toBe(true);
+    expect(await isBearerTokenValidAsync({ password: undefined, token: "anything" })).toBe(true);
   });
 
   test("accepts the plaintext token against the bcrypt hash and rejects missing or wrong tokens", async () => {
     expect(
       await isBearerTokenValidAsync({ password: CORRECT_PASSWORD_HASH, token: "correct-password" }),
     ).toBe(true);
-    expect(isBearerTokenValid({ password: CORRECT_PASSWORD_HASH, token: "correct-password" })).toBe(
-      true,
-    );
     expect(await isBearerTokenValidAsync({ password: CORRECT_PASSWORD_HASH, token: null })).toBe(
       false,
     );
@@ -34,11 +45,11 @@ describe("daemon bearer validator", () => {
     );
   });
 
-  test("hashes a password into a bcrypt value", () => {
+  test("hashes a password into a bcrypt value", async () => {
     const hash = hashDaemonPassword("correct-password");
 
     expect(hash).toMatch(/^\$2[aby]\$12\$/);
-    expect(isBearerTokenValid({ password: hash, token: "correct-password" })).toBe(true);
+    expect(await isBearerTokenValidAsync({ password: hash, token: "correct-password" })).toBe(true);
   });
 
   test("extracts HTTP bearer tokens", () => {
@@ -68,6 +79,24 @@ describe("daemon bearer validator", () => {
     // Everything else stays behind the daemon password.
     expect(shouldBypassBearerAuth("GET", "/api/status")).toBe(false);
     expect(shouldBypassBearerAuth("POST", "/api/files/upload")).toBe(false);
+  });
+});
+
+describe("encoded credentials (F01)", () => {
+  test("reads the password from the current and legacy subprotocols and from an encoded header", () => {
+    const password = "a b,c/d\"e'f🔐";
+    const protocols = daemonAuthProtocols(password);
+    expect(extractWsBearerToken(extractWsBearerProtocol(protocols.join(", ")))).toBe(password);
+    expect(extractWsBearerToken("paseo.bearer.legacy-token")).toBe("legacy-token");
+    expect(extractHttpBearerToken(daemonAuthorizationHeader(password))).toBe(password);
+    expect(extractHttpBearerToken("Bearer plain-token")).toBe("plain-token");
+  });
+
+  test("answers with the plain protocol, so the handshake never echoes the credential", () => {
+    expect(selectDaemonProtocol(daemonAuthProtocols("secret"))).toBe(DAEMON_PLAIN_PROTOCOL);
+    // An older client offers only its credential protocol, which is echoed as before.
+    expect(selectDaemonProtocol(["paseo.bearer.secret"])).toBe("paseo.bearer.secret");
+    expect(selectDaemonProtocol([DAEMON_PLAIN_PROTOCOL])).toBe(false);
   });
 });
 
@@ -120,4 +149,119 @@ describe("agent MCP request authorizer", () => {
       }),
     ).toBe(false);
   });
+});
+
+describe("hello admission", () => {
+  test("never promotes an unpaired relay hello to owner authority", async () => {
+    for (const credential of [
+      undefined,
+      { kind: "password" as const, password: "relay-password" },
+      { kind: "localCredential" as const, token: "local-token" },
+    ]) {
+      expect(
+        await resolveSessionAdmission({
+          credential,
+          passwordHash: undefined,
+          localCredential: "local-token",
+          transport: "relay",
+        }),
+      ).toEqual({ rejection: "password_required" });
+    }
+  });
+
+  test("admits a stale local credential when no password is configured", async () => {
+    expect(
+      await resolveSessionAdmission({
+        credential: { kind: "localCredential", token: "stale" },
+        passwordHash: undefined,
+        localCredential: "current",
+        transport: "direct",
+      }),
+    ).toMatchObject({ admission: { principalId: "owner" } });
+  });
+  test("accepts a password and current local credential, but rejects old and wrong credentials", async () => {
+    const home = await mkdtemp(join(tmpdir(), "paseo-local-auth-"));
+    try {
+      const first = await writeLocalCredential(home);
+      const second = await writeLocalCredential(home);
+      const input = {
+        passwordHash: CORRECT_PASSWORD_HASH,
+        localCredential: second,
+        transport: "direct" as const,
+      };
+      expect(
+        await resolveSessionAdmission({
+          ...input,
+          credential: { kind: "password", password: "correct-password" },
+        }),
+      ).toMatchObject({ admission: { principalId: "owner" } });
+      expect(
+        await resolveSessionAdmission({
+          ...input,
+          credential: { kind: "localCredential", token: second },
+        }),
+      ).toMatchObject({ admission: { principalId: "owner" } });
+      expect(
+        await resolveSessionAdmission({
+          ...input,
+          credential: { kind: "localCredential", token: first },
+        }),
+      ).toEqual({ rejection: "incorrect_password" });
+      expect(
+        await resolveSessionAdmission({
+          ...input,
+          credential: { kind: "password", password: "wrong" },
+        }),
+      ).toEqual({ rejection: "incorrect_password" });
+      expect(
+        await resolveSessionAdmission({
+          ...input,
+          transport: "relay",
+          credential: { kind: "password", password: "wrong" },
+        }),
+      ).toEqual({ rejection: "password_required" });
+      expect(await resolveSessionAdmission({ ...input, credential: undefined })).toEqual({
+        rejection: "password_required",
+      });
+      expect(
+        await resolveSessionAdmission({ ...input, transport: "relay", credential: undefined }),
+      ).toEqual({ rejection: "password_required" });
+    } finally {
+      await deleteLocalCredential(home);
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("writes a private rotating credential and reads it only for the matching target", async () => {
+    const home = await mkdtemp(join(tmpdir(), "paseo-local-file-"));
+    try {
+      await writeFile(join(home, "paseo.pid"), JSON.stringify({ listen: "127.0.0.1:6767" }));
+      const first = await writeLocalCredential(home);
+      if (process.platform !== "win32") {
+        expect((await stat(join(home, "local-credential"))).mode & 0o777).toBe(0o600);
+      }
+      expect(readLocalCredentialForTarget(home, "tcp://localhost:6767")).toBe(first);
+      expect(readLocalCredentialForTarget(home, "tcp://remote.example:6767")).toBeNull();
+      const second = await writeLocalCredential(home);
+      expect(second).not.toBe(first);
+      expect((await readFile(join(home, "local-credential"), "utf8")).trim()).toBe(second);
+      await deleteLocalCredential(home);
+      expect(readLocalCredentialForTarget(home, "localhost:6767")).toBeNull();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+test("report credentials never authenticate the agent MCP action endpoint, including passwordless or matching-token hosts", async () => {
+  const report = "report1." + "x".repeat(43);
+  for (const password of [undefined, CORRECT_PASSWORD_HASH])
+    for (const capabilityToken of [null, report, "ordinary-mcp-token"])
+      expect(
+        await isAgentMcpRequestAuthorized({
+          password,
+          capabilityToken,
+          authorizationHeader: `Bearer ${report}`,
+        }),
+      ).toBe(false);
 });

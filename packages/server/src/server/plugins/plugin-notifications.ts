@@ -6,7 +6,7 @@ import type { PushDeliveryReport, PushPayload } from "../push/index.js";
 import { writePrivateFileAtomicSync } from "../private-files.js";
 
 // Plugin notifications (`server.notify`). Every accepted notification joins the host's in-app list;
-// only `urgency: "now"` also raises a push to the connected Fulcra apps, title only.
+// only `urgency: "now"` also raises a push to the connected Fulcra apps (CONTRACTS §3.4), title only.
 // The host checks the manifest grant; the plugin never supplies it.
 //
 // One durable state file holds four independent parts:
@@ -21,7 +21,7 @@ export const PLUGIN_NOTIFICATION_TITLE_MAX = 120;
 const MAX_DISPLAYED = 500;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT_PER_WINDOW = 10;
-// How long a key stays deduplicated.
+// How long a key stays deduplicated. See CONTRACT-CHANGE-J5b-1 (proposed for CONTRACTS §3.4).
 export const KEY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const RETRY_DELAYS_MS = [30_000, 120_000, 600_000, 1_800_000, 3_600_000];
 

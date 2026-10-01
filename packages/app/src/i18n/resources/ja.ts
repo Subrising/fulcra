@@ -2,6 +2,16 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ja: TranslationResources = {
+  plugins: {
+    commandCentreRelay: {
+      title: "Command Centre にはこの Mac への直接接続が必要です",
+      why: "このデバイスは暗号化リレー経由で Mac に接続しています。リレーでは Command Centre を開けないため、直接接続するまでこれらの画面は空のままです。",
+      todo: "直接接続するには、このホストを開き、「接続を追加」→「直接接続」を選んで、Mac の Tailscale またはローカルネットワークのアドレスとホストのパスワードを入力してください。接続できるようになると、アプリが自動で切り替えます。",
+      meanwhile: "セッションとチャットはリレー経由で引き続き使えます。",
+      error:
+        "Command Centre にはこの Mac への直接接続が必要です。このホストに直接接続(Tailscale またはローカルネットワーク)を追加してください。",
+    },
+  },
   sessionOwnership: {
     noLeaderYet: "リーダー未設定",
     unknownProject: "プロジェクト不明",
@@ -1103,6 +1113,231 @@ export const ja: TranslationResources = {
       description: "接続を確認してもう一度お試しください。",
     },
   },
+  automations: {
+    title: "オートメーション",
+    intro:
+      "何かが起きたら、何かをする。オートメーションはこのホストで実行され、オートメーションで指定しない限り Fulcra の外には何も投稿されません。",
+    new: "新しいオートメーション",
+    loading: "オートメーションを読み込み中…",
+    failed:
+      "オートメーションを読み込めませんでした。繰り返し起きる場合はホストを更新してください。",
+    empty:
+      "オートメーションはまだありません。プルリクエストが開かれたらセッションを開始する、別のセッションが終わったらセッションにメッセージを送る、などを作成できます。",
+    enabled: "オン",
+    runNow: "今すぐ実行",
+    history: "履歴 ({{count}})",
+    hideHistory: "履歴を隠す",
+    edit: "編集",
+    neverRun: "まだ実行されていません",
+    lastRun: "前回の実行 {{when}} · {{source}}",
+    noRuns: "まだ実行されていません。",
+    skippedSummary:
+      "{{count}} 回スキップ (最後は {{when}}): オフだった、1 分以内の繰り返し、または 1 日の上限に達しました。",
+    status: {
+      running: "実行中",
+      ok: "完了",
+      failed: "失敗",
+      skipped: "スキップ",
+    },
+    unknownProject: "削除されたプロジェクト",
+    untitledSession: "無題のセッション",
+    cadence: {
+      minutes_one: "毎分",
+      minutes_other: "{{count}} 分ごと",
+      hours_one: "毎時",
+      hours_other: "{{count}} 時間ごと",
+      days_one: "毎日",
+      days_other: "{{count}} 日ごと",
+    },
+    when: {
+      schedule: "スケジュールで ({{cadence}})",
+      pullRequest: {
+        opened: "{{project}} でプルリクエストが開かれたとき",
+        updated: "{{project}} でプルリクエストが更新されたとき",
+        both: "{{project}} でプルリクエストが開かれた・更新されたとき",
+      },
+      session: {
+        finished: "セッションが終了したとき",
+        blocked: "セッションがあなたを待っているとき",
+        usage_limit: "セッションが使用量の上限に達したとき",
+        finishedInProject: "{{project}} のセッションが終了したとき",
+        blockedInProject: "{{project}} のセッションがあなたを待っているとき",
+        usage_limitInProject: "{{project}} のセッションが使用量の上限に達したとき",
+      },
+    },
+    do: {
+      startSession: "{{project}} で {{template}} のセッションを開始",
+      messageSession: "「{{session}}」にメッセージを送信",
+      note: "メモを記録",
+      noteAndPost: "メモを記録してプルリクエストに投稿",
+    },
+    run: {
+      manual: "手動で実行",
+      schedule: "スケジュール",
+      pullRequest: "プルリクエスト #{{number}}",
+      pullRequestAny: "プルリクエスト",
+      session: {
+        finished: "セッションが終了",
+        blocked: "セッションがあなたを待っていた",
+        usage_limit: "セッションが使用量の上限に到達",
+      },
+    },
+    builder: {
+      newTitle: "新しいオートメーション",
+      editTitle: "オートメーションを編集",
+      delete: "削除",
+      cancel: "キャンセル",
+      save: "保存",
+      create: "作成",
+      saveFailed: "オートメーションを保存できませんでした。",
+      name: "名前",
+      namePlaceholder: "新しいプルリクエストをレビュー",
+      enabled: "オン",
+      when: "いつ",
+      do: "何をする",
+      trigger: {
+        pull_request: "プルリクエスト",
+        session: "セッション",
+        schedule: "スケジュール",
+      },
+      project: "プロジェクト",
+      chooseProject: "プロジェクトを選択",
+      noProjects: "このホストにプロジェクトはありません",
+      prOpened: "開かれた",
+      prUpdated: "更新された (新しいコミット)",
+      prHint: "あなたの GitHub サインインで 5 分ごとに確認します (読み取りのみ)。",
+      session: {
+        finished: "終了",
+        blocked: "あなた待ち",
+        usage_limit: "使用量の上限",
+      },
+      anyProject: "すべてのプロジェクト",
+      action: {
+        start_session: "セッションを開始",
+        message_session: "セッションにメッセージ",
+        note: "メモを記録",
+      },
+      template: "テンプレート",
+      chooseTemplate: "テンプレートを選択",
+      noTemplates: "テンプレートはありません",
+      providerDefaults: "{{provider}} (既定の設定)",
+      prompt: "プロンプト",
+      promptPlaceholder: "セッションに何をさせますか?",
+      eventHint: "{{token}} は起きたことに置き換わります (例: 「pull request #7 opened」)。",
+      sessionLabel: "セッション",
+      chooseSession: "セッションを選択",
+      noSessions: "開いているセッションはありません",
+      note: "メモ",
+      notePlaceholder: "確認が必要",
+      noteHint:
+        "このホストの実行履歴と一緒に保存されます。「今日」や受信箱への投稿はまだ使えません。",
+      postToGithub: "プルリクエストにコメントとしても投稿する",
+      postToGithubHint:
+        "既定ではオフです。オンにすると、実行のたびにあなたのサインインでメモが GitHub に投稿されます。",
+      allowUnattended: "許可を求めずに実行",
+      allowUnattendedHint:
+        "オフ: あなたが始めたセッションと同じく、コマンドの実行やファイルの変更の前に確認します。",
+      allowUnattendedWarning:
+        "セッションは確認なしでコマンドの実行、ファイルの変更、プッシュができます。このオートメーションを起動するものが、その動きを左右できます。",
+    },
+  },
+  insights: {
+    limits: {
+      capped:
+        "リストごとに最新の {{count}} 件のプルリクエストだけを読み込んだため、古いものが欠けている可能性があります。",
+      reviewWait:
+        "レビュー待ちは、プルリクエストが開かれたとき (下書きの時間を含む) から、作成者以外による最初の承認または変更依頼までです。コメントとボットは数えません。",
+      finished:
+        "セッションはターンが正常に終わったときに完了とみなします。失敗したターンやアーカイブだけでは数えません。",
+    },
+    title: "インサイト",
+    loading: "インサイトを読み込んでいます…",
+    failed: "このホストからインサイトを読み込めませんでした。",
+    allProjects: "すべてのプロジェクト",
+    lastDays: "過去 {{count}} 日",
+    delivery: "デリバリー",
+    agents: "エージェント",
+    deliveryUnavailable: "GitHub からプルリクエストを読み込めませんでした。",
+    deliveryNone: "この範囲に GitHub のプルリクエストはありません。",
+    otherFolders: "その他のフォルダ",
+    hint: "バーをタップすると数値を表示します。",
+    duration: {
+      minutes: "{{count}} 分",
+      hours: "{{count}} 時間",
+      days: "{{count}} 日",
+    },
+    age: {
+      lt1d: "< 1 日",
+      d1to3: "1–3 日",
+      d3to7: "3–7 日",
+      d7to30: "1–4 週間",
+      gt30d: "> 30 日",
+    },
+    readout: {
+      week: "{{week}} の週: マージ {{merged}} 件、マージまで中央値 {{cycle}}",
+      age: "{{age}}: オープン {{count}} 件",
+      sessions: "{{day}}: 開始 {{started}}、完了 {{finished}}",
+      blocked: "{{day}}: あなた待ち {{blocked}} 回、使用量上限で停止 {{limits}} 回",
+      project: "{{name}}: {{count}} セッション",
+    },
+    tile: {
+      cycle: "オープン → マージ（中央値）",
+      review: "最初のレビューまで（中央値）",
+      merge: "マージ率",
+      started: "開始したセッション",
+      finishedNote: "完了 {{count}}",
+      blocked: "あなたを待った時間",
+      limits: "使用量上限での停止",
+    },
+    chart: {
+      merged: "週ごとのマージ数",
+      openByAge: "経過日数別のオープン中プルリクエスト",
+      sessions: "日ごとのセッション",
+      blocked: "日ごとのあなた待ちと使用量上限",
+      projects: "プロジェクト別のセッション",
+    },
+    series: {
+      merged: "マージ",
+      open: "オープン",
+      started: "開始",
+      finished: "完了",
+      blocked: "停止",
+    },
+    takeaway: {
+      cycleNone: "過去 {{days}} 日にマージされたプルリクエストはありません。",
+      cycle: "プルリクエストはオープンからマージまで {{median}} かかっています。",
+      cycle_doubled:
+        "マージが遅くなりました: オープンからマージまで {{median}}（以前は {{before}}）。",
+      cycle_halved:
+        "マージが速くなりました: オープンからマージまで {{median}}（以前は {{before}}）。",
+      reviewNoneWaiting:
+        "まだレビューされたプルリクエストはありません。準備済みのうち {{count}} 件が 2 日以上待っています。",
+      reviewNone: "この期間にレビューはありません。",
+      review_doubled:
+        "レビュー待ちが倍増: {{median}}（以前は {{before}}）。2 日以上待ち {{count}} 件。",
+      review: "レビューは {{median}} 後に始まります。2 日以上待ち {{count}} 件。",
+      mergeNone: "この期間にマージもクローズもありません。",
+      merge:
+        "決着したプルリクエストの {{percent}}% がマージされました（マージ {{merged}}、クローズ {{closed}}）。",
+      openNone: "オープン中のプルリクエストはありません。",
+      open: "オープン中のプルリクエストは {{count}} 件、うち {{old}} 件は 1 週間以上経過。",
+      sessionsNone: "過去 {{days}} 日にセッションはありません。",
+      sessions:
+        "開始 {{started}}、完了 {{finished}} セッション。最も多い日は {{day}}（{{count}}）。",
+      sessions_doubled:
+        "前の期間の倍のセッション: {{started}}（以前は {{before}}）。最多は {{day}}（{{count}}）。",
+      sessions_halved:
+        "前の期間の半分のセッション: {{started}}（以前は {{before}}）。最多は {{day}}（{{count}}）。",
+      blockedNotRecording:
+        "あなたを待った時間は、このホストがこのバージョンで動き始めてから記録されます。現在 {{now}} 件待機中。",
+      blockedNone: "{{since}} 以降、あなたを待ったものはありません。現在 {{now}} 件待機中。",
+      blocked:
+        "セッションがあなたを {{count}} 回、合計 {{time}} 待ちました。現在 {{now}} 件待機中。",
+      limitsNone: "{{since}} 以降、使用量上限での停止はありません。",
+      limits: "使用量上限での停止 {{count}} 回、最多は {{project}}。",
+      projects: "最も多くのセッションは {{name}}（{{count}}）でした。",
+    },
+  },
   sidebar: {
     display: {
       trigger: "表示設定",
@@ -1180,6 +1415,8 @@ export const ja: TranslationResources = {
       sessions: "履歴",
       search: "検索",
       schedules: "スケジュール",
+      insights: "インサイト",
+      automations: "オートメーション",
     },
     worktreeSetup: {
       title: "ワークツリースクリプトを設定",
@@ -1559,6 +1796,15 @@ export const ja: TranslationResources = {
   },
   workspaceSetup: {
     title: "ワークスペースを作成",
+    role: {
+      label: "役割",
+      none: "なし",
+      planning: "計画",
+      orchestration: "オーケストレーション",
+      implementation: "実装",
+      usesDefault: "{{role}}の既定値を使用: {{model}}、推論量 {{effort}}",
+      usesDefaultModel: "{{role}}の既定値を使用: {{model}}",
+    },
     errors: {
       failedCreateWorktree: "ワークツリーの作成に失敗しました",
       failedOpenProject: "プロジェクトを開けませんでした",
@@ -1638,6 +1884,10 @@ export const ja: TranslationResources = {
     },
   },
   pairing: {
+    hostPassword: {
+      title: "{{host}} のパスワード",
+      label: "ホストのパスワード",
+    },
     connectionMethods: {
       title: "接続を追加",
       direct: {
@@ -1689,13 +1939,21 @@ export const ja: TranslationResources = {
         failedTitle: "接続に失敗しました",
         failedToConnect: "{{endpoint}}への接続に失敗しました。",
         noAdditionalDetails: "{{detail}}（追加の詳細は提供されていません）",
-        timedOut: "接続がタイムアウトしました。ホスト/ポートとネットワークを確認してください。",
+        timedOut:
+          "接続がタイムアウトしました。この Mac のアドレスとネットワークを確認してください。",
         refused: "接続が拒否されました。このアドレスでサーバーが実行されていますか？",
         hostNotFound: "ホストが見つかりません。ホスト名を確認してもう一度試してください。",
         hostUnreachable:
           "ホストに到達できません。ネットワークとファイアウォールを確認してください。",
-        tlsError: "TLSエラー。直接接続は、デーモンの前にTLS終端がある場合のみSSLを使用します。",
-        unableToConnect: "接続できません。ホスト/ポートとデーモンが到達可能かを確認してください。",
+        tlsError:
+          "安全な接続を確立できませんでした。この Mac のアドレスが HTTPS でない場合は「SSL を使用」をオフにしてください。",
+        unableToConnect:
+          "この Mac に接続できませんでした。アドレスとネットワークを確認するか、もう一度お試しください。",
+        signInFailed:
+          "この Mac にサインインできませんでした: {{reason}}。パスワードを確認するか、もう一度お試しください。",
+        reasonIncorrectPassword: "パスワードが正しくありません",
+        reasonPasswordRequired: "この Mac のパスワードが必要です",
+        reasonCouldNotOpen: "接続を開けませんでした",
         details: "詳細: {{detail}}",
       },
     },
@@ -1751,7 +2009,20 @@ export const ja: TranslationResources = {
       errorTitle: "エラー",
     },
     device: {
+      ...en.pairing.device,
       loadingOffer: "ペアリングオファーを読み込み中...",
+      allowCommandCentre: "Command Centre を許可",
+      commandCentreOff:
+        "オフ: このデバイスでは直接接続のときだけ Command Centre を使えます。 変更するとデバイスが一時的に再接続します。",
+      commandCentreWarning:
+        "オン: このデバイスはリレー経由でどこからでもセッションを管理できます。紛失や盗難のときは、すぐにここで削除してください。 変更するとデバイスが一時的に再接続します。",
+      relay: "リレー",
+      defaultRelay: "既定のリレー",
+      changeRelay: "変更",
+      devicesFailed: "ペアリング済みのデバイスを読み込めませんでした。",
+      connecting: "このMacに接続しています…",
+      reconnect: "再接続",
+      offerTimedOut: "ペアリング情報が時間内に届きませんでした。",
       failedToLoadOffer: "ペアリングオファーの読み込みに失敗しました。",
       relayDisabled:
         "リレーが有効になっていません。デバイスをペアリングするにはリレーを有効にしてください。",
@@ -1903,7 +2174,165 @@ export const ja: TranslationResources = {
       boundaries: "境界",
       closeDetail: "詳細を閉じる",
       detailId: "ID",
+      graph: {
+        title: "コード依存関係マップ",
+        subtitle:
+          "{{modules}} モジュール · {{connections}} 接続 · {{ref}} ({{commit}}) のコードから描いたもの",
+        sourceCode: "コードから",
+        sourceDrawn: "描かれたマップ",
+        loading: "依存関係マップを描いています…",
+        failed: "依存関係マップを描けませんでした",
+        missing:
+          "このプルリクエストのコミットはまだこのコンピューターにありません。「変更」で開いて取得してください。",
+        searchPlaceholder: "モジュールを検索",
+        matches_one: "{{count}} 件一致",
+        matches_other: "{{count}} 件一致",
+        zoomIn: "拡大",
+        zoomOut: "縮小",
+        fit: "全体表示",
+        filterKinds: "種類",
+        filterGroups: "パッケージ",
+        kind: {
+          frontend: "アプリと UI",
+          backend: "サービス",
+          messagebus: "メッセージング",
+          security: "セキュリティ",
+          database: "データ",
+          service: "ライブラリ",
+          external: "外部",
+        },
+        legendSelected: "選択中",
+        legendUses: "これが使うもの",
+        legendUsedBy: "これを使うもの",
+        legendEdited: "プルリクエストで編集",
+        selectHint: "モジュールを選ぶと、それが使うものとそれを使うものが強調表示されます。",
+        moduleFacts: "{{files}} ファイル · コード {{code}} · テスト {{tests}}",
+        statUses: "使うもの: 直接 · 全体",
+        statUsedBy: "使われている: 直接 · 全体",
+        statFiles: "ここでの変更の影響を受けうるファイル",
+        usesTitle: "これが使うもの",
+        usedByTitle: "これを使うもの",
+        none: "なし",
+        clear: "クリア",
+        prBanner:
+          "#{{number}} を表示中: 編集されたモジュール {{parts}} 個、変更されたファイル {{files}} 個。1 つ選ぶと影響範囲を確認できます。",
+        prClear: "リポジトリ全体を表示",
+        breadcrumbAll: "すべてのパッケージ",
+        packageHint: "パッケージを選ぶとモジュールが開きます。",
+        allLevels: "すべての階層を表示",
+        showInMap: "マップで表示",
+      },
+      review: {
+        open: "レビュー",
+        loading: "レビューを準備しています…",
+        failed: "このプルリクエストはまだここでレビューできません",
+        back: "戻る",
+        meta: "{{author}} が {{head}} を {{base}} にマージしようとしています · {{commit}}",
+        unknownAuthor: "不明なユーザー",
+        checks: {
+          none: "チェックなし",
+          pending: "チェック実行中（{{total}} 件中 {{passed}} 件成功）",
+          success: "チェック成功（{{total}} 件中 {{passed}} 件）",
+          failure: "チェック失敗（{{total}} 件中 {{passed}} 件成功）",
+        },
+        githubReview: "GitHub のレビュー: {{state}}",
+        noAutomatedReview: "自動レビューはまだありません",
+        adwVerdict: "自動レビュー: {{verdict}}",
+        findingsTitle_one: "自動レビューの指摘 {{count}} 件",
+        findingsTitle_other: "自動レビューの指摘 {{count}} 件",
+        filesTitle: "{{count}} ファイル · +{{additions}} −{{deletions}}",
+        risk: {
+          LOW: "低",
+          NORMAL: "通常",
+          HIGH: "高",
+        },
+        riskExplain: {
+          LOW: "低リスク: テスト、ドキュメント、設定。",
+          NORMAL: "通常リスク: {{tests}} 件のテストが届くコード。",
+          HIGH: "高リスク: どのテストも届かないコード、またはこの変更が削除するコード。",
+        },
+        loadingDiff: "変更を読み込んでいます…",
+        noDiff: "このファイルに表示できるテキストの変更はありません。",
+        noFindingsHere: "自動レビューはこのファイルで何も見つけませんでした。",
+        noAutomatedReviewYet: "自動レビューはまだありません。",
+        decisionTitle: "あなたの判断",
+        choice: {
+          approve: "承認",
+          requestChanges: "変更を依頼",
+          comment: "コメント",
+        },
+        notePlaceholder: "メモを追加（任意）",
+        postToGithub: "GitHub にも投稿",
+        postOn: "GitHub のサインインでこのレビューをプルリクエストに投稿します。",
+        postOff: "オフ: Fulcra にのみ記録されます。GitHub には何も送信されません。",
+        record: "判断を記録",
+        recording: "記録しています…",
+        recordFailed: "判断を記録できませんでした。",
+        recorded: "{{decision}} · {{when}}",
+        recordedLocal: "Fulcra にのみ記録。GitHub には投稿していません。",
+        recordedPosted: "Fulcra に記録し、GitHub に投稿しました。",
+        recordedPostFailed: "Fulcra に記録しました。GitHub はレビューを受け付けませんでした。",
+      },
       change: {
+        generated: {
+          sourceDrawn: "描かれたマップ",
+          sourceCode: "コードから",
+          sourceCodeHint: "プルリクエストの変更前と変更後のコードから自動的に描いたもの",
+          pickEmpty: "このプロジェクトには開いているプルリクエストがありません。",
+          pickFailed: "プルリクエストを一覧表示できませんでした。",
+          pickPrompt: "プルリクエストを選ぶと、何が変わるかを確認できます。",
+          generating: "コードからアーキテクチャを描いています…",
+          missingTitle: "このプルリクエストのコミットはまだこのコンピューターにありません",
+          missingDetail:
+            "取得すると変更前と変更後を描けます。取得するのはプルリクエストのブランチとそのベースだけです。",
+          fetch: "プルリクエストのコミットを取得",
+          fetching: "取得中…",
+          fetchFailed: "コミットを取得できませんでした。",
+          failedTitle: "アーキテクチャを描けませんでした",
+          updateHost: "変更のアーキテクチャをコードから描くには、ホストを更新してください。",
+          provenance:
+            "{{base}} と {{head}} のコードから描いています。部分はフォルダー、接続はインポートです。",
+          plainTitle: "わかりやすく言うと",
+          plainScope:
+            "システムの {{parts}} 個の部分にある {{files}} 個のファイルを変更します（追加 {{added}}、削除 {{deleted}}）。",
+          plainStructureNone: "新しい部分や接続は追加されず、作業は既存の部分の中にとどまります。",
+          plainAddsParts: "追加される部分: {{list}}。",
+          plainRemovesParts: "削除される部分: {{list}}。",
+          plainAddsConnections: "追加される接続: {{list}}。",
+          plainRemovesConnections: "削除される接続: {{list}}。",
+          plainReach:
+            "{{direct}} 個のファイルが変更されたコードを直接インポートしており、{{parts}} 個の部分にある {{files}} 個のファイルが影響を受ける可能性があります。最も多いのは {{top}} です。",
+          plainReachNone:
+            "プロジェクト内のほかのどこも、変更されたコードをインポートしていません。",
+          plainTestsAll:
+            "変更されたすべてのコードファイルに、少なくとも 1 つのテストが届いています。",
+          plainTestsSome:
+            "変更されたコードファイル {{code}} 個のうち {{uncovered}} 個には、どのテストも届いていません: {{list}}。",
+          plainTestsNoCode: "変更されたコードファイルはありません。",
+          impactTitle: "影響範囲",
+          statFiles: "変更されたファイル",
+          statParts: "編集された部分",
+          statDirect: "直接インポート",
+          statReach: "影響の可能性",
+          statTests: "テストが届く",
+          statTestsValue: "{{code}} 個中 {{covered}} 個",
+          editedTitle: "この変更が編集する部分",
+          editedCounts: "追加 {{added}} · 変更 {{modified}} · 削除 {{deleted}}",
+          reachTitle: "変更に依存する部分",
+          reachFiles_one: "{{count}} 個のファイル",
+          reachFiles_other: "{{count}} 個のファイル",
+          filesTitle: "変更されたファイル",
+          fileTests_one: "{{count}} 個のテストが届く · 最初に開く: {{nearest}}",
+          fileTests_other: "{{count}} 個のテストが届く · 最初に開く: {{nearest}}",
+          fileNoTests: "届くテストなし",
+          fileAdded: "追加",
+          fileModified: "変更",
+          fileDeleted: "削除",
+          kindTest: "テスト",
+          kindOther: "コード以外",
+          showAllFiles: "{{count}} 個のファイルをすべて表示",
+          filesCut: "最初の {{count}} 個のファイルだけを表示しています。",
+        },
         viewMap: "マップ",
         viewChange: "変更",
         openFromPullRequest: "アーキテクチャの変更",
@@ -2073,8 +2502,11 @@ export const ja: TranslationResources = {
     groupInfo: "{{title}}について",
     sections: {
       general: "一般",
+      chat: "チャット",
       appearance: "外観",
-      layout: en.settings.sections.layout,
+      sidebar: "サイドバー",
+      terminal: "ターミナル",
+      browser: "ブラウザ",
       editor: "エディター",
       shortcuts: "ショートカット",
       integrations: "連携",
@@ -2134,6 +2566,7 @@ export const ja: TranslationResources = {
     },
     general: {
       title: "一般",
+      sending: "送信",
       browserData: {
         title: "ブラウザーデータ",
         siteData: "Cookie とサイトデータ",
@@ -2160,8 +2593,6 @@ export const ja: TranslationResources = {
         },
       },
       serviceUrls: {
-        label: "サービスURL",
-        description: "実行中のスクリプトからURLを開く場所",
         options: {
           ask: "確認する",
           inApp: "Fulcraで",
@@ -2180,7 +2611,6 @@ export const ja: TranslationResources = {
       toolCallDetail: {
         label: "ツール呼び出しの表示",
         description: "タイムラインでのツール呼び出しの表示方法",
-        accessibilityLabel: "ツール呼び出しの表示を選択（{{value}}）",
         options: {
           overview: "要約",
           detailed: "すべての詳細",
@@ -2428,6 +2858,10 @@ export const ja: TranslationResources = {
       },
     },
     host: {
+      password: {
+        guidance:
+          "このホストを削除し、このデーモンが求めるパスワードを入力して追加し直してください。",
+      },
       appearance: {
         title: "外観",
         name: {

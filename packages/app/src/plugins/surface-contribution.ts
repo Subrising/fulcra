@@ -37,3 +37,11 @@ export function getPluginSurfaceContributionServerIds(
     })
     .map((installation) => installation.serverId);
 }
+
+/** Host-owned fallback remains available when untrusted code is never installed. */
+export function pluginSurfaceTitle(pluginId: string, contributionTitle?: string): string {
+  return (
+    contributionTitle ??
+    (pluginId === "orca-organization-next" ? "Fulcra Command Centre" : pluginId || "Plugin")
+  );
+}

@@ -1,3 +1,10 @@
+import { hostKeyFingerprint } from "@getpaseo/client/relay-v3";
+import {
+  describeBundleResults,
+  isPairingBundle,
+  pairEveryOffer,
+  parsePairingBundle,
+} from "@/relay/pairing-bundle";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, Pressable, Text, View } from "react-native";
@@ -7,9 +14,8 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import type { BarcodeScanningResult, BarcodeSettings } from "expo-camera";
 import { useHostMutations } from "@/runtime/host-runtime";
-import { decodeOfferFragmentPayload, normalizeHostPort } from "@/utils/daemon-endpoints";
-import { connectToDaemon } from "@/utils/test-daemon-connection";
-import { ConnectionOfferSchema } from "@getpaseo/protocol/connection-offer";
+import { decodeOfferFragmentPayload } from "@/utils/daemon-endpoints";
+import { parseConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
 import { isWeb } from "@/constants/platform";
 import { BackHeader } from "@/components/headers/back-header";
@@ -114,7 +120,7 @@ function extractOfferUrlFromScan(result: BarcodeScanningResult): string | null {
   const raw = typeof result.data === "string" ? result.data.trim() : "";
   if (!raw) return null;
 
-  if (raw.includes("#offer=")) return raw;
+  if (raw.includes("#offer=") || isPairingBundle(raw)) return raw;
 
   return null;
 }
@@ -126,9 +132,11 @@ export default function PairScanScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     source?: string;
+    repairServerId?: string;
   }>();
   const source = typeof params.source === "string" ? params.source : "settings";
-  const { upsertConnectionFromOfferUrl: upsertDaemonFromOfferUrl } = useHostMutations();
+  const { upsertConnectionFromOfferUrl: upsertDaemonFromOfferUrl, upsertConnectionFromOffer } =
+    useHostMutations();
 
   const [permission, requestPermission] = useCameraPermissions();
   const [isPairing, setIsPairing] = useState(false);
@@ -168,37 +176,113 @@ export default function PairScanScreen() {
       if (lastScannedRef.current === offerUrl) return;
       lastScannedRef.current = offerUrl;
 
+      // Pair once, see every Mac: one code carrying an offer for each Mac. Show every host's fingerprint, then
+      // pair with each; one Mac failing never stops the others.
+      if (isPairingBundle(offerUrl) && !params.repairServerId) {
+        try {
+          setIsPairing(true);
+          const offers = parsePairingBundle(offerUrl);
+          const lines = offers.map(
+            (offer) =>
+              `${offer.hostLabel || t("pairing.device.unnamedHost")}: ${hostKeyFingerprint(offer.daemonPublicKeyB64)}`,
+          );
+          Alert.alert(
+            `Pair with ${offers.length} ${offers.length === 1 ? "Mac" : "Macs"}`,
+            `${lines.join("\n")}\n\n${t("pairing.device.verifyIdentity")}`,
+            [
+              {
+                text: t("pairing.link.actions.cancel"),
+                style: "cancel",
+                onPress: () => {
+                  lastScannedRef.current = null;
+                  setIsPairing(false);
+                },
+              },
+              {
+                text: t("pairing.link.actions.pair"),
+                onPress: () => {
+                  void pairEveryOffer(offers, (offer) => upsertConnectionFromOffer(offer))
+                    .then((results) => {
+                      if (results.some((r) => !r.ok))
+                        Alert.alert(t("pairing.scan.errorTitle"), describeBundleResults(results));
+                      const first = results.find((r) => r.ok);
+                      if (first) navigateToPairedHost(first.serverId);
+                      else lastScannedRef.current = null;
+                      return;
+                    })
+                    .finally(() => setIsPairing(false));
+                },
+              },
+            ],
+            { cancelable: false },
+          );
+        } catch (error) {
+          lastScannedRef.current = null;
+          Alert.alert(
+            t("pairing.scan.errorTitle"),
+            error instanceof Error ? error.message : t("pairing.scan.unableToPair"),
+          );
+          setIsPairing(false);
+        }
+        return;
+      }
       try {
         setIsPairing(true);
         const idx = offerUrl.indexOf("#offer=");
         const encoded = offerUrl.slice(idx + "#offer=".length).trim();
         const offerPayload = decodeOfferFragmentPayload(encoded);
-        const offer = ConnectionOfferSchema.parse(offerPayload);
+        const offer = parseConnectionOffer(offerPayload);
+        if (params.repairServerId && offer.serverId !== params.repairServerId) {
+          throw new Error(
+            "This code is for a different host. Get a new code from the host you are pairing again.",
+          );
+        }
 
-        const { client, hostname } = await connectToDaemon(
-          {
-            id: "probe",
-            type: "relay",
-            relayEndpoint: normalizeHostPort(offer.relay.endpoint),
-            useTls: offer.relay.useTls,
-            daemonPublicKeyB64: offer.daemonPublicKeyB64,
-          },
-          { serverId: offer.serverId },
+        Alert.alert(
+          offer.hostLabel || t("pairing.device.unnamedHost"),
+          `${t("pairing.device.fingerprint", { value: hostKeyFingerprint(offer.daemonPublicKeyB64) })}\n\n${t("pairing.device.verifyIdentity")}`,
+          [
+            {
+              text: t("pairing.link.actions.cancel"),
+              style: "cancel",
+              onPress: () => {
+                lastScannedRef.current = null;
+                setIsPairing(false);
+              },
+            },
+            {
+              text: t("pairing.link.actions.pair"),
+              onPress: () => {
+                void upsertDaemonFromOfferUrl(offerUrl, offer.hostLabel)
+                  .then((profile) => navigateToPairedHost(profile.serverId))
+                  .catch((error) => {
+                    lastScannedRef.current = null;
+                    Alert.alert(
+                      t("pairing.scan.errorTitle"),
+                      error instanceof Error ? error.message : t("pairing.scan.unableToPair"),
+                    );
+                  })
+                  .finally(() => setIsPairing(false));
+              },
+            },
+          ],
+          { cancelable: false },
         );
-        await client.close().catch(() => undefined);
-
-        const profile = await upsertDaemonFromOfferUrl(offerUrl, hostname ?? undefined);
-
-        navigateToPairedHost(profile.serverId);
       } catch (error) {
         lastScannedRef.current = null;
         const message = error instanceof Error ? error.message : t("pairing.scan.unableToPair");
         Alert.alert(t("pairing.scan.errorTitle"), message);
-      } finally {
         setIsPairing(false);
       }
     },
-    [isPairing, navigateToPairedHost, t, upsertDaemonFromOfferUrl],
+    [
+      isPairing,
+      navigateToPairedHost,
+      params.repairServerId,
+      t,
+      upsertConnectionFromOffer,
+      upsertDaemonFromOfferUrl,
+    ],
   );
 
   const handleRouterBack = useCallback(() => router.back(), [router]);

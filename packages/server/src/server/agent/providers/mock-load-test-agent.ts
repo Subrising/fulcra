@@ -425,6 +425,13 @@ function parseAgentStreamStressPrompt(prompt: AgentPromptInput): AgentStreamStre
   };
 }
 
+// Test-only: `paseo-e2e background <n>` reports n background jobs (0 ends them), through the same
+// display-only event real providers use, so the e2e can show the "Working" row and its badge.
+function parseMockBackgroundWorkPrompt(prompt: AgentPromptInput): number | null {
+  const match = /^paseo-e2e background (\d{1,3})$/m.exec(promptToText(prompt).trim());
+  return match ? Number(match[1]) : null;
+}
+
 function parseStructuredBranchNamePrompt(
   prompt: AgentPromptInput,
 ): { title: string; branch: string } | null {
@@ -834,6 +841,7 @@ export class MockLoadTestAgentSession implements AgentSession {
     const structuredBranchName = parseStructuredBranchNamePrompt(prompt);
     const settledAssistantImageMarkdown = parseSettledAssistantImageMarkdown(prompt);
     const steeringReplayShape = parseSteeringReplayShape(prompt);
+    const backgroundJobs = parseMockBackgroundWorkPrompt(prompt);
     const scheduleTurn = () => {
       if (shouldEmitTurnFailure(prompt)) {
         this.scheduleFailedTurn(turn);
@@ -843,6 +851,12 @@ export class MockLoadTestAgentSession implements AgentSession {
         this.scheduleStreamingAssistantTurn(turn, this.streamingAssistantResponse);
       } else if (this.assistantResponse !== null) {
         this.scheduleSettledAssistantTurn(turn, this.assistantResponse);
+      } else if (backgroundJobs !== null) {
+        this.emitBackgroundWork(backgroundJobs);
+        this.scheduleSettledAssistantTurn(
+          turn,
+          backgroundJobs > 0 ? "Started a background job." : "Background jobs finished.",
+        );
       } else if (structuredBranchName) {
         this.scheduleSettledAssistantTurn(turn, JSON.stringify(structuredBranchName));
       } else if (settledAssistantImageMarkdown) {
@@ -1608,6 +1622,26 @@ export class MockLoadTestAgentSession implements AgentSession {
       turnId,
       item,
     });
+  }
+
+  /** Live only: not remembered, so history replay never re-reports a job that has ended. */
+  private emitBackgroundWork(count: number): void {
+    const now = new Date().toISOString();
+    const event: AgentStreamEvent = {
+      type: "background_work_changed",
+      provider: this.provider,
+      backgroundWork:
+        count > 0
+          ? { count, kinds: ["shell"], source: "provider", since: now, observedAt: now }
+          : null,
+    };
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger?.warn({ err: error }, "Mock load-test listener failed");
+      }
+    }
   }
 
   private emit(event: AgentStreamEvent): void {

@@ -1,8 +1,13 @@
+import { assertFinalInputCheck, recordFinalInputHandoff } from "../../final-input-check.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import type { Logger } from "pino";
 import { z } from "zod";
 
+import {
+  submitNativeQueuedDispatch,
+  refuseNativeQueuedDispatch,
+} from "../../native-queued-dispatch.js";
 import { terminateWithTreeKill } from "../../../../utils/tree-kill.js";
 
 const DEFAULT_TIMEOUT_MS = 14 * 24 * 60 * 60 * 1000;
@@ -237,6 +242,94 @@ export class CodexAppServerClient {
         reject(new Error(`Codex app-server request timed out for ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
+    });
+  }
+
+  /** Refusal-only host notice fence at the actual synchronous write; no authority is minted. */
+  requestWithFinalInputCheck(
+    method: string,
+    params: unknown,
+    handle: object,
+    checkPrepared: () => void,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  ): Promise<unknown> {
+    const id = this.nextId++;
+    const serialized = JSON.stringify({ id, method, params });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error("Final-checked Codex request timed out"));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        if (this.disposed || this.child.stdin.destroyed)
+          throw new Error("Final-checked transport closed");
+        const result: unknown = checkPrepared();
+        if (result && typeof result === "object" && "then" in result) {
+          void Promise.resolve(result).catch(() => {});
+          throw new Error("Final prepared check must be synchronous");
+        }
+        assertFinalInputCheck(handle);
+        this.child.stdin.write(`${serialized}\n`);
+        recordFinalInputHandoff(handle);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
+    });
+  }
+
+  /** One captured native turn/start request. Pending ID is installed before the synchronous write. */
+  requestNativeQueuedTurn(
+    params: unknown,
+    capability: () => void,
+    checkPrepared: () => void,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  ): Promise<{ requestId: number; threadId: string; turnId: string }> {
+    if (this.disposed) refuseNativeQueuedDispatch(capability, "Codex app-server client is closed");
+    const requestParams = isRecord(params) ? params : null;
+    const threadId = requestParams?.threadId;
+    if (typeof threadId !== "string" || !threadId)
+      refuseNativeQueuedDispatch(capability, "Native queued thread unavailable");
+    const id = this.nextId++;
+    const serialized = JSON.stringify({ id, method: "turn/start", params });
+    const response = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error("Native queued Codex acceptance timed out"));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        submitNativeQueuedDispatch(
+          capability,
+          () => this.child.stdin.write(`${serialized}\n`),
+          () => {
+            if (this.disposed || this.child.stdin.destroyed)
+              refuseNativeQueuedDispatch(capability, "Native queued transport closed");
+            return checkPrepared();
+          },
+        );
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
+    });
+    return response.then((result) => {
+      const value = isRecord(result) ? result : null;
+      const turn = isRecord(value?.turn) ? value.turn : null;
+      if (
+        !turn ||
+        typeof turn.id !== "string" ||
+        !turn.id ||
+        turn.id.length > 200 ||
+        (turn.status !== "inProgress" && turn.status !== "completed") ||
+        turn.error !== null ||
+        (value?.threadId !== undefined && value.threadId !== threadId)
+      )
+        throw new Error("Native queued Codex acknowledgement invalid");
+      return { requestId: id, threadId, turnId: turn.id };
     });
   }
 

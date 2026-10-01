@@ -23,7 +23,7 @@ import {
   useGlobalWebOverlayLayer,
   useWebOverlayRegistration,
 } from "@/lib/overlay-root";
-import { useHosts } from "@/runtime/host-runtime";
+import { useHosts, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
 import { orderHostsLocalFirst, type HostProfile } from "@/types/host-connection";
 import { buildSettingsAddHostRoute } from "@/utils/host-routes";
 
@@ -111,6 +111,7 @@ function HostChooserRow({
   onChooseHost: (serverId: string) => void;
 }) {
   const { theme } = useUnistyles();
+  const pairingRequired = useHostRuntimeSnapshot(host.serverId)?.pairingRequired;
   const handlePress = useCallback(() => onChooseHost(host.serverId), [host.serverId, onChooseHost]);
   const rowStyle = useCallback(
     ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
@@ -132,10 +133,10 @@ function HostChooserRow({
       </View>
       <View style={styles.rowText}>
         <Text style={styles.rowTitle} numberOfLines={1}>
-          {host.label}
+          {pairingRequired && host.label === host.serverId ? "Unnamed host" : host.label}
         </Text>
         <Text style={styles.rowSubtitle} numberOfLines={1}>
-          {host.serverId}
+          {pairingRequired ? "Pair again to reconnect" : host.serverId}
         </Text>
       </View>
       <Server size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />

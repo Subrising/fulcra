@@ -1,3 +1,5 @@
+import { CurrentSessionAccountInfo } from "@/sessions/session-account-info";
+import { sessionAccountDescription, runtimeAccountName } from "@/sessions/session-account";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -100,6 +102,7 @@ import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-w
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { deriveSidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { buildDraftAgentSetup, type ClientSlashCommand } from "@/client-slash-commands";
+import { hostDisplayName } from "@/hosts/host-display-name";
 
 interface ChatAgentStateShape {
   serverId: string | null;
@@ -352,6 +355,7 @@ function useAgentPanelDescriptor(
         session?.agents?.get(target.agentId) ?? session?.agentDetails?.get(target.agentId) ?? null;
       return {
         provider: agent?.provider ?? "codex",
+        accountName: runtimeAccountName(agent),
         title: agent?.title ?? null,
         status: agent?.status ?? null,
         pendingPermissionCount: agent?.pendingPermissions.length ?? 0,
@@ -364,11 +368,12 @@ function useAgentPanelDescriptor(
   const provider = descriptorState.provider;
   const label = resolveWorkspaceAgentTabLabel(descriptorState.title);
   const icon = getProviderIcon(provider, context.serverId);
+  const accountText = sessionAccountDescription(provider, descriptorState.accountName);
 
   return {
     label: label ?? "",
-    subtitle: `${formatProviderLabel(provider)} agent`,
-    tooltip: label ?? `${formatProviderLabel(provider)} agent`,
+    subtitle: `${formatProviderLabel(provider)} agent${accountText}`,
+    tooltip: `${label ?? `${formatProviderLabel(provider)} agent`}${accountText}`,
     titleState: label ? "ready" : "loading",
     icon,
     statusBucket: descriptorState.status
@@ -554,8 +559,8 @@ function AgentPanelContent({
   const daemon = connectionServerId
     ? (daemons.find((entry) => entry.serverId === connectionServerId) ?? null)
     : null;
-  const serverLabel =
-    daemon?.label ?? connectionServerId ?? t("agentPanel.unavailable.selectedHost");
+  // A host is named, never shown by its server id; an unknown host is "the selected host".
+  const serverLabel = daemon ? hostDisplayName(daemon) : t("agentPanel.unavailable.selectedHost");
   const isUnknownDaemon = Boolean(connectionServerId && !daemon);
   const connectionStatus: HostRuntimeConnectionStatus =
     isUnknownDaemon && runtimeConnectionStatus === "connecting"
@@ -1355,6 +1360,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       onRewindComplete={handleRewindComplete}
     >
       <View style={styles.root}>
+        <CurrentSessionAccountInfo serverId={serverId} agentId={agentId} />
         {dock}
 
         {isArchivingCurrentAgent ? (

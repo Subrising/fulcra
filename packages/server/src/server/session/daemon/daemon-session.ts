@@ -23,6 +23,7 @@ export interface DaemonRuntimeConfig {
   appBaseUrl?: string;
   desktopManaged?: boolean;
   getRelayConfig(): {
+    pairingOfferTtlSeconds?: number;
     enabled: boolean;
     endpoint: string;
     publicEndpoint: string;
@@ -261,6 +262,7 @@ export class DaemonSession {
       const pairing = await generateLocalPairingOffer({
         paseoHome: this.paseoHome,
         relayEnabled: relay?.enabled ?? false,
+        pairingOfferTtlSeconds: relay?.pairingOfferTtlSeconds,
         relayEndpoint: relay?.endpoint,
         relayPublicEndpoint: relay?.publicEndpoint,
         relayUseTls: relay?.useTls,
@@ -276,6 +278,7 @@ export class DaemonSession {
           url: pairing.url ?? "",
           qr: pairing.qr ?? null,
           relayEnabled: pairing.relayEnabled,
+          ...(pairing.reason ? { reason: pairing.reason } : {}),
         },
       });
     } catch (error) {

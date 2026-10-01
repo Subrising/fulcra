@@ -90,6 +90,21 @@ try {
   });
   captured = launch.instance;
   await openDesktop();
+
+  // Orca connects to an existing controller, so manageBuiltInDaemon defaults to false and
+  // every lifecycle command refuses until someone turns it on
+  // (packages/desktop/src/settings/desktop-settings.ts, and the guard in
+  // src/daemon/daemon-manager.ts). Assert that contract before opting in, so this suite
+  // cannot be "fixed" later by flipping the default back on.
+  await assert.rejects(command("start_desktop_daemon"), /Built-in daemon management is disabled/);
+  // Opt in the way the settings UI does, through the same handler set these tests drive —
+  // packages/app/src/desktop/daemon/daemon-management-toggle.ts. Persisted in userData, so it
+  // survives the relaunch later in this file.
+  const managed = await command("patch_desktop_settings", {
+    daemon: { manageBuiltInDaemon: true },
+  });
+  assert.equal(managed.daemon.manageBuiltInDaemon, true, "built-in daemon management opt-in");
+
   const attached = await command("start_desktop_daemon");
   assert.equal(attached.pid, captured.pid);
   assert.equal(attached.desktopManaged, true);

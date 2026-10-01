@@ -30,7 +30,7 @@ describe("fulcra sign-in return link forwarding", () => {
       "fulcra://oauth/a/b",
       "fulcra://other/flow_1234abcd",
       "fulcra://oauth/flow_1234abcd#x",
-      // Repeated or trailing slashes.
+      // Repeated or trailing slashes (R-E-12).
       "fulcra://oauth//flow_1234abcd/",
       "fulcra://oauth//flow_1234abcd",
       "fulcra://oauth/flow_1234abcd/",
@@ -55,7 +55,7 @@ describe("fulcra sign-in return link forwarding", () => {
     expect(after.calls).toEqual([]);
   });
 
-  it("sends the code nowhere when no host, or more than one, claims the flow", async () => {
+  it("sends the code nowhere when no host, or more than one, claims the flow (R-E-11)", async () => {
     const hosts = [client([], connected("never")), client(["flow_other001"], connected("never"))];
     expect(await forwardOAuthCallback(LINK, hosts)).toMatchObject({ status: "failed" });
     const twins = [

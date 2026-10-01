@@ -1,0 +1,9 @@
+{
+  "name": "openclaw-plugin-orca-command",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "openclaw": { "extensions": ["./src/index.mjs"] },
+  "peerDependencies": { "openclaw": ">=2026.9.2" },
+  "scripts": { "test": "node --test src/*.test.mjs" }
+}

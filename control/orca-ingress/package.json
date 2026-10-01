@@ -1,0 +1,23 @@
+{
+  "name": "openclaw-plugin-orca-ingress",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "files": [
+    "src",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test src/*.test.mjs",
+    "plugin:validate": "openclaw plugins validate --root . --entry ./src/index.mjs"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.mjs"
+    ]
+  }
+}

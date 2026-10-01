@@ -14,15 +14,15 @@ import {
   buildOpenProjectRoute,
 } from "@/utils/host-routes";
 
-export const HOME_PLUGIN_ID = "organization";
-export const HOME_SIDEBAR_ID = "organization";
+export const ORCA_ORGANIZATION_PLUGIN_ID = "orca-organization";
+export const ORCA_ORGANIZATION_SIDEBAR_ID = "organization";
 
 export type OrcaHomeAvailability = "unknown" | "present" | "absent";
 
 /**
- * The home plugin lives in a plugin surface, and the catalog that would contain it arrives
+ * Orca home lives in a plugin surface, and the catalog that would contain it arrives
  * asynchronously after connect. Redirecting before it lands is permanent, so a cold start with
- * The home plugin installed would be thrown to the fallback and never come back.
+ * Orca installed would be thrown to the fallback and never come back.
  *
  * "unknown" is therefore only reported while an answer is still genuinely coming: connected,
  * plugins supported, catalog not yet settled. Offline, unsupported, and asked-and-failed all
@@ -30,10 +30,10 @@ export type OrcaHomeAvailability = "unknown" | "present" | "absent";
  * pending would hold the splash forever.
  */
 /**
- * A cold start passes through three states that all look like "no the home plugin" if you only read
+ * A cold start passes through three states that all look like "no Orca home" if you only read
  * booleans: the connection is still opening, the host has not sent its features yet, and the
  * catalog has not arrived. Only the last of those was treated as pending before, so a host that
- * does have the home plugin was redirected away permanently. Known absence still answers immediately,
+ * does have Orca home was redirected away permanently. Known absence still answers immediately,
  * and `unknownSettledByBound` keeps an unanswered host from waiting forever.
  */
 export const ORCA_HOME_UNKNOWN_BOUND_MS = 5_000;
@@ -209,7 +209,7 @@ export function resolveHostIndexRoute(input: {
   ) {
     return buildHostWorkspaceRoute(input.serverId, input.workspaceSelection.workspaceId);
   }
-  // The home plugin is a plugin surface, and a host that does not have that plugin installed has
+  // Orca home is a plugin surface, and a host that does not have that plugin installed has
   // nowhere to render it: the surface screen shows "This plugin surface is unavailable" with
   // no shell chrome, so there is no menu and no way back to settings. Sending a fresh install
   // there strands it on the first screen it ever shows. Fall back to the built-in route this
@@ -218,9 +218,9 @@ export function resolveHostIndexRoute(input: {
   // arriving. A remembered workspace is resolved above and never waits on it.
   if (input.orcaHome === "unknown") return null;
   if (input.orcaHome === "absent") return buildOpenProjectRoute();
-  return buildPluginSurfaceRoute(input.serverId, HOME_PLUGIN_ID, {
+  return buildPluginSurfaceRoute(input.serverId, ORCA_ORGANIZATION_PLUGIN_ID, {
     kind: "sidebar",
-    id: HOME_SIDEBAR_ID,
+    id: ORCA_ORGANIZATION_SIDEBAR_ID,
   });
 }
 

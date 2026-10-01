@@ -271,9 +271,10 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
         <View style={styles.content}>
           <Text style={[styles.title, { fontSize: 48 }]}>Fulcra</Text>
           <View style={styles.copyBlock}>
-            <Text style={styles.title}>Your coding agents, in one place.</Text>
+            <Text style={styles.title}>Your team. Your direction.</Text>
             <Text style={styles.subtitle}>
-              Connect a host to start, follow and direct your AI coding agents.
+              Connect your controller to follow goals, review outcomes and direct your saved AI
+              conversations.
             </Text>
           </View>
 

@@ -1,3 +1,7 @@
+import { assertFinalInputCheck, recordFinalInputHandoff } from "./final-input-check.js";
+import { StaleProviderSessionError } from "./stale-provider-session-error.js";
+import { TRUSTED_OPERATION, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
+import type { TrustedOperationHandle } from "../plugins/trusted.js";
 import { expect, it, test, vi } from "vitest";
 import pino, { type Logger } from "pino";
 import { randomUUID } from "node:crypto";
@@ -9,6 +13,8 @@ import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
 import { AgentStorage } from "./agent-storage.js";
 import {
+  startAgentRun,
+  type AgentRunController,
   formatSystemNotificationPrompt,
   isSystemInjectedEnvelope,
   setupFinishNotification,
@@ -16,6 +22,7 @@ import {
 } from "./agent-prompt.js";
 import type { AgentManagerEvent, ManagedAgent } from "./agent-manager.js";
 import type {
+  AgentRunOptions,
   AgentClient,
   AgentRunResult,
   AgentSession,
@@ -52,6 +59,10 @@ interface FinishNotificationScenarioOptions {
   requireParentOwnership?: boolean;
   parentPromptError?: Error;
   logger?: Logger;
+  beforeStorageGet?: (agentId: string) => Promise<void>;
+  beforeLastMessage?: () => Promise<void>;
+  noticeIdentityCurrent?: () => boolean;
+  nativeReportLinked?: () => boolean;
 }
 
 interface FinishNotificationScenario {
@@ -64,6 +75,8 @@ interface FinishNotificationScenario {
   finishChildAndReadParentPrompt(): Promise<string>;
   closeChildAndReadParentPrompt(): Promise<string>;
   parentPrompts(): string[];
+  /** The message id each input to an agent was admitted with (FIX-8 W3). */
+  inputMessageIds(): Array<[string, string | undefined]>;
   steerAttemptCount(): number;
   wasParentPrompted(): boolean;
 }
@@ -89,6 +102,16 @@ function createFinishNotificationScenario(
   Reflect.set(callerAgent, "config", { title: "Caller Agent" });
 
   const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
+  const inputMessageIds: Array<[string, string | undefined]> = [];
+  const realWithInput = agentManager.withInput.bind(agentManager);
+  Reflect.set(
+    agentManager,
+    "withInput",
+    (agentId: string, kind: never, messageId: string | undefined, ...rest: never[]) => {
+      inputMessageIds.push([agentId, messageId]);
+      return (realWithInput as (...args: unknown[]) => unknown)(agentId, kind, messageId, ...rest);
+    },
+  );
   Reflect.set(agentManager, "getAgent", (agentId: string) => {
     if (agentId === "child-agent") {
       return childAgent;
@@ -104,7 +127,16 @@ function createFinishNotificationScenario(
       subscriber = null;
     };
   });
+  Reflect.set(agentManager, "captureFinishNotificationCheck", () => () => {
+    if (options?.noticeIdentityCurrent?.() === false) throw new Error("Captured identity replaced");
+  });
+  Reflect.set(
+    agentManager,
+    "nativeReportOwnsFinish",
+    () => options?.nativeReportLinked?.() === true,
+  );
   Reflect.set(agentManager, "getLastAssistantMessage", async () => {
+    await options?.beforeLastMessage?.();
     return options?.childLastAssistantMessage ?? null;
   });
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
@@ -113,12 +145,18 @@ function createFinishNotificationScenario(
     steerAttemptCount += 1;
     return { status: "inactive" };
   });
-  Reflect.set(agentManager, "streamAgent", (_agentId: string, prompt: string) => {
-    parentPrompted = true;
-    parentPrompts.push(prompt);
-    resolveParentPrompt?.(prompt);
-    return (async function* noop() {})();
-  });
+  Reflect.set(
+    agentManager,
+    "streamAgent",
+    (_agentId: string, prompt: string, runOptions?: AgentRunOptions) => {
+      assertFinalInputCheck(runOptions?.[FINAL_INPUT_CHECK]);
+      parentPrompted = true;
+      parentPrompts.push(prompt);
+      recordFinalInputHandoff(runOptions?.[FINAL_INPUT_CHECK]);
+      resolveParentPrompt?.(prompt);
+      return (async function* noop() {})();
+    },
+  );
   Reflect.set(agentManager, "replaceAgentRun", async (_agentId: string, prompt: string) => {
     resolveParentPrompt?.(prompt);
     throw options?.parentPromptError;
@@ -126,6 +164,7 @@ function createFinishNotificationScenario(
 
   const agentStorage: AgentStorage = Object.create(AgentStorage.prototype);
   Reflect.set(agentStorage, "get", async (agentId: string) => {
+    await options?.beforeStorageGet?.(agentId);
     if (agentId === "child-agent") {
       const parentAgentId =
         options?.childParentAgentId === undefined ? "caller-agent" : options.childParentAgentId;
@@ -250,6 +289,9 @@ function createFinishNotificationScenario(
     parentPrompts() {
       return parentPrompts;
     },
+    inputMessageIds() {
+      return inputMessageIds;
+    },
     steerAttemptCount() {
       return steerAttemptCount;
     },
@@ -278,6 +320,17 @@ test("finish notifications tell the parent the child's last assistant message", 
     ),
   );
   expect(scenario.steerAttemptCount()).toBe(1);
+});
+
+// FIX-8 W3 (gate M): the daemon's finish notice to a lead carries a daemon-only message id, so the controller can tell
+// a child's report from a person typing into a delegated lead (which would end its delegation and its grants).
+test("finish notifications are sent with a paseo-notify message id", async () => {
+  const scenario = createFinishNotificationScenario();
+  scenario.startWatchingChild();
+  await scenario.finishChildAndReadParentPrompt();
+  const toCaller = scenario.inputMessageIds().filter(([id]) => id === "caller-agent");
+  expect(toCaller.length).toBeGreaterThan(0);
+  for (const [, messageId] of toCaller) expect(messageId).toMatch(/^paseo-notify:[0-9a-f-]{36}$/);
 });
 
 test("finish notifications truncate oversized child responses", async () => {
@@ -492,6 +545,7 @@ it("does not notify archived callers", async () => {
       };
     }),
   );
+  Reflect.set(agentManager, "captureFinishNotificationCheck", () => () => {});
   Reflect.set(agentManager, "hasInFlightRun", vi.fn().mockReturnValue(false));
   Reflect.set(agentManager, "streamAgent", streamAgentSpy);
   Reflect.set(agentManager, "replaceAgentRun", replaceAgentRunSpy);
@@ -762,3 +816,126 @@ test("waiting for a run start still gives up at the run start budget", async () 
     await scenario.cleanup();
   }
 });
+
+for (const deferred of [false, true]) {
+  test(`stale reload carries the admitted operation (${deferred ? "iterator" : "immediate"})`, async () => {
+    const handle = Object.freeze({}) as TrustedOperationHandle;
+    let attempts = 0;
+    const reload = vi.fn(async (...args: unknown[]) => {
+      expect(args).toEqual(["worker", undefined, undefined, handle]);
+      expect(args[3]).toBe(handle);
+    });
+    const controller = {
+      withInput: async (
+        _id: string,
+        _kind: string,
+        _message: unknown,
+        run: (h: TrustedOperationHandle) => Promise<unknown>,
+      ) => run(handle),
+      trustedPlugins: { daemon: (run: () => unknown) => run() },
+      getAgent: () => null,
+      tryRunOutOfBand: () => false,
+      streamAgent: (
+        _id: string,
+        _prompt: unknown,
+        options: { [TRUSTED_OPERATION]?: TrustedOperationHandle },
+      ) => {
+        expect(options[TRUSTED_OPERATION]).toBe(handle);
+        const stale = attempts++ === 0;
+        if (stale && !deferred) throw new StaleProviderSessionError("old");
+        return (async function* () {
+          if (stale) throw new StaleProviderSessionError("old");
+          yield* [];
+        })();
+      },
+      reloadAgentSession: reload,
+    } as unknown as AgentRunController;
+    await startAgentRun(controller, "worker", "hello", createTestLogger());
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    expect(reload).toHaveBeenCalledOnce();
+  });
+}
+
+// NC2 regression uses the real notification orchestration with held fake storage/messages.
+test.each(["caller", "child", "message", "dispatch-storage"] as const)(
+  "NC2 finish generation: re-arm while %s await is held suppresses old terminal notice only",
+  async (stage) => {
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let callers = 0,
+      paused = false;
+    const pause = async () => {
+      if (!paused) {
+        paused = true;
+        entered();
+        await held;
+      }
+    };
+    const scenario = createFinishNotificationScenario({
+      beforeStorageGet: async (id) => {
+        if (id === "caller-agent") callers++;
+        if (
+          (stage === "caller" && id === "caller-agent" && callers === 1) ||
+          (stage === "child" && id === "child-agent") ||
+          (stage === "dispatch-storage" && id === "caller-agent" && callers === 2)
+        )
+          await pause();
+      },
+      beforeLastMessage: stage === "message" ? pause : undefined,
+    });
+    scenario.startWatchingChild();
+    scenario.finishChild();
+    await started;
+    scenario.startWatchingChild();
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(scenario.parentPrompts()).toHaveLength(0);
+    await scenario.finishChildAndReadParentPrompt();
+    expect(scenario.parentPrompts()).toHaveLength(1);
+  },
+);
+
+test("NC2 finish generation: normal terminal stop still delivers its one notice", async () => {
+  const scenario = createFinishNotificationScenario();
+  scenario.startWatchingChild();
+  await scenario.finishChildAndReadParentPrompt();
+  scenario.finishChild();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(scenario.parentPrompts()).toHaveLength(1);
+});
+
+test.each(["identity", "native-link"] as const)(
+  "NC2 finish generation: held notice refuses fresh %s change",
+  async (change) => {
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let current = true,
+      linked = false;
+    const scenario = createFinishNotificationScenario({
+      beforeLastMessage: async () => {
+        entered();
+        await held;
+      },
+      noticeIdentityCurrent: () => current,
+      nativeReportLinked: () => linked,
+    });
+    scenario.startWatchingChild();
+    scenario.finishChild();
+    await started;
+    if (change === "identity") current = false;
+    else linked = true;
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(scenario.parentPrompts()).toHaveLength(0);
+  },
+);

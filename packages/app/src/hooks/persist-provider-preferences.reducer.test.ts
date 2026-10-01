@@ -107,7 +107,7 @@ describe("reducer -> persistProviderPreferences", () => {
       },
     ]);
     expect(state.form.provider).toBe("codex");
-    expect(state.form.modeId).toBe("auto-review");
+    expect(state.form.modeId).toBe("full-access"); // Codex's built-in default (FIX-8 B)
     expect(state.userModified.modeId).toBe(false);
     expect((await persistFrom(state)).providerPreferences?.codex?.mode).toBeUndefined();
   });

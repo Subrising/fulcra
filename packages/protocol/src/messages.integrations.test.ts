@@ -110,7 +110,7 @@ describe("host plugin API protocol", () => {
           notifications: [
             {
               id: "n",
-              pluginId: "organization",
+              pluginId: "orca-organization",
               key: "k",
               title: "Approve the release",
               urgency: "now",

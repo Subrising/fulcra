@@ -11,20 +11,24 @@ import { ScreenHeader } from "@/components/headers/screen-header";
 import { ScreenTitle } from "@/components/headers/screen-title";
 import { HostPicker } from "@/components/hosts/host-picker";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
+import { useHostRuntimeClient, useHosts, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
 import type { Theme } from "@/styles/theme";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { usePluginHostNavigation } from "./host-navigation";
 import { resolvePluginIcon } from "./icons";
 import { toPluginTheme } from "./theme";
-import { useInstalledPlugin, usePluginInstallations } from "./registry";
+import { usePluginEvaluationError, useInstalledPlugin, usePluginInstallations } from "./registry";
 import { buildPluginSurfaceRoute } from "./routes";
 import { rememberPluginContributionHost } from "./contribution-host";
 import { SurfaceErrorBoundary } from "./surface-error-boundary";
+import { useRadiusScratchOwner } from "./radius-scratch-owner";
+import { CommandCentreRelayNotice, useNeedsDirectConnection } from "./command-centre-relay-notice";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { PluginRuntimeBoundary } from "./runtime-boundary";
+import { pluginConnectionRefusal, pluginSurfaceUnavailable } from "./surface-refusal";
 import {
   getPluginSurfaceContributionServerIds,
+  pluginSurfaceTitle,
   resolvePluginSurfaceContribution,
   type PluginSurfaceContributionIdentity,
 } from "./surface-contribution";
@@ -69,9 +73,19 @@ function SurfaceRenderer({
   theme: PluginTheme;
 }) {
   const navigation = usePluginHostNavigation(host.id);
+  const radiusScratchOwner = useRadiusScratchOwner(host.id, client, plugin);
+  // L46: over the relay Command Centre cannot be read; say so instead of mounting a surface that would fail.
+  const relayOnly = useNeedsDirectConnection(host.id, plugin.id);
+  if (relayOnly) return <CommandCentreRelayNotice />;
   return (
     <PluginRuntimeBoundary plugin={plugin} client={client}>
-      <Surface theme={theme} host={host} layout={layout} navigation={navigation} />
+      <Surface
+        theme={theme}
+        host={host}
+        layout={layout}
+        navigation={navigation}
+        {...{ radiusScratchOwner }}
+      />
     </PluginRuntimeBoundary>
   );
 }
@@ -159,9 +173,12 @@ export function PluginSurfaceScreen() {
     return { kind: contributionKind, id: contributionId };
   }, [contributionId, contributionKind]);
   const plugin = useInstalledPlugin(serverId, pluginId);
+  const evaluationError = usePluginEvaluationError(serverId, pluginId);
   const installations = usePluginInstallations(pluginId);
   const hosts = useHosts();
   const client = useHostRuntimeClient(serverId);
+  const connectionError = pluginConnectionRefusal(useHostRuntimeSnapshot(serverId));
+  const retryConnection = useCallback(() => client?.ensureConnected(), [client]);
   const compact = useIsCompactFormFactor();
   const { sidebarItem, surface } = useMemo(
     () => resolvePluginSurfaceContribution(plugin, identity),
@@ -173,7 +190,7 @@ export function PluginSurfaceScreen() {
       identity ? getPluginSurfaceContributionServerIds(installations, pluginId, identity) : [],
     [identity, installations, pluginId],
   );
-  const title = sidebarItem?.title ?? surface?.id ?? (pluginId || "Plugin");
+  const title = pluginSurfaceTitle(pluginId, sidebarItem?.title ?? surface?.id);
   const Icon = sidebarItem ? resolvePluginIcon(sidebarItem.icon) : null;
   const close = useCallback(() => {
     if (router.canGoBack()) router.back();
@@ -224,6 +241,20 @@ export function PluginSurfaceScreen() {
     <View style={styles.screen}>
       <ScreenHeader left={headerLeft} right={headerRight} />
       <View style={styles.body}>
+        {connectionError && (
+          <View>
+            <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+              {connectionError}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry connection"
+              onPress={retryConnection}
+            >
+              <Text style={styles.errorText}>Retry connection</Text>
+            </Pressable>
+          </View>
+        )}
         {plugin && surface && client ? (
           <SurfaceErrorBoundary
             key={`${serverId}/${pluginId}/${identity?.kind}/${contributionId}`}
@@ -241,7 +272,7 @@ export function PluginSurfaceScreen() {
           </SurfaceErrorBoundary>
         ) : (
           <Text style={styles.errorText}>
-            {plugin && surface ? "Plugin host is offline." : "This plugin surface is unavailable."}
+            {pluginSurfaceUnavailable(connectionError, !!evaluationError, !!(plugin && surface))}
           </Text>
         )}
       </View>

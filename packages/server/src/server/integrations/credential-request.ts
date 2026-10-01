@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ProviderDefinition } from "./providers.js";
 
-// Host-mediated provider requests for plugins. A plugin names an account, a
+// Host-mediated provider requests for plugins (CONTRACTS §7.2 v1.7). A plugin names an account, a
 // method and a path; the host attaches the account's credential and sends the request only to that
 // account's provider API base. The plugin never sees the credential: it is not in the request the
 // plugin builds, it cannot be redirected to another origin, and it is scrubbed from the response.

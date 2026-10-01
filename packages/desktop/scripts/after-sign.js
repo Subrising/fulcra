@@ -4,7 +4,7 @@ const { smokePackagedDesktopApp } = require("../e2e/packaged-app-smoke.js");
 
 // Resolved from what electron-builder actually produced, never from this package.json. The two are
 // separate settings and since the Fulcra rename they disagree: the builder emits Fulcra.app while
-// package.json still had the old product name, so the smoke check looked for a bundle that does not exist and the
+// package.json still says Orca, so the smoke check looked for a bundle that does not exist and the
 // PASEO_DESKTOP_SMOKE build failed here. Reading the builder's own appInfo means a future rename
 // cannot desync them again.
 function productFilename(context) {

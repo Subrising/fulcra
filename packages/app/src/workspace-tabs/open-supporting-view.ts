@@ -120,3 +120,17 @@ export function autoOpenWorkspacePullRequest(input: {
     };
   });
 }
+
+/** Repeated opens focus Context wherever the user placed it; only a new tab opens beside. */
+export function openWorkspaceContext(input: WorkspaceViewInput): string | null {
+  if (usesCompactExplorerSidebar(input)) {
+    openExplorerView(input, "context");
+    return null;
+  }
+  return openWorkspaceTargetAtLocation({
+    isCompact: input.isCompact,
+    workspaceKey: input.workspaceKey,
+    target: { kind: "context" },
+    location: "side",
+  });
+}

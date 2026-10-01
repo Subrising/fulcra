@@ -12,12 +12,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { access } from "node:fs/promises";
-import { watch } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { SkillSelection, SkillTargets } from "./operations";
+import { installSkills, type SkillSelection, type SkillTargets } from "./operations";
 import type { SkillSelectionStore } from "./selection-store";
 import { createSkillsController, type SkillsController } from "./controller";
 import { beginSkillsTransaction } from "./transaction";
@@ -191,17 +190,6 @@ async function backupArtifacts(targets: SkillTargets): Promise<string[][]> {
   );
 }
 
-async function waitForTransactionDirectory(parent: string): Promise<void> {
-  const events = watch(parent);
-  try {
-    for await (const event of events) {
-      if (event.filename?.startsWith(".paseo-skills-transaction-")) return;
-    }
-  } finally {
-    await events.return?.();
-  }
-}
-
 /** Puts a regular file where the agents skills tree goes, so convergence fails with ENOTDIR. */
 async function blockAgentsDir(targets: SkillTargets): Promise<void> {
   await rm(targets.agentsDir, { recursive: true, force: true });
@@ -210,7 +198,7 @@ async function blockAgentsDir(targets: SkillTargets): Promise<void> {
 }
 
 async function isInstalled(targets: SkillTargets, name: string): Promise<boolean> {
-  const dirs = [targets.agentsDir, targets.claudeDir, targets.codexDir];
+  const dirs = [targets.agentsDir, targets.claudeDir];
   const present = await Promise.all(
     dirs.map((dir) =>
       access(path.join(dir, name))
@@ -454,7 +442,7 @@ describe("skills controller", () => {
     expect(await installedEverywhere(readOnly.targets)).toEqual([
       ["paseo", "paseo-loop"],
       ["paseo", "paseo-loop"],
-      ["paseo", "paseo-loop"],
+      ["paseo-loop"],
     ]);
     expect(await readUserFile(readOnly.targets, "paseo-loop", "notes/mine.md")).toEqual([
       "hand written",
@@ -575,6 +563,7 @@ describe("skills controller", () => {
       };
       const next: SkillSelection = { mode: "custom", skills: ["paseo"] };
       await harness.controller.save(previous);
+      await writeUserFile(harness.targets, "paseo-loop", "SKILL.md", "paseo-loop-v1");
       const livePaths = [
         harness.targets.agentsDir,
         harness.targets.claudeDir,
@@ -601,6 +590,7 @@ describe("skills controller", () => {
     };
     const next: SkillSelection = { mode: "custom", skills: ["paseo"] };
     await harness.controller.save(previous);
+    await writeUserFile(harness.targets, "paseo-loop", "SKILL.md", "paseo-loop-v1");
 
     const transaction = await beginSkillsTransaction(harness.targets, previous, next, [
       { kind: "delete", name: "paseo-loop" },
@@ -666,6 +656,7 @@ describe("skills controller", () => {
     };
     const next: SkillSelection = { mode: "custom", skills: ["paseo"] };
     await harness.controller.save(previous);
+    await writeUserFile(harness.targets, "paseo-loop", "SKILL.md", "paseo-loop-v1");
     await writeUserFile(harness.targets, "paseo-loop", "notes/mine.md", "staged notes");
 
     const transaction = await beginSkillsTransaction(harness.targets, previous, next, [
@@ -1115,7 +1106,7 @@ describe("skills controller", () => {
     expect(await installedEverywhere(harness.targets)).toEqual([
       ["paseo", "paseo-advisor", "paseo-loop"],
       ["paseo", "paseo-advisor", "paseo-loop"],
-      ["paseo", "paseo-advisor", "paseo-loop"],
+      ["paseo-advisor"],
     ]);
     expect(result.selection).toEqual({ mode: "custom", skills: ["paseo", "paseo-loop"] });
   });
@@ -1131,7 +1122,7 @@ describe("skills controller", () => {
 
     expect(result.confirmationRequired).toBeNull();
     expect(result.selection).toEqual({ mode: "custom", skills: ["paseo"] });
-    expect(await installedEverywhere(harness.targets)).toEqual([["paseo"], ["paseo"], ["paseo"]]);
+    expect(await installedEverywhere(harness.targets)).toEqual([["paseo"], ["paseo"], []]);
   });
 
   it("asks again when another directory appears before the retry", async () => {
@@ -1150,7 +1141,7 @@ describe("skills controller", () => {
     expect(await installedEverywhere(harness.targets)).toEqual([
       ["paseo", "paseo-advisor", "paseo-chat", "paseo-loop"],
       ["paseo", "paseo-advisor", "paseo-chat", "paseo-loop"],
-      ["paseo", "paseo-advisor", "paseo-chat", "paseo-loop"],
+      ["paseo-chat"],
     ]);
   });
 
@@ -1159,15 +1150,48 @@ describe("skills controller", () => {
     await harness.controller.save(selection);
     await writeFile(path.join(harness.targets.sourceDir, "paseo", "SKILL.md"), "paseo-v2");
 
-    const transactionStarted = waitForTransactionDirectory(path.dirname(harness.targets.agentsDir));
-    const save = harness.controller.save(selection);
-    await transactionStarted;
-    await writeUserFile(harness.targets, "paseo-chat", "notes/mine.md", "hand written");
+    let markApplying!: () => void;
+    let releaseApply!: () => void;
+    const applying = new Promise<void>((resolve) => {
+      markApplying = resolve;
+    });
+    const applyGate = new Promise<void>((resolve) => {
+      releaseApply = resolve;
+    });
+    let selectionCommits = 0;
+    const controller = createSkillsController({
+      resolveTargets: () => harness.targets,
+      selectionStore: {
+        ...harness.selectionStore,
+        set: async (next) => {
+          selectionCommits += 1;
+          return harness.selectionStore.set(next);
+        },
+      },
+      applyFrozenPlan: async (...args) => {
+        markApplying();
+        await applyGate;
+        return installSkills(...args);
+      },
+    });
+    const save = controller.save(selection);
+    await applying;
+    try {
+      await writeUserFile(harness.targets, "paseo-chat", "notes/mine.md", "hand written");
+    } finally {
+      releaseApply();
+    }
 
     const result = await save;
 
     expect(result.confirmationRequired).toEqual({ removals: ["paseo-chat"] });
     expect(result.selection).toEqual(selection);
+    expect(selectionCommits).toBe(0);
+    expect(await readUserFile(harness.targets, "paseo", "SKILL.md")).toEqual([
+      "paseo-v1",
+      "paseo-v1",
+      null,
+    ]);
     expect(await readUserFile(harness.targets, "paseo-chat", "notes/mine.md")).toEqual([
       "hand written",
       "hand written",
@@ -1179,7 +1203,7 @@ describe("skills controller", () => {
     const result = await harness.controller.save({ mode: "custom", skills: ["paseo"] });
 
     expect(result.confirmationRequired).toBeNull();
-    expect(await installedEverywhere(harness.targets)).toEqual([["paseo"], ["paseo"], ["paseo"]]);
+    expect(await installedEverywhere(harness.targets)).toEqual([["paseo"], ["paseo"], []]);
   });
 
   it("preserves a regular file at a skill path when save convergence fails", async () => {
@@ -1211,7 +1235,7 @@ describe("skills controller", () => {
     ]);
 
     expect(saved.selection).toEqual({ mode: "custom", skills: ["paseo"] });
-    expect(await installedEverywhere(harness.targets)).toEqual([["paseo"], ["paseo"], ["paseo"]]);
+    expect(await installedEverywhere(harness.targets)).toEqual([["paseo"], ["paseo"], []]);
     expect(await harness.controller.status()).toEqual({
       state: "up-to-date",
       ops: [],

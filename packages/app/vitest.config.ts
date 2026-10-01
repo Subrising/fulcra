@@ -41,13 +41,22 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["src/**/*.{test,spec}.{ts,tsx}", "native-release-version.test.ts"],
+          include: [
+            "src/**/*.{test,spec}.{ts,tsx}",
+            "native-release-version.test.ts",
+            "plugins/with-fdroid-autolinking.test.ts",
+          ],
           setupFiles: [path.resolve(__dirname, "vitest.setup.ts")],
           exclude: [...configDefaults.exclude, "e2e/**", "src/**/*.browser.{test,spec}.{ts,tsx}"],
         },
       },
       {
         extends: true,
+        optimizeDeps: {
+          // Pairing mocks host-runtime, but discovery still scans its dependencies.
+          // Keep web dependencies discoverable; these native graphs are unused here.
+          exclude: ["expo-router", "expo-modules-core"],
+        },
         test: {
           name: "browser",
           fileParallelism: false,
@@ -127,6 +136,10 @@ export default defineConfig({
     ],
     alias: [
       {
+        find: /^@getpaseo\/client\/relay-v3$/,
+        replacement: path.resolve(__dirname, "../client/src/relay-v3/index.ts"),
+      },
+      {
         find: /^@getpaseo\/relay\/e2ee$/,
         replacement: path.resolve(__dirname, "../relay/src/e2ee.ts"),
       },
@@ -141,6 +154,10 @@ export default defineConfig({
       {
         find: /^@lezer\/([a-z-]+)$/,
         replacement: path.resolve(rootNodeModules, "@lezer/$1/dist/index.cjs"),
+      },
+      {
+        find: /^expo-clipboard$/,
+        replacement: path.resolve(__dirname, "test-stubs/expo-clipboard.ts"),
       },
       { find: "@", replacement: path.resolve(__dirname, "src") },
       // Keep keyboard-controller's imports in Vite so native aliases and platform extensions apply.
@@ -211,6 +228,12 @@ export default defineConfig({
       {
         find: /^expo-linking$/,
         replacement: path.resolve(__dirname, "test-stubs/expo-linking.ts"),
+      },
+      // No Node implementation: every call on the real module rejects, so a test
+      // touching a persisted store drowns in unhandled rejections.
+      {
+        find: /^@react-native-async-storage\/async-storage$/,
+        replacement: path.resolve(__dirname, "test-stubs/async-storage.ts"),
       },
       {
         find: /^lucide-react-native$/,

@@ -1,3 +1,7 @@
+import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
+import { OfferStore } from "./pairing/offer-store.js";
+import { DeviceRegistry } from "./pairing/device-registry.js";
+import { RelayDeviceGate } from "./pairing/relay-device-gate.js";
 import type pino from "pino";
 import type { KeyPair } from "@getpaseo/relay/e2ee";
 import type { ExternalSocketMetadata } from "./websocket-server.js";
@@ -8,6 +12,7 @@ import {
 } from "./relay-transport.js";
 
 export interface RelayRuntimeConfig {
+  pairingOfferTtlSeconds?: number;
   enabled: boolean;
   endpoint: string;
   publicEndpoint: string;
@@ -17,6 +22,7 @@ export interface RelayRuntimeConfig {
 
 interface RelayRuntimeOptions {
   config: RelayRuntimeConfig;
+  paseoHome: string;
   logger: pino.Logger;
   attachSocket(ws: RelaySocketLike, metadata?: ExternalSocketMetadata): Promise<void>;
   serverId: string;
@@ -27,7 +33,13 @@ interface RelayRuntimeOptions {
 export interface RelayRuntime {
   getConfig(): RelayRuntimeConfig;
   setEnabled(enabled: boolean): void;
+  setEndpoint(endpoint: string | null, useTls: boolean): Promise<void>;
   stop(): Promise<void>;
+}
+
+function relayState(config: { endpoint: string | null; enabled: boolean }) {
+  if (!config.endpoint) return "unconfigured";
+  return config.enabled ? "enabled" : "disabled";
 }
 
 export function createRelayRuntime(options: RelayRuntimeOptions): RelayRuntime {
@@ -36,7 +48,7 @@ export function createRelayRuntime(options: RelayRuntimeOptions): RelayRuntime {
   let transport: RelayTransportController | null = null;
 
   function start(): void {
-    if (transport) return;
+    if (transport || !config.endpoint) return;
     transport = startTransport({
       logger: options.logger,
       attachSocket: options.attachSocket,
@@ -44,6 +56,10 @@ export function createRelayRuntime(options: RelayRuntimeOptions): RelayRuntime {
       relayUseTls: config.useTls,
       serverId: options.serverId,
       daemonKeyPair: options.daemonKeyPair,
+      deviceGate: new RelayDeviceGate(
+        new OfferStore(options.paseoHome),
+        new DeviceRegistry(options.paseoHome),
+      ),
     });
   }
 
@@ -62,6 +78,23 @@ export function createRelayRuntime(options: RelayRuntimeOptions): RelayRuntime {
     });
   }
 
+  let endpointChange = Promise.resolve();
+  async function applyEndpoint(endpoint: string | null, useTls: boolean): Promise<void> {
+    await stop();
+    config = {
+      ...config,
+      endpoint: endpoint ?? DEFAULT_RELAY_ENDPOINT,
+      publicEndpoint: endpoint ?? DEFAULT_RELAY_ENDPOINT,
+      useTls,
+      publicUseTls: useTls,
+    };
+    if (config.enabled) start();
+  }
+  function setEndpoint(endpoint: string | null, useTls: boolean): Promise<void> {
+    endpointChange = endpointChange.then(() => applyEndpoint(endpoint, useTls));
+    return endpointChange;
+  }
+
   async function stop(): Promise<void> {
     const current = transport;
     transport = null;
@@ -71,7 +104,11 @@ export function createRelayRuntime(options: RelayRuntimeOptions): RelayRuntime {
   if (config.enabled) start();
 
   return {
-    getConfig: () => config,
+    getConfig: () => ({
+      ...config,
+      state: relayState(config),
+    }),
+    setEndpoint,
     setEnabled,
     stop,
   };

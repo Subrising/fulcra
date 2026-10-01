@@ -12,7 +12,7 @@ import {
 import type { DaemonStartResult, StartDaemonIfEnabledInput } from "@/runtime/daemon-start-service";
 
 describe("startHostRuntimeBootstrap", () => {
-  it("boots the host registry and starts the managed-daemon decision as one operation", async () => {
+  it("boots the host registry and starts the managed-daemon decision independently", async () => {
     const events: string[] = [];
     const shouldStartDaemon = async () => true;
     const store = {
@@ -41,9 +41,10 @@ describe("startHostRuntimeBootstrap", () => {
 
     expect(events).toEqual(["boot", "daemon-start-decision"]);
     expect(await receivedDecisions[0]).toBe(true);
+    expect(events).toEqual(["boot", "daemon-start-decision"]);
   });
 
-  it("waits for the host registry to load before evaluating managed-daemon startup", async () => {
+  it("loads the registry before evaluating managed-daemon startup", async () => {
     const events: string[] = [];
     let resolveBoot!: () => void;
     const booted = new Promise<void>((resolve) => {
@@ -367,7 +368,7 @@ describe("resolveHostIndexRoute", () => {
     ).toEqual("/h/server-saved/workspace/workspace-a");
   });
 
-  it("opens the home plugin when the remembered workspace is proven missing", () => {
+  it("opens Orca home when the remembered workspace is proven missing", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",
@@ -375,10 +376,10 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelectionStatus: "missing",
         orcaHome: "present",
       }),
-    ).toEqual("/h/server-saved/plugin/organization/sidebar/organization");
+    ).toEqual("/h/server-saved/plugin/orca-organization/sidebar/organization");
   });
 
-  it("opens the home plugin when the remembered workspace belongs to another host", () => {
+  it("opens Orca home when the remembered workspace belongs to another host", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",
@@ -386,10 +387,10 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelectionStatus: "exists",
         orcaHome: "present",
       }),
-    ).toEqual("/h/server-saved/plugin/organization/sidebar/organization");
+    ).toEqual("/h/server-saved/plugin/orca-organization/sidebar/organization");
   });
 
-  it("opens the home plugin when no workspace is remembered", () => {
+  it("opens Orca home when no workspace is remembered", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",
@@ -397,13 +398,13 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelectionStatus: "unknown",
         orcaHome: "present",
       }),
-    ).toEqual("/h/server-saved/plugin/organization/sidebar/organization");
+    ).toEqual("/h/server-saved/plugin/orca-organization/sidebar/organization");
   });
 
-  // The home plugin is a plugin surface. A host without that plugin renders "This plugin surface is
+  // Orca home is a plugin surface. A host without that plugin renders "This plugin surface is
   // unavailable" with no shell chrome, so routing a fresh install there leaves it with no menu
   // and no way into settings.
-  it("opens the built-in project route when the host has no the home plugin surface", () => {
+  it("opens the built-in project route when the host has no Orca home surface", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",
@@ -415,7 +416,7 @@ describe("resolveHostIndexRoute", () => {
   });
 
   // The catalog arrives after connect. Redirecting before it lands is permanent, so a cold
-  // start with the home plugin installed would be thrown to the fallback and never come back.
+  // start with Orca installed would be thrown to the fallback and never come back.
   it("waits instead of redirecting while the plugin catalog is still arriving", () => {
     expect(
       resolveHostIndexRoute({
@@ -438,7 +439,7 @@ describe("resolveHostIndexRoute", () => {
     ).toEqual("/h/server-saved/workspace/workspace-a");
   });
 
-  it("still restores a remembered workspace when the host has no the home plugin surface", () => {
+  it("still restores a remembered workspace when the host has no Orca home surface", () => {
     expect(
       resolveHostIndexRoute({
         serverId: "server-saved",

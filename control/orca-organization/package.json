@@ -1,0 +1,20 @@
+{
+  "name": "orca-organization",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node verify.mjs",
+    "verify:portable": "node ../tools/no-machine-ties.mjs"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "5.102.8",
+    "@types/node": "20.19.37",
+    "@types/react": "19.2.18",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "5.9.3",
+    "zod": "4.6.2",
+    "esbuild": "0.25.12"
+  }
+}

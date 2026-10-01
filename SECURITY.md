@@ -10,43 +10,36 @@ The Paseo daemon can run anywhere you want to execute agents: your laptop, a Mac
 
 Clients connect to the daemon over WebSocket. There are two ways to establish this connection:
 
-- **Relay connection** — The daemon connects outbound to our relay server, and clients meet it there. No open ports required.
+- **Relay connection** — The daemon connects outbound to an existing Paseo relay by default, and clients meet it there. No open ports required.
 - **Direct connection** — The daemon listens on a network address and clients connect directly.
 
 ## Relay threat model
 
-The relay is designed to be untrusted. All traffic between your phone and daemon is end-to-end encrypted. The relay server cannot read your messages, see your code, or modify traffic without detection. Even if the relay is compromised, your data remains protected.
+Fulcra v0.2 defaults to `relay.paseo.sh:443`; a local direct owner can configure another endpoint. The relay Worker is unchanged. Hosts connect outbound to it. The relay sees IP addresses, host identifiers, connection timing, frame sizes, public handshake keys and a fresh session challenge. It does not receive private encryption keys or plaintext application messages.
 
-### How it works
+Pairing v3 uses an out-of-band `fulcra://pair#offer=…` link or QR code. The offer pins the host's Curve25519 public key and carries a single-use secret with a ten-minute default expiry. The daemon stores only the secret hash; claiming consumes it before the reply. At most four offers are outstanding. A new app refuses version-2 offers with an update instruction. An old app against a v3 host can still receive a masked relay close and retry without that clear instruction.
 
-1. The daemon generates a persistent Curve25519 keypair on first run and stores it at `$PASEO_HOME/daemon-keypair.json` with mode `0600`
-2. The pairing URL (rendered as a QR code or opened directly) carries the daemon's public key in its URL fragment (`https://app.paseo.sh/#offer=...`). Fragments are not sent to the web server, so `app.paseo.sh` never sees the key.
-3. When the phone connects via the relay, it generates a fresh ephemeral Curve25519 keypair and sends an `e2ee_hello` message containing its public key. The daemon will not process any application messages until this handshake completes.
-4. Both sides perform a Curve25519 ECDH key exchange to derive a shared key. All subsequent messages are encrypted with XSalsa20-Poly1305 (NaCl `box`). The encrypted bundle is `[24-byte nonce][ciphertext]`. Peers optionally negotiate `binaryCiphertext` in `e2ee_hello` / `e2ee_ready`: negotiated application text is carried as a base64 WebSocket text frame, while application binary is carried as a raw WebSocket binary frame. A peer that does not negotiate the capability uses base64 text frames for both kinds.
+Each app installation keeps a long-lived device key. The desktop app keeps it in the Electron main process, wrapped with safeStorage (the app's keychain entry on macOS); an older plaintext copy in renderer storage moves there unchanged on first use and is then deleted, so paired hosts keep admitting the device. iOS, Android and the browser still keep it unencrypted in app storage: anyone who can read that storage can act as the device to every paired host until you revoke it. Don't describe these device keys as OS-protected. Both parties derive session keys from the client ephemeral key, device key, host key, host identifier and a fresh daemon challenge. Separate direction keys and strictly increasing 64-bit counters reject reflection, duplicated frames, counter gaps and captured-session replay. The daemon admits a session only after decrypting a device proof and checking its registry or a valid pairing claim.
 
-The WebSocket opcode is preserved end to end after negotiation; the receiver never guesses whether authenticated plaintext is text or binary from its byte contents. The plaintext handshake remains WebSocket text and contains only public keys and capability declarations.
+A paired device can run code as the host user through terminals and agents, like any local process running as that user. **Revocation, not the permission list, is the containment for paired-device access.** RPC restrictions are not an OS-user sandbox and cannot undo code already executed or persistence a hostile device installed. The local CLI `paseo daemon pair` mints directly under the rule **local user = owner**. Plugin service sessions are excluded from pairing, device-management and relay-endpoint RPCs. Command Centre management remains separately fenced by V1.1b cryptographic authentication evidence; neither a device principal nor unpassworded loopback carries that evidence.
 
-The relay sees only: IP addresses, timing, message sizes, session IDs, and the plaintext `e2ee_hello` / `e2ee_ready` handshake frames (which contain only public keys). It cannot read message contents, forge messages, or derive encryption keys from observing the handshake.
+A paired device receives owner permissions except `command-centre.manage` and `access.manage`; it retains `daemon.manage`. A device principal cannot resume the local owner's session. Registry parsing also strips the two excluded permissions. No management authentication evidence is granted to a device principal. New offers and relay endpoint changes require a local direct owner connection.
 
-### Why the relay can't attack you
+Revocation immediately denies the device in memory, detaches and closes its sockets, and cleans up its sessions before waiting for registry persistence. Admission checks that in-memory denial across registry instances. Persistence retries for up to one second; a failure keeps the device denied until the daemon stops, and the owner must retry or stop the daemon and revoke offline before restarting. Pairing shows the host name and a 128-bit public-key fingerprint. Malformed offer and handshake errors never echo the raw input. The app refuses a changed host key for a known host identifier; removing the old host and pairing again is an explicit action.
 
-The daemon requires a valid cryptographic handshake before processing any commands. A compromised relay cannot:
+The unchanged relay has no authenticated host-slot token. It can replace a transport slot, drop traffic, delay it or prevent connections; endpoint host-key authentication still prevents impersonation. A leaked unused offer can be claimed by an attacker before its owner uses it. A stolen paired device is a powerful host operator until revoked. App storage is not OS-protected secret storage in this version, and a stolen host private key can expose captured traffic: forward secrecy against host-key theft is not provided. A hostile process running as the daemon's OS user remains inside the local trust boundary.
 
-- **Impersonate the daemon to your phone** — Without the daemon's secret key, it cannot derive the shared key, so any traffic it injects fails authenticated decryption on the phone
-- **Send commands as you** — The daemon only accepts traffic that decrypts and authenticates under a shared key derived with its own secret key. The phone's keypair is ephemeral per connection, so there is no persistent phone-side secret to steal; protection comes from the daemon's secret key never leaving the daemon.
-- **Read your traffic** — All messages are encrypted with XSalsa20-Poly1305 (NaCl box) after the handshake
-- **Forge messages** — NaCl box provides authenticated encryption; tampered messages are rejected
-- **Replay old messages across sessions** — Each session derives fresh encryption keys, so ciphertext from one session cannot be replayed into another session. Within a live session, replay protection is not yet implemented; the protocol uses random nonces and does not track nonce reuse or message counters.
+See [self-hosting and recovery](docs/relay-self-host.md). Identity rotation requires a stopped daemon and unpairs every device.
 
-### Trust model
-
-The QR code or pairing link is the trust anchor. It contains the daemon's public key, which is required to establish the encrypted connection. Treat it like a password — don't share it publicly.
+Relay admission requires the paired-device handshake and its fresh owner grants. A password or anonymous `hello` never substitutes for the device identity.
 
 ## Local daemon trust boundary
 
-By default, the daemon binds to `127.0.0.1`. With no password configured, the local control plane is trusted by network reachability — anything that can reach the daemon socket can control the daemon. This is the same security model Docker documents for its daemon: the security boundary is access to the socket or listening address.
+By default, the daemon binds to `127.0.0.1`. With no password configured, anything that can reach the daemon socket can control the daemon. Loopback is reachable by other users on the machine and by some forwarding tools.
 
-The daemon also supports an optional shared-secret password (set via `auth.password` in `config.json` or the `PASEO_PASSWORD` env var; stored bcrypt-hashed). When configured, every HTTP request must carry `Authorization: Bearer <password>` and every WebSocket upgrade must include a `Sec-WebSocket-Protocol: paseo.bearer.<password>` subprotocol. Browser WebSocket cannot set custom headers, which is why the token rides in the subprotocol. Health (`GET /api/health`) and CORS preflight (`OPTIONS`) are exempt. The password is intended for direct-TCP exposure (e.g. `tcp://host:port?ssl=true&password=...`); it is **not** a substitute for the relay's E2E encryption when traversing untrusted networks.
+The daemon supports an optional shared-secret password (set via `auth.password` in `config.json` or the `PASEO_PASSWORD` env var; stored bcrypt-hashed). WebSocket clients send the password in `hello`; the daemon sends no session data before admission. Direct connections still accept bearer headers and WebSocket bearer subprotocols for older clients. HTTP stays bearer-header based. Health (`GET /api/health`) and CORS preflight (`OPTIONS`) are exempt; `/api/files/download` and `/mcp/agents` use their own capability tokens.
+
+The daemon writes a new `$PASEO_HOME/local-credential` on every run with mode `0600` and removes it on shutdown. The CLI and desktop main process read it only for the daemon whose PID lock `listen` matches their connection target. A same-user process can read this credential, so the password protects against network clients and other OS users, not processes running as the daemon user. Protect `$PASEO_HOME` accordingly. Relay traffic remains end-to-end encrypted independently of password admission.
 
 Connected clients are trusted operators of the daemon user. File previews follow that authority: a preview request may read any regular file the daemon process can read, while keeping path normalization and symlink checks in the daemon file service. Workspace-relative paths remain a UI convenience, not a security boundary.
 

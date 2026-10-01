@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Example shop",
+    "subtitle": "Manually mapped from the example shop's service definitions (not deployed; a test fixture)"
+  },
+  "components": [
+    { "id": "web", "type": "frontend", "label": "Shop website", "sublabel": "what customers use", "pos": [40, 40], "size": [200, 62] },
+    { "id": "orders", "type": "backend", "label": "Orders service", "sublabel": "takes orders, checks stock", "pos": [320, 40], "size": [200, 62] },
+    { "id": "search", "type": "backend", "label": "Product search", "sublabel": "finds products in stock", "pos": [880, 40], "size": [200, 62] },
+    { "id": "payments", "type": "external", "label": "Card payments provider", "sublabel": "outside company", "pos": [40, 200], "size": [200, 62] },
+    { "id": "orders-db", "type": "database", "label": "Orders database", "sublabel": "every order ever placed", "pos": [320, 200], "size": [200, 62] },
+    { "id": "mail", "type": "messagebus", "label": "Email queue", "sublabel": "receipts and reports", "pos": [600, 200], "size": [200, 62] }
+  ],
+  "connections": [
+    { "id": "web-to-orders", "from": "web", "to": "orders", "label": "places orders", "variant": "emphasis" },
+    { "id": "orders-to-db", "from": "orders", "to": "orders-db", "label": "stores orders" },
+    { "id": "orders-to-payments", "from": "orders", "to": "payments", "label": "takes payment", "variant": "dashed" },
+    { "id": "orders-to-mail", "from": "orders", "to": "mail", "label": "sends receipts" },
+    { "id": "orders-to-search", "from": "orders", "to": "search", "label": "checks stock" },
+    { "id": "search-to-db", "from": "search", "to": "orders-db", "label": "reads products" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Source", "items": ["services.yaml SHA256 00000000", "manually mapped, not deployed"] }
+  ]
+}

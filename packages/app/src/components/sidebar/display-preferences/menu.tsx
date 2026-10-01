@@ -58,6 +58,7 @@ import { SIDEBAR_ROW_ITEMS, type SidebarRowItem } from "./row-items";
 import { useWorkspaceLabelProjection } from "@/workspace-labels";
 import { WorkspaceLabelDot } from "@/workspace-labels/swatch";
 import { WorkspaceLabelManagerModal } from "@/workspace-labels/manager-modal";
+import { hostDisplayName } from "@/hosts/host-display-name";
 
 const mutedIconMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -709,7 +710,7 @@ function HostFilterPage({
         <HostFilterItem
           key={host.serverId}
           serverId={host.serverId}
-          label={host.label?.trim() || host.serverId}
+          label={hostDisplayName(host)}
           selected={preferences.hostFilters.includes(host.serverId)}
           onToggle={preferences.toggleHostFilter}
         />

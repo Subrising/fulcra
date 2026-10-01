@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 import { useHostRouteServerId } from "@/navigation/host-route-context";
 import {
   ORCA_HOME_UNKNOWN_BOUND_MS,
-  HOME_PLUGIN_ID,
-  HOME_SIDEBAR_ID,
+  ORCA_ORGANIZATION_PLUGIN_ID,
+  ORCA_ORGANIZATION_SIDEBAR_ID,
   resolveHostIndexRoute,
   resolveOrcaHomeAvailability,
   resolveWorkspaceSelectionStatus,
@@ -37,9 +37,9 @@ export default function HostIndexRoute() {
   const isWorkspaceSelectionLoaded = useIsLastWorkspaceSelectionHydrated();
   const workspaceSelectionWorkspaceId =
     workspaceSelection?.serverId === serverId ? workspaceSelection.workspaceId : null;
-  const organizationPlugin = useInstalledPlugin(serverId ?? "", HOME_PLUGIN_ID);
+  const organizationPlugin = useInstalledPlugin(serverId ?? "", ORCA_ORGANIZATION_PLUGIN_ID);
   const connection = useHostRuntimeConnectionStatus(serverId ?? "");
-  // Null until the host sends its features. Treating that as false sent a host that has the home plugin
+  // Null until the host sends its features. Treating that as false sent a host that has Orca
   // home to the fallback, and the redirect is permanent.
   const pluginsSupported = useHostFeatureAvailability(serverId ?? "", "plugins");
   const catalogSettled = useHostCatalogSettled(serverId ?? "");
@@ -48,7 +48,7 @@ export default function HostIndexRoute() {
   // present without contributing it.
   const { surface: organizationSurface } = resolvePluginSurfaceContribution(organizationPlugin, {
     kind: "sidebar",
-    id: HOME_SIDEBAR_ID,
+    id: ORCA_ORGANIZATION_SIDEBAR_ID,
   });
   const orcaHome = resolveOrcaHomeAvailability({
     connection,

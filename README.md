@@ -1,217 +1,183 @@
 # Fulcra
 
-**Run a team of real AI coding sessions from one place, and steer them without reading every line.**
-Fulcra runs Claude Code, Codex and other agent CLIs as long-lived sessions on your own machine, and gives you one app
-to start them, follow them, answer them and review what they changed. Your code stays on your machine.
+**Run a team of real AI coding sessions from one place, and steer their work.**
+Fulcra runs Claude Code, Codex and other agent CLIs as persistent sessions on your machine.
+Use the desktop app to start sessions, follow their progress, answer decisions and inspect their work.
+The Command Centre adds projects, leadership and delegated work alongside the app, host and CLI in one repository.
 
-![A project's story in Fulcra: what is happening now, what is next, what needs you, and the risks. Demo data.](docs/readme/organisation.png)
+![Organisation and project work in Fulcra. Demo data.](docs/readme/organisation.png)
 
-<sub>Screens in this README use made-up demo data (a sample product called "Tally" and an example shop).</sub>
+<sub>README images use made-up demo data. They illustrate views, not hardware acceptance evidence.</sub>
 
-## Why Fulcra
+## Availability
 
-- **Many sessions, one place.** Real Claude Code and Codex sessions — each with its own history, worktree and
-  tools — side by side, instead of a stack of terminal tabs.
-- **Steer, don't babysit.** See what each session is doing, what it changed and what it needs from you, then answer
-  in one tap. You review outcomes, not keystrokes.
-- **Sensible defaults.** New Claude sessions start in Auto mode on your account's default model and effort, so you
-  are not re-choosing settings every time.
-- **Yours to run.** Open source (Apache-2.0), runs on your machine, talks to the agent CLIs you already use.
-
-## Availability at a glance
-
-| Area | In v0.1 (released) | Coming in v0.2 (Command Centre) |
+| Area | v0.2 scope | Limits |
 | --- | --- | --- |
-| Sessions | Run Claude Code, Codex, Copilot, OpenCode and Pi sessions; follow, answer and steer them | Step-through replay of a session |
-| Workspaces | Git worktrees per workspace, diffs, terminals, files | Job → draft PR → review → merge → clean-up, run for you |
-| Models | Models read from your Claude Code install; Auto mode, default model and effort stored per session | — |
-| GitHub | Pull request status through your `gh` login | Issues and pull requests in a Trackers view |
-| Organisation, Inbox, Environments, Changes | — | All four (screens below) |
-| Channels | Desktop app (macOS), `fulcra` CLI | Phone, Discord |
+| Sessions/workspaces | Persistent sessions, worktrees, diffs, terminals and files; session step-through | Shell-created file edits may be absent from the file-change filter. |
+| Command Centre | Organisation, project/session views, Today, decisions and held messages | One-click orchestrator refresh and a complete autonomous job-to-merge loop are not established. |
+| Changes | Workspace PR view and before/after architecture diagrams | Full automatic blast-radius coverage for every change is not established. |
+| Environments | Planning and hold views | Production launch/teardown and automatic promotion are held. |
+| Tracking | GitHub issues/PRs and existing host sign-in [C9] | Jira/Bitbucket and public Discord end-to-end workflows are not established. |
+| Accounts | Multi-account Claude/Codex pool and delegated limit rotation | Manual A→B→A continuity and remote management require C9 PASS. |
+| Defaults | Role/model/effort defaults; Claude auto / Codex full-access on every host [C9] | Codex Full Access runs commands without approval prompts; Fulcra cannot pre-check credential access, destructive Git actions or publishing in this mode. |
+| Devices | D13 server-enforced read-only tier; explicit accounts.manage grant [C9] | Phone installation and acceptance remain unverified in this release record. |
+| Platforms | Source only; macOS Apple silicon has prior test evidence | No public binary is eligible from the unsigned/non-notarized wrapper. Windows/Android not hardware-tested; Linux acceptance not established. |
 
-## How it works
+`[C9]` identifies release claims awaiting candidate 9 acceptance. This README is an editorial draft until
+those gates and the single-checkout artifact gates pass. See the release notes for the final supported scope.
 
-### Who does what
+## How work is organised
 
-You set direction. **Primes** lead areas of work, each project gets an **orchestrator**, and orchestrators hand work
-to **worker sessions**. Workers are full, persistent Claude Code or Codex sessions — not throwaway subagents — so they
-keep their history and can be resumed, inspected and redirected.
-
-```mermaid
-flowchart LR
-  you([You]) --> primeA[Delivery prime]
-  you --> primeB[Research prime]
-  primeA --> orchA[Tally orchestrator]
-  primeA --> orchB[Website orchestrator]
-  primeB --> orchC[Platform orchestrator]
-  orchA --> w1[Worker session<br/>Claude Code]
-  orchA --> w2[Worker session<br/>Codex]
-  orchB --> w3[Worker session<br/>Claude Code]
-  orchC --> w4[Worker session<br/>Claude Code]
-```
-
-<sub>v0.1 runs and shows the sessions. Primes and orchestrators arrive with the Command Centre in v0.2.</sub>
-
-### How a job moves
-
-Every job gets its own worktree, so parallel sessions never edit the same checkout. Work lands as a draft pull
-request, gets a review sized to its risk, merges, and the worktree is cleaned up.
+You set direction. Primes lead areas of work, project orchestrators coordinate jobs, and worker sessions
+carry them out. Workers retain history and can be inspected and resumed. Generation fences reject stale
+leadership after replacement; the complete one-click refresh workflow remains deferred.
 
 ```mermaid
 flowchart LR
-  job[Job] --> wt[Own worktree]
-  wt --> pr[Draft pull request]
-  pr --> review{Review<br/>sized to risk}
-  review -- changes needed --> wt
-  review -- approved --> merge[Merge]
-  merge --> clean[Worktree cleaned up]
+  you([You]) --> prime[Prime]
+  prime --> project[Project orchestrator]
+  project --> claude[Claude Code worker]
+  project --> codex[Codex worker]
+  project --> inbox[Decisions and held messages]
+  inbox --> you
 ```
 
-<sub>v0.1 gives each workspace its own worktree and shows pull request status. The full loop runs for you in v0.2.</sub>
+Each workspace can use its own Git worktree. Fulcra shows changes and pull request status; a complete
+automatic job → draft PR → review → merge → cleanup loop is not claimed for this release.
 
-### How you talk to it
+## Command Centre views
 
-```mermaid
-flowchart LR
-  app[Fulcra desktop app<br/>v0.1] --> host
-  cli[fulcra CLI<br/>v0.1] --> host
-  phone[Phone app<br/>planned] -.-> host
-  chat[Discord<br/>v0.2] -.-> host
-  host[Fulcra host<br/>on your machine] --> claude[Claude Code sessions]
-  host --> codex[Codex sessions]
-  host --> other[Copilot · OpenCode · Pi]
-  direct[Direct use of<br/>Claude Code / Codex] --> claude
-  direct --> codex
+- **Organisation:** projects, leadership, sessions and work status.
+- **Inbox / Today:** decisions, held messages and work that needs attention. A failed read must not appear as all clear.
+- **Sessions:** follow a conversation and inspect its turns and tools. [C9] Pending approvals show “Needs you”.
+- **Changes:** inspect workspace changes and before/after architecture views.
+- **Environments:** inspect plans and holds before operational action.
+- **Trackers:** view GitHub work; [C9] identify your work using the host's existing gh sign-in, without copying its token.
+
+![Inbox with a decision and alternatives. Demo data.](docs/readme/inbox.png)
+![Session step-through. Demo data.](docs/readme/sessions-step-through.png)
+![Changes and architecture diagrams. Demo data.](docs/readme/changes-blast-radius.png)
+![Environment planning. Demo data.](docs/readme/environments.png)
+![Tracker connections. Demo data.](docs/readme/trackers.png)
+
+## Accounts and defaults
+
+Settings → Accounts & Defaults manages pooled Claude and Codex accounts, priorities and enabled state.
+Delegated sessions can continue on another eligible account after a usage limit; human-held sessions are
+marked limited rather than silently moved.
+
+[C9] Switch a session using “Switch account…” or `/account`. The same session and history must continue.
+Remote switching requires an owner-granted `accounts.manage` capability in Settings → Devices, separate
+from Command Centre access. Existing devices receive no account-management grant on upgrade. Until C9
+passes, takeover is supported from the Mac hosting the session. D13 read-only devices cannot manage accounts.
+Remote add/remove remains conditional on exact acceptance. C9 host settlement is ENABLEMENT-ONLY: source
+contains Keychain diagnostics/readback, owned app-managed restart and a staged adapter gate. Packaged
+integration and prime app-context acceptance remain NOT_RUN. Pool coordination, writer leases, enrollment,
+host-sync grants and cross-host sync remain unimplemented/HOLD, outside C9; no sync completion is claimed.
+
+Models come from the provider catalog. Role defaults are editable; an explicit model/effort choice wins.
+[C9] New top-level sessions default to Claude `auto` / Codex `full-access`, including plain hosts. Internal
+helpers retain conservative modes. Daemon-created children inherit restrictions; controller-brokered worker
+clamping remains a documented gap. Claude `bypassPermissions` is refused.
+
+**Codex Full Access runs commands without approval prompts. Fulcra cannot pre-check credential access,
+destructive Git actions or publishing in this mode.** This enforcement gap (L52) is an accepted limitation
+for v0.2.0 native Codex FullAccess only, conditional on this release disclosure and matching help text in
+Settings → Accounts & Defaults. It does not exempt Claude, host-sync grants or future releases.
+
+Claude Auto must still pass the credential/Keychain, destructive shared-branch Git and publishing/release
+approval gates [C9]. Ordinary MCP/tool calls should need no Fulcra approval under the automatic defaults
+[C9]. Fulcra management tools and host-sync operations retain their separate authorization checks.
+
+[C9] Integrated source includes pooled Claude and Codex readers, session-account attribution and a
+per-account rundown in chat and Settings, with unavailable states, reset/status figures and bounded
+refresh/cache behavior. The C9 rundown gate is source-delivered. Packaged gate and UI acceptance remain
+NOT_RUN until bound to the exact seal; this is implementation scope, not shipped or live-provider acceptance.
+
+Native queued intercom and prime report-up are IMMEDIATE-NEXT, outside the a768 C9 artifact scope. No
+queued-delivery or report-up completion is claimed for that artifact.
+
+## Source-only release
+
+v0.2 defaults to source only. The current packaging wrapper disables signing and notarization and is
+ineligible for public `.app`, `.dmg` or `.zip` binary assets under this release’s signing requirement.
+A future binary requires signing evidence accepted by the release owner and hash-bound artifact gates.
+Build from source using the instructions below; no public binary download or checksum is claimed here.
+
+Use matching bundled/served plugin bytes on all Macs using the desktop Command Centre. Version skew can
+show “Plugin not trusted on this Mac”. Pair devices and grant capabilities explicitly when configuring
+a developer-built installation.
+
+Mobile/web relay identity keys remain plaintext; desktop storage is protected but the renderer holds the
+key in memory while connected. Mobile/web also lack the desktop bundled-plugin pin. See release notes for
+same-user/plugin trust, platform and other security limits.
+
+## One repository
+
+```text
+packages/     App, desktop, host/server, CLI and shared libraries
+control/      Controller, Command Centre plugin, ingress, provider integration and tools
+local/        Ignored machine configuration and local operational state
+scripts/      Product build and packaging entry points
 ```
 
-The host runs on your machine next to your code. The desktop app starts it for you. Sessions are ordinary Claude Code
-and Codex sessions, so you can still open them directly in their own CLIs.
-
-## Features
-
-### Organisation
-
-**Why it matters:** one page tells you what every project is doing, what is next, what needs you and what is at risk,
-written in plain language by the project's orchestrator.
-
-![Organisation: primes, the projects each one owns, and a project's story with its risks. Demo data.](docs/readme/organisation.png)
-
-**Availability:** Coming in v0.2 (Command Centre).
-
-### Inbox
-
-**Why it matters:** decisions come to you the way they would to a CEO — the question, a recommendation, the options
-in plain words — and you answer once.
-
-![Inbox: a decision with a recommended option and alternatives, each explained in one line. Demo data.](docs/readme/inbox.png)
-
-**Availability:** Coming in v0.2 (Command Centre).
-
-### Sessions step-through
-
-**Why it matters:** replay what a session did, turn by turn and step by step — what it read, what it changed, which
-tests it ran — without scrolling a raw transcript. Inspired by Kepler's step-through view.
-
-![Sessions step-through: a session's turns, with the files it edited and the tests it ran at each step. Demo data.](docs/readme/sessions-step-through.png)
-
-**Availability:**
-- **In v0.1:** run, follow and steer Claude Code, Codex, Copilot, OpenCode and Pi sessions; answer permission
-  prompts; send follow-ups.
-- **Coming in v0.2:** the step-through replay shown here.
-
-### Changes and blast radius
-
-**Why it matters:** before you merge, see which parts of the system a change touches and what else depends on them,
-as a before/after diagram. Archify-style architecture maps.
-
-![Changes: before and after diagrams of an example shop, with the parts that changed and the parts affected. Demo data.](docs/readme/changes-blast-radius.png)
-
-**Availability:**
-- **In v0.1:** diffs for each workspace.
-- **Coming in v0.2:** the diagram view shown here. It is not in the app yet.
-
-### Environments and push-to-next
-
-**Why it matters:** see which version runs where — Dev, Next, Live — and move a change one step at a time, with a
-single approval and an automatic undo if a check fails. Radius-style environments.
-
-![Environments: Dev, Next and Live for a sample product, with a promotion waiting for approval. Demo data.](docs/readme/environments.png)
-
-**Availability:** Coming in v0.2 (Command Centre).
-
-### Trackers
-
-**Why it matters:** issues and pull requests from where your team already keeps them, read-only. Fulcra never changes
-anything there.
-
-![Trackers: connected GitHub accounts and a read-only sign-in flow. Demo data.](docs/readme/trackers.png)
-
-**Availability:**
-- **In v0.1:** pull request status through your existing `gh` login.
-- **Coming in v0.2:** the Trackers view shown here, for GitHub, Jira and Bitbucket.
-
-### Models and Auto defaults
-
-**Why it matters:** new models appear without a Fulcra update, and new sessions start on sensible settings.
-
-```mermaid
-flowchart LR
-  cc[Your Claude Code install] -->|reports models| list[Model list in Fulcra]
-  list --> def[Default model<br/>and its default effort]
-  def --> new[New Claude session<br/>Auto mode · default model · default effort]
-  you([You]) -. choose another .-> new
-```
-
-**Availability:** In v0.1.
-- Claude models are read from your installed Claude Code.
-- New Claude sessions store Auto mode, the default model and its default effort.
-- Anything you choose yourself wins over these defaults.
-- Providers whose CLI is not installed show as "Not installed".
-
-## Install (macOS, Apple silicon)
-
-1. Download `Fulcra-0.1.0-arm64.dmg` from the Releases page and drag **Fulcra** into Applications.
-2. This build is not notarized, so macOS blocks it the first time. Open **System Settings → Privacy & Security**,
-   scroll to the message about Fulcra, choose **Open Anyway** and confirm.
-3. Install and sign in to at least one agent CLI, for example
-   [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex.
-
-The desktop app starts its own host. To use a host on another machine, run it there with the CLI and connect to it
-from the app.
+Use tracked `*.example` templates to create your own configuration under `local/`. Keep machine hostnames,
+device IDs, pins/grants, controller homes, receipts, credentials, evidence and local release folders out of
+the tracked tree. Examples and tests use placeholders. Moving config to `local/` does not change installed
+runtime identities or move existing user data automatically. Follow the final control setup guide for the
+supported config-loader/template commands; do not assume merely copying a file activates it.
 
 ## Build from source
 
-You need Node.js 22+ and npm. For the desktop app, you also need macOS with the Xcode command line tools.
+Use Node.js 22+ and npm; Node.js 24 matches the controller bundle target. For macOS desktop packaging,
+install the Xcode command line tools. Python 3 is needed for the control tools that use it.
+From the repository root:
 
 ```bash
+git clone https://github.com/Subrising/fulcra.git
+cd fulcra
 npm ci
 npm run typecheck
-npm run build:server                            # host, CLI and their libraries
-cd packages/desktop && npm run build:unsigned   # macOS app in packages/desktop/release/
+npm run build:server
+node scripts/package-command-centre.mjs ./control
 ```
 
-Development:
+The unsigned Command Centre wrapper builds the server, bundled plugin/controller, web app and desktop app
+from this checkout and outputs an app directory under `packages/desktop/release/` (normally
+`mac-arm64/Fulcra.app`). It disables signing, notarization and hardened runtime; it does not produce a DMG/ZIP
+or prove packaged launch/upgrade acceptance. This command retains the current wrapper's explicit controller
+argument; use it only after the consolidation owner confirms its one-checkout path/provenance adaptations.
+Generic `build:unsigned` does not itself establish that the Command Centre bundle was rebuilt.
+
+Development uses `npm run dev` for the host, `npm run dev:app` for the shared app, or `npm run dev:desktop`
+for desktop development. These are separate processes; root `dev` does not start both host and app.
 
 ```bash
-npm run dev          # host + app in development mode
-fulcra daemon status # the CLI (`paseo` still works as an alias)
+fulcra daemon status # paseo remains a compatibility alias
 ```
 
-The host keeps its state in `~/.paseo`. Set `FULCRA_HOME` to use another directory.
+The standalone CLI's default state home remains `~/.paseo`; existing `FULCRA_HOME`/`PASEO_HOME` compatibility
+is retained. Desktop uses its existing app user-data daemon directory unless overridden. Keep the desktop
+bundle ID `dev.orca.workspace.desktop`, macOS data directory `~/Library/Application Support/Orca`, Keychain
+service names, socket paths, runtime environment variable names and trusted plugin IDs unchanged.
 
-## Staying current with upstream
+Release builds use the candidate pipeline, recording the single-checkout commit and product/control lineage,
+then sealing/scanning/testing the exact output. A successful source build is not a public release verdict.
 
-Fulcra is a fork of Paseo that renames only what you see, so upstream changes keep merging.
-`scripts/sync-upstream.sh` merges Paseo's `main` into a sync branch, runs the typecheck and unit tests, and lists any
-conflicts. A weekly workflow opens a pull request with the result. See [docs/UPSTREAM.md](docs/UPSTREAM.md).
+## Staying current with Paseo
+
+Fulcra is a fork of [Paseo](https://github.com/getpaseo/paseo), with additional orchestration/control code.
+Keep the `upstream` remote pointing to getpaseo/paseo for future merges. Retain compatible upstream package
+names and runtime identities. Correct the identity inventory in [docs/UPSTREAM.md](docs/UPSTREAM.md) when
+consolidating: its old `app.fulcra.desktop` / Application Support/Fulcra description is not the v0.2 runtime.
+Describe the sync script/workflow as active only if it is present and validated in the published tree.
 
 ## Credits and licences
 
-- **Paseo** — Fulcra is built on [Paseo](https://github.com/getpaseo/paseo) by Mohamed Boudra, used under the Apache
-  License 2.0. See [NOTICE](NOTICE).
-- **Archify** ([MIT](https://github.com/tt-a1i/archify)) — the architecture-map approach behind the Changes view.
-- **Radius** ([Apache-2.0](https://github.com/radius-project/radius)) — the environments model behind Environments.
-- **Kepler** is proprietary. The step-through view is inspired by it. Fulcra has no affiliation with Kepler and uses
-  none of its code.
+Fulcra is based on Paseo by Mohamed Boudra, under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Preserve upstream copyright and applicable third-party notices in source and binary distributions, and
+mark modified source files. Fulcra does not claim endorsement by the Paseo project.
 
-Fulcra is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+The architecture-map approach draws on Archify (MIT); environment planning draws on Radius (Apache-2.0).
+Retain their licences/notices wherever code/assets are actually incorporated. Kepler inspires the session
+step-through approach; it is proprietary, unaffiliated, and none of its code or assets is included.

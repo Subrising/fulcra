@@ -1,0 +1,62 @@
+{
+  "sourceAnchor": "b2f5cf2440e25674852a753e82781e3a6a02ed22",
+  "sourceCorrection": "46e928a063c630881b749d3cb8f4616d224709d2",
+  "files": {
+    "gate-switch-continuity.mjs": {
+      "origin": "W1 frozen task fix8 handoff",
+      "originalSha256": "13a4e8c6bf133a38269d1ade33a55e508ee4561fcbd9ffb458ddc212db9661d1",
+      "deliveredSha256": "f78145c6acb1b90a1f26bb50598c1cc8d503feb15469bd5c3c7d88ed23abe26f"
+    },
+    "fake-claude-continuity.cjs": {
+      "origin": "W1 frozen task fix8 handoff",
+      "originalSha256": "b666ce3e15bca5ba8cfac05ec4595fcd827eee5476bcf1e776076d5baa8d3dd5",
+      "deliveredSha256": "2cd2549874200a1b7ef808364def888c31f27fd1b9cab20ca1c4e8ba93794cce"
+    },
+    "gate-switch-continuity-codex.mjs": {
+      "origin": "W2 control 38a3e37d4635fe55be776524f214201b7edef71b next-build/u7",
+      "originalSha256": "ab2985ec0ddbc69548e50b33803a3fbc33d905fcff31603d4c80b8f8888304ff",
+      "deliveredSha256": "49f5c66639948fd84cb697516742ff981cd7871a948dc4d545f957e62fdaf9f2"
+    },
+    "fake-codex-continuity.cjs": {
+      "origin": "W2 control 38a3e37d4635fe55be776524f214201b7edef71b next-build/u7",
+      "originalSha256": "a07842caadac4b0f0f197398574fb4bc85cde33e94e8a48aacf0ab96c426590e",
+      "deliveredSha256": "218872f2688275965475db45a719d89a09365a9e2d0d6a8d5fa26273be688e5e"
+    },
+    "gate-pending-permission.mjs": {
+      "origin": "W2 control 38a3e37d4635fe55be776524f214201b7edef71b next-build/u7",
+      "originalSha256": "413172f6ac498b0910d8791b1d66f6d81e468d9ffc7c43e640bee32ea8db773b",
+      "deliveredSha256": "50160adb4de3234cc317e55059889b6f832c70467454a0040a5c2a7666bb7070"
+    },
+    "W2-FIX-8.md": {
+      "origin": "W2 control 38a3e37d4635fe55be776524f214201b7edef71b next-build/u7",
+      "originalSha256": "961e29f9ac5927fd48de33f10e4010cc11c454372b7d41574e18368605b08d87",
+      "deliveredSha256": "79fa51156ced0ca189e2a63a32a6b9512865938737d8d0cc75d4a8d6cc0ffaa6"
+    },
+    "fake-claude-cli.cjs": {
+      "origin": "candidate-8 retained gate sources next-build/u7",
+      "originalSha256": "4696904f4e94b281e20f4c55c4b3179fd0df410523b8268debefd1986d80b800",
+      "deliveredSha256": "9b8f2d27bdd6c56d24fe0b74503c26b6338943829dbd99955536ed2b457a5ec2"
+    },
+    "fake-codex-app-server.cjs": {
+      "origin": "candidate-8 retained gate sources next-build/u7",
+      "originalSha256": "79a74137f5994e9f6acc8d7b6af120e846791bfedcf7a280579dc1a14e543959",
+      "deliveredSha256": "73cb8f5de6d44fcca212ac2fc1b45fbd09f808dc45353e0b818b873493133df3"
+    },
+    "gate-remote-accounts.mjs": {
+      "origin": "candidate-8 retained gate sources next-build/u7",
+      "originalSha256": "1369f48b08fe717fc567bc20a0c4b53b0ed715bffdf9cb5506b1536e137aafee",
+      "deliveredSha256": "38fe7cb23e4089c13e8f353f0f352a4de56d4ff610ba034a3dbc28ec4f806606",
+      "previousDeliveredSha256": "8228b21fb7eee281db280ce541c635f9a15f3800b62b7cae34b74fc78d725710"
+    },
+    "gate-management-final-dispatch.mjs": {
+      "origin": "Exact93 sealed runner diagnostic raw-ASAR read repair; native original-fs only, predicate unchanged; independent review required",
+      "deliveredSha256": "bb66fdb921a91c590f7c05c0cfe49712899543fb529ece5ad4c2630355c77db9",
+      "previousDeliveredSha256": "5ca7509f02c4596426d832c4b195d1296042daf669e7c641b4e4b6f6f8db029f",
+      "previousDeliveredSha256s": [
+        "5ca7509f02c4596426d832c4b195d1296042daf669e7c641b4e4b6f6f8db029f",
+        "02b0f2f7530cca45312662a00f26ad0bebdae75d03e7b21753e922bbdf4889fa"
+      ]
+    }
+  },
+  "reviewFollowup": "G1 original granted socket retained; final-dispatch invocation staged coverage still required"
+}

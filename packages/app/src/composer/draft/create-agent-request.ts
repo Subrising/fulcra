@@ -3,6 +3,8 @@ import type { AgentSnapshotPayload, CreateAgentRequestMessage } from "@getpaseo/
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { encodeImages } from "@/utils/encode-images";
 import type { UserMessageImageAttachment } from "@/types/stream";
+import type { SessionRole } from "@getpaseo/protocol/session-roles";
+import { roleLabelOption } from "@/provider-selection/role-defaults";
 
 export interface WorkspaceDraftAgentRequest {
   workspaceId: string;
@@ -11,6 +13,8 @@ export interface WorkspaceDraftAgentRequest {
   clientMessageId: string;
   images?: UserMessageImageAttachment[];
   attachments?: CreateAgentRequestMessage["attachments"];
+  /** What the session is for; absent sends no label, exactly as before roles existed. */
+  role?: SessionRole | null;
 }
 
 /**
@@ -26,6 +30,7 @@ export async function requestWorkspaceDraftAgent(
     config: request.config,
     workspaceId: request.workspaceId,
     clientMessageId: request.clientMessageId,
+    ...roleLabelOption(request.role),
     ...(request.text ? { initialPrompt: request.text } : {}),
     ...(images && images.length > 0 ? { images } : {}),
     ...(request.attachments && request.attachments.length > 0

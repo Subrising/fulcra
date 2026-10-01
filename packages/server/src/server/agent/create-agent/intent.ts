@@ -4,6 +4,23 @@ export interface CreateAgentCaller {
   id: string;
   cwd: string;
   workspaceId?: string;
+  /** The caller's own labels: a child inherits its task and project, so ownership survives every create path. */
+  labels?: Record<string, string>;
+}
+
+// Update-7 (ownership on every create path): a session created from inside a session (`paseo run`, an MCP create)
+// belongs to the caller's task and project, and is an implementation worker unless the request names a role. The
+// request's own labels always win; the parent label is always the caller.
+export const INHERITED_LABELS = ["task", "fulcra.project"] as const;
+export const ROLE_LABEL = "fulcra.role";
+export function inheritedLabels(caller: CreateAgentCaller | null): Record<string, string> {
+  if (!caller?.labels) return {};
+  const out: Record<string, string> = {};
+  for (const key of INHERITED_LABELS) {
+    const value = caller.labels[key];
+    if (typeof value === "string" && value) out[key] = value;
+  }
+  return out;
 }
 
 export interface CreateAgentPlacement {
@@ -29,7 +46,9 @@ export async function resolveCreateAgentIntent(input: {
 }): Promise<CreateAgentIntent> {
   const parentAgentId = input.legacyDetached ? null : (input.caller?.id ?? null);
   const placement = await resolvePlacement(input);
-  const labels = {
+  const labels: Record<string, string> = {
+    ...(parentAgentId ? inheritedLabels(input.caller) : {}),
+    ...(parentAgentId ? { [ROLE_LABEL]: "implementation" } : {}),
     ...input.childAgentDefaultLabels,
     ...input.labels,
     ...(parentAgentId ? { [PARENT_AGENT_ID_LABEL]: parentAgentId } : {}),

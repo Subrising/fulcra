@@ -1,5 +1,7 @@
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { Button } from "@/components/ui/button";
+import { AccountRundown } from "./account-rundown";
 import { ProviderUsageCard } from "./card";
 import { providerUsageCopy } from "./copy";
 import type { ProviderUsage, ProviderUsageView } from "./types";
@@ -19,9 +21,11 @@ function matchProvider(
 export function ProviderUsageTooltipSection({
   view,
   activeProviderId,
+  onRefreshAccounts,
 }: {
   view: ProviderUsageView;
   activeProviderId: string | null | undefined;
+  onRefreshAccounts?: () => void;
 }) {
   if (view.kind === "loading") {
     return (
@@ -37,17 +41,38 @@ export function ProviderUsageTooltipSection({
       <>
         <View style={styles.divider} />
         <Text style={styles.error}>{view.message}</Text>
+        {onRefreshAccounts ? (
+          <Button variant="ghost" size="sm" onPress={onRefreshAccounts}>
+            Try again
+          </Button>
+        ) : null}
       </>
     );
   }
 
   const usage = matchProvider(view.payload.providers, activeProviderId);
-  if (!usage) return null;
+  const accounts = view.payload.accounts ?? [];
+  if (!usage && accounts.length === 0) return null;
 
   return (
     <>
-      <View style={styles.divider} />
-      <ProviderUsageCard usage={usage} compact />
+      {usage ? (
+        <>
+          <View style={styles.divider} />
+          <ProviderUsageCard usage={usage} compact />
+        </>
+      ) : null}
+      {accounts.length > 0 ? (
+        <>
+          <View style={styles.divider} />
+          <AccountRundown
+            accounts={accounts}
+            onRefresh={onRefreshAccounts}
+            busy={view.isRefreshing}
+            compact
+          />
+        </>
+      ) : null}
     </>
   );
 }

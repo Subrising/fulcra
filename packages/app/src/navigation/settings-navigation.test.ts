@@ -19,7 +19,7 @@ describe("returning from settings", () => {
     navigation.restoreWorkspace.mockReturnValue(false);
   });
 
-  it("returns a newly connected user to startup and the home plugin without requiring a project", () => {
+  it("returns a newly connected user to startup and Orca home without requiring a project", () => {
     returnFromSettings({ kind: "root" });
     expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("/");
     expect(navigation.dismissTo).not.toHaveBeenCalled();
@@ -34,7 +34,7 @@ describe("returning from settings", () => {
   });
 
   it("returns plugin settings to the same host", () => {
-    returnFromSettings({ kind: "plugin", serverId: "book", pluginId: "organization", screenId: "work" });
+    returnFromSettings({ kind: "plugin", serverId: "book", pluginId: "orca", screenId: "work" });
     expect(navigation.dismissTo).toHaveBeenCalledExactlyOnceWith(
       buildSettingsHostSectionRoute("book", "plugins"),
     );

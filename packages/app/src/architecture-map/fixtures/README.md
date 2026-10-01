@@ -7,5 +7,6 @@ They are data, not Archify code; the upstream MIT notice that accompanied the ex
 kept beside them in `NOTICE-archify-LICENSE.txt`.
 
 `change-base.ir.json` and `change-head.ir.json` are a made-up shop, before and after one change
-(a search service added, a reports job removed, the orders service changed). The app's
-comparison (`map-diff.ts`) is tested on this pair.
+(a search service added, a reports job removed, the orders service changed). They are the same
+files as `orca-architecture-map/fixtures/changes/` in the control repo, so the app's comparison
+(`map-diff.ts`) and the agents' (`diff.mjs`) are tested on the same pair.

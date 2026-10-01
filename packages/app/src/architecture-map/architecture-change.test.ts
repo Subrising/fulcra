@@ -19,7 +19,7 @@ const file = (path: string, isDeleted = false): ChangedFile => ({ path, isDelete
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
 
-describe("a pull request compared at its own commits", () => {
+describe("a pull request compared at its own commits (CONTRACTS v1.16)", () => {
   const prInput = (
     maps: Parameters<typeof buildArchitectureChange>[0]["pullRequestMaps"],
     headText: string | null = head,
@@ -151,8 +151,8 @@ describe("buildArchitectureChange", () => {
     expect(change.pullRequest).toBeNull();
   });
 
-  // a pull request's Before/After is the maps at its own base and head
-  // commits. The host cannot read a file at a commit yet, so nothing is
+  // R-C-J7-2 (CONTRACTS v1.14): a pull request's Before/After is the maps at its own base and head
+  // commits. The host cannot read a file at a commit yet (CONTRACT-CHANGE-J7-1), so nothing is
   // rebuilt from this computer's files.
   it("without the maps read at its commits, never rebuilds a pull request's comparison from local files", () => {
     const edited = JSON.parse(head);

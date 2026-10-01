@@ -1348,3 +1348,33 @@ async function applyReviewedUpdate(service: PluginService, pluginId: string) {
   expect(preview?.outcome).toBe("update");
   return service.applyUpdates([preview!.proposal!]);
 }
+
+it("only the verified embedding-host path enables a trusted claimed bundle", async () => {
+  const { TrustedPlugins } = await import("./trusted.js");
+  const home = await mkdtemp(path.join(tmpdir(), "cc-enable-"));
+  roots.push(home);
+  const directory = await createPlugin("cc-bundled", "export default () => {};");
+  const trusted = new TrustedPlugins();
+  // Verify identity through the same trusted startup table, without granting an ordinary API override.
+  Object.defineProperty(trusted, "verifyBundledDirectory", {
+    value: async (id: string, candidate: string) =>
+      id === "cc-bundled" && candidate === directory ? directory : undefined,
+  });
+  Object.defineProperty(trusted, "claimsBundle", { value: (id: string) => id === "cc-bundled" });
+  const paused = createPausedRuntime();
+  paused.releaseStart();
+  const service = createService(
+    home,
+    { "cc-bundled": { source: "directory", path: directory, enabled: false } },
+    { runtime: paused.runtime, trustedBundles: trusted },
+  );
+  try {
+    await expect(service.enablePlugin("cc-bundled")).rejects.toThrow();
+    await expect(service.enableBundledPlugin("cc-bundled", home)).rejects.toThrow("Verified");
+    await service.enableBundledPlugin("cc-bundled", directory);
+    expect(catalogIds(service)).toEqual(["cc-bundled"]);
+  } finally {
+    await service.stopAllPlugins();
+    trusted.close();
+  }
+});

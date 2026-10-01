@@ -36,7 +36,7 @@ describe("desktop-settings-commands", () => {
       releaseChannel: "beta",
     });
 
-    expect(store.get).toHaveBeenCalledTimes(1);
+    expect(store.get).toHaveBeenCalledTimes(2);
     expect(store.patch).toHaveBeenCalledWith({
       daemon: { keepRunningAfterQuit: false },
     });

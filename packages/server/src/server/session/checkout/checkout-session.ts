@@ -1,3 +1,4 @@
+import { prewarmArchitectureChange } from "../../../utils/architecture-map/architecture-change-service.js";
 import type pino from "pino";
 import type { SessionDelivery } from "../owned-subscriptions/index.js";
 import { isAbsolute } from "node:path";
@@ -695,14 +696,41 @@ export class CheckoutSession {
 
   async handleStashPopRequest(
     msg: Extract<SessionInboundMessage, { type: "stash_pop_request" }>,
+    assertRetainedApply?: (target: { cwd: string; sha: string }) => void,
   ): Promise<void> {
-    const { cwd, stashIndex, requestId } = msg;
+    const { cwd, stashIndex, requestId, stashSha, keepStash } = msg;
     try {
-      await runGitCommand(["stash", "pop", `stash@{${stashIndex}}`], {
+      if (keepStash === true || stashSha !== undefined) {
+        if (keepStash !== true || !stashSha || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(stashSha)) {
+          throw new Error("Retained stash application requires an immutable stash SHA");
+        }
+        const entries = await this.workspaceGitService.listStashes(
+          cwd,
+          { paseoOnly: false },
+          { force: true, reason: "stash-apply" },
+        );
+        if (!entries.some((entry) => entry.sha === stashSha)) {
+          throw new Error("Selected stash is no longer available");
+        }
+        if (!assertRetainedApply) throw new Error("Retained stash source authority unavailable");
+        // The original request owner and target are rechecked after preparation,
+        // immediately before mutation. This cannot roll back Git after dispatch.
+        assertRetainedApply({ cwd, sha: stashSha });
+        await runGitCommand(["stash", "apply", stashSha], {
+          cwd,
+          timeout: 120_000,
+          beforeSpawn: () => assertRetainedApply({ cwd, sha: stashSha }),
+        });
+      } else {
+        await runGitCommand(["stash", "pop", `stash@{${stashIndex}}`], {
+          cwd,
+          timeout: 120_000,
+        });
+      }
+      await this.gitMutation.notifyGitMutation(
         cwd,
-        timeout: 120_000,
-      });
-      await this.gitMutation.notifyGitMutation(cwd, "stash-pop");
+        keepStash === true ? "stash-apply" : "stash-pop",
+      );
       this.scheduleDiffRefresh(cwd);
       this.host.emit({
         type: "stash_pop_response",
@@ -1129,13 +1157,81 @@ export class CheckoutSession {
     return { ...pullRequest, number: pullRequest.number };
   }
 
+  /** A pull request's commits from the forge, for the generated architecture change (CONTRACTS v1.17). */
+  async resolvePullRequestCommits(input: { cwd: string; number: number }): Promise<{
+    number: number;
+    title: string;
+    url?: string;
+    baseRefName: string | null;
+    headRefName: string | null;
+    baseRefOid: string | null;
+    headRefOid: string | null;
+  }> {
+    const { service } = await this.requireForgeService(input.cwd);
+    const pr = await service.getPullRequest({ cwd: input.cwd, number: input.number });
+    if (pr.number !== input.number) throw new Error("The requested pull request is unavailable.");
+    return {
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      baseRefName: pr.baseRefName ?? null,
+      headRefName: pr.headRefName ?? null,
+      baseRefOid: pr.baseRefOid ?? null,
+      headRefOid: pr.headRefOid ?? null,
+    };
+  }
+
   async handleCheckoutPrStatusRequest(
     msg: Extract<SessionInboundMessage, { type: "checkout_pr_status_request" }>,
   ): Promise<void> {
     const { cwd, requestId } = msg;
 
     try {
+      if (msg.pullRequest !== undefined) {
+        const { forge, service } = await this.requireForgeService(cwd);
+        const pr = await service.getPullRequest({ cwd, number: msg.pullRequest });
+        if (pr.number !== msg.pullRequest)
+          throw new Error("The requested pull request is unavailable.");
+        // A tracked pull request is mapped as soon as its commits are known (CHANGES, automatic maps).
+        prewarmArchitectureChange({
+          cwd,
+          base: pr.baseRefOid,
+          head: pr.headRefOid,
+          title: `#${pr.number} ${pr.title}`,
+        });
+        this.host.emit({
+          type: "checkout_pr_status_response",
+          payload: {
+            cwd,
+            requestId,
+            githubFeaturesEnabled: true,
+            authState: "authenticated",
+            forge,
+            status: {
+              ...pr,
+              forge,
+              isDraft: pr.isDraft ?? false,
+              isMerged: pr.state.toLowerCase() === "merged",
+              mergeable: "UNKNOWN",
+              checks: [],
+              checksStatus: "none",
+              reviewDecision: null,
+            },
+            error: null,
+          },
+        });
+        return;
+      }
       const snapshot = await this.workspaceGitService.getSnapshot(cwd);
+      const current = snapshot.forge.pullRequest;
+      if (current && typeof current.number === "number") {
+        prewarmArchitectureChange({
+          cwd,
+          base: current.baseRefOid,
+          head: current.headRefOid,
+          title: `#${current.number} ${current.title ?? ""}`.trim(),
+        });
+      }
       this.host.emit({
         type: "checkout_pr_status_response",
         payload: buildCheckoutPrStatusPayloadFromSnapshot({

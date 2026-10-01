@@ -13,7 +13,7 @@ import {
 } from "@getpaseo/protocol/device-proof";
 import type { PluginDevice } from "@getpaseo/plugin/client";
 
-// Device key adapters for `ctx.device`. The private key stays in the platform:
+// Device key adapters for `ctx.device` (CONTRACTS §3.6). The private key stays in the platform:
 // the Secure Enclave or keychain on iOS, the Android Keystore, the Electron main process on desktop.
 // These adapters validate the choice payload before any prompt, pass bytes and a bounded reason
 // to the platform, and turn its answer into a ChoiceProof. Nothing here can see a private key.
@@ -25,7 +25,7 @@ export class DevicePromptRefusedError extends Error {
   }
 }
 
-// The desktop refused to pair because this Mac has no usable Touch ID.
+// The desktop refused to pair because this Mac has no usable Touch ID (CONTRACTS §3.6 rule 3).
 export class DevicePairingUnavailableError extends Error {
   constructor(message = "Pair from your iPhone, or a Mac with Touch ID") {
     super(message);
@@ -58,7 +58,7 @@ export interface NativeDeviceKeyModule {
     userPresence: boolean;
   }>;
   // Signs base64 bytes after a biometric. Resolves the base64 DER ECDSA signature and the device id
-  // of the exact key that made it (each pairing has its own key alias).
+  // of the exact key that made it (each pairing has its own key alias, R-D-4).
   sign(dataBase64: string, reason: string): Promise<{ signature: string; deviceId: string }>;
 }
 

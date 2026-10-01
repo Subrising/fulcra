@@ -1,6 +1,66 @@
+import { GitAiDraftResponseSchema } from "@getpaseo/protocol/git-ai-draft";
+import { createGitAiDraftHelp } from "./session/checkout/git-ai-draft-help.js";
+import { createToollessGitDraftGeneration } from "./session/checkout/git-ai-draft-generation.js";
+import { CatalogReadRefusal, type PluginCatalogPaging } from "./plugins/catalog-paging.js";
+import type {
+  PluginCatalogPageRequest,
+  PluginCatalogBundleGetRequest,
+  PluginCatalogSnapshotReleaseRequest,
+} from "@getpaseo/protocol/plugin-catalog-paging";
+import {
+  NativeArtifactContentReadInputSchema,
+  NativeArtifactContentReadOutputSchema,
+  type NativeArtifactContentReadInput,
+} from "@getpaseo/protocol/native-artifact-content";
+import {
+  NativeEvidenceReadOutputSchema,
+  ManagedArtifactReadOutputSchema,
+} from "@getpaseo/protocol/native-evidence";
+import { NativeOwnerReportReadOutputSchema } from "@getpaseo/protocol/native-intercom";
+import { checkReportPublication } from "./report-publication.js";
+import { snapshotParentAdoption } from "./agent/parent-adoption.js";
+import { admissionOutcome, admissionRefusalMessage } from "./plugins/admission-outcome.js";
+import type { ManagementAuthentication, ManagementInvocation } from "./plugins/management.js";
+import type { TrustedOperationHandle } from "./plugins/trusted.js";
+import {
+  promptPayload,
+  deferredCommandPayload as commandPayload,
+} from "./agent/trusted-operation.js";
+import { AdmissionDeniedError } from "./plugins/trusted.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import { handleFileAtCommitRequest } from "./checkout/file-at-commit-request.js";
-import type { CheckoutFileAtCommitGetRequest } from "@getpaseo/protocol/messages";
+import {
+  handlePullRequestReviewDecide,
+  handlePullRequestReviewFileDiff,
+  handlePullRequestReviewGet,
+  type PullRequestReviewDeps,
+} from "./checkout/pull-request-review-request.js";
+import { runGitHubCli } from "../services/github-service.js";
+import { getInsights } from "../utils/insights/service.js";
+import { projectOf } from "../utils/insights/agents.js";
+import {
+  applyAutomationRequest,
+  getHostAutomations,
+  type AutomationRequest,
+} from "./automations/automation-service.js";
+import { getForgeRemoteUrl } from "../utils/checkout-git.js";
+import {
+  handleArchitectureChangeFetchRequest,
+  handleArchitectureChangeGetRequest,
+  handleArchitectureGraphGetRequest,
+  type ArchitectureChangeDeps,
+} from "./checkout/architecture-change-request.js";
+import type {
+  CheckoutArchitectureChangeFetchRequest,
+  CheckoutArchitectureChangeGetRequest,
+  CheckoutArchitectureGraphGetRequest,
+  CheckoutFileAtCommitGetRequest,
+  CheckoutPullRequestReviewDecideRequest,
+  CheckoutPullRequestReviewFileDiffRequest,
+  CheckoutPullRequestReviewGetRequest,
+  InsightsGetRequest,
+  AutomationResult,
+} from "@getpaseo/protocol/messages";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
@@ -12,7 +72,7 @@ import type { MessageReceipts } from "./message-receipts/index.js";
 import equal from "fast-deep-equal";
 import { SessionDelivery, type OwnedSubscription } from "./session/owned-subscriptions/index.js";
 import { v4 as uuidv4 } from "uuid";
-import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, resolve, sep } from "path";
 import { homedir } from "node:os";
 import { CLIENT_CAPS, type ClientCapability } from "@getpaseo/protocol/client-capabilities";
@@ -231,6 +291,7 @@ import {
 } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import type { ProviderUsageService } from "../services/quota-fetcher/service.js";
+import type { AccountUsageRegistry } from "../services/quota-fetcher/account-usage-registry.js";
 import {
   resolveWorkspaceRootAgent,
   summarizeFetchWorkspacesEntries,
@@ -446,6 +507,20 @@ const nodeSessionFileSystem: SessionFileSystem = {
 // Stub types for features under development (modules not yet available)
 type AgentMcpTransportFactory = () => Promise<unknown>;
 
+function providersByUse(providers: readonly string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const p of providers) counts.set(p, (counts.get(p) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+}
+
+const AUTOMATION_RESPONSE_TYPES = {
+  "automation.list.request": "automation.list.response",
+  "automation.save.request": "automation.save.response",
+  "automation.set-enabled.request": "automation.set-enabled.response",
+  "automation.delete.request": "automation.delete.response",
+  "automation.run-now.request": "automation.run-now.response",
+} as const;
+
 export interface SessionOptions {
   browserToolsBroker?: BrowserToolsBroker | null;
   clientId: string;
@@ -484,6 +559,9 @@ export interface SessionOptions {
   workspaceAutoName: WorkspaceAutoName;
   daemonConfigStore: DaemonConfigStore;
   pluginRuntime?: {
+    managementTarget?: (
+      pluginId: string,
+    ) => import("./plugins/management.js").ManagementTarget | undefined;
     before: import("./plugins/lifecycle/index.js").PluginLifecycle["before"];
     emit: import("./plugins/lifecycle/index.js").PluginLifecycle["emit"];
     listPlugins(): Promise<import("@getpaseo/protocol/messages").PluginListItem[]>;
@@ -518,7 +596,14 @@ export interface SessionOptions {
     subscribe(listener: (pluginId: string) => void): () => void;
     subscribeSettings?(listener: (pluginId: string, settingsId: string) => void): () => void;
     catalog(): Array<{ id: string; clientBundle: string }>;
-    invokePluginRpc(pluginId: string, method: string, input: unknown): Promise<unknown>;
+    catalogPaging?(): PluginCatalogPaging | undefined;
+    invokePluginRpc(
+      pluginId: string,
+      method: string,
+      input: unknown,
+      management?: ManagementInvocation,
+      options?: { readOnlyCaller?: boolean },
+    ): Promise<unknown>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
   // Plugin notifications and the shared credential store (Fulcra host APIs).
@@ -533,6 +618,7 @@ export interface SessionOptions {
   terminalManager: TerminalManager | null;
   providerSnapshotManager: ProviderSnapshotManager;
   providerUsageService: ProviderUsageService;
+  accountUsage?: AccountUsageRegistry;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
   serviceProxy?: ServiceProxySubsystem;
@@ -754,6 +840,7 @@ export class Session {
   private registryMutationQueue: Promise<void> = Promise.resolve();
   private projectUpdateQueue: Promise<void> = Promise.resolve();
   private isCleanedUp = false;
+  private checkoutWriteAdmissionEpoch = 0;
   private readonly timelineSubscriptions = new Map<
     string,
     { owner: OwnedSubscription; agentIds: Set<string> }
@@ -776,7 +863,11 @@ export class Session {
   private readonly workspaceLabelService: WorkspaceLabelService | null;
   private readonly eventSubscriptions = new Map<
     string,
-    { owner: OwnedSubscription; events: Set<SessionEventSubscription>; notifications: boolean }
+    {
+      owner: OwnedSubscription;
+      events: Set<SessionEventSubscription>;
+      notifications: boolean;
+    }
   >();
   private readonly workspaceUpdateTails = new Map<string, Promise<void>>();
   private readonly terminalManager: TerminalManager | null;
@@ -848,6 +939,7 @@ export class Session {
       terminalManager,
       providerSnapshotManager,
       providerUsageService,
+      accountUsage,
       serviceProxy,
       scriptRuntimeStore,
       workspaceSetupSnapshots,
@@ -924,6 +1016,7 @@ export class Session {
       workspaceRegistry: this.workspaceRegistry,
       projectRegistry: this.projectRegistry,
       workspaceGitService: this.workspaceGitService,
+      isDirectory: (path) => this.filesystem.isDirectory(path),
       logger: this.sessionLogger,
     });
     this.workspaceRecovery = createWorkspaceRecoveryService({
@@ -974,6 +1067,17 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.providerCatalogSession = new ProviderCatalogSession({
+      sessionUsage: async (agentId) => {
+        const agent = this.agentManager.getAgent(agentId);
+        if (!agent || !this.isProviderVisibleToClient(agent.provider)) return null;
+        return this.agentManager.getAgentSessionUsage(agentId);
+      },
+      usageCredential: (agentId) => {
+        const credential = this.agentManager.getAgentUsageCredential(agentId);
+        return credential && this.isProviderVisibleToClient(credential.provider)
+          ? credential
+          : null;
+      },
       host: {
         emit: (msg) => this.emit(msg),
         isProviderVisibleToClient: (provider) => this.isProviderVisibleToClient(provider),
@@ -1006,6 +1110,7 @@ export class Session {
       },
       providerSnapshotManager,
       providerUsageService,
+      accountUsage,
       logger: this.sessionLogger,
     });
     this.agentConfigSession = new AgentConfigSession({
@@ -1563,45 +1668,57 @@ export class Session {
    * Interrupt the agent's active run so the next prompt starts a fresh turn.
    * Returns once the manager confirms the stream has been cancelled.
    */
-  private async interruptAgentIfRunning(agentId: string): Promise<void> {
-    const snapshot = this.agentManager.getAgent(agentId);
-    if (!snapshot) {
-      this.sessionLogger.trace({ agentId }, "agent.session.interrupt.not_found");
-      throw new Error(`Agent ${agentId} not found`);
-    }
+  private async interruptAgentIfRunning(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<void> {
+    return this.agentManager.withInput(
+      agentId,
+      "interrupt",
+      undefined,
+      async (operationHandle) => {
+        const snapshot = this.agentManager.getAgent(agentId);
+        if (!snapshot) {
+          this.sessionLogger.trace({ agentId }, "agent.session.interrupt.not_found");
+          throw new Error(`Agent ${agentId} not found`);
+        }
 
-    const hasInFlightRun = this.agentManager.hasInFlightRun(agentId);
-    if (!hasInFlightRun) {
-      this.sessionLogger.trace(
-        {
-          agentId,
-          provider: snapshot.provider,
-          lifecycle: snapshot.lifecycle,
-          hasInFlightRun,
-        },
-        "agent.session.interrupt.skip_not_running",
-      );
-      return;
-    }
+        const hasInFlightRun = this.agentManager.hasInFlightRun(agentId);
+        if (!hasInFlightRun) {
+          this.sessionLogger.trace(
+            {
+              agentId,
+              provider: snapshot.provider,
+              lifecycle: snapshot.lifecycle,
+              hasInFlightRun,
+            },
+            "agent.session.interrupt.skip_not_running",
+          );
+          return;
+        }
 
-    this.sessionLogger.debug(
-      { agentId, lifecycle: snapshot.lifecycle, hasInFlightRun },
-      "interruptAgentIfRunning: interrupting",
+        this.sessionLogger.debug(
+          { agentId, lifecycle: snapshot.lifecycle, hasInFlightRun },
+          "interruptAgentIfRunning: interrupting",
+        );
+
+        const t0 = Date.now();
+        const cancellation = await this.agentManager.cancelAgentRun(agentId, operationHandle);
+        this.sessionLogger.debug(
+          { agentId, cancellation: cancellation.status, durationMs: Date.now() - t0 },
+          "interruptAgentIfRunning: cancelAgentRun completed",
+        );
+        if (cancellation.status === "refused") {
+          this.sessionLogger.warn(
+            { agentId },
+            "interruptAgentIfRunning: reported running but no active run was cancelled",
+          );
+          throw new AgentRunCancellationError(agentId, "stop");
+        }
+      },
+      commandPayload("interrupt"),
+      handle,
     );
-
-    const t0 = Date.now();
-    const cancellation = await this.agentManager.cancelAgentRun(agentId);
-    this.sessionLogger.debug(
-      { agentId, cancellation: cancellation.status, durationMs: Date.now() - t0 },
-      "interruptAgentIfRunning: cancelAgentRun completed",
-    );
-    if (cancellation.status === "refused") {
-      this.sessionLogger.warn(
-        { agentId },
-        "interruptAgentIfRunning: reported running but no active run was cancelled",
-      );
-      throw new AgentRunCancellationError(agentId, "stop");
-    }
   }
 
   private hasActiveAgentRun(agentId: string | null): boolean {
@@ -2038,6 +2155,7 @@ export class Session {
     const storedRecord = await this.agentStorage.get(payload.id);
     payload.title = storedRecord?.title ?? null;
     payload.archivedAt = storedRecord?.archivedAt ?? null;
+    payload.inputSequence = this.agentManager.trustedPlugins.sequence(payload.id);
     return payload;
   }
 
@@ -2049,7 +2167,10 @@ export class Session {
     record: StoredAgentRecord,
     registeredProviderIds = new Set(this.providerSnapshotManager.listRegisteredProviderIds()),
   ): AgentSnapshotPayload {
-    return buildStoredAgentPayload(record, registeredProviderIds);
+    return {
+      ...buildStoredAgentPayload(record, registeredProviderIds),
+      inputSequence: this.agentManager.trustedPlugins.sequence(record.id),
+    };
   }
 
   private isProviderVisibleToClient(provider: string): boolean {
@@ -2106,7 +2227,10 @@ export class Session {
    * Main entry point for processing session messages
    */
   public async handleMessage(msg: SessionInboundMessage, source?: object): Promise<void> {
-    return this.delivery.request(source, msg, () => this.handleRequest(msg, source));
+    return this.agentManager.trustedPlugins.rpc(
+      "inputProvenance" in msg ? msg.inputProvenance : undefined,
+      () => this.delivery.request(source, msg, () => this.handleRequest(msg, source)),
+    );
   }
 
   private async handleRequest(msg: SessionInboundMessage, source?: object): Promise<void> {
@@ -2152,8 +2276,9 @@ export class Session {
               payload: {
                 requestId,
                 requestType: msg.type,
-                error: `Request failed: ${err.message}`,
+                error: `Request failed: ${admissionRefusalMessage(error) ?? err.message}`,
                 code: "handler_error",
+                ...admissionOutcome(error),
               },
             });
           } catch (emitError) {
@@ -2176,8 +2301,49 @@ export class Session {
     }
   }
 
+  private readonly managementSources = new Map<
+    object,
+    { authentication: ManagementAuthentication; permissions: readonly DaemonPermission[] }
+  >();
+  private readonly managementInvocations = new Map<ManagementInvocation, object>();
+
+  /** Called by the admitting transport, never by a wire request. */
+  public admitManagementSource(
+    source: object,
+    authentication?: ManagementAuthentication,
+    permissions: readonly DaemonPermission[] = this.authorization.listPermissions(),
+  ): void {
+    this.revokeManagementSource(source);
+    if (authentication && !this.pluginOriginId)
+      this.managementSources.set(
+        source,
+        Object.freeze({
+          authentication: Object.freeze({ ...authentication }),
+          permissions: Object.freeze([...permissions]),
+        }),
+      );
+  }
+  public revokeManagementSource(source: object): void {
+    this.managementSources.delete(source);
+    for (const [invocation, owner] of this.managementInvocations)
+      if (owner === source) {
+        invocation.close();
+        this.managementInvocations.delete(invocation);
+      }
+  }
+
+  private pluginCatalogPermissionEpoch = 0;
+  private nativeMessagePermissionEpoch = 0;
+
   public setPermissions(permissions: readonly DaemonPermission[]): void {
+    this.checkoutWriteAdmissionEpoch += 1;
+    this.nativeMessagePermissionEpoch++;
+    this.pluginCatalogPermissionEpoch++;
     this.authorization.replacePermissions(permissions);
+    if (!permissions.includes("command-centre.manage") || !permissions.includes("daemon.manage")) {
+      for (const invocation of this.managementInvocations.keys()) invocation.close();
+      this.managementInvocations.clear();
+    }
     if (!this.authorization.allowsPermission("workspace.write")) {
       void this.delivery
         .releaseFamily("browser-host")
@@ -2295,7 +2461,7 @@ export class Session {
       this.dispatchSubscriptionMessage(msg, source) ??
       this.dispatchVoiceAndControlMessage(msg) ??
       this.dispatchAgentRewindMessage(msg, source) ??
-      this.dispatchAgentRelationshipMessage(msg) ??
+      this.dispatchAgentRelationshipMessage(msg, source) ??
       this.dispatchAgentTimelineMessage(msg, source) ??
       this.dispatchHubExecutionMessage(msg) ??
       this.dispatchCreationMessage(msg, source) ??
@@ -2307,7 +2473,7 @@ export class Session {
       this.dispatchProviderMessage(msg) ??
       this.dispatchOrchestrationSkillsMessage(msg) ??
       this.dispatchPluginDirectoryMessage(msg) ??
-      this.dispatchPluginMessage(msg) ??
+      this.dispatchPluginMessage(msg, source) ??
       this.dispatchTerminalMessage(msg) ??
       this.dispatchScheduleMessage(msg) ??
       this.dispatchMiscMessage(msg);
@@ -2383,9 +2549,15 @@ export class Session {
     }
   }
 
-  private dispatchPluginMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+  private dispatchPluginMessage(
+    msg: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> | undefined {
     const integration = this.dispatchIntegrationMessage(msg);
     if (integration) return integration;
+    const catalogRead = this.dispatchPluginCatalogRead(msg);
+    if (catalogRead) return catalogRead;
+
     if (msg.type === "plugin.list.request") {
       return (this.pluginRuntime?.listPlugins() ?? Promise.resolve([])).then((plugins) => {
         this.emit({
@@ -2450,23 +2622,557 @@ export class Session {
         payload: {
           requestId: msg.requestId,
           plugins: this.pluginRuntime?.catalog() ?? [],
+          trustedHost: { contract: "1.1", boot: this.agentManager.trustedPlugins.boot },
+          trustedPlugins: this.agentManager.trustedPlugins.catalog(),
         },
       });
       return undefined;
     }
-    if (msg.type === "plugin.rpc.invoke.request") {
-      if (!this.pluginRuntime) throw new Error("Plugin service is unavailable");
-      return this.pluginRuntime
-        .invokePluginRpc(msg.pluginId, msg.method, msg.input)
-        .then((output) => {
-          this.emit({
-            type: "plugin.rpc.invoke.response",
-            payload: { requestId: msg.requestId, output },
-          });
-          return undefined;
-        });
-    }
+    if (msg.type === "plugin.rpc.invoke.request")
+      return this.invokeManagedPluginRequest(msg, source);
     return undefined;
+  }
+
+  private async handleGitAiDraftRequest(
+    request: Extract<SessionInboundMessage, { type: "checkout.git_ai.draft.request" }>,
+  ): Promise<void> {
+    const input = structuredClone(request);
+    const epoch = this.checkoutWriteAdmissionEpoch;
+    const abort = new AbortController();
+    const operation = this.delivery.operation(
+      (message) =>
+        message.type === "checkout.git_ai.draft.response" &&
+        message.payload.requestId === input.requestId,
+      () => abort.abort(),
+    );
+    const disconnected = () => abort.abort();
+    operation.signal.addEventListener("abort", disconnected, { once: true });
+    const assertCurrent = () => {
+      if (
+        this.isCleanedUp ||
+        abort.signal.aborted ||
+        operation.signal.aborted ||
+        epoch !== this.checkoutWriteAdmissionEpoch ||
+        !this.authorization.allowsPermission("workspace.write")
+      )
+        throw new Error("Draft read lifetime refused");
+    };
+    const subscribe = this.workspaceRegistry.subscribeToMutations?.bind(this.workspaceRegistry);
+    const unsubscribe = subscribe?.((mutation) => {
+      if (mutation.workspaceId === input.workspaceId) abort.abort();
+    });
+    let original: { cwd: string; projectId: string; updatedAt: string } | undefined;
+    let canonical: string | undefined;
+    const authorizeCheckoutRead = async () => {
+      assertCurrent();
+      const workspace = await this.workspaceRegistry.get(input.workspaceId);
+      assertCurrent();
+      if (!workspace || workspace.archivedAt || !unsubscribe)
+        throw new Error("Draft checkout unavailable");
+      const captured = {
+        cwd: workspace.cwd,
+        projectId: workspace.projectId,
+        updatedAt: workspace.updatedAt,
+      };
+      if (original && JSON.stringify(captured) !== JSON.stringify(original))
+        throw new Error("Draft checkout changed");
+      original ??= captured;
+      const cwd = await realpath(workspace.cwd);
+      assertCurrent();
+      if (canonical && canonical !== cwd) throw new Error("Draft checkout changed");
+      canonical ??= cwd;
+      return cwd;
+    };
+    try {
+      const generation = createToollessGitDraftGeneration({ assertCurrent, signal: abort.signal });
+      const git = {
+        getCheckoutDiff: async (...args: Parameters<WorkspaceGitService["getCheckoutDiff"]>) => {
+          if ((await authorizeCheckoutRead()) !== args[0])
+            throw new Error("Draft checkout changed");
+          const result = await this.workspaceGitService.getCheckoutDiff(...args);
+          await authorizeCheckoutRead();
+          return result;
+        },
+        resolveRepoRoot: async (cwd: string) => {
+          if ((await authorizeCheckoutRead()) !== cwd) throw new Error("Draft checkout changed");
+          const result = await this.workspaceGitService.resolveRepoRoot(cwd);
+          await authorizeCheckoutRead();
+          return result;
+        },
+      };
+      const service = createGitAiDraftHelp({
+        authorizeCheckoutRead,
+        workspaceGitService: git,
+        generation,
+        metadataGenerator: createGitMetadataGenerator({
+          workspaceGitService: git,
+          generation,
+          strictDraft: { assertCurrent },
+        }),
+      });
+      const draft = await service.generate({ kind: input.kind });
+      await authorizeCheckoutRead();
+      assertCurrent();
+      const reply = GitAiDraftResponseSchema.parse({
+        type: "checkout.git_ai.draft.response",
+        payload: {
+          requestId: input.requestId,
+          workspaceId: input.workspaceId,
+          kind: input.kind,
+          result: { status: "ok", draft },
+        },
+      });
+      assertCurrent();
+      operation.emit(reply);
+    } catch {
+      // Never serialize Git/provider bodies, paths or fallback text as a successful draft.
+      if (!this.isCleanedUp && !operation.signal.aborted && !abort.signal.aborted) {
+        let error: "stale" | "access_denied" | "unavailable" = "unavailable";
+        if (epoch !== this.checkoutWriteAdmissionEpoch) error = "stale";
+        else if (!this.authorization.allowsPermission("workspace.write")) error = "access_denied";
+        operation.emit({
+          type: "checkout.git_ai.draft.response",
+          payload: {
+            requestId: input.requestId,
+            workspaceId: input.workspaceId,
+            kind: input.kind,
+            result: {
+              status: "refused",
+              error,
+            },
+          },
+        });
+      }
+    } finally {
+      unsubscribe?.();
+      operation.signal.removeEventListener("abort", disconnected);
+      abort.abort();
+      await operation.release();
+    }
+  }
+
+  private dispatchPluginCatalogRead(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
+      case "plugin.catalog.page.request":
+      case "plugin.catalog.bundle.get.request":
+      case "plugin.catalog.snapshot.release.request":
+        return this.handlePluginCatalogRead(msg);
+      default:
+        return undefined;
+    }
+  }
+
+  private async handlePluginCatalogRead(
+    input:
+      | PluginCatalogPageRequest
+      | PluginCatalogBundleGetRequest
+      | PluginCatalogSnapshotReleaseRequest,
+  ): Promise<void> {
+    const msg = structuredClone(input);
+    const permissionEpoch = this.pluginCatalogPermissionEpoch;
+    const trust = {
+      trustedHost: { contract: "1.1" as const, boot: this.agentManager.trustedPlugins.boot },
+      trustedPlugins: this.agentManager.trustedPlugins.catalog(),
+    };
+    const trustFingerprint = JSON.stringify(trust);
+    const operation = this.delivery.operation(
+      (message) =>
+        message.type === "plugin.catalog.page.response" ||
+        message.type === "plugin.catalog.bundle.get.response" ||
+        message.type === "plugin.catalog.snapshot.release.response",
+      () => {},
+    );
+    const checkRead = (signal: AbortSignal) => {
+      if (
+        signal.aborted ||
+        this.isCleanedUp ||
+        permissionEpoch !== this.pluginCatalogPermissionEpoch ||
+        !this.authorization.allowsPermission("daemon.manage") ||
+        JSON.stringify({
+          trustedHost: { contract: "1.1", boot: this.agentManager.trustedPlugins.boot },
+          trustedPlugins: this.agentManager.trustedPlugins.catalog(),
+        }) !== trustFingerprint
+      )
+        throw new CatalogReadRefusal("read_revoked");
+    };
+    const current = () => checkRead(operation.signal);
+    const paging = this.pluginRuntime?.catalogPaging?.();
+    let origin: ReturnType<SessionDelivery["operation"]> | undefined;
+    let snapshotId: string | undefined;
+    try {
+      current();
+      if (!paging) throw new CatalogReadRefusal("unavailable");
+      if (msg.type === "plugin.catalog.page.request") {
+        let payload;
+        if (msg.cursor)
+          payload = await paging.page(operation.source, msg.cursor, current, msg.requestId);
+        else {
+          origin = this.delivery.operation(
+            () => false,
+            () => {
+              if (snapshotId) paging.discard(operation.source, snapshotId);
+            },
+          );
+          const capturedOrigin = origin;
+          payload = await paging.open(
+            operation.source,
+            () => checkRead(capturedOrigin.signal),
+            () => {
+              void capturedOrigin.release().catch(() => {});
+            },
+            trust,
+            msg.requestId,
+            current,
+          );
+          snapshotId = payload.snapshotId;
+        }
+        paging.checkPublication(operation.source, payload.snapshotId, current);
+        operation.emit({ type: "plugin.catalog.page.response", payload });
+      } else if (msg.type === "plugin.catalog.bundle.get.request") {
+        const payload = await paging.bundle(
+          operation.source,
+          msg.snapshotId,
+          msg.reference,
+          msg.offset,
+          msg.length,
+          current,
+          msg.requestId,
+        );
+        paging.checkPublication(operation.source, payload.snapshotId, current);
+        operation.emit({ type: "plugin.catalog.bundle.get.response", payload });
+      } else {
+        paging.release(operation.source, msg.snapshotId, current);
+        current();
+        operation.emit({
+          type: "plugin.catalog.snapshot.release.response",
+          payload: { requestId: msg.requestId, status: "ok", snapshotId: msg.snapshotId },
+        });
+      }
+    } catch (error) {
+      if (snapshotId) paging?.discard(operation.source, snapshotId);
+      await origin?.release();
+      if (operation.signal.aborted || this.isCleanedUp) return;
+      const payload = {
+        requestId: msg.requestId,
+        status: "refused" as const,
+        error: error instanceof CatalogReadRefusal ? error.code : ("invalid_request" as const),
+      };
+      if (msg.type === "plugin.catalog.page.request")
+        operation.emit({ type: "plugin.catalog.page.response", payload });
+      else if (msg.type === "plugin.catalog.bundle.get.request")
+        operation.emit({ type: "plugin.catalog.bundle.get.response", payload });
+      else operation.emit({ type: "plugin.catalog.snapshot.release.response", payload });
+    } finally {
+      await operation.release();
+    }
+  }
+
+  private async handleRetainedStashApply(
+    msg: Extract<SessionInboundMessage, { type: "stash_pop_request" }>,
+  ): Promise<void> {
+    const epoch = this.checkoutWriteAdmissionEpoch;
+    const originalCwd = msg.cwd;
+    const originalSha = msg.stashSha;
+    // Existing delivery ownership binds this physical originating source. A
+    // disconnect/re-attach with the same object cannot revive this operation.
+    const operation = this.delivery.operation(
+      () => false,
+      () => {},
+    );
+    try {
+      await this.checkoutSession.handleStashPopRequest(msg, (target) => {
+        if (
+          this.isCleanedUp ||
+          operation.signal.aborted ||
+          epoch !== this.checkoutWriteAdmissionEpoch ||
+          !this.authorization.allowsPermission("workspace.write") ||
+          target.cwd !== originalCwd ||
+          target.sha !== originalSha
+        )
+          throw new Error("Retained stash request authority or lifetime is no longer current");
+      });
+    } finally {
+      await operation.release();
+    }
+  }
+
+  private parseArtifactContentReply(output: unknown, input: NativeArtifactContentReadInput) {
+    const projection = NativeArtifactContentReadOutputSchema.parse(output);
+    if (
+      projection.requestId !== input.requestId ||
+      projection.artifactId !== input.artifactId ||
+      projection.grantId !== input.grantId ||
+      projection.grantRevision !== input.grantRevision ||
+      projection.offset !== input.offset ||
+      projection.length !== input.length ||
+      JSON.stringify(projection.scope) !== JSON.stringify(input.scope)
+    )
+      throw new Error("Content response correlation refused");
+    return projection;
+  }
+
+  private async handleNativeArtifactContentRead(
+    msg: Extract<SessionInboundMessage, { type: "native.managed-artifacts.content.request" }>,
+    source?: object,
+  ): Promise<void> {
+    if (!source || this.pluginOriginId || !this.pluginRuntime)
+      throw new Error("Host owner content source required");
+    const { type: _type, ...wire } = msg;
+    const input = NativeArtifactContentReadInputSchema.parse(structuredClone(wire));
+    const signal = this.delivery.requestSignal;
+    const captured = this.managementSources.get(source),
+      epoch = this.nativeMessagePermissionEpoch;
+    const guard = () => {
+      signal.throwIfAborted();
+      if (
+        this.isCleanedUp ||
+        this.nativeMessagePermissionEpoch !== epoch ||
+        this.managementSources.get(source) !== captured ||
+        !this.authorization.listPermissions().includes("workspace.read")
+      )
+        throw new Error("Original content delivery authority changed");
+    };
+    const management = this.agentManager.trustedPlugins.management.open(
+      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      () => {
+        try {
+          guard();
+        } catch {
+          return undefined;
+        }
+        return captured
+          ? {
+              ...captured.authentication,
+              permissions: this.authorization
+                .listPermissions()
+                .filter((permission) => captured.permissions.includes(permission)),
+            }
+          : undefined;
+      },
+    );
+    if (!management) throw new Error("Owner content authority unavailable");
+    this.managementInvocations.set(management, source);
+    try {
+      guard();
+      const output = await management.invoke(uuidv4(), {
+        method: "artifact-content-owner-read",
+        input,
+      });
+      guard();
+      const projection = this.parseArtifactContentReply(output, input);
+      checkReportPublication(output);
+      guard();
+      this.emit({
+        type: "native.managed-artifacts.content.response",
+        payload: { requestId: input.requestId, output: projection },
+      });
+    } catch (error) {
+      throw new Error("Native artifact content refused", { cause: error });
+    } finally {
+      management.close();
+      this.managementInvocations.delete(management);
+    }
+  }
+
+  private nativeMetadataMethod(type: string): string {
+    if (type === "native.managed-artifacts.index.request")
+      return "managed-artifact-index-owner-read";
+    if (type === "native.evidence.index.request") return "evidence-index-owner-read";
+    return "report-inbox-owner-read";
+  }
+  private async handleNativeOwnerReportRead(
+    msg: Extract<
+      SessionInboundMessage,
+      {
+        type:
+          | "native.report.inbox.request"
+          | "native.evidence.index.request"
+          | "native.managed-artifacts.index.request";
+      }
+    >,
+    source?: object,
+  ): Promise<void> {
+    if (!source || this.pluginOriginId || !this.pluginRuntime)
+      throw new Error("Host-authenticated owner report source required");
+    const signal = this.delivery.requestSignal;
+    const captured = this.managementSources.get(source);
+    const management = this.agentManager.trustedPlugins.management.open(
+      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      () => {
+        const live = this.managementSources.get(source);
+        return live && live === captured && !this.isCleanedUp
+          ? {
+              ...live.authentication,
+              permissions: this.authorization
+                .listPermissions()
+                .filter((permission) => live.permissions.includes(permission)),
+            }
+          : undefined;
+      },
+    );
+    if (!management) throw new Error("Verified owner report authority unavailable");
+    this.managementInvocations.set(management, source);
+    try {
+      signal.throwIfAborted();
+      const output = await management.invoke(uuidv4(), {
+        method: this.nativeMetadataMethod(msg.type),
+        input: { identity: msg.identity, expectedEpoch: msg.expectedEpoch, scope: msg.scope },
+      });
+      signal.throwIfAborted();
+      // Same physical source, actual owner invocation, exact registered identity/scope after every await.
+      if (msg.type === "native.managed-artifacts.index.request") {
+        const projection = ManagedArtifactReadOutputSchema.parse(output);
+        checkReportPublication(output);
+        this.emit({
+          type: "native.managed-artifacts.index.response",
+          payload: { requestId: msg.requestId, output: projection },
+        });
+      } else if (msg.type === "native.evidence.index.request") {
+        const projection = NativeEvidenceReadOutputSchema.parse(output);
+        checkReportPublication(output);
+        this.emit({
+          type: "native.evidence.index.response",
+          payload: { requestId: msg.requestId, output: projection },
+        });
+      } else {
+        const projection = NativeOwnerReportReadOutputSchema.parse(output);
+        checkReportPublication(output);
+        this.emit({
+          type: "native.report.inbox.response",
+          payload: { requestId: msg.requestId, output: projection },
+        });
+      }
+    } catch (error) {
+      if (
+        msg.type === "native.evidence.index.request" ||
+        msg.type === "native.managed-artifacts.index.request"
+      )
+        throw new Error("Native evidence index refused", { cause: error });
+      throw error;
+    } finally {
+      management.close();
+      this.managementInvocations.delete(management);
+    }
+  }
+
+  /** Radius writes alone retain the admitting physical source through every native effect and reply. */
+  private async invokeOriginalRadiusScratchRequest(
+    msg: Extract<SessionInboundMessage, { type: "plugin.rpc.invoke.request" }>,
+    source?: object,
+  ): Promise<void> {
+    const request = structuredClone(msg);
+    const admission = source ? this.managementSources.get(source) : undefined;
+    const epoch = this.checkoutWriteAdmissionEpoch;
+    let management: ManagementInvocation | undefined;
+    const operation = this.delivery.operation(
+      (message) =>
+        message.type === "plugin.rpc.invoke.response" &&
+        message.payload.requestId === request.requestId,
+      () => management?.close(),
+    );
+    const assertCurrent = () => {
+      if (
+        !source ||
+        !admission ||
+        this.isCleanedUp ||
+        this.pluginOriginId ||
+        operation.signal.aborted ||
+        this.managementSources.get(source) !== admission ||
+        epoch !== this.checkoutWriteAdmissionEpoch ||
+        !this.authorization.allowsPermission("daemon.manage") ||
+        !this.authorization.allowsPermission("command-centre.manage") ||
+        !this.authorization.allowsPermission("accounts.manage")
+      )
+        throw new Error("Original Radius owner invocation unavailable");
+    };
+    try {
+      assertCurrent();
+      management = this.agentManager.trustedPlugins.management.open(
+        this.pluginRuntime?.managementTarget?.(request.pluginId),
+        () => {
+          assertCurrent();
+          return {
+            ...admission!.authentication,
+            permissions: this.authorization
+              .listPermissions()
+              .filter((permission) => admission!.permissions.includes(permission)),
+          };
+        },
+      );
+      if (!management) throw new Error("Original Radius owner invocation unavailable");
+      this.managementInvocations.set(management, source!);
+      assertCurrent();
+      const output = await this.pluginRuntime!.invokePluginRpc(
+        request.pluginId,
+        request.method,
+        request.input,
+        management,
+      );
+      assertCurrent();
+      // The operation emits only to the originally admitting physical Delivery; no broad Session broadcast.
+      operation.emit({
+        type: "plugin.rpc.invoke.response",
+        payload: { requestId: request.requestId, output },
+      });
+    } finally {
+      management?.close();
+      if (management) this.managementInvocations.delete(management);
+      await operation.release();
+    }
+  }
+
+  private invokeManagedPluginRequest(
+    msg: Extract<SessionInboundMessage, { type: "plugin.rpc.invoke.request" }>,
+    source?: object,
+  ): Promise<void> {
+    if (!this.pluginRuntime) throw new Error("Plugin service is unavailable");
+    if (
+      msg.pluginId === "orca-organization-next" &&
+      [
+        "organization.radius.scratch.simulate",
+        "organization.radius.scratch.prune-simulate",
+      ].includes(msg.method)
+    )
+      return this.invokeOriginalRadiusScratchRequest(msg, source);
+    // D13: a caller without daemon.manage (a read-only device) is admitted for plugin reads only: the runtime refuses
+    // any method the bundled Command Centre plugin did not register as a read, and its management runs reads only.
+    const readOnlyCaller = !this.authorization.allowsPermission("daemon.manage");
+    const management =
+      source && !this.pluginOriginId
+        ? this.agentManager.trustedPlugins.management.open(
+            this.pluginRuntime.managementTarget?.(msg.pluginId),
+            () => {
+              const admission = this.managementSources.get(source);
+              return admission && !this.isCleanedUp
+                ? {
+                    ...admission.authentication,
+                    permissions: this.authorization
+                      .listPermissions()
+                      .filter((permission) => admission.permissions.includes(permission)),
+                  }
+                : undefined;
+            },
+            { readOnly: readOnlyCaller },
+          )
+        : undefined;
+    if (management && source) this.managementInvocations.set(management, source);
+    return Promise.resolve()
+      .then(() =>
+        this.pluginRuntime!.invokePluginRpc(msg.pluginId, msg.method, msg.input, management, {
+          readOnlyCaller,
+        }),
+      )
+      .finally(() => {
+        management?.close();
+        if (management) this.managementInvocations.delete(management);
+      })
+      .then((output) => {
+        this.emit({
+          type: "plugin.rpc.invoke.response",
+          payload: { requestId: msg.requestId, output },
+        });
+        return undefined;
+      });
   }
 
   private dispatchPluginDirectoryMessage(msg: SessionInboundMessage): Promise<void> | undefined {
@@ -2576,7 +3282,7 @@ export class Session {
     return this.dispatchCredentialsMessage(credentials, msg);
   }
 
-  // Account management is an app/operator power. A plugin's own session may
+  // Account management is an app/operator power (CONTRACTS §7.2 v1.7). A plugin's own session may
   // only list metadata for the connectors its manifest declares.
   private async dispatchPluginCredentialsMessage(
     credentials: NonNullable<NonNullable<SessionOptions["hostIntegrations"]>["credentials"]>,
@@ -2720,8 +3426,13 @@ export class Session {
     }
   }
 
-  private dispatchAgentRelationshipMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+  private dispatchAgentRelationshipMessage(
+    msg: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> | undefined {
     switch (msg.type) {
+      case "agent.parent.adopt.request":
+        return this.handleParentAdoptRequest(msg, source);
       case "agent.detach.request":
         return this.handleDetachAgentRequest(msg.agentId, msg.requestId);
       default:
@@ -2734,6 +3445,12 @@ export class Session {
     source?: object,
   ): Promise<void> | undefined {
     switch (msg.type) {
+      case "native.managed-artifacts.content.request":
+        return this.handleNativeArtifactContentRead(msg, source);
+      case "native.managed-artifacts.index.request":
+      case "native.evidence.index.request":
+      case "native.report.inbox.request":
+        return this.handleNativeOwnerReportRead(msg, source);
       case "fetch_agent_timeline_request":
         return this.handleFetchAgentTimelineRequest(msg, source);
       case "agent.timeline.append.request":
@@ -2942,7 +3659,7 @@ export class Session {
     }
   }
 
-  // The cwd must be a workspace in this daemon's registry.
+  // CONTRACTS v1.16: the cwd must be a workspace in this daemon's registry.
   private async handleFileAtCommitRequest(msg: CheckoutFileAtCommitGetRequest): Promise<void> {
     const payload = await handleFileAtCommitRequest({
       msg,
@@ -2950,6 +3667,180 @@ export class Session {
         (await this.workspaceRegistry.list()).map((workspace) => workspace.cwd),
     });
     this.emit({ type: "checkout.file-at-commit.get.response", payload });
+  }
+
+  // CONTRACTS v1.17: generated architecture change for a pull request or two commits.
+  private architectureChangeDeps(): ArchitectureChangeDeps {
+    return {
+      listWorkspaceCwds: async () =>
+        (await this.workspaceRegistry.list()).map((workspace) => workspace.cwd),
+      resolvePullRequest: (input) => this.checkoutSession.resolvePullRequestCommits(input),
+    };
+  }
+
+  private async handleArchitectureChangeGet(
+    msg: CheckoutArchitectureChangeGetRequest,
+  ): Promise<void> {
+    const payload = await handleArchitectureChangeGetRequest({
+      msg,
+      deps: this.architectureChangeDeps(),
+    });
+    this.emit({ type: "checkout.architecture-change.get.response", payload });
+  }
+
+  // CONTRACTS v1.20: Insights for one project or all of them (read-only).
+  private async handleInsightsGet(msg: InsightsGetRequest): Promise<void> {
+    try {
+      const result = await getInsights({
+        projectId: msg.projectId ?? null,
+        days: msg.days,
+        deps: {
+          paseoHome: this.paseoHome,
+          listProjects: async () =>
+            (await this.projectRegistry.list())
+              .filter((p) => !p.archivedAt)
+              .map((p) => ({
+                projectId: p.projectId,
+                name: p.customName ?? p.displayName,
+                rootPath: p.rootPath,
+                kind: p.kind,
+              })),
+          listWorkspaces: async () =>
+            (await this.workspaceRegistry.list()).map((w) => ({
+              workspaceId: w.workspaceId,
+              projectId: w.projectId,
+            })),
+          listAgentRecords: () => this.agentStorage.list(),
+          runGh: (args, options) => runGitHubCli(args, options),
+          repositoryOf: async (cwd) => {
+            const url = await getForgeRemoteUrl(cwd);
+            const match = url ? /github\.com[/:]([^/]+\/[^/.]+)/i.exec(url) : null;
+            return match ? match[1].toLowerCase() : null;
+          },
+        },
+      });
+      this.emit({
+        type: "insights.get.response",
+        payload: { requestId: msg.requestId, status: "ok", result },
+      });
+    } catch {
+      this.emit({
+        type: "insights.get.response",
+        payload: { requestId: msg.requestId, status: "error", error: "Insights could not be read" },
+      });
+    }
+  }
+
+  // CONTRACTS v1.21: Automations. Every response carries the refreshed list and what the builder picks from.
+  private async handleAutomationRequest(msg: AutomationRequest): Promise<void> {
+    const type = AUTOMATION_RESPONSE_TYPES[msg.type];
+    try {
+      const service = getHostAutomations();
+      const run = await applyAutomationRequest(service, msg);
+      const result = await this.automationResult(await service.list());
+      this.emit({
+        type,
+        payload: { requestId: msg.requestId, status: "ok", result, ...(run ? { run } : {}) },
+      });
+    } catch (error) {
+      this.emit({
+        type,
+        payload: {
+          requestId: msg.requestId,
+          status: "error",
+          error: error instanceof Error ? error.message : "The automation could not be changed",
+        },
+      });
+    }
+  }
+
+  private async automationResult(
+    automations: AutomationResult["automations"],
+  ): Promise<AutomationResult> {
+    const projects = (await this.projectRegistry.list()).filter((p) => !p.archivedAt);
+    const workspaces = new Map(
+      (await this.workspaceRegistry.list()).map((w) => [w.workspaceId, w.projectId] as const),
+    );
+    const records = await this.agentStorage.list();
+    const sessions = records
+      .filter((r) => !r.archivedAt && !r.internal)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 40)
+      .map((r) => ({
+        agentId: r.id,
+        title: r.title ?? "",
+        projectId: projectOf(r, projects, workspaces) || null,
+      }));
+    return {
+      automations,
+      projects: projects.map((p) => ({
+        projectId: p.projectId,
+        name: p.customName ?? p.displayName,
+      })),
+      sessions,
+      templates: (this.daemonConfigStore.get().agentProfiles ?? []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        provider: p.provider,
+      })),
+      providers: providersByUse(records.map((r) => r.provider)),
+    };
+  }
+
+  // CONTRACTS v1.19: the PR review screen.
+  private pullRequestReviewDeps(): PullRequestReviewDeps {
+    return {
+      ...this.architectureChangeDeps(),
+      runGh: (args, options) => runGitHubCli(args, options),
+      paseoHome: this.paseoHome,
+    };
+  }
+
+  private async handlePullRequestReviewGet(
+    msg: CheckoutPullRequestReviewGetRequest,
+  ): Promise<void> {
+    const payload = await handlePullRequestReviewGet({ msg, deps: this.pullRequestReviewDeps() });
+    this.emit({ type: "checkout.pull-request-review.get.response", payload });
+  }
+
+  private async handlePullRequestReviewFileDiff(
+    msg: CheckoutPullRequestReviewFileDiffRequest,
+  ): Promise<void> {
+    const payload = await handlePullRequestReviewFileDiff({
+      msg,
+      deps: this.pullRequestReviewDeps(),
+    });
+    this.emit({ type: "checkout.pull-request-review.file-diff.response", payload });
+  }
+
+  private async handlePullRequestReviewDecide(
+    msg: CheckoutPullRequestReviewDecideRequest,
+  ): Promise<void> {
+    const payload = await handlePullRequestReviewDecide({
+      msg,
+      deps: this.pullRequestReviewDeps(),
+    });
+    this.emit({ type: "checkout.pull-request-review.decide.response", payload });
+  }
+
+  private async handleArchitectureGraphGet(
+    msg: CheckoutArchitectureGraphGetRequest,
+  ): Promise<void> {
+    const payload = await handleArchitectureGraphGetRequest({
+      msg,
+      deps: this.architectureChangeDeps(),
+    });
+    this.emit({ type: "checkout.architecture-graph.get.response", payload });
+  }
+
+  private async handleArchitectureChangeFetch(
+    msg: CheckoutArchitectureChangeFetchRequest,
+  ): Promise<void> {
+    const payload = await handleArchitectureChangeFetchRequest({
+      msg,
+      deps: this.architectureChangeDeps(),
+    });
+    this.emit({ type: "checkout.architecture-change.fetch.response", payload });
   }
 
   // eslint-disable-next-line complexity
@@ -2963,6 +3854,26 @@ export class Session {
         return this.checkoutSession.handleCommitFileDiffRequest(msg);
       case "checkout.file-at-commit.get.request":
         return this.handleFileAtCommitRequest(msg);
+      case "checkout.architecture-change.get.request":
+        return this.handleArchitectureChangeGet(msg);
+      case "checkout.architecture-change.fetch.request":
+        return this.handleArchitectureChangeFetch(msg);
+      case "checkout.architecture-graph.get.request":
+        return this.handleArchitectureGraphGet(msg);
+      case "insights.get.request":
+        return this.handleInsightsGet(msg);
+      case "automation.list.request":
+      case "automation.save.request":
+      case "automation.set-enabled.request":
+      case "automation.delete.request":
+      case "automation.run-now.request":
+        return this.handleAutomationRequest(msg);
+      case "checkout.pull-request-review.get.request":
+        return this.handlePullRequestReviewGet(msg);
+      case "checkout.pull-request-review.file-diff.request":
+        return this.handlePullRequestReviewFileDiff(msg);
+      case "checkout.pull-request-review.decide.request":
+        return this.handlePullRequestReviewDecide(msg);
       case "validate_branch_request":
         return this.checkoutSession.handleValidateBranchRequest(msg);
       case "branch_suggestions_request":
@@ -2979,6 +3890,8 @@ export class Session {
         return this.checkoutSession.handleCheckoutSwitchBranchRequest(msg);
       case "checkout.rename_branch.request":
         return this.checkoutSession.handleCheckoutRenameBranchRequest(msg);
+      case "checkout.git_ai.draft.request":
+        return this.handleGitAiDraftRequest(msg);
       case "checkout_commit_request":
         return this.checkoutSession.handleCheckoutCommitRequest(msg);
       case "checkout_merge_request":
@@ -3013,7 +3926,9 @@ export class Session {
       case "stash_save_request":
         return this.checkoutSession.handleStashSaveRequest(msg);
       case "stash_pop_request":
-        return this.checkoutSession.handleStashPopRequest(msg);
+        return msg.keepStash === true || msg.stashSha !== undefined
+          ? this.handleRetainedStashApply(msg)
+          : this.checkoutSession.handleStashPopRequest(msg);
       case "stash_list_request":
         return this.checkoutSession.handleStashListRequest(msg);
       default:
@@ -3318,12 +4233,24 @@ export class Session {
       ...(placementProvider ? { provider: placementProvider } : {}),
     };
 
+    // Refusal must precede even the storage delete fence; the close path rechecks later.
+    const operationHandle = this.agentManager.trustedPlugins.input(
+      live ?? stored ?? { id: agentId },
+      "close",
+      undefined,
+      () => this.agentManager.trustedPlugins.captureOperation(),
+      commandPayload("close", { purgeHistory: options.purgeHistory }),
+    );
     // File-backed storage still needs an early delete fence before closeAgent().
     beginAgentDeleteIfSupported(this.agentStorage, agentId);
 
     try {
-      await closeAgentCommand({ agentManager: this.agentManager }, agentId);
+      await closeAgentCommand({ agentManager: this.agentManager }, agentId, operationHandle);
     } catch (error) {
+      if (error instanceof AdmissionDeniedError) {
+        cancelAgentDeleteIfSupported(this.agentStorage, agentId);
+        throw error;
+      }
       this.sessionLogger.warn(
         { err: error, agentId },
         `Failed to close agent ${agentId} during delete`,
@@ -3393,6 +4320,7 @@ export class Session {
 
   private async archiveAgentForClose(
     agentId: string,
+    operationHandle?: TrustedOperationHandle,
   ): Promise<{ agentId: string; archivedAt: string }> {
     const { archivedAt, record: archivedRecord } = await archiveAgentCommand(
       {
@@ -3401,6 +4329,7 @@ export class Session {
         logger: this.sessionLogger,
       },
       agentId,
+      operationHandle,
     );
 
     if (this.agentUpdates.hasSubscription()) {
@@ -3411,6 +4340,63 @@ export class Session {
     }
 
     return { agentId, archivedAt };
+  }
+
+  private async handleParentAdoptRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.parent.adopt.request" }>,
+    source?: object,
+  ): Promise<void> {
+    const request = snapshotParentAdoption(msg);
+    const requestId = msg.requestId;
+    const admission = source ? this.managementSources.get(source) : undefined;
+    const ownerIsCurrent = () =>
+      !!source &&
+      !this.pluginOriginId &&
+      !!admission &&
+      this.managementSources.get(source) === admission &&
+      admission.authentication.id === "owner" &&
+      admission.authentication.authentication === "daemon-password" &&
+      admission.authentication.deviceId === null &&
+      ["access.manage", "daemon.manage", "workspace.write"].every(
+        (permission) =>
+          admission.permissions.includes(permission as DaemonPermission) &&
+          this.authorization.allowsPermission(permission as DaemonPermission),
+      );
+    let error: string | null = null;
+    try {
+      if (!ownerIsCurrent()) throw new Error("Current native owner admission required");
+      const oldRoot = request.expectedParentAgentId
+        ? await this.resolveDelegationRootWorkspaceId(request.expectedParentAgentId)
+        : null;
+      const oldWorkspace = request.expectedParentAgentId
+        ? this.agentManager.getAgent(request.expectedParentAgentId)?.workspaceId
+        : null;
+      await this.agentManager.adoptAgentParent(request, ownerIsCurrent);
+      const newRoot = await this.resolveDelegationRootWorkspaceId(request.parentAgentId);
+      await this.emitWorkspaceUpdatesForWorkspaceIds(
+        new Set(
+          [
+            this.agentManager.getAgent(request.agentId)?.workspaceId,
+            this.agentManager.getAgent(request.parentAgentId)?.workspaceId,
+            oldWorkspace,
+            oldRoot,
+            newRoot,
+          ].filter((id): id is string => !!id),
+        ),
+      );
+    } catch (failure) {
+      if (admissionOutcome(failure)) throw failure;
+      error = getErrorMessageOr(failure, "Parent adoption refused");
+    }
+    this.emit({
+      type: "agent.parent.adopt.response",
+      payload: {
+        requestId,
+        agentId: request.agentId,
+        accepted: error === null,
+        error,
+      },
+    });
   }
 
   private async handleDetachAgentRequest(agentId: string, requestId: string): Promise<void> {
@@ -3450,6 +4436,7 @@ export class Session {
         },
       });
     } catch (error) {
+      if (admissionOutcome(error)) throw error;
       const message = getErrorMessageOr(error, "Failed to detach agent");
       this.sessionLogger.error({ err: error, agentId, requestId }, "Failed to detach agent");
       this.emit({
@@ -3465,8 +4452,18 @@ export class Session {
   }
 
   private async handleCloseItemsRequest(msg: CloseItemsRequest): Promise<void> {
+    const operations = new Map<string, TrustedOperationHandle | undefined>();
+    for (const agentId of msg.agentIds) {
+      this.agentManager.withInput(
+        agentId,
+        "archive",
+        undefined,
+        (handle) => operations.set(agentId, handle),
+        commandPayload("archive"),
+      );
+    }
     const archiveResults = await Promise.allSettled(
-      msg.agentIds.map((agentId) => this.archiveAgentForClose(agentId)),
+      msg.agentIds.map((agentId) => this.archiveAgentForClose(agentId, operations.get(agentId))),
     );
     const agents = [];
     for (let i = 0; i < archiveResults.length; i += 1) {
@@ -3474,6 +4471,7 @@ export class Session {
       if (result.status === "fulfilled") {
         agents.push(result.value);
       } else {
+        if (result.reason instanceof AdmissionDeniedError) throw result.reason;
         this.sessionLogger.warn(
           { err: result.reason, agentId: msg.agentIds[i], requestId: msg.requestId },
           "Failed to archive agent during close_items batch",
@@ -4138,7 +5136,14 @@ export class Session {
     request: AgentCreateRequest,
     observer?: (snapshot: CreationSnapshot) => void,
   ): Promise<CreationSnapshot> {
-    const { requestId, type: _type, subscribe: _subscribe, idempotencyKey, ...intent } = request;
+    const {
+      requestId,
+      type: _type,
+      subscribe: _subscribe,
+      inputProvenance: _inputProvenance,
+      idempotencyKey,
+      ...intent
+    } = request;
     return this.creationService.create(
       {
         kind: "agent",
@@ -4345,7 +5350,7 @@ export class Session {
         if (!record) throw new Error("Previously created agent no longer exists");
         agent = this.buildStoredAgentPayload(record);
       } else {
-        agent = await this.createSessionAgent(msg);
+        agent = await this.createSessionAgent(msg, msg.agentId);
       }
       this.emit({
         type: "status",
@@ -4468,6 +5473,7 @@ export class Session {
           attachments,
           git,
           labels: resolvedIntent.intent.labels,
+          parentAgentId: resolvedIntent.intent.parentAgentId,
           env,
           provisionalTitle,
           firstAgentContext,
@@ -4524,7 +5530,12 @@ export class Session {
     const intent = await resolveCreateAgentIntent({
       explicitWorkspaceId: createdWorktree?.workspace.workspaceId ?? request.workspaceId,
       caller: callerAgent
-        ? { id: callerAgent.id, cwd: callerAgent.cwd, workspaceId: callerAgent.workspaceId }
+        ? {
+            id: callerAgent.id,
+            cwd: callerAgent.cwd,
+            workspaceId: callerAgent.workspaceId,
+            labels: callerAgent.labels,
+          }
         : null,
       labels: request.labels,
       resolveWorkspace: async (workspaceId) => {
@@ -4751,15 +5762,43 @@ export class Session {
     this.sessionLogger.info({ agentId }, `Refreshing agent ${agentId} from persistence`);
 
     try {
+      const admissionAgent = this.agentManager.getAgent(agentId) ??
+        (await this.agentStorage.get(agentId)) ?? { id: agentId };
+      const operationHandle = this.agentManager.trustedPlugins.input(
+        admissionAgent,
+        "configure",
+        undefined,
+        () => this.agentManager.trustedPlugins.captureOperation(),
+        commandPayload("reload", { options: { rehydrateFromDisk: true } }),
+      );
+      this.agentManager.trustedPlugins.input(
+        admissionAgent,
+        "unarchive",
+        undefined,
+        () => undefined,
+        commandPayload("unarchive"),
+        operationHandle,
+      );
       await this.restoreOwningWorkspaceForLegacyAgentRefresh(agentId);
-      await unarchiveAgentState(this.agentStorage, this.agentManager, agentId);
+      await unarchiveAgentState(
+        this.agentStorage,
+        this.agentManager,
+        agentId,
+        undefined,
+        operationHandle,
+      );
       let snapshot: ManagedAgent;
       const existing = this.agentManager.getAgent(agentId);
       if (existing) {
-        await this.interruptAgentIfRunning(agentId);
-        snapshot = await this.agentManager.reloadAgentSession(agentId, undefined, {
-          rehydrateFromDisk: true,
-        });
+        await this.interruptAgentIfRunning(agentId, operationHandle);
+        snapshot = await this.agentManager.reloadAgentSession(
+          agentId,
+          undefined,
+          {
+            rehydrateFromDisk: true,
+          },
+          operationHandle,
+        );
       } else {
         const record = await this.agentStorage.get(agentId);
         if (!record) {
@@ -4797,6 +5836,7 @@ export class Session {
         });
       }
     } catch (error) {
+      if (admissionOutcome(error)) throw error;
       const message = getErrorMessage(error);
       this.sessionLogger.error({ err: error, agentId }, `Failed to refresh agent ${agentId}`);
       if (requestId) {
@@ -4827,7 +5867,7 @@ export class Session {
 
     try {
       await cancelAgentRunCommand(
-        // Storage lets stop clear a dead turn on an agent no process has loaded.
+        // Orca R3b: storage lets stop clear a dead turn on an agent no process has loaded.
         {
           agentManager: this.agentManager,
           agentStorage: this.agentStorage,
@@ -4849,6 +5889,7 @@ export class Session {
         });
       }
     } catch (error) {
+      if (admissionOutcome(error)) throw error;
       if (requestId) {
         this.sessionLogger.error(
           { err: error, agentId },
@@ -4891,6 +5932,7 @@ export class Session {
         source,
       );
     } catch (error) {
+      if (admissionOutcome(error)) throw error;
       this.emitForSource(
         {
           type: "agent.rewind.response",
@@ -5348,7 +6390,11 @@ export class Session {
   }
 
   private async listTerminalActivityContributions(): Promise<
-    Array<{ cwd: string; workspaceId?: string; activity: TerminalActivity | null }>
+    Array<{
+      cwd: string;
+      workspaceId?: string;
+      activity: TerminalActivity | null;
+    }>
   > {
     const terminalManager = this.terminalManager;
     if (!terminalManager) {
@@ -5359,11 +6405,14 @@ export class Session {
       directories.map((cwd) => terminalManager.getTerminals(cwd)),
     );
     return terminalsByDirectory.flat().map((session) => {
-      const contribution: { cwd: string; workspaceId?: string; activity: TerminalActivity | null } =
-        {
-          cwd: session.cwd,
-          activity: session.getActivity(),
-        };
+      const contribution: {
+        cwd: string;
+        workspaceId?: string;
+        activity: TerminalActivity | null;
+      } = {
+        cwd: session.cwd,
+        activity: session.getActivity(),
+      };
       if (session.workspaceId) {
         contribution.workspaceId = session.workspaceId;
       }
@@ -5956,7 +7005,11 @@ export class Session {
     options?: {
       snapshotByWorkspaceId?: Map<
         string,
-        { status: string; statusEnteredAt: string | null; activityAtMs: number | null }
+        {
+          status: string;
+          statusEnteredAt: string | null;
+          activityAtMs: number | null;
+        }
       >;
     },
   ): void {
@@ -6757,12 +7810,20 @@ export class Session {
   private buildBootstrapSnapshot(entries: FetchWorkspacesResponseEntry[]): {
     snapshotByWorkspaceId: Map<
       string,
-      { status: string; statusEnteredAt: string | null; activityAtMs: number | null }
+      {
+        status: string;
+        statusEnteredAt: string | null;
+        activityAtMs: number | null;
+      }
     >;
   } {
     const snapshotByWorkspaceId = new Map<
       string,
-      { status: string; statusEnteredAt: string | null; activityAtMs: number | null }
+      {
+        status: string;
+        statusEnteredAt: string | null;
+        activityAtMs: number | null;
+      }
     >();
     for (const entry of entries) {
       const parsedActivity = entry.activityAt ? Date.parse(entry.activityAt) : null;
@@ -8444,6 +9505,10 @@ export class Session {
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
+    // Snapshot the complete requested body before the first resolution await.
+    const nativePermissionEpoch = this.nativeMessagePermissionEpoch;
+    const publicationSignal = msg.nativeQueue ? this.delivery.requestSignal : undefined;
+    if (msg.nativeQueue) msg = structuredClone(msg);
     const resolved = await this.resolveAgentIdentifier(msg.agentId);
     if (!resolved.ok) {
       this.emit({
@@ -8462,6 +9527,42 @@ export class Session {
       const agentId = resolved.agentId;
 
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
+      if (msg.nativeQueue) {
+        if (!msg.messageId || msg.messageId.length > 256)
+          throw new Error("Native queue requires a stable bounded message ID");
+        if (msg.activeTurnBehavior || msg.images?.length || msg.attachments?.length)
+          throw new Error("Native queue refuses steering, interruption and attachments");
+        const requireSource = () => {
+          if (
+            this.nativeMessagePermissionEpoch !== nativePermissionEpoch ||
+            !this.authorization.allowsInbound(msg)
+          )
+            throw new Error("Native queue source permission changed");
+        };
+        publicationSignal!.throwIfAborted();
+        const receipt = await this.agentManager.queueNativePrompt(
+          agentId,
+          prompt,
+          msg.messageId,
+          promptPayload(prompt, { clientMessageId: msg.messageId }),
+          requireSource,
+        );
+        const accepted = ["queued", "dispatching", "delivered"].includes(receipt.state);
+        // No await between fresh protected publication check and the original response transport.
+        publicationSignal!.throwIfAborted();
+        this.agentManager.assertNativeQueuedReceiptCurrent(receipt);
+        this.emit({
+          type: "send_agent_message_response",
+          payload: {
+            requestId: msg.requestId,
+            agentId,
+            accepted,
+            nativeReceipt: receipt,
+            error: accepted ? null : `Native queue ${receipt.state}`,
+          },
+        });
+        return;
+      }
       this.sessionLogger.trace(
         {
           agentId,
@@ -8514,8 +9615,10 @@ export class Session {
         },
       });
     } catch (error) {
+      if (admissionOutcome(error)) throw error;
       if (this.delivery.requestSignal.aborted) return;
-      this.handleAgentRunError(resolved.agentId, error, "Failed to send agent message");
+      if (!msg.nativeQueue)
+        this.handleAgentRunError(resolved.agentId, error, "Failed to send agent message");
       this.emit({
         type: "send_agent_message_response",
         payload: {
@@ -8818,6 +9921,7 @@ export class Session {
   public async cleanup(): Promise<void> {
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
+    for (const source of this.managementSources.keys()) this.revokeManagementSource(source);
     await this.delivery.close();
 
     if (this.unsubscribeAgentEvents) {

@@ -19,10 +19,14 @@ import { buildSidebarProjection } from "./sidebar-projection";
 import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { filterWorkspacesByLabels, type SidebarWorkspaceGroup } from "./sidebar-labels";
 import { filterWorkspacesByProjects, resolveActiveProjectFilters } from "./sidebar-project-filter";
+import { markOfflineHostEntries } from "./sidebar-offline-hosts";
+import { useOfflineHosts } from "./use-offline-hosts";
 import {
   hasAuthoritativeWorkspaceLabelCatalog,
   useWorkspaceLabelProjection,
 } from "@/workspace-labels";
+import { useHosts } from "@/runtime/host-runtime";
+import { hostDisplayName } from "@/hosts/host-display-name";
 
 interface SidebarModel extends SidebarWorkspacesListResult {
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
@@ -96,9 +100,20 @@ export function SidebarModelProvider({
   // live session-store subscription over every workspace on every visible host, so widening this
   // for a filter that does not need it costs a retained-but-inactive sidebar real work.
   const needsWorkspaceEntries = groupMode !== "project" || hasActiveLabelFilter;
-  const workspaceEntriesByKey = useSidebarWorkspaceEntries(
+  const hostEntriesByKey = useSidebarWorkspaceEntries(
     list.workspacePlacements,
     active !== false || needsWorkspaceEntries,
+  );
+  // An unreachable host's rows stay, but as offline: its last-known status is not current.
+  const offlineHosts = useOfflineHosts();
+  const savedHosts = useHosts();
+  const hostNames = useMemo(
+    () => new Map(savedHosts.map((host) => [host.serverId, hostDisplayName(host)] as const)),
+    [savedHosts],
+  );
+  const workspaceEntriesByKey = useMemo(
+    () => markOfflineHostEntries(hostEntriesByKey, offlineHosts),
+    [hostEntriesByKey, offlineHosts],
   );
   const filteredWorkspaceEntriesByKey = useMemo(() => {
     const byProject = filterWorkspacesByProjects({
@@ -146,6 +161,8 @@ export function SidebarModelProvider({
       pinnedWorkspaceOrder,
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       projectNamesByViewKey: list.projectNamesByViewKey,
+      offlineHosts,
+      hostNames,
       groupMode,
       pinnedCollapsed,
       collapsedProjectKeys,
@@ -156,6 +173,8 @@ export function SidebarModelProvider({
       collapsedWorkspaceGroupKeys,
       groupMode,
       list.projectNamesByViewKey,
+      offlineHosts,
+      hostNames,
       filteredProjects,
       pinnedCollapsed,
       pinnedKeys,

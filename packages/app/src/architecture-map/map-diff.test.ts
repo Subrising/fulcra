@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { parseArchitectureIr, type ArchitectureMapModel } from "./ir-model";
 import { compareMaps, deltaModel, reach } from "./map-diff";
 
-// Comparison cases on the fixture pair in ./fixtures.
+// The same cases as the control repo's orca-architecture-map/diff.test.mjs, on the same fixture
+// pair, so the app and the agents' tooling cannot drift apart silently.
 
 type ParsedJson = ReturnType<typeof JSON.parse>;
 

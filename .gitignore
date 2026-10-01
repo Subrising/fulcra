@@ -92,7 +92,21 @@ packages/desktop/src-tauri/resources/managed-runtime/
 app.json
 
 # Build-only Fulcra preview artifacts (directory names kept for compatibility)
+/artifacts/orca-preview/
 /packages/desktop/release-preview/
 
 # Heap snapshots dumped by --heapsnapshot-near-heap-limit; keep them for debugging.
 *.heapsnapshot
+
+# Distribution-only compiled Command Centre resources
+/packages/desktop/bundled-plugins/
+
+# Machine release configuration and evidence
+/local/*
+!/local/*.example
+!/local/README.md
+
+# Historical capture scripts must not reintroduce installation evidence.
+**/evidence/
+/orca-organization/docs/screens/
+/control/orca-organization/docs/screens/

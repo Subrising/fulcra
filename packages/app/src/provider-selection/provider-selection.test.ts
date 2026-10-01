@@ -164,7 +164,7 @@ describe("combined model selector data", () => {
     ]);
   });
 
-  // a CLI that is not installed is not an error; an installed CLI that fails still is.
+  // APP2: a CLI that is not installed is not an error; an installed CLI that fails still is.
   it("marks a provider whose CLI is not installed as unavailable, not as an error", () => {
     const [copilot] = buildSelectableProviderSelectorProviders([
       snapshotEntry({ provider: "copilot", label: "Copilot", status: "unavailable", models: [] }),

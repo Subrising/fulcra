@@ -17,41 +17,108 @@ export interface MaterializedProviderImage {
   path: string;
 }
 
+const materializedFacts = new WeakMap<object, { sha256: string; size: number }>();
+export function materializedNativeImageFact(
+  image: MaterializedProviderImage,
+): { sha256: string; size: number } | undefined {
+  const fact = materializedFacts.get(image);
+  return fact ? { ...fact } : undefined;
+}
 const PROVIDER_IMAGE_ATTACHMENT_DIR = "paseo-attachments";
 const PROVIDER_IMAGE_ATTACHMENT_DIR_PREFIX = `${PROVIDER_IMAGE_ATTACHMENT_DIR}-`;
 const PRIVATE_ATTACHMENT_DIR_MODE = 0o700;
 const MATERIALIZED_IMAGE_FILE_MODE = 0o600;
 
-let materializedImageAttachmentDir: string | null = null;
-
-function canReuseMaterializedImageAttachmentDir(dir: string): boolean {
-  try {
-    const stats = fsSync.lstatSync(dir);
-    if (!stats.isDirectory()) {
-      return false;
-    }
-    fsSync.chmodSync(dir, PRIVATE_ATTACHMENT_DIR_MODE);
-    return true;
-  } catch {
-    return false;
-  }
+const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
+const MAX_PRIVATE_BYTES = 64 * 1024 * 1024;
+const MAX_PRIVATE_FILES = 256;
+// Darwin's O_NOFOLLOW_ANY rejects symlinks in every path component, not just the leaf.
+const noFollowAny = process.platform === "darwin" ? 0x20000000 : 0;
+interface PrivateRoot {
+  path: string;
+  fd: number;
+  dev: number;
+  ino: number;
+  files: Map<string, { dev: number; ino: number; size: number }>;
+  bytes: number;
+  ancestors: Array<{ path: string; dev: number; ino: number }>;
 }
+let privateRoot: PrivateRoot | undefined;
+function checkRoot(root: PrivateRoot): void {
+  for (const ancestor of root.ancestors) {
+    const current = fsSync.lstatSync(ancestor.path);
+    if (!current.isDirectory() || current.dev !== ancestor.dev || current.ino !== ancestor.ino)
+      throw new Error("Private image ancestor replaced");
+  }
 
-function getMaterializedImageAttachmentDir(): string {
+  const descriptor = fsSync.fstatSync(root.fd),
+    observed = fsSync.lstatSync(root.path);
   if (
-    materializedImageAttachmentDir &&
-    canReuseMaterializedImageAttachmentDir(materializedImageAttachmentDir)
-  ) {
-    return materializedImageAttachmentDir;
-  }
-
-  materializedImageAttachmentDir = fsSync.mkdtempSync(
-    path.join(os.tmpdir(), PROVIDER_IMAGE_ATTACHMENT_DIR_PREFIX),
-  );
-  fsSync.chmodSync(materializedImageAttachmentDir, PRIVATE_ATTACHMENT_DIR_MODE);
-  return materializedImageAttachmentDir;
+    !observed.isDirectory() ||
+    observed.dev !== root.dev ||
+    observed.ino !== root.ino ||
+    descriptor.dev !== root.dev ||
+    descriptor.ino !== root.ino ||
+    (observed.mode & 0o777) !== 0o700 ||
+    (process.geteuid && observed.uid !== process.geteuid())
+  )
+    throw new Error("Private image root replaced");
 }
-
+function getPrivateRoot(): PrivateRoot {
+  if (process.platform !== "darwin" && process.platform !== "linux")
+    throw new Error("Confined image materialization unavailable");
+  if (privateRoot) {
+    try {
+      checkRoot(privateRoot);
+      return privateRoot;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // A missing pathname may be a still-live renamed directory. Never release its pool.
+      const retained = fsSync.fstatSync(privateRoot.fd);
+      if (
+        retained.dev !== privateRoot.dev ||
+        retained.ino !== privateRoot.ino ||
+        retained.nlink !== 0
+      )
+        throw new Error("Private image root moved or deletion unproved", { cause: error });
+      fsSync.closeSync(privateRoot.fd);
+      privateRoot = undefined;
+    }
+  }
+  const parent = fsSync.realpathSync(os.tmpdir());
+  const dir = fsSync.mkdtempSync(path.join(parent, PROVIDER_IMAGE_ATTACHMENT_DIR_PREFIX));
+  const created = fsSync.lstatSync(dir);
+  const fd = fsSync.openSync(
+    dir,
+    fsSync.constants.O_RDONLY |
+      fsSync.constants.O_DIRECTORY |
+      (noFollowAny || fsSync.constants.O_NOFOLLOW),
+  );
+  const stat = fsSync.fstatSync(fd);
+  if (stat.dev !== created.dev || stat.ino !== created.ino || !stat.isDirectory()) {
+    fsSync.closeSync(fd);
+    throw new Error("Private image creation replaced");
+  }
+  fsSync.fchmodSync(fd, PRIVATE_ATTACHMENT_DIR_MODE);
+  const ancestors: Array<{ path: string; dev: number; ino: number }> = [];
+  for (let current = parent; ; current = path.dirname(current)) {
+    const value = fsSync.lstatSync(current);
+    ancestors.push({ path: current, dev: value.dev, ino: value.ino });
+    if (path.dirname(current) === current) break;
+  }
+  const root = {
+    path: dir,
+    fd,
+    dev: stat.dev,
+    ino: stat.ino,
+    files: new Map(),
+    bytes: 0,
+    ancestors,
+  };
+  checkRoot(root);
+  privateRoot = root;
+  return root;
+}
 function getImageExtension(mimeType: string): string {
   switch (mimeType) {
     case "image/jpeg":
@@ -81,6 +148,34 @@ function normalizeImageData(mimeType: string, data: string): { mimeType: string;
   return { mimeType, data };
 }
 
+function validateDestination(
+  before: fsSync.Stats,
+  created: boolean,
+  known: { dev: number; ino: number; size: number } | undefined,
+): void {
+  if (
+    !before.isFile() ||
+    before.nlink !== 1 ||
+    (before.mode & 0o777) !== 0o600 ||
+    (process.geteuid && before.uid !== process.geteuid()) ||
+    (!created &&
+      (!known ||
+        known.dev !== before.dev ||
+        known.ino !== before.ino ||
+        known.size !== before.size))
+  )
+    throw new Error("Private image destination refused");
+}
+function decodeBoundedImage(image: { data: string; mimeType: string | null }) {
+  // Reject before allocating a root or opening any destination. Retention is separately bounded.
+  if (image.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 256)
+    throw new Error("Native image exceeds byte limit");
+  const normalized = normalizeImageData(image.mimeType ?? "image/png", image.data);
+  const bytes = Buffer.from(normalized.data, "base64");
+  if (bytes.length < 1 || bytes.length > MAX_IMAGE_BYTES)
+    throw new Error("Native image exceeds byte limit");
+  return { normalized, bytes };
+}
 // Filenames are a content hash of the bytes so re-materializing the same image
 // within a process reuses the existing temp file instead of leaking a fresh one
 // for repeated image blocks or history replay.
@@ -88,15 +183,67 @@ export function materializeProviderImage(image: {
   data: string;
   mimeType: string | null;
 }): MaterializedProviderImage {
-  const attachmentsDir = getMaterializedImageAttachmentDir();
-  const normalized = normalizeImageData(image.mimeType ?? "image/png", image.data);
-  const bytes = Buffer.from(normalized.data, "base64");
-  const extension = getImageExtension(normalized.mimeType);
+  const { normalized, bytes } = decodeBoundedImage(image);
   const hash = createHash("sha256").update(bytes).digest("hex");
-  const filePath = path.join(attachmentsDir, `${hash}.${extension}`);
-  fsSync.writeFileSync(filePath, bytes, { mode: MATERIALIZED_IMAGE_FILE_MODE });
-  fsSync.chmodSync(filePath, MATERIALIZED_IMAGE_FILE_MODE);
-  return { path: filePath };
+  const name = `${hash}.${getImageExtension(normalized.mimeType)}`;
+  const root = getPrivateRoot();
+  checkRoot(root);
+  const known = root.files.get(name);
+  if (
+    !known &&
+    (root.files.size >= MAX_PRIVATE_FILES || root.bytes + bytes.length > MAX_PRIVATE_BYTES)
+  )
+    throw new Error("Private image retention exhausted");
+  const filePath = path.join(root.path, name);
+  const openPath = process.platform === "linux" ? `/proc/self/fd/${root.fd}/${name}` : filePath;
+  let descriptor: number,
+    created = false;
+  try {
+    descriptor = fsSync.openSync(
+      openPath,
+      fsSync.constants.O_RDWR |
+        fsSync.constants.O_CREAT |
+        fsSync.constants.O_EXCL |
+        (noFollowAny || fsSync.constants.O_NOFOLLOW),
+      MATERIALIZED_IMAGE_FILE_MODE,
+    );
+    created = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !known) throw error;
+    descriptor = fsSync.openSync(
+      openPath,
+      fsSync.constants.O_RDONLY | (noFollowAny || fsSync.constants.O_NOFOLLOW),
+    );
+  }
+  try {
+    checkRoot(root);
+    const before = fsSync.fstatSync(descriptor);
+    validateDestination(before, created, known);
+    // Exclusive new inode only. Reuse is read-only; never truncate/chmod an existing path.
+    if (!known) {
+      root.bytes += bytes.length;
+      root.files.set(name, { dev: before.dev, ino: before.ino, size: bytes.length });
+    }
+    if (created) fsSync.writeFileSync(descriptor, bytes);
+    const after = fsSync.fstatSync(descriptor),
+      observed = Buffer.alloc(bytes.length);
+    fsSync.readSync(descriptor, observed, 0, observed.length, 0);
+    checkRoot(root);
+    if (
+      after.nlink !== 1 ||
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      after.size !== bytes.length ||
+      !observed.equals(bytes)
+    )
+      throw new Error("Native image materialization changed");
+    root.files.set(name, { dev: after.dev, ino: after.ino, size: after.size });
+    const result = { path: filePath };
+    materializedFacts.set(result, { sha256: hash, size: bytes.length });
+    return result;
+  } finally {
+    fsSync.closeSync(descriptor);
+  }
 }
 
 // Recognizes markdown rendered for a materialized provider image: its source is a content-hashed

@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
+import { canonicalJson } from "@getpaseo/protocol/trusted-input";
+import { fromByteArray } from "base64-js";
 import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
   DaemonClient,
+  NativeQueueUncertainError,
+  type NativeQueueReceipt,
   type DaemonClientTrace,
   type CreateAgentRequestOptions,
   type DaemonTransport,
@@ -828,7 +833,7 @@ test("dedupes in-flight checkout status requests per agentId", async () => {
   });
 });
 
-test("passes password as HTTP bearer header and WebSocket subprotocol", async () => {
+test("passes password as HTTP bearer header and WebSocket subprotocols (plain, encoded, legacy)", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();
   const transportFactory = vi.fn(() => mock.transport);
@@ -850,7 +855,145 @@ test("passes password as HTTP bearer header and WebSocket subprotocol", async ()
   expect(transportFactory).toHaveBeenCalledWith({
     url: "ws://test",
     headers: { Authorization: "Bearer shared-secret" },
-    protocols: ["paseo.bearer.shared-secret"],
+    // A current host selects fulcra.v1 (no secret echoed); fulcra.auth carries any password encoded; the legacy form
+    // is kept only for token-safe passwords, for hosts from before the change.
+    protocols: ["fulcra.v1", "fulcra.auth.c2hhcmVkLXNlY3JldA", "paseo.bearer.shared-secret"],
+  });
+});
+
+test("keeps relay upgrade credentials out of the socket request", async () => {
+  const mock = createMockTransport();
+  const requests: Array<{ url: string; headers?: Record<string, string>; protocols?: string[] }> =
+    [];
+  const client = new DaemonClient({
+    url: "ws://relay.test/ws?role=client&serverId=srv_test&v=2",
+    clientId: "clsk_relay_auth_test",
+    password: "shared-secret",
+    authHeader: "Bearer shared-secret",
+    e2ee: { enabled: true, daemonPublicKeyB64: "daemon-public-key" },
+    reconnect: { enabled: false },
+    transportFactory: (request) => {
+      requests.push(request);
+      return mock.transport;
+    },
+  });
+  clients.push(client);
+  void client.connect();
+  await vi.waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0]).toEqual({ url: "ws://relay.test/ws?role=client&serverId=srv_test&v=2" });
+});
+
+test("refuses relay password auth without an encrypted hello", async () => {
+  const requests: unknown[] = [];
+  const client = new DaemonClient({
+    url: "ws://relay.test/ws?role=client&serverId=srv_test&v=2",
+    clientId: "clsk_unencrypted_relay_test",
+    password: "shared-secret",
+    connectTimeoutMs: 50,
+    reconnect: { enabled: false },
+    transportFactory: (request) => {
+      requests.push(request);
+      return createMockTransport().transport;
+    },
+  });
+  clients.push(client);
+  await expect(client.connect()).rejects.toThrow("Relay credentials require E2EE");
+  expect(requests).toEqual([]);
+});
+
+test("stops reconnecting after a password rejection on an established connection", async () => {
+  const socket = createMockTransport();
+  let attempts = 0;
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_reconnect_auth_test",
+    password: "old-secret",
+    reconnect: { enabled: true, baseDelayMs: 1, maxDelayMs: 1 },
+    transportFactory: () => {
+      attempts += 1;
+      return socket.transport;
+    },
+  });
+  clients.push(client);
+  const connected = client.connect();
+  socket.triggerOpen();
+  await connected;
+  socket.triggerMessage(JSON.stringify({ type: "hello.rejected", reason: "incorrect_password" }));
+  socket.triggerClose({ code: 4003, reason: "Incorrect password" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(client.authFailureReason).toBe("incorrect_password");
+  expect(attempts).toBe(1);
+});
+
+test("sends a password containing spaces in hello without an invalid WebSocket subprotocol", async () => {
+  const mock = createMockTransport();
+  const transportFactory = vi.fn(() => mock.transport);
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    password: "two words",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen({ preserveSent: true });
+  await connected;
+  expect(transportFactory).toHaveBeenCalledWith({
+    url: "ws://test",
+    headers: {},
+  });
+  expect(JSON.parse(assertStr(mock.sent[0]))).toMatchObject({
+    type: "hello",
+    auth: { kind: "password", password: "two words" },
+  });
+});
+
+test("uses a local credential over a saved password when the desktop bridge provides one", async () => {
+  const mock = createMockTransport();
+  const transportFactory = vi.fn(() => mock.transport);
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "desktop-managed",
+    password: "stale-password",
+    localCredential: async () => "current-local-token",
+    reconnect: { enabled: false },
+    transportFactory,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  await vi.waitFor(() => expect(transportFactory).toHaveBeenCalled());
+  mock.triggerOpen({ preserveSent: true });
+  await connected;
+  expect(transportFactory).toHaveBeenCalledWith({ url: "ws://test", headers: {} });
+  expect(JSON.parse(assertStr(mock.sent[0]))).toMatchObject({
+    type: "hello",
+    auth: { kind: "localCredential", token: "current-local-token" },
+  });
+});
+
+test("uses the saved host password when the desktop bridge has no credential for the target", async () => {
+  const mock = createMockTransport();
+  const transportFactory = vi.fn(() => mock.transport);
+  const localCredential = vi.fn(async () => undefined);
+  const client = new DaemonClient({
+    url: "ws://remote-host",
+    clientId: "remote-saved-host",
+    password: "saved-password",
+    localCredential,
+    reconnect: { enabled: false },
+    transportFactory,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  await vi.waitFor(() => expect(transportFactory).toHaveBeenCalled());
+  mock.triggerOpen({ preserveSent: true });
+  await connected;
+  expect(localCredential).toHaveBeenCalledOnce();
+  expect(JSON.parse(assertStr(mock.sent[0]))).toMatchObject({
+    type: "hello",
+    auth: { kind: "password", password: "saved-password" },
   });
 });
 
@@ -900,6 +1043,8 @@ test("advertises client capabilities in hello", async () => {
       timeline_notifications: true,
       plugin_timeline_items: true,
       workspace_setup_blocked: true,
+      command_centre_permission: true,
+      hello_rejection: true,
       browser_host: {
         supportedCommands: ["list_tabs"],
         hostKind: "desktop app",
@@ -7110,4 +7255,1547 @@ test("reading a file at a commit refuses before sending on a host without the ca
       maxBytes: 1024,
     }),
   );
+});
+
+test.each([true, false])(
+  "P7: catalog wire round trip preserves trusted facts (modern=%s)",
+  async (modern) => {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "trusted-catalog",
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    mock.triggerOpen();
+    await connected;
+    const pending = client.getPluginCatalog();
+    const request = parseSentFrame(mock.sent.at(-1));
+    const catalog = {
+      plugins: [{ id: "ordinary-plugin", clientBundle: "client.js" }],
+      ...(modern
+        ? {
+            trustedHost: { contract: "1.1", boot: "11111111-1111-4111-8111-111111111111" },
+            trustedPlugins: [
+              {
+                id: "orca-organization-next",
+                contract: "1.1",
+                hooks: ["input", "permission", "deny", "mcp", "codex"],
+              },
+            ],
+          }
+        : {}),
+    };
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "plugin.catalog.get.response",
+        payload: { requestId: request.requestId, ...catalog },
+      }),
+    );
+    await expect(pending).resolves.toEqual(catalog);
+    expect(await pending).not.toHaveProperty("requestId");
+    if (!modern) {
+      expect(await pending).not.toHaveProperty("trustedHost");
+      expect(await pending).not.toHaveProperty("trustedPlugins");
+    }
+  },
+);
+
+test("P8 public raw input preserves provenance and correlates its response", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "private-controller",
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen();
+  await connected;
+  const pending = client.invokeRawInput(
+    {
+      type: "cancel_agent_request",
+      agentId: "fixture-agent",
+      inputProvenance: "private-one-use-token",
+    },
+    "cancel_agent_response",
+  );
+  const request = parseSentFrame(mock.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "cancel_agent_request",
+    inputProvenance: "private-one-use-token",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "cancel_agent_response",
+      payload: { requestId: request.requestId, agentId: "fixture-agent", agent: null },
+    }),
+  );
+  await expect(pending).resolves.toMatchObject({ agentId: "fixture-agent", agent: null });
+});
+
+test("raw permission input retains semantic identity and exposes only wire refusal metadata", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "private-controller",
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen();
+  await connected;
+  const requestId = "orca-permission:11111111-1111-4111-8111-111111111111";
+  for (const typed of [true, false]) {
+    const pending = client.invokeRawInput(
+      {
+        type: "agent_permission_response",
+        agentId: "fixture-agent",
+        requestId,
+        response: { behavior: "allow" },
+        inputProvenance: "one-use-token",
+      },
+      "agent_permission_resolved",
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: typed ? "admission_refused" : "handler_error",
+      nativeDispatched: typed ? false : undefined,
+    });
+    expect(parseSentFrame(mock.sent.at(-1))).toMatchObject({
+      requestId,
+      inputProvenance: "one-use-token",
+    });
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "rpc_error",
+        payload: {
+          requestId,
+          error: "Provider says refused",
+          code: typed ? "admission_refused" : "handler_error",
+          ...(typed ? { nativeDispatched: false as const } : {}),
+        },
+      }),
+    );
+    await rejected;
+  }
+});
+
+test.each([4403, 4426])(
+  "REPAIR r1: raw close code %s alone does NOT trigger pairing",
+  async (code) => {
+    vi.useFakeTimers();
+    const first = createMockTransport();
+    const next = createMockTransport();
+    const factory = vi.fn().mockReturnValueOnce(first.transport).mockReturnValue(next.transport);
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "repair-fixture",
+      e2ee: { enabled: true, daemonPublicKeyB64: "fixture-key" },
+      transportFactory: factory,
+      reconnect: { enabled: true, baseDelayMs: 10, maxDelayMs: 10 },
+    });
+    clients.push(client);
+    try {
+      const connected = client.connect();
+      first.triggerOpen();
+      await connected;
+      first.triggerClose({ code, reason: "This device was removed. Pair again" });
+      expect(client.pairingRequired).toBeNull();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(factory).toHaveBeenCalledTimes(2);
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  },
+);
+
+test.each([4403, 4426])("REPAIR authenticated close %s stops client reconnect", async (code) => {
+  vi.useFakeTimers();
+  const transport = createMockTransport();
+  const factory = vi.fn(() => transport.transport);
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "repair-fixture",
+    e2ee: { enabled: true, daemonPublicKeyB64: "fixture-key" },
+    transportFactory: factory,
+    reconnect: { enabled: true, baseDelayMs: 10 },
+  });
+  clients.push(client);
+  try {
+    const connected = client.connect();
+    transport.triggerOpen();
+    await connected;
+    transport.triggerClose({ code, trusted: true });
+    expect(client.pairingRequired).toBe(code === 4403 ? "device-removed" : "pairing-upgraded");
+    client.ensureConnected({ verify: true });
+    await expect(client.connect()).rejects.toMatchObject({ name: "PairingRequiredError" });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(factory).toHaveBeenCalledTimes(1);
+  } finally {
+    await client.close();
+    vi.useRealTimers();
+  }
+});
+
+test("REPAIR authenticated unregistered device before server info requests fresh pairing", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "repair-fixture",
+    e2ee: { enabled: true, daemonPublicKeyB64: "fixture-key" },
+    transportFactory: () => transport.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  const refused = expect(connected).rejects.toMatchObject({ pairingRequired: "pairing-upgraded" });
+  transport.triggerClose({ code: 4403, trusted: true });
+  await refused;
+  expect(client.pairingRequired).toBe("pairing-upgraded");
+});
+
+// L42: a host that never answers the paired-devices list (older hosts dropped the reply) must fail within the
+// caller's timeout so the pairing modal can say so and offer Retry, not wait for the 60 s default.
+test("rejects a paired-devices list the host never answers, after the caller's timeout", async () => {
+  vi.useFakeTimers();
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "pairing-fixture",
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  try {
+    const connected = client.connect();
+    mock.triggerOpen();
+    await connected;
+    const pending = client.listPairedDevices({ timeout: 15_000 });
+    const rejected = expect(pending).rejects.toThrow(/timed? ?out/i);
+    expect(parseSentFrame(mock.sent.at(-1))).toMatchObject({
+      type: "daemon.list_paired_devices.request",
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejected;
+  } finally {
+    await client.close();
+    vi.useRealTimers();
+  }
+});
+
+// F01/F02: any password is carried in a valid form, and an error from opening the connection never repeats it.
+test("carries any password in valid subprotocols and headers, and never reports it", async () => {
+  const password = `${Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)).join("")}日本🔐`;
+  const seen: { protocols?: string[]; headers?: Record<string, string> } = {};
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "credential-fixture",
+    password,
+    reconnect: { enabled: false },
+    transportFactory: (options) => {
+      Object.assign(seen, { protocols: options.protocols, headers: options.headers });
+      // What a browser does when given an invalid subprotocol: its message names the protocol.
+      throw new Error(
+        `Failed to construct 'WebSocket': The subprotocol '${options.protocols?.[1]}' is invalid.`,
+      );
+    },
+  });
+  clients.push(client);
+  const failure = await client.connect().then(
+    () => null,
+    (error: unknown) => error as Error,
+  );
+  for (const protocol of seen.protocols ?? [])
+    expect(protocol).toMatch(/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/);
+  expect(seen.headers?.Authorization).toMatch(/^Bearer [\x21-\x7e]+$/);
+  const reported = [failure?.message ?? "", client.lastError ?? ""].join("\n");
+  expect(reported).not.toContain(password);
+  expect(reported).not.toContain(seen.protocols?.[1] ?? "never");
+  expect(reported).toContain("Couldn't open a connection to this Mac");
+});
+
+// Source transport boundary. The release producer/Session admission and generated validators
+// require their own composed evidence; a client receipt never grants authority.
+async function nativeQueueClient(advertise = true) {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "native_queue_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: advertise ? { nativeQueuedMessages: true } : {} });
+  await connecting;
+  return { client, mock };
+}
+function nativeQueueResponse(
+  mock: ReturnType<typeof createMockTransport>,
+  request: Record<string, unknown>,
+  receipt?: NativeQueueReceipt,
+  accepted = true,
+) {
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "target",
+        accepted,
+        error: accepted ? null : "Native queue refused",
+        ...(receipt ? { nativeReceipt: receipt } : {}),
+      },
+    }),
+  );
+}
+function nativeQueueRequests(mock: ReturnType<typeof createMockTransport>) {
+  return mock.sent
+    .filter((data) => typeof data === "string")
+    .map((data) => JSON.parse(data as string))
+    .filter(
+      (frame) => frame.type === "session" && frame.message.type === "send_agent_message_request",
+    )
+    .map((frame) => frame.message);
+}
+test("native queue client gates absent feature with no send or fallback", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  await expect(
+    client.sendNativeQueuedMessage("target", "draft", { messageId: "stable-id" }),
+  ).rejects.toMatchObject({ code: "NATIVE_QUEUE_UNSUPPORTED" });
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
+});
+test.each([
+  { messageId: "" },
+  { messageId: " padded " },
+  { messageId: "x".repeat(257) },
+  { messageId: "stable-id", images: [{ data: "fixture", mimeType: "image/png" }] },
+  { messageId: "stable-id", activeTurnBehavior: "interrupt" as const },
+  { messageId: "stable-id", activeTurnBehavior: "steer" as const },
+  {
+    messageId: "stable-id",
+    attachments: [
+      {
+        type: "uploaded_file" as const,
+        id: "fixture",
+        fileName: "fixture.txt",
+        mimeType: "text/plain",
+        size: 1,
+        path: "/fixture.txt",
+      },
+    ],
+  },
+])("native queue client refuses incompatible input without writes: %j", async (options) => {
+  const { client, mock } = await nativeQueueClient();
+  await expect(client.sendNativeQueuedMessage("target", "draft", options)).rejects.toMatchObject({
+    code: "NATIVE_QUEUE_INVALID",
+  });
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
+});
+test("native queue client refuses slash command before writes", async () => {
+  const { client, mock } = await nativeQueueClient();
+  await expect(
+    client.sendNativeQueuedMessage("target", " /command", { messageId: "stable-id" }),
+  ).rejects.toMatchObject({ code: "NATIVE_QUEUE_INVALID" });
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
+});
+test.each(["queued", "dispatching", "delivered", "refused", "cancelled", "uncertain"] as const)(
+  "native queue client preserves truthful %s receipt and immutable ID",
+  async (state) => {
+    const { client, mock } = await nativeQueueClient();
+    const options = { messageId: "stable-id" };
+    const pending = client.sendNativeQueuedMessage("target", "retained draft", options);
+    const request = nativeQueueRequests(mock)[0];
+    options.messageId = "retargeted-id";
+    expect(request).toMatchObject({
+      type: "send_agent_message_request",
+      agentId: "target",
+      text: "retained draft",
+      messageId: "stable-id",
+      nativeQueue: true,
+    });
+    expect(request).not.toHaveProperty("activeTurnBehavior");
+    const receipt = { messageId: "stable-id", state, pendingCount: 1 };
+    nativeQueueResponse(
+      mock,
+      request,
+      receipt,
+      ["queued", "dispatching", "delivered"].includes(state),
+    );
+    expect(await pending).toEqual(receipt);
+    expect(Object.isFrozen(await pending)).toBe(true);
+    expect(nativeQueueRequests(mock)).toHaveLength(1);
+  },
+);
+test.each(["missing", "mismatched", "false-positive", "false-negative"])(
+  "native queue client keeps draft on %s receipt without replay",
+  async (kind) => {
+    const { client, mock } = await nativeQueueClient();
+    const pending = client.sendNativeQueuedMessage("target", "private fixture draft", {
+      messageId: "stable-id",
+    });
+    const request = nativeQueueRequests(mock)[0];
+    nativeQueueResponse(
+      mock,
+      request,
+      kind === "missing"
+        ? undefined
+        : {
+            messageId: kind === "mismatched" ? "wrong-id" : "stable-id",
+            state: kind === "false-negative" ? "refused" : "queued",
+            pendingCount: 0,
+          },
+      kind !== "false-positive",
+    );
+    const error = await pending.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(NativeQueueUncertainError);
+    expect(error).toMatchObject({
+      code: "NATIVE_QUEUE_UNCERTAIN",
+      messageId: "stable-id",
+      draft: { agentId: "target", text: "private fixture draft", messageId: "stable-id" },
+    });
+    expect(JSON.stringify(error)).not.toContain("private fixture draft");
+    expect(Object.isFrozen((error as NativeQueueUncertainError).draft)).toBe(true);
+    expect(nativeQueueRequests(mock)).toHaveLength(1);
+  },
+);
+test("native queue client reports pre-admission refusal with no fallback", async () => {
+  const { client, mock } = await nativeQueueClient();
+  const pending = client.sendNativeQueuedMessage("target", "draft", { messageId: "stable-id" });
+  nativeQueueResponse(mock, nativeQueueRequests(mock)[0], undefined, false);
+  await expect(pending).rejects.toMatchObject({ code: "NATIVE_QUEUE_REFUSED" });
+  expect(nativeQueueRequests(mock)).toHaveLength(1);
+});
+test("native queue client retains exact source authorization refusal and immutable draft", async () => {
+  const { client, mock } = await nativeQueueClient();
+  const pending = client.sendNativeQueuedMessage("target", "private retained draft", {
+    messageId: "stable-id",
+  });
+  const request = nativeQueueRequests(mock)[0];
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "target",
+        accepted: false,
+        error: "Authenticated delegated operation required",
+      },
+    }),
+  );
+  const refusal = await pending.catch((caught: unknown) => caught);
+  expect(refusal).toMatchObject({
+    code: "NATIVE_QUEUE_REFUSED",
+    message: "Authenticated delegated operation required",
+    messageId: "stable-id",
+    draft: { agentId: "target", text: "private retained draft", messageId: "stable-id" },
+  });
+  expect(Object.isFrozen((refusal as { draft: unknown }).draft)).toBe(true);
+  expect(JSON.stringify(refusal)).not.toContain("private retained draft");
+  expect(nativeQueueRequests(mock)).toHaveLength(1);
+});
+test.each([
+  {
+    code: "access_denied",
+    marker: undefined,
+    text: "Session is not authorized for send_agent_message_request",
+  },
+  { code: "admission_refused", marker: false as const, text: "Admission refused" },
+])(
+  "native queue client preserves actual known RPC refusal and draft: $code",
+  async ({ code, marker, text }) => {
+    const { client, mock } = await nativeQueueClient();
+    const pending = client.sendNativeQueuedMessage("target", "private retained draft", {
+      messageId: "stable-id",
+    });
+    const request = nativeQueueRequests(mock)[0];
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "rpc_error",
+        payload: {
+          requestId: request.requestId,
+          requestType: "send_agent_message_request",
+          code,
+          error: text,
+          ...(marker === false ? { nativeDispatched: false } : {}),
+        },
+      }),
+    );
+    const refusal = await pending.catch((caught: unknown) => caught);
+    expect(refusal).toMatchObject({
+      code,
+      messageId: "stable-id",
+      draft: { agentId: "target", text: "private retained draft", messageId: "stable-id" },
+    });
+    expect((refusal as Error).message).toBe(
+      `${text} requestType=send_agent_message_request code=${code}`,
+    );
+    expect((refusal as { nativeDispatched?: false }).nativeDispatched).toBe(marker);
+    expect(Object.isFrozen((refusal as { draft: unknown }).draft)).toBe(true);
+    expect(JSON.stringify(refusal)).not.toContain("private retained draft");
+    expect(nativeQueueRequests(mock)).toHaveLength(1);
+  },
+);
+test.each([
+  { code: "handler_error", marker: undefined },
+  { code: "handler_error", marker: false as const },
+  { code: "admission_refused", marker: undefined },
+])(
+  "native queue client never derives known refusal from text or unbranded marker: %j",
+  async ({ code, marker }) => {
+    const { client, mock } = await nativeQueueClient();
+    const pending = client.sendNativeQueuedMessage("target", "retained draft", {
+      messageId: "stable-id",
+    });
+    const request = nativeQueueRequests(mock)[0];
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "rpc_error",
+        payload: {
+          requestId: request.requestId,
+          requestType: "send_agent_message_request",
+          code,
+          error: "Session is not authorized for send_agent_message_request",
+          ...(marker === false ? { nativeDispatched: false } : {}),
+        },
+      }),
+    );
+    await expect(pending).rejects.toMatchObject({
+      code: "NATIVE_QUEUE_UNCERTAIN",
+      draft: { messageId: "stable-id", text: "retained draft" },
+    });
+    expect(nativeQueueRequests(mock)).toHaveLength(1);
+  },
+);
+test("native queue client lost acknowledgement retains same ID and never retries after timeout", async () => {
+  vi.useFakeTimers();
+  const { client, mock } = await nativeQueueClient();
+  const options = { messageId: "stable-id" };
+  const pending = client.sendNativeQueuedMessage("target", "retained draft", options);
+  const failed = expect(pending).rejects.toMatchObject({
+    code: "NATIVE_QUEUE_UNCERTAIN",
+    draft: { messageId: "stable-id", text: "retained draft" },
+  });
+  options.messageId = "changed-while-waiting";
+  await vi.advanceTimersByTimeAsync(60001);
+  await failed;
+  await vi.advanceTimersByTimeAsync(60001);
+  expect(nativeQueueRequests(mock)).toHaveLength(1);
+  expect(nativeQueueRequests(mock)[0].messageId).toBe("stable-id");
+});
+test("native queue client disconnect loses ack without resend", async () => {
+  const { client, mock } = await nativeQueueClient();
+  const pending = client.sendNativeQueuedMessage("target", "retained draft", {
+    messageId: "stable-id",
+  });
+  const failed = expect(pending).rejects.toMatchObject({
+    code: "NATIVE_QUEUE_UNCERTAIN",
+    messageId: "stable-id",
+  });
+  mock.triggerClose({ code: 1006 });
+  await failed;
+  expect(nativeQueueRequests(mock)).toHaveLength(1);
+});
+test("native queue client leaves ordinary send untouched on an unadvertised host", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const pending = client.sendAgentMessage("target", "ordinary draft", { messageId: "ordinary-id" });
+  const request = nativeQueueRequests(mock)[0];
+  expect(request).not.toHaveProperty("nativeQueue");
+  nativeQueueResponse(mock, request);
+  await expect(pending).resolves.toBeUndefined();
+});
+
+test("native queue client does not queue across reconnect or reuse the old host feature", async () => {
+  const { client, mock } = await nativeQueueClient();
+  mock.triggerClose({ code: 1006 });
+  await expect(
+    client.sendNativeQueuedMessage("target", "draft", { messageId: "stable-id" }),
+  ).rejects.toMatchObject({ code: "NATIVE_QUEUE_UNSUPPORTED" });
+  const reconnecting = client.connect();
+  mock.triggerOpen({ preserveSent: true, features: {} });
+  await reconnecting;
+  await expect(
+    client.sendNativeQueuedMessage("target", "draft", { messageId: "stable-id" }),
+  ).rejects.toMatchObject({ code: "NATIVE_QUEUE_UNSUPPORTED" });
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
+});
+
+const ownerReportUuid = "00000000-0000-4000-8000-000000000001";
+function ownerReportInput() {
+  return {
+    identity: {
+      agentId: ownerReportUuid,
+      instanceId: ownerReportUuid,
+      sessionId: "native",
+      boot: ownerReportUuid,
+    },
+    expectedEpoch: ownerReportUuid,
+    scope: { projectId: ownerReportUuid, taskId: ownerReportUuid },
+  };
+}
+async function ownerReportClient(advertise = true) {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "owner_report_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: advertise ? { nativeOwnerReportInbox: true } : {} });
+  await connecting;
+  return { client, mock };
+}
+function ownerReportRequest(mock: ReturnType<typeof createMockTransport>) {
+  return mock.sent
+    .filter((frame) => typeof frame === "string")
+    .map((frame) => JSON.parse(frame as string))
+    .find((frame) => frame.message?.type === "native.report.inbox.request")?.message;
+}
+function ownerReportResponse(
+  mock: ReturnType<typeof createMockTransport>,
+  requestId: string,
+  scope = ownerReportInput().scope,
+) {
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "native.report.inbox.response",
+      payload: {
+        requestId,
+        output: { scope, events: [], overflow: [], visibleMetadataCount: 0, bounded: true },
+      },
+    }),
+  );
+}
+test("owner report client refuses absent feature without sending", async () => {
+  const { client, mock } = await ownerReportClient(false);
+  await expect(client.readNativeOwnerReportInbox(ownerReportInput())).rejects.toThrow(
+    "unavailable",
+  );
+  expect(ownerReportRequest(mock)).toBeUndefined();
+});
+test("owner report client captures input and correlates a bounded scoped response", async () => {
+  const { client, mock } = await ownerReportClient();
+  const input = ownerReportInput();
+  const pending = client.readNativeOwnerReportInbox(input);
+  input.scope.taskId = "00000000-0000-4000-8000-000000000002";
+  await vi.waitFor(() => expect(ownerReportRequest(mock)).toBeDefined());
+  const request = ownerReportRequest(mock);
+  expect(request.scope.taskId).toBe(ownerReportUuid);
+  ownerReportResponse(mock, request.requestId);
+  await expect(pending).resolves.toMatchObject({ bounded: true, visibleMetadataCount: 0 });
+});
+test("owner report client rejects a different response scope", async () => {
+  const { client, mock } = await ownerReportClient();
+  const pending = client.readNativeOwnerReportInbox(ownerReportInput());
+  const rejected = expect(pending).rejects.toThrow("scope");
+  await vi.waitFor(() => expect(ownerReportRequest(mock)).toBeDefined());
+  ownerReportResponse(mock, ownerReportRequest(mock).requestId, {
+    projectId: ownerReportUuid,
+    taskId: "00000000-0000-4000-8000-000000000002",
+  });
+  await rejected;
+});
+test("owner report client preserves host authorization refusal without fallback", async () => {
+  const { client, mock } = await ownerReportClient();
+  const pending = client.readNativeOwnerReportInbox(ownerReportInput());
+  const rejected = expect(pending).rejects.toMatchObject({ code: "access_denied" });
+  await vi.waitFor(() => expect(ownerReportRequest(mock)).toBeDefined());
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "rpc_error",
+      payload: {
+        requestId: ownerReportRequest(mock).requestId,
+        requestType: "native.report.inbox.request",
+        code: "access_denied",
+        error: "Session is not authorized for native.report.inbox.request",
+      },
+    }),
+  );
+  await rejected;
+  expect(
+    mock.sent.filter(
+      (frame) => typeof frame === "string" && frame.includes("native.report.inbox.request"),
+    ),
+  ).toHaveLength(1);
+});
+test("owner report client disconnect refuses the pending original read", async () => {
+  const { client, mock } = await ownerReportClient();
+  const pending = client.readNativeOwnerReportInbox(ownerReportInput());
+  const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(ownerReportRequest(mock)).toBeDefined());
+  mock.triggerClose();
+  await rejected;
+});
+
+async function evidenceIndexClient(advertise = true) {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "evidence_index_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: advertise ? { nativeEvidenceIndex: true } : {} });
+  await connecting;
+  return { client, mock };
+}
+function evidenceIndexRequest(mock: ReturnType<typeof createMockTransport>) {
+  return mock.sent
+    .filter((frame) => typeof frame === "string")
+    .map((frame) => JSON.parse(frame as string))
+    .find((frame) => frame.message?.type === "native.evidence.index.request")?.message;
+}
+function evidenceIndexOutput() {
+  const now = Date.now();
+  return {
+    scope: ownerReportInput().scope,
+    entries: [
+      {
+        id: ownerReportUuid,
+        operationDigest: "a".repeat(64),
+        scope: ownerReportInput().scope,
+        at: now - 100,
+        expiresAt: now + 10000,
+        fact: { kind: "file_touch", basis: "native_provider_ack", fileCount: 1 },
+        metadataCommitted: true,
+      },
+    ],
+    bounded: true,
+    contentReadAvailable: false,
+  };
+}
+function evidenceIndexResponse(
+  mock: ReturnType<typeof createMockTransport>,
+  requestId: string,
+  output = evidenceIndexOutput(),
+) {
+  mock.triggerMessage(
+    wrapSessionMessage({ type: "native.evidence.index.response", payload: { requestId, output } }),
+  );
+}
+test("evidence index client refuses absent feature without sending", async () => {
+  const { client, mock } = await evidenceIndexClient(false);
+  await expect(client.readNativeEvidenceIndex(ownerReportInput())).rejects.toThrow("unavailable");
+  expect(evidenceIndexRequest(mock)).toBeUndefined();
+});
+test("evidence index client freezes original scope and returns metadata without content rights", async () => {
+  const { client, mock } = await evidenceIndexClient();
+  const input = ownerReportInput();
+  const pending = client.readNativeEvidenceIndex(input);
+  input.scope.taskId = "00000000-0000-4000-8000-000000000002";
+  await vi.waitFor(() => expect(evidenceIndexRequest(mock)).toBeDefined());
+  const request = evidenceIndexRequest(mock);
+  expect(request.scope.taskId).toBe(ownerReportUuid);
+  evidenceIndexResponse(mock, request.requestId);
+  await expect(pending).resolves.toMatchObject({
+    bounded: true,
+    contentReadAvailable: false,
+    entries: [{ fact: { kind: "file_touch", basis: "native_provider_ack" } }],
+  });
+});
+test.each(["scope", "expired", "future", "overlong"])(
+  "evidence index client refuses invalid row %s",
+  async (kind) => {
+    const { client, mock } = await evidenceIndexClient();
+    const pending = client.readNativeEvidenceIndex(ownerReportInput());
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(evidenceIndexRequest(mock)).toBeDefined());
+    const output = evidenceIndexOutput();
+    if (kind === "scope") output.entries[0].scope.taskId = "00000000-0000-4000-8000-000000000002";
+    if (kind === "expired") output.entries[0].expiresAt = Date.now() - 1;
+    if (kind === "future") output.entries[0].at = Date.now() + 100000;
+    if (kind === "overlong") output.entries[0].expiresAt = output.entries[0].at + 21600001;
+    evidenceIndexResponse(mock, evidenceIndexRequest(mock).requestId, output);
+    await rejected;
+  },
+);
+test("evidence index client preserves actual owner refusal with one request and no fallback", async () => {
+  const { client, mock } = await evidenceIndexClient();
+  const pending = client.readNativeEvidenceIndex(ownerReportInput());
+  const rejected = expect(pending).rejects.toMatchObject({ code: "access_denied" });
+  await vi.waitFor(() => expect(evidenceIndexRequest(mock)).toBeDefined());
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "rpc_error",
+      payload: {
+        requestId: evidenceIndexRequest(mock).requestId,
+        requestType: "native.evidence.index.request",
+        code: "access_denied",
+        error: "Session is not authorized for native.evidence.index.request",
+      },
+    }),
+  );
+  await rejected;
+  expect(
+    mock.sent.filter(
+      (frame) => typeof frame === "string" && frame.includes("native.evidence.index.request"),
+    ),
+  ).toHaveLength(1);
+});
+test("evidence index client disconnect refuses original pending read", async () => {
+  const { client, mock } = await evidenceIndexClient();
+  const pending = client.readNativeEvidenceIndex(ownerReportInput());
+  const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(evidenceIndexRequest(mock)).toBeDefined());
+  mock.triggerClose();
+  await rejected;
+});
+
+async function managedArtifactClient(advertise = true) {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "managed_artifact_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: advertise ? { managedArtifactIndex: true } : {} });
+  await connecting;
+  return { client, mock };
+}
+function managedArtifactRequest(mock: ReturnType<typeof createMockTransport>) {
+  return mock.sent
+    .filter((frame) => typeof frame === "string")
+    .map((frame) => JSON.parse(frame as string))
+    .find((frame) => frame.message?.type === "native.managed-artifacts.index.request")?.message;
+}
+function managedArtifactOutput() {
+  const now = Date.now();
+  return {
+    scope: ownerReportInput().scope,
+    entries: [
+      {
+        id: ownerReportUuid,
+        operationDigest: "a".repeat(64),
+        scope: ownerReportInput().scope,
+        at: now - 100,
+        expiresAt: now + 10000,
+        fact: {
+          kind: "managed_artifact",
+          basis: "host_materialized_declared_output",
+          sha256: "b".repeat(64),
+          size: 12,
+          contentAvailable: false,
+        },
+        metadataCommitted: true,
+      },
+    ],
+    bounded: true,
+    contentReadAvailable: false,
+  };
+}
+function managedArtifactResponse(
+  mock: ReturnType<typeof createMockTransport>,
+  requestId: string,
+  output = managedArtifactOutput(),
+) {
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "native.managed-artifacts.index.response",
+      payload: { requestId, output },
+    }),
+  );
+}
+test("managed artifact client refuses absent feature without sending", async () => {
+  const { client, mock } = await managedArtifactClient(false);
+  await expect(client.readManagedArtifactIndex(ownerReportInput())).rejects.toThrow("unavailable");
+  expect(managedArtifactRequest(mock)).toBeUndefined();
+});
+test("managed artifact client freezes original scope and returns metadata without content rights", async () => {
+  const { client, mock } = await managedArtifactClient();
+  const input = ownerReportInput();
+  const pending = client.readManagedArtifactIndex(input);
+  input.scope.taskId = "00000000-0000-4000-8000-000000000002";
+  await vi.waitFor(() => expect(managedArtifactRequest(mock)).toBeDefined());
+  const request = managedArtifactRequest(mock);
+  expect(request.scope.taskId).toBe(ownerReportUuid);
+  managedArtifactResponse(mock, request.requestId);
+  await expect(pending).resolves.toMatchObject({
+    bounded: true,
+    contentReadAvailable: false,
+    entries: [
+      {
+        fact: {
+          kind: "managed_artifact",
+          basis: "host_materialized_declared_output",
+          contentAvailable: false,
+        },
+      },
+    ],
+  });
+});
+test.each(["scope", "expired", "future", "overlong"])(
+  "managed artifact client refuses invalid row %s",
+  async (kind) => {
+    const { client, mock } = await managedArtifactClient();
+    const pending = client.readManagedArtifactIndex(ownerReportInput());
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(managedArtifactRequest(mock)).toBeDefined());
+    const output = managedArtifactOutput();
+    if (kind === "scope") output.entries[0].scope.taskId = "00000000-0000-4000-8000-000000000002";
+    if (kind === "expired") output.entries[0].expiresAt = Date.now() - 1;
+    if (kind === "future") output.entries[0].at = Date.now() + 100000;
+    if (kind === "overlong") output.entries[0].expiresAt = output.entries[0].at + 21600001;
+    managedArtifactResponse(mock, managedArtifactRequest(mock).requestId, output);
+    await rejected;
+  },
+);
+test("managed artifact client preserves actual owner refusal with one request and no fallback", async () => {
+  const { client, mock } = await managedArtifactClient();
+  const pending = client.readManagedArtifactIndex(ownerReportInput());
+  const rejected = expect(pending).rejects.toMatchObject({ code: "access_denied" });
+  await vi.waitFor(() => expect(managedArtifactRequest(mock)).toBeDefined());
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "rpc_error",
+      payload: {
+        requestId: managedArtifactRequest(mock).requestId,
+        requestType: "native.managed-artifacts.index.request",
+        code: "access_denied",
+        error: "Session is not authorized for native.managed-artifacts.index.request",
+      },
+    }),
+  );
+  await rejected;
+  expect(
+    mock.sent.filter(
+      (frame) =>
+        typeof frame === "string" && frame.includes("native.managed-artifacts.index.request"),
+    ),
+  ).toHaveLength(1);
+});
+test("managed artifact client disconnect refuses original pending read", async () => {
+  const { client, mock } = await managedArtifactClient();
+  const pending = client.readManagedArtifactIndex(ownerReportInput());
+  const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(managedArtifactRequest(mock)).toBeDefined());
+  mock.triggerClose();
+  await rejected;
+});
+
+test("managed artifact client rejects duplicate opaque IDs", async () => {
+  const { client, mock } = await managedArtifactClient();
+  const pending = client.readManagedArtifactIndex(ownerReportInput());
+  const rejected = expect(pending).rejects.toThrow("duplicate");
+  await vi.waitFor(() => expect(managedArtifactRequest(mock)).toBeDefined());
+  const output = managedArtifactOutput();
+  output.entries.push({ ...output.entries[0] });
+  managedArtifactResponse(mock, managedArtifactRequest(mock).requestId, output);
+  await rejected;
+});
+test("managed artifact client refuses response after original host replacement", async () => {
+  const { client, mock } = await managedArtifactClient();
+  const pending = client.readManagedArtifactIndex(ownerReportInput());
+  const rejected = expect(pending).rejects.toThrow("connection changed");
+  await vi.waitFor(() => expect(managedArtifactRequest(mock)).toBeDefined());
+  const request = managedArtifactRequest(mock);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "status",
+      payload: {
+        status: "server_info",
+        serverId: "replacement",
+        hostname: null,
+        version: null,
+        features: { managedArtifactIndex: true },
+      },
+    }),
+  );
+  managedArtifactResponse(mock, request.requestId);
+  await rejected;
+});
+test("managed artifact client ignores unrelated request correlation", async () => {
+  const { client, mock } = await managedArtifactClient();
+  const pending = client.readManagedArtifactIndex(ownerReportInput());
+  let settled = false;
+  void pending.then(() => {
+    settled = true;
+    return settled;
+  });
+  await vi.waitFor(() => expect(managedArtifactRequest(mock)).toBeDefined());
+  managedArtifactResponse(mock, "00000000-0000-4000-8000-000000000099");
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  managedArtifactResponse(mock, managedArtifactRequest(mock).requestId);
+  await expect(pending).resolves.toMatchObject({ contentReadAvailable: false });
+});
+
+async function managedContentClient(advertise = true) {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "managed_content_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: advertise ? { managedArtifactContent: true } : {} });
+  await connecting;
+  return { client, mock };
+}
+function managedContentInput() {
+  return {
+    ...ownerReportInput(),
+    requestId: ownerReportUuid,
+    grantId: ownerReportUuid,
+    grantRevision: ownerReportUuid,
+    artifactId: ownerReportUuid,
+    offset: 0,
+    length: 4,
+  };
+}
+function managedContentRequest(mock: ReturnType<typeof createMockTransport>) {
+  return mock.sent
+    .filter((frame) => typeof frame === "string")
+    .map((frame) => JSON.parse(frame as string))
+    .find((frame) => frame.message?.type === "native.managed-artifacts.content.request")?.message;
+}
+function managedContentOutput() {
+  return {
+    requestId: ownerReportUuid,
+    grantId: ownerReportUuid,
+    grantRevision: ownerReportUuid,
+    artifactId: ownerReportUuid,
+    scope: ownerReportInput().scope,
+    offset: 0,
+    length: 4,
+    expiresAt: Date.now() + 10000,
+    encoding: "base64",
+    contentType: "text/plain",
+    data: "dGVzdA==",
+    eof: true,
+  };
+}
+function replyManagedContent(
+  mock: ReturnType<typeof createMockTransport>,
+  output = managedContentOutput(),
+  requestId = ownerReportUuid,
+) {
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "native.managed-artifacts.content.response",
+      payload: { requestId, output },
+    }),
+  );
+}
+test("managed content client refuses missing availability without sending", async () => {
+  const { client, mock } = await managedContentClient(false);
+  await expect(client.readManagedArtifactContent(managedContentInput())).rejects.toThrow(
+    "unavailable",
+  );
+  expect(managedContentRequest(mock)).toBeUndefined();
+});
+test("managed content client snapshots the explicit request and returns only the bound text range", async () => {
+  const { client, mock } = await managedContentClient();
+  const input = managedContentInput();
+  const pending = client.readManagedArtifactContent(input);
+  input.scope.taskId = "00000000-0000-4000-8000-000000000002";
+  await vi.waitFor(() => expect(managedContentRequest(mock)).toBeDefined());
+  expect(managedContentRequest(mock).scope.taskId).toBe(ownerReportUuid);
+  replyManagedContent(mock);
+  await expect(pending).resolves.toMatchObject({ data: "dGVzdA==", contentType: "text/plain" });
+  await expect(client.readManagedArtifactContent(managedContentInput())).rejects.toThrow(
+    "already attempted",
+  );
+});
+test.each(["grant", "revision", "artifact", "scope", "offset", "expiry", "length", "encoding"])(
+  "managed content client refuses mismatched %s",
+  async (kind) => {
+    const { client, mock } = await managedContentClient();
+    const pending = client.readManagedArtifactContent(managedContentInput());
+    await vi.waitFor(() => expect(managedContentRequest(mock)).toBeDefined());
+    const output = managedContentOutput();
+    const other = "00000000-0000-4000-8000-000000000002";
+    if (kind === "grant") output.grantId = other;
+    if (kind === "revision") output.grantRevision = other;
+    if (kind === "artifact") output.artifactId = other;
+    if (kind === "scope") output.scope.taskId = other;
+    if (kind === "offset") output.offset = 1;
+    if (kind === "expiry") output.expiresAt = Date.now() - 1;
+    if (kind === "length") output.length = 5;
+    if (kind === "encoding") output.data = "YWJj";
+    replyManagedContent(mock, output);
+    await expect(pending).rejects.toThrow();
+  },
+);
+test("managed content client cancels original publication without refund or replay", async () => {
+  const { client, mock } = await managedContentClient();
+  const abort = new AbortController();
+  const pending = client.readManagedArtifactContent(managedContentInput(), {
+    signal: abort.signal,
+  });
+  await vi.waitFor(() => expect(managedContentRequest(mock)).toBeDefined());
+  abort.abort();
+  replyManagedContent(mock);
+  await expect(pending).rejects.toThrow("cancelled");
+  await expect(client.readManagedArtifactContent(managedContentInput())).rejects.toThrow(
+    "already attempted",
+  );
+});
+test("managed content client preserves host refusal and never sends the same attempt again", async () => {
+  const { client, mock } = await managedContentClient();
+  const pending = client.readManagedArtifactContent(managedContentInput());
+  await vi.waitFor(() => expect(managedContentRequest(mock)).toBeDefined());
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "rpc_error",
+      payload: {
+        requestId: ownerReportUuid,
+        requestType: "native.managed-artifacts.content.request",
+        code: "access_denied",
+        error: "Native artifact content refused",
+      },
+    }),
+  );
+  await expect(pending).rejects.toThrow("Native artifact content refused");
+  await expect(client.readManagedArtifactContent(managedContentInput())).rejects.toThrow(
+    "already attempted",
+  );
+});
+
+test("managed content client ignores unrelated reply correlation", async () => {
+  const { client, mock } = await managedContentClient();
+  const pending = client.readManagedArtifactContent(managedContentInput());
+  let settled = false;
+  void pending.then(() => {
+    settled = true;
+    return settled;
+  });
+  await vi.waitFor(() => expect(managedContentRequest(mock)).toBeDefined());
+  replyManagedContent(mock, managedContentOutput(), "00000000-0000-4000-8000-000000000099");
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  replyManagedContent(mock);
+  await expect(pending).resolves.toMatchObject({ contentType: "text/plain" });
+});
+test("managed content client refuses original host replacement", async () => {
+  const { client, mock } = await managedContentClient();
+  const pending = client.readManagedArtifactContent(managedContentInput());
+  const rejected = expect(pending).rejects.toThrow("connection changed");
+  await vi.waitFor(() => expect(managedContentRequest(mock)).toBeDefined());
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "status",
+      payload: {
+        status: "server_info",
+        serverId: "replacement",
+        hostname: null,
+        version: null,
+        features: { managedArtifactContent: true },
+      },
+    }),
+  );
+  replyManagedContent(mock);
+  await rejected;
+});
+
+async function gitDraftClient(advertise = true) {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "git_draft_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: advertise ? { gitAiDrafts: true } : {} });
+  await connecting;
+  return { client, mock };
+}
+function gitDraftRequest(mock: ReturnType<typeof createMockTransport>) {
+  return mock.sent
+    .filter((frame) => typeof frame === "string")
+    .map((frame) => JSON.parse(frame as string))
+    .find((frame) => frame.message?.type === "checkout.git_ai.draft.request")?.message;
+}
+test("Git draft client requires explicit capability without invoking an ordinary commit", async () => {
+  const { client, mock } = await gitDraftClient(false);
+  await expect(client.requestGitAiDraft(ownerReportUuid, "commit-message")).rejects.toThrow();
+  expect(gitDraftRequest(mock)).toBeUndefined();
+});
+test("Git draft client sends kind-only selected workspace and returns editor wording", async () => {
+  const { client, mock } = await gitDraftClient();
+  const pending = client.requestGitAiDraft(ownerReportUuid, "commit-message");
+  await vi.waitFor(() => expect(gitDraftRequest(mock)).toBeDefined());
+  const request = gitDraftRequest(mock);
+  expect(Object.keys(request).sort()).toEqual(["kind", "requestId", "type", "workspaceId"]);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "checkout.git_ai.draft.response",
+      payload: {
+        requestId: request.requestId,
+        workspaceId: request.workspaceId,
+        kind: request.kind,
+        result: { status: "ok", draft: { kind: "commit-message", message: "Reviewed subject" } },
+      },
+    }),
+  );
+  await expect(pending).resolves.toEqual({ kind: "commit-message", message: "Reviewed subject" });
+  expect(
+    mock.sent.filter(
+      (frame) => typeof frame === "string" && frame.includes("checkout_commit_request"),
+    ),
+  ).toHaveLength(0);
+});
+test("Git draft client preserves an explicit refusal and never retries or commits", async () => {
+  const { client, mock } = await gitDraftClient();
+  const pending = client.requestGitAiDraft(ownerReportUuid, "conflict-help");
+  const rejected = expect(pending).rejects.toThrow("access_denied");
+  await vi.waitFor(() => expect(gitDraftRequest(mock)).toBeDefined());
+  const request = gitDraftRequest(mock);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "checkout.git_ai.draft.response",
+      payload: {
+        requestId: request.requestId,
+        workspaceId: request.workspaceId,
+        kind: request.kind,
+        result: { status: "refused", error: "access_denied" },
+      },
+    }),
+  );
+  await rejected;
+  expect(
+    mock.sent.filter(
+      (frame) => typeof frame === "string" && frame.includes("checkout.git_ai.draft.request"),
+    ),
+  ).toHaveLength(1);
+});
+test("Git draft client rejects a mismatched workspace without accepting a suggestion", async () => {
+  const { client, mock } = await gitDraftClient();
+  const pending = client.requestGitAiDraft(ownerReportUuid, "conflict-help");
+  const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(gitDraftRequest(mock)).toBeDefined());
+  const request = gitDraftRequest(mock);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "checkout.git_ai.draft.response",
+      payload: {
+        requestId: request.requestId,
+        workspaceId: "00000000-0000-4000-8000-000000000099",
+        kind: request.kind,
+        result: { status: "ok", draft: { kind: "conflict-help", advice: "Foreign checkout" } },
+      },
+    }),
+  );
+  await rejected;
+});
+test("paged catalog client capability refusal never calls the legacy request", async () => {
+  const { client, mock } = await gitDraftClient(false);
+  await expect(
+    client.getPagedPluginCatalog({ sha256: async () => "a".repeat(64) }),
+  ).rejects.toThrow("unavailable");
+  expect(
+    mock.sent.filter((frame) => typeof frame === "string" && frame.includes("plugin.catalog.")),
+  ).toHaveLength(0);
+});
+
+async function pagingClient() {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "paging_test",
+    transportFactory: () => mock.transport,
+    reconnect: { enabled: false },
+  });
+  clients.push(client);
+  const connecting = client.connect();
+  mock.triggerOpen({ features: { pluginCatalogPaging: true } });
+  await connecting;
+  return { client, mock };
+}
+function catalogRequest(mock: ReturnType<typeof createMockTransport>, type: string) {
+  return mock.sent
+    .filter((frame) => typeof frame === "string")
+    .map((frame) => JSON.parse(frame as string))
+    .find((frame) => frame.message?.type === type)?.message;
+}
+const pagingHash = async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+async function catalogTransportFixture() {
+  const bytes = new TextEncoder().encode("export default 'α😀';");
+  const trust = { trustedHost: { contract: "1.1" as const, boot: "boot" }, trustedPlugins: [] };
+  const entries = [
+    {
+      id: "example",
+      bundle: {
+        reference: ownerReportUuid,
+        sha256: await pagingHash(bytes),
+        byteLength: bytes.byteLength,
+      },
+    },
+  ];
+  const revision = "00000000-0000-4000-8000-000000000002";
+  const manifestHash = await pagingHash(
+    new TextEncoder().encode(canonicalJson({ version: 1, revision, entries, trust })),
+  );
+  const snapshot = {
+    version: 1,
+    snapshotId: ownerReportUuid,
+    revision,
+    manifestHash,
+    expiresAt: Date.now() + 20000,
+  };
+  return { bytes, entries, trust, snapshot };
+}
+test("paged catalog actual client maps page/chunk/release and only publishes fully verified scripts", async () => {
+  const { client, mock } = await pagingClient();
+  const value = await catalogTransportFixture();
+  const pending = client.getPagedPluginCatalog({ sha256: pagingHash });
+  await vi.waitFor(() => expect(catalogRequest(mock, "plugin.catalog.page.request")).toBeDefined());
+  let request = catalogRequest(mock, "plugin.catalog.page.request");
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "plugin.catalog.page.response",
+      payload: {
+        requestId: request.requestId,
+        status: "ok",
+        ...value.snapshot,
+        entries: value.entries,
+        trust: value.trust,
+        nextCursor: null,
+      },
+    }),
+  );
+  await vi.waitFor(() =>
+    expect(catalogRequest(mock, "plugin.catalog.bundle.get.request")).toBeDefined(),
+  );
+  request = catalogRequest(mock, "plugin.catalog.bundle.get.request");
+  expect(request.snapshotId).toBe(ownerReportUuid);
+  expect(request.offset).toBe(0);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "plugin.catalog.bundle.get.response",
+      payload: {
+        requestId: request.requestId,
+        status: "ok",
+        ...value.snapshot,
+        reference: ownerReportUuid,
+        sha256: value.entries[0].bundle.sha256,
+        offset: 0,
+        totalBytes: value.bytes.byteLength,
+        data: fromByteArray(value.bytes),
+        eof: true,
+      },
+    }),
+  );
+  await vi.waitFor(() =>
+    expect(catalogRequest(mock, "plugin.catalog.snapshot.release.request")).toBeDefined(),
+  );
+  request = catalogRequest(mock, "plugin.catalog.snapshot.release.request");
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "plugin.catalog.snapshot.release.response",
+      payload: { requestId: request.requestId, status: "ok", snapshotId: ownerReportUuid },
+    }),
+  );
+  await expect(pending).resolves.toMatchObject({
+    plugins: [{ id: "example", clientBundle: "export default 'α😀';" }],
+  });
+  expect(catalogRequest(mock, "plugin.catalog.get.request")).toBeUndefined();
+});
+test("paged catalog original connection lost during held chunk refuses without release replay or bulk fallback", async () => {
+  const { client, mock } = await pagingClient();
+  const value = await catalogTransportFixture();
+  const pending = client.getPagedPluginCatalog({ sha256: pagingHash });
+  const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(catalogRequest(mock, "plugin.catalog.page.request")).toBeDefined());
+  const request = catalogRequest(mock, "plugin.catalog.page.request");
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "plugin.catalog.page.response",
+      payload: {
+        requestId: request.requestId,
+        status: "ok",
+        ...value.snapshot,
+        entries: value.entries,
+        trust: value.trust,
+        nextCursor: null,
+      },
+    }),
+  );
+  await vi.waitFor(() =>
+    expect(catalogRequest(mock, "plugin.catalog.bundle.get.request")).toBeDefined(),
+  );
+  mock.triggerClose();
+  await rejected;
+  expect(catalogRequest(mock, "plugin.catalog.snapshot.release.request")).toBeUndefined();
+  expect(catalogRequest(mock, "plugin.catalog.get.request")).toBeUndefined();
+});
+
+function radiusConsumerInput() {
+  return {
+    attemptId: "00000000-0000-4000-8000-000000000001",
+    plan: {
+      target: "0.61.x" as const,
+      definition: {
+        application: "demo",
+        requirements: [{ id: "port", resourceId: "web", port: 8080 }],
+        current: [],
+        proposed: [{ id: "web", image: "nginx:1.27.5", port: 8080 }],
+      },
+      revision: "captured",
+      changes: [],
+    },
+    expectedRevision: "captured",
+  };
+}
+function radiusConsumerOutput(attemptId = radiusConsumerInput().attemptId) {
+  return {
+    attemptId,
+    kind: "local-scratch-simulation",
+    target: "0.61.x",
+    outputs: [
+      "app.bicep",
+      "requirements.json",
+      "infra-change.json",
+      "deployment-simulation.json",
+    ].map((file) => ({ file, bytes: 1, sha256: "a".repeat(64) })),
+    nativeCompilation: "not_run",
+    environmentDeployment: "held",
+    externalEffects: false,
+  };
+}
+function radiusConsumerRequests(mock: ReturnType<typeof createMockTransport>) {
+  return mock.sent
+    .filter((frame) => typeof frame === "string")
+    .map((frame) => parseSentFrame(frame))
+    .filter((frame) => frame.type === "plugin.rpc.invoke.request");
+}
+function radiusConsumerReply(
+  mock: ReturnType<typeof createMockTransport>,
+  requestId: unknown,
+  output = radiusConsumerOutput(),
+) {
+  mock.triggerMessage(
+    wrapSessionMessage({ type: "plugin.rpc.invoke.response", payload: { requestId, output } }),
+  );
+}
+test("Radius persistent client captures normal purpose/input and consumes the original attempt once", async () => {
+  const { client, mock } = await evidenceIndexClient(false);
+  const input = radiusConsumerInput();
+  const pending = client.simulateRadiusScratch(input, {
+    signal: new AbortController().signal,
+    checkOriginalLifetime: () => {},
+  });
+  input.plan.definition.application = "changed";
+  await vi.waitFor(() => expect(radiusConsumerRequests(mock)).toHaveLength(1));
+  const request = radiusConsumerRequests(mock)[0]!;
+  expect(request).toMatchObject({
+    pluginId: "orca-organization-next",
+    method: "organization.radius.scratch.simulate",
+    input: { plan: { definition: { application: "demo" } } },
+  });
+  expect(request.input).not.toHaveProperty("confirmDestructive");
+  radiusConsumerReply(mock, request.requestId);
+  await expect(pending).resolves.toMatchObject({
+    nativeCompilation: "not_run",
+    environmentDeployment: "held",
+  });
+  await expect(
+    client.simulateRadiusScratch(input, {
+      signal: new AbortController().signal,
+      checkOriginalLifetime: () => {},
+    }),
+  ).rejects.toThrow("do not replay");
+  expect(radiusConsumerRequests(mock)).toHaveLength(1);
+});
+test("Radius persistent client requires literal explicit confirmation for the separate prune purpose", async () => {
+  const { client, mock } = await evidenceIndexClient(false);
+  const bad = { ...radiusConsumerInput(), confirmDestructive: false };
+  await expect(
+    client.simulateRadiusScratch(bad, {
+      signal: new AbortController().signal,
+      checkOriginalLifetime: () => {},
+    }),
+  ).rejects.toThrow();
+  expect(radiusConsumerRequests(mock)).toHaveLength(0);
+  const pending = client.simulateRadiusScratch(
+    { ...radiusConsumerInput(), confirmDestructive: true },
+    { signal: new AbortController().signal, checkOriginalLifetime: () => {} },
+  );
+  await vi.waitFor(() => expect(radiusConsumerRequests(mock)).toHaveLength(1));
+  const request = radiusConsumerRequests(mock)[0]!;
+  expect(request).toMatchObject({
+    method: "organization.radius.scratch.prune-simulate",
+    input: { confirmDestructive: true },
+  });
+  radiusConsumerReply(mock, request.requestId);
+  await pending;
+});
+test("Radius persistent client refuses an aborted original before send", async () => {
+  const { client, mock } = await evidenceIndexClient(false);
+  const abort = new AbortController();
+  abort.abort();
+  await expect(
+    client.simulateRadiusScratch(radiusConsumerInput(), {
+      signal: abort.signal,
+      checkOriginalLifetime: () => {},
+    }),
+  ).rejects.toThrow();
+  expect(radiusConsumerRequests(mock)).toHaveLength(0);
+});
+test("Radius persistent client rejects a late original-host reply and never resends its consumed UUID", async () => {
+  const { client, mock } = await evidenceIndexClient(false);
+  const pending = client.simulateRadiusScratch(radiusConsumerInput(), {
+    signal: new AbortController().signal,
+    checkOriginalLifetime: () => {},
+  });
+  const rejected = expect(pending).rejects.toThrow("Original Radius connection");
+  await vi.waitFor(() => expect(radiusConsumerRequests(mock)).toHaveLength(1));
+  const request = radiusConsumerRequests(mock)[0]!;
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "status",
+      payload: {
+        status: "server_info",
+        serverId: "replacement",
+        hostname: null,
+        version: null,
+        features: {},
+      },
+    }),
+  );
+  radiusConsumerReply(mock, request.requestId);
+  await rejected;
+  await expect(
+    client.simulateRadiusScratch(radiusConsumerInput(), {
+      signal: new AbortController().signal,
+      checkOriginalLifetime: () => {},
+    }),
+  ).rejects.toThrow("do not replay");
+  expect(radiusConsumerRequests(mock)).toHaveLength(1);
+});
+test("Radius persistent client rejects mismatched output without refunding the original attempt", async () => {
+  const { client, mock } = await evidenceIndexClient(false);
+  const pending = client.simulateRadiusScratch(radiusConsumerInput(), {
+    signal: new AbortController().signal,
+    checkOriginalLifetime: () => {},
+  });
+  const rejected = expect(pending).rejects.toThrow("Unconfirmed Radius");
+  await vi.waitFor(() => expect(radiusConsumerRequests(mock)).toHaveLength(1));
+  radiusConsumerReply(
+    mock,
+    radiusConsumerRequests(mock)[0]!.requestId,
+    radiusConsumerOutput("00000000-0000-4000-8000-000000000002"),
+  );
+  await rejected;
+  await expect(
+    client.simulateRadiusScratch(radiusConsumerInput(), {
+      signal: new AbortController().signal,
+      checkOriginalLifetime: () => {},
+    }),
+  ).rejects.toThrow("do not replay");
+  expect(radiusConsumerRequests(mock)).toHaveLength(1);
 });

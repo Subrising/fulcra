@@ -428,6 +428,14 @@ export function buildSchedulesRoute() {
   return "/schedules" as const;
 }
 
+export function buildAutomationsRoute() {
+  return "/automations" as const;
+}
+
+export function buildInsightsRoute() {
+  return "/insights" as const;
+}
+
 export function buildOpenProjectRoute() {
   return "/open-project" as const;
 }
@@ -492,7 +500,10 @@ export function resolveKnownHostRoute(input: {
 export const SETTINGS_SECTION_SLUGS = [
   "general",
   "appearance",
-  "layout",
+  "sidebar",
+  "chat",
+  "terminal",
+  "browser",
   "editor",
   "shortcuts",
   "integrations",

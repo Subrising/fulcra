@@ -1,3 +1,4 @@
+import { validatedTimestamp } from "./runtime-observation.js";
 import type {
   AgentListItemPayload,
   AgentSnapshotPayload,
@@ -81,7 +82,7 @@ export function toStoredAgentRecord(
     createdAt,
     updatedAt: agent.updatedAt.toISOString(),
     lastActivityAt: agent.updatedAt.toISOString(),
-    lastUserMessageAt: agent.lastUserMessageAt ? agent.lastUserMessageAt.toISOString() : null,
+    lastUserMessageAt: validatedTimestamp(agent.lastUserMessageAt),
     title: options?.title ?? null,
     labels: agent.labels,
     lastStatus: agent.lifecycle,
@@ -114,6 +115,8 @@ export function toAgentPayload(
 
   const payload: AgentSnapshotPayload = {
     id: agent.id,
+    inputSequence: agent.inputSequence,
+    ...(agent.session && agent.instanceId ? { runtimeInstanceId: agent.instanceId } : {}),
     provider: agent.provider,
     cwd: agent.cwd,
     ...(agent.workspaceId ? { workspaceId: agent.workspaceId } : {}),
@@ -123,7 +126,7 @@ export function toAgentPayload(
     ...(runtimeInfo ? { runtimeInfo } : {}),
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
-    lastUserMessageAt: agent.lastUserMessageAt ? agent.lastUserMessageAt.toISOString() : null,
+    lastUserMessageAt: validatedTimestamp(agent.lastUserMessageAt),
     status: agent.lifecycle,
     activeTurn: agent.activeTurnId
       ? {
@@ -138,7 +141,13 @@ export function toAgentPayload(
     pendingPermissions: sanitizePendingPermissions(agent.pendingPermissions),
     persistence: projectPersistenceHandleForWire(agent.persistence),
     title: options?.title ?? null,
-    labels: agent.labels,
+    labels: (() => {
+      const labels = { ...agent.labels };
+      delete labels["fulcra.account-name"];
+      const account = agent.session?.usageSourceLabel?.();
+      if (account) labels["fulcra.account-name"] = account.slice(0, 60);
+      return labels;
+    })(),
   };
 
   const usage = sanitizeUsage(agent.lastUsage);
@@ -146,13 +155,24 @@ export function toAgentPayload(
     payload.lastUsage = usage;
   }
 
+  // Display only: never persisted (toStoredAgentRecord leaves it out) and never an input to status.
+  if (agent.backgroundWork) {
+    payload.backgroundWork = { ...agent.backgroundWork, kinds: [...agent.backgroundWork.kinds] };
+  }
+
   if (agent.lastError !== undefined) {
     payload.lastError = agent.lastError;
   }
 
-  // Handle attention state
-  payload.requiresAttention = agent.attention.requiresAttention;
-  if (agent.attention.requiresAttention) {
+  // Permission waits are actionable even while the provider remains running.
+  // Project them separately from persisted unread-result attention, so resolving a
+  // request restores that state and never leaves a stale saved permission badge.
+  payload.requiresAttention =
+    agent.pendingPermissions.size > 0 || agent.attention.requiresAttention;
+  if (agent.pendingPermissions.size > 0) {
+    payload.attentionReason = "permission";
+    payload.attentionTimestamp = agent.updatedAt.toISOString();
+  } else if (agent.attention.requiresAttention) {
     payload.attentionReason = agent.attention.attentionReason;
     payload.attentionTimestamp = agent.attention.attentionTimestamp.toISOString();
   } else {
@@ -195,7 +215,7 @@ function buildStoredPersistenceHandle(
   return toAgentPersistenceHandle(validProviders, record.persistence);
 }
 
-// Backstop: a stored payload is built only for an agent no process has loaded, and nothing runs a turn
+// Orca R3a backstop: a stored payload is built only for an agent no process has loaded, and nothing runs a turn
 // for such an agent, so a stored running/initializing is projected as idle (as handleWaitForFinish already treats
 // it). The boot normalisation makes this unreachable for records that existed at boot.
 function storedAgentStatus(record: StoredAgentRecord): StoredAgentRecord["lastStatus"] {
@@ -344,7 +364,7 @@ function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentC
   return Object.keys(serializable).length ? serializable : null;
 }
 
-function sanitizePendingPermissions(
+export function sanitizePendingPermissions(
   pending: Map<string, AgentPermissionRequest>,
 ): AgentPermissionRequest[] {
   return Array.from(pending.values()).map((request) =>

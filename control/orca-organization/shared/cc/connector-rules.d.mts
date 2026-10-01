@@ -1,0 +1,15 @@
+export declare const CONNECTOR_ID: RegExp;
+export declare const AUTH_METHODS: readonly string[];
+export declare const ITEM_KINDS: readonly string[];
+export declare const ITEM_STATES: readonly string[];
+export declare const HEALTH: readonly string[];
+export declare const MAPPING_STATES: readonly string[];
+export declare const HOSTNAME: RegExp;
+export declare const UUID: RegExp;
+export declare function connectorProblem(connector: unknown): string | null;
+export declare function issueRef(connector: string, site: string | null, remoteId: string, ref: string): string;
+export declare function repoKey(connector: string, site: string | null, path: string): string;
+export declare function prRef(repoKey: string, number: number | string): string;
+export declare function commitRef(repoKey: string, sha: string): string;
+export declare function itemProblem(item: unknown): string | null;
+export declare function mappingProblem(mapping: unknown): string | null;

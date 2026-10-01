@@ -14,9 +14,7 @@ const labels: SessionOwnershipLabels = {
   unknownAccessibility: "Owning project unknown",
 };
 
-function record(
-  overrides: Partial<SessionOwnershipRecord> = {},
-): SessionOwnershipRecord {
+function record(overrides: Partial<SessionOwnershipRecord> = {}): SessionOwnershipRecord {
   return {
     state: "recorded",
     projectId: "0c2a1d64-6b1e-4f5a-9d2f-1f7a4a2b3c4d",
@@ -31,7 +29,7 @@ function record(
 }
 
 describe("selectSessionOwnership", () => {
-  it("carries all four ownership service states instead of collapsing them", () => {
+  it("carries all four controller states instead of collapsing them", () => {
     // `recorded` is the normal healthy path: written through a seat at creation.
     const recorded = selectSessionOwnership(record());
     expect(recorded).toMatchObject({ kind: "owned", state: "recorded" });
@@ -57,9 +55,9 @@ describe("selectSessionOwnership", () => {
     });
     expect(future.kind).toBe("unknown");
     expect(selectSessionLeaderLabel(future, labels)).toBeNull();
-    expect(selectSessionOwnership({ ...record(), state: "" as SessionOwnershipRecord["state"] }).kind).toBe(
-      "unknown",
-    );
+    expect(
+      selectSessionOwnership({ ...record(), state: "" as SessionOwnershipRecord["state"] }).kind,
+    ).toBe("unknown");
   });
 
   it("reports the state that is true when a record contradicts itself", () => {
@@ -81,7 +79,7 @@ describe("selectSessionProjectLabel", () => {
     ).toMatchObject({ text: "Portable delivery", source: "controller", isUnknown: false });
   });
 
-  it("shows the ownership service's own sentence rather than wording we invented", () => {
+  it("shows the controller's own sentence rather than wording we invented", () => {
     const detail = "The owning task was closed on 19 September.";
     expect(
       selectSessionProjectLabel({
@@ -97,7 +95,7 @@ describe("selectSessionProjectLabel", () => {
     });
   });
 
-  it("falls back to our wording only when the ownership service supplied none", () => {
+  it("falls back to our wording only when the controller supplied none", () => {
     expect(
       selectSessionProjectLabel({
         ownership: selectSessionOwnership(record({ state: "unknown", detail: null })),
@@ -158,4 +156,28 @@ describe("selectSessionLeaderLabel", () => {
       selectSessionLeaderLabel(selectSessionOwnership(record({ leaderTitle: null })), labels),
     ).toBe("Reports to agent-leader-1");
   });
+});
+
+it("shows validated manager supervision without claiming project or role ownership", () => {
+  const managed = selectSessionOwnership(
+    record({
+      state: "managed",
+      projectId: null,
+      projectName: null,
+      detail: "Managed by Portable coordinator; role-session: n/a.",
+    }),
+  );
+  expect(managed.kind).toBe("managed");
+  expect(selectSessionProjectLabel({ ownership: managed, placement: null, labels })).toMatchObject({
+    text: "Managed by Portable coordinator; role-session: n/a.",
+    isUnknown: false,
+  });
+  expect(selectSessionLeaderLabel(managed, labels)).toBe("Reports to Portable coordinator");
+  const missing = selectSessionOwnership(
+    record({ state: "managed", leaderAgentId: null, leaderTitle: null }),
+  );
+  expect(missing.kind).toBe("unknown");
+  expect(selectSessionProjectLabel({ ownership: missing, placement: null, labels }).isUnknown).toBe(
+    true,
+  );
 });

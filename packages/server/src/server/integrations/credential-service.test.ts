@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createFileAccountsStore, createMemoryAccountsStore } from "./accounts-store.js";
+import {
+  CredentialAccountSchema,
+  createFileAccountsStore,
+  createMemoryAccountsStore,
+} from "./accounts-store.js";
 import { CREDENTIALS_SERVICE, createMemoryCredentialBackend } from "./credential-backend.js";
 import { CredentialService } from "./credential-service.js";
 
@@ -177,7 +181,7 @@ function apiFetch(handler: (url: string, init: RequestInit | undefined) => Respo
   }) as typeof fetch;
 }
 
-describe("plugin access: host-mediated requests", () => {
+describe("plugin access: host-mediated requests (CONTRACTS §7.2 v1.7)", () => {
   it("attaches the credential itself and returns an answer with every form of it scrubbed", async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
     const { credentials } = service({ fetch: apiFetch(echoingApi(calls)) });
@@ -432,7 +436,7 @@ async function deviceAccount(refresh: () => Response | Promise<Response>) {
   return { ...setup, clock, id: outcome.account.id, refreshCalls: () => refreshCalls };
 }
 
-describe("refresh and lifecycle", () => {
+describe("refresh and lifecycle (R-J5b-4/-5)", () => {
   it("refreshes an expiring device-flow token without a secret, and falls back to needs-reconnect", async () => {
     let answer = json({ access_token: "gho_refreshed", refresh_token: "ghr_2", expires_in: 3600 });
     const { credentials, backend, clock, id } = await deviceAccount(() => answer);
@@ -533,7 +537,7 @@ describe("refresh and lifecycle", () => {
     return { ...setup, clock, refreshes, polls, connectDevice, call };
   }
 
-  it("a refresh that started before a reconnect cannot replace the reconnected token", async () => {
+  it("a refresh that started before a reconnect cannot replace the reconnected token (R-D-2)", async () => {
     const h = interleavingHarness();
     h.polls.push(json({ access_token: "gho_old", refresh_token: "ghr_old", expires_in: 3600 }));
     const account = await h.connectDevice();
@@ -651,11 +655,11 @@ describe("forge layer", () => {
 });
 
 describe("migration from the plugin keychain namespace", () => {
-  it("imports an issue-tracker token once and leaves the old item untouched", async () => {
-    const legacyKey = "ai.fulcra.plugin.organization/jira.acme:token";
+  it("imports a J3 tracker token once and leaves the old item untouched", async () => {
+    const legacyKey = "ai.fulcra.plugin.orca-organization/jira.acme:token";
     const { credentials, backend } = service({ backendItems: { [legacyKey]: `${JIRA_TOKEN}\n` } });
     const input = {
-      pluginId: "organization",
+      pluginId: "orca-organization",
       secretName: "jira.acme:token",
       connector: "jira",
       site: "acme.atlassian.net",
@@ -695,7 +699,7 @@ describe("migration from the plugin keychain namespace", () => {
     });
     await expect(
       credentials.importLegacy({
-        pluginId: "organization",
+        pluginId: "orca-organization",
         secretName: "github:token",
         connector: "github",
         grants: ["github"],
@@ -717,5 +721,134 @@ describe("migration from the plugin keychain namespace", () => {
         grants: ["github"],
       }),
     ).rejects.toThrow("Invalid plugin id");
+  });
+});
+
+describe("this Mac's GitHub sign-in (U7 W4)", () => {
+  const signedIn = (...identities: { site: string | null; login: string; id: number }[]) => ({
+    read: async () => ({ status: "signed-in" as const, identities }),
+  });
+
+  function withSignIn(
+    hostSignIn: ConstructorParameters<typeof CredentialService>[0]["hostSignIn"],
+  ) {
+    const backend = createMemoryCredentialBackend();
+    const accounts = createMemoryAccountsStore();
+    const credentials = new CredentialService({
+      accounts,
+      backend,
+      fetch: providerFetch(),
+      now: () => Date.parse("2026-09-30T10:00:00Z"),
+      hostSignIn,
+    });
+    return { credentials, accounts, backend };
+  }
+
+  it("lists the detected login as a connected GitHub account from this Mac's sign-in", async () => {
+    const { credentials, accounts } = withSignIn(signedIn({ site: null, login: "example-user", id: 42 }));
+    const listed = (await credentials.list()).accounts;
+    expect(listed).toEqual([
+      {
+        version: 1,
+        id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+        connector: "github",
+        site: null,
+        displayName: "example-user",
+        method: "cli",
+        scopes: [],
+        state: "connected",
+        expiresAt: null,
+        lastCheckedAt: "2026-09-30T10:00:00.000Z",
+        createdAt: "2026-09-30T10:00:00.000Z",
+      },
+    ]);
+    // Stable across reads, valid under the stored-account schema, and never written to the store.
+    expect((await credentials.list()).accounts[0].id).toBe(listed[0].id);
+    expect(() => CredentialAccountSchema.parse(listed[0])).not.toThrow();
+    expect(await accounts.list()).toEqual([]);
+  });
+
+  it("keeps an Enterprise sign-in on its own site", async () => {
+    const { credentials } = withSignIn(
+      signedIn(
+        { site: null, login: "example-user", id: 42 },
+        { site: "ghe.corp.example", login: "example-owner", id: 7 },
+      ),
+    );
+    const listed = (await credentials.list()).accounts;
+    expect(listed.map((a) => [a.site, a.displayName])).toEqual([
+      [null, "example-user"],
+      ["ghe.corp.example", "example-owner"],
+    ]);
+    expect(listed[0].id).not.toBe(listed[1].id);
+  });
+
+  it("a manually connected account for the same site wins", async () => {
+    const { credentials } = withSignIn(
+      signedIn(
+        { site: null, login: "example-user", id: 42 },
+        { site: "ghe.corp.example", login: "example-owner", id: 7 },
+      ),
+    );
+    await connectToken(credentials, { connector: "github", token: GITHUB_TOKEN });
+    const listed = (await credentials.list()).accounts;
+    expect(listed.map((a) => [a.site, a.displayName, a.method])).toEqual([
+      [null, "octocat (GitHub)", "token"],
+      ["ghe.corp.example", "example-owner", "cli"],
+    ]);
+  });
+
+  it("is only a name: no request, disconnect, reconnect or forge token uses it", async () => {
+    const { credentials, accounts } = withSignIn(signedIn({ site: null, login: "example-user", id: 42 }));
+    const [detected] = (await credentials.list()).accounts;
+    await expect(
+      credentials.request({
+        grants: ["github"],
+        writeGranted: false,
+        accountId: detected.id,
+        connector: "github",
+        request: { method: "GET", path: "/user" },
+      }),
+    ).rejects.toThrow("No github account with that id");
+    await expect(credentials.remove(detected.id)).resolves.toBe(false);
+    await expect(credentials.reconnect(detected.id)).rejects.toThrow("No account with that id");
+    // The PR panels keep using gh's own login exactly as before, and no needs-reconnect row appears.
+    await expect(credentials.githubTokenForHost("github.com")).resolves.toBeNull();
+    expect(await accounts.list()).toEqual([]);
+    expect((await credentials.list()).accounts.map((a) => a.state)).toEqual(["connected"]);
+  });
+
+  it("lists nothing extra when gh is missing, signed out or failing, and never fails the list", async () => {
+    for (const hostSignIn of [
+      { read: async () => ({ status: "no-cli" as const }) },
+      { read: async () => ({ status: "signed-out" as const }) },
+      {
+        read: async (): Promise<never> => {
+          throw new Error("boom");
+        },
+      },
+    ]) {
+      const { credentials } = withSignIn(hostSignIn);
+      await expect(credentials.list()).resolves.toMatchObject({ accounts: [] });
+    }
+  });
+
+  it("keeps no token anywhere: the accounts file stays empty and the list carries none", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "fulcra-accounts-"));
+    try {
+      const filePath = path.join(directory, "integrations", "accounts.json");
+      const credentials = new CredentialService({
+        accounts: createFileAccountsStore(filePath),
+        backend: createMemoryCredentialBackend(),
+        fetch: providerFetch(),
+        hostSignIn: signedIn({ site: null, login: "example-user", id: 42 }),
+      });
+      const listed = JSON.stringify(await credentials.list());
+      expect(listed).toContain('"displayName":"example-user"');
+      expect(listed).not.toMatch(/gh[opsu]_|github_pat_/);
+      expect(() => readFileSync(filePath, "utf8")).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

@@ -74,6 +74,19 @@ describe("WorkspaceShortcutTargetsSubscriber", () => {
   let container: HTMLElement | null = null;
 
   beforeEach(() => {
+    // These are online workspace-order fixtures. Empty connection lists otherwise
+    // make the real runtime correctly move every row into the Offline group.
+    const runtime = getHostRuntimeStore();
+    const readSnapshot = runtime.getSnapshot.bind(runtime);
+    const onlineSnapshots = new WeakMap();
+    vi.spyOn(runtime, "getSnapshot").mockImplementation((serverId) => {
+      const snapshot = readSnapshot(serverId);
+      if (!snapshot) return snapshot;
+      if (!onlineSnapshots.has(snapshot)) {
+        onlineSnapshots.set(snapshot, { ...snapshot, connectionStatus: "online" });
+      }
+      return onlineSnapshots.get(snapshot);
+    });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -113,6 +126,7 @@ describe("WorkspaceShortcutTargetsSubscriber", () => {
         root?.unmount();
       });
     }
+    vi.restoreAllMocks();
     root = null;
     container?.remove();
     container = null;

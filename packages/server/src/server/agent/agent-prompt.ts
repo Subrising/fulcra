@@ -1,3 +1,8 @@
+import { createFinalInputCheck, waitForFinalInputHandoff } from "./final-input-check.js";
+import { randomUUID } from "node:crypto";
+import { deferredPromptPayload as promptPayload } from "./trusted-operation.js";
+import { TRUSTED_OPERATION, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
+import type { TrustedOperationHandle } from "../plugins/trusted.js";
 import type { Logger } from "pino";
 
 import type {
@@ -14,8 +19,13 @@ import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
 
 export type AgentUnarchiveController = Pick<AgentManager, "notifyAgentState" | "unarchiveSnapshot">;
 
+// Refusal-only legacy notice checks; never wire flags or authority substitutes.
+const finishDispatchChecks = new WeakMap<object, () => void>();
+
 export type AgentRunController = Pick<
   AgentManager,
+  | "withInput"
+  | "trustedPlugins"
   | "getAgent"
   | "tryRunOutOfBand"
   | "hasInFlightRun"
@@ -23,7 +33,7 @@ export type AgentRunController = Pick<
   | "steerOrReplaceActiveTurn"
   | "streamAgent"
 > & {
-  reloadAgentSession(agentId: string): Promise<unknown>;
+  reloadAgentSession(...args: Parameters<AgentManager["reloadAgentSession"]>): Promise<unknown>;
 };
 
 export interface StartAgentRunOptions {
@@ -96,35 +106,67 @@ export async function startAgentRun(
   logger: Logger,
   options?: StartAgentRunOptions,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
-  const snapshot = agentManager.getAgent(agentId);
-  logger.trace(
-    {
-      agentId,
-      provider: snapshot?.provider,
-      providerSessionId: snapshot?.persistence?.sessionId ?? undefined,
-      turnId: snapshot?.activeForegroundTurnId ?? undefined,
-      promptType: typeof prompt === "string" ? "string" : "structured",
-      hasRunOptions: Boolean(options?.runOptions),
-      replaceRunning: Boolean(options?.replaceRunning),
+  const finishCheck = options && finishDispatchChecks.get(options);
+  finishCheck?.();
+  return agentManager.withInput(
+    agentId,
+    "prompt",
+    options?.runOptions?.clientMessageId,
+    async (handle) => {
+      if (handle)
+        options = {
+          ...options,
+          runOptions: { ...options?.runOptions, [TRUSTED_OPERATION]: handle },
+        };
+      if (options && finishCheck) finishDispatchChecks.set(options, finishCheck);
+      finishCheck?.();
+      const snapshot = agentManager.getAgent(agentId);
+      logger.trace(
+        {
+          agentId,
+          provider: snapshot?.provider,
+          providerSessionId: snapshot?.persistence?.sessionId ?? undefined,
+          turnId: snapshot?.activeForegroundTurnId ?? undefined,
+          promptType: typeof prompt === "string" ? "string" : "structured",
+          hasRunOptions: Boolean(options?.runOptions),
+          replaceRunning: Boolean(options?.replaceRunning),
+        },
+        "agent.session.start_stream.request",
+      );
+      // Out-of-band commands (e.g. /goal pause) must run WITHOUT canceling an
+      // in-flight turn — replaceAgentRun would interrupt the running turn. The
+      // intercept lives at this layer so it covers every prompt entrypoint.
+      if (agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions)) {
+        return { disposition: "out_of_band" };
+      }
+      try {
+        return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+      } catch (error) {
+        if (finishCheck || !isStaleProviderSessionError(error)) throw error;
+        logger.info(
+          { agentId, err: error },
+          "Provider session went stale; reopening from persistence",
+        );
+        // The live session belongs to a retired plugin runtime. Reload swaps in a
+        // fresh session on the current runtime while preserving history and labels.
+        await agentManager.trustedPlugins.daemon(() =>
+          agentManager.reloadAgentSession(
+            agentId,
+            undefined,
+            undefined,
+            options?.runOptions?.[TRUSTED_OPERATION],
+          ),
+        );
+        return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
+      }
     },
-    "agent.session.start_stream.request",
+    promptPayload(prompt, options?.runOptions, {
+      replaceRunning: options?.replaceRunning ?? false,
+      activeTurnBehavior: options?.activeTurnBehavior,
+      clearPendingPermissions: options?.clearPendingPermissions ?? false,
+    }),
+    options?.runOptions?.[TRUSTED_OPERATION],
   );
-  // Out-of-band commands (e.g. /goal pause) must run WITHOUT canceling an
-  // in-flight turn — replaceAgentRun would interrupt the running turn. The
-  // intercept lives at this layer so it covers every prompt entrypoint.
-  if (agentManager.tryRunOutOfBand(agentId, prompt, options?.runOptions)) {
-    return { disposition: "out_of_band" };
-  }
-  try {
-    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
-  } catch (error) {
-    if (!isStaleProviderSessionError(error)) throw error;
-    logger.info({ agentId, err: error }, "Provider session went stale; reopening from persistence");
-    // The live session belongs to a retired plugin runtime. Reload swaps in a
-    // fresh session on the current runtime while preserving history and labels.
-    await agentManager.reloadAgentSession(agentId);
-    return await startAgentRunInner(agentManager, agentId, prompt, logger, options);
-  }
 }
 
 async function startAgentRunInner(
@@ -134,11 +176,14 @@ async function startAgentRunInner(
   logger: Logger,
   options?: StartAgentRunOptions,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
+  const finishCheck = options && finishDispatchChecks.get(options);
+  finishCheck?.();
   const snapshot = agentManager.getAgent(agentId);
   const steered = await steerOrReplaceActiveRun(agentManager, agentId, prompt, options);
   if (steered?.disposition === "steered") {
     return steered;
   }
+  finishCheck?.();
   const { iterator, replaced } = steered
     ? { iterator: steered.iterator, replaced: true }
     : await startOrReplaceRun(agentManager, agentId, prompt, options);
@@ -161,7 +206,14 @@ async function startAgentRunInner(
           { agentId, err: error },
           "Provider session went stale; reopening from persistence",
         );
-        await agentManager.reloadAgentSession(agentId);
+        await agentManager.trustedPlugins.daemon(() =>
+          agentManager.reloadAgentSession(
+            agentId,
+            undefined,
+            undefined,
+            options?.runOptions?.[TRUSTED_OPERATION],
+          ),
+        );
         const retry = await startOrReplaceRun(agentManager, agentId, prompt, options);
         await drainAgentRunIterator(retry.iterator);
       }
@@ -199,8 +251,9 @@ export async function unarchiveAgentState(
   agentManager: AgentUnarchiveController,
   agentId: string,
   updates?: { workspaceId?: string; labels?: Record<string, string | null> },
+  operationHandle?: TrustedOperationHandle,
 ): Promise<boolean> {
-  const unarchived = await agentManager.unarchiveSnapshot(agentId, updates);
+  const unarchived = await agentManager.unarchiveSnapshot(agentId, updates, operationHandle);
   if (!unarchived) return false;
   agentManager.notifyAgentState(agentId);
   return true;
@@ -306,36 +359,91 @@ export async function waitForAgentRunStartWithTimeout(
 export async function sendPromptToAgent(
   params: SendPromptToAgentParams,
 ): Promise<{ disposition: PromptDispatchDisposition }> {
-  const unarchive = params.unarchive ?? true;
+  const finishCheck = finishDispatchChecks.get(params);
+  finishCheck?.();
+  return params.agentManager.withInput(
+    params.agentId,
+    "prompt",
+    params.messageId ?? params.runOptions?.clientMessageId,
+    async (handle) => {
+      if (handle)
+        params = {
+          ...params,
+          runOptions: { ...params.runOptions, [TRUSTED_OPERATION]: handle },
+        };
+      const unarchive = params.unarchive ?? true;
 
-  const record = await params.agentStorage.get(params.agentId);
-  if (record?.archivedAt) {
-    if (!unarchive) {
-      return { disposition: "turn_started" };
-    }
-    await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId);
-  }
+      const record = await params.agentStorage.get(params.agentId);
+      finishCheck?.();
+      if (record?.archivedAt) {
+        params.agentManager.trustedPlugins.input(
+          record,
+          "prompt",
+          params.messageId ?? params.runOptions?.clientMessageId,
+          () => undefined,
+          promptPayload(params.prompt, params.runOptions, {
+            sessionMode: params.sessionMode,
+            unarchive: params.unarchive ?? true,
+            replaceRunning: true,
+            activeTurnBehavior: params.activeTurnBehavior,
+            clearPendingPermissions: params.clearPendingPermissions ?? false,
+          }),
+          handle,
+        );
+      }
+      if (record?.archivedAt) {
+        if (!unarchive) {
+          return { disposition: "turn_started" };
+        }
+        await unarchiveAgentState(
+          params.agentStorage,
+          params.agentManager,
+          params.agentId,
+          undefined,
+          handle,
+        );
+      }
 
-  await ensureAgentLoaded(params.agentId, {
-    agentManager: params.agentManager,
-    agentStorage: params.agentStorage,
-    logger: params.logger,
-  });
+      await ensureAgentLoaded(params.agentId, {
+        agentManager: params.agentManager,
+        agentStorage: params.agentStorage,
+        logger: params.logger,
+      });
 
-  if (params.sessionMode) {
-    await params.agentManager.setAgentMode(params.agentId, params.sessionMode);
-  }
+      finishCheck?.();
+      if (params.sessionMode) {
+        await params.agentManager.setAgentMode(params.agentId, params.sessionMode, handle);
+      }
 
-  const runOptions = params.messageId
-    ? { ...params.runOptions, clientMessageId: params.messageId }
-    : params.runOptions;
+      const runOptions = params.messageId
+        ? { ...params.runOptions, clientMessageId: params.messageId }
+        : params.runOptions;
 
-  return await startAgentRun(params.agentManager, params.agentId, params.prompt, params.logger, {
-    replaceRunning: true,
-    activeTurnBehavior: params.activeTurnBehavior,
-    clearPendingPermissions: params.clearPendingPermissions,
-    runOptions,
-  });
+      finishCheck?.();
+      const startOptions: StartAgentRunOptions = {
+        replaceRunning: true,
+        activeTurnBehavior: params.activeTurnBehavior,
+        clearPendingPermissions: params.clearPendingPermissions,
+        runOptions,
+      };
+      if (finishCheck) finishDispatchChecks.set(startOptions, finishCheck);
+      return await startAgentRun(
+        params.agentManager,
+        params.agentId,
+        params.prompt,
+        params.logger,
+        startOptions,
+      );
+    },
+    promptPayload(params.prompt, params.runOptions, {
+      sessionMode: params.sessionMode,
+      unarchive: params.unarchive ?? true,
+      replaceRunning: true,
+      activeTurnBehavior: params.activeTurnBehavior,
+      clearPendingPermissions: params.clearPendingPermissions ?? false,
+    }),
+    params.runOptions?.[TRUSTED_OPERATION],
+  );
 }
 
 export async function startCreatedAgentInitialPrompt(
@@ -425,6 +533,18 @@ interface NotifySafelyOptions {
   permissionRequest?: AgentPermissionRequest;
 }
 
+/**
+ * FIX-8 W3: the message id prefix of the daemon's finish notice to a caller. The notice is admitted with source
+ * "daemon" (it has no ambient human or agent context), and a trusted plugin (Fulcra's controller) can tell it from a
+ * person typing into the caller: a delegated lead keeps its delegation when a child reports back. The prefix alone
+ * proves nothing; only the daemon source does.
+ */
+export const FINISH_NOTIFICATION_MESSAGE_PREFIX = "paseo-notify:";
+// A caller waits on a child through one armed notification. Arming again, such as a
+// follow-up prompt while the child still runs, replaces the earlier one so the child's
+// next finish reaches the caller once.
+const armedFinishNotifications = new WeakMap<AgentManager, Map<string, () => void>>();
+
 export function setupFinishNotification(params: SetupFinishNotificationParams): void {
   const {
     agentManager,
@@ -436,9 +556,31 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
   } = params;
   let hasSeenRunning = false;
   let stopped = false;
+  let superseded = false;
+  const checkIdentity = agentManager.captureFinishNotificationCheck(childAgentId, callerAgentId);
+  const checkCurrent = () => {
+    if (superseded || agentManager.nativeReportOwnsFinish(childAgentId, callerAgentId))
+      throw new Error("Finish notification superseded by current wake ownership");
+    checkIdentity();
+  };
   const notifiedPermissionRequestIds = new Set<string>();
   let unsubscribe: (() => void) | null = null;
   let notificationQueue = Promise.resolve();
+
+  const armedByManager = armedFinishNotifications.get(agentManager) ?? new Map();
+  armedFinishNotifications.set(agentManager, armedByManager);
+  const armedKey = JSON.stringify([childAgentId, callerAgentId]);
+  armedByManager.get(armedKey)?.();
+  const cancel = () => {
+    superseded = true;
+    stop();
+  };
+  armedByManager.set(armedKey, cancel);
+  if (agentManager.nativeReportOwnsFinish(childAgentId, callerAgentId)) {
+    cancel();
+    armedByManager.delete(armedKey);
+    return;
+  }
 
   function stop(): void {
     if (stopped) return;
@@ -450,17 +592,21 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     reason: FinishNotificationReason,
     permissionRequest?: AgentPermissionRequest,
   ): Promise<void> {
+    checkCurrent();
     const callerRecord = await agentStorage.get(callerAgentId);
+    checkCurrent();
     if (callerRecord?.archivedAt) {
       return;
     }
 
     const record = await agentStorage.get(childAgentId);
+    checkCurrent();
     if (requireParentOwnership && getParentAgentIdFromLabels(record?.labels) !== callerAgentId) {
       return;
     }
     const title = record?.title ?? childAgentId;
     const lastAssistantMessage = await agentManager.getLastAssistantMessage(childAgentId);
+    checkCurrent();
     const body = formatFinishNotificationBody({
       childAgentId,
       title,
@@ -469,27 +615,40 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       permissionRequest,
     });
 
-    await sendPromptToAgent({
+    const finalCheck = createFinalInputCheck(checkCurrent);
+    const dispatch: SendPromptToAgentParams = {
       agentManager,
       agentStorage,
       agentId: callerAgentId,
       prompt: formatSystemNotificationPrompt(body),
+      messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${randomUUID()}`,
+      runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
       activeTurnBehavior: "steer",
       unarchive: false,
       logger,
-    });
+    };
+    finishDispatchChecks.set(dispatch, checkCurrent);
+    checkCurrent();
+    await sendPromptToAgent(dispatch);
+    await waitForFinalInputHandoff(finalCheck);
   }
 
   function notifySafely(reason: FinishNotificationReason, options: NotifySafelyOptions = {}): void {
     if (stopped) return;
     if (options.terminal ?? true) stop();
     notificationQueue = notificationQueue
-      .then(() => notify(reason, options.permissionRequest))
+      .then(() =>
+        agentManager.trustedPlugins.daemon(() => notify(reason, options.permissionRequest)),
+      )
       .catch((error) => {
+        superseded = true;
         logger.error(
           { err: error, childAgentId, callerAgentId, reason },
           "Failed to notify caller agent",
         );
+      })
+      .finally(() => {
+        if (stopped && armedByManager.get(armedKey) === cancel) armedByManager.delete(armedKey);
       });
   }
 

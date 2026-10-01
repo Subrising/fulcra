@@ -1,7 +1,4 @@
-Fulcra
-Copyright (c) 2026 the Fulcra authors
-
-Fulcra is based on Paseo (Apache-2.0) by Mohamed Boudra.
+This product is a modified fork of Paseo.
 
   Paseo
   Copyright (c) 2025-present Mohamed Boudra
@@ -10,30 +7,40 @@ Fulcra is based on Paseo (Apache-2.0) by Mohamed Boudra.
 
 This distribution contains modifications to the original work. Apache License
 2.0 section 4(b) requires modified files to carry prominent notices stating
-that they were changed; this file records those changes collectively, and the
-git history of this repository records them in full against Paseo 0.9.1
-(upstream commit 818658520).
+that they were changed. This file summarizes the fork's modification scope;
+it does not replace the required notices in modified files.
 
 CHANGES MADE IN THIS FORK
 -------------------------
 
-Fulcra 0.1.0 is Paseo 0.9.1 with: the Fulcra name and artwork in the app,
-desktop app and CLI (`fulcra`, with `paseo` kept as an alias); `FULCRA_HOME`
-(with `PASEO_HOME` as a fallback); session defaults (new Claude sessions store
-their default permission mode, model and effort); Claude model discovery from
-the installed Claude Code; project names instead of ids in the new-workspace
-picker; "Not installed" for providers whose CLI is missing; and the other
-fixes recorded in the git history. Internal identifiers such as the
-`@getpaseo/*` package names are unchanged so upstream changes keep merging;
-see docs/UPSTREAM.md.
+This fork combines the product and control source in one repository. Its
+modification areas include:
+
+  packages/app        mobile and shared application surface
+  packages/server     daemon, provider integration, agent lifecycle, plugin host
+  packages/desktop    desktop integration, packaging and release configuration
+  packages/protocol   wire protocol and validation
+  packages/cli        command line surface
+  control/            orchestration, Command Centre and supporting tools
+  .github/workflows   build and release automation
+  scripts/            fork-specific build and packaging entry points
+
+This is a description of maintained source areas, not a count of development
+commits or a statement that every feature has passed release acceptance.
+
+The substantive additions of this fork are an orchestration and accountability
+layer that does not exist upstream: named seats within projects, recorded
+session ownership with provenance, operator-approved communication channels
+carrying fixed message allowances and expiry, and generation fences that reject
+stale authority after a session is replaced.
 
 TRADEMARKS
 ----------
 
 Apache License 2.0 section 6 grants no rights to the trade names, trademarks,
 service marks or product names of the licensor. "Paseo" is used here only to
-identify the origin of this work, as that section permits, and Fulcra does not
-claim endorsement by or affiliation with the Paseo project or its authors.
+identify the origin of this work, as that section permits, and this fork does
+not claim endorsement by or affiliation with the Paseo project or its authors.
 
 THIRD-PARTY COMPONENTS
 ----------------------

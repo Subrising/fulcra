@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Shared credential store and plugin notifications. Every RPC here is
+// Shared credential store and plugin notifications (Fulcra CONTRACTS §3.4, §7.2). Every RPC here is
 // gated on `server_info.features.credentials` / `features.pluginNotifications`. No response ever
 // carries a secret: account rows are metadata only.
 

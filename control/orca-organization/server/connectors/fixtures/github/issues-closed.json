@@ -1,0 +1,43 @@
+[
+ {
+  "number": 40,
+  "title": "Old crash on start",
+  "state": "closed",
+  "updated_at": "2026-09-20T10:00:00Z",
+  "repository_url": "https://api.github.com/repos/acme/app",
+  "html_url": "https://evil.example/40",
+  "labels": [],
+  "assignee": null,
+  "body": null
+ },
+ {
+  "number": 17,
+  "title": "Fix sign-in after an update",
+  "state": "closed",
+  "updated_at": "2026-09-24T13:10:00Z",
+  "repository_url": "https://api.github.com/repos/acme/app",
+  "html_url": "https://evil.example/17",
+  "labels": [],
+  "assignee": null,
+  "body": "Fixes #42",
+  "pull_request": {
+   "url": "https://api.github.com/repos/acme/app/pulls/17",
+   "merged_at": "2026-09-24T13:10:00Z"
+  }
+ },
+ {
+  "number": 16,
+  "title": "Abandoned attempt",
+  "state": "closed",
+  "updated_at": "2026-09-19T10:00:00Z",
+  "repository_url": "https://api.github.com/repos/acme/app",
+  "html_url": "https://evil.example/16",
+  "labels": [],
+  "assignee": null,
+  "body": null,
+  "pull_request": {
+   "url": "https://api.github.com/repos/acme/app/pulls/16",
+   "merged_at": null
+  }
+ }
+]

@@ -23,6 +23,7 @@ import { DaemonClient } from "./test-utils/daemon-client.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
 import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import type { WorkspaceAutoName } from "./workspace-auto-name.js";
+import { withTrustedSurface } from "./test-utils/trusted-surface.js";
 
 interface BrowserToolsDaemonHarness {
   broker: BrowserToolsBroker;
@@ -279,7 +280,7 @@ function createVoiceAssistantWebSocketServer(params: {
   broker: BrowserToolsBroker;
 }): VoiceAssistantWebSocketServer {
   const { httpServer, broker } = params;
-  const agentManager = {
+  const agentManager = withTrustedSurface({
     setAgentAttentionCallback() {},
     subscribe: () => () => {},
     getMetricsSnapshot: () => ({
@@ -288,7 +289,7 @@ function createVoiceAssistantWebSocketServer(params: {
       withActiveForegroundTurn: 0,
       timelineStats: { totalItems: 0, maxItemsPerAgent: 0 },
     }),
-  };
+  });
   const daemonConfigStore = {
     onApply: () => () => {},
     onChange: () => () => {},

@@ -27,7 +27,7 @@ export function createPluginClientRuntime(
     runtime,
     createPluginNavigation({ serverId: installation.serverId, workspaceId: null }),
   );
-  // The answering device's key: present only where this app can hold one.
+  // The answering device's key (CONTRACTS §3.6): present only where this app can hold one.
   const device = getPluginDevice();
   return {
     ...capabilities,

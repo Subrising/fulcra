@@ -1,3 +1,5 @@
+import type { CapturedCodexAdmission } from "../../agent-sdk-types.js";
+import type { TrustedCodexTurnV11 } from "@getpaseo/plugin/server";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { AgentQuotaSnapshot } from "../../agent-sdk-types.js";
@@ -101,14 +103,21 @@ export async function readCodexQuota(
 }
 
 interface CodexTurnAdmission {
-  check: (quota: AgentQuotaSnapshot) => true;
+  check: ((quota: AgentQuotaSnapshot) => true) | CapturedCodexAdmission;
+  turn?: TrustedCodexTurnV11 | null;
   quota: AgentQuotaSnapshot;
   parameters: Record<string, unknown>;
 }
 
 // Must remain synchronous: the caller checks its native revision and then writes.
-export function assertCodexTurnAdmission({ check, quota, parameters }: CodexTurnAdmission): void {
-  if (typeof check !== "function" || check.constructor.name === "AsyncFunction") {
+export function assertCodexTurnAdmission({
+  check,
+  quota,
+  parameters,
+  turn,
+}: CodexTurnAdmission): void {
+  const handler = typeof check === "function" ? check : check?.check;
+  if (typeof handler !== "function" || handler.constructor.name === "AsyncFunction") {
     throw new CodexQuotaError("admission_refused");
   }
   const preparedQuotaMatches =
@@ -116,10 +125,77 @@ export function assertCodexTurnAdmission({ check, quota, parameters }: CodexTurn
     (parameters.model ?? null) === quota.model &&
     (parameters.serviceTier ?? null) === quota.serviceTier;
   if (!preparedQuotaMatches) throw new CodexQuotaError("admission_refused");
-  const verdict: unknown = check(quota);
+  const verdict: unknown =
+    typeof check === "function" ? check(quota) : checkCapturedAdmission(check, turn, quota);
   if (verdict !== true) {
     // A malformed internal callback must not leave an unhandled rejection.
     void Promise.resolve(verdict).catch(() => {});
     throw new CodexQuotaError("admission_refused");
   }
+}
+
+function checkCapturedAdmission(
+  check: CapturedCodexAdmission,
+  turn: TrustedCodexTurnV11 | null | undefined,
+  quota: AgentQuotaSnapshot,
+): unknown {
+  if (!turn || turn.operation !== check.operation || turn.instanceId !== check.instanceId)
+    throw new CodexQuotaError("admission_refused");
+  check.validate();
+  return check.check(turn, quota);
+}
+
+/** Catch only the quota read; submission errors must remain dispatch-unknown. */
+export async function readCodexTurnQuota(options: {
+  read(): Promise<AgentQuotaSnapshot>;
+  validate(): void;
+  admission: ((quota: AgentQuotaSnapshot) => true) | CapturedCodexAdmission;
+  turn: TrustedCodexTurnV11 | null;
+}): Promise<AgentQuotaSnapshot> {
+  try {
+    return await options.read();
+  } catch (error) {
+    if (!(error instanceof CodexQuotaError) || !isQuotaReadFailure(error.code)) throw error;
+    options.validate();
+    if (typeof options.admission !== "function" && options.turn) {
+      try {
+        const result = options.admission.onQuotaReadFailure(options.turn, {
+          code: error.code,
+          nativeDispatched: false,
+        });
+        if (result !== undefined) void Promise.resolve(result).catch(() => undefined);
+      } catch {
+        // The failed callback cannot establish a durable retry receipt or permit dispatch.
+      }
+    }
+    throw new CodexQuotaError("admission_refused");
+  }
+}
+function isQuotaReadFailure(
+  code: CodexQuotaError["code"],
+): code is "unavailable" | "read_failed" | "invalid_reply" {
+  return code === "unavailable" || code === "read_failed" || code === "invalid_reply";
+}
+
+export function capturedCodexTurn(
+  admission: CodexTurnAdmission["check"],
+  nativeSessionId: string,
+  parameters: Record<string, unknown>,
+): TrustedCodexTurnV11 | null {
+  if (typeof admission === "function") return null;
+  if (
+    !admission ||
+    typeof admission !== "object" ||
+    typeof admission.validate !== "function" ||
+    typeof admission.check !== "function" ||
+    typeof admission.onQuotaReadFailure !== "function"
+  )
+    throw new CodexQuotaError("admission_refused");
+  return Object.freeze({
+    operation: admission.operation,
+    instanceId: admission.instanceId,
+    nativeSessionId,
+    model: typeof parameters.model === "string" ? parameters.model : null,
+    serviceTier: typeof parameters.serviceTier === "string" ? parameters.serviceTier : null,
+  });
 }

@@ -18,7 +18,14 @@ import {
   type SidebarShortcutModel,
   type SidebarShortcutSection,
 } from "@/utils/sidebar-shortcuts";
+import { UNNAMED_HOST } from "@/hosts/host-display-name";
 import { statusWorkspaceGroups, type SidebarWorkspaceGroup } from "./sidebar-labels";
+import {
+  OFFLINE_HOSTS_GROUP_KEY,
+  offlineGroupLabel,
+  sortOfflineRows,
+  type OfflineHostSummary,
+} from "./sidebar-offline-hosts";
 
 export interface SidebarProjection {
   pinnedGroups: PinnedSidebarGroups;
@@ -41,6 +48,10 @@ export interface SidebarProjectionInput {
   pinnedWorkspaceOrder: string[];
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   projectNamesByViewKey: Map<string, string>;
+  /** Saved hosts the app cannot reach, keyed by server id. Their rows arrive already marked offline. */
+  offlineHosts?: ReadonlyMap<string, OfflineHostSummary>;
+  /** Display names of saved hosts, for per-host counts on group headers. */
+  hostNames?: ReadonlyMap<string, string>;
   groupMode: SidebarGroupMode;
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
@@ -99,8 +110,64 @@ function buildWorkspaceGroups(
     case "project":
       return [];
     case "status":
-      return statusWorkspaceGroups(
-        buildStatusGroups(unpinnedWorkspaces, input.projectNamesByViewKey),
-      );
+      return buildStatusModeGroups(input, unpinnedWorkspaces);
   }
+}
+
+/**
+ * Status groups describe what is happening now, so they only hold rows whose host is reachable. Rows
+ * from an unreachable host follow in one trailing group: still findable and openable, never counted
+ * as working or waiting on their host's last word.
+ */
+function buildStatusModeGroups(
+  input: SidebarProjectionInput,
+  unpinnedWorkspaces: SidebarWorkspaceEntry[],
+): SidebarWorkspaceGroup[] {
+  const live: SidebarWorkspaceEntry[] = [];
+  const offline: SidebarWorkspaceEntry[] = [];
+  for (const workspace of unpinnedWorkspaces) {
+    (workspace.hostOffline ? offline : live).push(workspace);
+  }
+  const groups = statusWorkspaceGroups(buildStatusGroups(live, input.projectNamesByViewKey)).map(
+    (group) => withHostCounts(group, input.hostNames),
+  );
+  if (offline.length === 0) return groups;
+  const offlineHosts = input.offlineHosts ?? new Map<string, OfflineHostSummary>();
+  const hostsInGroup = [...new Set(offline.map((workspace) => workspace.serverId))].map(
+    (serverId) => offlineHosts.get(serverId) ?? { name: UNNAMED_HOST, since: null },
+  );
+  const hostNames = new Map([...offlineHosts].map(([serverId, host]) => [serverId, host.name]));
+  groups.push(
+    withHostCounts(
+      {
+        key: OFFLINE_HOSTS_GROUP_KEY,
+        label: offlineGroupLabel(hostsInGroup),
+        rows: sortOfflineRows(offline, hostNames),
+        leading: { kind: "offline" },
+      },
+      input.hostNames,
+    ),
+  );
+  return groups;
+}
+
+/**
+ * Per-host row counts for a group that spans more than one host, busiest first, so a collapsed or
+ * long group still says how many sessions each Mac has in it.
+ */
+export function withHostCounts(
+  group: SidebarWorkspaceGroup,
+  hostNames: ReadonlyMap<string, string> | undefined,
+): SidebarWorkspaceGroup {
+  const counts = new Map<string, number>();
+  for (const row of group.rows) counts.set(row.serverId, (counts.get(row.serverId) ?? 0) + 1);
+  if (counts.size < 2) return group;
+  const hostCounts = [...counts]
+    .map(([serverId, count]) => ({
+      serverId,
+      name: hostNames?.get(serverId) ?? UNNAMED_HOST,
+      count,
+    }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return { ...group, hostCounts };
 }

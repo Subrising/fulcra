@@ -1,5 +1,10 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import type { NavigateToWorkspaceInput } from "@/stores/navigation-active-workspace-store";
+import {
+  changeViewRequestKey,
+  parseArchitectureChangeSelection,
+  useChangeViewRequests,
+} from "@/architecture-map/change-view-request";
 import { isHttpUrl } from "@/utils/http-url";
 
 interface HostNavigationOwner {
@@ -19,6 +24,33 @@ export function createPluginHostNavigation(
       owner.openAgent({ serverId: targetServerId ?? serverId, agentId }),
     openWorkspace: ({ workspaceId, serverId: targetServerId }) =>
       owner.openWorkspace({ serverId: targetServerId ?? serverId, workspaceId }),
+    openArchitectureChange: (input) => {
+      const selection = parseArchitectureChangeSelection(input);
+      const destinationServerId = input.serverId ?? serverId;
+      const workspaceId =
+        typeof input.workspaceId === "string" && input.workspaceId.trim()
+          ? owner.resolveWorkspace({
+              serverId: destinationServerId,
+              workspaceId: input.workspaceId,
+            })
+          : null;
+      if (!workspaceId) throw new Error("Workspace is unavailable on the requested host.");
+      useChangeViewRequests
+        .getState()
+        .request(changeViewRequestKey(destinationServerId, workspaceId), selection);
+      try {
+        owner.openWorkspace({
+          serverId: destinationServerId,
+          workspaceId,
+          target: { kind: "architecture_map" },
+        });
+      } catch (error) {
+        useChangeViewRequests
+          .getState()
+          .consume(changeViewRequestKey(destinationServerId, workspaceId));
+        throw error;
+      }
+    },
     openBrowser: owner.browserAvailable
       ? ({ url, workspaceId, serverId: targetServerId }) => {
           if (!isHttpUrl(url)) throw new Error("Only absolute HTTP(S) URLs are supported.");

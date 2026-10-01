@@ -59,7 +59,7 @@ API failures use RFC 9457 problem details. Missing, invalid, or revoked credenti
   "status": 401,
   "detail": "Provide an active Paseo organization credential in the Authorization: Bearer header.",
   "code": "unauthorized",
-  "requestId": "5e967c44-fc22-4f6d-8fc5-1bbff33121af"
+  "requestId": "00000000-0000-4000-8000-000000000000"
 }
 ```
 
@@ -83,9 +83,9 @@ Installation requires `configuration:install`. It creates or updates the organiz
 
 ```json
 {
-  "triggerId": "00000000-0000-4000-8000-000000000001",
+  "triggerId": "00000000-0000-4000-8000-000000000000",
   "name": "manual-task",
-  "revisionId": "00000000-0000-4000-8000-000000000002",
+  "revisionId": "00000000-0000-4000-8000-000000000000",
   "version": 1,
   "active": true
 }

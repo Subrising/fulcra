@@ -3,7 +3,7 @@ import Foundation
 import LocalAuthentication
 import Security
 
-// The iOS device key. A P-256 private key created by the Security framework in the
+// The iOS device key (CONTRACTS §3.6). A P-256 private key created by the Security framework in the
 // Secure Enclave when the device has one (otherwise in the keychain), with an access control that
 // requires the currently enrolled Face ID / Touch ID for every use. The private key cannot be
 // exported; JavaScript only ever receives the public key and DER signatures.

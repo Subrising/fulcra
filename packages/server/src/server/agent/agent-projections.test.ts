@@ -528,3 +528,14 @@ describe("toRecentProviderSessionDescriptorPayload", () => {
     });
   });
 });
+
+it("publishes only the live host instance identity and never persists it", () => {
+  const agent = createManagedAgent({ instanceId: "host-instance" });
+  expect(toAgentPayload(agent).runtimeInstanceId).toBe("host-instance");
+  const record = toStoredAgentRecord(agent);
+  expect(record).not.toHaveProperty("runtimeInstanceId");
+  expect(buildStoredAgentPayload(record, ["claude"])).not.toHaveProperty("runtimeInstanceId");
+  expect(
+    toAgentPayload(createManagedAgent({ instanceId: "closed-instance", lifecycle: "closed" })),
+  ).not.toHaveProperty("runtimeInstanceId");
+});

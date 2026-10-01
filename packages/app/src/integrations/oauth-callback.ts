@@ -1,4 +1,4 @@
-// the sign-in return link `fulcra://oauth/<flowId>?…`. The app hands the URL,
+// Fulcra J4 (CONTRACTS §7.2 v1.4): the sign-in return link `fulcra://oauth/<flowId>?…`. The app hands the URL,
 // unchanged, to the host that started the sign-in (`credentials.complete({ kind: "callback", url })`); the host
 // checks the path, state and expiry itself and consumes the flow once. Nothing here reads or keeps the code.
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -15,7 +15,7 @@ export type OAuthCallbackOutcome =
 
 const START_AGAIN = "Start it again from Settings › Integrations.";
 
-// Sends the link to the one connected host whose client started this flow. The link carries the
+// Sends the link to the one connected host whose client started this flow (R-E-11). The link carries the
 // authorization code and state, so no other host ever receives it: with no owner, or an ambiguous one, nothing
 // is sent.
 export async function forwardOAuthCallback(

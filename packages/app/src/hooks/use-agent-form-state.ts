@@ -1,3 +1,4 @@
+import { resolveDraftEffort } from "@/composer/agent-controls/draft-effort";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
 import type {
@@ -498,8 +499,12 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   const agentDefinition = formState.provider
     ? providerDefinitionMap.get(formState.provider)
     : undefined;
-  const effectiveModel = resolveEffectiveModel(availableModels, formState.model);
-  const availableThinkingOptionsRaw = effectiveModel?.thinkingOptions;
+  const draftEffort = resolveDraftEffort(
+    availableModels ?? [],
+    formState.model,
+    formState.thinkingOptionId,
+  );
+  const availableThinkingOptionsRaw = draftEffort.options;
   const availableThinkingOptions = useMemo(
     () => availableThinkingOptionsRaw ?? [],
     [availableThinkingOptionsRaw],

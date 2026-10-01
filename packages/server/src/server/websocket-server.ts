@@ -1,3 +1,8 @@
+import { DeviceRegistry } from "./pairing/device-registry.js";
+import { generateLocalPairingOffer } from "./pairing-offer.js";
+import { relayUsesTls } from "@getpaseo/protocol/daemon-endpoints";
+import { permissionMessageForWire, permissionsForWire } from "@getpaseo/protocol/permission-wire";
+import type { ManagementAuthentication } from "./plugins/management.js";
 import { stat } from "node:fs/promises";
 import type { CreationSnapshot } from "@getpaseo/protocol/messages";
 import { CreationService } from "./creation/index.js";
@@ -80,17 +85,24 @@ import {
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import {
+  extractHttpBearerToken,
   extractWsBearerProtocol,
   extractWsBearerToken,
-  isBearerTokenValid,
+  selectDaemonProtocol,
+  isBearerTokenValidAsync,
   type DaemonAuthConfig,
 } from "./auth.js";
+import { resolveSessionAdmission } from "./session-admission-auth.js";
 import {
   WebSocketRuntimeMetricsWindow,
   type WebSocketRuntimeCounters,
   type WebSocketRuntimeDiagnosticSnapshot,
 } from "./websocket/runtime-metrics.js";
 import { ProviderUsageService } from "../services/quota-fetcher/service.js";
+import { AccountUsageRegistry } from "../services/quota-fetcher/account-usage-registry.js";
+import { ClaudeAccountUsageReader } from "../services/quota-fetcher/providers/claude-account-usage.js";
+import { CodexAccountUsageReader } from "../services/quota-fetcher/providers/codex-account-usage.js";
+import { createFulcraPoolRoster } from "../services/quota-fetcher/fulcra-pool-roster.js";
 import { getProcessMemoryDiagnostics, getProcessUptimeSeconds } from "./process-diagnostics.js";
 import {
   CLIENT_SHUTDOWN_RPC_REASON,
@@ -101,6 +113,7 @@ import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import type { DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
 import { DirectorySyncService } from "./directory-sync/index.js";
+import { AccountActionsAudit } from "./plugins/account-actions.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import type { WorkspaceLabelService } from "./workspace-labels/index.js";
 import {
@@ -120,9 +133,12 @@ export interface ExternalSocketMetadata {
   externalSessionKey?: string;
   relayConnectionId?: string;
   hubDaemonId?: string;
+  admission?: SessionAdmission;
 }
 
 export interface SessionAdmission {
+  deviceId?: string;
+  authentication?: ManagementAuthentication;
   principalId: string;
   permissions: readonly DaemonPermission[];
   hubExecutionAgents?: HubExecutionAgents;
@@ -132,10 +148,12 @@ interface PendingConnection {
   connectionLogger: pino.Logger;
   helloTimeout: ReturnType<typeof setTimeout> | null;
   identity: WebSocketConnectionIdentity;
-  admission: SessionAdmission;
+  admission: SessionAdmission | null;
+  authenticating: boolean;
 }
 
 interface WebSocketConnectionIdentity {
+  deviceId?: string;
   connectionId: string;
   transport: "direct" | "relay" | "hub";
   peer: "loopback" | "local_ipc" | "external";
@@ -284,6 +302,7 @@ function createFallbackWorkspaceGitService(): WorkspaceGitService {
         nativeTrackedFileCount: 0,
         pendingEventCount: 0,
         pendingReconciliationWorkCount: 0,
+        pendingClassificationCount: 0,
         reconciliationInFlightCount: 0,
         reconciliationCount: 0,
         scopedReconciliationCount: 0,
@@ -456,6 +475,7 @@ interface PluginSessionConnection extends SessionConnectionBase {
 type SessionConnection = ReconnectableSessionConnection | PluginSessionConnection;
 
 interface SocketSessionOptions {
+  authentication?: ManagementAuthentication;
   clientId: string;
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
@@ -480,6 +500,8 @@ interface ClosePhysicalSocketParams {
 }
 
 const SLOW_REQUEST_THRESHOLD_MS = 500;
+// A pairing invite is handed straight to a new device; keep it short-lived (the owner's own offers stay 10 min).
+const INVITE_TTL_SECONDS = 300;
 const EXTERNAL_SESSION_DISCONNECT_GRACE_MS = 90_000;
 const HELLO_TIMEOUT_MS = 15_000;
 const WS_CLOSE_HELLO_TIMEOUT = 4001;
@@ -492,6 +514,49 @@ const OWNER_SESSION_ADMISSION: SessionAdmission = {
   principalId: "owner",
   permissions: OWNER_PERMISSIONS,
 };
+
+type SessionRequest = Extract<WSInboundMessage, { type: "session" }>["message"];
+type PairingRpc = Extract<
+  SessionRequest,
+  {
+    type:
+      | "daemon.get_pairing_offer.request"
+      | "daemon.list_paired_devices.request"
+      | "daemon.revoke_paired_device.request"
+      | "daemon.unpair_self.request"
+      | "daemon.set_relay_endpoint.request";
+  }
+>;
+function isPairingRpc(rpc: SessionRequest): rpc is PairingRpc {
+  return (
+    rpc.type === "daemon.get_pairing_offer.request" ||
+    rpc.type === "daemon.list_paired_devices.request" ||
+    rpc.type === "daemon.revoke_paired_device.request" ||
+    rpc.type === "daemon.unpair_self.request" ||
+    rpc.type === "daemon.set_relay_endpoint.request"
+  );
+}
+// Pair once, see every Mac: invites are authorised in their own handler (see handlePairingInviteRpc).
+type PairingInviteRpc = Extract<
+  SessionRequest,
+  {
+    type:
+      | "daemon.pairing.invite.request"
+      | "daemon.pairing.invite.allow.request"
+      | "daemon.pairing.command_centre.allow.request"
+      | "daemon.pairing.accounts_manage.allow.request"
+      | "daemon.accounts_audit.list.request";
+  }
+>;
+function isPairingInviteRpc(rpc: SessionRequest): rpc is PairingInviteRpc {
+  return (
+    rpc.type === "daemon.pairing.invite.request" ||
+    rpc.type === "daemon.pairing.invite.allow.request" ||
+    rpc.type === "daemon.pairing.command_centre.allow.request" ||
+    rpc.type === "daemon.pairing.accounts_manage.allow.request" ||
+    rpc.type === "daemon.accounts_audit.list.request"
+  );
+}
 
 export class MissingDaemonVersionError extends Error {
   constructor() {
@@ -548,6 +613,8 @@ export class VoiceAssistantWebSocketServer {
   private readonly workspaceAutoName: WorkspaceAutoName;
   private readonly downloadTokenStore: DownloadTokenStore;
   private readonly paseoHome: string;
+  private readonly passwordHash: string | undefined;
+  private readonly credentialSource: DaemonAuthConfig | undefined;
   private readonly worktreesRoot: string | undefined;
   private readonly daemonConfigStore: DaemonConfigStore;
   private readonly pushNotifications: PushNotifications;
@@ -583,6 +650,7 @@ export class VoiceAssistantWebSocketServer {
   private unsubscribeSpeechReadiness: (() => void) | null = null;
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
   private readonly providerUsageService: ProviderUsageService;
+  private readonly accountUsage: AccountUsageRegistry;
   private unsubscribeTerminalActivity: (() => void) | null = null;
   private readonly browserToolsBroker: BrowserToolsBroker | null;
   private readonly hubRelationships: HubRelationshipManagement | null;
@@ -671,6 +739,7 @@ export class VoiceAssistantWebSocketServer {
       throw new MissingDaemonVersionError();
     }
     this.daemonVersion = daemonVersion.trim();
+    this.credentialSource = auth;
     this.daemonRuntimeConfig = daemonRuntimeConfig;
     this.browserToolsBroker = browserToolsBroker ?? null;
     this.hubRelationships = hubRelationships ?? null;
@@ -680,6 +749,7 @@ export class VoiceAssistantWebSocketServer {
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
+    agentManager.setNativeMessageReceipts(this.messageReceipts);
     this.creationService = new CreationService(
       join(paseoHome, "creations"),
       this.logger.child({ module: "creation" }),
@@ -700,6 +770,7 @@ export class VoiceAssistantWebSocketServer {
     this.workspaceAutoName = workspaceAutoName;
     this.downloadTokenStore = downloadTokenStore;
     this.paseoHome = paseoHome;
+    this.passwordHash = auth?.password;
     this.worktreesRoot = daemonRuntimeConfig?.worktreesRoot;
     this.daemonConfigStore = daemonConfigStore;
     this.mcpBaseUrl = mcpBaseUrl;
@@ -756,6 +827,18 @@ export class VoiceAssistantWebSocketServer {
     this.providerUsageService = new ProviderUsageService({
       logger: this.logger,
     });
+    // update-7c: per-account usage for the Fulcra account pool (Claude and Codex readers).
+    // Match the trusted distribution home; the daemon's inherited shell environment is not the plugin home.
+    this.accountUsage = new AccountUsageRegistry({
+      logger: this.logger,
+      readers: [
+        new ClaudeAccountUsageReader({ logger: this.logger }),
+        new CodexAccountUsageReader({ logger: this.logger }),
+      ],
+      roster: createFulcraPoolRoster({ root: join(paseoHome, "command-centre") }),
+      sessions: () => this.agentManager.listPooledUsageSessions(),
+    });
+    this.accountUsage.start();
 
     this.wss = this.createWebSocketServer(server, wsConfig, auth);
     this.startRuntimeMetricsInterval();
@@ -866,7 +949,11 @@ export class VoiceAssistantWebSocketServer {
 
   // Main-loop stall visibility: terminal frames and agent traffic share one event
   // loop, so delay percentiles here are the ground truth for "the daemon is busy".
-  private snapshotEventLoopDelay(): { p50Ms: number; p99Ms: number; maxMs: number } | null {
+  private snapshotEventLoopDelay(): {
+    p50Ms: number;
+    p99Ms: number;
+    maxMs: number;
+  } | null {
     const monitor = this.eventLoopDelayMonitor;
     if (!monitor) {
       return null;
@@ -915,28 +1002,71 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
+  private pendingPasswordChecks = 0;
+
   private async attachAuthenticatedSocket(
     ws: WebSocket,
     request: IncomingMessage,
     password: string | undefined,
   ): Promise<void> {
-    if (password) {
-      const requestMetadata = extractSocketRequestMetadata(request);
+    // WebSocket clients send hello as soon as the upgrade opens. Pause the TCP
+    // reader while bcrypt yields, then resume only after session listeners exist.
+    ws.pause();
+    try {
       const protocol = extractWsBearerProtocol(request.headers["sec-websocket-protocol"]);
-      const token = extractWsBearerToken(protocol);
-      const isAuthorized = isBearerTokenValid({ password, token });
-      if (!isAuthorized) {
-        const reason = token === null ? "Password required" : "Incorrect password";
-        this.logger.warn(
-          { ...requestMetadata, hasToken: token !== null },
-          "Rejected WebSocket connection with invalid daemon password",
-        );
-        ws.close(WS_CLOSE_DAEMON_AUTH_FAILED, reason);
-        return;
+      const token =
+        extractWsBearerToken(protocol) ?? extractHttpBearerToken(request.headers.authorization);
+      const hasHeaderCredential = token !== null;
+      if (password && hasHeaderCredential) {
+        const requestMetadata = extractSocketRequestMetadata(request);
+        if (this.pendingPasswordChecks >= 4) {
+          ws.close(1013, "Authentication busy; retry shortly");
+          return;
+        }
+        if ((token?.length ?? 0) > 1024) {
+          ws.close(WS_CLOSE_DAEMON_AUTH_FAILED, "Authentication capacity exceeded");
+          return;
+        }
+        let isAuthorized = false;
+        this.pendingPasswordChecks++;
+        try {
+          isAuthorized = await isBearerTokenValidAsync({ password, token });
+        } catch {
+          isAuthorized = false;
+        } finally {
+          this.pendingPasswordChecks--;
+        }
+        if (ws.readyState !== 1) return;
+        if (!isAuthorized) {
+          const reason = token === null ? "Password required" : "Incorrect password";
+          this.logger.warn(
+            { ...requestMetadata, hasToken: token !== null },
+            "Rejected WebSocket connection with invalid daemon password",
+          );
+          ws.close(WS_CLOSE_DAEMON_AUTH_FAILED, reason);
+          return;
+        }
       }
-    }
 
-    await this.attachSocket(ws, request);
+      const admission =
+        hasHeaderCredential || !password
+          ? {
+              ...OWNER_SESSION_ADMISSION,
+              ...(password
+                ? {
+                    authentication: {
+                      id: "owner",
+                      authentication: "daemon-password" as const,
+                      deviceId: null,
+                    },
+                  }
+                : {}),
+            }
+          : null;
+      await this.attachSocket(ws, request, undefined, false, admission);
+    } finally {
+      ws.resume();
+    }
   }
 
   public broadcast(message: WSOutboundMessage): void {
@@ -983,13 +1113,79 @@ export class VoiceAssistantWebSocketServer {
   public async attachExternalSocket(
     ws: WebSocketLike,
     metadata?: ExternalSocketMetadata,
-    admission: SessionAdmission = OWNER_SESSION_ADMISSION,
+    admission: SessionAdmission | undefined = metadata?.admission,
     initialHello?: WSHelloMessage,
   ): Promise<void> {
     if (metadata?.transport === "relay") {
+      if (!this.relayAdmissionAllowed(admission)) {
+        ws.close(4403, "Not paired");
+        return;
+      }
       this.incrementRuntimeCounter("relayExternalSocketAttached");
     }
-    await this.attachSocket(ws, undefined, metadata, false, admission, initialHello);
+    await this.attachSocket(
+      ws,
+      undefined,
+      metadata,
+      false,
+      admission ?? OWNER_SESSION_ADMISSION,
+      initialHello,
+    );
+  }
+
+  /**
+   * The relay gate. A relay socket is a paired device's own principal, never access management. It carries Command
+   * Centre authority only as that device's paired-device authentication, and only while this Mac's owner has
+   * granted the device Command Centre (read fresh here, so a removed or suspended grant is refused).
+   */
+  private relayAdmissionAllowed(admission: SessionAdmission | undefined): boolean {
+    if (!admission?.deviceId || admission.principalId !== `device:${admission.deviceId}`)
+      return false;
+    if (admission.permissions.includes("access.manage")) return false;
+    const manages = admission.permissions.includes("command-centre.manage");
+    // U7: account management only rides on full management, and only while the owner's grant stands (read fresh).
+    if (
+      admission.permissions.includes("accounts.manage") &&
+      (!manages || !new DeviceRegistry(this.paseoHome).hasAccountsManage(admission.deviceId))
+    )
+      return false;
+    const auth = admission.authentication;
+    if (!auth) return !manages;
+    // D13: a read-only grant authenticates the device for Command Centre READS only: it holds no management
+    // permission, and every plugin call and management command it makes is checked as a read (session, host).
+    if (!manages)
+      return (
+        auth.authentication === "paired-device" &&
+        auth.id === admission.principalId &&
+        auth.deviceId === admission.deviceId &&
+        !admission.permissions.includes("daemon.manage") &&
+        new DeviceRegistry(this.paseoHome).hasReadOnlyCommandCentre(admission.deviceId)
+      );
+    return (
+      manages &&
+      auth.authentication === "paired-device" &&
+      auth.id === admission.principalId &&
+      auth.deviceId === admission.deviceId &&
+      new DeviceRegistry(this.paseoHome).hasCommandCentre(admission.deviceId)
+    );
+  }
+
+  public closeDeviceSockets(deviceId: string, code = 4403, reason = "Device unpaired"): void {
+    const connections = new Set<SessionConnection>(
+      [...this.externalSessionsByKey.values()].filter(
+        (connection) => connection.principalId === `device:${deviceId}`,
+      ),
+    );
+    for (const [ws, identity] of this.socketIdentities) {
+      if (identity.deviceId !== deviceId) continue;
+      const connection = this.sessions.get(ws);
+      if (connection) connections.add(connection);
+      // Detach immediately: a WebSocket close handshake alone leaves a window
+      // in which buffered requests could still execute.
+      void this.detachSocket(ws, { code, reason });
+      ws.close(code, reason);
+    }
+    for (const connection of connections) void this.cleanupConnection(connection, "Device revoked");
   }
 
   public async attachPluginSocket(
@@ -1006,7 +1202,7 @@ export class VoiceAssistantWebSocketServer {
     this.pluginSocketIds.set(ws, pluginId);
     this.pluginSocketCleanup.set(ws, resolve);
     try {
-      await this.attachSocket(ws, undefined, undefined, true);
+      await this.attachSocket(ws, undefined, undefined, true, OWNER_SESSION_ADMISSION);
     } catch (error) {
       this.pluginSocketIds.delete(ws);
       this.finishPluginSocketCleanup(ws);
@@ -1020,7 +1216,7 @@ export class VoiceAssistantWebSocketServer {
     permissions: readonly DaemonPermission[],
   ): void {
     for (const pending of this.pendingConnections.values()) {
-      if (pending.admission.principalId === principalId) {
+      if (pending.admission?.principalId === principalId) {
         pending.admission = { ...pending.admission, permissions };
       }
     }
@@ -1042,6 +1238,7 @@ export class VoiceAssistantWebSocketServer {
   }
 
   public async close(): Promise<void> {
+    this.accountUsage.stop();
     this.prepareForShutdown();
     this.unsubscribeSpeechReadiness?.();
     this.unsubscribeSpeechReadiness = null;
@@ -1163,9 +1360,15 @@ export class VoiceAssistantWebSocketServer {
       return;
     }
 
-    const payloadBytes = outboundFrameByteLength(payload);
+    const legacyMessage = permissionMessageForWire(message, false);
+    const legacyPayload = legacyMessage === message ? payload : JSON.stringify(legacyMessage);
     for (const ws of writableSockets) {
-      this.sendFrameToClient(ws, payload, payloadBytes, () => {
+      const capable =
+        this.sessions
+          .get(ws)
+          ?.session.supportsForSource?.(CLIENT_CAPS.commandCentrePermission, ws) === true;
+      const wirePayload = capable ? payload : legacyPayload;
+      this.sendFrameToClient(ws, wirePayload, outboundFrameByteLength(wirePayload), () => {
         this.runtimeMetrics.recordOutboundMessage(message, ws.bufferedAmount);
       });
     }
@@ -1288,7 +1491,7 @@ export class VoiceAssistantWebSocketServer {
     request?: unknown,
     metadata?: ExternalSocketMetadata,
     allowDuringStartup = false,
-    admission: SessionAdmission = OWNER_SESSION_ADMISSION,
+    admission: SessionAdmission | null = null,
     initialHello?: WSHelloMessage,
   ): Promise<void> {
     if (
@@ -1305,6 +1508,7 @@ export class VoiceAssistantWebSocketServer {
 
     const requestMetadata = extractSocketRequestMetadata(request);
     const identity = createWebSocketConnectionIdentity(requestMetadata, metadata);
+    if (admission?.deviceId) identity.deviceId = admission.deviceId;
     this.socketIdentities.set(ws, identity);
     const connectionLogger = this.logger.child(toConnectionLogFields(identity));
 
@@ -1313,6 +1517,7 @@ export class VoiceAssistantWebSocketServer {
       helloTimeout: null,
       identity,
       admission,
+      authenticating: false,
     };
     const timeout = setTimeout(() => {
       if (this.pendingConnections.get(ws) !== pending) {
@@ -1344,9 +1549,7 @@ export class VoiceAssistantWebSocketServer {
       },
       "Client connected; awaiting hello",
     );
-    if (initialHello) {
-      this.handleHello({ ws, message: initialHello, pending });
-    }
+    if (initialHello) await this.handleHelloSafely({ ws, message: initialHello, pending });
   }
 
   private createSessionConnection(params: {
@@ -1367,6 +1570,7 @@ export class VoiceAssistantWebSocketServer {
       appVersion,
       clientCapabilities,
       permissions: admission.permissions,
+      authentication: admission.authentication,
       connectionLogger,
       onMessage: (msg) => {
         if (!connection) {
@@ -1429,8 +1633,23 @@ export class VoiceAssistantWebSocketServer {
     };
     connection =
       lifecycle.kind === "ephemeral-plugin"
-        ? { ...base, lifecycle: "ephemeral-plugin", pluginId: lifecycle.pluginId }
-        : { ...base, lifecycle: "reconnectable", externalDisconnectCleanupTimeout: null };
+        ? {
+            ...base,
+            lifecycle: "ephemeral-plugin",
+            pluginId: lifecycle.pluginId,
+          }
+        : {
+            ...base,
+            lifecycle: "reconnectable",
+            externalDisconnectCleanupTimeout: null,
+          };
+    session.admitManagementSource(
+      ws,
+      lifecycle.kind === "reconnectable" && admission.authentication?.id === admission.principalId
+        ? admission.authentication
+        : undefined,
+      admission.permissions,
+    );
     session.updateClientCapabilities(clientCapabilities, ws, appVersion);
     return connection;
   }
@@ -1485,6 +1704,7 @@ export class VoiceAssistantWebSocketServer {
       terminalManager: this.terminalManager,
       providerSnapshotManager: this.providerSnapshotManager,
       providerUsageService: this.providerUsageService,
+      accountUsage: this.accountUsage,
       hubExecutionAgents: options.hubExecutionAgents,
       hubRelationships: options.hubRelationships,
       serviceProxy: this.serviceProxy ?? undefined,
@@ -1544,14 +1764,14 @@ export class VoiceAssistantWebSocketServer {
     return pending;
   }
 
-  private handleHello(params: {
+  private async handleHello(params: {
     ws: WebSocketLike;
     message: WSHelloMessage;
     pending: PendingConnection;
-  }): void {
+  }): Promise<void> {
     const { ws, message, pending } = params;
 
-    if (message.protocolVersion !== WS_PROTOCOL_VERSION) {
+    if (message.protocolVersion < 1) {
       this.clearPendingConnection(ws);
       pending.connectionLogger.warn(
         {
@@ -1560,13 +1780,12 @@ export class VoiceAssistantWebSocketServer {
         },
         "Rejected hello due to protocol version mismatch",
       );
-      try {
-        ws.close(WS_CLOSE_INCOMPATIBLE_PROTOCOL, "Incompatible protocol version");
-      } catch {
-        // ignore close errors
-      }
+      await this.rejectHello(ws, message, "incompatible_protocol");
       return;
     }
+
+    pending.authenticating = true;
+    if (!pending.admission && !(await this.admitPendingHello(ws, message, pending))) return;
 
     const clientId = message.clientId.trim();
     if (clientId.length === 0) {
@@ -1593,11 +1812,13 @@ export class VoiceAssistantWebSocketServer {
     }
 
     this.clearPendingConnection(ws);
+    const admitted = pending.admission;
+    if (!admitted) throw new Error("Admitted hello has no session admission");
     pending.identity.clientId = clientId;
     if (message.appVersion) {
       pending.identity.appVersion = message.appVersion;
     }
-    const sessionKey = sessionConnectionKey(pending.admission.principalId, clientId);
+    const sessionKey = sessionConnectionKey(admitted.principalId, clientId);
     const existing = pluginId ? undefined : this.externalSessionsByKey.get(sessionKey);
     if (existing) {
       this.resumeSession({ ws, message, pending, existing });
@@ -1613,14 +1834,14 @@ export class VoiceAssistantWebSocketServer {
       clientCapabilities: message.capabilities ?? null,
       connectionLogger,
       lifecycle: pluginId ? { kind: "ephemeral-plugin", pluginId } : { kind: "reconnectable" },
-      admission: pending.admission,
+      admission: admitted,
     });
     this.sessions.set(ws, connection);
     if (connection.lifecycle === "reconnectable") {
       this.externalSessionsByKey.set(sessionKey, connection);
     }
     pending.identity.sessionId = connection.session.getSessionId();
-    this.sendToClient(ws, this.createServerInfoMessage(connection.session));
+    this.sendToClient(ws, this.createServerInfoMessage(connection.session, ws));
     connection.connectionLogger.info(
       {
         ...toConnectionLogFields(pending.identity),
@@ -1631,6 +1852,105 @@ export class VoiceAssistantWebSocketServer {
     );
   }
 
+  private handleHelloSafely(params: {
+    ws: WebSocketLike;
+    message: WSHelloMessage;
+    pending: PendingConnection;
+  }): Promise<void> {
+    return this.handleHello(params).catch((error: unknown) => {
+      try {
+        this.handleRawMessageError({
+          ws: params.ws,
+          data: "",
+          error,
+          log: params.pending.connectionLogger,
+        });
+      } catch {
+        // The error reporter must not turn a connection failure into a process failure.
+      } finally {
+        try {
+          params.ws.close(WS_CLOSE_INVALID_HELLO, "Invalid hello");
+        } catch {
+          // The transport may already be closed.
+        }
+      }
+    });
+  }
+
+  private async admitPendingHello(
+    ws: WebSocketLike,
+    message: WSHelloMessage,
+    pending: PendingConnection,
+  ): Promise<boolean> {
+    if (pending.admission) return true;
+    try {
+      const password = message.auth?.kind === "password" ? message.auth.password : null;
+      if ((password?.length ?? 0) > 1024 || this.pendingPasswordChecks >= 4) {
+        this.clearPendingConnection(ws);
+        await this.rejectHello(ws, message, "incorrect_password");
+        return false;
+      }
+      this.pendingPasswordChecks++;
+      let resolved: Awaited<ReturnType<typeof resolveSessionAdmission>>;
+      try {
+        resolved = await resolveSessionAdmission({
+          credential: message.auth,
+          passwordHash: this.passwordHash,
+          localCredential: this.credentialSource?.localCredential?.() ?? null,
+          transport: pending.identity.transport === "relay" ? "relay" : "direct",
+        });
+      } finally {
+        this.pendingPasswordChecks--;
+      }
+      if (this.pendingConnections.get(ws) !== pending) return false;
+      if ("rejection" in resolved) {
+        this.clearPendingConnection(ws);
+        await this.rejectHello(ws, message, resolved.rejection);
+        return false;
+      }
+      pending.admission = resolved.admission;
+      return true;
+    } catch (error) {
+      pending.connectionLogger.error({ err: error }, "Failed to resolve hello credential");
+      if (this.pendingConnections.get(ws) === pending) {
+        this.clearPendingConnection(ws);
+        await this.rejectHello(ws, message, "incorrect_password");
+      }
+      return false;
+    }
+  }
+
+  private async rejectHello(
+    ws: WebSocketLike,
+    hello: WSHelloMessage,
+    reason: "password_required" | "incorrect_password" | "incompatible_protocol",
+  ): Promise<void> {
+    // Older clients discard unknown frames, then use the close code and reason.
+    // They never send hello.auth, so avoid sending an unknown envelope to them.
+    if (hello.auth || hello.capabilities?.[CLIENT_CAPS.helloRejection] === true) {
+      try {
+        await ws.send(JSON.stringify({ type: "hello.rejected", reason, accepts: ["password"] }));
+      } catch {
+        // The close reason remains the compatibility signal.
+      }
+    }
+    const closeReason = {
+      password_required: "Password required",
+      incorrect_password: "Incorrect password",
+      incompatible_protocol: "Incompatible protocol version",
+    }[reason];
+    try {
+      ws.close(
+        reason === "incompatible_protocol"
+          ? WS_CLOSE_INCOMPATIBLE_PROTOCOL
+          : WS_CLOSE_DAEMON_AUTH_FAILED,
+        closeReason,
+      );
+    } catch {
+      // Ignore a transport that closed while the rejection was sent.
+    }
+  }
+
   private resumeSession(params: {
     ws: WebSocketLike;
     message: WSHelloMessage;
@@ -1638,6 +1958,11 @@ export class VoiceAssistantWebSocketServer {
     existing: ReconnectableSessionConnection;
   }): void {
     const { ws, message, pending, existing } = params;
+    const admission = pending.admission;
+    if (!admission) {
+      ws.close(WS_CLOSE_DAEMON_AUTH_FAILED, "Missing session admission");
+      return;
+    }
     this.incrementRuntimeCounter("helloResumed");
     if (existing.externalDisconnectCleanupTimeout) {
       clearTimeout(existing.externalDisconnectCleanupTimeout);
@@ -1659,10 +1984,15 @@ export class VoiceAssistantWebSocketServer {
     ) {
       existing.clientCapabilities = newClientCapabilities;
     }
+    existing.session.admitManagementSource(
+      ws,
+      admission.authentication?.id === admission.principalId ? admission.authentication : undefined,
+      admission.permissions,
+    );
     existing.sockets.add(ws);
     this.sessions.set(ws, existing);
     pending.identity.sessionId = existing.session.getSessionId();
-    this.sendToClient(ws, this.createServerInfoMessage(existing.session));
+    this.sendToClient(ws, this.createServerInfoMessage(existing.session, ws));
     pending.connectionLogger.info(
       {
         ...toConnectionLogFields(pending.identity),
@@ -1673,20 +2003,39 @@ export class VoiceAssistantWebSocketServer {
     );
   }
 
-  private buildServerInfoStatusPayload(session: Session): ServerInfoStatusPayload {
+  private buildServerInfoStatusPayload(session: Session, capable = false): ServerInfoStatusPayload {
     return {
       status: "server_info",
+      protocolVersion: WS_PROTOCOL_VERSION,
       serverId: this.serverId,
       hostname: getHostname(),
       version: this.daemonVersion,
-      permissions: session.getPermissions(),
+      permissions: permissionsForWire(session.getPermissions(), capable),
       // COMPAT(desktopManaged): added in v0.1.X, remove optional parsing after 2027-01-16.
       desktopManaged: this.daemonRuntimeConfig?.desktopManaged === true,
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
         ownedSubscriptions: true,
         agentRequestReceipts: true,
+        // Schema availability only; the draft still requires current workspace.write.
+        gitAiDrafts: true,
+        // Legacy injected runtimes without the concrete guarded pager remain unavailable.
+        ...(this.pluginRuntime?.catalogPaging?.() ? { pluginCatalogPaging: true } : {}),
+        // Explicit authenticated delegated queue; not ordinary human/Claude conversion.
+        nativeQueuedMessages: true,
+        nativeOwnerReportInbox: true,
+        nativeEvidenceIndex: true,
+        managedArtifactContent: true,
+        managedArtifactIndex: true,
         interruptedTurn: true,
+        // COMPAT(pairingInvites): added 2026-09-29; remove gate after 2027-09-29.
+        pairingInvites: true,
+        // COMPAT(deviceCommandCentre): added 2026-09-29 (L46 option 5); remove gate after 2027-09-29.
+        deviceCommandCentre: true,
+        // COMPAT(deviceReadOnlyTier): added 2026-10-01 (D13); remove gate after 2027-10-01.
+        deviceReadOnlyTier: true,
+        // COMPAT(deviceAccountsManage): added 2026-09-30 (U7); remove gate after 2027-09-30.
+        deviceAccountsManage: true,
         workspaceRequestReceipts: true,
         creationLifecycle: true,
         hubAgentRpc: true,
@@ -1739,6 +2088,11 @@ export class VoiceAssistantWebSocketServer {
         pluginThemes: true,
         pluginNotifications: this.hostIntegrations?.notifications !== undefined,
         checkoutFileAtCommit: true,
+        architectureChangeGenerate: true,
+        architectureGraph: true,
+        pullRequestReview: true,
+        insights: true,
+        automations: true,
         credentials: this.hostIntegrations?.credentials !== undefined,
         pluginSettings: true,
         pluginTimelineItems: true,
@@ -1777,11 +2131,13 @@ export class VoiceAssistantWebSocketServer {
         workspaceFileEditing: true,
         // COMPAT(providerUsageList): added in v0.1.98, drop the gate when daemon floor >= v0.1.98.
         providerUsageList: true,
+        pooledAccountUsageList: true,
         agentQuotaRead: true,
         agentMcpRefresh: true,
         agentMcpReconnect: true,
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
         agentDetach: true,
+        agentParentAdopt: true,
         // COMPAT(agentThinkingUpdate): added in v0.2.4, remove gate after 2027-01-28.
         agentThinkingUpdate: true,
         // COMPAT(daemonDiagnostics): added in v0.1.100, remove gate after 2026-12-25 once daemon floor >= v0.1.100.
@@ -1812,6 +2168,9 @@ export class VoiceAssistantWebSocketServer {
         projectCreateDirectory: true,
         // COMPAT(commitsList): added in v0.1.110, remove gate after 2027-01-16.
         commitsList: true,
+        commitTopology: true,
+        containedFileIndex: true,
+        stashApplyBySha: true,
         // COMPAT(commitBaseClassification): added in v0.2.0, remove gate after 2027-01-23.
         commitBaseClassification: true,
         // COMPAT(providerRemoval): added in v0.1.105, drop the gate when floor >= v0.1.105.
@@ -1848,12 +2207,15 @@ export class VoiceAssistantWebSocketServer {
     };
   }
 
-  private createServerInfoMessage(session: Session): WSOutboundMessage {
+  private createServerInfoMessage(session: Session, source: WebSocketLike): WSOutboundMessage {
     return {
       type: "session",
       message: {
         type: "status",
-        payload: this.buildServerInfoStatusPayload(session),
+        payload: this.buildServerInfoStatusPayload(
+          session,
+          session.supportsForSource?.(CLIENT_CAPS.commandCentrePermission, source) === true,
+        ),
       },
     };
   }
@@ -1878,7 +2240,7 @@ export class VoiceAssistantWebSocketServer {
         continue;
       connection.session.publish({
         type: "status",
-        payload: this.buildServerInfoStatusPayload(connection.session),
+        payload: this.buildServerInfoStatusPayload(connection.session, true),
       });
     }
   }
@@ -1967,6 +2329,7 @@ export class VoiceAssistantWebSocketServer {
 
     this.sessions.delete(ws);
     connection.sockets.delete(ws);
+    connection.session.revokeManagementSource(ws);
     connection.session.clearAgentTimelineSubscription(ws);
     this.socketIdentities.delete(ws);
 
@@ -2152,8 +2515,8 @@ export class VoiceAssistantWebSocketServer {
     pendingConnection: PendingConnection;
   }): void {
     const { ws, message, pendingConnection } = params;
-    if (message.type === "hello") {
-      this.handleHello({
+    if (message.type === "hello" && !pendingConnection.authenticating) {
+      void this.handleHelloSafely({
         ws,
         message,
         pending: pendingConnection,
@@ -2223,7 +2586,7 @@ export class VoiceAssistantWebSocketServer {
       const message = parsedMessage.data;
       this.recordInboundMessageType(message.type);
 
-      if (message.type === "ping") {
+      if (message.type === "ping" && activeConnection) {
         // A plugin socket is IPC to a child this daemon already supervises, not
         // an abandonable application socket.
         if (!this.pluginSocketIds.has(ws)) {
@@ -2233,16 +2596,16 @@ export class VoiceAssistantWebSocketServer {
         return;
       }
 
-      if (message.type === "recording_state") {
-        return;
-      }
-
       if (pendingConnection) {
         this.handlePendingConnectionMessage({
           ws,
           message,
           pendingConnection,
         });
+        return;
+      }
+
+      if (message.type === "recording_state") {
         return;
       }
 
@@ -2273,13 +2636,12 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
-  private async dispatchSessionMessage(
+  private logControlRpc(
     ws: WebSocketLike,
     activeConnection: SessionConnection,
-    message: Extract<WSInboundMessage, { type: "session" }>,
-  ): Promise<void> {
-    this.recordInboundSessionRequestType(message.message.type);
-    const controlRpc = getControlRpcLogInfo(message.message);
+    request: Extract<WSInboundMessage, { type: "session" }>["message"],
+  ): void {
+    const controlRpc = getControlRpcLogInfo(request);
     if (controlRpc) {
       const identity = this.socketIdentities.get(ws);
       let connectionFields: Record<string, unknown>;
@@ -2295,6 +2657,300 @@ export class VoiceAssistantWebSocketServer {
         },
         "ws_control_rpc_received",
       );
+    }
+  }
+
+  /** A direct loopback or local-IPC owner socket that is not a plugin socket. */
+  private isLocalOwnerConnection(
+    ws: WebSocketLike,
+    activeConnection: SessionConnection,
+    identity: WebSocketConnectionIdentity | undefined,
+  ): boolean {
+    return (
+      !this.pluginSocketIds.has(ws) &&
+      activeConnection.principalId === "owner" &&
+      identity?.transport === "direct" &&
+      (identity.peer === "loopback" || identity.peer === "local_ipc")
+    );
+  }
+
+  /** Pairing and relay-address RPCs: authorised here, before any reply. */
+  private async handlePairingRpc(
+    ws: WebSocketLike,
+    activeConnection: SessionConnection,
+    rpc: PairingRpc,
+  ): Promise<void> {
+    const identity = this.socketIdentities.get(ws);
+    const permissions = activeConnection.session.getPermissions();
+    const registry = new DeviceRegistry(this.paseoHome);
+    const localOwner = this.isLocalOwnerConnection(ws, activeConnection, identity);
+    const { delivery } = activeConnection.session;
+    // Replies go through the session's delivery so they carry the request's proof: a modern client's socket drops
+    // any session message without one (this is why the paired-devices list used to time out).
+    const emit = (reply: SessionOutboundMessage) => {
+      if (!delivery.reply(reply)) this.sendToClient(ws, { type: "session", message: reply });
+    };
+    const revoke = async (
+      deviceId: string,
+      close: (id: string, code: number, reason: string) => void,
+    ) => {
+      try {
+        await registry.revoke(deviceId, close);
+      } catch (error) {
+        // Self-unpair closes its requester before persistence. Keep a local
+        // operator-visible failure even though that socket can no longer reply.
+        this.logger.warn(
+          { deviceId },
+          "Device remains denied in memory; revocation persistence failed. Retry or revoke offline before restart.",
+        );
+        throw error;
+      }
+    };
+    await delivery.request(ws, rpc, async () => {
+      try {
+        if (rpc.type === "daemon.get_pairing_offer.request") {
+          if (!localOwner || !permissions.includes("access.manage"))
+            throw new Error("Pair new devices from this Mac");
+          await activeConnection.session.handleMessage(rpc, ws);
+        } else if (rpc.type === "daemon.set_relay_endpoint.request") {
+          if (!localOwner || !permissions.includes("daemon.manage"))
+            throw new Error("Use a local owner connection to change the relay address");
+          const useTls = rpc.endpoint ? relayUsesTls(rpc.endpoint, rpc.useTls) : true;
+          this.daemonConfigStore.setRelayEndpoint(rpc.endpoint, useTls);
+          emit({
+            type: "daemon.set_relay_endpoint.response",
+            payload: { requestId: rpc.requestId, endpoint: rpc.endpoint },
+          });
+        } else if (rpc.type === "daemon.unpair_self.request") {
+          if (identity?.transport !== "relay" || !identity.deviceId)
+            throw new Error("Not a paired device");
+          await revoke(identity.deviceId, (id, code, reason) => {
+            emit({ type: "daemon.unpair_self.response", payload: { requestId: rpc.requestId } });
+            this.closeDeviceSockets(id, code, reason);
+          });
+        } else {
+          if (!localOwner || !permissions.includes("access.manage"))
+            throw new Error("Pair new devices from this Mac");
+          if (rpc.type === "daemon.list_paired_devices.request") {
+            emit({
+              type: "daemon.list_paired_devices.response",
+              payload: {
+                requestId: rpc.requestId,
+                devices: registry.list().map((d) => ({
+                  deviceId: d.deviceId,
+                  name: d.name,
+                  createdAt: d.createdAt,
+                  lastSeenAt: d.lastSeenAt,
+                  connected: [...this.socketIdentities.values()].some(
+                    (i) => i.deviceId === d.deviceId,
+                  ),
+                  invites: d.invites === true,
+                  commandCentre: registry.hasCommandCentre(d.deviceId),
+                  readOnly: registry.hasReadOnlyCommandCentre(d.deviceId) || undefined,
+                  accountsManage: registry.hasAccountsManage(d.deviceId) || undefined,
+                })),
+              },
+            });
+          } else {
+            await revoke(rpc.deviceId, (id, code, reason) =>
+              this.closeDeviceSockets(id, code, reason),
+            );
+            emit({
+              type: "daemon.revoke_paired_device.response",
+              payload: { requestId: rpc.requestId },
+            });
+          }
+        }
+      } catch (error) {
+        emit({
+          type: "rpc_error",
+          payload: {
+            requestId: rpc.requestId,
+            requestType: rpc.type,
+            error: error instanceof Error ? error.message : "Pairing request failed",
+          },
+        });
+      }
+    });
+  }
+
+  /**
+   * U7: this Mac's owner lets a device manage accounts, and reads the audit of what devices did. A separate grant from
+   * Command Centre (which the device needs in full); the device's sockets close so a change arrives with a fresh
+   * admission. Owner only: the explicit access.manage check mirrors the Command Centre grant.
+   */
+  private async handleAccountsManageRpc(
+    rpc: Extract<
+      PairingInviteRpc,
+      {
+        type: "daemon.pairing.accounts_manage.allow.request" | "daemon.accounts_audit.list.request";
+      }
+    >,
+    context: {
+      localOwner: boolean;
+      permissions: readonly string[];
+      registry: DeviceRegistry;
+      emit: (reply: SessionOutboundMessage) => void;
+    },
+  ): Promise<void> {
+    const { localOwner, permissions, registry, emit } = context;
+    if (rpc.type === "daemon.pairing.accounts_manage.allow.request") {
+      if (!localOwner || !permissions.includes("access.manage"))
+        throw new Error("Choose which devices can manage accounts from this Mac");
+      await registry.setAccountsManage(rpc.deviceId, rpc.allow, (id, code, reason) =>
+        this.closeDeviceSockets(id, code, reason),
+      );
+      this.logger.info(
+        { deviceId: rpc.deviceId, allow: rpc.allow },
+        "Device account management changed",
+      );
+      emit({
+        type: "daemon.pairing.accounts_manage.allow.response",
+        payload: { requestId: rpc.requestId, deviceId: rpc.deviceId, allow: rpc.allow },
+      });
+      return;
+    }
+    if (!localOwner || !permissions.includes("access.manage"))
+      throw new Error("Only this Mac's owner can see account activity");
+    const names = new Map(registry.list().map((d) => [d.deviceId, d.name]));
+    const entries = new AccountActionsAudit(this.paseoHome).list().map((entry) => ({
+      at: entry.at,
+      deviceId: entry.deviceId,
+      deviceName: names.get(entry.deviceId) ?? null,
+      action: entry.action,
+      accountLabel: entry.accountLabel,
+    }));
+    emit({
+      type: "daemon.accounts_audit.list.response",
+      payload: { requestId: rpc.requestId, entries },
+    });
+  }
+
+  /**
+   * A fresh single-use offer for ANOTHER device, minted on this host: for the local owner, or for a relay device
+   * this Mac's owner allowed. Allowing is local-owner only, so a device can never allow itself.
+   */
+  private async handlePairingInviteRpc(
+    ws: WebSocketLike,
+    activeConnection: SessionConnection,
+    rpc: PairingInviteRpc,
+  ): Promise<void> {
+    const identity = this.socketIdentities.get(ws);
+    const permissions = activeConnection.session.getPermissions();
+    const registry = new DeviceRegistry(this.paseoHome);
+    const localOwner =
+      this.isLocalOwnerConnection(ws, activeConnection, identity) &&
+      permissions.includes("access.manage");
+    const { delivery } = activeConnection.session;
+    // As for the other pairing RPCs: replies carry the request's delivery proof, or modern clients drop them.
+    const emit = (reply: SessionOutboundMessage) => {
+      if (!delivery.reply(reply)) this.sendToClient(ws, { type: "session", message: reply });
+    };
+    await delivery.request(ws, rpc, async () => {
+      try {
+        if (rpc.type === "daemon.pairing.command_centre.allow.request") {
+          // Only this Mac's owner, from this Mac, grants a device Command Centre (never a device itself). The
+          // explicit access.manage check mirrors invite.allow: pairing RPCs are dispatched before the session's
+          // operation-permission table applies.
+          if (!localOwner || !permissions.includes("access.manage"))
+            throw new Error("Choose which devices can use Command Centre from this Mac");
+          await registry.setCommandCentre(
+            rpc.deviceId,
+            rpc.allow,
+            (id, code, reason) => this.closeDeviceSockets(id, code, reason),
+            rpc.readOnly === true,
+          );
+          this.logger.info(
+            { deviceId: rpc.deviceId, allow: rpc.allow, readOnly: rpc.readOnly === true },
+            "Device Command Centre access changed",
+          );
+          emit({
+            type: "daemon.pairing.command_centre.allow.response",
+            payload: {
+              requestId: rpc.requestId,
+              deviceId: rpc.deviceId,
+              allow: rpc.allow,
+              ...(rpc.allow && rpc.readOnly === true ? { readOnly: true } : {}),
+            },
+          });
+          return;
+        }
+        if (
+          rpc.type === "daemon.pairing.accounts_manage.allow.request" ||
+          rpc.type === "daemon.accounts_audit.list.request"
+        ) {
+          await this.handleAccountsManageRpc(rpc, { localOwner, permissions, registry, emit });
+          return;
+        }
+        if (rpc.type === "daemon.pairing.invite.allow.request") {
+          if (!localOwner) throw new Error("Choose who can invite devices from this Mac");
+          registry.setInvites(rpc.deviceId, rpc.allow);
+          emit({
+            type: "daemon.pairing.invite.allow.response",
+            payload: { requestId: rpc.requestId, deviceId: rpc.deviceId, allow: rpc.allow },
+          });
+          return;
+        }
+        const invitedBy =
+          identity?.transport === "relay" && identity.deviceId ? identity.deviceId : null;
+        if (!localOwner && (invitedBy === null || !registry.canInvite(invitedBy)))
+          throw new Error("This device may not invite new devices to this Mac");
+        emit({
+          type: "daemon.pairing.invite.response",
+          payload: { requestId: rpc.requestId, ...(await this.mintPairingInvite()) },
+        });
+        this.logger.info({ invitedBy: invitedBy ?? "owner" }, "Pairing invite issued");
+      } catch (error) {
+        emit({
+          type: "rpc_error",
+          payload: {
+            requestId: rpc.requestId,
+            requestType: rpc.type,
+            error: error instanceof Error ? error.message : "Pairing invite failed",
+          },
+        });
+      }
+    });
+  }
+
+  /** A one-time offer for a new device, short-lived because it is handed straight to that device. */
+  private async mintPairingInvite(): Promise<{ url: string; expiresAt: string }> {
+    const relay = this.daemonRuntimeConfig?.getRelayConfig();
+    const ttlSeconds = Math.min(
+      relay?.pairingOfferTtlSeconds ?? INVITE_TTL_SECONDS,
+      INVITE_TTL_SECONDS,
+    );
+    const offer = await generateLocalPairingOffer({
+      paseoHome: this.paseoHome,
+      relayEnabled: relay?.enabled ?? false,
+      pairingOfferTtlSeconds: ttlSeconds,
+      relayEndpoint: relay?.endpoint,
+      relayPublicEndpoint: relay?.publicEndpoint,
+      relayUseTls: relay?.useTls,
+      relayPublicUseTls: relay?.publicUseTls,
+      includeQr: false,
+      logger: this.logger,
+    });
+    if (!offer.url)
+      throw new Error("Remote access is off on this Mac, so it cannot invite devices");
+    return { url: offer.url, expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString() };
+  }
+
+  private async dispatchSessionMessage(
+    ws: WebSocketLike,
+    activeConnection: SessionConnection,
+    message: Extract<WSInboundMessage, { type: "session" }>,
+  ): Promise<void> {
+    this.recordInboundSessionRequestType(message.message.type);
+    this.logControlRpc(ws, activeConnection, message.message);
+    const rpc = message.message;
+    if (isPairingRpc(rpc)) {
+      await this.handlePairingRpc(ws, activeConnection, rpc);
+      return;
+    }
+    if (isPairingInviteRpc(rpc)) {
+      await this.handlePairingInviteRpc(ws, activeConnection, rpc);
+      return;
     }
     const startMs = performance.now();
     await activeConnection.session.handleMessage(message.message, ws);
@@ -2321,21 +2977,8 @@ export class VoiceAssistantWebSocketServer {
   }): void {
     const { ws, data, error, log } = params;
     const err = error instanceof Error ? error : new Error(String(error));
-    const { rawPayload, parsedPayload } = this.decodeRawMessagePayloadForError(data);
-
-    const trimmedRawPayload =
-      typeof rawPayload === "string" && rawPayload.length > 2000
-        ? `${rawPayload.slice(0, 2000)}... (truncated)`
-        : rawPayload;
-
-    log.error(
-      {
-        err,
-        rawPayload: trimmedRawPayload,
-        parsedPayload,
-      },
-      "Failed to parse/handle message",
-    );
+    // Inbound frames can contain hello.auth.password or session secrets.
+    log.error({ errorName: err.name }, "Failed to parse/handle message");
 
     if (this.pendingConnections.has(ws)) {
       this.clearPendingConnection(ws);
@@ -2347,7 +2990,9 @@ export class VoiceAssistantWebSocketServer {
       return;
     }
 
-    const requestInfo = extractRequestInfoFromUnknownWsInbound(parsedPayload);
+    const requestInfo = extractRequestInfoFromUnknownWsInbound(
+      this.decodeRawMessagePayloadForError(data),
+    );
     this.sessions.get(ws)?.session.delivery.protocolFailure(ws, {
       ...requestInfo,
       error: `Invalid message: ${err.message}`,
@@ -2355,24 +3000,12 @@ export class VoiceAssistantWebSocketServer {
     });
   }
 
-  private decodeRawMessagePayloadForError(data: Buffer | ArrayBuffer | Buffer[] | string): {
-    rawPayload: string | null;
-    parsedPayload: unknown;
-  } {
-    let rawPayload: string | null = null;
-    let parsedPayload: unknown = null;
+  private decodeRawMessagePayloadForError(data: Buffer | ArrayBuffer | Buffer[] | string): unknown {
     try {
-      const buffer = bufferFromWsData(data);
-      rawPayload = buffer.toString();
-      parsedPayload = JSON.parse(rawPayload);
-    } catch (payloadError) {
-      rawPayload = rawPayload ?? "<unreadable>";
-      parsedPayload = parsedPayload ?? rawPayload;
-      const payloadErr =
-        payloadError instanceof Error ? payloadError : new Error(String(payloadError));
-      this.logger.error({ err: payloadErr }, "Failed to decode raw payload");
+      return JSON.parse(bufferFromWsData(data).toString());
+    } catch {
+      return null;
     }
-    return { rawPayload, parsedPayload };
   }
 
   private incrementRuntimeCounter(counter: keyof WebSocketRuntimeCounters): void {
@@ -2900,15 +3533,7 @@ function selectWebSocketProtocol(
   if (!password) {
     return protocols.values().next().value ?? false;
   }
-
-  for (const protocol of protocols) {
-    const token = extractWsBearerToken(protocol);
-    if (token !== null) {
-      return protocol;
-    }
-  }
-
-  return false;
+  return selectDaemonProtocol(protocols);
 }
 
 function stringifyCloseReason(reason: unknown): string | null {

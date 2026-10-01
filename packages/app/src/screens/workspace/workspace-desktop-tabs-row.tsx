@@ -615,6 +615,7 @@ function getFallbackTabLabel(
   if (tab.target.kind === "pull_request") {
     return labels.pullRequest;
   }
+  if (tab.target.kind === "context") return "Context";
   if (tab.target.kind === "architecture_map") {
     return labels.architectureMap;
   }

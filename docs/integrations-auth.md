@@ -41,12 +41,12 @@ an OAuth client id is hidden until `integrations.oauthClientIds` names one, and 
 a client secret is marked `needs-broker` and never offered: a desktop app cannot keep a secret, and
 the app ships none.
 
-| Method    | How it works                                                                                                                                                       |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `token`   | Paste a personal access token or API token. The host checks it against the provider before saving.                                                                 |
-| `device`  | OAuth device flow: the host shows a code, the user enters it on the provider's page, the app polls `credentials.complete`.                                         |
-| `browser` | OAuth authorization code with PKCE (S256). The redirect is `fulcra://oauth/<flowId>` (the app forwards it) or `http://127.0.0.1:<port>/oauth/<flowId>` on desktop. |
-| `cli`     | The existing `gh` login. The forge layer uses it directly; it never creates an account.                                                                            |
+| Method    | How it works                                                                                                                                                                                                    |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `token`   | Paste a personal access token or API token. The host checks it against the provider before saving.                                                                                                              |
+| `device`  | OAuth device flow: the host shows a code, the user enters it on the provider's page, the app polls `credentials.complete`.                                                                                      |
+| `browser` | OAuth authorization code with PKCE (S256). The redirect is `fulcra://oauth/<flowId>` (the app forwards it) or `http://127.0.0.1:<port>/oauth/<flowId>` on desktop.                                              |
+| `cli`     | The existing `gh` login. The forge layer uses it directly. `credentials.list` also shows each signed-in host as a `cli` account named by its login, so the app knows who you are; see `host-github-sign-in.ts`. |
 
 ### Provider findings
 
@@ -129,7 +129,7 @@ signs in again instead.
 
 ## Plugin access
 
-Plugins never receive a secret. `server.credentials.request(accountId,
+Plugins never receive a secret (CONTRACTS §7.2 v1.7). `server.credentials.request(accountId,
 connector, { method, path, query?, headers?, body? })` asks the daemon to call the account's provider
 API: `api.github.com`, `https://<site>/rest/api/…` for Jira (plus `/rest/dev-status/…` and
 `/rest/agile/1.0/…` for GET only), `api.bitbucket.org/2.0/…` or the

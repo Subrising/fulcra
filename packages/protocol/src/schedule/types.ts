@@ -37,6 +37,9 @@ export const ScheduleTargetSchema = z.discriminatedUnion("type", [
       featureValues: z.record(z.string(), z.unknown()).optional(),
       systemPrompt: z.string().optional(),
       mcpServers: z.record(z.string(), z.unknown()).optional(),
+      // Absent means unattended (every schedule so far). Automations send false: their sessions start in the same
+      // permission mode a person's session gets, and ask before acting.
+      unattended: z.boolean().optional(),
     }),
   }),
 ]);
@@ -86,6 +89,8 @@ export interface CreateScheduleInput {
   maxRuns?: number | null;
   expiresAt?: string | null;
   runOnCreate?: boolean | null;
+  /** Create the schedule paused (it never runs until resumed or run once). */
+  paused?: boolean | null;
 }
 
 export interface UpdateScheduleNewAgentConfig {

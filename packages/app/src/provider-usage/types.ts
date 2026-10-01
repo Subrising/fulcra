@@ -19,6 +19,7 @@ export type {
 
 export type ProviderUsageBalanceUnit = ProviderUsageBalance["unit"];
 export type ProviderUsageListPayload = ProviderUsageListResponseMessage["payload"];
+export type AccountUsageRow = NonNullable<ProviderUsageListPayload["accounts"]>[number];
 
 export type ProviderUsageView =
   | { kind: "loading" }

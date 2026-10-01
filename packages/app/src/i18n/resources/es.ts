@@ -2,6 +2,16 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const es: TranslationResources = {
+  plugins: {
+    commandCentreRelay: {
+      title: "Command Centre necesita una conexión directa con este Mac",
+      why: "Este dispositivo llega al Mac a través del relé cifrado. El relé no puede abrir Command Centre, así que estas pantallas quedan vacías hasta que te conectes directamente.",
+      todo: "Para conectarte directamente, abre este host, elige Agregar conexión → Conexión directa e introduce la dirección de Tailscale o de la red local del Mac con su contraseña. La app cambia sola a esa conexión cuando puede alcanzarla.",
+      meanwhile: "Las sesiones y el chat siguen funcionando a través del relé.",
+      error:
+        "Command Centre necesita una conexión directa con este Mac. Agrega una conexión directa (Tailscale o red local) para este host.",
+    },
+  },
   sessionOwnership: {
     noLeaderYet: "Aún sin líder",
     unknownProject: "Proyecto desconocido",
@@ -1126,6 +1136,229 @@ export const es: TranslationResources = {
       description: "Comprueba tu conexión e inténtalo de nuevo.",
     },
   },
+  automations: {
+    title: "Automatizaciones",
+    intro:
+      "Cuando pase algo, haz algo. Las automatizaciones se ejecutan en este host y nada se publica fuera de Fulcra salvo que una automatización lo indique.",
+    new: "Nueva automatización",
+    loading: "Cargando automatizaciones…",
+    failed: "No se pudieron cargar las automatizaciones. Actualiza el host si sigue ocurriendo.",
+    empty:
+      "Aún no hay automatizaciones. Crea una para iniciar una sesión cuando se abra una pull request, enviar un mensaje a una sesión cuando termine otra y más.",
+    enabled: "Activada",
+    runNow: "Ejecutar ahora",
+    history: "Historial ({{count}})",
+    hideHistory: "Ocultar historial",
+    edit: "Editar",
+    neverRun: "Aún no se ha ejecutado",
+    lastRun: "Última ejecución {{when}} · {{source}}",
+    noRuns: "Aún no hay ejecuciones.",
+    skippedSummary:
+      "Omitida {{count}} veces, la última {{when}}: estaba desactivada, se repitió en menos de un minuto o alcanzó un límite diario.",
+    status: {
+      running: "En curso",
+      ok: "Hecho",
+      failed: "Error",
+      skipped: "Omitida",
+    },
+    unknownProject: "un proyecto eliminado",
+    untitledSession: "Sesión sin título",
+    cadence: {
+      minutes_one: "cada minuto",
+      minutes_other: "cada {{count}} minutos",
+      hours_one: "cada hora",
+      hours_other: "cada {{count}} horas",
+      days_one: "cada día",
+      days_other: "cada {{count}} días",
+    },
+    when: {
+      schedule: "Según una programación ({{cadence}})",
+      pullRequest: {
+        opened: "Cuando se abre una pull request en {{project}}",
+        updated: "Cuando se actualiza una pull request en {{project}}",
+        both: "Cuando se abre o actualiza una pull request en {{project}}",
+      },
+      session: {
+        finished: "Cuando termina una sesión",
+        blocked: "Cuando una sesión te está esperando",
+        usage_limit: "Cuando una sesión alcanza un límite de uso",
+        finishedInProject: "Cuando termina una sesión en {{project}}",
+        blockedInProject: "Cuando una sesión en {{project}} te está esperando",
+        usage_limitInProject: "Cuando una sesión en {{project}} alcanza un límite de uso",
+      },
+    },
+    do: {
+      startSession: "iniciar una sesión de {{template}} en {{project}}",
+      messageSession: "enviar un mensaje a «{{session}}»",
+      note: "registrar una nota",
+      noteAndPost: "registrar una nota y publicarla en la pull request",
+    },
+    run: {
+      manual: "Ejecutada manualmente",
+      schedule: "Según la programación",
+      pullRequest: "Pull request #{{number}}",
+      pullRequestAny: "Pull request",
+      session: {
+        finished: "Terminó una sesión",
+        blocked: "Una sesión te estaba esperando",
+        usage_limit: "Una sesión alcanzó un límite de uso",
+      },
+    },
+    builder: {
+      newTitle: "Nueva automatización",
+      editTitle: "Editar automatización",
+      delete: "Eliminar",
+      cancel: "Cancelar",
+      save: "Guardar",
+      create: "Crear",
+      saveFailed: "No se pudo guardar la automatización.",
+      name: "Nombre",
+      namePlaceholder: "Revisar pull requests nuevas",
+      enabled: "Activada",
+      when: "Cuando",
+      do: "Hacer",
+      trigger: {
+        pull_request: "Pull request",
+        session: "Sesión",
+        schedule: "Programación",
+      },
+      project: "Proyecto",
+      chooseProject: "Elige un proyecto",
+      noProjects: "No hay proyectos en este host",
+      prOpened: "Abierta",
+      prUpdated: "Actualizada (commits nuevos)",
+      prHint: "Se comprueba cada 5 minutos con tu cuenta de GitHub, solo lectura.",
+      session: {
+        finished: "Termina",
+        blocked: "Te espera",
+        usage_limit: "Límite de uso",
+      },
+      anyProject: "Cualquier proyecto",
+      action: {
+        start_session: "Iniciar una sesión",
+        message_session: "Enviar mensaje a una sesión",
+        note: "Registrar una nota",
+      },
+      template: "Plantilla",
+      chooseTemplate: "Elige una plantilla",
+      noTemplates: "No hay plantillas",
+      providerDefaults: "{{provider}} (ajustes predeterminados)",
+      prompt: "Instrucción",
+      promptPlaceholder: "¿Qué debe hacer la sesión?",
+      eventHint:
+        "{{token}} se sustituye por lo que ocurrió, por ejemplo «pull request #7 abierta».",
+      sessionLabel: "Sesión",
+      chooseSession: "Elige una sesión",
+      noSessions: "No hay sesiones abiertas",
+      note: "Nota",
+      notePlaceholder: "Necesita revisión",
+      noteHint:
+        "Se guarda con el historial de ejecuciones en este host. Publicar en Hoy o en la Bandeja de entrada aún no está disponible.",
+      postToGithub: "Publicarla también como comentario en la pull request",
+      postToGithubHint:
+        "Desactivado por defecto. Si lo activas, la nota se publica en GitHub con tu cuenta cada vez que se ejecute.",
+      allowUnattended: "Ejecutar sin pedir permiso",
+      allowUnattendedHint:
+        "Desactivado: la sesión pide permiso antes de ejecutar comandos o cambiar archivos, como una sesión que inicias tú.",
+      allowUnattendedWarning:
+        "La sesión puede ejecutar comandos, cambiar archivos y publicar sin preguntar. Cualquier cosa que active esta automatización puede dirigirla.",
+    },
+  },
+  insights: {
+    limits: {
+      capped:
+        "Solo se leyeron las {{count}} pull requests más recientes por lista, así que pueden faltar las más antiguas.",
+      reviewWait:
+        "La espera de revisión va desde que se abre una pull request (incluido el tiempo en borrador) hasta la primera aprobación o solicitud de cambios de alguien que no sea su autor; los comentarios y los bots no cuentan.",
+      finished:
+        "Una sesión cuenta como terminada cuando su turno acabó con normalidad; los turnos fallidos y el simple archivado no cuentan.",
+    },
+    title: "Métricas",
+    loading: "Leyendo métricas…",
+    failed: "No se pudieron leer las métricas de este host.",
+    allProjects: "Todos los proyectos",
+    lastDays: "Últimos {{count}} días",
+    delivery: "Entrega",
+    agents: "Agentes",
+    deliveryUnavailable: "No se pudieron leer los datos de pull requests de GitHub.",
+    deliveryNone: "No hay pull requests de GitHub en este ámbito.",
+    otherFolders: "Otras carpetas",
+    hint: "Toca una barra para ver sus cifras.",
+    duration: {
+      minutes: "{{count}} min",
+      hours: "{{count}} h",
+      days: "{{count}} días",
+    },
+    age: {
+      lt1d: "< 1 día",
+      d1to3: "1–3 días",
+      d3to7: "3–7 días",
+      d7to30: "1–4 semanas",
+      gt30d: "> 30 días",
+    },
+    readout: {
+      week: "Semana del {{week}}: {{merged}} fusionadas, mediana {{cycle}} hasta fusionar",
+      age: "{{age}}: {{count}} abiertas",
+      sessions: "{{day}}: {{started}} iniciadas, {{finished}} terminadas",
+      blocked: "{{day}}: te esperaron {{blocked}} veces, {{limits}} paradas por límite de uso",
+      project: "{{name}}: {{count}} sesiones",
+    },
+    tile: {
+      cycle: "Apertura → fusión (mediana)",
+      review: "Espera hasta la primera revisión (mediana)",
+      merge: "Tasa de fusión",
+      started: "Sesiones iniciadas",
+      finishedNote: "{{count}} terminadas",
+      blocked: "Tiempo esperándote",
+      limits: "Paradas por límite de uso",
+    },
+    chart: {
+      merged: "Pull requests fusionadas por semana",
+      openByAge: "Pull requests abiertas por antigüedad",
+      sessions: "Sesiones por día",
+      blocked: "Esperas y límites de uso por día",
+      projects: "Sesiones por proyecto",
+    },
+    series: {
+      merged: "Fusionadas",
+      open: "Abiertas",
+      started: "Iniciadas",
+      finished: "Terminadas",
+      blocked: "Paradas",
+    },
+    takeaway: {
+      cycleNone: "No se fusionó ninguna pull request en los últimos {{days}} días.",
+      cycle: "Las pull requests tardan {{median}} desde que se abren hasta que se fusionan.",
+      cycle_doubled: "Fusionar es más lento: {{median}} desde la apertura, antes {{before}}.",
+      cycle_halved: "Fusionar es más rápido: {{median}} desde la apertura, antes {{before}}.",
+      reviewNoneWaiting:
+        "Ninguna pull request ha recibido revisión; {{count}} listas llevan más de 2 días esperando.",
+      reviewNone: "No hubo revisiones en este periodo.",
+      review_doubled:
+        "La espera de revisión se duplicó: {{median}}, antes {{before}}; {{count}} esperan más de 2 días.",
+      review: "Las revisiones empiezan tras {{median}}; {{count}} esperan más de 2 días.",
+      mergeNone: "No se fusionó ni cerró nada en este periodo.",
+      merge:
+        "Se fusionó el {{percent}}% de las pull requests decididas ({{merged}} fusionadas, {{closed}} cerradas).",
+      openNone: "No hay pull requests abiertas.",
+      open: "Hay {{count}} pull requests abiertas; {{old}} tienen más de una semana.",
+      sessionsNone: "No hubo sesiones en los últimos {{days}} días.",
+      sessions:
+        "Se iniciaron {{started}} sesiones y terminaron {{finished}}; el día con más fue {{day}} ({{count}}).",
+      sessions_doubled:
+        "El doble de sesiones que el periodo anterior: {{started}}, antes {{before}}; más el {{day}} ({{count}}).",
+      sessions_halved:
+        "La mitad de sesiones que el periodo anterior: {{started}}, antes {{before}}; más el {{day}} ({{count}}).",
+      blockedNotRecording:
+        "El tiempo esperándote se registra desde que este host usa esta versión; {{now}} esperando ahora.",
+      blockedNone: "Nada te ha esperado desde el {{since}}; {{now}} esperando ahora.",
+      blocked:
+        "Las sesiones te esperaron {{count}} veces, {{time}} en total; {{now}} esperando ahora.",
+      limitsNone: "Sin paradas por límite de uso desde el {{since}}.",
+      limits: "{{count}} paradas por límite de uso, sobre todo en {{project}}.",
+      projects: "La mayoría de sesiones fueron en {{name}} ({{count}}).",
+    },
+  },
   sidebar: {
     display: {
       trigger: "Preferencias de visualización",
@@ -1202,6 +1435,8 @@ export const es: TranslationResources = {
       sessions: "Historial",
       search: "Buscar",
       schedules: "Horarios",
+      insights: "Métricas",
+      automations: "Automatizaciones",
     },
     worktreeSetup: {
       title: "Configurar secuencias de comandos del árbol de trabajo",
@@ -1588,6 +1823,15 @@ export const es: TranslationResources = {
   },
   workspaceSetup: {
     title: "Crear espacio de trabajo",
+    role: {
+      label: "Rol",
+      none: "Ninguno",
+      planning: "Planificación",
+      orchestration: "Orquestación",
+      implementation: "Implementación",
+      usesDefault: "Usa el valor predeterminado de {{role}}: {{model}}, esfuerzo {{effort}}",
+      usesDefaultModel: "Usa el valor predeterminado de {{role}}: {{model}}",
+    },
     errors: {
       failedCreateWorktree: "No se pudo crear el árbol de trabajo",
       failedOpenProject: "No se pudo abrir el proyecto",
@@ -1667,6 +1911,10 @@ export const es: TranslationResources = {
     },
   },
   pairing: {
+    hostPassword: {
+      title: "Contraseña de {{host}}",
+      label: "Contraseña del host",
+    },
     connectionMethods: {
       title: "Agregar conexión",
       direct: {
@@ -1718,14 +1966,19 @@ export const es: TranslationResources = {
         failedTitle: "La conexión falló",
         failedToConnect: "No pudimos conectarnos a{{endpoint}}.",
         noAdditionalDetails: "{{detail}}(no se proporcionan detalles adicionales)",
-        timedOut: "Se agotó el tiempo de conexión. Verifique el host/porty su red.",
+        timedOut: "Se agotó el tiempo de conexión. Revisa la dirección de este Mac y tu red.",
         refused: "Conexión rechazada. ¿El servidor se está ejecutando en esta dirección?",
         hostNotFound: "Hostno encontrado. Verifique el nombre de host e inténtelo nuevamente.",
         hostUnreachable: "Hostes inalcanzable. Verifique su red y firewall.",
         tlsError:
-          "Error de TLS. Las conexiones directas utilizan SSL solo cuando hay un terminador TLS delante del demonio.",
+          "No se pudo establecer una conexión segura. Desactiva Usar SSL salvo que la dirección de este Mac use HTTPS.",
         unableToConnect:
-          "No se puede conectar. Verifique el host/porty que se pueda acceder al demonio.",
+          "No se pudo llegar a este Mac. Revisa su dirección y tu red, o inténtalo de nuevo.",
+        signInFailed:
+          "No se pudo iniciar sesión en este Mac: {{reason}}. Revisa la contraseña o inténtalo de nuevo.",
+        reasonIncorrectPassword: "la contraseña no es correcta",
+        reasonPasswordRequired: "este Mac necesita su contraseña",
+        reasonCouldNotOpen: "no se pudo abrir la conexión",
         details: "Detalles:{{detail}}",
       },
     },
@@ -1781,7 +2034,20 @@ export const es: TranslationResources = {
       errorTitle: "Error",
     },
     device: {
+      ...en.pairing.device,
       loadingOffer: "Cargando oferta de maridaje...",
+      allowCommandCentre: "Permitir Command Centre",
+      commandCentreOff:
+        "Desactivado: en este dispositivo Command Centre solo funciona con una conexión directa. Cambiar esto vuelve a conectar el dispositivo un momento.",
+      commandCentreWarning:
+        "Activado: este dispositivo puede gestionar sesiones desde cualquier lugar a través del relé. Si lo pierdes o te lo roban, quítalo aquí de inmediato. Cambiar esto vuelve a conectar el dispositivo un momento.",
+      relay: "Relay",
+      defaultRelay: "Relay predeterminado",
+      changeRelay: "Cambiar",
+      devicesFailed: "No se pudieron cargar los dispositivos vinculados.",
+      connecting: "Conectando con este Mac…",
+      reconnect: "Reconectar",
+      offerTimedOut: "La oferta de emparejamiento no llegó a tiempo.",
       failedToLoadOffer: "No se pudo cargar la oferta de emparejamiento.",
       relayDisabled: "El relé no está habilitado. Habilite el relé para emparejar un dispositivo.",
       enableTitle: "¿Habilitar el relé?",
@@ -1932,7 +2198,166 @@ export const es: TranslationResources = {
       boundaries: "Límites",
       closeDetail: "Cerrar detalles",
       detailId: "Identificador",
+      graph: {
+        title: "Mapa de dependencias del código",
+        subtitle:
+          "{{modules}} módulos · {{connections}} conexiones · dibujado a partir del código en {{ref}} ({{commit}})",
+        sourceCode: "A partir del código",
+        sourceDrawn: "Mapa dibujado",
+        loading: "Dibujando el mapa de dependencias…",
+        failed: "No se pudo dibujar el mapa de dependencias",
+        missing:
+          "Los commits de esta pull request aún no están en este equipo. Ábrela en Cambio para descargarlos.",
+        searchPlaceholder: "Buscar módulos",
+        matches_one: "{{count}} coincidencia",
+        matches_other: "{{count}} coincidencias",
+        zoomIn: "Acercar",
+        zoomOut: "Alejar",
+        fit: "Ajustar",
+        filterKinds: "Tipos",
+        filterGroups: "Paquetes",
+        kind: {
+          frontend: "App e interfaz",
+          backend: "Servicios",
+          messagebus: "Mensajería",
+          security: "Seguridad",
+          database: "Datos",
+          service: "Bibliotecas",
+          external: "Externos",
+        },
+        legendSelected: "Seleccionado",
+        legendUses: "Lo que usa",
+        legendUsedBy: "Lo que lo usa",
+        legendEdited: "Editado por la pull request",
+        selectHint: "Selecciona un módulo para resaltar lo que usa y lo que lo usa.",
+        moduleFacts: "{{files}} archivos · {{code}} de código · {{tests}} de pruebas",
+        statUses: "Usa: directamente · en total",
+        statUsedBy: "Lo usan: directamente · en total",
+        statFiles: "Archivos que pueden notar un cambio aquí",
+        usesTitle: "Lo que usa",
+        usedByTitle: "Usado por",
+        none: "Nada",
+        clear: "Borrar",
+        prBanner:
+          "Mostrando #{{number}}: {{parts}} módulos editados, {{files}} archivos modificados. Selecciona uno para ver su radio de impacto.",
+        prClear: "Mostrar todo el repositorio",
+        breadcrumbAll: "Todos los paquetes",
+        packageHint: "Selecciona un paquete para abrir sus módulos.",
+        allLevels: "Mostrar todos los niveles",
+        showInMap: "Mostrar en el mapa",
+      },
+      review: {
+        open: "Revisar",
+        loading: "Preparando la revisión…",
+        failed: "Esta pull request aún no se puede revisar aquí",
+        back: "Atrás",
+        meta: "{{author}} quiere fusionar {{head}} en {{base}} · {{commit}}",
+        unknownAuthor: "Alguien",
+        checks: {
+          none: "Sin comprobaciones",
+          pending: "Comprobaciones en curso ({{passed}} de {{total}} correctas)",
+          success: "Comprobaciones correctas ({{passed}} de {{total}})",
+          failure: "Comprobaciones con fallos ({{passed}} de {{total}} correctas)",
+        },
+        githubReview: "Revisión en GitHub: {{state}}",
+        noAutomatedReview: "Aún no hay revisión automática",
+        adwVerdict: "Revisión automática: {{verdict}}",
+        findingsTitle_one: "{{count}} hallazgo de la revisión automática",
+        findingsTitle_other: "{{count}} hallazgos de la revisión automática",
+        filesTitle: "{{count}} archivos · +{{additions}} −{{deletions}}",
+        risk: {
+          LOW: "Bajo",
+          NORMAL: "Normal",
+          HIGH: "Alto",
+        },
+        riskExplain: {
+          LOW: "Riesgo bajo: pruebas, documentación o configuración.",
+          NORMAL: "Riesgo normal: código que alcanzan {{tests}} pruebas.",
+          HIGH: "Riesgo alto: código que ninguna prueba alcanza, o código que este cambio elimina.",
+        },
+        loadingDiff: "Cargando los cambios…",
+        noDiff: "No hay cambios de texto que mostrar para este archivo.",
+        noFindingsHere: "La revisión automática no encontró nada en este archivo.",
+        noAutomatedReviewYet: "Aún no hay revisión automática.",
+        decisionTitle: "Tu decisión",
+        choice: {
+          approve: "Aprobar",
+          requestChanges: "Solicitar cambios",
+          comment: "Comentar",
+        },
+        notePlaceholder: "Añade una nota (opcional)",
+        postToGithub: "Publicar también en GitHub",
+        postOn: "Publica esta revisión en la pull request con tu sesión de GitHub.",
+        postOff: "Desactivado: se registra solo en Fulcra. No se envía nada a GitHub.",
+        record: "Registrar decisión",
+        recording: "Registrando…",
+        recordFailed: "No se pudo registrar la decisión.",
+        recorded: "{{decision}} · {{when}}",
+        recordedLocal: "Registrada solo en Fulcra; no se publicó en GitHub.",
+        recordedPosted: "Registrada en Fulcra y publicada en GitHub.",
+        recordedPostFailed: "Registrada en Fulcra; GitHub no aceptó la revisión.",
+      },
       change: {
+        generated: {
+          sourceDrawn: "Mapa dibujado",
+          sourceCode: "A partir del código",
+          sourceCodeHint:
+            "Dibujado automáticamente a partir del código en ambos extremos de la pull request",
+          pickEmpty: "No hay pull requests abiertas en este proyecto.",
+          pickFailed: "No se pudieron listar las pull requests.",
+          pickPrompt: "Elige una pull request para ver lo que cambia.",
+          generating: "Dibujando la arquitectura a partir del código…",
+          missingTitle: "Los commits de esta pull request aún no están en este equipo",
+          missingDetail:
+            "Descárgalos para dibujar el antes y el después. Solo se descargan la rama de la pull request y su base.",
+          fetch: "Descargar los commits de la pull request",
+          fetching: "Descargando…",
+          fetchFailed: "No se pudieron descargar los commits.",
+          failedTitle: "No se pudo dibujar la arquitectura",
+          updateHost:
+            "Actualiza el host para dibujar la arquitectura de un cambio a partir de su código.",
+          provenance:
+            "Dibujado a partir del código en {{base}} y {{head}}. Las partes son carpetas; las conexiones son importaciones.",
+          plainTitle: "En pocas palabras",
+          plainScope:
+            "Modifica {{files}} archivos en {{parts}} partes del sistema ({{added}} añadidos, {{deleted}} eliminados).",
+          plainStructureNone:
+            "No añade partes ni conexiones nuevas; el trabajo se queda dentro de las partes existentes.",
+          plainAddsParts: "Añade partes: {{list}}.",
+          plainRemovesParts: "Elimina partes: {{list}}.",
+          plainAddsConnections: "Añade conexiones: {{list}}.",
+          plainRemovesConnections: "Elimina conexiones: {{list}}.",
+          plainReach:
+            "{{direct}} archivos importan directamente el código modificado, y {{files}} archivos en {{parts}} partes pueden notarlo, sobre todo en {{top}}.",
+          plainReachNone: "Nada más en el proyecto importa el código modificado.",
+          plainTestsAll: "Cada archivo de código modificado está cubierto por al menos una prueba.",
+          plainTestsSome:
+            "{{uncovered}} de {{code}} archivos de código modificados no están cubiertos por ninguna prueba: {{list}}.",
+          plainTestsNoCode: "No se modificó ningún archivo de código.",
+          impactTitle: "Radio de impacto",
+          statFiles: "Archivos modificados",
+          statParts: "Partes editadas",
+          statDirect: "Lo importan directamente",
+          statReach: "Pueden notarlo",
+          statTests: "Cubiertos por pruebas",
+          statTestsValue: "{{covered}} de {{code}}",
+          editedTitle: "Partes que edita este cambio",
+          editedCounts: "{{added}} añadidas · {{modified}} modificadas · {{deleted}} eliminadas",
+          reachTitle: "Partes que dependen del cambio",
+          reachFiles_one: "{{count}} archivo",
+          reachFiles_other: "{{count}} archivos",
+          filesTitle: "Archivos modificados",
+          fileTests_one: "cubierto por {{count}} prueba · abrir primero: {{nearest}}",
+          fileTests_other: "cubierto por {{count}} pruebas · abrir primero: {{nearest}}",
+          fileNoTests: "ninguna prueba lo cubre",
+          fileAdded: "añadido",
+          fileModified: "modificado",
+          fileDeleted: "eliminado",
+          kindTest: "prueba",
+          kindOther: "no es código",
+          showAllFiles: "Mostrar los {{count}} archivos",
+          filesCut: "Solo se muestran los primeros {{count}} archivos.",
+        },
         viewMap: "Mapa",
         viewChange: "Cambio",
         openFromPullRequest: "Cambio de arquitectura",
@@ -2102,8 +2527,11 @@ export const es: TranslationResources = {
     groupInfo: "Acerca de{{title}}",
     sections: {
       general: "General",
+      chat: "Chat",
       appearance: "Apariencia",
-      layout: en.settings.sections.layout,
+      sidebar: "Barra lateral",
+      terminal: "Terminal",
+      browser: "Navegador",
       editor: "Editor",
       shortcuts: "Atajos",
       integrations: "Integraciones",
@@ -2163,6 +2591,7 @@ export const es: TranslationResources = {
     },
     general: {
       title: "General",
+      sending: "Envío",
       browserData: {
         title: "Datos del navegador",
         siteData: "Cookies y datos de sitios",
@@ -2193,8 +2622,6 @@ export const es: TranslationResources = {
         },
       },
       serviceUrls: {
-        label: "URL de servicio",
-        description: "Dónde abrir URL desde scripts en ejecución",
         options: {
           ask: "Preguntar",
           inApp: "En Fulcra",
@@ -2214,7 +2641,6 @@ export const es: TranslationResources = {
       toolCallDetail: {
         label: "Visualización de llamadas a herramientas",
         description: "Cómo aparecen las llamadas a herramientas en la cronología",
-        accessibilityLabel: "Seleccionar visualización de llamadas a herramientas ({{value}})",
         options: {
           overview: "Resumen",
           detailed: "Detalle completo",
@@ -2462,6 +2888,9 @@ export const es: TranslationResources = {
       },
     },
     host: {
+      password: {
+        guidance: "Elimina este host y vuelve a añadirlo con la contraseña que pide este daemon.",
+      },
       appearance: {
         title: "Apariencia",
         name: {

@@ -1,0 +1,32 @@
+{
+  "pagelen": 50,
+  "page": 1,
+  "values": [
+    {
+      "id": 7,
+      "title": "Broken link on the pricing page",
+      "state": "open",
+      "kind": "bug",
+      "priority": "major",
+      "updated_on": "2026-09-23T15:00:00.000000+00:00",
+      "repository": {
+        "uuid": "{00000000-0000-4908-8706-000000002005}"
+      },
+      "assignee": {
+        "display_name": "Test User C"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Resolved long ago",
+      "state": "resolved",
+      "kind": "task",
+      "priority": "minor",
+      "updated_on": "2026-06-01T15:00:00.000000+00:00",
+      "repository": {
+        "uuid": "{00000000-0000-4908-8706-000000002005}"
+      },
+      "assignee": null
+    }
+  ]
+}

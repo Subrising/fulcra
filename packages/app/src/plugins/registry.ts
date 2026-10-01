@@ -1,3 +1,4 @@
+import { isPluginBundleTrusted, PLUGIN_TRUST_EXPLANATION } from "./bundle-trust";
 import { useMemo, useSyncExternalStore } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -5,16 +6,19 @@ import { assertPluginCompatibility } from "@getpaseo/protocol/plugin-requirement
 import { resolveAppVersion } from "@/utils/app-version";
 import { createPluginClientRuntime } from "./client-runtime";
 import { runPluginClientBundle, type PluginClientRuntime } from "./evaluate";
-import type { InstalledPlugin } from "./types";
+import type { InstalledPlugin, UntrustedPlugin } from "./types";
 import { PluginReconnectState } from "./reconnect-state";
+import { IntercomSettingsSection } from "@/screens/settings/intercom-section";
 
-type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>[number];
+type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>["plugins"][number];
 
 export class PluginRegistry {
   private readonly reconnectState = new PluginReconnectState();
   private readonly byHost = new Map<string, InstalledPlugin[]>();
   private readonly listeners = new Set<() => void>();
   private snapshot: InstalledPlugin[] = [];
+  private readonly untrusted = new Map<string, UntrustedPlugin>();
+  private untrustedSnapshot: UntrustedPlugin[] = [];
   private readonly disposed = new WeakSet<InstalledPlugin>();
   private readonly evaluationErrors = new Map<string, string>();
   // Hosts whose catalog question has been answered, however it was answered: loaded, declared
@@ -35,6 +39,7 @@ export class PluginRegistry {
   };
 
   getSnapshot = (): InstalledPlugin[] => this.snapshot;
+  getUntrustedSnapshot = (): UntrustedPlugin[] => this.untrustedSnapshot;
 
   isCatalogSettled(serverId: string): boolean {
     return this.catalogSettled.has(serverId);
@@ -59,10 +64,42 @@ export class PluginRegistry {
     },
   ): boolean {
     const previous = this.byHost.get(serverId) ?? [];
+    const previousUntrusted = new Map(this.untrusted);
+    for (const [key, item] of this.untrusted)
+      if (item.serverId === serverId) this.untrusted.delete(key);
+    for (const entry of catalog) {
+      if (!entry.clientBundle || isPluginBundleTrusted(entry)) continue;
+      const key = `${serverId}/${entry.id}`;
+      const prior = previous.find((plugin) => plugin.id === entry.id) ?? previousUntrusted.get(key);
+      // Keep only safe presentation fields from previously verified contributions. Never inspect/eval refused code.
+      const sidebarItems = prior?.sidebarItems.map(({ id, title, icon, surface }) => ({
+        id,
+        title,
+        icon,
+        surface,
+      }));
+      this.untrusted.set(key, {
+        id: entry.id,
+        serverId,
+        untrusted: true,
+        sidebarItems: sidebarItems?.length
+          ? sidebarItems
+          : [
+              {
+                id: entry.id === "orca-organization-next" ? "organization" : "untrusted",
+                title: entry.id === "orca-organization-next" ? "Command Centre" : entry.id,
+                icon: "ShieldAlert",
+                surface: "untrusted",
+              },
+            ],
+      });
+    }
+
     const previousTimelineBundles = previous
       .filter((plugin) => plugin.timelineTransformers.length > 0)
       .map((plugin) => `${plugin.id}\0${plugin.clientBundle}`);
     const preserved = catalog.flatMap((entry) => {
+      if (!isPluginBundleTrusted(entry)) return [];
       const existing = previous.find(
         (plugin) =>
           plugin.id !== options.replacePluginId &&
@@ -84,6 +121,7 @@ export class PluginRegistry {
       let lifetime: AbortController | undefined;
       try {
         if (!entry.clientBundle) return [];
+        if (!isPluginBundleTrusted(entry)) throw Error(PLUGIN_TRUST_EXPLANATION);
         assertPluginCompatibility({ ...entry, version: this.dependencies.version, runtime: "app" });
         const existing = preserved.find(
           (plugin) => plugin.id === entry.id && plugin.clientBundle === entry.clientBundle,
@@ -126,6 +164,21 @@ export class PluginRegistry {
           this.publish(),
         );
         Object.assign(installation, evaluated);
+        // App-owned screen uses this already verified host/plugin RPC boundary; it grants no owner rights.
+        if (
+          entry.id === "orca-organization-next" &&
+          !installation.settingsScreens.some((screen) => screen.id === "intercom")
+        ) {
+          installation.settingsScreens = [
+            ...installation.settingsScreens,
+            {
+              id: "intercom",
+              title: "Intercom",
+              icon: "MessagesSquare",
+              Component: IntercomSettingsSection,
+            },
+          ];
+        }
         const paseo = runtime.paseo;
         installation.cleanup = async () => {
           const results = await Promise.allSettled([paseo.dispose(), evaluated.cleanup()]);
@@ -190,8 +243,18 @@ export class PluginRegistry {
   }
 
   private teardownHost(serverId: string): void {
+    let removedUntrusted = false;
+    for (const [key, item] of this.untrusted)
+      if (item.serverId === serverId) {
+        this.untrusted.delete(key);
+        this.evaluationErrors.delete(key);
+        removedUntrusted = true;
+      }
     const installed = this.byHost.get(serverId);
-    if (!installed) return;
+    if (!installed) {
+      if (removedUntrusted) this.publish();
+      return;
+    }
     for (const plugin of installed) this.dispose(plugin);
     for (const key of this.evaluationErrors.keys()) {
       if (key.startsWith(`${serverId}/`)) this.evaluationErrors.delete(key);
@@ -215,6 +278,7 @@ export class PluginRegistry {
   }
 
   private publish(): void {
+    this.untrustedSnapshot = [...this.untrusted.values()];
     this.snapshot = [...this.byHost.values()]
       .flat()
       .sort((left, right) =>
@@ -245,6 +309,16 @@ export function useHostCatalogSettled(serverId: string): boolean {
   );
 }
 
+// Evaluation failures can change without installing a plugin. Subscribe to that
+// value explicitly so the compiled surface cannot memoize an imperative lookup.
+export function usePluginEvaluationError(serverId: string, pluginId: string): string | undefined {
+  return useSyncExternalStore(
+    pluginRegistry.subscribe,
+    () => pluginRegistry.getEvaluationError(serverId, pluginId),
+    () => pluginRegistry.getEvaluationError(serverId, pluginId),
+  );
+}
+
 export function useInstalledPlugin(serverId: string, pluginId: string): InstalledPlugin | null {
   return (
     useInstalledPlugins().find(
@@ -256,4 +330,12 @@ export function useInstalledPlugin(serverId: string, pluginId: string): Installe
 export function usePluginInstallations(pluginId: string): InstalledPlugin[] {
   const installed = useInstalledPlugins();
   return useMemo(() => installed.filter((plugin) => plugin.id === pluginId), [installed, pluginId]);
+}
+
+export function useUntrustedPlugins(): UntrustedPlugin[] {
+  return useSyncExternalStore(
+    pluginRegistry.subscribe,
+    pluginRegistry.getUntrustedSnapshot,
+    pluginRegistry.getUntrustedSnapshot,
+  );
 }

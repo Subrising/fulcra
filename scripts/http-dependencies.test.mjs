@@ -113,8 +113,8 @@ test("Express query and form parsing preserve nested fields and repeated values"
   app.get("/query", (req, res) => res.json(req.query));
   app.post("/form", express.urlencoded({ extended: true }), (req, res) => res.json(req.body));
   await withHttp(app, async (base) => {
-    const input = "user[name]=Ada&roles[]=reader&roles[]=writer";
-    const expected = { user: { name: "Ada" }, roles: ["reader", "writer"] };
+    const input = "user[name]=the owner&roles[]=reader&roles[]=writer";
+    const expected = { user: { name: "The owner" }, roles: ["reader", "writer"] };
     const query = await fetch(base + "/query?" + input, { signal: AbortSignal.timeout(2000) });
     assert.equal(query.status, 200);
     assert.deepEqual(await query.json(), expected);

@@ -175,3 +175,150 @@ describe("SidebarCallout", () => {
     expect(container?.querySelector('[data-testid="callout-dismiss"]')).toBeNull();
   });
 });
+
+import { SidebarSessions } from "./sidebar/sidebar-sessions";
+import { useSessionStore } from "@/stores/session-store";
+import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
+const SERVER_ID = "sidebar-session-test";
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: vi.fn().mockResolvedValue(null),
+    setItem: vi.fn().mockResolvedValue(undefined),
+    removeItem: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+import { useSidebarViewStore } from "@/stores/sidebar-view-store";
+const sessionNavigation = vi.hoisted(() => vi.fn());
+vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: sessionNavigation }));
+vi.mock("@/sessions/session-account-info", () => ({
+  SessionAccountInfo: ({
+    account,
+    testID,
+  }: {
+    account: { name: string | null } | null;
+    testID: string;
+  }) => <span data-testid={testID}>{account?.name ?? "Account unavailable"}</span>,
+}));
+describe("mounted all-session sidebar", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const agent = (id: string, workspaceId: string | null = "shared") =>
+    normalizeAgentSnapshot(
+      {
+        id,
+        provider: "codex",
+        cwd: "/fixtures/project",
+        workspaceId: workspaceId ?? undefined,
+        title: `Session ${id}`,
+        model: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        lastUserMessageAt: null,
+        status: "idle",
+        capabilities: {
+          supportsStreaming: true,
+          supportsSessionPersistence: true,
+          supportsDynamicModes: false,
+          supportsMcpServers: true,
+          supportsReasoningStream: true,
+          supportsToolInvocations: true,
+          supportsRewindConversation: false,
+          supportsRewindFiles: false,
+          supportsRewindBoth: false,
+        },
+        currentModeId: null,
+        availableModes: [],
+        pendingPermissions: [],
+        persistence: null,
+        labels: { "fulcra.account-name": `Account ${id}` },
+      },
+      SERVER_ID,
+    );
+  beforeEach(async () => {
+    await act(async () => {
+      useSessionStore.getState().initializeSession(SERVER_ID, null as never);
+    });
+    sessionNavigation.mockReset();
+    useSidebarViewStore.setState({ hostFilters: [] });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+  it("shows an explicit total beyond the preview, opens exact sessions and reacts to account switches", async () => {
+    const agents = Array.from({ length: 10 }, (_, i) =>
+      agent(String(i), i === 9 ? null : "shared"),
+    );
+    const initialAgents = new Map(agents.map((a) => [a.id, a]));
+    await act(async () => {
+      useSessionStore.getState().setAgents(SERVER_ID, initialAgents);
+    });
+    await act(async () => root.render(<SidebarSessions serverIds={[SERVER_ID]} />));
+    expect(container.textContent).toContain("All sessions (10)");
+    expect(container.querySelectorAll('[data-testid^="sidebar-session-open-"]')).toHaveLength(8);
+    await act(async () =>
+      (container.querySelector('[data-testid="sidebar-all-sessions-more"]') as HTMLElement).click(),
+    );
+    expect(container.querySelectorAll('[data-testid^="sidebar-session-open-"]')).toHaveLength(10);
+    await act(async () =>
+      (
+        container.querySelector(
+          `[data-testid="sidebar-session-open-${SERVER_ID}-9"]`,
+        ) as HTMLElement
+      ).click(),
+    );
+    expect(sessionNavigation).toHaveBeenCalledWith({
+      serverId: SERVER_ID,
+      agentId: "9",
+      workspaceId: null,
+    });
+    const switched = { ...agents[0], labels: { "fulcra.account-name": "Switched B" } };
+    const switchedAgents = new Map([switched, ...agents.slice(1)].map((a) => [a.id, a]));
+    await act(async () => {
+      useSessionStore.getState().setAgents(SERVER_ID, switchedAgents);
+    });
+    expect(
+      container.querySelector(`[data-testid="sidebar-session-account-${SERVER_ID}-0"]`)
+        ?.textContent,
+    ).toBe("Switched B");
+    expect(
+      container.querySelector(`[data-testid="sidebar-session-account-${SERVER_ID}-1"]`)
+        ?.textContent,
+    ).toBe("Account 1");
+  });
+  it("keeps idle sessions visible apart from workspace collapse and applies host/closed/archive filters", async () => {
+    const idle = agent("idle");
+    const closed = { ...agent("closed"), status: "closed" as const };
+    const archived = { ...agent("archived"), archivedAt: new Date("2026-10-01T00:00:00.000Z") };
+    const visible = new Map([idle, closed, archived].map((a) => [a.id, a]));
+    await act(async () => {
+      useSessionStore.getState().setAgents(SERVER_ID, visible);
+    });
+    await act(async () => root.render(<SidebarSessions serverIds={[SERVER_ID, "other-host"]} />));
+    expect(container.textContent).toContain("All sessions (1)");
+    expect(
+      container.querySelector(`[data-testid="sidebar-session-open-${SERVER_ID}-idle"]`),
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain("Session closed");
+    expect(container.textContent).not.toContain("Session archived");
+    await act(async () => {
+      useSidebarViewStore.setState({ hostFilters: ["other-host"] });
+    });
+    expect(container.querySelector('[data-testid="sidebar-all-sessions"]')).toBeNull();
+    await act(async () => {
+      useSidebarViewStore.setState({ hostFilters: [] });
+    });
+    await act(async () =>
+      (
+        container.querySelector('[data-testid="sidebar-all-sessions-toggle"]') as HTMLElement
+      ).click(),
+    );
+    expect(container.textContent).toContain("All sessions (1)");
+    expect(
+      container.querySelector(`[data-testid="sidebar-session-open-${SERVER_ID}-idle"]`),
+    ).toBeNull();
+  });
+});

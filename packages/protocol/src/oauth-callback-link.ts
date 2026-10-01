@@ -1,4 +1,4 @@
-// Fulcra sign-in return links: `fulcra://oauth/<flowId>`, optionally followed by a query. The
+// Fulcra sign-in return links (CONTRACTS §7.2): `fulcra://oauth/<flowId>`, optionally followed by a query. The
 // app and the desktop main process both use this one rule. It is matched on the raw string, before any URL
 // normalisation, so repeated or trailing slashes, dot segments, credentials, ports, fragments and a differently
 // cased scheme are all refused. The host still validates the flow, state and expiry itself.

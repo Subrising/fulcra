@@ -4,9 +4,10 @@ on:
   push:
     tags:
       # The inherited release contract accepts X.Y.Z and X.Y.Z-beta.N only
-      # (scripts/release-version-utils.mjs). Private-preview tags are
+      # (scripts/release-version-utils.mjs). Orca's private-preview tags are
       # neither, so publishing them is rejected after the workflow has already
-      # started. Exclude them at the trigger. See docs/pipelines.md.
+      # started. Exclude them at the trigger; the private preview is built and
+      # delivered by orca-private-preview.yml instead. See docs/pipelines.md.
       - "v*"
       - "!v*-private-preview"
       - "desktop-v*"
@@ -180,8 +181,8 @@ jobs:
         run: |
           set -euo pipefail
           build_args=(-- --publish never --mac --${{ matrix.electron_arch }})
-          build_args+=("-c.publish.releaseType=$RELEASE_TYPE")
-          build_args+=("-c.publish.channel=$RELEASE_CHANNEL")
+          # electron-builder.yml sets publish: null (Fulcra has no update feed yet), so pass no
+          # -c.publish.* overrides: they create a provider-less publish object that fails validation.
           npm run build:desktop "${build_args[@]}"
 
       - name: Upload packaged smoke diagnostics
@@ -285,8 +286,8 @@ jobs:
         run: |
           set -euo pipefail
           build_args=(-- --publish never --linux --x64)
-          build_args+=("-c.publish.releaseType=$RELEASE_TYPE")
-          build_args+=("-c.publish.channel=$RELEASE_CHANNEL")
+          # electron-builder.yml sets publish: null (Fulcra has no update feed yet), so pass no
+          # -c.publish.* overrides: they create a provider-less publish object that fails validation.
           npm run build:desktop "${build_args[@]}"
 
       - name: Upload packaged smoke diagnostics
@@ -387,8 +388,8 @@ jobs:
         run: |
           set -euo pipefail
           build_args=(-- --publish never --win --x64 --arm64)
-          build_args+=("-c.publish.releaseType=$RELEASE_TYPE")
-          build_args+=("-c.publish.channel=$RELEASE_CHANNEL")
+          # electron-builder.yml sets publish: null (Fulcra has no update feed yet), so pass no
+          # -c.publish.* overrides: they create a provider-less publish object that fails validation.
           npm run build:desktop "${build_args[@]}"
 
       - name: Upload packaged smoke diagnostics

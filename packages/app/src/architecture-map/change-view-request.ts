@@ -5,24 +5,53 @@ import { create } from "zustand";
 // workspace, as before); the request is a one-shot note the panel consumes and then clears, so a
 // persisted layout never carries it.
 
+export type ArchitectureChangeSelection =
+  | { pullRequest: number; commit?: never }
+  | { commit: { base: string; head: string }; pullRequest?: never };
+
+export function parseArchitectureChangeSelection(input: {
+  pullRequest?: unknown;
+  commit?: unknown;
+}): ArchitectureChangeSelection {
+  if (
+    input.commit === undefined &&
+    Number.isSafeInteger(input.pullRequest) &&
+    (input.pullRequest as number) > 0
+  )
+    return { pullRequest: input.pullRequest as number };
+  if (input.pullRequest === undefined && input.commit && typeof input.commit === "object") {
+    const pair = input.commit as { base?: unknown; head?: unknown };
+    const sha = /^[a-fA-F0-9]{40}$/;
+    if (
+      typeof pair.base === "string" &&
+      typeof pair.head === "string" &&
+      sha.test(pair.base) &&
+      sha.test(pair.head)
+    )
+      return { commit: { base: pair.base.toLowerCase(), head: pair.head.toLowerCase() } };
+  }
+  throw new Error("Choose one pull request or two full commit SHAs.");
+}
+
 interface ChangeViewRequests {
-  pending: ReadonlySet<string>;
-  request: (workspaceKey: string) => void;
-  consume: (workspaceKey: string) => boolean;
+  pending: ReadonlyMap<string, ArchitectureChangeSelection | true>;
+  request: (workspaceKey: string, selection?: ArchitectureChangeSelection) => void;
+  consume: (workspaceKey: string) => ArchitectureChangeSelection | boolean;
 }
 
 export const useChangeViewRequests = create<ChangeViewRequests>((set, get) => ({
-  pending: new Set(),
-  request: (workspaceKey) =>
-    set((state) => ({ pending: new Set(state.pending).add(workspaceKey) })),
+  pending: new Map(),
+  request: (workspaceKey, selection) =>
+    set((state) => ({ pending: new Map(state.pending).set(workspaceKey, selection ?? true) })),
   consume: (workspaceKey) => {
-    if (!get().pending.has(workspaceKey)) return false;
+    const selection = get().pending.get(workspaceKey);
+    if (!selection) return false;
     set((state) => {
-      const pending = new Set(state.pending);
+      const pending = new Map(state.pending);
       pending.delete(workspaceKey);
       return { pending };
     });
-    return true;
+    return selection;
   },
 }));
 

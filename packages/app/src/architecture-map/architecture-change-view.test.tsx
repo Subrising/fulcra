@@ -69,7 +69,7 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 const onOpenPullRequest = vi.fn();
 
-function render(change: Ready, initialWidth: number): HTMLElement {
+function render(change: Ready, initialWidth: number, showFileFacts = true): HTMLElement {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -81,6 +81,7 @@ function render(change: Ready, initialWidth: number): HTMLElement {
         baseLabel="main"
         onOpenPullRequest={onOpenPullRequest}
         initialWidth={initialWidth}
+        showFileFacts={showFileFacts}
       />,
     );
   });
@@ -185,4 +186,12 @@ describe("ArchitectureChangeView", () => {
     expect(text()).toContain("<img src=x onerror=alert(1)> search");
     expect(container?.querySelector("img")).toBeNull();
   });
+});
+
+it("does not present missing selected-change file facts as zero changes", () => {
+  render(ready(), 1280, false);
+  const summary = one("architecture-change-summary")?.textContent ?? "";
+  expect(summary).toContain("Touches 3 parts of the system.");
+  expect(summary).not.toContain("files changed");
+  expect(summary).not.toContain("test beside");
 });

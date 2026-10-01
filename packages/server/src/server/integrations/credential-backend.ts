@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 
 // Shared credential store secrets live in the OS credential store under one service name, with the
-// account id as the item name. Every backend passes secret values over stdin and
+// account id as the item name (CONTRACTS §7.2). Every backend passes secret values over stdin and
 // never in argv, where other local users could read them from the process table.
 export const CREDENTIALS_SERVICE = "ai.fulcra.credentials";
 

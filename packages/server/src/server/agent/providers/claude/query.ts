@@ -1,3 +1,4 @@
+import { trustedClaudeDenyRules } from "../../../plugins/trusted.js";
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { query, type Options, type Query, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 
@@ -110,10 +111,30 @@ function applyRuntimeSettingsToClaudeOptions(
   };
 }
 
+export function applyTrustedClaudeDeny(options: ClaudeOptions): ClaudeOptions {
+  const rules = trustedClaudeDenyRules();
+  if (rules.length === 0) return options;
+  // A settings path cannot be merged without dropping its settings; refuse it rather than weakening policy.
+  if (typeof options.settings === "string")
+    throw new Error("Trusted Claude deny requires inline settings");
+  const settings = options.settings ?? {};
+  return {
+    ...options,
+    disallowedTools: [...new Set([...(options.disallowedTools ?? []), ...rules])],
+    settings: {
+      ...settings,
+      permissions: {
+        ...settings.permissions,
+        deny: [...new Set([...(settings.permissions?.deny ?? []), ...rules])],
+      },
+    },
+  };
+}
+
 export function claudeQuery(input: ClaudeQueryInput, context: ClaudeQueryContext = {}): Query {
   const launchQuery = context.queryFactory ?? query;
   return launchQuery({
     ...input,
-    options: applyRuntimeSettingsToClaudeOptions(input.options, context),
+    options: applyTrustedClaudeDeny(applyRuntimeSettingsToClaudeOptions(input.options, context)),
   });
 }

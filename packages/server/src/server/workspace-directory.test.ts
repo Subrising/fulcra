@@ -244,6 +244,7 @@ interface AgentState {
   pendingPermissionCount?: number;
   requiresAttention?: boolean;
   attentionReason?: AgentSnapshotPayload["attentionReason"];
+  backgroundWork?: AgentSnapshotPayload["backgroundWork"];
 }
 
 function createAgent(
@@ -289,6 +290,7 @@ function createAgent(
     attentionReason: input.attentionReason ?? null,
     attentionTimestamp: null,
     archivedAt: null,
+    ...(input.backgroundWork ? { backgroundWork: input.backgroundWork } : {}),
   } satisfies AgentSnapshotPayload;
 }
 
@@ -693,4 +695,60 @@ test("Git observation targets exclude archived records without hydrating app des
   expect(await directory.listObservationTargets()).toEqual([
     { id: "observed", workspaceDirectory: "/workspace/observed", workspaceKind: "local_checkout" },
   ]);
+});
+
+describe("WorkspaceDirectory background work (display only)", () => {
+  const work = (count: number) => ({
+    count,
+    kinds: ["shell" as const],
+    source: "provider" as const,
+    since: "2026-03-02T11:00:00.000Z",
+    observedAt: "2026-03-02T12:00:00.000Z",
+  });
+
+  test("an idle agent with a background job makes its workspace working, with the count", async () => {
+    const workspace = new WorkspaceStatus();
+    workspace.hasRootAgent({ id: "builder", status: "idle", backgroundWork: work(2) });
+
+    const descriptor = await workspace.workspaceDescriptor();
+    expect(descriptor.status).toBe("running");
+    expect(descriptor.backgroundWorkCount).toBe(2);
+    expect(descriptor.statusEnteredAt).toBe("2026-03-02T11:00:00.000Z");
+  });
+
+  test("without background jobs the workspace is done and carries no count", async () => {
+    const workspace = new WorkspaceStatus();
+    workspace.hasRootAgent({ id: "builder", status: "idle" });
+
+    const descriptor = await workspace.workspaceDescriptor();
+    expect(descriptor.status).toBe("done");
+    expect("backgroundWorkCount" in descriptor).toBe(false);
+  });
+
+  test("needs input still wins over background jobs", async () => {
+    const workspace = new WorkspaceStatus();
+    workspace.hasRootAgent({
+      id: "builder",
+      status: "idle",
+      pendingPermissionCount: 1,
+      backgroundWork: work(1),
+    });
+
+    const descriptor = await workspace.workspaceDescriptor();
+    expect(descriptor.status).toBe("needs_input");
+    expect(descriptor.backgroundWorkCount).toBe(1);
+  });
+
+  test("a finished turn with a build still running reads as working, not ready to review", async () => {
+    const workspace = new WorkspaceStatus();
+    workspace.hasRootAgent({
+      id: "builder",
+      status: "idle",
+      requiresAttention: true,
+      attentionReason: "finished",
+      backgroundWork: work(1),
+    });
+
+    await expect(workspace.workspaceStatus()).resolves.toBe("running");
+  });
 });

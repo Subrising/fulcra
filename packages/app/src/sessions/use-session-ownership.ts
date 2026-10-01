@@ -13,7 +13,7 @@ import {
 /**
  * The single place the app learns a session's recorded owner.
  *
- * The record belongs to the ownership service and reaches the app through the organization
+ * The record belongs to the controller and reaches the app through the organization
  * plugin's `organization.session-ownership` read. Nothing here mints ownership, invents a
  * project id, or resolves a name: an absent, refused or malformed answer leaves the row
  * exactly as it was before — the daemon's derived placement — rather than claiming a

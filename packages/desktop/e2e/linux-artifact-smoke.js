@@ -11,7 +11,7 @@ const BUILDER_CONFIG = path.join(__dirname, "..", "electron-builder.yml");
 // electron-builder derives the install root from `productName` and the desktop entry and
 // launcher from `executableName`, so those two keys are the only source of truth. Hardcoding
 // them is what left this file looking for /opt/Paseo and Paseo.desktop long after the product
-// was renamed: the smoke kept passing on a fork's layout and would have failed on the real one.
+// became Orca: the smoke kept passing on a fork's layout and would have failed on the real one.
 //
 // Missing key means stop, not guess. A default would put the old name back a rename later.
 function builderName(key) {

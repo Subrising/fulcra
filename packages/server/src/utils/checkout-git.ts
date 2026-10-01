@@ -1,4 +1,5 @@
 import { resolve, dirname, basename } from "path";
+import { resolveForgeRemoteUrl } from "./forge-remote.js";
 import { existsSync, realpathSync } from "fs";
 import { open as openFile, readFile, stat as statFile } from "fs/promises";
 import { setImmediate } from "node:timers/promises";
@@ -64,6 +65,7 @@ export type GitMutationRefreshReason =
   | "create-branch"
   | "stash-push"
   | "stash-pop"
+  | "stash-apply"
   | "discard-changes"
   | "create-worktree";
 
@@ -1357,6 +1359,18 @@ export async function getOriginRemoteUrl(
   }
 }
 
+// U5-D07: the checkout's forge remote URL, chosen by URL rather than by the name `origin` (utils/forge-remote.ts).
+export async function getForgeRemoteUrl(
+  cwd: string,
+  context?: CheckoutContext,
+): Promise<string | null> {
+  return resolveForgeRemoteUrl(
+    cwd,
+    (args, options) => getRunGitCommand(context)(args, options),
+    READ_ONLY_GIT_ENV,
+  );
+}
+
 export async function hasOriginRemote(cwd: string): Promise<boolean> {
   const url = await getOriginRemoteUrl(cwd);
   return url !== null;
@@ -2344,12 +2358,13 @@ const COMMIT_RECORD_SEPARATOR = "\x1e";
 // Record-separated, NUL-field-separated so arbitrary subject text stays parseable.
 // `%x1e`/`%x00` are git placeholders (literal text in the arg, real bytes in the
 // output) — passing actual NUL bytes as a process arg is rejected by Node.
-const COMMIT_LOG_FORMAT = "%x1e%H%x00%h%x00%an%x00%aI%x00%s";
+const COMMIT_LOG_FORMAT = "%x1e%H%x00%h%x00%an%x00%aI%x00%s%x00%P";
 
 type CheckoutCommitFileStatus = NonNullable<CheckoutCommitFile["status"]>;
 
 interface ParsedCheckoutCommit {
   sha: string;
+  parentShas: string[];
   shortSha: string;
   authorName: string;
   authorDate: string;
@@ -2479,6 +2494,7 @@ function parseCheckoutCommitRecords(stdout: string): ParsedCheckoutCommit[] {
       authorName: fields[2] ?? "",
       authorDate: (fields[3] ?? "").trim(),
       subject: fields[4] ?? "",
+      parentShas: (fields[5] ?? "").trim().split(/\s+/).filter(Boolean),
       files,
     });
   }
@@ -2608,6 +2624,7 @@ export async function listCheckoutCommits({
 
   const commits = records.map((record) => ({
     sha: record.sha,
+    parentShas: record.parentShas,
     shortSha: record.shortSha,
     subject: record.subject,
     authorName: record.authorName,
@@ -2671,6 +2688,36 @@ export async function getCommitFileDiff({
     return null;
   }
 
+  return file;
+}
+
+/**
+ * One file's diff between two commits (a pull request's merge base and head), parsed with the same parser as the
+ * commit diff. Null when the file did not change between them or the change is binary-only.
+ */
+export async function getRangeFileDiff({
+  cwd,
+  base,
+  head,
+  path,
+}: {
+  cwd: string;
+  base: string;
+  head: string;
+  path: string;
+}): Promise<ParsedDiffFile | null> {
+  const { stdout } = await runGitCommand(["diff", "--no-renames", base, head, "--", path], {
+    cwd,
+    envOverlay: READ_ONLY_GIT_ENV,
+  });
+  if (stdout.trim().length === 0) return null;
+  const parsedFiles = await parseAndHighlightDiff(stdout, cwd, {
+    getOldFileContent: (file) => readGitFileContentAtRef(cwd, base, file.path),
+    getNewFileContent: (file) => readGitFileContentAtRef(cwd, head, file.path),
+  });
+  const file = parsedFiles.find((candidate) => candidate.path === path) ?? null;
+  if (!file) return null;
+  if (file.hunks.length === 0 && /^Binary files .* differ$/m.test(stdout)) return null;
   return file;
 }
 
@@ -4009,7 +4056,7 @@ export interface PullRequestStatus {
   state: string;
   baseRefName: string;
   headRefName: string;
-  // The PR's base and head commits (40-hex), when the forge reports them.
+  // CONTRACTS v1.16: the PR's base and head commits (40-hex), when the forge reports them.
   baseRefOid?: string;
   headRefOid?: string;
   isMerged: boolean;

@@ -1,11 +1,20 @@
 import { compare, compareSync, hashSync } from "bcryptjs";
 import { timingSafeEqual } from "node:crypto";
 import type { RequestHandler } from "express";
+import {
+  DAEMON_AUTH_PROTOCOL_PREFIX,
+  DAEMON_PLAIN_PROTOCOL,
+  LEGACY_BEARER_PROTOCOL_PREFIX,
+  passwordFromBearerToken,
+  passwordFromProtocol,
+} from "@getpaseo/protocol/daemon-credential";
+import { matchesLocalCredential } from "./local-credential.js";
 
 export const DAEMON_PASSWORD_BCRYPT_COST = 12;
 
 export interface DaemonAuthConfig {
   password?: string;
+  localCredential?: () => string | null;
 }
 
 export interface BearerAuthRejectContext {
@@ -19,10 +28,6 @@ interface BearerValidationInput {
   token: string | null;
 }
 
-export function isBearerTokenValid(input: BearerValidationInput): boolean {
-  return isBearerTokenValidSync(input);
-}
-
 export async function isBearerTokenValidAsync(input: BearerValidationInput): Promise<boolean> {
   if (!input.password) {
     return true;
@@ -32,6 +37,10 @@ export async function isBearerTokenValidAsync(input: BearerValidationInput): Pro
   }
 
   return compare(input.token, input.password);
+}
+
+export function isBearerTokenValid(input: BearerValidationInput): boolean {
+  return isBearerTokenValidSync(input);
 }
 
 export function isBearerTokenValidSync(input: BearerValidationInput): boolean {
@@ -57,34 +66,45 @@ export function extractHttpBearerToken(value: string | undefined): string | null
   if (scheme !== "Bearer" || tokenParts.length !== 1) {
     return null;
   }
-  return tokenParts[0] ?? null;
+  // Current clients send `b64u.<base64url>` for any password that is not a plain token.
+  return tokenParts[0] ? passwordFromBearerToken(tokenParts[0]) : null;
 }
 
+/**
+ * The offered subprotocol that carries the password: the encoded `fulcra.auth.` form from current clients first, else
+ * the legacy `paseo.bearer.` form from older ones.
+ */
 export function extractWsBearerProtocol(value: string | undefined): string | null {
   if (!value) {
     return null;
   }
-
-  for (const protocol of value.split(",")) {
-    const trimmed = protocol.trim();
-    const segments = trimmed.split(".");
-    if (segments[0] === "paseo" && segments[1] === "bearer" && segments.length >= 3) {
-      return trimmed;
-    }
-  }
-
-  return null;
+  const offered = value.split(",").map((protocol) => protocol.trim());
+  return (
+    offered.find((protocol) => protocol.startsWith(DAEMON_AUTH_PROTOCOL_PREFIX)) ??
+    offered.find(
+      (protocol) =>
+        protocol.startsWith(LEGACY_BEARER_PROTOCOL_PREFIX) &&
+        protocol.length > LEGACY_BEARER_PROTOCOL_PREFIX.length,
+    ) ??
+    null
+  );
 }
 
+/** The password an offered subprotocol carries (decoded for the current form), or null. */
 export function extractWsBearerToken(protocol: string | null): string | null {
-  if (!protocol) {
-    return null;
-  }
-  const segments = protocol.split(".");
-  if (segments[0] !== "paseo" || segments[1] !== "bearer" || segments.length < 3) {
-    return null;
-  }
-  return segments.slice(2).join(".");
+  return protocol ? passwordFromProtocol(protocol) : null;
+}
+
+/**
+ * The subprotocol to answer with. A current client also offers the plain `fulcra.v1`, which carries no secret, so the
+ * handshake never echoes the credential; an older client offers only its credential protocol, which is echoed as
+ * before (a browser refuses a handshake that answers none of its offers).
+ */
+export function selectDaemonProtocol(offered: Iterable<string>): string | false {
+  const list = [...offered];
+  if (!list.some((protocol) => extractWsBearerToken(protocol) !== null)) return false;
+  if (list.includes(DAEMON_PLAIN_PROTOCOL)) return DAEMON_PLAIN_PROTOCOL;
+  return list.find((protocol) => extractWsBearerToken(protocol) !== null) ?? false;
 }
 
 export function createRequireBearerMiddleware(
@@ -101,7 +121,13 @@ export function createRequireBearerMiddleware(
     void (async () => {
       try {
         const token = extractHttpBearerToken(req.header("authorization"));
-        if (!(await isBearerTokenValidAsync({ password, token }))) {
+        const localCredential = req.path === "/api/status" ? auth?.localCredential?.() : null;
+        const isLocal =
+          localCredential !== null &&
+          localCredential !== undefined &&
+          token !== null &&
+          matchesLocalCredential(localCredential, token);
+        if (!isLocal && !(await isBearerTokenValidAsync({ password, token }))) {
           onReject?.({
             path: req.path,
             method: req.method,
@@ -145,10 +171,12 @@ export async function isAgentMcpRequestAuthorized(input: {
   capabilityToken: string | null;
   authorizationHeader: string | undefined;
 }): Promise<boolean> {
+  const token = extractHttpBearerToken(input.authorizationHeader);
+  // Reserved report credentials select only native metadata read/consume, never the agent action endpoint.
+  if (token?.startsWith("report1.")) return false;
   if (!input.password) {
     return true;
   }
-  const token = extractHttpBearerToken(input.authorizationHeader);
   if (input.capabilityToken !== null && token !== null) {
     // Constant-time compare; length-guard first because timingSafeEqual throws
     // on differing buffer lengths.

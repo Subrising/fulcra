@@ -1,0 +1,41 @@
+{
+  "id": "orca-ingress",
+  "name": "Fulcra Ingress",
+  "description": "Scoped access to existing Fulcra saved sessions.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "bindingsDir": {
+        "type": "string"
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "trustedOwnerSessionKey": {
+        "type": "string",
+        "minLength": 1
+      },
+      "completionWakes": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "bindingsDir",
+      "agentId"
+    ],
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "orca_ingress_status",
+      "orca_ingress_assign",
+      "orca_ingress_result",
+      "orca_ingress_ack"
+    ]
+  }
+}

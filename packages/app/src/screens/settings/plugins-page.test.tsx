@@ -4,7 +4,7 @@ import { subscriptionFixture } from "@/runtime/subscription-fixture";
  */
 import { i18n as testI18n } from "@/i18n/i18next";
 import React, { type ReactElement } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { PluginListItem, PluginLogEntry } from "@getpaseo/protocol/messages";
@@ -12,6 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostPluginsPage } from "./plugins-page";
 
 void testI18n;
+
+vi.mock("@/plugins/bundle-trust", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/plugins/bundle-trust")>()),
+  isPluginBundleTrusted: () => false,
+}));
 
 const runtime = vi.hoisted(() => ({
   connected: true,
@@ -61,11 +66,13 @@ vi.mock("@/components/adaptive-modal-sheet", async () => {
 
 vi.mock("react-native-reanimated", () => ({
   default: { View: "div" },
+  FadeIn: { duration: () => undefined },
   Keyframe: class {
     duration() {
       return this;
     }
   },
+  runOnJS: (callback: (...args: unknown[]) => unknown) => callback,
   Easing: { ease: "ease", inOut: (value: unknown) => value },
   interpolateColor: (value: number, _input: number[], output: string[]) =>
     value >= 1 ? output[1] : output[0],
@@ -251,5 +258,30 @@ describe("HostPluginsPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Refresh" }).at(-1)!);
     await waitFor(() => expect(client.getPluginLogs).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("No plugin output yet")).toBeDefined();
+  });
+
+  it("shows refused bundled code even when ordinary plugins are disabled and unconfigured", async () => {
+    const { pluginRegistry } = await import("@/plugins/registry");
+    const client = createClient();
+    client.getDaemonConfig.mockResolvedValue({ config: { pluginsEnabled: false } });
+    renderPage(client);
+    await screen.findByText("No plugins configured");
+    try {
+      act(() =>
+        pluginRegistry.installCatalog(
+          "host-a",
+          [{ id: "orca-organization-next", clientBundle: "untrusted bytes" }],
+          { client: client as unknown as DaemonClient },
+        ),
+      );
+      expect(await screen.findByText("Plugin not trusted on this Mac")).toBeDefined();
+      expect(screen.getByText(/Update Fulcra on the host Mac/)).toBeDefined();
+      expect(screen.getByText(/orca-organization-next/)).toBeDefined();
+      act(() => pluginRegistry.removeHost("host-a"));
+      await waitFor(() => expect(screen.queryByText("Plugin not trusted on this Mac")).toBeNull());
+    } finally {
+      cleanup();
+      pluginRegistry.removeHost("host-a");
+    }
   });
 });

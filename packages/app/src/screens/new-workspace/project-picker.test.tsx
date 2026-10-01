@@ -82,8 +82,8 @@ describe("useNewWorkspaceProjectPicker", () => {
   });
 });
 
-// The picker names a project the way the sidebar does, never by a raw id.
-const CHAT_ID = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+// J6: the picker names a project the way the sidebar does, never by a raw id.
+const CHAT_ID = "0a2a9b27-e6eb-4de9-bef1-2c1f6f1b0e7a";
 
 function chatProject(input: {
   projectName: string;
@@ -119,7 +119,7 @@ function labels(
   );
 }
 
-describe("resolveProjectPickerLabel labels", () => {
+describe("J6: resolveProjectPickerLabel", () => {
   it("keeps a project's own display name", () => {
     const named = chatProject({
       projectName: "Fulcra product",
@@ -138,8 +138,8 @@ describe("resolveProjectPickerLabel labels", () => {
       workspaceKeys: ["host:ws1"],
     });
     expect(
-      resolveProjectPickerLabel(chat, labels({ "host:ws1": "Release checklist review" })),
-    ).toBe("Release checklist review");
+      resolveProjectPickerLabel(chat, labels({ "host:ws1": "Orca phone interface acceptance" })),
+    ).toBe("Orca phone interface acceptance");
   });
 
   it("names a generated-id project with several conversations like the sidebar does", () => {
@@ -191,12 +191,26 @@ describe("resolveProjectPickerLabel labels", () => {
         routeProjectContextViewKey: null,
         lastActiveProject: chat,
         allowAllProjects: true,
-        conversationLabels: labels({ "host:ws1": "Release checklist review" }),
+        conversationLabels: labels({ "host:ws1": "Orca phone interface acceptance" }),
       }),
     );
     expect(result.current.projectPickerOptions.map((option) => option.label)).toEqual([
-      "Release checklist review",
+      "Orca phone interface acceptance",
     ]);
-    expect(result.current.projectTriggerLabel).toBe("Release checklist review");
+    expect(result.current.projectTriggerLabel).toBe("Orca phone interface acceptance");
   });
+});
+
+it("keeps an explicit UUID-shaped project title", () => {
+  const named = {
+    ...chatProject({
+      projectName: CHAT_ID,
+      iconWorkingDir: `/tasks/${CHAT_ID}`,
+      workspaceKeys: ["host:ws1"],
+    }),
+    projectCustomName: CHAT_ID,
+  };
+  expect(resolveProjectPickerLabel(named, labels({ "host:ws1": "Fixture research" }))).toBe(
+    CHAT_ID,
+  );
 });

@@ -1,3 +1,4 @@
+import { SidebarSessions } from "./sidebar/sidebar-sessions";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   View,
@@ -1914,6 +1915,10 @@ export function SidebarWorkspaceList({
     enabled: rowItems.host && shouldShowSidebarHostLabels(projects),
   });
   const serverIds = useMemo(() => hosts.map((host) => host.serverId), [hosts]);
+  const sessionHostNames = useMemo(
+    () => new Map(hosts.map((host) => [host.serverId, host.label])),
+    [hosts],
+  );
   const supportsMultiplicityByServerId = useHostFeatureMap(serverIds, "workspaceMultiplicity");
   const supportsPinningByServerId = useHostFeatureMap(serverIds, "workspacePinning");
   const onToggleWorkspacePin = useSidebarWorkspacePinController();
@@ -1962,6 +1967,17 @@ export function SidebarWorkspaceList({
   // Project mode is the one that keeps its project headers; every other grouping mode is a flat
   // list of grouped rows, so a new mode lands in the grouped branch rather than silently in this
   // one's `else`.
+  const sessionsHeader = (
+    <>
+      {listHeaderComponent}
+      <SidebarSessions
+        serverIds={serverIds}
+        hostNames={sessionHostNames}
+        onSelect={onWorkspacePress}
+      />
+    </>
+  );
+
   const content =
     groupMode !== "project" ? (
       <SidebarGroupedModeList
@@ -1975,7 +1991,7 @@ export function SidebarWorkspaceList({
         supportsPinningByServerId={supportsPinningByServerId}
         onToggleWorkspacePin={onToggleWorkspacePin}
         onPinnedWorkspaceReorder={handlePinnedWorkspaceReorder}
-        listHeaderComponent={listHeaderComponent}
+        listHeaderComponent={sessionsHeader}
         sidebarFilterEmpty={sidebarFilterEmpty}
         parentGestureRef={parentGestureRef}
         dragGestureHostActive={dragGestureHostActive}
@@ -1993,7 +2009,7 @@ export function SidebarWorkspaceList({
         onAddProject={onAddProject}
         onImportSession={onImportSession}
         listFooterComponent={listFooterComponent}
-        listHeaderComponent={listHeaderComponent}
+        listHeaderComponent={sessionsHeader}
         sidebarFilterEmpty={sidebarFilterEmpty}
         hasActiveProjectFilter={hasActiveProjectFilter}
         parentGestureRef={parentGestureRef}

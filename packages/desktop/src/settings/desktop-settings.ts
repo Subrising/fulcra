@@ -14,6 +14,7 @@ export interface DesktopSettings {
   daemon: {
     manageBuiltInDaemon: boolean;
     keepRunningAfterQuit: boolean;
+    commandCentreEnabled?: boolean;
   };
 }
 
@@ -35,8 +36,10 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
     playSound: true,
   },
   daemon: {
-    manageBuiltInDaemon: true,
+    // Orca connects to its existing controller; opening the app must not start Paseo.
+    manageBuiltInDaemon: false,
     keepRunningAfterQuit: false,
+    commandCentreEnabled: false,
   },
 };
 
@@ -52,10 +55,11 @@ const NotificationsSchema = z
 
 const DaemonSchema = z
   .looseObject({
+    commandCentreEnabled: z.boolean().catch(false),
     manageBuiltInDaemon: z.boolean().catch(DEFAULT_DESKTOP_SETTINGS.daemon.manageBuiltInDaemon),
     keepRunningAfterQuit: z.boolean().catch(DEFAULT_DESKTOP_SETTINGS.daemon.keepRunningAfterQuit),
   })
-  .catch(() => ({ ...DEFAULT_DESKTOP_SETTINGS.daemon }));
+  .catch(() => ({ ...DEFAULT_DESKTOP_SETTINGS.daemon, commandCentreEnabled: false }));
 
 const DesktopSettingsSchema = z
   .looseObject({
@@ -107,7 +111,7 @@ function buildDefaultSettings(): StoredDesktopSettings {
   return {
     releaseChannel: DEFAULT_DESKTOP_SETTINGS.releaseChannel,
     notifications: { ...DEFAULT_DESKTOP_SETTINGS.notifications },
-    daemon: { ...DEFAULT_DESKTOP_SETTINGS.daemon },
+    daemon: { ...DEFAULT_DESKTOP_SETTINGS.daemon, commandCentreEnabled: false },
   };
 }
 
@@ -127,8 +131,10 @@ function toDesktopSettings(stored: StoredDesktopSettings): DesktopSettings {
     releaseChannel: stored.releaseChannel,
     notifications: { playSound: stored.notifications.playSound },
     daemon: {
-      manageBuiltInDaemon: stored.daemon.manageBuiltInDaemon,
-      keepRunningAfterQuit: stored.daemon.keepRunningAfterQuit,
+      manageBuiltInDaemon: stored.daemon.commandCentreEnabled || stored.daemon.manageBuiltInDaemon,
+      keepRunningAfterQuit:
+        stored.daemon.commandCentreEnabled || stored.daemon.keepRunningAfterQuit,
+      commandCentreEnabled: stored.daemon.commandCentreEnabled,
     },
   };
 }
@@ -153,6 +159,8 @@ function coerceDesktopSettingsPatch(input: unknown): DesktopSettingsPatch {
 
   if (isRecord(input.daemon)) {
     const daemonPatch: Partial<DesktopSettings["daemon"]> = {};
+    const commandCentreEnabled = coerceBoolean(input.daemon.commandCentreEnabled);
+    if (commandCentreEnabled !== null) daemonPatch.commandCentreEnabled = commandCentreEnabled;
     const manageBuiltInDaemon = coerceBoolean(input.daemon.manageBuiltInDaemon);
     if (manageBuiltInDaemon !== null) {
       daemonPatch.manageBuiltInDaemon = manageBuiltInDaemon;
@@ -287,6 +295,11 @@ export function createDesktopSettingsStore({
     async patch(patch: unknown): Promise<DesktopSettings> {
       const current = await loadDocument();
       const coercedPatch = coerceDesktopSettingsPatch(patch);
+      // The stored quit preference remains the value to restore after disabling.
+      if (current.settings.daemon.commandCentreEnabled && coercedPatch.daemon) {
+        delete coercedPatch.daemon.keepRunningAfterQuit;
+        delete coercedPatch.daemon.manageBuiltInDaemon;
+      }
       const next = mergeDesktopSettings(current.settings, coercedPatch);
       await persistDocument({
         ...current,

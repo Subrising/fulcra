@@ -14,6 +14,7 @@ export interface WorkspaceStructureProject {
   viewKey: string;
   projectKey: string | null;
   projectName: string;
+  projectCustomName?: string | null;
   projectKind: WorkspaceDescriptor["projectKind"] | "unknown";
   iconWorkingDir: string;
   hosts: WorkspaceStructureHostPlacement[];
@@ -92,17 +93,21 @@ export function buildWorkspaceStructureProjects(input: {
   }
 
   return Array.from(byProject.values())
-    .map((draft) => ({
-      viewKey: draft.viewKey,
-      projectKey: draft.projectKey,
-      projectName: draft.projectName,
-      projectKind: draft.projectKind,
-      iconWorkingDir: draft.iconWorkingDir,
-      hosts: Array.from(draft.hosts.values()),
-      workspaceKeys: draft.workspaces
-        .sort(compareWorkspaceStructureItems)
-        .map((workspace) => workspace.workspaceKey),
-    }))
+    .map((draft) => {
+      const project: WorkspaceStructureProject = {
+        viewKey: draft.viewKey,
+        projectKey: draft.projectKey,
+        projectName: draft.projectName,
+        projectKind: draft.projectKind,
+        iconWorkingDir: draft.iconWorkingDir,
+        hosts: Array.from(draft.hosts.values()),
+        workspaceKeys: draft.workspaces
+          .sort(compareWorkspaceStructureItems)
+          .map((workspace) => workspace.workspaceKey),
+      };
+      if (draft.hasCustomName) project.projectCustomName = draft.projectName;
+      return project;
+    })
     .sort(
       (left, right) =>
         left.projectName.localeCompare(right.projectName, undefined, {

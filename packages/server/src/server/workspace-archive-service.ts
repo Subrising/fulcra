@@ -1,3 +1,6 @@
+import type { TrustedOperationHandle } from "./plugins/trusted.js";
+import { deferredCommandPayload as commandPayload } from "./agent/trusted-operation.js";
+import { AdmissionDeniedError } from "./plugins/trusted.js";
 import { resolve } from "node:path";
 
 import type { Logger } from "pino";
@@ -33,7 +36,15 @@ export interface ArchiveDependencies {
   paseoWorktreesBaseRoot?: string;
   github: ForgeService;
   workspaceGitService: Pick<WorkspaceGitService, "getSnapshot">;
-  agentManager: Pick<AgentManager, "listAgents" | "getAgent" | "archiveAgent" | "archiveSnapshot">;
+  agentManager: Pick<
+    AgentManager,
+    | "listAgents"
+    | "getAgent"
+    | "archiveAgent"
+    | "archiveSnapshot"
+    | "trustedPlugins"
+    | "preflightArchiveDescendants"
+  >;
   agentStorage: Pick<AgentStorage, "listByWorkspace">;
   // Resolves the worktree at a path to its workspaceId for archive-by-path. The
   // path uniquely identifies a worktree workspace; this is a directory lookup for
@@ -127,6 +138,49 @@ export async function archiveByScope(
   return runWithGitCommandPriority("high", () => archiveByScopeWithPriority(dependencies, request));
 }
 
+async function admitWorkspaceArchives(
+  dependencies: ArchiveWorkspaceContentsDependencies,
+  workspaceIds: string[],
+  operations = new Map<string, TrustedOperationHandle | undefined>(),
+): Promise<Map<string, TrustedOperationHandle | undefined>> {
+  for (const workspaceId of workspaceIds) {
+    const records = await dependencies.agentStorage.listByWorkspace(workspaceId);
+    const agents = new Map(
+      records.filter((record) => !record.archivedAt).map((record) => [record.id, record]),
+    );
+    for (const agent of dependencies.agentManager.listAgents()) {
+      if (agent.workspaceId === workspaceId) {
+        dependencies.agentManager.trustedPlugins.input(
+          agent,
+          "archive",
+          undefined,
+          () =>
+            operations.set(agent.id, dependencies.agentManager.trustedPlugins.captureOperation()),
+          commandPayload("archive"),
+          operations.get(agent.id),
+        );
+        agents.delete(agent.id);
+      }
+    }
+    for (const record of agents.values()) {
+      dependencies.agentManager.trustedPlugins.input(
+        record,
+        "archive",
+        undefined,
+        () =>
+          operations.set(record.id, dependencies.agentManager.trustedPlugins.captureOperation()),
+        commandPayload("archive"),
+        operations.get(record.id),
+      );
+    }
+  }
+  // Complete every descendant preflight before callers cancel/archive any sibling.
+  for (const agentId of operations.keys()) {
+    await dependencies.agentManager.preflightArchiveDescendants(agentId);
+  }
+  return operations;
+}
+
 async function archiveByScopeWithPriority(
   dependencies: ArchiveDependencies,
   request: ArchiveByScopeRequest,
@@ -134,6 +188,7 @@ async function archiveByScopeWithPriority(
   const target = await resolveArchiveTarget(dependencies, request.scope);
   const targetWorkspaceIds = target.workspaceIds;
 
+  const operations = await admitWorkspaceArchives(dependencies, targetWorkspaceIds);
   await stopWorkspaceSetups(dependencies, target.setupWorkspaceIds, request.requestId);
 
   if (targetWorkspaceIds.length > 0) {
@@ -151,6 +206,7 @@ async function archiveByScopeWithPriority(
       dependencies,
       targetWorkspaceIds,
       request.requestId,
+      operations,
     );
 
     if (target.backing?.mainRepoRoot) {
@@ -318,13 +374,14 @@ async function archiveTargetRecords(
   dependencies: ArchiveDependencies,
   targetWorkspaceIds: string[],
   requestId: string,
+  operations: Map<string, TrustedOperationHandle | undefined>,
 ): Promise<{ archivedAgents: Set<string>; archivedWorkspaceIds: string[] }> {
   const archivedAgents = new Set<string>();
   const archivedWorkspaceIds: string[] = [];
 
   const results = await Promise.allSettled(
     targetWorkspaceIds.map(async (workspaceId) => {
-      const agents = await archiveWorkspaceContents(dependencies, workspaceId);
+      const agents = await archiveWorkspaceContents(dependencies, workspaceId, operations);
       await dependencies.archiveWorkspaceRecord(workspaceId);
       return { workspaceId, agents };
     }),
@@ -337,6 +394,7 @@ async function archiveTargetRecords(
         archivedAgents.add(agentId);
       }
     } else {
+      if (result.reason instanceof AdmissionDeniedError) throw result.reason;
       dependencies.sessionLogger?.warn(
         { err: result.reason, requestId },
         "archiveByScope workspace teardown failed; continuing",
@@ -462,7 +520,9 @@ export type ArchiveWorkspaceContentsDependencies = Pick<
 export async function archiveWorkspaceContents(
   dependencies: ArchiveWorkspaceContentsDependencies,
   workspaceId: string,
+  operations?: Map<string, TrustedOperationHandle | undefined>,
 ): Promise<Set<string>> {
+  const admitted = await admitWorkspaceArchives(dependencies, [workspaceId], operations);
   const archivedAgents = new Set<string>();
 
   const liveAgents = dependencies.agentManager
@@ -494,14 +554,15 @@ export async function archiveWorkspaceContents(
   const archiveResults = await Promise.allSettled([
     ...[...agentIdsToArchive].map((agentId) =>
       dependencies.agentManager.getAgent(agentId)
-        ? dependencies.agentManager.archiveAgent(agentId)
-        : dependencies.agentManager.archiveSnapshot(agentId, archivedAt),
+        ? dependencies.agentManager.archiveAgent(agentId, admitted.get(agentId))
+        : dependencies.agentManager.archiveSnapshot(agentId, archivedAt, admitted.get(agentId)),
     ),
     dependencies.killTerminalsForWorkspace(workspaceId),
   ]);
 
   for (const result of archiveResults) {
     if (result.status === "rejected") {
+      if (result.reason instanceof AdmissionDeniedError) throw result.reason;
       dependencies.sessionLogger?.warn(
         { err: result.reason, workspaceId },
         "Workspace archive teardown step failed; continuing",

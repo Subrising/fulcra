@@ -60,7 +60,9 @@ export function protocolBuildReason() {
   if (process.env.PASEO_SKIP_PROTOCOL_BUILD === "1") return null;
   const oldestOutput = oldestOutputMtimeMs(distDir);
   if (oldestOutput === null) return "protocol dist is missing";
-  const newestInput = Math.max(...inputPaths.map((entry) => newestMtimeMs(path.join(protocolDir, entry))));
+  const newestInput = Math.max(
+    ...inputPaths.map((entry) => newestMtimeMs(path.join(protocolDir, entry))),
+  );
   // Compared against the OLDEST output so a build interrupted halfway is treated as stale
   // rather than accepted because one late file happens to post-date the sources.
   return newestInput > oldestOutput ? "protocol sources are newer than its dist" : null;

@@ -32,11 +32,11 @@ function fakeSecurity(items: Record<string, string>) {
 describe("plugin secrets", () => {
   it("P1: reads only inside the namespace of the plugin id the host started", async () => {
     const security = fakeSecurity({
-      "ai.fulcra.plugin.organization/github.com:read": CANARY,
+      "ai.fulcra.plugin.orca-organization/github.com:read": CANARY,
       "ai.fulcra.plugin.other-plugin/github.com:read": "other-plugin-secret-value",
     });
     const store = createPluginSecretStore({
-      pluginId: "organization",
+      pluginId: "orca-organization",
       platform: "darwin",
       run: security.run,
     });
@@ -47,7 +47,7 @@ describe("plugin secrets", () => {
         args: [
           "find-generic-password",
           "-s",
-          "ai.fulcra.plugin.organization",
+          "ai.fulcra.plugin.orca-organization",
           "-a",
           "github.com:read",
           "-w",
@@ -119,7 +119,9 @@ describe("plugin secrets", () => {
   // plugin-process.ts registers process handlers at import, so its wiring is checked at the source.
   it("P6: the plugin process binds the namespace to the host plugin id and guards every result path", () => {
     const source = readFileSync(new URL("./plugin-process.ts", import.meta.url), "utf8");
-    expect(source).toContain("secretStore = createPluginSecretStore({ pluginId: message.pluginId });");
+    expect(source).toContain(
+      "secretStore = createPluginSecretStore({ pluginId: message.pluginId });",
+    );
     expect(source).toContain("secrets: secretStore?.secrets,");
     expect(source).toContain(
       "return redactPluginError(secretStore, error instanceof Error ? error.message : String(error));",

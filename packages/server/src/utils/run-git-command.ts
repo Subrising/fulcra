@@ -53,6 +53,8 @@ export interface GitCommandOptions {
   timeout?: number;
   maxOutputBytes?: number;
   acceptExitCodes?: number[];
+  /** Synchronous refusal only, after scheduler admission and immediately before spawn. */
+  beforeSpawn?: () => void;
 }
 
 export interface GitCommandResult<Output = string> {
@@ -396,6 +398,7 @@ function executeGitCommand<Output>(
         // `core.quotepath=false` makes git emit raw UTF-8 paths instead of
         // octal-escaping non-ASCII bytes (e.g. `测试文件.txt` vs `"\346\265\213..."`).
         // `core.fsmonitor=false` prevents repository config from launching a command.
+        options.beforeSpawn?.();
         child = spawnProcess(
           "git",
           ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args],

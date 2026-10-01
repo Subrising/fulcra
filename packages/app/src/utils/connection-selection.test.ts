@@ -19,7 +19,7 @@ function probes(input: Record<string, ConnectionProbeState>): Map<string, Connec
 }
 
 describe("selectBestConnection", () => {
-  it("picks the available connection with lowest latency regardless of transport", () => {
+  it("L46: prefers an available direct connection over a faster relay", () => {
     const candidates: ConnectionCandidate[] = [
       { connectionId: "direct:a", connection: makeDirect("direct:a", "a:6767") },
       {
@@ -36,10 +36,10 @@ describe("selectBestConnection", () => {
       }),
     });
 
-    expect(selected).toBe("relay:b");
+    expect(selected).toBe("direct:a");
   });
 
-  it("picks the lowest-latency connection among mixed transport candidates", () => {
+  it("L46: picks the lowest-latency direct connection before any relay", () => {
     const candidates: ConnectionCandidate[] = [
       { connectionId: "direct:a", connection: makeDirect("direct:a", "a:6767") },
       { connectionId: "direct:c", connection: makeDirect("direct:c", "c:6767") },
@@ -58,7 +58,7 @@ describe("selectBestConnection", () => {
       }),
     });
 
-    expect(selected).toBe("relay:b");
+    expect(selected).toBe("direct:c");
   });
 
   it("ignores unavailable and pending probes", () => {
@@ -121,5 +121,20 @@ describe("selectBestConnection", () => {
     });
 
     expect(selected).toBeNull();
+  });
+
+  it("L46: falls back to the relay only when no direct connection is available", () => {
+    const candidates: ConnectionCandidate[] = [
+      { connectionId: "direct:a", connection: makeDirect("direct:a", "a:6767") },
+      { connectionId: "relay:b", connection: makeRelay("relay:b", "relay.example:443") },
+    ];
+    const selected = selectBestConnection({
+      candidates,
+      probeByConnectionId: probes({
+        "direct:a": { status: "unavailable", latencyMs: null },
+        "relay:b": { status: "available", latencyMs: 30 },
+      }),
+    });
+    expect(selected).toBe("relay:b");
   });
 });

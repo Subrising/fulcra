@@ -1,0 +1,3 @@
+# Fulcra ingress
+
+A private OpenClaw tool adapter for one explicitly bound delegated Fulcra session per conversation. Uses the existing controller capability socket. No provider or operator password, arbitrary target selection, new task store or worker lifecycle. See ../docs/openclaw-ingress.md for owner command boundaries and ../docs/openclaw-completions.md for opt-in completion wakes. The four tools are status, assign, result and ack. Background access requires the host-correlated completion ticket; it never synthesizes owner status. This source requires the matching notification-capable controller. Installed acceptance is a separate rollout step.

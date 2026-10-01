@@ -5,7 +5,7 @@ import {
   SessionOutboundMessageSchema,
 } from "./messages";
 
-// Additive, optional wire shapes.
+// CONTRACTS v1.16 (CONTRACT-CHANGE-J7-1): additive, optional wire shapes.
 describe("checkout.file-at-commit.get wire shapes", () => {
   it("parses both request forms and refuses malformed targets structurally", () => {
     for (const at of [

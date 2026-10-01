@@ -1,6 +1,6 @@
 {
   "name": "@getpaseo/client",
-  "version": "0.9.1",
+  "version": "0.10.2",
   "description": "Paseo client SDK package",
   "files": [
     "dist",
@@ -24,6 +24,14 @@
     "./internal/daemon-client-websocket-transport": {
       "types": "./dist/daemon-client-websocket-transport.d.ts",
       "default": "./dist/daemon-client-websocket-transport.js"
+    },
+    "./relay-v3": {
+      "types": "./dist/relay-v3/index.d.ts",
+      "default": "./dist/relay-v3/index.js"
+    },
+    "./controller-transport": {
+      "types": "./dist/controller-transport.d.ts",
+      "default": "./dist/controller-transport.js"
     }
   },
   "publishConfig": {
@@ -39,8 +47,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@getpaseo/protocol": "0.9.1",
-    "@getpaseo/relay": "0.9.1",
+    "@getpaseo/protocol": "0.10.2",
+    "@getpaseo/relay": "0.10.2",
+    "base64-js": "^1.5.1",
+    "tweetnacl": "^1.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

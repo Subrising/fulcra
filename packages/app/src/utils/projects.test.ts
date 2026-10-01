@@ -207,3 +207,32 @@ describe("workspace change request number", () => {
     ).toBeNull();
   });
 });
+
+test("search and project summaries show session titles or a friendly fallback for UUID folders", () => {
+  const uuid = "00000000-0000-4000-8000-000000000001";
+  const p: ProjectDescriptor = {
+    ...descriptor("project", "", `/tasks/${uuid}`),
+    projectDisplayName: uuid,
+  };
+  const w: WorkspaceDescriptor = {
+    ...workspace("session", "project", `/tasks/${uuid}`),
+    name: uuid,
+  };
+  const hosts = [
+    { serverId: "fixture", serverName: "Fixture", isOnline: true, projects: [p], workspaces: [w] },
+  ];
+  const labels = new Map([
+    ["fixture:session", { workspaceName: "Fixture research", projectName: "Fixture research" }],
+  ]);
+  const titled = buildProjects({ hosts, conversationLabels: labels }).projects[0]!;
+  expect(titled.projectName).toBe("Fixture research");
+  expect(titled.hosts[0]!.workspaces[0]!.name).toBe("Fixture research");
+  const untitled = buildProjects({ hosts }).projects[0]!;
+  expect(untitled.projectName).toBe("Untitled session");
+  expect(untitled.hosts[0]!.workspaces[0]!.name).toBe("Untitled session");
+  w.title = "Custom session";
+  p.projectCustomName = "Custom project";
+  const custom = buildProjects({ hosts, conversationLabels: labels }).projects[0]!;
+  expect(custom.projectName).toBe("Custom project");
+  expect(custom.hosts[0]!.workspaces[0]!.name).toBe("Custom session");
+});

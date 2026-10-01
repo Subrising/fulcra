@@ -1,3 +1,5 @@
+import { CurrentSessionAccountInfo, SessionAccountInfo } from "@/sessions/session-account-info";
+import { sessionAccount } from "@/sessions/session-account";
 import { useCallback, useMemo, type ReactElement } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -210,6 +212,11 @@ function SubagentsTrackRow({
         <Text style={styles.rowLabel} numberOfLines={1}>
           {displayLabel}
         </Text>
+        {row.kind === "paseo" ? (
+          <CurrentSessionAccountInfo serverId={serverId} agentId={row.id} header={false} />
+        ) : (
+          <SessionAccountInfo account={sessionAccount({ provider: row.provider })} />
+        )}
         {presentation.subtitle ? (
           <Text style={styles.rowTrailing} numberOfLines={1}>
             {presentation.subtitle}
@@ -235,6 +242,8 @@ function SubagentsTrackRow({
       presentation,
       row.kind,
       row.id,
+      row.provider,
+      serverId,
     ],
   );
 

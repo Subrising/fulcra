@@ -7,20 +7,16 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
 
+import { DeviceRegistry } from "../pairing/device-registry.js";
 import { generateLocalPairingOffer } from "../pairing-offer.js";
 import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
-import { createClientChannel, type Transport } from "@getpaseo/relay/e2ee";
-import {
-  deriveSharedKey,
-  decrypt,
-  encrypt,
-  exportPublicKey,
-  generateKeyPair,
-  importPublicKey,
-} from "@getpaseo/relay";
+import { createClientChannel, type Transport } from "@getpaseo/client/relay-v3";
+import { decrypt, encrypt, exportPublicKey, generateKeyPair } from "@getpaseo/relay";
 import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
 import { ConnectionOfferSchema } from "@getpaseo/protocol/connection-offer";
 import { WSOutboundMessageSchema } from "@getpaseo/protocol/messages";
+
+const isRelayDataConnected = (line: string) => line.includes("relay_data_connected");
 
 const nodeMajor = Number((process.versions.node ?? "0").split(".")[0] ?? "0");
 const shouldRunRelayE2e = process.env.FORCE_RELAY_E2E === "1" || nodeMajor < 25;
@@ -184,7 +180,7 @@ async function waitForCapturedLog(
   let relayProcess: ChildProcess | null = null;
   let relayStdoutLines: string[] = [];
 
-  const startRelay = async (options: { useLocalRelay?: boolean } = {}) => {
+  const startRelay = async () => {
     relayStdoutLines = [];
     relayPort = await getAvailablePort();
     const relayDir = path.resolve(process.cwd(), "../relay");
@@ -192,6 +188,8 @@ async function waitForCapturedLog(
       "wrangler",
       "dev",
       "--local",
+      "--var",
+      "PASEO_RELAY_UPSTREAM:",
       "--ip",
       "127.0.0.1",
       "--port",
@@ -199,9 +197,6 @@ async function waitForCapturedLog(
       "--live-reload=false",
       "--show-interactive-dev-session=false",
     ];
-    if (options.useLocalRelay) {
-      relayArgs.push("--var", "PASEO_RELAY_UPSTREAM:");
-    }
     relayProcess = spawn("npx", relayArgs, {
       cwd: relayDir,
       env: { ...process.env },
@@ -251,6 +246,7 @@ async function waitForCapturedLog(
       listen: "127.0.0.1",
       logger,
       relayEnabled: true,
+      relayUseTls: false,
       relayEndpoint: `127.0.0.1:${relayPort}`,
     });
 
@@ -263,6 +259,11 @@ async function waitForCapturedLog(
         appBaseUrl: daemon.config.appBaseUrl,
       });
       const { serverId, daemonPublicKeyB64 } = decodeOfferFromFragmentUrl(offerUrl);
+      const deviceKeyPair = generateKeyPair();
+      new DeviceRegistry(daemon.paseoHome).add(
+        exportPublicKey(deviceKeyPair.publicKey),
+        "Test device",
+      );
 
       const stableClientId = `cid_test_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
       const ws = new WebSocket(
@@ -325,35 +326,40 @@ async function waitForCapturedLog(
           try {
             let pingSent = false;
             let channelRef: Awaited<ReturnType<typeof createClientChannel>> | null = null;
-            const channel = await createClientChannel(transport, daemonPublicKeyB64, {
-              onmessage: (data) => {
-                try {
-                  const payload = typeof data === "string" ? JSON.parse(data) : data;
-                  const wsMsg = WSOutboundMessageSchema.safeParse(payload);
-                  if (
-                    wsMsg.success &&
-                    wsMsg.data.type === "session" &&
-                    wsMsg.data.message.type === "status" &&
-                    wsMsg.data.message.payload?.status === "server_info"
-                  ) {
-                    if (!pingSent && channelRef) {
-                      pingSent = true;
-                      void channelRef.send(JSON.stringify({ type: "ping" }));
+            const channel = await createClientChannel(
+              transport,
+              daemonPublicKeyB64,
+              {
+                onmessage: (data) => {
+                  try {
+                    const payload = typeof data === "string" ? JSON.parse(data) : data;
+                    const wsMsg = WSOutboundMessageSchema.safeParse(payload);
+                    if (
+                      wsMsg.success &&
+                      wsMsg.data.type === "session" &&
+                      wsMsg.data.message.type === "status" &&
+                      wsMsg.data.message.payload?.status === "server_info"
+                    ) {
+                      if (!pingSent && channelRef) {
+                        pingSent = true;
+                        void channelRef.send(JSON.stringify({ type: "ping" }));
+                      }
+                      return;
                     }
-                    return;
+                    if (wsMsg.success && wsMsg.data.type === "pong") {
+                      settleResolve(wsMsg.data);
+                      ws.close();
+                    }
+                  } catch (err) {
+                    settleReject(err);
                   }
-                  if (wsMsg.success && wsMsg.data.type === "pong") {
-                    settleResolve(wsMsg.data);
-                    ws.close();
-                  }
-                } catch (err) {
+                },
+                onerror: (err) => {
                   settleReject(err);
-                }
+                },
               },
-              onerror: (err) => {
-                settleReject(err);
-              },
-            });
+              { deviceKeyPair, serverId },
+            );
             channelRef = channel;
             await channel.send(
               JSON.stringify({
@@ -386,12 +392,13 @@ async function waitForCapturedLog(
     process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";
 
     const { logger, lines } = createCapturingLogger();
-    await startRelay({ useLocalRelay: true });
+    await startRelay();
 
     const daemon = await createTestPaseoDaemon({
       listen: "127.0.0.1",
       logger,
       relayEnabled: true,
+      relayUseTls: false,
       relayEndpoint: `127.0.0.1:${relayPort}`,
     });
 
@@ -429,6 +436,8 @@ async function waitForCapturedLog(
             ws.send(
               JSON.stringify({
                 type: "e2ee_hello",
+                v: 3,
+                device: exportPublicKey(generateKeyPair().publicKey),
                 key: exportPublicKey(new Uint8Array(32)),
               }),
             );
@@ -508,6 +517,7 @@ async function waitForCapturedLog(
       listen: "127.0.0.1",
       logger,
       relayEnabled: true,
+      relayUseTls: false,
       relayEndpoint: `127.0.0.1:${relayPort}`,
     });
 
@@ -520,6 +530,11 @@ async function waitForCapturedLog(
         appBaseUrl: daemon.config.appBaseUrl,
       });
       const { serverId, daemonPublicKeyB64 } = decodeOfferFromFragmentUrl(offerUrl);
+      const deviceKeyPair = generateKeyPair();
+      new DeviceRegistry(daemon.paseoHome).add(
+        exportPublicKey(deviceKeyPair.publicKey),
+        "Test device",
+      );
 
       // Previously, the daemon would time out waiting for `hello` and reconnect every ~10s.
       // Wait long enough to catch that regression.
@@ -589,33 +604,38 @@ async function waitForCapturedLog(
           try {
             let pingSent = false;
             let channelRef: Awaited<ReturnType<typeof createClientChannel>> | null = null;
-            const channel = await createClientChannel(transport, daemonPublicKeyB64, {
-              onmessage: (data) => {
-                const payload = typeof data === "string" ? JSON.parse(data) : data;
-                const wsMsg = WSOutboundMessageSchema.safeParse(payload);
-                if (
-                  wsMsg.success &&
-                  wsMsg.data.type === "session" &&
-                  wsMsg.data.message.type === "status" &&
-                  wsMsg.data.message.payload?.status === "server_info"
-                ) {
-                  if (!pingSent && channelRef) {
-                    pingSent = true;
-                    void channelRef.send(JSON.stringify({ type: "ping" }));
+            const channel = await createClientChannel(
+              transport,
+              daemonPublicKeyB64,
+              {
+                onmessage: (data) => {
+                  const payload = typeof data === "string" ? JSON.parse(data) : data;
+                  const wsMsg = WSOutboundMessageSchema.safeParse(payload);
+                  if (
+                    wsMsg.success &&
+                    wsMsg.data.type === "session" &&
+                    wsMsg.data.message.type === "status" &&
+                    wsMsg.data.message.payload?.status === "server_info"
+                  ) {
+                    if (!pingSent && channelRef) {
+                      pingSent = true;
+                      void channelRef.send(JSON.stringify({ type: "ping" }));
+                    }
+                    return;
                   }
-                  return;
-                }
-                if (wsMsg.success && wsMsg.data.type === "pong") {
+                  if (wsMsg.success && wsMsg.data.type === "pong") {
+                    clearTimeout(timeout);
+                    resolve(wsMsg.data);
+                    ws.close();
+                  }
+                },
+                onerror: (err) => {
                   clearTimeout(timeout);
-                  resolve(wsMsg.data);
-                  ws.close();
-                }
+                  reject(err);
+                },
               },
-              onerror: (err) => {
-                clearTimeout(timeout);
-                reject(err);
-              },
-            });
+              { deviceKeyPair, serverId },
+            );
             channelRef = channel;
             await channel.send(
               JSON.stringify({
@@ -644,34 +664,23 @@ async function waitForCapturedLog(
     }
   }, 90000);
 
-  test("daemon accepts a relay client that pipelines app hello after E2EE hello", async () => {
-    process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";
-
+  test("daemon refuses a v2 peer that pipelines app hello", async () => {
     const { logger, lines } = createCapturingLogger();
     await startRelay();
-
     const daemon = await createTestPaseoDaemon({
-      listen: "127.0.0.1",
       logger,
+      listen: "127.0.0.1",
       relayEnabled: true,
+      relayUseTls: false,
       relayEndpoint: `127.0.0.1:${relayPort}`,
     });
-
     try {
       const offerUrl = await getPairingOfferUrl({
         paseoHome: daemon.paseoHome,
-        relayEnabled: daemon.config.relayEnabled,
+        relayEnabled: true,
         relayEndpoint: daemon.config.relayEndpoint,
-        relayPublicEndpoint: daemon.config.relayPublicEndpoint,
-        appBaseUrl: daemon.config.appBaseUrl,
       });
-      const { serverId, daemonPublicKeyB64 } = decodeOfferFromFragmentUrl(offerUrl);
-      const clientKeyPair = generateKeyPair();
-      const sharedKey = deriveSharedKey(
-        clientKeyPair.secretKey,
-        importPublicKey(daemonPublicKeyB64),
-      );
-
+      const { serverId } = decodeOfferFromFragmentUrl(offerUrl);
       const ws = new WebSocket(
         buildRelayWebSocketUrl({
           endpoint: `127.0.0.1:${relayPort}`,
@@ -680,104 +689,43 @@ async function waitForCapturedLog(
           role: "client",
         }),
       );
-
-      const received = await new Promise<unknown>((resolve, reject) => {
+      const closed = await new Promise<number>((resolve, reject) => {
         const timeout = setTimeout(() => {
           ws.close();
-          reject(new Error("timed out waiting for server_info"));
+          reject(new Error("v2 not refused"));
         }, 20000);
-
-        const settleResolve = (value: unknown) => {
-          clearTimeout(timeout);
-          resolve(value);
-          ws.close();
-        };
-        const settleReject = (reason: unknown) => {
-          clearTimeout(timeout);
-          reject(reason);
-          ws.close();
-        };
-
-        ws.on("open", () => {
-          ws.send(
-            JSON.stringify({
-              type: "e2ee_hello",
-              key: exportPublicKey(clientKeyPair.publicKey),
-            }),
-          );
-          ws.send(
-            encodeCiphertext(
-              encrypt(
-                sharedKey,
-                JSON.stringify({
-                  type: "hello",
-                  clientId: "cid_relay_pipelined_hello",
-                  clientType: "cli",
-                  protocolVersion: 1,
-                }),
-              ),
-            ),
-          );
-        });
-
-        ws.on("message", (data) => {
+        ws.on("open", async () => {
           try {
-            const text = typeof data === "string" ? data : data.toString();
-            const maybePlaintext = JSON.parse(text) as unknown;
-            if (
-              maybePlaintext &&
-              typeof maybePlaintext === "object" &&
-              "type" in maybePlaintext &&
-              maybePlaintext.type === "e2ee_ready"
-            ) {
-              return;
-            }
-          } catch {
-            // encrypted frame; parse below
-          }
-
-          try {
-            const parsed = WSOutboundMessageSchema.parse(
-              parseEncryptedJson(sharedKey, data.toString()),
+            await waitForCapturedLog(lines, isRelayDataConnected);
+            ws.send(
+              JSON.stringify({
+                type: "e2ee_hello",
+                key: exportPublicKey(generateKeyPair().publicKey),
+              }),
             );
-            if (
-              parsed.type === "session" &&
-              parsed.message.type === "status" &&
-              parsed.message.payload?.status === "server_info"
-            ) {
-              settleResolve({
-                type: parsed.type,
-                message: {
-                  type: parsed.message.type,
-                  payload: { status: parsed.message.payload.status },
-                },
-              });
-            }
+            ws.send(
+              JSON.stringify({
+                type: "hello",
+                clientId: "test-v2",
+                clientType: "cli",
+                protocolVersion: 1,
+              }),
+            );
           } catch (error) {
-            settleReject(error);
+            clearTimeout(timeout);
+            reject(error);
           }
         });
-
-        ws.on("close", (code, reason) => {
-          settleReject(new Error(`relay client closed before server_info: ${code} ${reason}`));
+        ws.on("close", (code) => {
+          clearTimeout(timeout);
+          resolve(code);
         });
         ws.on("error", (err) => {
-          settleReject(err);
+          clearTimeout(timeout);
+          reject(err);
         });
       });
-
-      expect(received).toEqual({
-        type: "session",
-        message: {
-          type: "status",
-          payload: { status: "server_info" },
-        },
-      });
-    } catch (err) {
-      const tail = lines.slice(-50).join("");
-      // eslint-disable-next-line no-console
-      console.error("daemon logs (tail):\n", tail);
-      throw err;
+      expect(closed).toBe(1012); // The unchanged relay masks endpoint close codes.
     } finally {
       await daemon.close();
       await stopRelay();

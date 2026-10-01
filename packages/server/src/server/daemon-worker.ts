@@ -1,3 +1,4 @@
+import { packagedPluginsDirectory } from "./plugins/packaged-directory.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { createPaseoDaemon, formatListenTarget } from "./bootstrap.js";
@@ -17,6 +18,7 @@ type SupervisorLifecycleMessage =
   | {
       type: "paseo:ready";
       listen: string;
+      serverId: string;
     }
   | {
       type: "paseo:restart";
@@ -70,6 +72,23 @@ function bootstrapFromEnvironment(): BootstrapResult {
   try {
     const paseoHome = resolvePaseoHome();
     const config = loadConfig(paseoHome);
+    const commandCentreEnabled = process.env.FULCRA_COMMAND_CENTRE === "1";
+    const generatedAuthHash = process.env.FULCRA_COMMAND_CENTRE_AUTH_HASH;
+    delete process.env.FULCRA_COMMAND_CENTRE_AUTH_HASH;
+    if (commandCentreEnabled) {
+      if (
+        !config.auth?.password &&
+        generatedAuthHash &&
+        /^\$2[aby]\$12\$[./A-Za-z0-9]{53}$/.test(generatedAuthHash)
+      )
+        config.auth = { password: generatedAuthHash };
+      if (!config.auth?.password) throw Error("Command Centre requires daemon authentication");
+      Object.defineProperty(config, "bundledPluginsDirectory", {
+        value: packagedPluginsDirectory(import.meta.url, true),
+        enumerable: true,
+        writable: false,
+      });
+    }
     const logger = createRootLogger({ log: config.log }, { paseoHome, file: false });
     return { paseoHome, logger, config };
   } catch (err) {
@@ -327,7 +346,11 @@ async function main() {
     if (!listen) {
       throw new Error("Daemon did not expose a listen target after startup");
     }
-    sendSupervisorLifecycleMessage({ type: "paseo:ready", listen });
+    sendSupervisorLifecycleMessage({
+      type: "paseo:ready",
+      listen,
+      serverId: daemon.getServerId(),
+    });
   } catch (err) {
     logger.fatal({ err }, "Daemon failed to start listening");
     throw err;

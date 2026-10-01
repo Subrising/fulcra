@@ -102,12 +102,17 @@ interface CheckoutGitActionsStoreState {
     actionId: CheckoutGitAsyncActionId;
   }) => CheckoutGitActionStatus;
 
-  commit: (params: { serverId: string; cwd: string }) => Promise<void>;
+  commit: (params: { serverId: string; cwd: string; message?: string }) => Promise<void>;
   pull: (params: { serverId: string; cwd: string }) => Promise<void>;
   push: (params: { serverId: string; cwd: string }) => Promise<void>;
   pullAndPush: (params: { serverId: string; cwd: string }) => Promise<void>;
   refresh: (params: { serverId: string; cwd: string }) => Promise<void>;
-  createPr: (params: { serverId: string; cwd: string }) => Promise<void>;
+  createPr: (params: {
+    serverId: string;
+    cwd: string;
+    title?: string;
+    body?: string;
+  }) => Promise<void>;
   mergePr: (params: {
     serverId: string;
     cwd: string;
@@ -182,14 +187,17 @@ export const useCheckoutGitActionsStore = create<CheckoutGitActionsStoreState>()
     return get().statusByCheckout[key]?.[actionId] ?? "idle";
   },
 
-  commit: async ({ serverId, cwd }) => {
+  commit: async ({ serverId, cwd, message }) => {
     await runCheckoutAction({
       serverId,
       cwd,
       actionId: "commit",
       run: async () => {
         const client = resolveClient(serverId);
-        const payload = await client.checkoutCommit(cwd, { addAll: true });
+        const payload = await client.checkoutCommit(cwd, {
+          addAll: true,
+          ...(message !== undefined ? { message } : {}),
+        });
         if (payload.error) {
           throw new Error(payload.error.message);
         }
@@ -261,14 +269,17 @@ export const useCheckoutGitActionsStore = create<CheckoutGitActionsStoreState>()
     });
   },
 
-  createPr: async ({ serverId, cwd }) => {
+  createPr: async ({ serverId, cwd, title, body }) => {
     await runCheckoutAction({
       serverId,
       cwd,
       actionId: "create-pr",
       run: async () => {
         const client = resolveClient(serverId);
-        const payload = await client.checkoutPrCreate(cwd, {});
+        const payload = await client.checkoutPrCreate(cwd, {
+          ...(title !== undefined ? { title } : {}),
+          ...(body !== undefined ? { body } : {}),
+        });
         if (payload.error) {
           throw new Error(payload.error.message);
         }

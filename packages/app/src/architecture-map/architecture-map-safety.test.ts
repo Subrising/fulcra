@@ -38,16 +38,23 @@ describe("architecture map source safety", () => {
         "architecture-change.ts",
         "architecture-map-panel.tsx",
         "architecture-map-view.tsx",
+        "blast-radius-section.tsx",
         "change-summary.ts",
+        "dependency-graph-model.ts",
+        "dependency-graph-view.tsx",
         "change-view-request.ts",
         "discovery.ts",
+        "generated-change.ts",
         "ir-model.ts",
         "ir-schema.ts",
         "layout.ts",
         "map-diff.ts",
+        "pull-request-review-view.tsx",
+        "review-inbox.ts",
         "reverse-patch.ts",
         "use-architecture-change.ts",
         "use-architecture-maps.ts",
+        "use-generated-change.ts",
       ].sort(),
     );
   });
@@ -82,4 +89,15 @@ describe("architecture map source safety", () => {
       expect(view).not.toMatch(/TSpan|TextPath|Image\b|Use\b/);
     },
   );
+
+  // withUnistyles puts an HTML wrapper around what it wraps on web; inside <svg> the browser never
+  // paints it, so the whole picture came out blank. Only the canvas component may be wrapped.
+  it.each([
+    "architecture-map-view.tsx",
+    "architecture-change-view.tsx",
+    "dependency-graph-view.tsx",
+  ])("%s never wraps an SVG element with withUnistyles", (file) => {
+    const view = stripComments(readFileSync(join(__dirname, file), "utf8"));
+    expect(view).not.toMatch(/withUnistyles\((G|Line|Polygon|Rect|SvgText|Svg)\)/);
+  });
 });

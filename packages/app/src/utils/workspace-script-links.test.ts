@@ -78,8 +78,8 @@ describe("resolveWorkspaceScriptLink", () => {
     expect(
       resolveLink({
         type: "directTcp",
-        endpoint: "workstation.example-net.ts.net:6767",
-        display: "workstation.example-net.ts.net:6767",
+        endpoint: "mac-mini.tail123.ts.net:6767",
+        display: "mac-mini.tail123.ts.net:6767",
       }),
     ).toEqual({
       primary: {
@@ -95,8 +95,8 @@ describe("resolveWorkspaceScriptLink", () => {
         },
         {
           kind: "direct",
-          label: "workstation.example-net.ts.net:3000",
-          url: "http://workstation.example-net.ts.net:3000",
+          label: "mac-mini.tail123.ts.net:3000",
+          url: "http://mac-mini.tail123.ts.net:3000",
         },
       ],
     });
@@ -106,7 +106,7 @@ describe("resolveWorkspaceScriptLink", () => {
     const publicUrl = "https://web--feature--paseo.services.example.com";
     expect(
       resolveLink(
-        { type: "directTcp", endpoint: "workstation.example-net.ts.net:6767", display: "remote" },
+        { type: "directTcp", endpoint: "mac-mini.tail123.ts.net:6767", display: "remote" },
         { ...runningService, publicProxyUrl: publicUrl, proxyUrl: publicUrl },
       ).targets,
     ).toEqual([
@@ -118,8 +118,8 @@ describe("resolveWorkspaceScriptLink", () => {
       },
       {
         kind: "direct",
-        label: "workstation.example-net.ts.net:3000",
-        url: "http://workstation.example-net.ts.net:3000",
+        label: "mac-mini.tail123.ts.net:3000",
+        url: "http://mac-mini.tail123.ts.net:3000",
       },
     ]);
   });

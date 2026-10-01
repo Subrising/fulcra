@@ -18,7 +18,17 @@ import {
 } from "./agent.js";
 import { claudeProjectDirSync } from "./project-dir.js";
 import { streamSession } from "../test-utils/session-stream-adapter.js";
-import type { AgentSession, AgentTimelineItem, AgentStreamEvent } from "../../agent-sdk-types.js";
+import type {
+  AgentPromptInput,
+  AgentSession,
+  AgentTimelineItem,
+  AgentStreamEvent,
+} from "../../agent-sdk-types.js";
+import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import { buildAgentPrompt, renderPromptAttachmentAsText } from "../../prompt-attachments.js";
+import { createNativeQueuedDispatch } from "../../native-queued-dispatch.js";
+import { NATIVE_QUEUED_FINAL, FINAL_INPUT_CHECK } from "../../agent-sdk-types.js";
+import { createFinalInputCheck } from "../../final-input-check.js";
 
 interface TestClaudeSession {
   translateMessageToEvents(message: SDKMessage): AgentStreamEvent[];
@@ -422,7 +432,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         logger,
         resolveBinary: async () => "/test/claude/bin",
         resolveVersion: async () => "2.1.219",
-        configDir: emptyConfigDir,
+        runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
         modelProbe: async () => {
           throw new Error("no Claude Code in unit tests");
         },
@@ -472,7 +482,7 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         resolveVersion: async () => {
           throw new Error("unrecognized version output");
         },
-        configDir: emptyConfigDir,
+        runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
         modelProbe: async () => {
           throw new Error("no Claude Code in unit tests");
         },
@@ -496,8 +506,8 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
       const client = new ClaudeAgentClient({
         logger,
         resolveBinary: async () => "/test/claude/bin",
-        resolveVersion: async () => "2.1.219",
-        configDir: emptyConfigDir,
+        resolveVersion: async () => "2.1.284",
+        runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
         modelProbe: async () => {
           throw new Error("no Claude Code in unit tests");
         },
@@ -518,6 +528,8 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
       expect(getThinkingIds("claude-opus-4-8")).toContain("ultracode");
       expect(getThinkingIds("claude-sonnet-5")).toContain("xhigh");
       expect(getThinkingIds("claude-sonnet-5")).toContain("ultracode");
+      expect(getThinkingIds("claude-sonnet-5-5")).toContain("xhigh");
+      expect(getThinkingIds("claude-sonnet-5-5")).not.toContain("off");
       expect(getThinkingIds("claude-opus-4-7[1m]")).toContain("ultracode");
       expect(getThinkingIds("claude-opus-4-7")).toContain("ultracode");
       expect(getThinkingIds("claude-sonnet-4-6")).not.toContain("ultracode");
@@ -652,6 +664,364 @@ describe("ClaudeAgentSession features", () => {
     });
     return { queryFactory, queryMock, launches };
   }
+
+  test("native queued final boundary: revocation after awaited query setup prevents SDK input handoff", async () => {
+    const { queryFactory } = createQueryMock();
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/fixture/provider-cli",
+    }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+    const ensure = Reflect.get(session, "ensureQuery").bind(session);
+    let valid = true;
+    let handoffs = 0;
+    vi.spyOn(
+      session as unknown as { ensureQuery(): Promise<unknown> },
+      "ensureQuery",
+    ).mockImplementation(async () => {
+      const result = await ensure();
+      valid = false;
+      const input = Reflect.get(session, "input");
+      const push = input.push.bind(input);
+      function handoff(message: unknown) {
+        handoffs++;
+        return push(message);
+      }
+      vi.spyOn(input, "push").mockImplementation(handoff);
+      return result;
+    });
+    const final = vi.fn(() => {
+      if (!valid) throw new Error("native source revoked");
+    });
+    try {
+      await expect(
+        session.startTurn("queued instruction", {
+          [NATIVE_QUEUED_FINAL]: createNativeQueuedDispatch(final),
+        }),
+      ).rejects.toThrow("native source revoked");
+      expect(final).toHaveBeenCalled();
+      expect(handoffs).toBe(0);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("native queued final boundary: fresh check immediately precedes SDK input handoff after setup", async () => {
+    const { queryFactory } = createQueryMock();
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/fixture/provider-cli",
+    }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+    const ensure = Reflect.get(session, "ensureQuery").bind(session);
+    const order: string[] = [];
+    vi.spyOn(
+      session as unknown as { ensureQuery(): Promise<unknown> },
+      "ensureQuery",
+    ).mockImplementation(async () => {
+      const result = await ensure();
+      order.push("setup awaited");
+      const input = Reflect.get(session, "input");
+      const push = input.push.bind(input);
+      function handoff(message: unknown) {
+        order.push("SDK handoff");
+        return push(message);
+      }
+      vi.spyOn(input, "push").mockImplementation(handoff);
+      return result;
+    });
+    try {
+      await session.startTurn("queued instruction", {
+        [NATIVE_QUEUED_FINAL]: createNativeQueuedDispatch(() => {
+          order.push("final");
+        }),
+      });
+      const handoff = order.indexOf("SDK handoff");
+      expect(order.slice(handoff - 2, handoff + 1)).toEqual([
+        "setup awaited",
+        "final",
+        "SDK handoff",
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("private finish final boundary: fresh check immediately precedes SDK input handoff after setup", async () => {
+    const { queryFactory } = createQueryMock();
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/fixture/provider-cli",
+    }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+    const ensure = Reflect.get(session, "ensureQuery").bind(session);
+    const order: string[] = [];
+    vi.spyOn(
+      session as unknown as { ensureQuery(): Promise<unknown> },
+      "ensureQuery",
+    ).mockImplementation(async () => {
+      const result = await ensure();
+      order.push("setup awaited");
+      const input = Reflect.get(session, "input");
+      const push = input.push.bind(input);
+      function handoff(message: unknown) {
+        order.push("SDK handoff");
+        return push(message);
+      }
+      vi.spyOn(input, "push").mockImplementation(handoff);
+      return result;
+    });
+    try {
+      await session.startTurn("queued instruction", {
+        [FINAL_INPUT_CHECK]: createFinalInputCheck(() => {
+          order.push("final");
+        }),
+      });
+      const handoff = order.indexOf("SDK handoff");
+      expect(order.slice(handoff - 2, handoff + 1)).toEqual([
+        "setup awaited",
+        "final",
+        "SDK handoff",
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test.each(["source", "native-id", "query", "input", "cancel", "close", "permission"])(
+    "native queued final boundary: %s while setup is held cannot hand off",
+    async (mutation) => {
+      const { queryFactory } = createQueryMock();
+      const session = await new ClaudeAgentClient({
+        logger,
+        queryFactory,
+        resolveBinary: async () => "/fixture/provider-cli",
+      }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+      const ensure = Reflect.get(session, "ensureQuery").bind(session);
+      let valid = true;
+      let entered = false;
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let handoffs = 0;
+      vi.spyOn(
+        session as unknown as { ensureQuery(): Promise<unknown> },
+        "ensureQuery",
+      ).mockImplementation(async () => {
+        const query = await ensure();
+        const input = Reflect.get(session, "input");
+        function handoff() {
+          handoffs++;
+        }
+        vi.spyOn(input, "push").mockImplementation(handoff);
+        entered = true;
+        await gate;
+        return query;
+      });
+      const capability = createNativeQueuedDispatch(() => {
+        if (!valid) throw new Error("source revoked");
+      });
+      const pending = session.startTurn("queued", { [NATIVE_QUEUED_FINAL]: capability });
+      const rejected = expect(pending).rejects.toThrow();
+      await vi.waitFor(() => expect(entered).toBe(true));
+      if (mutation === "source") valid = false;
+      if (mutation === "native-id") Reflect.set(session, "claudeSessionId", "new-native-id");
+      if (mutation === "query") Reflect.set(session, "query", {});
+      if (mutation === "input")
+        Reflect.set(session, "input", {
+          push() {
+            handoffs++;
+          },
+          end() {},
+        });
+      if (mutation === "cancel") Reflect.get(session, "cancelCurrentTurn")();
+      if (mutation === "close") Reflect.set(session, "closed", true);
+      if (mutation === "permission")
+        Reflect.get(session, "pendingPermissions").set("permission", {});
+      finish();
+      try {
+        await rejected;
+        expect(handoffs).toBe(0);
+      } finally {
+        Reflect.get(session, "pendingPermissions").clear();
+        Reflect.set(session, "closed", false);
+        await session.close();
+      }
+    },
+  );
+
+  test.each(["source", "native-id", "query", "input", "cancel", "close"])(
+    "private finish final boundary: %s while setup is held cannot hand off",
+    async (mutation) => {
+      const { queryFactory } = createQueryMock();
+      const session = await new ClaudeAgentClient({
+        logger,
+        queryFactory,
+        resolveBinary: async () => "/fixture/provider-cli",
+      }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+      const ensure = Reflect.get(session, "ensureQuery").bind(session);
+      let valid = true;
+      let entered = false;
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let handoffs = 0;
+      vi.spyOn(
+        session as unknown as { ensureQuery(): Promise<unknown> },
+        "ensureQuery",
+      ).mockImplementation(async () => {
+        const query = await ensure();
+        const input = Reflect.get(session, "input");
+        function handoff() {
+          handoffs++;
+        }
+        vi.spyOn(input, "push").mockImplementation(handoff);
+        entered = true;
+        await gate;
+        return query;
+      });
+      const capability = createFinalInputCheck(() => {
+        if (!valid) throw new Error("source revoked");
+      });
+      const pending = session.startTurn("queued", { [FINAL_INPUT_CHECK]: capability });
+      const rejected = expect(pending).rejects.toThrow();
+      await vi.waitFor(() => expect(entered).toBe(true));
+      if (mutation === "source") valid = false;
+      if (mutation === "native-id") Reflect.set(session, "claudeSessionId", "new-native-id");
+      if (mutation === "query") Reflect.set(session, "query", {});
+      if (mutation === "input")
+        Reflect.set(session, "input", {
+          push() {
+            handoffs++;
+          },
+          end() {},
+        });
+      if (mutation === "cancel") Reflect.get(session, "cancelCurrentTurn")();
+      if (mutation === "close") Reflect.set(session, "closed", true);
+      if (mutation === "permission")
+        Reflect.get(session, "pendingPermissions").set("permission", {});
+      finish();
+      try {
+        await rejected;
+        expect(handoffs).toBe(0);
+      } finally {
+        Reflect.get(session, "pendingPermissions").clear();
+        Reflect.set(session, "closed", false);
+        await session.close();
+      }
+    },
+  );
+
+  test.each(["/rewind", "/other", [{ type: "text", text: "non-text form" }]])(
+    "native queued final boundary: refuses unsupported queued input %j",
+    async (prompt) => {
+      const { queryFactory } = createQueryMock();
+      const session = await new ClaudeAgentClient({
+        logger,
+        queryFactory,
+        resolveBinary: async () => "/fixture/provider-cli",
+      }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+      try {
+        await expect(
+          session.startTurn(prompt as never, {
+            [NATIVE_QUEUED_FINAL]: createNativeQueuedDispatch(() => {}),
+          }),
+        ).rejects.toThrow("unavailable");
+        expect(queryFactory).not.toHaveBeenCalled();
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
+  test("native queued final boundary: callback spoof cannot acquire authority", async () => {
+    const { queryFactory } = createQueryMock();
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/fixture/provider-cli",
+    }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+    try {
+      await expect(
+        session.startTurn("queued", { [NATIVE_QUEUED_FINAL]: () => {} }),
+      ).rejects.toThrow("capability unavailable");
+      expect(queryFactory).not.toHaveBeenCalled();
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("native queued final boundary: local handoff and early turn_started cannot prove delivery", async () => {
+    const { nativeQueuedAcceptance, supportsNativeQueuedProvider } =
+      await import("../../native-queued-dispatch.js");
+    const { queryFactory } = createQueryMock();
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/fixture/provider-cli",
+    }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+    const events: AgentStreamEvent[] = [];
+    const unsubscribe = session.subscribe((event) => events.push(event));
+    const capability = createNativeQueuedDispatch(() => {});
+    try {
+      await session.startTurn("queued", { [NATIVE_QUEUED_FINAL]: capability });
+      expect(events.some((event) => event.type === "turn_started")).toBe(true);
+      expect(nativeQueuedAcceptance(capability)).toBeUndefined();
+      expect(supportsNativeQueuedProvider(session)).toBe(false);
+    } finally {
+      unsubscribe();
+      await session.close();
+    }
+  });
+
+  test("native queued final boundary: actual local Claude handoff persists UNCERTAIN and cannot replay", async () => {
+    const { MessageReceipts } = await import("../../../message-receipts/index.js");
+    const { nativeQueuedAcceptance } = await import("../../native-queued-dispatch.js");
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "native-claude-receipt-"));
+    const ledger = new MessageReceipts(directory);
+    const input = {
+      agentId: "target",
+      messageId: "throwaway",
+      request: { text: "queued" },
+      principal: { source: "host-fixture" },
+      boot: "fixture-boot",
+      attachmentBytes: 0,
+      authorize() {},
+    };
+    const { queryFactory } = createQueryMock();
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/fixture/provider-cli",
+    }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+    let dispatches = 0;
+    try {
+      await ledger.enqueue(input);
+      const outcome = await ledger.dispatchNext(
+        "target",
+        () => true,
+        async (_ticket, finalCheck) => {
+          dispatches++;
+          const capability = createNativeQueuedDispatch(finalCheck);
+          await session.startTurn("queued", { [NATIVE_QUEUED_FINAL]: capability });
+          const accepted = nativeQueuedAcceptance(capability);
+          if (!accepted) throw new Error("Claude correlated acknowledgement unavailable");
+          return accepted;
+        },
+      );
+      expect(outcome).toMatchObject({ state: "uncertain", pendingCount: 0 });
+      expect(await ledger.enqueue(input)).toMatchObject({ state: "uncertain" });
+      expect(await new MessageReceipts(directory).enqueue(input)).toMatchObject({
+        state: "uncertain",
+      });
+      expect(dispatches).toBe(1);
+    } finally {
+      await session.close();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
 
   test("publishes a resolution when the SDK aborts a permission callback", async () => {
     const { queryFactory } = createQueryMock();
@@ -788,6 +1158,29 @@ describe("ClaudeAgentSession features", () => {
     await session.close();
   });
 
+  test("passes extra Claude Code CLI arguments to the SDK", async () => {
+    const { queryFactory, launches } = createQueryMock();
+    const client = new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.createSession({
+      provider: "claude",
+      cwd: process.cwd(),
+      providerOptions: {
+        extraArgs: { chrome: null, model: "x" },
+      },
+    });
+
+    await expect(session.startTurn("hello")).resolves.toEqual({
+      turnId: expect.stringMatching(/^foreground-turn-/),
+    });
+
+    expect(launches[0]?.options.extraArgs).toEqual({ chrome: null, model: "x" });
+    await session.close();
+  });
+
   test("lists fast mode only for supported Opus models", async () => {
     const client = new ClaudeAgentClient({ logger, resolveBinary: async () => "/test/claude/bin" });
 
@@ -876,6 +1269,97 @@ describe("ClaudeAgentSession features", () => {
     await session.close();
   });
 
+  async function captureSdkUserMessage(prompt: AgentPromptInput): Promise<SDKUserMessage> {
+    const { queryFactory, queryMock } = createQueryMock();
+    let resolveSent: ((message: SDKUserMessage) => void) | null = null;
+    const sent = new Promise<SDKUserMessage>((resolve) => {
+      resolveSent = resolve;
+    });
+    queryFactory.mockImplementation((input: { prompt: AsyncIterable<SDKUserMessage> }) => {
+      void (async () => {
+        for await (const message of input.prompt) {
+          resolveSent?.(message);
+          break;
+        }
+      })();
+      return queryMock;
+    });
+    const session = await new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    }).createSession({ provider: "claude", cwd: process.cwd() });
+    try {
+      await session.startTurn(prompt);
+      return await sent;
+    } finally {
+      await session.close();
+    }
+  }
+
+  const issueAttachment: AgentAttachment = {
+    type: "forge_issue",
+    mimeType: "application/paseo-forge-issue",
+    forge: "github",
+    number: 12,
+    title: "Fake issue for QA",
+    url: "https://example.invalid/acme/app/issues/12",
+    body: "This is an attached issue body.",
+  };
+
+  // Claude Code expands a slash command only when it is the last content block of the user
+  // message, so an auto-attached issue or a pasted screenshot must not be appended after it.
+  test("sends a typed slash command last when an attachment follows it", async () => {
+    const message = await captureSdkUserMessage(
+      buildAgentPrompt("/hello please", undefined, [issueAttachment]),
+    );
+
+    expect(message.message.content).toEqual([
+      { type: "text", text: renderPromptAttachmentAsText(issueAttachment) },
+      { type: "text", text: "/hello please" },
+    ]);
+  });
+
+  test("sends a typed slash command last when an image follows it", async () => {
+    const message = await captureSdkUserMessage(
+      buildAgentPrompt("/hello please", [{ data: "aGk=", mimeType: "image/png" }], undefined),
+    );
+
+    expect(message.message.content).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "aGk=" } },
+      { type: "text", text: "/hello please" },
+    ]);
+  });
+
+  test("keeps typed text before attachments when it is not a slash command", async () => {
+    const message = await captureSdkUserMessage(
+      buildAgentPrompt("please look at this issue", undefined, [issueAttachment]),
+    );
+
+    expect(message.message.content).toEqual([
+      { type: "text", text: "please look at this issue" },
+      { type: "text", text: renderPromptAttachmentAsText(issueAttachment) },
+    ]);
+  });
+
+  test("moves the typed slash command, not an attachment that reads like one", async () => {
+    const chatHistory: AgentAttachment = {
+      type: "text",
+      mimeType: "text/plain",
+      contextKind: "chat_history",
+      text: "/earlier command quoted from another chat",
+    };
+    const message = await captureSdkUserMessage(
+      buildAgentPrompt("/hello please", undefined, [chatHistory, issueAttachment]),
+    );
+
+    expect(message.message.content).toEqual([
+      { type: "text", text: chatHistory.text },
+      { type: "text", text: renderPromptAttachmentAsText(issueAttachment) },
+      { type: "text", text: "/hello please" },
+    ]);
+  });
+
   test("maps Ultracode to xhigh effort and Claude ultracode settings", async () => {
     const { queryFactory } = createQueryMock();
     const client = new ClaudeAgentClient({
@@ -901,6 +1385,35 @@ describe("ClaudeAgentSession features", () => {
     });
 
     await session.close();
+  });
+
+  test("disables Claude hooks for internal agents only", async () => {
+    const { queryFactory } = createQueryMock();
+    const client = new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const internalSession = await client.createSession({
+      provider: "claude",
+      cwd: process.cwd(),
+      internal: true,
+    });
+    const userSession = await client.createSession({
+      provider: "claude",
+      cwd: process.cwd(),
+    });
+
+    await internalSession.startTurn("hello");
+    await userSession.startTurn("hello");
+
+    expect(queryFactory.mock.calls[0]?.[0].options.settings).toMatchObject({
+      disableAllHooks: true,
+    });
+    expect(queryFactory.mock.calls[1]?.[0].options.settings).toBeUndefined();
+
+    await internalSession.close();
+    await userSession.close();
   });
 
   test("turns Claude thinking off without retaining an effort level", async () => {
@@ -1122,6 +1635,26 @@ describe("ClaudeAgentSession features", () => {
 
     await expect(session.setThinkingOption?.("off")).rejects.toThrow(
       "Thinking option 'off' is not available for model 'claude-fable-5'",
+    );
+
+    await session.close();
+  });
+
+  test("rejects disabled thinking on Sonnet 5.5, which only runs with adaptive thinking", async () => {
+    const { queryFactory } = createQueryMock();
+    const client = new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.createSession({
+      provider: "claude",
+      cwd: process.cwd(),
+      model: "claude-sonnet-5-5",
+    });
+
+    await expect(session.setThinkingOption?.("off")).rejects.toThrow(
+      "Thinking option 'off' is not available for model 'claude-sonnet-5-5'",
     );
 
     await session.close();

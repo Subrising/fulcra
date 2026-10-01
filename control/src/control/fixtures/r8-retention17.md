@@ -1,0 +1,1 @@
+Synthetic R8 V2 config fixture: firstRun shape from control 94804fc7, followed by the supported retention write of 17. IDs are synthetic. R8 firstRun creates tasks.json (issues/projects), not a tasks/ job directory. INT r12-up-3 and r12-up-5 retain this setting on disk but fail the completed cleanup-preview RPC. No credentials or user state are copied.

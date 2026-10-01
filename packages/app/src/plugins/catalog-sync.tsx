@@ -1,3 +1,4 @@
+import { preparePluginCatalog } from "./bundle-trust";
 import { pluginSettingsKey } from "./settings/use-settings";
 import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -14,10 +15,13 @@ export function PluginCatalogSync({
 }) {
   const connected = useHostRuntimeIsConnected(serverId);
   const supported = useHostFeatureAvailability(serverId, "plugins");
+  const paging = useHostFeatureAvailability(serverId, "pluginCatalogPaging");
 
   useEffect(() => {
     let cancelled = false;
     let refreshQueue = Promise.resolve();
+    let generation = 0;
+    let reading: AbortController | undefined;
     if (!connected) {
       pluginRegistry.suspendHost(serverId);
       return;
@@ -33,28 +37,42 @@ export function PluginCatalogSync({
       return;
     }
     const refresh = (replacePluginId?: string) => {
-      refreshQueue = refreshQueue.then(() =>
-        client
-          .getPluginCatalog()
-          .then((catalog) => {
-            if (!cancelled) {
-              pluginRegistry.installCatalog(serverId, catalog, {
-                replacePluginId,
-                client,
-              });
-            }
-            return undefined;
-          })
-          .catch((error) => {
-            if (!cancelled) {
-              console.warn(`[Plugins] Failed to load catalog for ${serverId}`, error);
-              // The question was asked and answered badly. Leaving it unanswered would park
-              // anything waiting on the catalog — the host index route — on a splash forever.
-              pluginRegistry.markCatalogSettled(serverId);
-            }
-            return undefined;
-          }),
-      );
+      const epoch = ++generation;
+      reading?.abort();
+      refreshQueue = refreshQueue.then(async () => {
+        if (cancelled || epoch !== generation) return;
+        const abort = new AbortController();
+        reading = abort;
+        try {
+          const catalog =
+            paging === true
+              ? await client.getPagedPluginCatalog({
+                  signal: abort.signal,
+                  sha256: async (bytes) => {
+                    const { digest, CryptoDigestAlgorithm } = await import("expo-crypto");
+                    const copy = new Uint8Array(bytes.byteLength);
+                    copy.set(bytes);
+                    const hash = new Uint8Array(
+                      await digest(CryptoDigestAlgorithm.SHA256, copy.buffer),
+                    );
+                    return Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
+                  },
+                })
+              : await client.getPluginCatalog();
+          if (cancelled || abort.signal.aborted || epoch !== generation) return;
+          const plugins = await preparePluginCatalog(catalog.plugins);
+          if (!cancelled && !abort.signal.aborted && epoch === generation) {
+            pluginRegistry.installCatalog(serverId, plugins, { replacePluginId, client });
+          }
+        } catch {
+          if (!cancelled && epoch === generation) {
+            // A paging refusal never retries through the legacy catalog or preserves old action surfaces.
+            pluginRegistry.suspendHost(serverId);
+            pluginRegistry.markCatalogSettled(serverId);
+          }
+        }
+        return undefined;
+      });
       return refreshQueue;
     };
     const observation = client.observeEvents([
@@ -84,11 +102,13 @@ export function PluginCatalogSync({
     });
     return () => {
       cancelled = true;
+      generation++;
+      reading?.abort();
       void observation
         .release()
         .catch((error) => console.warn("[Plugins] Failed to release catalog", error));
     };
-  }, [client, connected, serverId, supported]);
+  }, [client, connected, serverId, supported, paging]);
 
   useEffect(() => () => pluginRegistry.removeHost(serverId), [serverId]);
   return null;
