@@ -118,6 +118,69 @@ export function resolveDefaultAgentCreateConfig(
   };
 }
 
+// Update-7 W3 (R1 P-8): a caller's mode class, for its children. "automatic" runs without routine prompts (Claude's
+// classifier `auto`, and the unattended modes); "restricted" is a mode the owner uses to keep a session in check;
+// anything not known here is "unknown" and is treated as restricted. Only Claude and Codex are classified.
+const RESTRICTED_MODES: Record<string, readonly string[]> = {
+  claude: ["default", "plan", "acceptEdits"],
+  codex: ["auto-review", "auto", "read-only"],
+};
+const AUTOMATIC_MODES: Record<string, readonly string[]> = {
+  claude: ["auto", "bypassPermissions"],
+  codex: ["full-access"],
+};
+export type ChildModeClass = "automatic" | "restricted" | "unknown";
+export function childModeClass(
+  provider: string,
+  modeId: string | null | undefined,
+): ChildModeClass {
+  if (!modeId) return "unknown";
+  if (AUTOMATIC_MODES[provider]?.includes(modeId)) return "automatic";
+  if (RESTRICTED_MODES[provider]?.includes(modeId)) return "restricted";
+  return "unknown";
+}
+const RESTRICTED_EQUIVALENTS: Record<string, readonly string[]> = {
+  claude: ["default"],
+  codex: ["auto-review", "auto"],
+};
+// A target provider's restricted equivalent for a restricted caller's cross-provider child. Never an unattended mode.
+function restrictedEquivalent(
+  provider: string,
+  availableModes: string[] | undefined,
+): string | undefined {
+  const preference = RESTRICTED_EQUIVALENTS[provider] ?? [];
+  return preference.find((m) => availableModes === undefined || availableModes.includes(m));
+}
+
+/**
+ * Update-7 W3 (owner, 01:29Z; e69ed191's gate dry run; R1 P-8): the create config for a provider that persists its own
+ * default mode on create (Claude, Codex). The caller's RESTRICTION CLASS is inherited, never its exact permissions:
+ * - no caller, or an automatic caller: the mode is left unset and decided downstream -- a host plugin's
+ *   agent.create hook (Fulcra's owner default), else the provider's conservative resolveDefaultModeId. So a Codex
+ *   full-access lead's Claude worker is neither refused nor handed bypassPermissions;
+ * - a restricted (or unknown) caller: the child stays restricted -- the caller's own mode on the same provider, the
+ *   target's restricted equivalent across providers.
+ * An explicit mode wins (validated), and a create that itself asks for unattended keeps the target's unattended mode;
+ * an unattended flag that only reflects the parent does not.
+ */
+export function resolveOwnDefaultCreateConfig(
+  input: ResolveAgentCreateConfigInput,
+): ResolveAgentCreateConfigResult {
+  if (input.requestedMode !== undefined) return resolveDefaultAgentCreateConfig(input);
+  const availableModeIds = input.availableModes?.map((mode) => mode.id);
+  const parent = input.parent;
+  if (parent && childModeClass(parent.provider, parent.modeId) !== "automatic") {
+    const sameProvider = parent.provider === input.provider && parent.modeId;
+    const modeId = sameProvider
+      ? (parent.modeId ?? undefined)
+      : restrictedEquivalent(input.provider, availableModeIds);
+    return { modeId, featureValues: input.featureValues };
+  }
+  const askedUnattended = input.unattended && parent?.isUnattended !== true;
+  const modeId = askedUnattended ? input.availableModes?.find(isUnattendedMode)?.id : undefined;
+  return { modeId, featureValues: input.featureValues };
+}
+
 export function isDefaultAgentCreateConfigUnattended(
   input: AgentCreateConfigUnattendedInput,
 ): boolean {

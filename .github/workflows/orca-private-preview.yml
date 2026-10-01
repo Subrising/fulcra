@@ -1,0 +1,206 @@
+name: Orca private preview (build only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build without publishing
+        type: choice
+        options: [all, windows, android]
+        default: all
+      delivery:
+        description: Where the build output is left (private-draft never publishes)
+        type: choice
+        options: [artifacts, private-draft]
+        default: artifacts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orca-private-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    if: inputs.platform == 'all' || inputs.platform == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    # Needed only by the private-draft delivery step below, which creates a draft
+    # release and never publishes. Job permissions cannot be made conditional.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+      - run: node scripts/npm-retry.mjs ci
+      # Seconds, immediately after install: reports the status codes and paths
+      # that would make the manifest record sourceDirty, before a long packaging
+      # run that could not be delivered anyway.
+      - name: Check source provenance after install
+        run: node scripts/orca-preview-build.mjs windows --provenance-only
+      - run: node scripts/orca-preview-build.mjs windows
+        env:
+          PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/orca-smoke
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.delivery == 'artifacts'
+        with:
+          name: Orca-Windows-x64-${{ github.sha }}
+          path: artifacts/orca-preview/windows
+          if-no-files-found: error
+          retention-days: 14
+      # The token reaches this step only. The script refuses a repository that is
+      # not private, only ever writes to a draft, and never publishes.
+      - name: Deliver to a private draft release
+        if: inputs.delivery == 'private-draft'
+        run: node scripts/orca-preview-release.mjs windows --confirm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure() && inputs.delivery == 'artifacts'
+        with:
+          name: Orca-Windows-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/orca-smoke
+          if-no-files-found: ignore
+          retention-days: 7
+
+  android:
+    if: inputs.platform == 'all' || inputs.platform == 'android'
+    # The 8 GB Linux runner showed severe memory pressure. Run 35366243698
+    # measured hermesc growing 1397 -> 3308 MB in 40 seconds while a Gradle JVM
+    # held 2081 MB; MemAvailable fell 1777 -> 522 MB and swap use jumped
+    # 390 -> 2294 MB in one 10-second tick, then the runner was terminated.
+    # Smaller JVM ceilings alone did not fix it, because Hermes alone peaks above
+    # 3.3 GB and the JVMs are resident at the same time.
+    #
+    # macos-15-intel is a standard GitHub-hosted runner with 14 GB and 4 CPUs,
+    # against ubuntu-24.04's 8 GB and 2. It is not a larger-runner purchase, a
+    # plan change or a self-hosted registration. Standard macOS minutes are
+    # billed at a higher multiplier than Linux; see docs/pipelines.md. Only this
+    # Android job moves. The Windows job and every Linux job are unchanged.
+    runs-on: macos-15-intel
+    # Run 105595708019 reached the release JS bundle at 30 minutes of build time
+    # with dex, merge and packaging still to run, on the standard hosted runner.
+    # 60 left no headroom for a cold Gradle cache; 120 bounds it without hiding a
+    # failure — an Android build that runs past this is wrong, not merely slow.
+    timeout-minutes: 120
+    # Needed only by the private-draft delivery step below, which creates a draft
+    # release and never publishes. Job permissions cannot be made conditional.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Prepare the Android SDK and reserve build space
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Disposable GitHub-hosted macOS VM only. Never a developer machine.
+          if [ "${GITHUB_ACTIONS:-}" != "true" ] || [ "${RUNNER_OS:-}" != "macOS" ]; then
+            echo "This step only runs on a hosted macOS runner (RUNNER_OS=${RUNNER_OS:-unset})."
+            exit 1
+          fi
+
+          # The image ships the Android SDK; take its own location rather than
+          # assuming one, and fail loudly if neither variable nor path is there.
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
+          if [ ! -d "$sdk" ]; then
+            echo "Android SDK not found at $sdk on this image."
+            exit 1
+          fi
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+          echo "sdk: $sdk"
+          ls "$sdk/ndk" 2>/dev/null || echo "no ndk directory yet; Gradle installs what it needs"
+
+          echo "cpus: $(sysctl -n hw.ncpu)  memory: $(( $(sysctl -n hw.memsize) / 1048576 ))MB"
+          sysctl vm.swapusage || true
+          df -h "$GITHUB_WORKSPACE"
+
+          free_kb() { df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 {print $4}'; }
+          if [ "$(free_kb)" -lt 20971520 ]; then
+            # Simulator runtimes are large and an Android build never uses them.
+            # Xcode itself is left alone. Removed only when actually short.
+            echo "Short of space; removing unused simulator runtimes."
+            sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
+            df -h "$GITHUB_WORKSPACE"
+          fi
+          if [ "$(free_kb)" -lt 20971520 ]; then
+            echo "Android source build needs at least 20 GiB free before npm/Gradle; have $(( $(free_kb) / 1048576 )) GiB."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+      - run: node scripts/npm-retry.mjs ci
+      # See the Windows job: cheap post-install provenance report before a long build.
+      - name: Check source provenance after install
+        run: node scripts/orca-preview-build.mjs android arm64-v8a --provenance-only
+
+      # Sampled from inside the build step so the lines stream into the live job
+      # log: a terminated runner never reaches a later step, so an end-of-job
+      # report would be lost on exactly the failure being diagnosed. Job logs
+      # survive the artifact storage quota. macOS has no /proc and no cgroup, so
+      # this reads vm_stat, sysctl and ps instead. The build's exit code stays
+      # authoritative and the sampler is killed on exit.
+      - name: Build Android preview
+        shell: bash
+        run: |
+          set -o pipefail
+          # 10s, because a longer interval can step over a short allocation
+          # spike. Even this can miss one; treat a gap between the last sample
+          # and a termination as unmeasured, not as evidence of health.
+          while true; do
+            now="$(date -u +%H:%M:%S)"
+            printf '[resources] %s %s %s\n' \
+              "$now" \
+              "$(vm_stat | awk -F'[:.]' '
+                   /page size of/ {size = $0; sub(/.*page size of /, "", size); sub(/ bytes.*/, "", size)}
+                   /Pages free/ {free = $2}
+                   /Pages inactive/ {inactive = $2}
+                   /Pages occupied by compressor/ {comp = $2}
+                   END {printf "MemFreeish=%dMB Compressed=%dMB", (free + inactive) * size / 1048576, comp * size / 1048576}')" \
+              "$(sysctl -n vm.swapusage | tr -s ' ')"
+            # pid, resident size and executable name only. `comm` carries no
+            # arguments, so no paths, tokens or environment can appear here.
+            ps -Ao pid=,rss=,comm= | sort -k2 -nr |
+              awk -v ts="$now" 'NR <= 5 {name = $3; sub(/.*\//, "", name); printf "[rss] %s pid=%s rss=%dMB comm=%s\n", ts, $1, $2/1024, name}'
+            sleep 10
+          done &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
+          node scripts/orca-preview-build.mjs android arm64-v8a
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.delivery == 'artifacts'
+        with:
+          name: Orca-Android-arm64-${{ github.sha }}
+          path: artifacts/orca-preview/android
+          if-no-files-found: error
+          retention-days: 14
+      # The token reaches this step only. The script refuses a repository that is
+      # not private, only ever writes to a draft, and never publishes.
+      - name: Deliver to a private draft release
+        if: inputs.delivery == 'private-draft'
+        run: node scripts/orca-preview-release.mjs android --confirm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

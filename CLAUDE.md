@@ -40,6 +40,7 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/providers.md](docs/providers.md)                               | Adding a new agent provider end-to-end                                                                                         |
 | [docs/forge-providers.md](docs/forge-providers.md)                   | Adding a git forge: registry/manifest, drop-in checklist, self-host/GHES, the two facts tiers                                  |
 | [docs/custom-providers.md](docs/custom-providers.md)                 | Custom provider config: Z.AI, Alibaba/Qwen, ACP agents, profiles, custom binaries                                              |
+| [docs/command-centre-packaging.md](docs/command-centre-packaging.md) | Command Centre packaging design, authentication decision and unsigned first-open steps                                         |
 | [docs/plugins.md](docs/plugins.md)                                   | Local plugin manifest, directory source config, RPCs, native surfaces, and attachment sources                                  |
 | [docs/integrations-auth.md](docs/integrations-auth.md)               | Shared credential store: tracker/forge sign-in methods, provider findings, OS keychains, callback validation                   |
 | [docs/service-proxy.md](docs/service-proxy.md)                       | Service proxy: exposing workspace scripts at public URLs, DNS setup, reverse proxy config                                      |
@@ -59,7 +60,9 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/explorer-sidebar.md](docs/explorer-sidebar.md)                 | Explorer sidebar and ordinary side-pane host contracts, lifecycle, placement, and routing preferences                          |
 | [docs/ad-hoc-daemon-testing.md](docs/ad-hoc-daemon-testing.md)       | Isolated in-process daemon test harness                                                                                        |
 | [docs/browser-capture-harness.md](docs/browser-capture-harness.md)   | Real-Electron browser screenshot harness and compositor-surface gotcha                                                         |
+| [docs/ios-personal-device.md](docs/ios-personal-device.md)           | Local iPhone builds with a personal Apple team and no remote push                                                              |
 | [docs/pipelines.md](docs/pipelines.md)                               | Which inherited workflows publish, what a fork must configure first, and why release tags are filtered                         |
+| [docs/windows.md](docs/windows.md)                                   | Fulcra Windows build-only preview, artifact retrieval and acceptance limits                                                      |
 | [docs/android.md](docs/android.md)                                   | App variants, local/cloud builds, EAS workflows, version codes, F-Droid source builds and store metadata                       |
 | [docs/docker.md](docs/docker.md)                                     | Running the daemon and bundled web UI in Docker, volumes, agent images, security                                               |
 | [docs/release.md](docs/release.md)                                   | Release playbook, draft releases, completion checklist                                                                         |
@@ -90,6 +93,11 @@ Do not:
 - Restate something you already said, in different words, for emphasis.
 - Hedge with "generally", "typically", or "you may want to" when the answer is "do this".
 - Clear your throat: "It's worth noting that", "In order to", "This section covers".
+
+## Portable Fulcra installation
+
+See [docs/portable-setup.md](docs/portable-setup.md) for the composed source installer,
+private user home, local task catalog and platform limits.
 
 ## Quick start
 

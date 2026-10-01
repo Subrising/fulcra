@@ -18,6 +18,13 @@ const customWebPlatform = (process.env.PASEO_WEB_PLATFORM ?? "")
   .toLowerCase();
 
 const config = getDefaultConfig(projectRoot);
+config.watchFolders = [
+  ...new Set([
+    ...(config.watchFolders ?? []),
+    path.resolve(projectRoot, "../../control/orca-organization/client"),
+    path.resolve(projectRoot, "../../control/orca-organization/shared"),
+  ]),
+];
 const defaultResolveRequest = config.resolver.resolveRequest ?? resolve;
 
 // Keep app exports deterministic across dev machines and CI. Metro's Watchman

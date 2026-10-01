@@ -117,6 +117,11 @@ export const GITHUB_POLL_ALIGNMENT_MS = 5_000;
 const GITHUB_GRAPHQL_RESERVE_RATIO = 0.4;
 const GITHUB_GRAPHQL_RESET_GRACE_MS = 1_000;
 const BATCH_PR_CANDIDATE_LIMIT = 10;
+// How many of a fork branch's own pull requests are read in full. One is the
+// normal case; the rest are earlier attempts on the same branch, and the one
+// carrying the checkout's head commit is read whichever attempt it belongs to.
+const FORK_PR_VIEW_LIMIT = 3;
+const FORK_PR_PAGE_SIZE = 100;
 const FROZEN_PR_CHECKS_CACHE_MAX_ENTRIES = 512;
 const GITHUB_ENV = {
   GIT_TERMINAL_PROMPT: "0",
@@ -142,6 +147,15 @@ const GitHubIssueSummarySchema = z.object({
 });
 
 const GitHubPullRequestSummarySchema = z.object({
+  isDraft: z.boolean().optional(),
+  baseRefOid: z
+    .string()
+    .regex(/^[a-f0-9]{40}$/)
+    .optional(),
+  headRefOid: z
+    .string()
+    .regex(/^[a-f0-9]{40}$/)
+    .optional(),
   number: z.number(),
   title: z.string().catch(""),
   url: z.string().catch(""),
@@ -457,6 +471,16 @@ const GitHubRepoViewSchema = z.object({
     .nullable()
     .optional(),
 });
+
+const ForkPullRequestRefsSchema = z.array(
+  z.object({
+    number: z.number(),
+    head: z
+      .object({ sha: z.string().catch("") })
+      .nullable()
+      .optional(),
+  }),
+);
 
 const PullRequestCheckoutTargetSchema = z.object({
   data: z.object({
@@ -2112,7 +2136,7 @@ export function createGitHubService(options: CreateGitHubServiceOptions = {}): G
               "view",
               String(input.number),
               "--json",
-              "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt",
+              "number,title,url,state,body,labels,baseRefName,headRefName,updatedAt,baseRefOid,headRefOid,isDraft",
             ],
             { cwd: input.cwd },
             GitHubPullRequestSummarySchema,
@@ -2876,6 +2900,14 @@ async function runGhCommand(
   return githubCliRunner.run(args, options);
 }
 
+/** The same `gh` runner the forge service uses (auth, environment, timeout), for the PR review screen. */
+export function runGitHubCli(
+  args: string[],
+  options: GitHubCommandRunnerOptions,
+): Promise<GitHubCommandResult> {
+  return runGhCommand(args, options);
+}
+
 // Anchored to github.com so a pasted URL from an unrelated tracker (a GitLab
 // or Gitea link that happens to share the /owner/repo/(pull|issues)/N shape)
 // passes through as literal search text instead of being misread as a number.
@@ -3004,8 +3036,6 @@ async function resolveCurrentPullRequestView(options: {
     return viewMatch.status;
   }
 
-  let listHeadRef = options.headRef;
-  let listRepo: string | undefined;
   let headRepositoryOwner = options.headRepositoryOwner;
 
   if (!headRepositoryOwner) {
@@ -3017,17 +3047,19 @@ async function resolveCurrentPullRequestView(options: {
       return null;
     }
     if (parentOwner && parentName) {
-      listHeadRef = `${forkOwner}:${options.headRef}`;
-      listRepo = `${parentOwner}/${parentName}`;
+      return resolveForkPullRequestView({
+        ...options,
+        forkOwner,
+        repo: `${parentOwner}/${parentName}`,
+      });
     }
     headRepositoryOwner = forkOwner;
   }
 
   const candidates = await listCurrentPullRequestCandidates({
     cwd: options.cwd,
-    headRef: listHeadRef,
+    headRef: options.headRef,
     run: options.run,
-    repo: listRepo,
   });
   const match = pickPullRequestCandidate({
     candidates,
@@ -3036,6 +3068,77 @@ async function resolveCurrentPullRequestView(options: {
     headRepositoryOwner,
   });
   return match?.status ?? null;
+}
+
+// A fork checkout's pull request lives in the parent repository, where only
+// its head repository tells it apart from every other fork's pull request on
+// the same branch name. `gh pr list --head` cannot ask that question: it
+// forwards the whole value as a head branch name, so "owner:branch" matches
+// nothing (cli/cli#10945), and the bare branch name loses a common name like
+// `main` among the other forks crowding the candidate page. The REST pulls
+// endpoint is the only lookup that takes a head repository, so it names the
+// pull requests and the ordinary view path reads each one's status.
+async function resolveForkPullRequestView(options: {
+  cwd: string;
+  headRef: string;
+  headSha?: string;
+  forkOwner: string;
+  repo: string;
+  run: (args: string[], options: GitHubCommandRunnerOptions) => Promise<string>;
+}): Promise<CurrentPullRequestStatus | null> {
+  const numbers = await listForkPullRequestNumbers(options);
+  const candidates = await Promise.all(
+    numbers.map((number) =>
+      tryCurrentPullRequestView({
+        cwd: options.cwd,
+        headRef: options.headRef,
+        run: options.run,
+        args: ["pr", "view", String(number), "--repo", options.repo],
+      }),
+    ),
+  );
+  const match = pickPullRequestCandidate({
+    candidates: candidates.filter(
+      (candidate): candidate is ResolvedPullRequestCandidate => candidate !== null,
+    ),
+    headRef: options.headRef,
+    headSha: options.headSha,
+    headRepositoryOwner: options.forkOwner,
+  });
+  return match?.status ?? null;
+}
+
+// The endpoint answers with the fork branch's pull requests, newest first, so
+// a branch reused for several attempts can carry the checkout's head commit on
+// an older one. Those are read first, and the rest of the window is filled
+// newest-first, so the full read stays bounded without dropping the attempt the
+// checkout is actually sitting on.
+async function listForkPullRequestNumbers(options: {
+  cwd: string;
+  headRef: string;
+  headSha?: string;
+  forkOwner: string;
+  repo: string;
+  run: (args: string[], options: GitHubCommandRunnerOptions) => Promise<string>;
+}): Promise<number[]> {
+  const query = new URLSearchParams({
+    state: "all",
+    per_page: String(FORK_PR_PAGE_SIZE),
+    head: `${options.forkOwner}:${options.headRef}`,
+  });
+  const args = ["api", `repos/${options.repo}/pulls?${query.toString()}`];
+  const stdout = await options.run(args, { cwd: options.cwd });
+  const refs = parseGitHubJsonOutput(stdout, ForkPullRequestRefsSchema, {
+    args,
+    cwd: options.cwd,
+    emptyFallback: "[]",
+  });
+  function carriesHeadSha(ref: (typeof refs)[number]): boolean {
+    return options.headSha !== undefined && ref.head?.sha === options.headSha;
+  }
+  return [...refs.filter(carriesHeadSha), ...refs.filter((ref) => !carriesHeadSha(ref))]
+    .slice(0, FORK_PR_VIEW_LIMIT)
+    .map((ref) => ref.number);
 }
 
 async function addCurrentPullRequestGithubFacts(options: {
@@ -3097,16 +3200,18 @@ async function loadPullRequestGithubFacts(options: {
 async function tryCurrentPullRequestView(options: {
   cwd: string;
   headRef: string;
+  args?: string[];
   run: (args: string[], options: GitHubCommandRunnerOptions) => Promise<string>;
 }): Promise<ResolvedPullRequestCandidate | null> {
+  const args = options.args ?? ["pr", "view"];
   try {
     const stdout = await runCurrentPullRequestStatusCommand({
       cwd: options.cwd,
       run: options.run,
-      args: ["pr", "view"],
+      args,
     });
     return parseCurrentPullRequestCandidate(stdout, options.headRef, {
-      args: ["pr", "view", "--json", CURRENT_PR_STATUS_FIELDS],
+      args: [...args, "--json", CURRENT_PR_STATUS_FIELDS],
       cwd: options.cwd,
     });
   } catch (error) {
@@ -3121,13 +3226,8 @@ async function listCurrentPullRequestCandidates(options: {
   cwd: string;
   headRef: string;
   run: (args: string[], options: GitHubCommandRunnerOptions) => Promise<string>;
-  repo?: string;
 }): Promise<ResolvedPullRequestCandidate[]> {
-  const args = ["pr", "list"];
-  if (options.repo) {
-    args.push("--repo", options.repo);
-  }
-  args.push("--state", "all", "--head", options.headRef, "--limit", "10");
+  const args = ["pr", "list", "--state", "all", "--head", options.headRef, "--limit", "10"];
   try {
     const stdout = await runCurrentPullRequestStatusCommand({
       cwd: options.cwd,
@@ -3494,6 +3594,9 @@ function toPullRequestSummary(
   item: z.infer<typeof GitHubPullRequestSummarySchema>,
 ): PullRequestSummary {
   return {
+    ...(item.baseRefOid ? { baseRefOid: item.baseRefOid } : {}),
+    ...(item.headRefOid ? { headRefOid: item.headRefOid } : {}),
+    ...(item.isDraft !== undefined ? { isDraft: item.isDraft } : {}),
     number: item.number,
     title: item.title,
     url: item.url,

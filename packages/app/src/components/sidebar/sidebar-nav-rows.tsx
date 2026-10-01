@@ -1,5 +1,5 @@
 import { router, usePathname } from "expo-router";
-import { CalendarClock, History, Plus, Search } from "lucide-react-native";
+import { CalendarClock, ChartColumn, History, Plus, Search, Workflow } from "lucide-react-native";
 import { memo, useCallback, useMemo, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import { View, type StyleProp, type ViewStyle } from "react-native";
@@ -19,6 +19,8 @@ import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspac
 import { useWorkspace } from "@/stores/session-store-hooks";
 import {
   buildNewWorkspaceRoute,
+  buildInsightsRoute,
+  buildAutomationsRoute,
   buildSchedulesRoute,
   buildSessionsRoute,
 } from "@/utils/host-routes";
@@ -170,9 +172,51 @@ function SidebarSchedulesRow({ onBeforeNavigate }: SidebarNavRowProps) {
   );
 }
 
+function SidebarAutomationsRow({ onBeforeNavigate }: SidebarNavRowProps) {
+  const { t } = useTranslation();
+  const pathname = usePathname();
+  const handlePress = useCallback(() => {
+    onBeforeNavigate?.();
+    router.push(buildAutomationsRoute());
+  }, [onBeforeNavigate]);
+
+  return (
+    <SidebarHeaderRow
+      icon={Workflow}
+      label={t(builtinSidebarNavLabelKey("automations"))}
+      onPress={handlePress}
+      isActive={pathname.includes("/automations")}
+      testID="sidebar-automations"
+      variant="compact"
+    />
+  );
+}
+
+function SidebarInsightsRow({ onBeforeNavigate }: SidebarNavRowProps) {
+  const { t } = useTranslation();
+  const pathname = usePathname();
+  const handlePress = useCallback(() => {
+    onBeforeNavigate?.();
+    router.push(buildInsightsRoute());
+  }, [onBeforeNavigate]);
+
+  return (
+    <SidebarHeaderRow
+      icon={ChartColumn}
+      label={t(builtinSidebarNavLabelKey("insights"))}
+      onPress={handlePress}
+      isActive={pathname.includes("/insights")}
+      testID="sidebar-insights"
+      variant="compact"
+    />
+  );
+}
+
 const BUILTIN_ROWS: Record<BuiltinSidebarNavId, ComponentType<SidebarNavRowProps>> = {
   "new-workspace": SidebarNewWorkspaceRow,
   history: SidebarHistoryRow,
   search: SidebarSearchRow,
   schedules: SidebarSchedulesRow,
+  insights: SidebarInsightsRow,
+  automations: SidebarAutomationsRow,
 };

@@ -1,8 +1,14 @@
+import { assertFinalInputCheck, recordFinalInputHandoff } from "../../final-input-check.js";
+import { FINAL_INPUT_CHECK } from "../../agent-sdk-types.js";
 import type { ChildProcess } from "node:child_process";
+import type {
+  AccountCredential,
+  AccountUsageReading,
+} from "../../../../services/quota-fetcher/account-usage-types.js";
+import { mergeRateLimitEvent } from "../../../../services/quota-fetcher/providers/claude-account-usage.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { promises } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   type AgentDefinition,
@@ -51,6 +57,7 @@ import {
 import { parsePartialJsonObject } from "./partial-json.js";
 import { ClaudeSidechainTracker } from "./sidechain-tracker.js";
 import { ClaudeTaskState } from "./task-state.js";
+import { ClaudeBackgroundWorkTracker } from "./background-work.js";
 import {
   ClaudeTaskProtocolSource,
   type ClaudeHookObservationInput,
@@ -75,6 +82,7 @@ import {
   formatProviderDiagnosticError,
 } from "../diagnostic-utils.js";
 import { appendOrReplaceGrowingAssistantMessage, runProviderTurn } from "../provider-runner.js";
+import { resolveOwnDefaultCreateConfig } from "../../create-agent-mode.js";
 import {
   applyClaudeToolPolicy,
   ClaudeProviderOptionsSchema,
@@ -82,9 +90,14 @@ import {
 } from "./options.js";
 import { renderPromptAttachmentAsText } from "../../prompt-attachments.js";
 import { claudeQuery, type ClaudeOptions, type ClaudeQueryFactory } from "./query.js";
-import { realClaudeRewindSdk, revertClaudeConversation, revertClaudeFiles } from "./rewind.js";
+import {
+  realClaudeRewindSdk,
+  revertClaudeConversation,
+  revertClaudeFiles,
+  type ClaudeRewindSdk,
+} from "./rewind.js";
 import { normalizeProviderReplayTimestamp } from "../../provider-history-timestamps.js";
-import { claudeProjectDirSync } from "./project-dir.js";
+import { claudeConfigDir, claudeProjectDirSync } from "./project-dir.js";
 import { THINKING_APPLIES_NEXT_TURN_NOTICE } from "../../provider-notices.js";
 import {
   isProviderImageMarkdown,
@@ -94,6 +107,7 @@ import {
 } from "../provider-image-output.js";
 
 import {
+  NATIVE_QUEUED_FINAL,
   getAgentStreamEventTurnId,
   type AgentPermissionAction,
   type AgentCapabilityFlags,
@@ -132,6 +146,11 @@ import {
   type ProviderRefreshContext,
   type ResolveAgentDefaultModeInput,
 } from "../../agent-sdk-types.js";
+import {
+  validateNativeQueuedDispatch,
+  submitNativeQueuedDispatch,
+  refuseNativeQueuedDispatch,
+} from "../../native-queued-dispatch.js";
 import { importSessionFromPersistence } from "../../provider-session-import.js";
 import { runProviderRefreshActivity } from "../../provider-refresh-deadline.js";
 import {
@@ -410,10 +429,10 @@ interface ClaudeAgentClientOptions {
   queryFactory?: ClaudeQueryFactory;
   resolveBinary?: () => Promise<string>;
   resolveVersion?: (signal?: AbortSignal) => Promise<string>;
-  configDir?: string;
   /** Asks Claude Code for the account's models. Tests inject one; the default spawns the real CLI. */
   modelProbe?: ClaudeModelProbe;
   now?: () => number;
+  rewindSdk?: ClaudeRewindSdk;
 }
 
 // How long a resolved Claude Code version is reused for the catalogue cache key before `--version` reruns.
@@ -429,6 +448,7 @@ interface ClaudeAgentSessionOptions {
   logger: Logger;
   queryFactory?: ClaudeQueryFactory;
   resolveBinary: () => Promise<string>;
+  rewindSdk?: ClaudeRewindSdk;
 }
 
 type ClaudeThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -1511,6 +1531,10 @@ export function readEventIdentifiers(message: SDKMessage): EventIdentifiers {
 }
 
 export class ClaudeAgentClient implements AgentClient {
+  // Update-7 W3: a new session without a mode takes Claude's own default, never its caller's.
+  readonly resolveCreateConfig = resolveOwnDefaultCreateConfig;
+  // R1 P-1: internal helper agents (fed untrusted repository text) plan only: no edits, no commands.
+  readonly internalModeId = "plan";
   readonly provider = "claude" as const;
   readonly capabilities = CLAUDE_CAPABILITIES;
   // A mode-less Claude session starts in `default` (Always Ask) for life, while resolveDefaultModeId says
@@ -1525,10 +1549,10 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly queryFactory?: ClaudeQueryFactory;
   private readonly resolveBinary: () => Promise<string>;
   private readonly resolveVersion: (signal?: AbortSignal) => Promise<string>;
-  private readonly configDir?: string;
   private readonly modelProbe: ClaudeModelProbe;
   private readonly now: () => number;
   private versionForKey: { version: string | null; at: number } | null = null;
+  private readonly rewindSdk: ClaudeRewindSdk;
 
   constructor(options: ClaudeAgentClientOptions) {
     this.defaults = options.defaults;
@@ -1539,9 +1563,9 @@ export class ClaudeAgentClient implements AgentClient {
     this.resolveVersion =
       options.resolveVersion ??
       ((signal) => resolveClaudeCodeVersion(this.runtimeSettings, signal));
-    this.configDir = options.configDir;
     this.modelProbe = options.modelProbe ?? probeClaudeModels;
     this.now = options.now ?? Date.now;
+    this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
   }
 
   resolveConfiguredModel(model: AgentModelDefinition): AgentModelDefinition {
@@ -1563,6 +1587,7 @@ export class ClaudeAgentClient implements AgentClient {
       logger: this.logger,
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
+      rewindSdk: this.rewindSdk,
     });
   }
 
@@ -1591,6 +1616,7 @@ export class ClaudeAgentClient implements AgentClient {
       logger: this.logger,
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
+      rewindSdk: this.rewindSdk,
     });
   }
 
@@ -1648,15 +1674,18 @@ export class ClaudeAgentClient implements AgentClient {
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to resolve Claude Code version for model catalog");
     }
+    const env = this.buildProviderEnv();
     const runtimeModels = await this.discoverRuntimeModels(context);
     const models = await runProviderRefreshActivity(context, "settings", () =>
-      getClaudeModelsWithSettings(this.logger, this.configDir, claudeCodeVersion, runtimeModels),
+      getClaudeModelsWithSettings(
+        this.logger,
+        claudeConfigDir(env),
+        claudeCodeVersion,
+        runtimeModels,
+      ),
     );
-    // Sessions gate fast mode per model; they read what this discovery found, not the manifest.
     recordClaudeRuntimeModels(runtimeModels?.length ? models : null);
-    const modeCatalog = claudeModeCatalog(
-      createProviderEnv({ baseEnv: process.env, runtimeSettings: this.runtimeSettings }),
-    );
+    const modeCatalog = claudeModeCatalog(env);
     return {
       models,
       ...modeCatalog,
@@ -1664,12 +1693,15 @@ export class ClaudeAgentClient implements AgentClient {
   }
 
   async resolveDefaultModeId({ env: launchEnv }: ResolveAgentDefaultModeInput): Promise<string> {
-    const env = createProviderEnv({
+    return claudeModeCatalog(this.buildProviderEnv(launchEnv)).defaultModeId;
+  }
+
+  private buildProviderEnv(launchEnv?: Record<string, string>): NodeJS.ProcessEnv {
+    return createProviderEnv({
       baseEnv: process.env,
       runtimeSettings: this.runtimeSettings,
       overlays: [launchEnv],
     });
-    return claudeModeCatalog(env).defaultModeId;
   }
 
   async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
@@ -1683,7 +1715,7 @@ export class ClaudeAgentClient implements AgentClient {
   async listImportableSessions(
     options?: ListImportableSessionsOptions,
   ): Promise<ImportableProviderSession[]> {
-    const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+    const configDir = claudeConfigDir(this.buildProviderEnv());
     const sessionsRoot = options?.cwd
       ? claudeProjectDirSync(options.cwd, { configDir })
       : path.join(configDir, "projects");
@@ -2114,6 +2146,7 @@ class ClaudeAgentSession implements AgentSession {
   private query: Query | null = null;
   private childProcess: ChildProcess | null = null;
   private input: AsyncMessageInput<SDKUserMessage> | null = null;
+  private readonly queryInputs = new WeakMap<Query, AsyncMessageInput<SDKUserMessage>>();
   /** The exact SDK query/input pair that owns the current foreground turn. */
   private activeForegroundQuery: Query | null = null;
   private activeForegroundInput: AsyncMessageInput<SDKUserMessage> | null = null;
@@ -2144,6 +2177,8 @@ class ClaudeAgentSession implements AgentSession {
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private readonly timelineAssembler = new TimelineAssembler();
   private readonly taskState = new ClaudeTaskState();
+  // Display only (MULTIHOST-DESIGN §6): backgrounded shells and workflows still running.
+  private readonly backgroundWork = new ClaudeBackgroundWorkTracker();
   private readonly taskProtocolSource = new ClaudeTaskProtocolSource({
     getToolInput: (toolUseId) => this.toolUseCache.get(toolUseId)?.input ?? null,
     readWorkflowResult: readClaudeWorkflowResultFile,
@@ -2167,6 +2202,7 @@ class ClaudeAgentSession implements AgentSession {
   private nextTurnOrdinal = 1;
   private cancelCurrentTurn: (() => void) | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
+  private accountUsageObservation: AccountUsageReading | null = null;
   private lastOptionsModel: string | null = null;
   private lastRuntimeModel: string | null = null;
   private compacting = false;
@@ -2180,6 +2216,7 @@ class ClaudeAgentSession implements AgentSession {
   private userMessageIds: string[] = [];
   private readonly emittedUserMessageIds = new Set<string>();
   private readonly rewindTurnAnchors: ClaudeRewindTurnAnchor[] = [];
+  private readonly rewindSdk: ClaudeRewindSdk;
   private pendingFreshSessionId: string | null = null;
   private recentStderr = "";
   private closed = false;
@@ -2195,6 +2232,7 @@ class ClaudeAgentSession implements AgentSession {
     this.logger = options.logger.child({ agentId: this.agentId });
     this.queryFactory = options.queryFactory;
     this.resolveBinary = options.resolveBinary;
+    this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
     this.contextUsage = new ClaudeContextUsageState(
       findClaudeModel(this.config.model)?.contextWindowMaxTokens,
     );
@@ -2235,6 +2273,40 @@ class ClaudeAgentSession implements AgentSession {
       modelId: this.config.model,
       fastModeEnabled: this.config.featureValues?.fast_mode === true,
     });
+  }
+
+  // Fulcra account pool: a pooled launch carries its account's token (CLAUDE_CODE_OAUTH_TOKEN, set by the plugin's
+  // session_open hook) and label. Usage for this session is that account's, not the Mac's own login.
+  usageSourceLabel(): string | null {
+    return this.launchEnv?.FULCRA_ACCOUNT_NAME ?? null;
+  }
+
+  usageCredential(): {
+    credential: AccountCredential;
+    label: string | null;
+    accountId: string | null;
+    observation: AccountUsageReading | null;
+  } | null {
+    const token = this.launchEnv?.CLAUDE_CODE_OAUTH_TOKEN;
+    if (!token) return null;
+    return {
+      credential: { kind: "token", token },
+      label: this.launchEnv?.FULCRA_ACCOUNT_NAME ?? null,
+      accountId: this.launchEnv?.FULCRA_ACCOUNT_ID ?? null,
+      observation: this.accountUsageObservation,
+    };
+  }
+
+  // update-7c: the CLI emits rate_limit_event on this session's own traffic; keep the last figures (free) so the
+  // account's usage refreshes without a probe. Nothing from the event is logged.
+  private noteRateLimitEvent(message: SDKMessage): void {
+    if (message.type !== "rate_limit_event") return;
+    const merged = mergeRateLimitEvent(
+      this.accountUsageObservation,
+      message.rate_limit_info,
+      Date.now(),
+    );
+    if (merged) this.accountUsageObservation = merged;
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
@@ -2284,6 +2356,65 @@ class ClaudeAgentSession implements AgentSession {
     return result;
   }
 
+  private assertQueuedClaudePrepared(
+    queued: () => void,
+    prepared: {
+      cancelIssued: boolean;
+      turnId: string;
+      nativeId: string | null;
+      preparedQuery: Query;
+      preparedInput: AsyncMessageInput<SDKUserMessage>;
+      originalQuery: Query | null;
+      originalInput: AsyncMessageInput<SDKUserMessage> | null;
+    },
+  ): void {
+    if (
+      this.closed ||
+      prepared.cancelIssued ||
+      this.pendingPermissions.size > 0 ||
+      this.activeForegroundTurnId !== prepared.turnId ||
+      this.claudeSessionId !== prepared.nativeId ||
+      !prepared.preparedQuery ||
+      this.query !== prepared.preparedQuery ||
+      this.input !== prepared.preparedInput ||
+      (prepared.originalQuery !== null && prepared.originalQuery !== prepared.preparedQuery) ||
+      (prepared.originalInput !== null && prepared.originalInput !== prepared.preparedInput)
+    )
+      refuseNativeQueuedDispatch(queued, "Native queued prepared Claude stream changed");
+  }
+
+  private assertFinishClaudePrepared(prepared: {
+    cancelIssued: boolean;
+    nativeId: string | null;
+    preparedQuery: Query;
+    preparedInput: AsyncMessageInput<SDKUserMessage>;
+  }): void {
+    if (
+      this.closed ||
+      prepared.cancelIssued ||
+      this.claudeSessionId !== prepared.nativeId ||
+      this.query !== prepared.preparedQuery ||
+      this.input !== prepared.preparedInput
+    )
+      throw new Error("Final-checked prepared Claude input changed");
+  }
+
+  private failClaudeStart(
+    error: unknown,
+    finishCheck: object | undefined,
+    queued: (() => void) | undefined,
+  ): void {
+    this.finishForegroundTurn(
+      this.buildTurnFailedEvent(error instanceof Error ? error.message : "Claude stream failed"),
+    );
+    if (finishCheck) throw error;
+    if (queued)
+      refuseNativeQueuedDispatch(
+        queued,
+        error instanceof Error ? error.message : "Native queued setup failed",
+      );
+  }
+
   async startTurn(
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
@@ -2295,6 +2426,17 @@ class ClaudeAgentSession implements AgentSession {
       throw new Error("A foreground turn is already active");
     }
 
+    const queued = options?.[NATIVE_QUEUED_FINAL];
+    const finishCheck = options?.[FINAL_INPUT_CHECK];
+    assertFinalInputCheck(finishCheck);
+    const nativeId = this.claudeSessionId;
+    const originalQuery = this.query;
+    const originalInput = this.input;
+    if (queued) {
+      validateNativeQueuedDispatch(queued);
+      if (typeof prompt !== "string" || prompt.trimStart().startsWith("/"))
+        refuseNativeQueuedDispatch(queued, "Native queued attachments or commands unavailable");
+    }
     const slashCommand = this.resolveSlashCommandInvocation(prompt);
     if (slashCommand?.commandName === REWIND_COMMAND_NAME) {
       const turnId = this.createTurnId("foreground");
@@ -2344,23 +2486,48 @@ class ClaudeAgentSession implements AgentSession {
     this.notifySubscribers({ type: "turn_started", provider: "claude" });
 
     try {
-      await this.ensureQuery();
+      const preparedQuery = await this.ensureQuery();
       if (!this.input) {
         throw new Error("Claude session input stream not initialized");
       }
-      this.activeForegroundQuery = this.query;
-      this.activeForegroundInput = this.input;
+      const preparedInput =
+        queued || finishCheck ? this.queryInputs.get(preparedQuery) : this.input;
+      if (!preparedInput)
+        refuseNativeQueuedDispatch(queued!, "Native queued captured SDK input unavailable");
+      this.activeForegroundQuery = preparedQuery;
+      this.activeForegroundInput = preparedInput;
       this.startQueryPump();
-      this.input.push(sdkMessage);
+      if (queued) {
+        // The prepared-object check is synchronous and runs after final authority validation.
+        submitNativeQueuedDispatch(
+          queued,
+          () => preparedInput.push(sdkMessage),
+          () =>
+            this.assertQueuedClaudePrepared(queued, {
+              cancelIssued,
+              turnId,
+              nativeId,
+              preparedQuery,
+              preparedInput,
+              originalQuery,
+              originalInput,
+            }),
+        );
+        // SDK input is a local handoff, not a correlated provider acknowledgement.
+      } else {
+        if (finishCheck)
+          this.assertFinishClaudePrepared({ cancelIssued, nativeId, preparedQuery, preparedInput });
+        assertFinalInputCheck(finishCheck);
+        preparedInput.push(sdkMessage);
+        recordFinalInputHandoff(finishCheck);
+      }
       setTimeout(() => {
         if (this.activeForegroundTurnId === turnId) {
           this.emitSubmittedUserMessage(sdkMessage, turnId, options?.clientMessageId);
         }
       }, 0);
     } catch (error) {
-      this.finishForegroundTurn(
-        this.buildTurnFailedEvent(error instanceof Error ? error.message : "Claude stream failed"),
-      );
+      this.failClaudeStart(error, finishCheck, queued);
     }
 
     return { turnId };
@@ -2396,7 +2563,12 @@ class ClaudeAgentSession implements AgentSession {
     ) {
       return { status: "unavailable" };
     }
-    this.enqueueSteer(input, message, options.clearPendingPermissions === true);
+    this.enqueueSteer(
+      input,
+      message,
+      options.clearPendingPermissions === true,
+      options[FINAL_INPUT_CHECK],
+    );
     return { status: "accepted" };
   }
 
@@ -2404,6 +2576,7 @@ class ClaudeAgentSession implements AgentSession {
     input: AsyncMessageInput<SDKUserMessage>,
     message: SDKUserMessage,
     clearPendingPermissions: boolean,
+    finalCheck?: object,
   ): void {
     const uuid = message.uuid;
     if (uuid) this.queuedSteerUuids.add(uuid);
@@ -2411,7 +2584,9 @@ class ClaudeAgentSession implements AgentSession {
       this.permissionClearingSteerUuids.add(uuid);
     }
     try {
+      assertFinalInputCheck(finalCheck);
       input.push(message);
+      recordFinalInputHandoff(finalCheck);
       if (clearPendingPermissions) {
         this.denyPendingPermissionsSupersededBySteer();
       }
@@ -2762,6 +2937,7 @@ class ClaudeAgentSession implements AgentSession {
     this.turnState = "idle";
     this.sidechainTracker.clear();
     this.taskProtocolSource.reset();
+    this.backgroundWork.clear();
     this.input?.end();
     this.query?.close?.();
     await this.awaitWithTimeout(this.query?.interrupt?.(), "close query interrupt");
@@ -2839,7 +3015,7 @@ class ClaudeAgentSession implements AgentSession {
       return;
     }
     await revertClaudeConversation({
-      sdk: realClaudeRewindSdk,
+      sdk: this.rewindSdk,
       sessionId: this.claudeSessionId,
       messageId: target.messageId,
       resolveMessageId: (messageId) => this.resolveClaudeMessageId(messageId),
@@ -3120,6 +3296,13 @@ class ClaudeAgentSession implements AgentSession {
     if (!messageId) {
       return;
     }
+    // Subagent frames ride the same stream as the conversation, but their uuids live on the
+    // subagent's sidechain, so forkSession cannot resolve one. Anchoring a turn on one leaves
+    // rewind throwing "Message <uuid> not found in session". The persisted history path already
+    // skips sidechain entries; the live stream has to skip them too.
+    if (readClaudeParentToolUseId(message)) {
+      return;
+    }
     if (
       message.type === "user" &&
       !isSyntheticUserEntry(message) &&
@@ -3155,17 +3338,18 @@ class ClaudeAgentSession implements AgentSession {
       throw new Error(`Claude rewind target ${messageId} is not in the tracked conversation`);
     }
 
-    if (index === 0) {
-      return { kind: "fresh-session" };
+    // A turn the model never answered — an instant gateway error, or an abort before the first
+    // token — leaves its anchor without an assistant id, and carries no conversation state worth
+    // preserving. Fork at the most recent turn before the target that did answer. Reading only
+    // the immediately preceding anchor let one such turn fail every later rewind in the
+    // conversation.
+    for (let previous = index - 1; previous >= 0; previous -= 1) {
+      const assistantMessageId = this.rewindTurnAnchors[previous]?.assistantMessageId;
+      if (assistantMessageId) {
+        return { kind: "fork", messageId: assistantMessageId };
+      }
     }
-
-    const previousTurn = this.rewindTurnAnchors[index - 1];
-    if (!previousTurn?.assistantMessageId) {
-      throw new Error(
-        `Claude rewind cannot preserve turn ${index} because its assistant response id was not observed`,
-      );
-    }
-    return { kind: "fork", messageId: previousTurn.assistantMessageId };
+    return { kind: "fresh-session" };
   }
 
   private async ensureQuery(): Promise<Query> {
@@ -3237,15 +3421,17 @@ class ClaudeAgentSession implements AgentSession {
         },
       },
     );
+    const preparedQuery = this.query;
+    this.queryInputs.set(preparedQuery, input);
     const fastMode = this.resolveFastModeSetting();
     if (fastMode !== null) {
-      await this.query.applyFlagSettings({ fastMode });
+      await preparedQuery.applyFlagSettings({ fastMode });
     }
     // Do not kick off background control-plane queries here. Methods like
     // supportedCommands()/setPermissionMode() may execute immediately after
     // ensureQuery() (for listCommands()/setMode()), and sharing the same query
     // control plane can cause those calls to wait behind supportedModels().
-    return this.query;
+    return preparedQuery;
   }
 
   private async awaitWithTimeout(
@@ -3424,13 +3610,17 @@ class ClaudeAgentSession implements AgentSession {
     input: { ultracode: boolean },
   ): Pick<ClaudeOptions, "settings"> | Record<string, never> {
     const fastMode = this.resolveFastModeSetting();
-    if (fastMode === null && !input.ultracode) {
+    // Internal agents do daemon work such as naming a branch, so the user's and
+    // project's hooks must not run for them.
+    const disableAllHooks = this.config.internal === true;
+    if (fastMode === null && !input.ultracode && !disableAllHooks) {
       return {};
     }
     return {
       settings: mergeClaudeSettings(providerOptions.settings, {
         ...(fastMode === null ? {} : { fastMode }),
         ...(input.ultracode ? { ultracode: true } : {}),
+        ...(disableAllHooks ? { disableAllHooks: true } : {}),
       }),
     };
   }
@@ -3464,9 +3654,19 @@ class ClaudeAgentSession implements AgentSession {
           };
         }
     > = [];
+    // Claude Code expands a slash command only when it is the last content block of the user
+    // message. buildAgentPrompt places the typed text ahead of images and rendered attachments,
+    // so a "/command" sent with a pasted link or a screenshot would otherwise reach the model as
+    // literal text instead of the command it names.
+    let typedSlashCommandIndex = -1;
     if (Array.isArray(prompt)) {
       for (const chunk of prompt) {
         if (chunk.type === "text") {
+          // Attachments rendered as text always carry a mimeType; the composer's typed text does
+          // not. Only the typed block can be a slash command the user meant to invoke.
+          if (!("mimeType" in chunk) && this.parseSlashCommandInput(chunk.text)) {
+            typedSlashCommandIndex = content.length;
+          }
           content.push({ type: "text", text: chunk.text });
         } else if (chunk.type === "image") {
           if (isImageMimeType(chunk.mimeType)) {
@@ -3485,6 +3685,10 @@ class ClaudeAgentSession implements AgentSession {
       }
     } else {
       content.push({ type: "text", text: prompt });
+    }
+    if (typedSlashCommandIndex >= 0 && typedSlashCommandIndex < content.length - 1) {
+      const [slashCommand] = content.splice(typedSlashCommandIndex, 1);
+      content.push(slashCommand);
     }
 
     const messageId = randomUUID();
@@ -3765,6 +3969,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private failRunningRuntimeTasks(): void {
+    if (this.backgroundWork.clear()) this.dispatchEvents([this.backgroundWorkEvent()]);
     this.dispatchEvents(
       foldSubagentObservations(this.taskProtocolSource.failRunningTasks()).map(
         (event): AgentStreamEvent => ({ type: "provider_subagent", provider: "claude", event }),
@@ -3929,6 +4134,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private async routeSdkMessageFromPump(message: SDKMessage): Promise<void> {
+    this.noteRateLimitEvent(message);
     if (this.shouldSuppressStaleResult(message)) {
       return;
     }
@@ -4216,9 +4422,18 @@ class ClaudeAgentSession implements AgentSession {
     this.permissionClearingSteerUuids.delete(lifecycle.commandUuid);
   }
 
+  private backgroundWorkEvent(): AgentStreamEvent {
+    return {
+      type: "background_work_changed",
+      provider: "claude",
+      backgroundWork: this.backgroundWork.snapshot(),
+    };
+  }
+
   private appendTaskStateEvent(message: SDKMessage, events: AgentStreamEvent[]): void {
     const item = this.taskState.observe(message);
     if (item) events.push({ type: "timeline", provider: "claude", item });
+    if (this.backgroundWork.observe(message)) events.push(this.backgroundWorkEvent());
   }
 
   /**
@@ -4895,6 +5110,7 @@ class ClaudeAgentSession implements AgentSession {
     )) {
       this.pushEvent({ type: "provider_subagent", provider: "claude", event });
     }
+    if (this.backgroundWork.cancelForeground()) this.pushEvent(this.backgroundWorkEvent());
   }
 
   private pushToolCall(
@@ -5171,7 +5387,7 @@ class ClaudeAgentSession implements AgentSession {
   private resolveHistoryPath(sessionId: string): string | null {
     const cwd = this.config.cwd;
     if (!cwd) return null;
-    const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+    const configDir = claudeConfigDir(this.buildSdkEnv());
     const candidates = [cwd];
     try {
       const realCwd = fs.realpathSync(cwd);

@@ -1,3 +1,18 @@
+import { readPagedPluginCatalog } from "./plugin-catalog-paging.js";
+import {
+  PluginCatalogPageRequestSchema,
+  PluginCatalogPageResponseSchema,
+  PluginCatalogBundleGetRequestSchema,
+  PluginCatalogBundleGetResponseSchema,
+  PluginCatalogSnapshotReleaseRequestSchema,
+  PluginCatalogSnapshotReleaseResponseSchema,
+} from "@getpaseo/protocol/plugin-catalog-paging";
+import {
+  GitAiDraftKindSchema,
+  GitAiDraftRequestSchema,
+  GitAiDraftResponseSchema,
+  type GitAiDraft,
+} from "@getpaseo/protocol/git-ai-draft";
 import type {
   AgentMcpRefreshInput,
   AgentMcpRefreshResult,
@@ -29,6 +44,14 @@ import {
   ShutdownRequestedStatusPayloadSchema,
   DaemonUpdateResponseSchema,
   SessionInboundMessageSchema,
+  ManagedArtifactReadRequestSchema,
+  ManagedArtifactReadResponseSchema,
+  NativeArtifactContentReadRequestSchema,
+  NativeArtifactContentReadResponseSchema,
+  NativeEvidenceReadRequestSchema,
+  NativeEvidenceReadResponseSchema,
+  NativeOwnerReportReadRequestSchema,
+  NativeOwnerReportReadResponseSchema,
   type ActiveTurnBehavior,
   type ServerInfoStatusPayload,
 } from "@getpaseo/protocol/messages";
@@ -116,6 +139,7 @@ import type {
   SessionInboundMessage,
   SessionOutboundMessage,
   SendAgentMessageRequest,
+  SendAgentMessageResponseMessage,
   PaseoConfigRaw,
   PaseoConfigRevision,
   WorkspaceCreateRequest,
@@ -123,6 +147,16 @@ import type {
   PluginListItem,
   PluginLogEntry,
   CheckoutFileAtCommitGetResponse,
+  CheckoutArchitectureChangeGetResponse,
+  CheckoutArchitectureChangeFetchResponse,
+  CheckoutArchitectureGraphGetResponse,
+  CheckoutPullRequestReviewDecideResponse,
+  CheckoutPullRequestReviewFileDiffResponse,
+  CheckoutPullRequestReviewGetResponse,
+  PullRequestReviewDecisionKind,
+  InsightsGetResponse,
+  AutomationInput,
+  AutomationResponse,
   CredentialAccount,
   CredentialProviderSummary,
   PluginNotification,
@@ -166,6 +200,7 @@ import {
 } from "@getpaseo/protocol/binary-frames/index";
 import {
   createRelayE2eeTransportFactory,
+  createRelayTransportFactory,
   createWebSocketTransportFactory,
   decodeMessageData,
   defaultWebSocketFactory,
@@ -182,6 +217,11 @@ import {
   normalizeProvidersSnapshotPayload,
 } from "./compat/normalize-provider-models.js";
 import { TerminalStreamRouter, type TerminalStreamEvent } from "./terminal-stream-router.js";
+import {
+  daemonAuthProtocols,
+  daemonAuthorizationHeader,
+  redactCredential,
+} from "@getpaseo/protocol/daemon-credential";
 import type {
   BrowserAutomationExecuteRequest,
   BrowserAutomationExecuteResponse,
@@ -224,11 +264,72 @@ export type ImportAgentInput =
       sessionId: string;
     });
 
+/** Plain, credential-free text for a connection that could not even be opened. */
+export const CONNECTION_OPEN_FAILED = "Couldn't open a connection to this Mac";
+
 function normalizePassword(value: string | undefined): string | null {
   if (typeof value !== "string") {
     return null;
   }
   return value.length > 0 ? value : null;
+}
+
+type HelloAuth =
+  | { kind: "password"; password: string }
+  | { kind: "localCredential"; token: string }
+  | undefined;
+
+export type DaemonAuthFailureReason = "password_required" | "incorrect_password";
+
+export class DaemonAuthenticationError extends Error {
+  readonly reason: DaemonAuthFailureReason;
+
+  constructor(reason: DaemonAuthFailureReason) {
+    super(reason === "password_required" ? "Password required" : "Incorrect password");
+    this.name = "DaemonAuthenticationError";
+    this.reason = reason;
+  }
+}
+
+export function getDaemonAuthFailureReason(error: unknown): DaemonAuthFailureReason | null {
+  return error instanceof DaemonAuthenticationError ? error.reason : null;
+}
+
+function authFailureFromLegacyClose(event: unknown): DaemonAuthFailureReason | null {
+  if (!event || typeof event !== "object" || !("reason" in event)) return null;
+  if (event.reason === "Password required") return "password_required";
+  if (event.reason === "Incorrect password") return "incorrect_password";
+  return null;
+}
+
+function chooseConnectionAuth(
+  config: DaemonClientConfig,
+  localCredential: string | undefined,
+): { helloAuth: HelloAuth; headers: Record<string, string>; protocols?: string[] } {
+  const password = normalizePassword(config.password);
+  let helloAuth: HelloAuth;
+  if (localCredential) helloAuth = { kind: "localCredential", token: localCredential };
+  else if (password) helloAuth = { kind: "password", password };
+  const headers: Record<string, string> = {};
+  const compatibleBearer = localCredential ? null : password;
+  // COMPAT(headerAuth): added in v0.9.1, remove after 2027-03-24.
+  if (compatibleBearer) headers.Authorization = daemonAuthorizationHeader(compatibleBearer);
+  else if (!localCredential && config.authHeader) headers.Authorization = config.authHeader;
+  return {
+    helloAuth,
+    headers,
+    ...(compatibleBearer ? { protocols: daemonAuthProtocols(compatibleBearer) } : {}),
+  };
+}
+
+function resolveConnectionAuth(
+  config: DaemonClientConfig,
+): ReturnType<typeof chooseConnectionAuth> | Promise<ReturnType<typeof chooseConnectionAuth>> {
+  const resolution = config.localCredential?.();
+  if (resolution instanceof Promise) {
+    return resolution.then((credential) => chooseConnectionAuth(config, credential));
+  }
+  return chooseConnectionAuth(config, resolution);
 }
 
 function extractCorrelatedResponseIdentity(input: unknown): CorrelatedResponseIdentity | null {
@@ -276,6 +377,29 @@ export type {
 } from "./daemon-client-transport.js";
 
 export type { TerminalStreamEvent };
+
+export type PairingRequiredReason = "pairing-upgraded" | "device-removed";
+
+// Only the encrypted channel can supply trusted=true. Never inspect reason text.
+export function pairingRequiredFromClose(
+  event: unknown,
+  wasConnected: boolean,
+): PairingRequiredReason | null {
+  if (!event || typeof event !== "object") return null;
+  const close = event as { code?: unknown; trusted?: unknown };
+  if (close.trusted !== true) return null; // REPAIR_MUTATION_R1
+  if (close.code === 4426) return "pairing-upgraded";
+  // Before server-info, 4403 cannot distinguish a removed device from an old/unregistered pairing.
+  if (close.code === 4403) return wasConnected ? "device-removed" : "pairing-upgraded";
+  return null;
+}
+
+export class PairingRequiredError extends Error {
+  constructor(public readonly pairingRequired: PairingRequiredReason) {
+    super("Pair this host again");
+    this.name = "PairingRequiredError";
+  }
+}
 
 export type ConnectionState =
   | { status: "idle" }
@@ -345,6 +469,7 @@ export interface DaemonClientConfig {
   appVersion?: string;
   runtimeGeneration?: number | null;
   password?: string;
+  localCredential?: () => string | undefined | Promise<string | undefined>;
   authHeader?: string;
   suppressSendErrors?: boolean;
   transportFactory?: DaemonTransportFactory;
@@ -354,6 +479,7 @@ export interface DaemonClientConfig {
   e2ee?: {
     enabled?: boolean;
     daemonPublicKeyB64?: string;
+    getDeviceKeyPair?: () => Promise<import("./relay-v3/index.js").KeyPair>;
   };
   reconnect?: {
     enabled?: boolean;
@@ -377,6 +503,70 @@ export interface SendMessageOptions {
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: SendAgentMessageRequest["attachments"];
+}
+
+export type NativeQueueReceipt = NonNullable<
+  SendAgentMessageResponseMessage["payload"]["nativeReceipt"]
+>;
+
+export type NativeQueueDraft = Readonly<{ agentId: string; text: string; messageId: string }>;
+
+/** Keep this draft and ID after acknowledgement loss; never automatically replay it. */
+export class NativeQueueUncertainError extends Error {
+  readonly code = "NATIVE_QUEUE_UNCERTAIN";
+  readonly messageId: string;
+  readonly details: Readonly<{ messageId: string }>;
+  declare readonly draft: NativeQueueDraft;
+  constructor(draft: NativeQueueDraft) {
+    super(
+      "Native queue acknowledgement is uncertain. Retain the draft and message ID; do not automatically resend.",
+    );
+    this.name = "NativeQueueUncertainError";
+    this.messageId = draft.messageId;
+    this.details = Object.freeze({ messageId: draft.messageId });
+    // Prompt content is recoverable by the caller, but excluded from ordinary error serialization.
+    Object.defineProperty(this, "draft", { value: draft, enumerable: false });
+  }
+}
+
+function retainNativeQueueDraft(error: Error, draft: NativeQueueDraft): Error {
+  Object.defineProperties(error, {
+    draft: { value: draft, enumerable: false },
+    messageId: { value: draft.messageId, enumerable: true },
+    details: { value: Object.freeze({ messageId: draft.messageId }), enumerable: true },
+  });
+  return error;
+}
+
+function captureNativeQueueDraft(
+  agentId: string,
+  text: string,
+  options: SendMessageOptions & { messageId: string },
+): NativeQueueDraft {
+  const draft = Object.freeze({ agentId, text, messageId: options.messageId });
+  if (
+    !draft.messageId ||
+    draft.messageId.length > 256 ||
+    draft.messageId.trim() !== draft.messageId
+  ) {
+    throw Object.assign(new Error("Native queue requires a stable nonblank message ID"), {
+      code: "NATIVE_QUEUE_INVALID",
+    });
+  }
+  if (
+    options.activeTurnBehavior ||
+    options.images?.length ||
+    options.attachments?.length ||
+    text.trimStart().startsWith("/")
+  ) {
+    throw Object.assign(
+      new Error(
+        "Native queue supports plain messages only, without attachments, slash commands or active-turn behavior",
+      ),
+      { code: "NATIVE_QUEUE_INVALID" },
+    );
+  }
+  return draft;
 }
 
 export interface AgentAttentionRequiredNotification {
@@ -955,12 +1145,19 @@ export class DaemonConnectionError extends Error {
   }
 }
 
-class DaemonRpcError extends Error {
+export class DaemonRpcError extends Error {
   readonly requestId: string;
   readonly requestType?: string;
   readonly code?: string;
+  readonly nativeDispatched?: false;
 
-  constructor(params: { requestId: string; error: string; requestType?: string; code?: string }) {
+  constructor(params: {
+    requestId: string;
+    error: string;
+    requestType?: string;
+    code?: string;
+    nativeDispatched?: false;
+  }) {
     const parts = [params.error];
     if (params.requestType) parts.push(`requestType=${params.requestType}`);
     if (params.code) parts.push(`code=${params.code}`);
@@ -969,6 +1166,7 @@ class DaemonRpcError extends Error {
     this.requestId = params.requestId;
     this.requestType = params.requestType;
     this.code = params.code;
+    this.nativeDispatched = params.nativeDispatched;
   }
 }
 
@@ -1149,6 +1347,36 @@ interface PingProbe {
   drivesLivenessFailure: boolean;
 }
 
+function assertManagedContentOutput(
+  message: z.infer<typeof NativeArtifactContentReadRequestSchema>,
+  output: z.infer<typeof NativeArtifactContentReadResponseSchema>["payload"]["output"],
+): void {
+  if (
+    output.requestId !== message.requestId ||
+    output.grantId !== message.grantId ||
+    output.grantRevision !== message.grantRevision ||
+    output.artifactId !== message.artifactId ||
+    output.scope.projectId !== message.scope.projectId ||
+    output.scope.taskId !== message.scope.taskId ||
+    output.offset !== message.offset ||
+    output.length > message.length ||
+    (!output.eof && output.length !== message.length)
+  ) {
+    throw new Error("Managed artifact content response does not match the original request");
+  }
+  const now = Date.now();
+  if (output.expiresAt <= now || output.expiresAt - now > 6 * 60 * 60 * 1000) {
+    throw new Error("Managed artifact content response is expired or invalid");
+  }
+  const bytes = decodeBase64ToBytes(output.data);
+  if (
+    bytes.length !== output.length ||
+    globalThis.btoa(String.fromCharCode(...bytes)) !== output.data
+  ) {
+    throw new Error("Managed artifact content encoding does not match its byte length");
+  }
+}
+
 export class DaemonClient {
   private readonly providerSnapshotUpdates = new ProviderSnapshotUpdates({
     active: (message) => this.owned.owns(message),
@@ -1177,6 +1405,7 @@ export class DaemonClient {
     failed: (error) => this.logger.error({ err: error }, "Subscription failed"),
   });
   private transport: DaemonTransport | null = null;
+  private helloAuth: HelloAuth;
   private transportCleanup: Array<() => void> = [];
   private rawMessageListeners: Set<(message: SessionOutboundMessage) => void> = new Set();
   private messageHandlers: Map<
@@ -1196,6 +1425,8 @@ export class DaemonClient {
   private connectResolve: (() => void) | null = null;
   private connectReject: ((error: Error) => void) | null = null;
   private lastErrorValue: string | null = null;
+  private pairingRequiredValue: PairingRequiredReason | null = null;
+  private authFailureReasonValue: DaemonAuthFailureReason | null = null;
   private connectionState: ConnectionState = { status: "idle" };
   private readonly terminalStreams = new TerminalStreamRouter();
   // Browser sign-in flows this connection started: flow id → expiry (ms). The app sends a
@@ -1211,6 +1442,8 @@ export class DaemonClient {
   private readonly logClientIdHash: string;
   private readonly logGeneration: number | null;
   private lastServerInfoMessage: ServerInfoStatusPayload | null = null;
+  private readonly managedContentAttempts = new Set<string>();
+  private readonly radiusScratchAttempts = new Set<string>();
   private runtimeMetricsInterval: ReturnType<typeof setInterval> | null = null;
   private runtimeMetrics: DaemonClientRuntimeMetrics | null = null;
   private pingProbe: PingProbe | null = null;
@@ -1270,6 +1503,7 @@ export class DaemonClient {
   // ============================================================================
 
   async connect(): Promise<void> {
+    if (this.pairingRequiredValue) throw new PairingRequiredError(this.pairingRequiredValue);
     if (this.connectionState.status === "disposed") {
       throw new Error("Daemon client is disposed");
     }
@@ -1290,7 +1524,34 @@ export class DaemonClient {
     return this.connectPromise;
   }
 
-  private attemptConnect(): void {
+  /** The transport for one attempt: relay E2EE over the base factory for relay URLs, else the base factory. */
+  private resolveAttemptTransportFactory() {
+    const baseTransportFactory =
+      this.config.transportFactory ??
+      createWebSocketTransportFactory(this.config.webSocketFactory ?? defaultWebSocketFactory);
+    const isRelayTransport = isRelayClientWebSocketUrl(this.config.url);
+    const shouldUseRelayE2ee = this.config.e2ee?.enabled === true && isRelayTransport;
+
+    let transportFactory = isRelayTransport
+      ? createRelayTransportFactory(baseTransportFactory)
+      : baseTransportFactory;
+    if (shouldUseRelayE2ee) {
+      const daemonPublicKeyB64 = this.config.e2ee?.daemonPublicKeyB64;
+      if (!daemonPublicKeyB64) {
+        throw new Error("daemonPublicKeyB64 is required for relay E2EE");
+      }
+      transportFactory = createRelayE2eeTransportFactory({
+        baseFactory: transportFactory,
+        daemonPublicKeyB64,
+        serverId: new URL(this.config.url).searchParams.get("serverId") ?? "",
+        getDeviceKeyPair: this.config.e2ee?.getDeviceKeyPair,
+        logger: this.logger,
+      });
+    }
+    return transportFactory;
+  }
+
+  private async attemptConnect(): Promise<void> {
     if (this.connectionState.status === "disposed") {
       this.rejectConnect(new Error("Daemon client is disposed"));
       return;
@@ -1310,45 +1571,26 @@ export class DaemonClient {
       this.reconnectTimeout = null;
     }
 
-    const headers: Record<string, string> = {};
-    const password = normalizePassword(this.config.password);
-    if (password) {
-      headers.Authorization = `Bearer ${password}`;
-    } else if (this.config.authHeader) {
-      headers.Authorization = this.config.authHeader;
-    }
-    const protocols = password ? [`paseo.bearer.${password}`] : undefined;
-
     try {
+      const resolution = resolveConnectionAuth(this.config);
+      const selected = resolution instanceof Promise ? await resolution : resolution;
+      if (!this.shouldReconnect) return;
+      this.helloAuth = selected.helloAuth;
       // Reconnect can overlap with browser close/error delivery ordering.
       // Always dispose previous transport before constructing the next one.
       this.disposeTransport();
-      const baseTransportFactory =
-        this.config.transportFactory ??
-        createWebSocketTransportFactory(this.config.webSocketFactory ?? defaultWebSocketFactory);
-      const shouldUseRelayE2ee =
-        this.config.e2ee?.enabled === true && isRelayClientWebSocketUrl(this.config.url);
-
-      let transportFactory = baseTransportFactory;
-      if (shouldUseRelayE2ee) {
-        const daemonPublicKeyB64 = this.config.e2ee?.daemonPublicKeyB64;
-        if (!daemonPublicKeyB64) {
-          throw new Error("daemonPublicKeyB64 is required for relay E2EE");
-        }
-        transportFactory = createRelayE2eeTransportFactory({
-          baseFactory: baseTransportFactory,
-          daemonPublicKeyB64,
-          logger: this.logger,
-        });
-      }
+      const isRelayTransport = isRelayClientWebSocketUrl(this.config.url);
+      this.assertEncryptedRelayAuth(selected.helloAuth, isRelayTransport);
+      const transportFactory = this.resolveAttemptTransportFactory();
       const transportUrl = this.resolveTransportUrlForAttempt();
       const transport = transportFactory({
         url: transportUrl,
-        headers,
-        ...(protocols ? { protocols } : {}),
+        headers: selected.headers,
+        ...(selected.protocols ? { protocols: selected.protocols } : {}),
       });
       this.transport = transport;
       this.lastServerInfoMessage = null;
+      this.authFailureReasonValue = null;
 
       this.updateConnectionState(
         {
@@ -1379,7 +1621,7 @@ export class DaemonClient {
             this.pendingGenericTransportErrorTimeout = null;
           }
           this.lastErrorValue = null;
-          this.sendHelloMessage();
+          void this.sendHelloMessage();
         }),
         transport.onClose((event) => {
           this.resetConnectTimeout();
@@ -1387,7 +1629,24 @@ export class DaemonClient {
             clearTimeout(this.pendingGenericTransportErrorTimeout);
             this.pendingGenericTransportErrorTimeout = null;
           }
-          const reason = describeTransportClose(event);
+          this.authFailureReasonValue ??= authFailureFromLegacyClose(event);
+          let reason = this.authFailureReasonValue
+            ? new DaemonAuthenticationError(this.authFailureReasonValue).message
+            : describeTransportClose(event);
+          const pairingRequired = this.config.e2ee?.enabled
+            ? pairingRequiredFromClose(event, this.connectionState.status === "connected")
+            : null;
+          if (pairingRequired) {
+            this.pairingRequiredValue = pairingRequired;
+            this.setReconnectEnabled(false);
+            reason =
+              pairingRequired === "device-removed"
+                ? "This device was removed. Pair it again from this Mac."
+                : "Fulcra's pairing changed. Pair this device with this Mac again.";
+          }
+          if (event && typeof event === "object" && Reflect.get(event, "code") === 4401) {
+            this.shouldReconnect = false; // Explicit Retry may try again after repairing credentials.
+          }
           if (reason) {
             this.lastErrorValue = reason;
           }
@@ -1440,17 +1699,24 @@ export class DaemonClient {
           if (this.transport === transport) this.handleTransportMessage(data);
         }),
       ];
-    } catch (error) {
+    } catch {
       this.resetConnectTimeout();
-      const message = error instanceof Error ? error.message : "Failed to connect";
+      // Never pass on the raw exception: constructing a connection can name the credential it was given.
+      const message = CONNECTION_OPEN_FAILED;
       this.lastErrorValue = message;
       this.scheduleReconnect({
         reason: message,
         event: "CONNECT_FAILED",
         reasonCode: "connect_failed",
       });
-      this.rejectConnect(error instanceof Error ? error : new Error(message));
+      this.rejectConnect(new Error(message));
     }
+  }
+
+  private assertEncryptedRelayAuth(helloAuth: HelloAuth, isRelayTransport: boolean): void {
+    if (!isRelayTransport || !helloAuth || this.config.e2ee?.enabled === true) return;
+    this.setReconnectEnabled(false);
+    throw new Error("Relay credentials require E2EE");
   }
 
   private resolveConnect(): void {
@@ -1506,6 +1772,7 @@ export class DaemonClient {
   }
 
   ensureConnected(options?: { verify?: boolean }): void {
+    if (this.pairingRequiredValue) return;
     if (this.connectionState.status === "disposed") {
       return;
     }
@@ -1566,8 +1833,21 @@ export class DaemonClient {
     return this.connectionState.status === "connecting";
   }
 
+  get pairingRequired(): PairingRequiredReason | null {
+    return this.pairingRequiredValue;
+  }
+
+  /** Anything this client reports about its connection, with every form of the password removed. */
+  private safeText(text: string): string {
+    return redactCredential(text, normalizePassword(this.config.password));
+  }
+
   get lastError(): string | null {
-    return this.lastErrorValue;
+    return this.lastErrorValue === null ? null : this.safeText(this.lastErrorValue);
+  }
+
+  get authFailureReason(): DaemonAuthFailureReason | null {
+    return this.authFailureReasonValue;
   }
 
   getLastLivenessRttMs(): number | null {
@@ -1837,6 +2117,7 @@ export class DaemonClient {
               error: msg.payload.error,
               requestType: msg.payload.requestType,
               code: msg.payload.code,
+              nativeDispatched: msg.payload.nativeDispatched,
             }),
           };
         }
@@ -1898,6 +2179,20 @@ export class DaemonClient {
         }
         return params.selectPayload(payload);
       },
+    });
+  }
+
+  /** Validated correlated input for trusted integrations, including one-use provenance fields.
+   * This transports evidence; only the daemon can authenticate or consume it.
+   */
+  public invokeRawInput<TResponseType extends CorrelatedResponseType>(
+    message: { type: SessionInboundMessage["type"] } & Record<string, unknown>,
+    responseType: TResponseType,
+  ): Promise<CorrelatedResponsePayload<TResponseType>> {
+    return this.sendCorrelatedSessionRequest({
+      message,
+      responseType,
+      ...(typeof message.requestId === "string" ? { requestId: message.requestId } : {}),
     });
   }
 
@@ -2898,6 +3193,23 @@ export class DaemonClient {
     return { archivedAt: result.archivedAt };
   }
 
+  /** Native owner-only parent adoption; this changes core parent metadata, not role authority. */
+  async adoptAgentParent(input: {
+    agentId: string;
+    parentAgentId: string;
+    expectedParentAgentId: string | null;
+    childNativeSessionId: string;
+    parentNativeSessionId: string;
+  }): Promise<void> {
+    if (this.lastServerInfoMessage?.features?.agentParentAdopt !== true)
+      throw new Error("Update the host to use native parent adoption");
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.parent.adopt.response">({
+        message: { type: "agent.parent.adopt.request", ...input },
+      });
+    if (!payload.accepted) throw new Error(payload.error ?? "Parent adoption refused");
+  }
+
   async detachAgent(agentId: string): Promise<void> {
     const payload = await this.sendNamespacedCorrelatedSessionRequest<"agent.detach.response">({
       message: {
@@ -3551,6 +3863,272 @@ export class DaemonClient {
     if (!payload.accepted) {
       throw new Error(payload.error ?? "sendAgentMessage rejected");
     }
+  }
+
+  /** Explicit host-owner metadata read. Capability advertisement never grants read authority. */
+  async readNativeOwnerReportInbox(
+    input: Omit<z.infer<typeof NativeOwnerReportReadRequestSchema>, "type" | "requestId">,
+  ): Promise<z.infer<typeof NativeOwnerReportReadResponseSchema>["payload"]["output"]> {
+    const host = this.lastServerInfoMessage;
+    if (
+      this.connectionState.status !== "connected" ||
+      host?.features?.nativeOwnerReportInbox !== true
+    ) {
+      throw new Error("Owner report metadata is unavailable on this connection");
+    }
+    const requestId = this.createRequestId();
+    // Parse before any await: callers cannot mutate identity, epoch or scope in flight.
+    const message = NativeOwnerReportReadRequestSchema.parse({
+      ...input,
+      type: "native.report.inbox.request",
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      options: { skipQueue: true },
+      select: (msg) =>
+        msg.type === "native.report.inbox.response" && msg.payload.requestId === requestId
+          ? NativeOwnerReportReadResponseSchema.parse(msg).payload
+          : null,
+    });
+    if (this.connectionState.status !== "connected" || this.lastServerInfoMessage !== host) {
+      throw new Error("Owner report connection changed before publication");
+    }
+    if (
+      payload.output.scope.projectId !== message.scope.projectId ||
+      payload.output.scope.taskId !== message.scope.taskId ||
+      [...payload.output.events, ...payload.output.overflow].some(
+        (event) =>
+          event.scope.projectId !== message.scope.projectId ||
+          event.scope.taskId !== message.scope.taskId,
+      )
+    ) {
+      throw new Error("Owner report response scope does not match the request");
+    }
+    return payload.output;
+  }
+
+  /** Protected owner metadata snapshot only; neither this method nor a row grants content access. */
+  async readNativeEvidenceIndex(
+    input: Omit<z.infer<typeof NativeEvidenceReadRequestSchema>, "type" | "requestId">,
+  ): Promise<z.infer<typeof NativeEvidenceReadResponseSchema>["payload"]["output"]> {
+    const host = this.lastServerInfoMessage;
+    if (
+      this.connectionState.status !== "connected" ||
+      host?.features?.nativeEvidenceIndex !== true
+    ) {
+      throw new Error("Native evidence metadata is unavailable on this connection");
+    }
+    const requestId = this.createRequestId();
+    const message = NativeEvidenceReadRequestSchema.parse({
+      ...input,
+      type: "native.evidence.index.request",
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      options: { skipQueue: true },
+      select: (msg) =>
+        msg.type === "native.evidence.index.response" && msg.payload.requestId === requestId
+          ? NativeEvidenceReadResponseSchema.parse(msg).payload
+          : null,
+    });
+    if (this.connectionState.status !== "connected" || this.lastServerInfoMessage !== host) {
+      throw new Error("Native evidence connection changed before publication");
+    }
+    const sameScope = (scope: typeof message.scope) =>
+      scope.projectId === message.scope.projectId && scope.taskId === message.scope.taskId;
+    if (
+      !sameScope(payload.output.scope) ||
+      payload.output.entries.some((entry) => !sameScope(entry.scope))
+    ) {
+      throw new Error("Native evidence response scope does not match the request");
+    }
+    const now = Date.now();
+    if (
+      payload.output.entries.some(
+        (entry) =>
+          entry.at > now ||
+          entry.expiresAt <= now ||
+          entry.expiresAt <= entry.at ||
+          entry.expiresAt - entry.at > 6 * 60 * 60 * 1000,
+      )
+    ) {
+      throw new Error("Native evidence response lifetime is invalid or expired");
+    }
+    return payload.output;
+  }
+
+  /** Protected owner metadata snapshot only; neither this method nor a row grants content access. */
+  async readManagedArtifactIndex(
+    input: Omit<z.infer<typeof ManagedArtifactReadRequestSchema>, "type" | "requestId">,
+  ): Promise<z.infer<typeof ManagedArtifactReadResponseSchema>["payload"]["output"]> {
+    const host = this.lastServerInfoMessage;
+    if (
+      this.connectionState.status !== "connected" ||
+      host?.features?.managedArtifactIndex !== true
+    ) {
+      throw new Error("Managed artifact metadata is unavailable on this connection");
+    }
+    const requestId = this.createRequestId();
+    const message = ManagedArtifactReadRequestSchema.parse({
+      ...input,
+      type: "native.managed-artifacts.index.request",
+      requestId,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      options: { skipQueue: true },
+      select: (msg) =>
+        msg.type === "native.managed-artifacts.index.response" &&
+        msg.payload.requestId === requestId
+          ? ManagedArtifactReadResponseSchema.parse(msg).payload
+          : null,
+    });
+    if (this.connectionState.status !== "connected" || this.lastServerInfoMessage !== host) {
+      throw new Error("Managed artifact connection changed before publication");
+    }
+    const sameScope = (scope: typeof message.scope) =>
+      scope.projectId === message.scope.projectId && scope.taskId === message.scope.taskId;
+    if (
+      !sameScope(payload.output.scope) ||
+      payload.output.entries.some((entry) => !sameScope(entry.scope))
+    ) {
+      throw new Error("Managed artifact response scope does not match the request");
+    }
+    const now = Date.now();
+    if (
+      payload.output.entries.some(
+        (entry) =>
+          entry.at > now ||
+          entry.expiresAt <= now ||
+          entry.expiresAt <= entry.at ||
+          entry.expiresAt - entry.at > 6 * 60 * 60 * 1000,
+      )
+    ) {
+      throw new Error("Managed artifact response lifetime is invalid or expired");
+    }
+    const ids = new Set(payload.output.entries.map((entry) => entry.id));
+    if (ids.size !== payload.output.entries.length) {
+      throw new Error("Managed artifact response contains duplicate identities");
+    }
+    return payload.output;
+  }
+
+  /** Explicit owner-granted text range only. Attempted reads are never replayed or refunded here. */
+  async readManagedArtifactContent(
+    input: Omit<z.infer<typeof NativeArtifactContentReadRequestSchema>, "type">,
+    options?: { signal?: AbortSignal },
+  ): Promise<z.infer<typeof NativeArtifactContentReadResponseSchema>["payload"]["output"]> {
+    const host = this.lastServerInfoMessage;
+    if (
+      this.connectionState.status !== "connected" ||
+      host?.features?.managedArtifactContent !== true
+    ) {
+      throw new Error("Managed artifact content is unavailable on this connection");
+    }
+    if (options?.signal?.aborted) throw new Error("Managed artifact content read cancelled");
+    const message = NativeArtifactContentReadRequestSchema.parse({
+      ...input,
+      type: "native.managed-artifacts.content.request",
+    });
+    if (this.managedContentAttempts.has(message.requestId)) {
+      throw new Error("Managed artifact content request was already attempted; do not replay it");
+    }
+    if (this.managedContentAttempts.size >= 4096) {
+      throw new Error("Managed artifact content request capacity reached");
+    }
+    this.managedContentAttempts.add(message.requestId);
+    const payload = await this.sendRequest({
+      requestId: message.requestId,
+      message,
+      options: { skipQueue: true },
+      select: (msg) =>
+        msg.type === "native.managed-artifacts.content.response" &&
+        msg.payload.requestId === message.requestId
+          ? NativeArtifactContentReadResponseSchema.parse(msg).payload
+          : null,
+    });
+    if (options?.signal?.aborted) throw new Error("Managed artifact content read cancelled");
+    if (this.connectionState.status !== "connected" || this.lastServerInfoMessage !== host) {
+      throw new Error("Managed artifact content connection changed before publication");
+    }
+    const output = payload.output;
+    assertManagedContentOutput(message, output);
+    return output;
+  }
+
+  /** Explicit delivery request only; a queued receipt is not provider acceptance or completion. */
+  async sendNativeQueuedMessage(
+    agentId: string,
+    text: string,
+    options: SendMessageOptions & { messageId: string },
+  ): Promise<NativeQueueReceipt> {
+    const draft = captureNativeQueueDraft(agentId, text, options);
+    // Never enqueue this delivery request across reconnect using a previous host advertisement.
+    if (
+      this.connectionState.status !== "connected" ||
+      this.lastServerInfoMessage?.features?.nativeQueuedMessages !== true
+    ) {
+      throw Object.assign(
+        new Error("Host does not support native queued messages; update the host"),
+        { code: "NATIVE_QUEUE_UNSUPPORTED" },
+      );
+    }
+    const requestId = this.createRequestId();
+    const message = SessionInboundMessageSchema.parse({
+      type: "send_agent_message_request",
+      requestId,
+      ...draft,
+      nativeQueue: true,
+    });
+    let payload: SendAgentMessageResponseMessage["payload"];
+    try {
+      payload = await this.sendRequest({
+        requestId,
+        message,
+        options: { skipQueue: true },
+        select: (msg) =>
+          msg.type === "send_agent_message_response" && msg.payload.requestId === requestId
+            ? msg.payload
+            : null,
+      });
+    } catch (error) {
+      // These host RPC outcomes are declared by SessionAuthorization/admission-outcome.
+      // Preserve their actual code/marker; this does not cancel a separate durable delegation.
+      if (
+        error instanceof DaemonRpcError &&
+        (error.code === "access_denied" ||
+          (error.code === "admission_refused" && error.nativeDispatched === false))
+      ) {
+        throw retainNativeQueueDraft(error, draft);
+      }
+      throw new NativeQueueUncertainError(draft);
+    }
+    const receipt = payload.nativeReceipt;
+    if (!receipt) {
+      if (!payload.accepted) {
+        // A refused response is not proof that durable queue admission never occurred.
+        throw retainNativeQueueDraft(
+          Object.assign(new Error(payload.error ?? "Native queue refused"), {
+            code: "NATIVE_QUEUE_REFUSED",
+          }),
+          draft,
+        );
+      }
+      throw new NativeQueueUncertainError(draft);
+    }
+    if (
+      receipt.messageId !== draft.messageId ||
+      payload.accepted !== ["queued", "dispatching", "delivered"].includes(receipt.state) ||
+      (payload.accepted && payload.error !== null)
+    ) {
+      throw new NativeQueueUncertainError(draft);
+    }
+    return Object.freeze({ ...receipt });
   }
 
   async sendMessage(agentId: string, text: string, options?: SendMessageOptions): Promise<void> {
@@ -4213,6 +4791,43 @@ export class DaemonClient {
     );
   }
 
+  /** Explicit read-only suggestion. Availability is not authority; never fall back to a mutating command. */
+  async requestGitAiDraft(
+    workspaceId: string,
+    kind: z.infer<typeof GitAiDraftKindSchema>,
+  ): Promise<GitAiDraft> {
+    const host = this.lastServerInfoMessage;
+    if (this.connectionState.status !== "connected" || host?.features?.gitAiDrafts !== true)
+      throw new Error("Git AI drafts are unavailable on this connection");
+    const requestId = this.createRequestId();
+    const message = GitAiDraftRequestSchema.parse({
+      type: "checkout.git_ai.draft.request",
+      requestId,
+      workspaceId,
+      kind,
+    });
+    const payload = await this.sendRequest({
+      requestId,
+      message,
+      options: { skipQueue: true },
+      select: (reply) =>
+        reply.type === "checkout.git_ai.draft.response" && reply.payload.requestId === requestId
+          ? GitAiDraftResponseSchema.parse(reply).payload
+          : null,
+    });
+    if (
+      this.connectionState.status !== "connected" ||
+      this.lastServerInfoMessage !== host ||
+      payload.workspaceId !== message.workspaceId ||
+      payload.kind !== message.kind
+    )
+      throw new Error("Git AI draft connection or scope changed");
+    if (payload.result.status !== "ok")
+      throw new Error(`Git AI draft refused: ${payload.result.error}`);
+    if (payload.result.draft.kind !== message.kind) throw new Error("Git AI draft kind mismatch");
+    return payload.result.draft;
+  }
+
   async checkoutCommit(
     cwd: string,
     input: { message?: string; addAll?: boolean },
@@ -4460,12 +5075,17 @@ export class DaemonClient {
     );
   }
 
-  async checkoutPrStatus(cwd: string, requestId?: string): Promise<CheckoutPrStatusPayload> {
+  async checkoutPrStatus(
+    cwd: string,
+    requestId?: string,
+    pullRequest?: number,
+  ): Promise<CheckoutPrStatusPayload> {
     return this.sendCorrelatedSessionRequest({
       requestId,
       message: {
         type: "checkout_pr_status_request",
         cwd,
+        ...(pullRequest === undefined ? {} : { pullRequest }),
       },
       responseType: "checkout_pr_status_response",
     });
@@ -4539,6 +5159,21 @@ export class DaemonClient {
         type: "stash_pop_request",
         cwd,
         stashIndex,
+      },
+      responseType: "stash_pop_response",
+    });
+  }
+
+  /** Caller gates stashApplyBySha before using this retained, immutable operation. */
+  async stashApply(cwd: string, stashSha: string, requestId?: string): Promise<StashPopPayload> {
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "stash_pop_request",
+        cwd,
+        stashIndex: 0,
+        stashSha,
+        keepStash: true,
       },
       responseType: "stash_pop_response",
     });
@@ -5230,6 +5865,99 @@ export class DaemonClient {
     });
   }
 
+  async listPairedDevices(options?: { timeout?: number }) {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.list_paired_devices.request" },
+      responseType: "daemon.list_paired_devices.response",
+      timeout: options?.timeout,
+    });
+  }
+  async revokePairedDevice(deviceId: string, options?: { timeout?: number }) {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.revoke_paired_device.request", deviceId },
+      responseType: "daemon.revoke_paired_device.response",
+      timeout: options?.timeout,
+    });
+  }
+  /** Pair once, see every Mac: a fresh one-time offer for another device (owner, or a device allowed to invite). */
+  async requestPairingInvite() {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.pairing.invite.request" },
+      responseType: "daemon.pairing.invite.response",
+    });
+  }
+  /** Local owner only: let a paired device invite new devices to this Mac, or stop it. */
+  async setPairedDeviceInvites(deviceId: string, allow: boolean) {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.pairing.invite.allow.request", deviceId, allow },
+      responseType: "daemon.pairing.invite.allow.response",
+    });
+  }
+  /**
+   * Local owner only: let a paired device use Command Centre over the relay, or stop it. Its sockets are closed and
+   * it reconnects with (or without) the grant.
+   */
+  async setPairedDeviceCommandCentre(
+    deviceId: string,
+    allow: boolean,
+    options?: { readOnly?: boolean },
+  ) {
+    // COMPAT(deviceCommandCentre): added 2026-09-29; remove after 2027-09-29 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.deviceCommandCentre !== true) {
+      throw new Error("Update the host to allow Command Centre on a device.");
+    }
+    // D13: never send readOnly to a host that does not enforce it (an older host would ignore it and grant everything).
+    const readOnly = allow && options?.readOnly === true;
+    if (readOnly && this.getLastServerInfoMessage()?.features?.deviceReadOnlyTier !== true) {
+      throw new Error("Update the host to allow read-only Command Centre on a device.");
+    }
+    return this.sendCorrelatedSessionRequest({
+      message: {
+        type: "daemon.pairing.command_centre.allow.request",
+        deviceId,
+        allow,
+        ...(readOnly ? { readOnly: true } : {}),
+      },
+      responseType: "daemon.pairing.command_centre.allow.response",
+    });
+  }
+  /**
+   * U7, this Mac's owner only: allow or stop a paired device managing accounts. Separate from Command Centre (which
+   * the device needs in full first).
+   */
+  async setPairedDeviceAccountsManage(deviceId: string, allow: boolean) {
+    // COMPAT(deviceAccountsManage): added 2026-09-30; remove after 2027-09-30 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.deviceAccountsManage !== true) {
+      throw new Error("Update the host to allow account management on a device.");
+    }
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.pairing.accounts_manage.allow.request", deviceId, allow },
+      responseType: "daemon.pairing.accounts_manage.allow.response",
+    });
+  }
+  /** U7, this Mac's owner only: recent account actions made from paired devices, newest first. */
+  async listAccountsAudit() {
+    if (this.getLastServerInfoMessage()?.features?.deviceAccountsManage !== true)
+      return { entries: [] };
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.accounts_audit.list.request" },
+      responseType: "daemon.accounts_audit.list.response",
+    });
+  }
+  async unpairSelf() {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.unpair_self.request" },
+      responseType: "daemon.unpair_self.response",
+      timeout: 3000,
+    });
+  }
+  async setRelayEndpoint(endpoint: string | null, useTls?: boolean) {
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "daemon.set_relay_endpoint.request", endpoint, useTls },
+      responseType: "daemon.set_relay_endpoint.response",
+    });
+  }
+
   async getDaemonPairingOffer(
     options?: DaemonPairingOfferOptions,
   ): Promise<DaemonPairingOfferPayload> {
@@ -5326,11 +6054,21 @@ export class DaemonClient {
     });
   }
 
-  async listProviderUsage(options?: { requestId?: string }): Promise<ProviderUsageListPayload> {
+  async listProviderUsage(options?: {
+    requestId?: string;
+    agentId?: string;
+    /** update-7c: include the rundown when the host advertises pooledAccountUsageList. */
+    accounts?: boolean;
+    /** update-7c: the on-demand button; the host still probes an account at most once a minute. */
+    refresh?: boolean;
+  }): Promise<ProviderUsageListPayload> {
     return this.sendNamespacedCorrelatedSessionRequest({
       requestId: options?.requestId,
       message: {
         type: "provider.usage.list.request",
+        ...(options?.agentId ? { agentId: options.agentId } : {}),
+        ...(options?.accounts ? { accounts: true } : {}),
+        ...(options?.refresh ? { refresh: true } : {}),
       },
     });
   }
@@ -5339,7 +6077,7 @@ export class DaemonClient {
     agentId: string,
     options?: { requestId?: string },
   ): Promise<AgentQuotaReadResponseMessage["payload"]> {
-    // COMPAT(agentQuotaRead): added in v0.8.0; remove after 2027-03-17 once host floor supports it.
+    // COMPAT(agentQuotaRead): added in Orca v0.8.0; remove after 2027-03-17 once host floor supports it.
     if (this.getLastServerInfoMessage()?.features?.agentQuotaRead !== true) {
       throw new Error("Update the host to read session quota.");
     }
@@ -5389,6 +6127,95 @@ export class DaemonClient {
     });
   }
 
+  /** Explicit L17 read; absent capability and every host refusal fail without a legacy fallback. */
+  async getPagedPluginCatalog(options: {
+    sha256: (bytes: Uint8Array) => Promise<string>;
+    signal?: AbortSignal;
+  }) {
+    const connection = this.lastServerInfoMessage;
+    const signal = options.signal;
+    const sha256 = options.sha256;
+    if (!this.isConnected || connection?.features?.pluginCatalogPaging !== true)
+      throw new Error("Plugin catalog paging unavailable");
+    const currentConnection = () => {
+      if (!this.isConnected || this.lastServerInfoMessage !== connection)
+        throw new Error("Plugin catalog connection changed");
+    };
+    const assertCurrent = () => {
+      currentConnection();
+      if (signal?.aborted) throw new Error("Plugin catalog read cancelled");
+    };
+    const result = await readPagedPluginCatalog({
+      assertCurrent,
+      sha256,
+      page: async (cursor) => {
+        assertCurrent();
+        const requestId = this.createRequestId();
+        const message = PluginCatalogPageRequestSchema.parse({
+          type: "plugin.catalog.page.request",
+          requestId,
+          ...(cursor ? { cursor } : {}),
+        });
+        const payload = await this.sendCorrelatedRequest({
+          requestId,
+          message,
+          responseType: "plugin.catalog.page.response",
+          options: { skipQueue: true },
+        });
+        assertCurrent();
+        const parsed = PluginCatalogPageResponseSchema.shape.payload.parse(payload);
+        if (parsed.requestId !== requestId) throw new Error("Plugin catalog request mismatch");
+        return parsed;
+      },
+      chunk: async (snapshotId, reference, offset, length) => {
+        assertCurrent();
+        const requestId = this.createRequestId();
+        const message = PluginCatalogBundleGetRequestSchema.parse({
+          type: "plugin.catalog.bundle.get.request",
+          requestId,
+          snapshotId,
+          reference,
+          offset,
+          length,
+        });
+        const payload = await this.sendCorrelatedRequest({
+          requestId,
+          message,
+          responseType: "plugin.catalog.bundle.get.response",
+          options: { skipQueue: true },
+        });
+        assertCurrent();
+        const parsed = PluginCatalogBundleGetResponseSchema.shape.payload.parse(payload);
+        if (parsed.requestId !== requestId) throw new Error("Plugin catalog request mismatch");
+        return parsed;
+      },
+      release: async (snapshotId) => {
+        currentConnection();
+        const requestId = this.createRequestId();
+        const message = PluginCatalogSnapshotReleaseRequestSchema.parse({
+          type: "plugin.catalog.snapshot.release.request",
+          requestId,
+          snapshotId,
+        });
+        const payload = await this.sendCorrelatedRequest({
+          requestId,
+          message,
+          responseType: "plugin.catalog.snapshot.release.response",
+          options: { skipQueue: true },
+        });
+        currentConnection();
+        const parsed = PluginCatalogSnapshotReleaseResponseSchema.shape.payload.parse(payload);
+        if (
+          parsed.requestId !== requestId ||
+          (parsed.status === "ok" && parsed.snapshotId !== snapshotId)
+        )
+          throw new Error("Plugin catalog release mismatch");
+      },
+    });
+    assertCurrent();
+    return result;
+  }
+
   async getPluginCatalog() {
     const requestId = this.createRequestId();
     const payload = await this.sendCorrelatedSessionRequest({
@@ -5396,7 +6223,8 @@ export class DaemonClient {
       message: { type: "plugin.catalog.get.request", requestId },
       responseType: "plugin.catalog.get.response",
     });
-    return payload.plugins;
+    const { requestId: _requestId, ...catalog } = payload;
+    return catalog;
   }
 
   async listPlugins(): Promise<PluginListItem[]> {
@@ -5524,7 +6352,7 @@ export class DaemonClient {
     return payload.removed;
   }
 
-  // Reads one file as it was at a commit, or at the merge base of two commits.
+  // Reads one file as it was at a commit, or at the merge base of two commits (CONTRACTS v1.16).
   // `sha` values must be 40-character commit ids; `path` is repository-relative.
   async getFileAtCommit(input: {
     cwd: string;
@@ -5548,6 +6376,242 @@ export class DaemonClient {
         ...(input.maxBytes !== undefined ? { maxBytes: input.maxBytes } : {}),
       },
       responseType: "checkout.file-at-commit.get.response",
+    });
+  }
+
+  // The architecture map generated from a change's code at both ends, plus its blast radius (CONTRACTS v1.17).
+  // Choose a pull request or two 40-character commit ids. Read-only; commits that are not in the repository
+  // come back as "missing-commits" (see fetchArchitectureChangeCommits).
+  async getArchitectureChange(input: {
+    cwd: string;
+    pullRequest?: number;
+    commits?: { base: string; head: string };
+  }): Promise<CheckoutArchitectureChangeGetResponse["payload"]> {
+    // COMPAT(architectureChangeGenerate): added in v0.9.2; remove after 2027-03-29 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.architectureChangeGenerate !== true) {
+      throw new Error("Update the host to draw a change's architecture from its code.");
+    }
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "checkout.architecture-change.get.request",
+        requestId,
+        cwd: input.cwd,
+        ...(input.pullRequest !== undefined ? { pullRequest: input.pullRequest } : {}),
+        ...(input.commits !== undefined ? { commits: input.commits } : {}),
+      },
+      responseType: "checkout.architecture-change.get.response",
+      timeout: 120000,
+    });
+  }
+
+  // The whole repository as a module graph (CONTRACTS v1.18): at the default branch's head, or at a pull
+  // request's head with the parts it edits highlighted. Read-only.
+  async getArchitectureGraph(input: {
+    cwd: string;
+    pullRequest?: number;
+  }): Promise<CheckoutArchitectureGraphGetResponse["payload"]> {
+    // COMPAT(architectureGraph): added in v0.9.2; remove after 2027-03-29 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.architectureGraph !== true) {
+      throw new Error("Update the host to see the code dependency map.");
+    }
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "checkout.architecture-graph.get.request",
+        requestId,
+        cwd: input.cwd,
+        ...(input.pullRequest !== undefined ? { pullRequest: input.pullRequest } : {}),
+      },
+      responseType: "checkout.architecture-graph.get.response",
+      timeout: 120000,
+    });
+  }
+
+  // COMPAT(pullRequestReview): added in v0.9.2; remove after 2027-03-29 once the host floor has it.
+  private assertPullRequestReview(): void {
+    if (this.getLastServerInfoMessage()?.features?.pullRequestReview !== true) {
+      throw new Error("Update the host to review pull requests here.");
+    }
+  }
+
+  // The PR review screen (CONTRACTS v1.19): files with module, size and risk, checks, ADW verdict and findings,
+  // and the operator's last decision. Read-only.
+  async getPullRequestReview(input: {
+    cwd: string;
+    pullRequest: number;
+  }): Promise<CheckoutPullRequestReviewGetResponse["payload"]> {
+    this.assertPullRequestReview();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "checkout.pull-request-review.get.request",
+        requestId,
+        cwd: input.cwd,
+        pullRequest: input.pullRequest,
+      },
+      responseType: "checkout.pull-request-review.get.response",
+      timeout: 120000,
+    });
+  }
+
+  // One file's changes between a pull request's merge base and head. Read-only.
+  async getPullRequestReviewFileDiff(input: {
+    cwd: string;
+    base: string;
+    head: string;
+    path: string;
+  }): Promise<CheckoutPullRequestReviewFileDiffResponse["payload"]> {
+    this.assertPullRequestReview();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "checkout.pull-request-review.file-diff.request", requestId, ...input },
+      responseType: "checkout.pull-request-review.file-diff.response",
+      timeout: 60000,
+    });
+  }
+
+  // Records the operator's review decision on the host; posts it to GitHub only when postToGithub is true.
+  async decidePullRequestReview(input: {
+    cwd: string;
+    pullRequest: number;
+    headOid: string;
+    decision: PullRequestReviewDecisionKind;
+    note: string;
+    postToGithub: boolean;
+  }): Promise<CheckoutPullRequestReviewDecideResponse["payload"]> {
+    this.assertPullRequestReview();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "checkout.pull-request-review.decide.request", requestId, ...input },
+      responseType: "checkout.pull-request-review.decide.response",
+      timeout: 60000,
+    });
+  }
+
+  // Delivery and agent insights for one project or all of them (CONTRACTS v1.20). Read-only.
+  async getInsights(input: {
+    days: number;
+    projectId?: string;
+  }): Promise<InsightsGetResponse["payload"]> {
+    // COMPAT(insights): added in v0.9.2; remove after 2027-03-29 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.insights !== true) {
+      throw new Error("Update the host to see insights.");
+    }
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "insights.get.request",
+        requestId,
+        days: input.days,
+        ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      },
+      responseType: "insights.get.response",
+      timeout: 120000,
+    });
+  }
+
+  // Automations: "when X, do Y" on top of schedules (CONTRACTS v1.21, automation.manage). Every response carries
+  // the refreshed list plus the projects and sessions the builder picks from.
+  private assertAutomations(): void {
+    // COMPAT(automations): added in v0.9.2; remove after 2027-03-29 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.automations !== true) {
+      throw new Error("Update the host to use automations.");
+    }
+  }
+
+  async listAutomations(): Promise<AutomationResponse["payload"]> {
+    this.assertAutomations();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "automation.list.request", requestId },
+      responseType: "automation.list.response",
+      timeout: 30000,
+    });
+  }
+
+  async saveAutomation(input: {
+    id?: string;
+    automation: AutomationInput;
+  }): Promise<AutomationResponse["payload"]> {
+    this.assertAutomations();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "automation.save.request",
+        requestId,
+        automation: input.automation,
+        ...(input.id ? { id: input.id } : {}),
+      },
+      responseType: "automation.save.response",
+      timeout: 30000,
+    });
+  }
+
+  async setAutomationEnabled(input: {
+    id: string;
+    enabled: boolean;
+  }): Promise<AutomationResponse["payload"]> {
+    this.assertAutomations();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "automation.set-enabled.request", requestId, ...input },
+      responseType: "automation.set-enabled.response",
+      timeout: 30000,
+    });
+  }
+
+  async deleteAutomation(id: string): Promise<AutomationResponse["payload"]> {
+    this.assertAutomations();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "automation.delete.request", requestId, id },
+      responseType: "automation.delete.response",
+      timeout: 30000,
+    });
+  }
+
+  async runAutomationNow(id: string): Promise<AutomationResponse["payload"]> {
+    this.assertAutomations();
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "automation.run-now.request", requestId, id },
+      responseType: "automation.run-now.response",
+      timeout: 60000,
+    });
+  }
+
+  // Fetches a pull request's head and base branch into refs/fulcra/pull/<n>/* (workspace.write).
+  async fetchArchitectureChangeCommits(input: {
+    cwd: string;
+    pullRequest: number;
+  }): Promise<CheckoutArchitectureChangeFetchResponse["payload"]> {
+    // COMPAT(architectureChangeGenerate): added in v0.9.2; remove after 2027-03-29 once the host floor has it.
+    if (this.getLastServerInfoMessage()?.features?.architectureChangeGenerate !== true) {
+      throw new Error("Update the host to draw a change's architecture from its code.");
+    }
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: {
+        type: "checkout.architecture-change.fetch.request",
+        requestId,
+        cwd: input.cwd,
+        pullRequest: input.pullRequest,
+      },
+      responseType: "checkout.architecture-change.fetch.response",
+      timeout: 150000,
     });
   }
 
@@ -5787,6 +6851,56 @@ export class DaemonClient {
       responseType: "plugin.rpc.invoke.response",
     });
     return payload.output;
+  }
+
+  /** One explicit owner scratch attempt. A confirmation selects purpose; only the host authenticates it. */
+  async simulateRadiusScratch(
+    input: RadiusScratchInput | (RadiusScratchInput & { confirmDestructive: true }),
+    options: { signal: AbortSignal; checkOriginalLifetime: () => void },
+  ): Promise<RadiusScratchOutput> {
+    const host = this.lastServerInfoMessage;
+    const { signal, checkOriginalLifetime } = options;
+    const check = () => {
+      checkOriginalLifetime();
+      if (
+        signal.aborted ||
+        this.connectionState.status !== "connected" ||
+        !host ||
+        this.lastServerInfoMessage !== host
+      )
+        throw new Error("Original Radius connection unavailable; do not replay this attempt");
+    };
+    check();
+    const captured = structuredClone(input);
+    const destructive = Object.hasOwn(captured, "confirmDestructive");
+    const parsed = destructive
+      ? RadiusScratchPruneInputSchema.parse(captured)
+      : RadiusScratchInputSchema.parse(captured);
+    if (this.radiusScratchAttempts.has(parsed.attemptId) || this.radiusScratchAttempts.size >= 4096)
+      throw new Error("Radius attempt already used or client capacity reached; do not replay");
+    check();
+    // Consumed before the single send, even if refused or the acknowledgement is lost.
+    this.radiusScratchAttempts.add(parsed.attemptId);
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedRequest({
+      requestId,
+      message: {
+        type: "plugin.rpc.invoke.request",
+        requestId,
+        pluginId: "orca-organization-next",
+        method: destructive
+          ? "organization.radius.scratch.prune-simulate"
+          : "organization.radius.scratch.simulate",
+        input: parsed,
+      },
+      responseType: "plugin.rpc.invoke.response",
+      options: { skipQueue: true },
+    });
+    check();
+    const output = RadiusScratchOutputSchema.parse(payload.output);
+    if (output.attemptId !== parsed.attemptId)
+      throw new Error("Unconfirmed Radius attempt outcome");
+    return output;
   }
 
   async respondToPermissionAndWait(
@@ -6344,8 +7458,9 @@ export class DaemonClient {
     return this.config.url;
   }
 
-  private sendHelloMessage(): void {
-    if (!this.transport) {
+  private async sendHelloMessage(): Promise<void> {
+    const transport = this.transport;
+    if (!transport) {
       this.scheduleReconnect({
         reason: "Transport unavailable before hello",
         event: "HELLO_TRANSPORT_MISSING",
@@ -6355,11 +7470,14 @@ export class DaemonClient {
     }
 
     try {
+      if (this.transport !== transport) return;
+      const auth = this.helloAuth;
       this.sendJsonMessage("hello", "hello", {
         type: "hello",
         clientId: this.config.clientId,
         clientType: this.config.clientType ?? "cli",
         protocolVersion: 1,
+        ...(auth ? { auth } : {}),
         capabilities: {
           ...DEFAULT_CLIENT_CAPABILITIES,
           ...this.config.capabilities,
@@ -6502,6 +7620,18 @@ export class DaemonClient {
       });
       this.resolvePingProbe();
       this.runtimeMetrics?.recordMessage("pong", bytes, perfNow() - startMs);
+      return;
+    }
+
+    if (parsed.data.type === "hello.rejected") {
+      const reasonMessage = {
+        password_required: "Password required",
+        incorrect_password: "Incorrect password",
+        incompatible_protocol: "Incompatible protocol version",
+      };
+      this.lastErrorValue = reasonMessage[parsed.data.reason];
+      this.authFailureReasonValue =
+        parsed.data.reason === "incompatible_protocol" ? null : parsed.data.reason;
       return;
     }
 
@@ -6703,13 +7833,19 @@ export class DaemonClient {
     this.terminalStreams.clearSlots();
     this.lastServerInfoMessage = null;
 
+    if (this.authFailureReasonValue) this.setReconnectEnabled(false);
+
     if (wasDisposed) {
       this.rejectConnect(new Error(reason ?? "Daemon client is disposed"));
       return;
     }
     this.emitDisconnectedStateForReconnect(reason, input);
     if (!this.shouldReconnect || this.config.reconnect?.enabled === false) {
-      this.rejectConnect(new Error(reason ?? "Transport disconnected before connect"));
+      let error: Error = new Error(reason ?? "Transport disconnected before connect");
+      if (this.authFailureReasonValue)
+        error = new DaemonAuthenticationError(this.authFailureReasonValue);
+      if (this.pairingRequiredValue) error = new PairingRequiredError(this.pairingRequiredValue);
+      this.rejectConnect(error);
       return;
     }
 
@@ -7087,3 +8223,10 @@ function resolveAgentConfig(options: CreateAgentRequestOptions): AgentSessionCon
     cwd: merged.cwd,
   };
 }
+import {
+  RadiusScratchInputSchema,
+  RadiusScratchPruneInputSchema,
+  RadiusScratchOutputSchema,
+  type RadiusScratchInput,
+  type RadiusScratchOutput,
+} from "@getpaseo/protocol/radius-scratch";

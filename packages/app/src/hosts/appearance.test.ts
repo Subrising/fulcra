@@ -122,13 +122,13 @@ describe("selectHostBadges", () => {
     });
   });
 
-  it("falls back to the server id when the label is blank", () => {
+  it("names a host with a blank label 'Unnamed host', never by its server id", () => {
     const badges = selectHostBadges({
       hosts: [host("alpha", "   ")],
       localServerId: null,
       enabled: true,
     });
-    expect(badges.get("alpha")?.label).toBe("alpha");
+    expect(badges.get("alpha")?.label).toBe("Unnamed host");
   });
 
   it("hides an untouched local host while its remote sibling shows", () => {

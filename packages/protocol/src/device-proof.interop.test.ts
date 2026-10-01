@@ -8,7 +8,8 @@ import {
   type ChoicePayload,
 } from "./device-proof";
 
-// Interop with an independent host-side verifier, under the device-proof wire rules: the envelope is { deviceId, alg: "ES256", signature, payload }; the
+// Interop with J3's controller verifier, under exactly the rules of CONTRACT-CHANGE-J3-1 (normative
+// since CONTRACTS v1.11): the envelope is { deviceId, alg: "ES256", signature, payload }; the
 // signature is ES256 over the canonical JSON of `payload` (sorted keys, no whitespace); it is base64
 // of either raw 64-byte r‖s or DER, told apart by length; P-256 SPKI keys only.
 //
@@ -69,15 +70,15 @@ function freshKey() {
   };
 }
 
-describe("device proofs verify under the independent verifier's rules", () => {
-  it("our canonical bytes equal the verifier's for the choice payload, whatever the key order", () => {
+describe("device proofs verify under J3's controller rules (CONTRACT-CHANGE-J3-1)", () => {
+  it("our canonical bytes equal J3's for the choice payload, whatever the key order", () => {
     const shuffled = Object.fromEntries(Object.entries(CHOICE).toReversed());
     expect(canonicalJson(CHOICE)).toBe(j3Canonical(CHOICE));
     expect(canonicalJson(shuffled)).toBe(j3Canonical(CHOICE));
     expect(Buffer.from(choicePayloadBytes(CHOICE)).toString("utf8")).toBe(j3Canonical(CHOICE));
   });
 
-  it("our canonical bytes equal the verifier's for its purpose-carrying device-write payloads", () => {
+  it("our canonical bytes equal J3's for its purpose-carrying device-write payloads", () => {
     const device = {
       userPresence: true,
       label: "Fixture phone",
@@ -126,7 +127,7 @@ describe("device proofs verify under the independent verifier's rules", () => {
     }
   });
 
-  it("a DER signature, which the verifier also accepts, verifies too", () => {
+  it("a DER signature, which J3 also accepts, verifies too", () => {
     const key = freshKey();
     const der = nodeSign("sha256", choicePayloadBytes(CHOICE), key.privateKey);
     expect(

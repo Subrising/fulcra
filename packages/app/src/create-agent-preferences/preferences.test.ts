@@ -381,4 +381,15 @@ describe("create agent preferences", () => {
   it("rejects an unknown launch target kind as invalid stored preferences", () => {
     expect(parseFormPreferences({ launchTarget: { kind: "shell" } })).toEqual({});
   });
+
+  it("remembers the role, and reads a role this build does not know as none without losing the rest", () => {
+    expect(parseFormPreferences({ provider: "claude", role: "planning" })).toEqual({
+      provider: "claude",
+      role: "planning",
+    });
+    expect(parseFormPreferences({ provider: "claude", role: "reviewer" })).toEqual({
+      provider: "claude",
+    });
+    expect(parseFormPreferences({ provider: "claude" })).toEqual({ provider: "claude" });
+  });
 });

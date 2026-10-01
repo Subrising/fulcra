@@ -1,7 +1,12 @@
+import { PluginCatalogPaging, type CatalogReadState } from "./catalog-paging.js";
+import { managementFailure } from "./management-error.js";
+import { readPackagedBundles } from "./packaged-bundles.js";
+import type { TrustedPlugins } from "./trusted.js";
+import type { ManagementInvocation, ManagementTarget } from "./management.js";
 import type { PluginBeforeRequests, PluginLifecycleEvents } from "@getpaseo/plugin/server";
 import { validateBeforeRequest, validateBeforeResult } from "./lifecycle/index.js";
 import { fork } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { stat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -57,13 +62,18 @@ interface PendingInvocation {
   resolve: (output: unknown) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
+  management?: ManagementInvocation;
 }
 
 interface LoadedPlugin {
+  managementTarget?: ManagementTarget;
+  bundledDirectory?: string;
   id: string;
   requirements: PluginRequirements | undefined;
   clientBundle: string;
   methods: ReadonlySet<string>;
+  /** D13: the methods the plugin registered as reads. */
+  readMethods: ReadonlySet<string>;
   hooks: { events: string[]; before: string[] };
   providers: readonly PluginProviderMetadata[];
   child: PluginChild | null;
@@ -113,6 +123,7 @@ interface RemoteProviderConnection {
 }
 
 interface PluginRuntimeDependencies {
+  trustedBundles?: TrustedPlugins;
   // Host capabilities reached through `host.call`: notify and the shared credential store.
   hostCalls?: (call: PluginHostCall) => Promise<unknown>;
   hostCapabilities?: { notify: boolean; credentials: boolean };
@@ -290,6 +301,21 @@ async function resolveEntryPaths(directory: string): Promise<{
 
 export class PluginRuntime {
   private readonly plugins = new Map<string, LoadedPlugin>();
+  private catalogRevision = randomUUID();
+  readonly catalogPaging = new PluginCatalogPaging(
+    () => this.catalogReadState(),
+    () => this.catalogRevision,
+  );
+
+  catalogReadState(): CatalogReadState {
+    return { revision: this.catalogRevision, entries: this.catalog() };
+  }
+
+  private catalogChanged(): void {
+    this.catalogRevision = randomUUID();
+    this.catalogPaging.invalidate();
+  }
+
   private readonly logTails = new Map<string, PluginLogTail>();
   private readonly logger: pino.Logger;
   private readonly spawnChild: () => PluginChild;
@@ -332,7 +358,14 @@ export class PluginRuntime {
       await this.stopPlugin(loaded);
       throw new Error(`Plugin start cancelled: ${pluginId}`);
     }
+    if (loaded.bundledDirectory)
+      loaded.managementTarget = Object.freeze({
+        pluginId,
+        bundleDirectory: loaded.bundledDirectory,
+        isCurrent: () => this.plugins.get(pluginId) === loaded,
+      });
     this.plugins.set(pluginId, loaded);
+    this.catalogChanged();
     this.appendLog(pluginId, "stdout", "[paseo] Plugin ready");
   }
 
@@ -348,12 +381,17 @@ export class PluginRuntime {
     const loaded = this.plugins.get(pluginId);
     if (!loaded) return false;
     this.plugins.delete(pluginId);
+    this.catalogChanged();
     this.rejectPending(loaded, `Plugin stopped: ${pluginId}`);
     await this.stopPlugin(loaded);
     return true;
   }
 
-  catalog(): Array<{ id: string; clientBundle: string; requirements?: PluginRequirements }> {
+  catalog(): Array<{
+    id: string;
+    clientBundle: string;
+    requirements?: PluginRequirements;
+  }> {
     return [...this.plugins.values()]
       .map(({ id, clientBundle, requirements }) => ({ id, clientBundle, requirements }))
       .sort((left, right) => left.id.localeCompare(right.id));
@@ -438,12 +476,55 @@ export class PluginRuntime {
     this.logTails.delete(pluginId);
   }
 
-  async invoke(pluginId: string, method: string, input: unknown): Promise<unknown> {
+  managementTarget(pluginId: string): ManagementTarget | undefined {
+    return this.plugins.get(pluginId)?.managementTarget;
+  }
+
+  async invoke(
+    pluginId: string,
+    method: string,
+    input: unknown,
+    management?: ManagementInvocation,
+    options?: { readOnlyCaller?: boolean },
+  ): Promise<unknown> {
     const loaded = this.plugins.get(pluginId);
     if (!loaded) throw new Error(`Plugin is not available: ${pluginId}`);
+    // D13: a read-only caller (a device holding only reads) reaches only the bundled Command Centre plugin's declared
+    // reads. Refused here, before anything is sent to the plugin; the management it gets can run reads only.
+    if (options?.readOnlyCaller && (!loaded.managementTarget || !loaded.readMethods.has(method))) {
+      management?.close();
+      throw new Error("This device can only read Command Centre");
+    }
+    if (management && !management.isFor(loaded.managementTarget)) {
+      management.close();
+      management = undefined;
+    }
     if (!loaded.methods.has(method))
       throw new Error(`Plugin ${pluginId} does not contribute RPC ${method}`);
-    return this.request(loaded, { type: "invoke", requestId: randomUUID(), method, input });
+    try {
+      return await this.request(
+        loaded,
+        {
+          type: "invoke",
+          requestId: randomUUID(),
+          method,
+          input,
+          ...(management
+            ? {
+                management: {
+                  invocationId: management.id,
+                  principal: management.principal,
+                  ...(management.readOnly ? { readOnly: true as const } : {}),
+                  ...(management.accountsManage ? { accountsManage: true as const } : {}),
+                },
+              }
+            : {}),
+        },
+        management,
+      );
+    } finally {
+      management?.close();
+    }
   }
 
   emit<Name extends keyof PluginLifecycleEvents>(
@@ -521,20 +602,36 @@ export class PluginRuntime {
   private request(
     loaded: LoadedPlugin,
     message: Extract<PluginProcessRequest, { requestId: string }>,
+    management?: ManagementInvocation,
   ): Promise<unknown> {
     const child = loaded.child;
     const pluginId = loaded.id;
     if (!child) throw new Error(`Plugin ${pluginId} has no server entry`);
     const requestId = message.requestId;
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        loaded.pending.delete(requestId);
-        if (message.type === "hook") {
-          void send(child, { type: "hook.cancel", requestId }).catch(() => {});
-        }
-        reject(new Error(`Plugin RPC timed out: ${pluginId}.${message.type}`));
-      }, REQUEST_TIMEOUT_MS);
-      loaded.pending.set(requestId, { resolve, reject, timeout });
+      const timeout = setTimeout(
+        () => {
+          management?.close();
+          loaded.pending.delete(requestId);
+          if (message.type === "hook") {
+            void send(child, { type: "hook.cancel", requestId }).catch(() => {});
+          }
+          reject(
+            Object.assign(
+              new Error(
+                management
+                  ? "Management outcome uncertain; do not replay"
+                  : `Plugin RPC timed out: ${pluginId}.${message.type}`,
+              ),
+              {
+                code: management ? "uncertain" : undefined,
+              },
+            ),
+          );
+        },
+        management ? 50_000 : REQUEST_TIMEOUT_MS,
+      );
+      loaded.pending.set(requestId, { resolve, reject, timeout, management });
       void send(child, message).catch((error) => {
         clearTimeout(timeout);
         loaded.pending.delete(requestId);
@@ -546,6 +643,7 @@ export class PluginRuntime {
   async stopAll(): Promise<void> {
     const loaded = [...this.plugins.values()];
     this.plugins.clear();
+    this.catalogChanged();
     for (const plugin of loaded) {
       this.rejectPending(plugin, `Plugin stopped: ${plugin.id}`);
     }
@@ -557,17 +655,46 @@ export class PluginRuntime {
     configuredPath: string,
   ): Promise<LoadedPlugin> {
     const directory = path.resolve(configuredPath);
+    const bundledDirectory = await this.dependencies.trustedBundles?.verifyBundledDirectory(
+      pluginId,
+      directory,
+    );
     const manifest = await readPluginManifest(directory);
     assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
     const entryPaths = await resolveEntryPaths(directory);
-    const bundles = await compilePlugin(entryPaths);
+    if (bundledDirectory) {
+      if (manifest.id !== pluginId) throw new Error("Trusted bundle ID override refused");
+      for (const entry of Object.values(entryPaths)) {
+        if (!entry) continue;
+        const resolved = await realpath(entry);
+        if (!resolved.startsWith(bundledDirectory + path.sep))
+          throw new Error("Trusted entry escaped bundle");
+      }
+    }
+    const bundles =
+      bundledDirectory && this.dependencies.trustedBundles?.requiresPackagedRuntime(pluginId)
+        ? await readPackagedBundles(bundledDirectory, this.daemonVersion)
+        : await compilePlugin(entryPaths);
+    // Bound the full encoded catalog entry, not JS character count. A failed load is
+    // surfaced in plugin settings/logs and does not disturb already running plugins.
+    const catalogBytes = Buffer.byteLength(
+      JSON.stringify({
+        id: pluginId,
+        clientBundle: bundles.clientBundle ?? "",
+        requirements: manifest.requirements,
+      }),
+    );
+    if (catalogBytes > 1024 * 1024)
+      throw new Error("Plugin catalog entry exceeds 1 MiB; reduce the client bundle");
     const serverBundle = bundles.serverBundle;
     if (!serverBundle) {
       return {
         id: pluginId,
+        bundledDirectory,
         clientBundle: bundles.clientBundle ?? "",
         requirements: manifest.requirements,
         methods: new Set(),
+        readMethods: new Set(),
         hooks: { events: [], before: [] },
         providers: [],
         child: null,
@@ -580,7 +707,7 @@ export class PluginRuntime {
       };
     }
     const sessionHost = this.sessionHost;
-    if (!sessionHost) throw new Error("Plugin Paseo session host is not attached");
+    if (!sessionHost) throw new Error("Plugin session host is not attached");
     const child = this.spawnChild();
     const outputCapture = new PluginOutputCapture(child, (stream, message) => {
       this.appendLog(pluginId, stream, message);
@@ -676,9 +803,11 @@ export class PluginRuntime {
     }
     loaded = {
       id: pluginId,
+      bundledDirectory,
       clientBundle: bundles.clientBundle ?? "",
       requirements: manifest.requirements,
       methods: new Set(ready.methods),
+      readMethods: new Set((ready.readMethods ?? []).filter((m) => ready.methods.includes(m))),
       hooks: ready.hooks ?? { events: [], before: [] },
       providers: ready.providers ?? [],
       child,
@@ -765,6 +894,58 @@ export class PluginRuntime {
       this.dependencies.onSettingsChanged?.(loaded.id, message.settingsId);
       return;
     }
+    if (message.type === "management.invoke") {
+      const pending = [...loaded.pending.values()].find(
+        (entry) => entry.management?.id === message.invocationId,
+      );
+      const invoke =
+        this.plugins.get(loaded.id) === loaded && pending?.management
+          ? pending.management.invoke(message.callId, message.command)
+          : Promise.reject(new Error("Management invocation unavailable"));
+      void invoke
+        .then(
+          (output) =>
+            loaded.child &&
+            send(loaded.child, {
+              type: "host.result",
+              callId: message.callId,
+              output,
+            }),
+          (error: unknown) =>
+            loaded.child &&
+            send(loaded.child, {
+              type: "host.error",
+              callId: message.callId,
+              ...managementFailure(error),
+            }),
+        )
+        .catch(() => undefined);
+      return;
+    }
+    if (message.type === "management.audit") {
+      const pending = [...loaded.pending.values()].find(
+        (entry) => entry.management?.id === message.invocationId,
+      );
+      const audit =
+        this.plugins.get(loaded.id) === loaded && pending?.management
+          ? pending.management.recordAccountAction(message.entry)
+          : Promise.reject(new Error("Management invocation unavailable"));
+      void audit
+        .then(
+          (output) =>
+            loaded.child &&
+            send(loaded.child, { type: "host.result", callId: message.callId, output }),
+          (error: unknown) =>
+            loaded.child &&
+            send(loaded.child, {
+              type: "host.error",
+              callId: message.callId,
+              ...managementFailure(error),
+            }),
+        )
+        .catch(() => undefined);
+      return;
+    }
     if (message.type === "host.call") {
       this.handleHostCall(loaded, message);
       return;
@@ -776,6 +957,7 @@ export class PluginRuntime {
     if (message.type !== "result" && message.type !== "error") return;
     const pending = loaded.pending.get(message.requestId);
     if (!pending) return;
+    pending.management?.close();
     loaded.pending.delete(message.requestId);
     clearTimeout(pending.timeout);
     if (message.type === "result") pending.resolve(message.output);
@@ -1100,6 +1282,7 @@ export class PluginRuntime {
     const wasPublished = this.plugins.get(loaded.id) === loaded;
     if (wasPublished) {
       this.plugins.delete(loaded.id);
+      this.catalogChanged();
     }
     this.rejectPending(loaded, `Plugin process exited: ${loaded.id}`);
     for (const state of loaded.providerConnections.values()) {
@@ -1156,6 +1339,7 @@ export class PluginRuntime {
 
   private rejectPending(loaded: LoadedPlugin, message: string): void {
     for (const invocation of loaded.pending.values()) {
+      invocation.management?.close();
       clearTimeout(invocation.timeout);
       invocation.reject(new Error(message));
     }

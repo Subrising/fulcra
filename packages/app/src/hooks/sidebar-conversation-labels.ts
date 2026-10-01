@@ -1,12 +1,10 @@
 import type { Agent, WorkspaceDescriptor, ProjectDescriptor } from "@/stores/session-store";
 import type { SidebarWorkspacePlacementModel } from "./sidebar-workspaces-view-model";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
-import { projectDisplayNameFromProjectId } from "@/utils/project-display-name";
+import { projectDisplayName, projectDisplayNameFromProjectId } from "@/utils/project-display-name";
 
-const GENERATED_NAME = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-export function isGeneratedSidebarName(value: string): boolean {
-  return GENERATED_NAME.test(value);
-}
+import { isGeneratedSessionName } from "@/utils/session-display-name";
+export const isGeneratedSidebarName = isGeneratedSessionName;
 export interface SidebarConversationLabel {
   workspaceName: string | null;
   projectName: string | null;
@@ -66,9 +64,7 @@ export function selectSidebarConversationLabels(
     if (!session) continue;
     const titles = selectWorkspaceTitles(session, serverId);
     for (const workspace of session.workspaces.values()) {
-      if (workspace.projectKind === "git") continue;
-      const title = titles.get(workspace.id)?.title;
-      if (!title) continue;
+      const title = workspace.title ?? titles.get(workspace.id)?.title ?? "Untitled session";
       const project = session.projects?.get(workspace.projectId);
       const projectName =
         project?.projectDisplayName ??
@@ -110,16 +106,20 @@ export function applySidebarConversationLabels(
   model: SidebarWorkspacePlacementModel,
   labels: ReadonlyMap<string, SidebarConversationLabel>,
 ): SidebarWorkspacePlacementModel {
-  if (!labels.size) return model;
   const projects = model.projects.map((project) => {
-    if (project.projectKind === "git") return project;
     const names = new Set(
       project.workspaces.flatMap((w) => labels.get(w.workspaceKey)?.projectName ?? []),
     );
-    let projectName = project.projectName;
-    if (isGeneratedSidebarName(projectName) && names.size) {
-      projectName = project.workspaces.length === 1 ? [...names][0]! : "Saved conversations";
+    const customName = project.projectCustomName?.trim();
+    const hasCustomName = Boolean(customName && !isGeneratedSidebarName(customName));
+    let projectName = hasCustomName ? customName! : project.projectName;
+    if (!hasCustomName && (!projectName.trim() || isGeneratedSidebarName(projectName))) {
+      projectName =
+        project.workspaces.length > 1
+          ? "Saved conversations"
+          : ([...names][0] ?? "Untitled project");
     }
+    projectName = projectDisplayName(projectName);
     const workspaces = project.workspaces.map((w) => {
       const label = labels.get(w.workspaceKey);
       if (!label?.workspaceName && projectName === project.projectName) return w;

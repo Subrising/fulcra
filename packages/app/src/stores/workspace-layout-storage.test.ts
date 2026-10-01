@@ -21,10 +21,8 @@ function layoutWithTab(target: unknown) {
 }
 
 describe("workspace layout persistence", () => {
-  it("keeps an architecture map tab across restarts", () => {
-    const parsed = WorkspaceLayoutPersistedStateSchema.safeParse(
-      layoutWithTab({ kind: "architecture_map" }),
-    );
+  it.each(["architecture_map", "context"])("keeps a %s tab across restarts", (kind) => {
+    const parsed = WorkspaceLayoutPersistedStateSchema.safeParse(layoutWithTab({ kind }));
     expect(parsed.success).toBe(true);
   });
 

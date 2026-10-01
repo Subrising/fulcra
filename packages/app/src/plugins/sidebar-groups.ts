@@ -1,7 +1,8 @@
-import type { InstalledPlugin, PluginSidebarContribution } from "./types";
+import type { InstalledPlugin, PluginSidebarContribution, UntrustedPlugin } from "./types";
 
 export interface PluginSidebarTarget {
-  plugin: InstalledPlugin;
+  plugin: Pick<InstalledPlugin, "id" | "serverId">;
+  untrusted?: boolean;
   item: PluginSidebarContribution;
 }
 
@@ -14,14 +15,21 @@ export interface PluginSidebarGroup {
   targets: PluginSidebarTarget[];
 }
 
-export function groupPluginSidebarContributions(plugins: InstalledPlugin[]): PluginSidebarGroup[] {
+export function groupPluginSidebarContributions(
+  plugins: InstalledPlugin[],
+  untrusted: UntrustedPlugin[] = [],
+): PluginSidebarGroup[] {
   const groups = new Map<string, PluginSidebarGroup>();
-  for (const plugin of plugins) {
+  for (const plugin of [...plugins, ...untrusted]) {
     for (const item of plugin.sidebarItems) {
       const key = `${plugin.id}/sidebar/${item.id}`;
       const existing = groups.get(key);
       if (existing) {
-        existing.targets.push({ plugin, item });
+        existing.targets.push({
+          plugin,
+          item,
+          untrusted: "untrusted" in plugin && plugin.untrusted === true,
+        });
       } else {
         groups.set(key, {
           key,
@@ -29,7 +37,9 @@ export function groupPluginSidebarContributions(plugins: InstalledPlugin[]): Plu
           contributionId: item.id,
           title: item.title,
           icon: item.icon,
-          targets: [{ plugin, item }],
+          targets: [
+            { plugin, item, untrusted: "untrusted" in plugin && plugin.untrusted === true },
+          ],
         });
       }
     }

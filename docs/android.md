@@ -1,17 +1,67 @@
 # Android
 
+## Fulcra private preview
+
+From an isolated checkout with Node 22+, npm 11.12.1, dependencies installed, Java 21 and an Android SDK:
+
+```bash
+node scripts/orca-preview-build.mjs android arm64-v8a
+```
+
+This builds a bundled release APK without installing it, starting Metro, using signing
+credentials, or publishing. It regenerates `packages/app/android`; keep native edits in
+Expo config/plugins. Output is in `artifacts/orca-preview/android`, alongside a JSON
+manifest with the source commit, version and SHA-256. Use `x86_64` for an emulator
+build. `android-prebuild` generates the project without running Gradle.
+
+The APK is **unsigned and cannot be installed yet**. The distributor must align and
+sign it using their own key before giving it to testers. Keep that key for upgrades;
+Android rejects updates signed with a different key. Signing and device installation
+are separate acceptance steps. For a development preview, create a dedicated key
+outside the checkout (for example with `keytool -genkeypair`) and retain it privately.
+Use Android build-tools `zipalign -P 16 -f 4 input.apk aligned.apk`, then
+`apksigner sign --ks /private/path/preview.p12 --out Fulcra-Preview.apk aligned.apk`.
+Verify with `apksigner verify --verbose --print-certs Fulcra-Preview.apk`, record the
+certificate and APK SHA-256, and install with `adb install -r Fulcra-Preview.apk`.
+Keep passwords and the key out of Git and downloadable artifacts. Each source
+builder/distributor owns their signing identity; this is not store signing. No production or developer signing credentials are
+read by this build path. An APK file or a successful Metro export does not establish
+phone acceptance.
+
+The preview uses the existing source-only profile: camera/QR scanning, push
+notifications, and Expo development client are excluded. Paste a pairing link or use
+**Add host** with your own reachable hostname, port and authentication. A phone's
+`localhost` refers to the phone, not your computer. On a standard Android emulator,
+`10.0.2.2` reaches its host computer. Use your own private network/VPN or a configured
+TLS endpoint for remote access; the preview does not include a hosted Fulcra service.
+Native development and host setup remain separate from client installation.
+
+The UI starts in dark mode and uses the Fulcra icon and `orca:` link scheme. Preview
+and production Android packages can coexist, but both claim that link scheme; use
+in-app paste if Android opens the other installed variant.
+
+For a credential-free hosted build, the manually dispatched
+`.github/workflows/orca-private-preview.yml` builds on Ubuntu and saves a 14-day
+Actions artifact. It does not create a release, upload to EAS, or submit to a store.
+Choose an Fulcra-owned **private repository** if the artifact must remain private;
+"private preview" is a distribution label, not repository access control. Parent
+integration/release work owns workflow dispatch and distribution.
+
+For the desktop counterpart, see [Windows preview](windows.md).
+
 ## App variants
 
 Controlled by `APP_VARIANT` in `packages/app/app.config.js`:
 
-| Variant       | App name     | Package ID                 |
-| ------------- | ------------ | -------------------------- |
-| `production`  | Fulcra       | `dev.orca.workspace`       |
-| `development` | Fulcra Debug | `dev.orca.workspace.debug` |
-| `private-preview` | Fulcra Preview | `dev.orca.workspace.preview` (source-only profile) |
+| Variant           | App name     | Package ID                   |
+| ----------------- | ------------ | ---------------------------- |
+| `production`      | Fulcra         | `dev.orca.workspace`         |
+| `development`     | Fulcra Debug   | `dev.orca.workspace.debug`   |
+| `private-preview` | Fulcra Preview | `dev.orca.workspace.preview` |
 
-The package IDs are kept from an earlier name so existing installs upgrade in place. The
-`android:development` and `android:production` commands below also **install** their builds.
+The preview script selects its variant and source-only profile together. The older
+`android:development` and `android:production` commands below also **install** their
+builds; use the preview script for build-only work.
 
 ## Version codes
 
@@ -201,6 +251,8 @@ adb exec-out screencap -p > screenshot.png
 
 ## Inherited release automation
 
-`eas.json`, `android-apk-release.yml`, and the tag-based release workflows are inherited from
-Paseo. Do not connect upstream Expo or store credentials to them; Fulcra has no configured store
-submission, and public store releases need their own release setup.
+`eas.json`, `android-apk-release.yml`, and the tag-based release workflows are
+inherited Paseo release machinery. They are not the Fulcra preview build path. Do not
+use them for Fulcra distribution or connect upstream Expo/store credentials. Fulcra has
+no configured store submission in the preview workflow; public releases and store
+setup require a separate release decision.

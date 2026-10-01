@@ -35,17 +35,21 @@ leaf.
 - Bad: `/` -> `/h/[serverId]/workspace/[workspaceId]`
 
 `/h/[serverId]` restores a remembered workspace on that same host, waiting for
-saved selection hydration. With no remembered workspace, it opens the host's plugin-provided
-home surface when the host contributes one, and `/open-project` when it does not. Explicit
-conversation routes keep their saved host and session identity.
+saved selection hydration. With no remembered workspace, it opens Fulcra work home
+through the existing plugin surface runtime. This preserves an original Book
+conversation after restart even when only Mini hosts the work overview. The
+controller providing home must have `orca-organization`; unavailable controllers
+retain the surface's normal loading/error state. Explicit conversation routes
+keep their saved host and session identity.
 
 The root still selects the remembered host boundary. It must not jump straight
 to a plugin or workspace leaf, or silently choose another online host while the
-remembered one connects.
+remembered one connects. The private Fulcra app starts with its built-in daemon
+management disabled; pairing selects the existing controller.
 
 Returning from app settings restores an existing conversation workspace when one
-is remembered. Without a workspace, it returns through `/` and the host boundary.
-Connecting a second host must not require opening a project first.
+is remembered. Without a workspace, it returns through `/` and the host boundary
+to Fulcra home. Connecting a second host must not require opening a project first.
 
 ## Error Recovery
 
@@ -181,11 +185,13 @@ The pure policy tests should still enforce the boundary split:
 - root startup with a saved workspace returns `/h/[serverId]`;
 - host index with the same saved workspace returns
   `/h/[serverId]/workspace/[workspaceId]`;
-- host index with no restorable workspace returns the host's plugin-provided home when that
-  host contributes one, and `/open-project` when it does not. The plugin catalog arrives after
-  connect, so the index waits rather than redirecting while a connected host that supports plugins
-  is still answering. Offline, unsupported and failed lookups resolve immediately — a permanent
-  redirect to a surface that never loads strands the app on a screen with no menu.
+- host index with no restorable workspace returns Fulcra home
+  (`/h/[serverId]/plugin/orca-organization/sidebar/organization`) when that host contributes
+  the surface, and `/open-project` when it does not. Fulcra home lives in a plugin, and the
+  catalog arrives after connect, so the index waits rather than redirecting while a connected
+  host that supports plugins is still answering. Offline, unsupported and failed lookups
+  resolve immediately — a permanent redirect to a surface that never loads strands the app on
+  a screen with no menu.
 
 ## Checklist
 

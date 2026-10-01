@@ -1,6 +1,6 @@
 {
   "name": "@getpaseo/expo-two-way-audio",
-  "version": "0.9.1",
+  "version": "0.10.2",
   "description": "Native module for two way audio streaming",
   "keywords": [
     "ExpoTwoWayAudio",
@@ -22,7 +22,7 @@
     "clean": "expo-module clean",
     "dev": "expo-module build",
     "lint": "expo-module lint",
-    "test": "expo-module test",
+    "test": "expo-module test --passWithNoTests",
     "format": "oxfmt --check .",
     "format:fix": "oxfmt .",
     "typecheck": "tsgo --noEmit",

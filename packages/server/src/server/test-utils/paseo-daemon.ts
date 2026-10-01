@@ -114,6 +114,7 @@ export async function createTestPaseoDaemon(
       },
       ...(options.timelineStoreStep ? { timelineStoreStep: options.timelineStoreStep } : {}),
       credentialBackend: options.credentialBackend ?? createMemoryCredentialBackend(),
+      hostGithubSignIn: null,
     });
     try {
       await startDaemonWithTimeout(daemon, TEST_DAEMON_START_TIMEOUT_MS);
@@ -193,10 +194,10 @@ async function prepareTestDaemonConfig(
     providerOverrides: options.providerOverrides,
     agentStoragePath: path.join(paseoHome, "agents"),
     relayEnabled: options.relayEnabled ?? false,
-    relayEndpoint: options.relayEndpoint ?? "relay.paseo.sh:443",
+    relayEndpoint: options.relayEndpoint ?? "127.0.0.1:8787",
     relayUseTls: options.relayUseTls,
     relayPublicUseTls: options.relayPublicUseTls,
-    appBaseUrl: "https://app.paseo.sh",
+    appBaseUrl: "fulcra://pair",
     auth: options.auth,
     pushNotificationSender: options.pushNotificationSender,
     serviceProxy: options.serviceProxy,

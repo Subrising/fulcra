@@ -9,11 +9,20 @@ Two mechanisms carry that split. Neither disables a check.
 
 ## Release tags
 
-`scripts/release-version-utils.mjs` accepts `X.Y.Z` and `X.Y.Z-beta.N` and rejects any
-other prerelease with `Unsupported release version`. Desktop Release, Android APK Release,
-Release Notes Sync and Deploy App therefore exclude `*-private-preview` tags at the trigger, so
-such a tag never starts them; a fork that wants private previews needs its own workflow. A real
-`vX.Y.Z` or `vX.Y.Z-beta.N` tag runs the inherited release workflows normally.
+`scripts/release-version-utils.mjs` accepts `X.Y.Z` and `X.Y.Z-beta.N`. Any
+other prerelease is rejected, so a `v0.1.0-private-preview` tag started Desktop
+Release, Android APK Release, Release Notes Sync and Deploy App and then failed
+each of them with `Unsupported release version`.
+
+Those four workflows now exclude `*-private-preview` tags at the trigger, so the
+run never starts. The private preview is built and delivered by
+`orca-private-preview.yml`, which has its own contract and its own private-draft
+delivery.
+
+If you cut a real `vX.Y.Z` or `vX.Y.Z-beta.N` tag, the inherited release
+workflows run normally. Loosening the version parser instead would have made
+`-private-preview` resolve to release channel `latest`, which is the opposite of
+what a private preview is.
 
 ## Deployment configuration
 
@@ -52,7 +61,9 @@ The root `package.json` overrides `markdown-it`. npm 10, which ships with Node
 `entities`, `linkify-it`, `mdurl` and `uc.micro` missing from the lock. npm 11
 resolves it. The lockfile is not at fault and does not need regenerating.
 
-Every job that installs therefore pins `npm@11.12.1` after `setup-node`. `docker/base/Dockerfile` pins it in the source-pack stage for the
+Every job that installs therefore pins `npm@11.12.1` after `setup-node`, which
+is what the Fulcra private preview workflow already did and why it was the only
+one passing. `docker/base/Dockerfile` pins it in the source-pack stage for the
 same reason. The runtime stage's `npm install -g /tmp/paseo-packs/*.tgz` is not
 affected: it installs built tarballs with no project `package.json`, so the root
 override never applies.
@@ -129,7 +140,7 @@ browser diagnostics, Playwright results, packaged smoke output — are
 summary line when the upload failed. The job log is unaffected either way.
 
 This applies to diagnostics only. Deliverable uploads and release assets, such
-as preview build artifacts, stay
+as the preview build artifacts in `orca-private-preview.yml`, stay
 failure-sensitive: a delivery that did not arrive is a failure. So does every
 test, build and packaging step.
 
@@ -143,6 +154,7 @@ Nothing above removes coverage:
 - **Desktop Packages** — real packaging and smoke on main and on pull requests
   that change packaging.
 - **Nix** — builds the default and desktop packages on main.
+- **Fulcra private preview** — the Windows and Android preview builds.
 
 ## Nix and the fork rename
 
@@ -153,8 +165,8 @@ mismatch. The macOS desktop job previously skipped that step and failed exactly
 that way.
 
 `nix/desktop-package.nix` and the macOS verification step used to hardcode
-`Paseo.app`, `Contents/MacOS/Paseo` and `sh.paseo.desktop`. This fork packages its
-own app name and bundle identifier. Both now read the name and bundle
+`Paseo.app`, `Contents/MacOS/Paseo` and `sh.paseo.desktop`. This fork packages
+`Orca` with `dev.orca.workspace.desktop`. Both now read the name and bundle
 identifier from `packages/desktop/package.json` and
 `packages/desktop/electron-builder.yml`. The assertions still fail when
 packaging produces no bundle, more than one bundle, or a bundle without its

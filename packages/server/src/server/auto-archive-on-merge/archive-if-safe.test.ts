@@ -1,3 +1,4 @@
+import { TrustedPlugins } from "../plugins/trusted.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,7 +98,9 @@ function createHarness(overrides?: {
     } as unknown as AutoArchiveArchiveOptions["daemonConfigStore"],
     workspaceGitService,
     github: {} as AutoArchiveArchiveOptions["github"],
-    agentManager: {} as AutoArchiveArchiveOptions["agentManager"],
+    agentManager: {
+      trustedPlugins: new TrustedPlugins(),
+    } as AutoArchiveArchiveOptions["agentManager"],
     agentStorage: {} as AutoArchiveArchiveOptions["agentStorage"],
     terminalManager: {} as AutoArchiveArchiveOptions["terminalManager"],
     findWorkspaceIdForCwd: vi.fn(async () => "ws-auto-archive"),
@@ -293,14 +296,17 @@ function createRealOutcomeHarness(input: {
     } as unknown as AutoArchiveArchiveOptions["workspaceGitService"],
     github: createGitHubServiceStub(),
     agentManager: {
+      trustedPlugins: new TrustedPlugins(),
       listAgents: () => [],
       archiveAgent: vi.fn(async () => ({ archivedAt: new Date().toISOString() })),
+      preflightArchiveDescendants: vi.fn(async () => undefined),
       archiveSnapshot: vi.fn(async () => {
         throw new Error("not expected without stored agents");
       }),
     } as unknown as AutoArchiveArchiveOptions["agentManager"],
     agentStorage: {
       list: async (): Promise<StoredAgentRecord[]> => [],
+      listByWorkspace: async (): Promise<StoredAgentRecord[]> => [],
     } as unknown as AutoArchiveArchiveOptions["agentStorage"],
     terminalManager: {
       listDirectories: () => [],

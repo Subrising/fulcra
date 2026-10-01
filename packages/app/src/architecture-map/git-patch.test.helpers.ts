@@ -32,7 +32,7 @@ export function parse(diffText: string): PatchFile {
 }
 
 export function gitDiff(before: string, after: string, context = 3): PatchFile {
-  const dir = mkdtempSync(join(tmpdir(), "git-reverse-"));
+  const dir = mkdtempSync(join(tmpdir(), "j7-reverse-"));
   try {
     writeFileSync(join(dir, "a"), before);
     writeFileSync(join(dir, "b"), after);

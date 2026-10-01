@@ -19,6 +19,7 @@ export interface DesktopSettings {
   daemon: {
     manageBuiltInDaemon: boolean;
     keepRunningAfterQuit: boolean;
+    commandCentreEnabled?: boolean;
   };
 }
 
@@ -36,6 +37,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   daemon: {
     manageBuiltInDaemon: true,
     keepRunningAfterQuit: false,
+    commandCentreEnabled: false,
   },
 };
 
@@ -163,6 +165,7 @@ function parseDesktopSettings(raw: unknown): DesktopSettings {
           : DEFAULT_DESKTOP_SETTINGS.notifications.playSound,
     },
     daemon: {
+      commandCentreEnabled: daemon.commandCentreEnabled === true,
       manageBuiltInDaemon:
         typeof daemon.manageBuiltInDaemon === "boolean"
           ? daemon.manageBuiltInDaemon

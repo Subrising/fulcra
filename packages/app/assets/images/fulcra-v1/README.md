@@ -1,6 +1,6 @@
 # Fulcra identity — Keystone
 
-Chosen on 2026-09-23 from six directions. A Roman arch in which every stone is held in place
+Chosen by the owner on 2026-09-23 from six directions. A Roman arch in which every stone is held in place
 by one coral wedge at the crown: **one accountable point holding the whole structure up.**
 
 - `icon.png` — opaque square app icon, 1254×1254, subject inside the centre ~70%.
@@ -11,3 +11,4 @@ by one coral wedge at the crown: **one accountable point holding the whole struc
   Measured, not estimated: at 62% nothing is clipped. Do not reuse `mark.png` as the foreground.
 - `icon.svg`, `mark.svg` — hand-written SVG sources.
 
+The previous `orca-v1` set is kept for history; nothing references it any more.

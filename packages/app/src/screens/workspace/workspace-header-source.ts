@@ -1,3 +1,4 @@
+import { sessionDisplayName } from "@/utils/session-display-name";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import type { SidebarConversationLabel } from "@/hooks/sidebar-conversation-labels";
 
@@ -50,8 +51,16 @@ export function resolveWorkspaceHeader(input: {
   subtitle: string;
 } {
   return {
-    title: input.conversationLabel?.workspaceName ?? input.workspace.name,
-    subtitle: input.conversationLabel?.projectName ?? input.workspace.projectDisplayName,
+    title: sessionDisplayName(
+      input.workspace.name,
+      input.workspace.title,
+      input.conversationLabel?.workspaceName,
+    ),
+    subtitle: sessionDisplayName(
+      input.workspace.projectDisplayName,
+      input.workspace.projectCustomName,
+      input.conversationLabel?.projectName,
+    ),
   };
 }
 

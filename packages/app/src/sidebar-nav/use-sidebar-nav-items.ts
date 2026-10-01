@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useAppSettings } from "@/hooks/use-settings";
-import { useInstalledPlugins } from "@/plugins/registry";
+import { useInstalledPlugins, useUntrustedPlugins } from "@/plugins/registry";
 import { groupPluginSidebarContributions } from "@/plugins/sidebar-groups";
 import {
   moveSidebarNavItem,
@@ -18,9 +18,13 @@ export interface UseSidebarNavItemsReturn {
 
 export function useSidebarNavItems(): UseSidebarNavItemsReturn {
   const plugins = useInstalledPlugins();
+  const untrusted = useUntrustedPlugins();
   const { settings, updateSettings } = useAppSettings();
   const preferences = settings.sidebarNavItems;
-  const pluginGroups = useMemo(() => groupPluginSidebarContributions(plugins), [plugins]);
+  const pluginGroups = useMemo(
+    () => groupPluginSidebarContributions(plugins, untrusted),
+    [plugins, untrusted],
+  );
 
   const items = useMemo(
     () =>

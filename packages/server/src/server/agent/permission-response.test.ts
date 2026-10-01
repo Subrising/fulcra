@@ -9,6 +9,7 @@ import type {
 } from "./agent-sdk-types.js";
 import type { AgentStreamEvent } from "../messages.js";
 import { respondToAgentPermission } from "./permission-response.js";
+import { withTrustedSurface } from "../test-utils/trusted-surface.js";
 
 class FakePermissionAgentManager {
   permissionResult: AgentPermissionResult | void;
@@ -69,7 +70,7 @@ describe("respondToAgentPermission", () => {
   const logger = createTestLogger();
 
   test("starts a follow-up run returned by the provider permission response", async () => {
-    const agentManager = new FakePermissionAgentManager();
+    const agentManager = withTrustedSurface(new FakePermissionAgentManager());
     agentManager.permissionResult = { followUpPrompt: "implement the approved plan" };
 
     await respondToAgentPermission({
@@ -97,7 +98,7 @@ describe("respondToAgentPermission", () => {
   });
 
   test("does not start a run when the permission response has no follow-up prompt", async () => {
-    const agentManager = new FakePermissionAgentManager();
+    const agentManager = withTrustedSurface(new FakePermissionAgentManager());
 
     await respondToAgentPermission({
       agentManager,
@@ -119,7 +120,7 @@ describe("respondToAgentPermission", () => {
   });
 
   test("replaces an in-flight run for follow-up prompts", async () => {
-    const agentManager = new FakePermissionAgentManager();
+    const agentManager = withTrustedSurface(new FakePermissionAgentManager());
     agentManager.hasRunInFlight = true;
     agentManager.permissionResult = { followUpPrompt: "continue after approval" };
 

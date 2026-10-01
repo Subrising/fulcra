@@ -57,7 +57,7 @@ provider identity, timeline epochs/rows, ownership, labels and saved tool policy
 `refreshed` means the provider resumed with the requested configuration; it does not prove the remote
 MCP service is reachable or that a model used it.
 
-Hosts with an external authority can configure the trusted synchronous
+Hosts with an external controller can configure the trusted synchronous
 `AgentManagerOptions.mcpRefreshAdmission` callback. It returns `{ revision, allowed }` from a
 consistent read of current ownership, generation, human-input and grant state. This host revision
 is included in the opaque `configRevision`. After all asynchronous launch preparation and event
@@ -65,7 +65,7 @@ draining, the manager reads it again and checks admission immediately before inv
 close, with no intervening await. Changed or denied authority returns `refused/stale`; unavailable
 or malformed authority fails closed. The callback must not mutate grants, send a prompt, or return
 a promise. This adds a host fence to the existing `workspace.write` permission; it grants no new
-authority. Hosts without an external authority retain the normal permission/identity checks.
+authority. Hosts without an external controller retain the normal permission/identity checks.
 
 Treat `refused` as no adoption and inspect again before deciding what to do. `unchanged` means the
 requested entries already match. A failed resume normally leaves the original saved configuration

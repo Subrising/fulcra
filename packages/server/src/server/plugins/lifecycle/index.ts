@@ -28,7 +28,25 @@ export const lifecycleEventNames = [
 export const beforeHookNames = ["agent.create", "agent.session_open", "workspace.create"] as const;
 
 const beforeSchemas = {
-  "agent.create": CreateAgentRequestMessageSchema.pick({ config: true, env: true }).strict(),
+  // labels are context for the hook (e.g. what the session is for); changes to them are not applied.
+  "agent.create": CreateAgentRequestMessageSchema.pick({
+    config: true,
+    env: true,
+    labels: true,
+  })
+    .extend({
+      // Update-7 W3 (R1 P-3 seam): for a create with a caller, the caller's provider, mode and mode class -- context for
+      // a host's child-mode policy. Like labels, a hook's changes to it are not applied.
+      caller: z
+        .object({
+          provider: z.string(),
+          modeId: z.string().nullable(),
+          modeClass: z.enum(["automatic", "restricted", "unknown"]),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
   "agent.session_open": z
     .object({
       agentId: z.string(),

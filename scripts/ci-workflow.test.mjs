@@ -17,6 +17,7 @@ const gatedCiJobs = new Map([
   ["typecheck", { name: "typecheck", contract: "quality" }],
   ["server-tests-ubuntu", { name: "server-tests (ubuntu-latest)", contracts: ["server", "hub"] }],
   ["server-tests-windows", { name: "server-tests (windows-latest)", contracts: ["server", "hub"] }],
+  ["server-tests-macos", { name: "server-tests (macos-14, file observation)", contract: "server" }],
   ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
   ["desktop-tests-windows", { name: "desktop-tests (windows-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
@@ -163,6 +164,8 @@ test("PR routing declares stable behavior ownership", () => {
     desktop: [
       "packages/desktop/**",
       "packages/app/src/desktop/**",
+      "packages/app/src/device/plugin-device.electron.ts",
+      "packages/app/src/plugins/bundle-trust-policy.electron.ts",
       "packages/server/src/server/browser-tools/**",
       "packages/app/e2e/support/**",
       "packages/app/*config.{cjs,js,ts}",
@@ -232,7 +235,19 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
   assert.ok(desktopSpecs.length > 0);
   assert.ok(browserSpecs.every((path) => path.startsWith("packages/app/e2e/browser/")));
   assert.ok(desktopSpecs.every((path) => path.startsWith("packages/desktop/e2e/")));
-  assert.ok(electronModules.every((path) => path.startsWith("packages/app/src/desktop/")));
+  const nativePolicyModules = new Set([
+    "packages/app/src/device/plugin-device.electron.ts",
+    "packages/app/src/plugins/bundle-trust-policy.electron.ts",
+  ]);
+  assert.ok(
+    electronModules.every(
+      (path) => path.startsWith("packages/app/src/desktop/") || nativePolicyModules.has(path),
+    ),
+  );
+  for (const path of nativePolicyModules) {
+    assert.ok(electronModules.includes(path), `missing native policy module ${path}`);
+    assert.ok(filters.desktop.includes(path), `native policy module lacks desktop CI ${path}`);
+  }
 
   const desktopPackage = JSON.parse(readFileSync(desktopPackagePath, "utf8"));
   assert.match(desktopPackage.scripts.test, /--exclude ["']e2e\/\*\*["']/);
@@ -252,6 +267,8 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
   assert.deepEqual(filters.desktop, [
     "packages/desktop/**",
     "packages/app/src/desktop/**",
+    "packages/app/src/device/plugin-device.electron.ts",
+    "packages/app/src/plugins/bundle-trust-policy.electron.ts",
     "packages/server/src/server/browser-tools/**",
     "packages/app/e2e/support/**",
     "packages/app/*config.{cjs,js,ts}",

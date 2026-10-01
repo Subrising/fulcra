@@ -36,8 +36,8 @@ export {
 } from "./persisted-config.js";
 
 const DEFAULT_PORT = 6767;
-const DEFAULT_RELAY_ENDPOINT = "relay.paseo.sh:443";
-const DEFAULT_APP_BASE_URL = "https://app.paseo.sh";
+import { DEFAULT_RELAY_ENDPOINT, relayUsesTls } from "@getpaseo/protocol/daemon-endpoints";
+const DEFAULT_APP_BASE_URL = undefined;
 const DEFAULT_TRUSTED_PROXIES = ["loopback"];
 
 interface ResolveBundledWebUiDistDirInput {
@@ -299,33 +299,29 @@ function resolveTlsFromEnv(
 
 function resolveRelayConfig(input: ResolveRelayInput): ResolvedRelay {
   const environmentEnabled = parseBooleanEnv(input.env.PASEO_RELAY_ENABLED);
+  const persistedRelay = input.persisted.daemon?.relay;
   // COMPAT(relayOptInDefault): daemons whose startup config omitted this field
   // retain relay-on removal semantics until 2027-01-31. Modern homes use false.
   const enabled =
-    input.cliRelayEnabled ??
-    environmentEnabled ??
-    input.persisted.daemon?.relay?.enabled ??
-    input.enabledFallback;
+    input.cliRelayEnabled ?? environmentEnabled ?? persistedRelay?.enabled ?? input.enabledFallback;
   const endpoint =
-    input.env.PASEO_RELAY_ENDPOINT ??
-    input.persisted.daemon?.relay?.endpoint ??
-    DEFAULT_RELAY_ENDPOINT;
+    input.env.PASEO_RELAY_ENDPOINT ?? persistedRelay?.endpoint ?? DEFAULT_RELAY_ENDPOINT;
   const publicEndpoint =
-    input.env.PASEO_RELAY_PUBLIC_ENDPOINT ??
-    input.persisted.daemon?.relay?.publicEndpoint ??
-    endpoint;
+    input.env.PASEO_RELAY_PUBLIC_ENDPOINT ?? persistedRelay?.publicEndpoint ?? endpoint;
   const useTls =
     input.cliRelayUseTls ??
     resolveTlsFromEnv(
       input.env.PASEO_RELAY_USE_TLS,
-      input.persisted.daemon?.relay?.useTls,
-      endpoint === DEFAULT_RELAY_ENDPOINT,
+      persistedRelay?.useTls,
+      endpoint ? relayUsesTls(endpoint) : true,
     );
+  if (endpoint) relayUsesTls(endpoint, useTls);
   const publicUseTls = resolveTlsFromEnv(
     input.env.PASEO_RELAY_PUBLIC_USE_TLS,
-    input.persisted.daemon?.relay?.publicUseTls,
+    persistedRelay?.publicUseTls,
     useTls,
   );
+  if (publicEndpoint) relayUsesTls(publicEndpoint, publicUseTls);
   return {
     enabled,
     enabledMutable: input.cliRelayEnabled === undefined && environmentEnabled === undefined,
@@ -605,6 +601,7 @@ export function resolveConfigFromPersisted(
   );
 
   const overrideControlledPaths = resolveOverrideControlledPaths(env, cli, speech.providers);
+  const persistedSettings = resolvePersistedPassThroughSettings(persisted);
 
   return {
     listen,
@@ -619,14 +616,14 @@ export function resolveConfigFromPersisted(
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
-    enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
     appendSystemPrompt,
     terminalProfiles,
     agentProfiles,
-    skillSelection: persisted.agents?.skills?.selection,
-    pluginsEnabled: persisted.pluginsEnabled ?? false,
+    skillSelection: persistedSettings.skillSelection,
+    pluginsEnabled: persistedSettings.pluginsEnabled,
     plugins: persisted.plugins,
-    oauthClientIds: persisted.integrations?.oauthClientIds ?? {},
+    oauthClientIds: persistedSettings.oauthClientIds,
     mcpDebug: env.MCP_DEBUG === "1",
     isDev: resolvePaseoNodeEnv(env) === "development",
     agentStoragePath: path.join(paseoHome, "agents"),
@@ -637,6 +634,7 @@ export function resolveConfigFromPersisted(
     relayEndpoint: relay.endpoint,
     relayPublicEndpoint: relay.publicEndpoint,
     relayUseTls: relay.useTls,
+    relayPairingOfferTtlSeconds: persisted.daemon?.relay?.pairingOfferTtlSeconds,
     relayPublicUseTls: relay.publicUseTls,
     serviceProxy,
     webUi,
@@ -648,9 +646,9 @@ export function resolveConfigFromPersisted(
     voiceLlmProviderExplicit: voiceLlm.providerExplicit,
     voiceLlmModel: voiceLlm.model,
     agentProviderSettings: extractAgentProviderSettings(providerOverrides),
-    providerCatalogRefreshTimeoutMs: persisted.agents?.catalogRefreshTimeoutMs,
-    timelineRetention: persisted.agents?.history?.retention ?? "keep",
-    metadataGeneration: persisted.agents?.metadataGeneration,
+    providerCatalogRefreshTimeoutMs: persistedSettings.providerCatalogRefreshTimeoutMs,
+    timelineRetention: persistedSettings.timelineRetention,
+    metadataGeneration: persistedSettings.metadataGeneration,
     providerOverrides,
     log: resolveLogConfigFromEnv(env, persisted),
     configReload: {
@@ -660,6 +658,19 @@ export function resolveConfigFromPersisted(
       relayEnabledFallback,
       startupPersisted: persisted,
     },
+  };
+}
+
+/** Settings read straight from the persisted file, with their defaults. */
+function resolvePersistedPassThroughSettings(persisted: PersistedConfig) {
+  return {
+    enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    skillSelection: persisted.agents?.skills?.selection,
+    pluginsEnabled: persisted.pluginsEnabled ?? false,
+    oauthClientIds: persisted.integrations?.oauthClientIds ?? {},
+    providerCatalogRefreshTimeoutMs: persisted.agents?.catalogRefreshTimeoutMs,
+    timelineRetention: persisted.agents?.history?.retention ?? "keep",
+    metadataGeneration: persisted.agents?.metadataGeneration,
   };
 }
 

@@ -1,5 +1,17 @@
+import { readBundledPluginPins } from "./bundled-plugin-pins.js";
+import { ownedDaemonHeaders } from "./command-centre-headers.js";
+import type { WebContents, Session as ElectronSession } from "electron";
+import { commandCentreBearer } from "./command-centre-target.js";
+import { saveCommandCentreOwner, ownsCommandCentreSupervisor } from "./command-centre-owner.js";
+import { commandCentreCredential } from "./command-centre-auth.js";
+import { commandCentreKeychain } from "./command-centre-keychain.js";
+import { restartManagedDaemon } from "./managed-restart.js";
+import { hashDaemonPassword, isBearerTokenValidAsync } from "@getpaseo/server/auth";
+import { localServiceOwnerCredential } from "./local-service-credential.js";
+import { loadPersistedConfig } from "@getpaseo/server/configuration";
 import { readFileSync } from "node:fs";
 import { getElectronDeviceKey } from "../features/device-key-electron.js";
+import { createRelayIdentityCommandHandlers } from "../features/relay-identity-electron.js";
 import path from "node:path";
 import { app, ipcMain, powerMonitor } from "electron";
 import log from "electron-log/main";
@@ -10,6 +22,7 @@ import {
   stopDaemonInstance,
   readDaemonInstance,
   isSameDaemonInstance,
+  readLocalCredentialForTarget,
   type DaemonInstance,
 } from "@getpaseo/server/daemon-control";
 import {
@@ -55,7 +68,7 @@ import {
 import { tailFile } from "../diagnostics/tail-file.js";
 
 const DAEMON_LOG_FILENAME = "daemon.log";
-let ownedLaunch: { home: string; instance: DaemonInstance } | null = null;
+let ownedLaunch: { home: string; instance: DaemonInstance; endpoint: string | null } | null = null;
 
 type DesktopDaemonState = "starting" | "running" | "stopped" | "errored";
 const DESKTOP_DAEMON_STOP_REASON_VALUES = [
@@ -82,6 +95,7 @@ export interface DesktopDaemonStatus {
   version: string | null;
   desktopManaged: boolean;
   ownedByDesktop: boolean;
+  usesGeneratedCredential?: boolean;
   startedAt: string | null;
   error: string | null;
 }
@@ -126,10 +140,7 @@ function parseDesktopDaemonStopReason(
 function getPaseoHome(): string {
   return resolvePaseoHome({
     ...process.env,
-    PASEO_HOME:
-      process.env.FULCRA_HOME ||
-      process.env.PASEO_HOME ||
-      path.join(app.getPath("userData"), "daemon"),
+    PASEO_HOME: process.env.PASEO_HOME || path.join(app.getPath("userData"), "daemon"),
   });
 }
 
@@ -172,12 +183,24 @@ function logDesktopDaemonLifecycle(message: string, details?: Record<string, unk
   });
 }
 
+function updateOwnedEndpointFromProbe(payload: Record<string, unknown>, home: string): void {
+  if (
+    ownedLaunch?.home === home &&
+    payload.pid === ownedLaunch.instance.pid &&
+    payload.startedAt === ownedLaunch.instance.startedAt &&
+    typeof payload.listen === "string"
+  ) {
+    ownedLaunch.endpoint = ownedEndpoint(home, { ...ownedLaunch.instance, listen: payload.listen });
+  }
+}
+
 function statusFromDaemonProbe(
   payload: Record<string, unknown>,
   home: string,
 ): DesktopDaemonStatus {
   const local = typeof payload.localDaemon === "string" ? payload.localDaemon : "stopped";
   const processAlive = local === "running" || local === "not_ready";
+  updateOwnedEndpointFromProbe(payload, home);
   let status: DesktopDaemonState = "stopped";
   if (local === "not_ready") status = "starting";
   if (local === "running") status = "running";
@@ -230,14 +253,15 @@ export async function resolveDesktopDaemonStatus(): Promise<DesktopDaemonStatus>
   const home = getPaseoHome();
 
   try {
-    const payload = (await runExternalCliJsonCommand([
-      "daemon",
-      "status",
-      "--home",
-      home,
-      "--json",
-    ])) as Record<string, unknown>;
-    return statusFromDaemonProbe(payload, home);
+    const password =
+      (await desktopCommandCentreCredential()) ?? (await localServiceStatusAuth(home));
+    const args = ["daemon", "status", "--home", home, "--json"];
+    const payload = (await (password
+      ? runExternalCliJsonCommand(args, { env: { PASEO_PASSWORD: password } })
+      : runExternalCliJsonCommand(args))) as Record<string, unknown>;
+    if (!payload || !["running", "not_ready", "stopped"].includes(String(payload.localDaemon)))
+      throw retryOwnedDaemon("Desktop daemon returned an invalid local status.");
+    return { ...statusFromDaemonProbe(payload, home), usesGeneratedCredential: Boolean(password) };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logDesktopDaemonLifecycle("resolveStatus CLI command failed", { error: errorMessage });
@@ -276,10 +300,189 @@ function assertBuiltInDaemonManagementEnabled(settings: DesktopSettings): void {
   }
 }
 
+async function desktopCommandCentreCredential(create = false): Promise<string | null> {
+  const settings = await getDesktopSettingsStore().get();
+  if (settings.daemon.commandCentreEnabled !== true) return null;
+  const home = getPaseoHome();
+  // A previously configured daemon password remains its owner's responsibility.
+  if (loadPersistedConfig(home).daemon?.auth?.password) return null;
+  return commandCentreCredential({
+    enabled: settings.daemon.commandCentreEnabled === true,
+    home,
+    keychain: commandCentreKeychain,
+    create,
+  });
+}
+
+function ownedEndpoint(home: string, instance: DaemonInstance): string | null {
+  const listen =
+    instance.listen ??
+    process.env.PASEO_LISTEN ??
+    loadPersistedConfig(home).daemon?.listen ??
+    `127.0.0.1:${process.env.PORT ?? 6767}`;
+  try {
+    const url = new URL(`ws://${listen}/ws`);
+    return ["127.0.0.1", "[::1]"].includes(url.hostname) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+function retryOwnedDaemon(message: string): Error {
+  return Object.assign(new Error(message), { code: "DESKTOP_DAEMON_RETRY" });
+}
+async function resolveOwnedAuth(url: string): Promise<string | null | undefined> {
+  const target = new URL(url);
+  if (target.protocol !== "ws:" || !["127.0.0.1", "[::1]"].includes(target.hostname))
+    return undefined;
+  const status = await resolveDesktopDaemonStatus();
+  if (status.error) throw retryOwnedDaemon("Desktop daemon status unavailable. Retry when ready.");
+  if (status.status === "starting")
+    throw retryOwnedDaemon("Desktop daemon is starting. Retry when ready.");
+  if (!status.ownedByDesktop || !status.listen) return undefined;
+  const expected = new URL(`ws://${status.listen}/ws`);
+  if (!["127.0.0.1", "[::1]"].includes(expected.hostname) || url !== expected.toString())
+    return undefined;
+  if (status.status !== "running")
+    throw retryOwnedDaemon("Desktop daemon is starting. Retry when ready.");
+  return commandCentreBearer({
+    enabled: true,
+    status,
+    target: { url, serverId: status.serverId },
+    read: desktopCommandCentreCredential,
+  });
+}
+/**
+ * L39: the local owner credential for this home's running service (not launched by this app), from its
+ * `controller.secret`, only when that secret is the service's configured password. Main process only.
+ */
+function localServiceAuth(url: string): Promise<string | undefined> {
+  return localServiceOwnerCredential(url, {
+    home: getPaseoHome(),
+    readInstance: readDaemonInstance,
+    endpointOf: ownedEndpoint,
+    configuredPasswordHash: (home) => loadPersistedConfig(home).daemon?.auth?.password,
+    matches: (secret, hash) => isBearerTokenValidAsync({ password: hash, token: secret }),
+    uid: process.getuid?.() ?? -1,
+  });
+}
+
+/**
+ * L39: the credential for this app's own status probe of this home's running service when this app launched no
+ * daemon (e.g. launchd-managed). Same checks as the window's sign-in; it goes only to the bundled CLI, for this
+ * home's recorded loopback endpoint.
+ */
+async function localServiceStatusAuth(home: string): Promise<string | null> {
+  if (ownedLaunch) return null;
+  if ((await getDesktopSettingsStore().get()).daemon.commandCentreEnabled !== true) return null;
+  const instance = await readDaemonInstance(home);
+  const endpoint = instance ? ownedEndpoint(home, instance) : null;
+  return (endpoint && (await localServiceAuth(endpoint))) || null;
+}
+
+async function desktopCommandCentreAuth(url: string): Promise<string | null | undefined> {
+  // Decide endpoint scope before any owned-daemon I/O or fault can affect another host.
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (target.protocol !== "ws:" || !["127.0.0.1", "[::1]"].includes(target.hostname))
+    return undefined;
+  if ((await getDesktopSettingsStore().get()).daemon.commandCentreEnabled !== true) {
+    return undefined;
+  }
+  // L39: when this app launched no daemon for this home, the home's running service (e.g. launchd-managed) may be
+  // the target. When it did, that owned daemon is this home's service, so any other endpoint is decided with no I/O.
+  if (url !== ownedLaunch?.endpoint) return ownedLaunch ? undefined : localServiceAuth(url);
+  const home = getPaseoHome();
+  const before = await readDaemonInstance(home);
+  const owner = ownedLaunch;
+  if (owner && (owner.home !== home || !before || !isSameDaemonInstance(before, owner.instance))) {
+    throw Error("Owned desktop daemon changed. Restart it from Settings.");
+  }
+  const password = await resolveOwnedAuth(url);
+  if (password) {
+    const after = await readDaemonInstance(home);
+    if ((await getDesktopSettingsStore().get()).daemon.commandCentreEnabled !== true) {
+      throw Error("Command Centre was disabled during authentication.");
+    }
+    if (!owner || ownedLaunch !== owner || !after || !isSameDaemonInstance(after, owner.instance)) {
+      throw Error("Owned desktop daemon changed during authentication.");
+    }
+  }
+  return password;
+}
+
+async function resolveDesktopStartupStatus(
+  home: string,
+  previousInstance: DaemonInstance | null,
+): Promise<DesktopDaemonStatus> {
+  // A first enable has no generated credential yet. Native local status can prove an
+  // absent instance without authenticating; an auth/CLI failure cannot prove absence.
+  let current: DesktopDaemonStatus;
+  if (previousInstance) {
+    current = await resolveDesktopDaemonStatus();
+  } else {
+    const payload = (await runExternalCliJsonCommand([
+      "daemon",
+      "status",
+      "--home",
+      home,
+      "--json",
+    ]).catch(() => {
+      throw retryOwnedDaemon("Desktop daemon local status unavailable; launch refused.");
+    })) as Record<string, unknown>;
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      payload.localDaemon !== "stopped" ||
+      payload.connectedDaemon !== "not_probed" ||
+      payload.pid != null ||
+      payload.listen != null ||
+      (await readDaemonInstance(home))
+    )
+      throw retryOwnedDaemon("Desktop daemon absence could not be verified; launch refused.");
+    current = statusFromDaemonProbe(payload, home);
+  }
+  if (current.error || current.status === "errored")
+    throw retryOwnedDaemon("Desktop daemon status unavailable; launch refused.");
+  if (previousInstance && current.status === "stopped")
+    throw retryOwnedDaemon("Desktop daemon changed during status observation; launch refused.");
+  return current;
+}
+
+async function assertDesktopHomeAbsent(home: string): Promise<void> {
+  if (getPaseoHome() !== home || (await readDaemonInstance(home)))
+    throw retryOwnedDaemon("Desktop daemon changed before launch; launch refused.");
+}
+
+async function assertDesktopStopCompleted(
+  home: string,
+  stopped: DesktopDaemonStatus,
+): Promise<void> {
+  if (stopped.error || stopped.status !== "stopped")
+    throw retryOwnedDaemon("Desktop daemon did not stop; launch refused.");
+  await assertDesktopHomeAbsent(home);
+}
+
 async function startDaemon(): Promise<DesktopDaemonStatus> {
   assertBuiltInDaemonManagementEnabled(await getDesktopSettingsStore().get());
 
-  const current = await resolveDesktopDaemonStatus();
+  const home = getPaseoHome();
+  const previousInstance = await readDaemonInstance(home);
+  if (
+    !ownedLaunch &&
+    previousInstance &&
+    (await ownsCommandCentreSupervisor(getPaseoHome(), previousInstance))
+  )
+    ownedLaunch = {
+      home: getPaseoHome(),
+      instance: previousInstance,
+      endpoint: ownedEndpoint(getPaseoHome(), previousInstance),
+    };
+  const current = await resolveDesktopStartupStatus(home, previousInstance);
   logDesktopDaemonLifecycle("initial status check before start", {
     status: current.status,
     pid: current.pid,
@@ -294,33 +497,51 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
         appVersion: normalizeVersion(resolveDesktopAppVersion()),
         daemonVersion: normalizeVersion(current.version),
       });
-      await stopDesktopDaemon("version_mismatch");
+      await assertDesktopStopCompleted(home, await stopDesktopDaemon("version_mismatch"));
     } else {
       return current;
     }
   }
 
-  const home = getPaseoHome();
+  const commandCentreEnabled =
+    (await getDesktopSettingsStore().get()).daemon.commandCentreEnabled === true;
+  const commandCentrePassword = await desktopCommandCentreCredential(true);
   const invocation = createNodeEntrypointInvocation({
     entrypoint: resolveDaemonRunnerEntrypoint(),
     argvMode: "node-script",
     args: [],
     baseEnv: process.env,
   });
+  // Credential creation/readback is asynchronous: a new lifetime may have appeared.
+  await assertDesktopHomeAbsent(home);
+  let acquired: DaemonInstance | undefined;
   try {
     await startDaemonInstance({
       home,
       timeoutMs: 30_000,
       ...invocation,
-      env: { ...invocation.env, PASEO_CLI: getBundledCliShimPath() },
+      env: {
+        ...invocation.env,
+        // The worker uses persisted auth or the generated hash, never an ambient override.
+        ...(commandCentreEnabled ? { PASEO_PASSWORD: undefined } : {}),
+        PASEO_CLI: getBundledCliShimPath(),
+        FULCRA_COMMAND_CENTRE: commandCentreEnabled ? "1" : "0",
+        FULCRA_COMMAND_CENTRE_AUTH_HASH: commandCentrePassword
+          ? hashDaemonPassword(commandCentrePassword)
+          : undefined,
+      },
       mode: "managed",
       desktopManaged: true,
       onAcquired: (instance) => {
-        ownedLaunch = { home, instance };
+        acquired = instance;
+        ownedLaunch = { home, instance, endpoint: ownedEndpoint(home, instance) };
       },
     });
   } catch (error) {
     if (!(error instanceof DaemonInstanceError && error.code === "DAEMON_NOT_READY")) throw error;
+  } finally {
+    // Acquisition is ownership evidence even if readiness times out. Never save a foreign result.
+    if (commandCentreEnabled && acquired) await saveCommandCentreOwner(home, acquired);
   }
   return resolveDesktopDaemonStatus();
 }
@@ -331,6 +552,8 @@ export async function stopDesktopDaemon(
 ): Promise<DesktopDaemonStatus> {
   const home = getPaseoHome();
   const instance = await readDaemonInstance(home);
+  if (!ownedLaunch && instance && (await ownsCommandCentreSupervisor(home, instance)))
+    ownedLaunch = { home, instance, endpoint: ownedEndpoint(home, instance) };
   const owned = Boolean(
     instance &&
     ownedLaunch &&
@@ -361,8 +584,11 @@ export async function stopDesktopDaemon(
 }
 
 async function restartDaemon(): Promise<DesktopDaemonStatus> {
-  await runExternalCliJsonCommand(["daemon", "restart", "--home", getPaseoHome(), "--json"]);
-  return resolveDesktopDaemonStatus();
+  return restartManagedDaemon({
+    status: resolveDesktopDaemonStatus,
+    stopOwned: () => stopDesktopDaemon("restart"),
+    startManaged: startDaemon,
+  });
 }
 
 function getDaemonLogs(): DesktopDaemonLogs {
@@ -400,12 +626,58 @@ async function resolveRequestedReleaseChannel(
 
 export function createDaemonCommandHandlers(): Record<string, DesktopCommandHandler> {
   return {
-    ...createDesktopSettingsCommandHandlers({ settingsStore: getDesktopSettingsStore() }),
+    ...createDesktopSettingsCommandHandlers({
+      settingsStore: getDesktopSettingsStore(),
+      onDaemonSettingsChanged: async () => {
+        const stopped = await stopDesktopDaemon("settings");
+        if (stopped.error || stopped.status === "errored")
+          throw retryOwnedDaemon("Desktop daemon status unavailable; settings were not applied.");
+        if (stopped.status === "running" || stopped.status === "starting") {
+          // L39: a service this app does not own (e.g. launchd-managed) keeps running with its own configuration, so
+          // there is nothing to restart. The setting is kept: it decides whether this window signs in to that
+          // service as its local owner (localServiceOwnerCredential still checks home, endpoint and password).
+          if (!ownedLaunch) {
+            logDesktopDaemonLifecycle("command centre setting saved beside an unowned service", {
+              pid: stopped.pid,
+            });
+            return;
+          }
+          throw Error(
+            "This background service is managed elsewhere. Command Centre settings were not applied.",
+          );
+        }
+        if ((await getDesktopSettingsStore().get()).daemon.manageBuiltInDaemon) await startDaemon();
+      },
+    }),
     desktop_get_runtime_info: () => ({
       appVersion: resolveDesktopAppVersion(),
       runningUnderARM64Translation: isRunningUnderARM64Translation(),
     }),
+    desktop_bundled_plugin_pins: () =>
+      readBundledPluginPins(
+        path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), "bundled-plugins"),
+      ),
     desktop_daemon_status: () => resolveDesktopDaemonStatus(),
+    desktop_daemon_connection_check: async (args) => {
+      if (typeof args?.url !== "string" || args.url.length > 2048)
+        throw Error("Invalid connection target");
+      try {
+        if ((await desktopCommandCentreAuth(args.url)) === null)
+          throw Error(
+            "Command Centre authentication unavailable. Restart the service in Settings.",
+          );
+      } catch (error) {
+        if (error instanceof Error && Reflect.get(error, "code") === "DESKTOP_DAEMON_RETRY")
+          return { retry: true };
+        throw error;
+      }
+      return true; // Never return a credential, even to this app's main world.
+    },
+    desktop_local_credential: async (args) => {
+      const instance = await readDaemonInstance(getPaseoHome());
+      if (!instance?.desktopManaged || typeof args?.listen !== "string") return null;
+      return readLocalCredentialForTarget(getPaseoHome(), args.listen);
+    },
     start_desktop_daemon: () => startDaemon(),
     stop_desktop_daemon: (args) =>
       stopDesktopDaemon(
@@ -464,10 +736,11 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
     get_local_daemon_version: () => getLocalDaemonVersion(),
     install_cli: () => installCli(),
     get_cli_install_status: () => getCliInstallStatus(),
-    // Device key: the private key stays in this process.
+    // Device key (CONTRACTS §3.6): the private key stays in this process.
     device_status: () => getElectronDeviceKey().status(),
     device_pair: (args) => getElectronDeviceKey().pair(args ?? {}),
     device_sign: (args) => getElectronDeviceKey().sign(args),
+    ...createRelayIdentityCommandHandlers(),
     read_legacy_skill_selection: () => readLegacySkillSelection(),
     delete_legacy_skill_selection: () => deleteLegacySkillSelection(),
   };
@@ -485,5 +758,18 @@ export function registerDaemonManager(): void {
       }
       return await handler(args);
     },
+  );
+}
+
+const commandCentreWindows = new Set<WebContents>();
+const commandCentreSessions = new WeakSet<ElectronSession>();
+export function registerCommandCentreWindow(contents: WebContents): void {
+  commandCentreWindows.add(contents);
+  contents.once("destroyed", () => commandCentreWindows.delete(contents));
+  if (commandCentreSessions.has(contents.session)) return;
+  commandCentreSessions.add(contents.session);
+  contents.session.webRequest.onBeforeSendHeaders(
+    { urls: ["ws://127.0.0.1/*", "ws://[::1]/*"] },
+    ownedDaemonHeaders(commandCentreWindows, desktopCommandCentreAuth),
   );
 }

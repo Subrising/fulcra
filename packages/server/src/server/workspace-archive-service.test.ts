@@ -1,3 +1,4 @@
+import { TrustedPlugins } from "./plugins/trusted.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -142,12 +143,14 @@ function createArchiveDeps(input: ArchiveDepsInput): ArchiveTestDependencies {
       getSnapshot: vi.fn(async () => null),
     } as unknown as Pick<WorkspaceGitService, "getSnapshot">,
     agentManager: {
+      trustedPlugins: new TrustedPlugins(),
       listAgents: () => [],
       getAgent: () => null,
       archiveAgent: vi.fn(async (agentId: string) => {
         archivedAgentIds.push(agentId);
         return { archivedAt: new Date().toISOString() };
       }),
+      preflightArchiveDescendants: vi.fn(async () => undefined),
       archiveSnapshot: vi.fn(async (agentId: string, _archivedAt: string) => {
         archivedSnapshotIds.push(agentId);
         return {};
@@ -741,6 +744,7 @@ describe("archiveByScope", () => {
       ],
     });
     deps.agentManager = {
+      trustedPlugins: new TrustedPlugins(),
       listAgents: () => [{ id: liveAgentId, workspaceId: targetWorkspaceId }] as ManagedAgent[],
       getAgent: (agentId: string) =>
         agentId === liveAgentId ? ({ id: liveAgentId } as ManagedAgent) : null,
@@ -748,6 +752,7 @@ describe("archiveByScope", () => {
         deps.archivedAgentIds.push(agentId);
         return { archivedAt: new Date().toISOString() };
       }),
+      preflightArchiveDescendants: vi.fn(async () => undefined),
       archiveSnapshot: vi.fn(async (agentId: string, _archivedAt: string) => {
         deps.archivedSnapshotIds.push(agentId);
         return {};
@@ -790,17 +795,20 @@ describe("archiveByScope", () => {
       activeWorkspaces: [{ workspaceId, cwd: repoDir, kind: "local_checkout" }],
     });
     deps.agentManager = {
+      trustedPlugins: new TrustedPlugins(),
       listAgents: () => [{ id: agentId, workspaceId }] as ManagedAgent[],
       getAgent: () => null,
       archiveAgent: vi.fn(async () => ({ archivedAt: new Date().toISOString() })),
+      preflightArchiveDescendants: vi.fn(async () => undefined),
       archiveSnapshot: vi.fn(async (id: string) => {
         deps.archivedSnapshotIds.push(id);
         return {};
       }),
     };
     deps.agentStorage = {
-      list: async () => [{ id: agentId, workspaceId, archivedAt: null }] as StoredAgentRecord[],
-    } as Pick<AgentStorage, "list">;
+      listByWorkspace: async () =>
+        [{ id: agentId, workspaceId, archivedAt: null }] as StoredAgentRecord[],
+    } as Pick<AgentStorage, "listByWorkspace">;
 
     const result = await archiveByScope(deps, {
       scope: { kind: "workspace", workspaceId },
@@ -878,3 +886,48 @@ describe("resolveWorkspaceIdAtPath", () => {
     expect(result).toBe("ws-nested");
   });
 });
+
+// Exercise both allSettled layers and the real backing-worktree removal path.
+test.each(["preflight", "teardown"] as const)(
+  "admission denial during %s preserves the backing worktree",
+  async (stage) => {
+    const { tempDir, repoDir } = createGitRepo();
+    const paseoHome = path.join(tempDir, ".paseo");
+    const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, `refused-${stage}`);
+    const deps = createArchiveDeps({
+      paseoHome,
+      activeWorkspaces: [
+        { workspaceId: "ws-refused", cwd: worktree.worktreePath, kind: "worktree" },
+      ],
+    });
+    const authority = deps.agentManager.trustedPlugins;
+    authority.register("fixture", true, (server) =>
+      server.admission.onInput(() => (stage === "preflight" ? "deny" : "allow")),
+    );
+    deps.agentManager.listAgents = () =>
+      [{ id: "victim", workspaceId: "ws-refused", provider: "codex" }] as never;
+    deps.agentManager.getAgent = () => ({ id: "victim" }) as never;
+    const { AdmissionDeniedError } = await import("./plugins/trusted.js");
+    deps.agentManager.archiveAgent = vi.fn(async () => {
+      throw new AdmissionDeniedError();
+    });
+    const archiveRecord = vi.spyOn(deps, "archiveWorkspaceRecord");
+    try {
+      await expect(
+        archiveByScope(deps, {
+          scope: { kind: "workspace", workspaceId: "ws-refused" },
+          requestId: "refused",
+        }),
+      ).rejects.toThrow("Trusted plugin denied admission");
+      expect(archiveRecord).not.toHaveBeenCalled();
+      expect(existsSync(worktree.worktreePath)).toBe(true);
+      if (stage === "preflight") {
+        expect(deps.markWorkspaceArchiving).not.toHaveBeenCalled();
+        expect(deps.killTerminalsForWorkspace).not.toHaveBeenCalled();
+        expect(deps.agentManager.archiveAgent).not.toHaveBeenCalled();
+      }
+    } finally {
+      authority.close();
+    }
+  },
+);

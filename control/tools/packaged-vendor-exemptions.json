@@ -1,0 +1,78 @@
+[
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "965d9ff595733e27add2ae5ce279307aa632d6a707313fc61171c3035bd1aecf",
+    "patterns": [
+      "/Users/",
+      "/Volumes/",
+      "DAVid",
+      "David",
+      "david"
+    ],
+    "justification": "Electron upstream macOS system-volume rules, generic home-path text, compression dictionary words and VDAVideoDecoder identifier; no user-specific configuration."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/et.lproj/locale.pak",
+    "sha256": "7fb797d3d74c9dfa4e669f55e3af4674f78d376cc0af45768f441a2d583d935a",
+    "patterns": [
+      "daVid"
+    ],
+    "justification": "Unmodified Electron Estonian localization: incidental name substring in salvestadaVideot."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sw.lproj/locale.pak",
+    "sha256": "29b51685f56f9b9763d50ffe8f4abbe9bb3e137d170636d1b469f97f7a7d8210",
+    "patterns": [
+      "daVid"
+    ],
+    "justification": "Unmodified Electron Swahili localization: incidental name substring across mudaVidhibiti."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/pty.node",
+    "sha256": "0aae85518beb134a666f8e415f78bf528b2e9d40b47498af97433dc459661366",
+    "patterns": [
+      "/Users/"
+    ],
+    "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+    "sha256": "08bc83a084651d095645010d34783f94b9af443614747e953e66d6578027e999",
+    "patterns": [
+      "/Users/"
+    ],
+    "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.1.23.2.dylib",
+    "sha256": "d306d2bc768540766c7ed8a1e0ff05d2870c77a934ebeee4a7bafa1b732ef299",
+    "patterns": [
+      "/Users/"
+    ],
+    "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib",
+    "sha256": "d306d2bc768540766c7ed8a1e0ff05d2870c77a934ebeee4a7bafa1b732ef299",
+    "patterns": [
+      "/Users/"
+    ],
+    "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib",
+    "sha256": "29c6099b28a79bf64356c52dea074c42965495cf1e50605171e485e35f641d18",
+    "patterns": [
+      "/Users/"
+    ],
+    "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node",
+    "sha256": "158344533ea5f4c5970399c8b28a852322985109beb861a38abebcf19d088d0d",
+    "patterns": [
+      "/Users/"
+    ],
+    "justification": "Upstream build RPATH; @loader_path is first and both linked dylibs are shipped alongside the addon."
+  }
+]

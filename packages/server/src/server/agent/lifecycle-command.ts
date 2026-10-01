@@ -1,3 +1,6 @@
+import { deferredCommandPayload as commandPayload } from "./trusted-operation.js";
+import type { TrustedOperationHandle } from "../plugins/trusted.js";
+import type { TrustedPayloadV11 } from "@getpaseo/protocol/trusted-input";
 import type { Logger } from "pino";
 
 import {
@@ -11,13 +14,29 @@ import type { AgentProviderNotice } from "./agent-sdk-types.js";
 export type LifecycleAgentSnapshot = Pick<ManagedAgent, "id" | "cwd" | "lifecycle">;
 
 export interface LifecycleAgentManager {
+  withInput<T>(
+    agentId: string,
+    kind: import("@getpaseo/plugin/server").TrustedInputKind,
+    messageId: string | undefined,
+    operation: (handle?: TrustedOperationHandle) => T,
+    payload?: TrustedPayloadV11 | (() => TrustedPayloadV11),
+    handle?: TrustedOperationHandle,
+  ): T;
   getAgent(agentId: string): LifecycleAgentSnapshot | null;
   hasInFlightRun(agentId: string): boolean;
-  cancelAgentRun(agentId: string): Promise<AgentRunCancellationResult>;
+  cancelAgentRun(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<AgentRunCancellationResult>;
   clearAgentAttention(agentId: string): Promise<void>;
-  archiveAgent(agentId: string): Promise<{ archivedAt: string }>;
-  archiveSnapshot(agentId: string, archivedAt: string): Promise<StoredAgentRecord>;
-  closeAgent(agentId: string): Promise<void>;
+  preflightArchiveDescendants(agentId: string): Promise<void>;
+  archiveAgent(agentId: string, handle?: TrustedOperationHandle): Promise<{ archivedAt: string }>;
+  archiveSnapshot(
+    agentId: string,
+    archivedAt: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<StoredAgentRecord>;
+  closeAgent(agentId: string, handle?: TrustedOperationHandle): Promise<void>;
   setLabels(agentId: string, labels: Record<string, string>): Promise<void>;
   detachAgent(agentId: string): Promise<{
     record: StoredAgentRecord;
@@ -38,7 +57,7 @@ export interface LifecycleAgentManager {
 export interface LifecycleAgentStorage {
   get(agentId: string): Promise<StoredAgentRecord | null>;
   upsert(record: StoredAgentRecord): Promise<void>;
-  // Optional so every existing storage double keeps compiling; AgentStorage implements it.
+  // Orca R3b. Optional so every existing storage double keeps compiling; AgentStorage implements it.
   normalizeInterruptedTurn?(
     agentId: string,
     marker: { detectedAt: string; bootId: string | null },
@@ -64,10 +83,11 @@ interface RequestedAgentRunCancellation extends CancelAgentRunResult {
 type CancellationDependencies = Pick<AgentLifecycleCommandDependencies, "agentManager" | "logger"> &
   Partial<Pick<AgentLifecycleCommandDependencies, "agentStorage">>;
 
-// Only the explicit stop command may normalise an unloaded agent's stored record: that is the
+// Orca R3b (review F2). Only the explicit stop command may normalise an unloaded agent's stored record: that is the
 // path the admission patch guards as human input (its anchor is cancelAgentRunCommand's first line). Every other
 // caller -- archiveAgentCommand today -- gets the old behaviour whatever its dependencies carry.
 interface CancellationOptions {
+  readonly operationHandle?: TrustedOperationHandle;
   readonly normalizeUnloadedStoredTurn?: true;
 }
 
@@ -79,7 +99,7 @@ async function requestAgentRunCancellation(
   const { agentManager, logger } = dependencies;
   const agent = agentManager.getAgent(agentId);
   if (!agent) {
-    // An agent no process has loaded runs no turn. A stored running/initializing record for it is a
+    // Orca R3b. An agent no process has loaded runs no turn. A stored running/initializing record for it is a
     // dead turn: stop normalises it to idle (with the interruption marker) and reports not_running, instead of
     // failing with "not found" and leaving the stored status running forever.
     const stored = options.normalizeUnloadedStoredTurn
@@ -120,7 +140,7 @@ async function requestAgentRunCancellation(
     "cancelAgentRunCommand: interrupting",
   );
   const startedAt = Date.now();
-  const cancellation = await agentManager.cancelAgentRun(agentId);
+  const cancellation = await agentManager.cancelAgentRun(agentId, options.operationHandle);
   logger.debug(
     { agentId, cancellation: cancellation.status, durationMs: Date.now() - startedAt },
     "cancelAgentRunCommand: cancelAgentRun completed",
@@ -137,18 +157,27 @@ export async function cancelAgentRunCommand(
   dependencies: CancellationDependencies,
   agentId: string,
 ): Promise<CancelAgentRunResult> {
-  const result = await requestAgentRunCancellation(dependencies, agentId, {
-    normalizeUnloadedStoredTurn: true,
-  });
-  if (result.cancellation.status === "refused") {
-    dependencies.logger.warn(
-      { agentId },
-      "cancelAgentRunCommand: reported running but no active run was cancelled",
-    );
-    throw new AgentRunCancellationError(agentId, "stop");
-  }
+  return dependencies.agentManager.withInput(
+    agentId,
+    "cancel",
+    undefined,
+    async (operationHandle) => {
+      const result = await requestAgentRunCancellation(dependencies, agentId, {
+        normalizeUnloadedStoredTurn: true,
+        operationHandle,
+      });
+      if (result.cancellation.status === "refused") {
+        dependencies.logger.warn(
+          { agentId },
+          "cancelAgentRunCommand: reported running but no active run was cancelled",
+        );
+        throw new AgentRunCancellationError(agentId, "stop");
+      }
 
-  return { agent: result.agent, cancelled: result.cancelled };
+      return { agent: result.agent, cancelled: result.cancelled };
+    },
+    commandPayload("cancel"),
+  );
 }
 
 export interface ArchiveAgentResult {
@@ -160,37 +189,49 @@ export interface ArchiveAgentResult {
 export async function archiveAgentCommand(
   dependencies: AgentLifecycleCommandDependencies,
   agentId: string,
+  handle?: TrustedOperationHandle,
 ): Promise<ArchiveAgentResult> {
-  const liveAgent = dependencies.agentManager.getAgent(agentId);
-  let record: StoredAgentRecord | null;
-  if (liveAgent) {
-    await requestAgentRunCancellation(dependencies, agentId);
-    await dependencies.agentManager.clearAgentAttention(agentId).catch(() => undefined);
-    await dependencies.agentManager.archiveAgent(agentId);
-    record = await dependencies.agentStorage.get(agentId);
-  } else {
-    record = await archiveStoredAgent(dependencies, agentId);
-  }
-
-  if (!record) {
-    throw new Error(`Agent not found in storage after archive: ${agentId}`);
-  }
-  if (!record.archivedAt) {
-    throw new Error(`Agent missing archivedAt after archive: ${agentId}`);
-  }
-
-  return {
+  return dependencies.agentManager.withInput(
     agentId,
-    archivedAt: record.archivedAt,
-    record,
-  };
+    "archive",
+    undefined,
+    async (operationHandle) => {
+      await dependencies.agentManager.preflightArchiveDescendants(agentId);
+      const liveAgent = dependencies.agentManager.getAgent(agentId);
+      let record: StoredAgentRecord | null;
+      if (liveAgent) {
+        await requestAgentRunCancellation(dependencies, agentId, { operationHandle });
+        await dependencies.agentManager.clearAgentAttention(agentId).catch(() => undefined);
+        await dependencies.agentManager.archiveAgent(agentId, operationHandle);
+        record = await dependencies.agentStorage.get(agentId);
+      } else {
+        record = await archiveStoredAgent(dependencies, agentId, operationHandle);
+      }
+
+      if (!record) {
+        throw new Error(`Agent not found in storage after archive: ${agentId}`);
+      }
+      if (!record.archivedAt) {
+        throw new Error(`Agent missing archivedAt after archive: ${agentId}`);
+      }
+
+      return {
+        agentId,
+        archivedAt: record.archivedAt,
+        record,
+      };
+    },
+    commandPayload("archive"),
+    handle,
+  );
 }
 
 export async function closeAgentCommand(
   dependencies: Pick<AgentLifecycleCommandDependencies, "agentManager">,
   agentId: string,
+  handle?: TrustedOperationHandle,
 ): Promise<void> {
-  await dependencies.agentManager.closeAgent(agentId);
+  await dependencies.agentManager.closeAgent(agentId, handle);
 }
 
 export interface UpdateAgentResult {
@@ -259,6 +300,7 @@ export async function setAgentModeCommand(
 async function archiveStoredAgent(
   dependencies: Pick<AgentLifecycleCommandDependencies, "agentManager" | "agentStorage">,
   agentId: string,
+  operationHandle?: TrustedOperationHandle,
 ): Promise<StoredAgentRecord> {
   const existing = await dependencies.agentStorage.get(agentId);
   if (!existing) {
@@ -270,5 +312,5 @@ async function archiveStoredAgent(
   }
 
   const archivedAt = new Date().toISOString();
-  return dependencies.agentManager.archiveSnapshot(agentId, archivedAt);
+  return dependencies.agentManager.archiveSnapshot(agentId, archivedAt, operationHandle);
 }

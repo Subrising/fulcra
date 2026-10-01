@@ -1,8 +1,9 @@
 {
   "name": "@getpaseo/desktop",
-  "version": "0.1.0",
+  "version": "0.10.2",
   "private": true,
   "description": "Fulcra desktop app",
+  "homepage": "https://github.com/Subrising/fulcra",
   "license": "Apache-2.0",
   "author": {
     "name": "Mohamed Boudra",
@@ -27,7 +28,9 @@
     "test:e2e:lifecycle": "npm run build:main && node ./e2e/daemon-lifecycle.e2e.mjs",
     "build:unsigned": "npm --prefix ../.. run build:server:clean && npm run build:app-dist && npm run build:main && electron-builder --config electron-builder.yml -c.mac.hardenedRuntime=false",
     "release:mac": "PASEO_DESKTOP_SMOKE=1 npm run build",
-    "build:app-dist": "cross-env PASEO_WEB_PLATFORM=electron npm --prefix ../app run build:web"
+    "build:app-dist": "cross-env PASEO_WEB_PLATFORM=electron npm --prefix ../app run build:web",
+    "build:command-centre": "node ../../scripts/build-command-centre.mjs",
+    "build:command-centre:unsigned": "node ../../scripts/package-command-centre.mjs"
   },
   "dependencies": {
     "@getpaseo/cli": "*",
@@ -49,6 +52,6 @@
     "vitest": "^4.1.6",
     "wait-on": "8.0.5"
   },
-  "desktopName": "Fulcra.desktop",
-  "productName": "Fulcra"
+  "desktopName": "Orca.desktop",
+  "productName": "Orca"
 }

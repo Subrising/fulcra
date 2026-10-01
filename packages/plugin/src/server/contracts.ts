@@ -7,6 +7,7 @@ import type { PluginLifecycleRegistration } from "./lifecycle.js";
 
 export interface PluginHandlerContext {
   paseo: PaseoApi;
+  management?: import("./management.js").PluginManagementContextV11;
 }
 
 export type PluginSettingsState<Schema extends ZodType> =
@@ -90,6 +91,12 @@ export interface PluginCredentials {
 }
 
 export interface PluginServerContext extends PluginLifecycleRegistration {
+  inputObservations: import("./trusted.js").TrustedPluginServer["inputObservations"];
+  /** Available only in a bundled index.host.js contribution; ordinary plugins are refused. */
+  admission: import("./trusted.js").TrustedPluginServer["admission"];
+  guard: import("./trusted.js").TrustedPluginServer["guard"];
+  claude: import("./trusted.js").TrustedPluginServer["claude"];
+  issueProvenance: import("./trusted.js").TrustedPluginServer["issueProvenance"];
   secrets?: PluginSecrets;
   // Hosts that predate these capabilities omit them.
   notify?(input: PluginNotifyInput): Promise<PluginNotifyResult>;
@@ -103,6 +110,8 @@ export interface PluginServerContext extends PluginLifecycleRegistration {
       input: ZodOutput<InputSchema>,
       context: PluginHandlerContext,
     ) => ZodInput<OutputSchema> | Promise<ZodInput<OutputSchema>>,
+    /** D13: `readOnly` declares a read. A read-only device may call only the bundled Command Centre plugin's reads. */
+    options?: { readOnly?: boolean },
   ): void;
   registerProvider(provider: ProviderRegistration): void;
 }

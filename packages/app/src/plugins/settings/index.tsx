@@ -13,6 +13,7 @@ import type { Theme } from "@/styles/theme";
 import { useInstalledPlugin } from "../registry";
 import { PluginRuntimeBoundary } from "../runtime-boundary";
 import { SurfaceErrorBoundary } from "../surface-error-boundary";
+import { CommandCentreRelayNotice, useNeedsDirectConnection } from "../command-centre-relay-notice";
 import { toPluginTheme } from "../theme";
 import { buildPluginSettingsRoute } from "./routes";
 
@@ -75,6 +76,7 @@ function SettingsContent({
   const client = useHostRuntimeClient(serverId);
   const connected = useHostRuntimeIsConnected(serverId);
   const supported = useHostFeature(serverId, "pluginSettings");
+  const relayOnly = useNeedsDirectConnection(serverId, pluginId);
   const compact = useIsCompactFormFactor();
   const hosts = useHosts();
   const [attempt, setAttempt] = useState(0);
@@ -105,6 +107,7 @@ function SettingsContent({
   );
   if (!connected)
     return <Text style={styles.message}>{t("settings.plugins.screens.offline")}</Text>;
+  if (relayOnly) return <CommandCentreRelayNotice />;
   // COMPAT(pluginSettings): added in v0.8, remove after 2027-03-05.
   if (!supported) return <Text style={styles.message}>{t("settings.plugins.screens.update")}</Text>;
   if (!plugin || !screen || !client)
@@ -119,7 +122,12 @@ function SettingsContent({
         renderError={renderError}
       >
         <PluginRuntimeBoundary plugin={plugin} client={client}>
-          <Component theme={theme} layout={layout} host={host} />
+          <Component
+            key={`${serverId}:${pluginId}:${screenId}`}
+            theme={theme}
+            layout={layout}
+            host={host}
+          />
         </PluginRuntimeBoundary>
       </SurfaceErrorBoundary>
     </View>

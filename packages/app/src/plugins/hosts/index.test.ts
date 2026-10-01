@@ -99,7 +99,7 @@ describe("plugin host access", () => {
     h.snapshots.set("b", { connectionStatus: "online", client: connection("new-b") });
     h.publish();
     expect(() => api.agents.subscribe(ignoreUpdate)).toThrow("disposed");
-    expect(() => api.config.get()).toThrow("Paseo client is released: b");
+    expect(() => api.config.get()).toThrow("Fulcra host connection is released: b");
     expect(h.runtime.getPaseoClient("b")).not.toBe(api);
     h.lifetime.abort();
     expect(() => h.runtime.getPaseoClient("b")).toThrow("Plugin has stopped");
@@ -116,7 +116,7 @@ it("reacquires a fresh API after explicit disposal without affecting a later bor
   const second = h.runtime.getPaseoClient("b");
   expect(second).not.toBe(first);
   expect(() => second.agents.subscribe(ignoreUpdate)).not.toThrow();
-  expect(() => first.config.get()).toThrow("Paseo client is released: b");
+  expect(() => first.config.get()).toThrow("Fulcra host connection is released: b");
   await first.dispose();
   expect(h.runtime.getPaseoClient("b")).toBe(second);
   h.lifetime.abort();

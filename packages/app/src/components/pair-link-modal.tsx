@@ -1,3 +1,7 @@
+import { router } from "expo-router";
+import { isNative } from "@/constants/platform";
+import { isFdroidBuild } from "@/constants/build-profile";
+import { PairingHostIdentity } from "@/relay/pairing-host-identity";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, Text, View } from "react-native";
@@ -5,10 +9,26 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { Link } from "lucide-react-native";
 import type { HostProfile } from "@/types/host-connection";
-import { useHosts, useHostMutations } from "@/runtime/host-runtime";
-import { decodeOfferFragmentPayload, normalizeHostPort } from "@/utils/daemon-endpoints";
-import { connectToDaemon } from "@/utils/test-daemon-connection";
-import { ConnectionOfferSchema } from "@getpaseo/protocol/connection-offer";
+import {
+  getHostRuntimeStore,
+  isHostRuntimeConnected,
+  useHosts,
+  useHostMutations,
+} from "@/runtime/host-runtime";
+import { machineName } from "@/hosts/replace-host";
+import { ReplaceOldHostCard } from "@/components/hosts/replace-old-host";
+import {
+  describeBundleResults,
+  isPairingBundle,
+  pairEveryOffer,
+  parsePairingBundle,
+} from "@/relay/pairing-bundle";
+import { decodeOfferFragmentPayload } from "@/utils/daemon-endpoints";
+import {
+  parseConnectionOffer,
+  parseConnectionOfferFromUrl,
+  type ConnectionOffer,
+} from "@getpaseo/protocol/connection-offer";
 import { AdaptiveModalSheet, AdaptiveTextInput, type SheetHeader } from "./adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
@@ -50,6 +70,7 @@ const styles = StyleSheet.create((theme) => ({
 
 export interface PairLinkModalProps {
   visible: boolean;
+  repairHost?: HostProfile;
   onClose: () => void;
   onCancel?: () => void;
   onSaved?: (result: {
@@ -60,20 +81,34 @@ export interface PairLinkModalProps {
   }) => void;
 }
 
-export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkModalProps) {
+export function PairLinkModal({
+  visible,
+  onClose,
+  onCancel,
+  onSaved,
+  repairHost,
+}: PairLinkModalProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const daemons = useHosts();
-  const { upsertConnectionFromOfferUrl: upsertDaemonFromOfferUrl } = useHostMutations();
+  const { upsertConnectionFromOfferUrl: upsertDaemonFromOfferUrl, upsertConnectionFromOffer } =
+    useHostMutations();
+  // Pair once, see every Mac: a link carrying one offer per Mac, and what pairing with each did.
+  const [bundle, setBundle] = useState<ConnectionOffer[] | null>(null);
+  const [bundleResult, setBundleResult] = useState<string | null>(null);
   const isMobile = useIsCompactFormFactor();
 
   const offerUrlRef = useRef("");
   const inputRef = useRef<EditingTextInputHandle>(null);
+  const [preview, setPreview] = useState<ConnectionOffer | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  // A new server id whose name matches a host that can't be reached: offer to replace it before closing.
+  const [pairedAgain, setPairedAgain] = useState<string | null>(null);
 
   const clearInput = useCallback(() => {
     offerUrlRef.current = "";
+    setPreview(null);
     inputRef.current?.replaceText("");
   }, []);
 
@@ -86,6 +121,9 @@ export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkM
     if (isSaving) return;
     clearInput();
     setErrorMessage("");
+    setPairedAgain(null);
+    setBundle(null);
+    setBundleResult(null);
     onClose();
   }, [isSaving, clearInput, onClose]);
 
@@ -99,6 +137,19 @@ export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkM
   const handleSave = useCallback(async () => {
     if (isSaving) return;
     const raw = offerUrlRef.current.trim();
+    if (bundle && !repairHost) {
+      setIsSaving(true);
+      setErrorMessage("");
+      try {
+        const results = await pairEveryOffer(bundle, (offer) => upsertConnectionFromOffer(offer));
+        clearInput();
+        setBundle(null);
+        setBundleResult(describeBundleResults(results));
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
     if (!raw) {
       setErrorMessage(t("pairing.link.errors.required"));
       return;
@@ -116,7 +167,7 @@ export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkM
           throw new Error(t("pairing.link.errors.emptyOffer"));
         }
         const payload = decodeOfferFragmentPayload(encoded);
-        return ConnectionOfferSchema.parse(payload);
+        return parseConnectionOffer(payload);
       } catch (error) {
         const message = error instanceof Error ? error.message : t("pairing.link.errors.invalid");
         setErrorMessage(message);
@@ -131,25 +182,38 @@ export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkM
       return;
     }
 
+    if (repairHost && parsedOffer.serverId !== repairHost.serverId) {
+      setErrorMessage(
+        "This code is for a different host. Get a new code from the host you are pairing again.",
+      );
+      return;
+    }
+
     try {
       setIsSaving(true);
       setErrorMessage("");
 
-      const { client, hostname } = await connectToDaemon(
-        {
-          id: "probe",
-          type: "relay",
-          relayEndpoint: normalizeHostPort(parsedOffer.relay.endpoint),
-          useTls: parsedOffer.relay.useTls,
-          daemonPublicKeyB64: parsedOffer.daemonPublicKeyB64,
-        },
-        { serverId: parsedOffer.serverId },
-      );
-      await client.close().catch(() => undefined);
-
       const isNewHost = !daemons.some((daemon) => daemon.serverId === parsedOffer.serverId);
-      const profile = await upsertDaemonFromOfferUrl(raw, hostname ?? undefined);
-      onSaved?.({ profile, serverId: parsedOffer.serverId, hostname, isNewHost });
+      const profile = await upsertDaemonFromOfferUrl(raw, parsedOffer.hostLabel);
+      onSaved?.({
+        profile,
+        serverId: parsedOffer.serverId,
+        hostname: parsedOffer.hostLabel ?? null,
+        isNewHost,
+      });
+      const name = machineName(profile.label);
+      const stale = daemons.some(
+        (other) =>
+          other.serverId !== profile.serverId &&
+          other.label !== other.serverId &&
+          machineName(other.label) === name &&
+          !isHostRuntimeConnected(getHostRuntimeStore().getSnapshot(other.serverId)),
+      );
+      if (isNewHost && !repairHost && name && stale) {
+        clearInput();
+        setPairedAgain(profile.serverId);
+        return;
+      }
       handleClose();
     } catch (error) {
       const message =
@@ -161,10 +225,41 @@ export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkM
     } finally {
       setIsSaving(false);
     }
-  }, [daemons, handleClose, isMobile, isSaving, onSaved, t, upsertDaemonFromOfferUrl]);
+  }, [
+    bundle,
+    clearInput,
+    daemons,
+    handleClose,
+    isMobile,
+    isSaving,
+    onSaved,
+    repairHost,
+    t,
+    upsertConnectionFromOffer,
+    upsertDaemonFromOfferUrl,
+  ]);
 
   const handleChangeOfferUrl = useCallback((next: string) => {
     offerUrlRef.current = next;
+    if (isPairingBundle(next)) {
+      setPreview(null);
+      try {
+        setBundle(parsePairingBundle(next));
+        setErrorMessage("");
+      } catch (error) {
+        setBundle(null);
+        setErrorMessage(error instanceof Error ? error.message : "Invalid pairing link");
+      }
+      return;
+    }
+    setBundle(null);
+    try {
+      setPreview(parseConnectionOfferFromUrl(next));
+      setErrorMessage("");
+    } catch (error) {
+      setPreview(null);
+      setErrorMessage(error instanceof Error ? error.message : "Invalid pairing offer");
+    }
   }, []);
 
   const handleSavePress = useCallback(() => {
@@ -173,6 +268,16 @@ export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkM
 
   const header = useMemo<SheetHeader>(() => ({ title: t("pairing.link.title") }), [t]);
 
+  // Rendered only when repairHost is set; the guard restates that condition for the type checker.
+  const handleScanPress = useCallback(() => {
+    if (!repairHost) return;
+    handleClose();
+    router.push({
+      pathname: "/pair-scan",
+      params: { source: "settings", repairServerId: repairHost.serverId },
+    });
+  }, [handleClose, repairHost]);
+
   return (
     <AdaptiveModalSheet
       header={header}
@@ -180,52 +285,89 @@ export function PairLinkModal({ visible, onClose, onCancel, onSaved }: PairLinkM
       onClose={handleClose}
       testID="pair-link-modal"
     >
-      <Text style={styles.helper}>{t("pairing.link.helper")}</Text>
+      {pairedAgain ? (
+        <View testID="pair-link-paired-again">
+          <ReplaceOldHostCard
+            serverId={pairedAgain}
+            assumeOnline={pairedAgain}
+            onReplaced={handleClose}
+          />
+          <Button variant="secondary" onPress={handleClose} testID="pair-link-done">
+            Done
+          </Button>
+        </View>
+      ) : (
+        <>
+          <Text style={styles.helper}>{t("pairing.link.helper")}</Text>
+          {repairHost && isNative && !isFdroidBuild ? (
+            <Button variant="secondary" onPress={handleScanPress}>
+              Scan QR code
+            </Button>
+          ) : null}
 
-      <View style={styles.field}>
-        <Text style={styles.label}>{t("pairing.link.label")}</Text>
-        <AdaptiveTextInput
-          ref={inputRef}
-          testID="pair-link-input"
-          nativeID="pair-link-input"
-          accessibilityLabel={t("pairing.link.label")}
-          onChangeText={handleChangeOfferUrl}
-          placeholder="https://app.paseo.sh/#offer=..."
-          placeholderTextColor={theme.colors.foregroundMuted}
-          style={styles.input}
-          autoFocus
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
-      </View>
+          <View style={styles.field}>
+            <Text style={styles.label}>{t("pairing.link.label")}</Text>
+            <AdaptiveTextInput
+              ref={inputRef}
+              testID="pair-link-input"
+              nativeID="pair-link-input"
+              accessibilityLabel={t("pairing.link.label")}
+              onChangeText={handleChangeOfferUrl}
+              placeholder="fulcra://pair#offer=..."
+              placeholderTextColor={theme.colors.foregroundMuted}
+              style={styles.input}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+          </View>
 
-      <View style={styles.actions}>
-        <Button
-          style={FLEX_ONE_STYLE}
-          variant="secondary"
-          onPress={handleCancel}
-          disabled={isSaving}
-          testID="pair-link-cancel"
-          accessibilityRole="button"
-          accessibilityLabel={t("pairing.link.actions.cancel")}
-        >
-          {t("pairing.link.actions.cancel")}
-        </Button>
-        <Button
-          style={FLEX_ONE_STYLE}
-          variant="default"
-          onPress={handleSavePress}
-          disabled={isSaving}
-          testID="pair-link-submit"
-          accessibilityRole="button"
-          accessibilityLabel={t("pairing.link.actions.pair")}
-          leftIcon={pairIcon}
-        >
-          {isSaving ? t("pairing.link.actions.pairing") : t("pairing.link.actions.pair")}
-        </Button>
-      </View>
+          {preview ? <PairingHostIdentity offer={preview} /> : null}
+          {bundle ? (
+            <View testID="pair-link-bundle">
+              <Text style={styles.helper}>
+                This link pairs this device with {bundle.length}{" "}
+                {bundle.length === 1 ? "Mac" : "Macs"}. Check each one before pairing.
+              </Text>
+              {bundle.map((offer) => (
+                <PairingHostIdentity key={offer.serverId} offer={offer} />
+              ))}
+            </View>
+          ) : null}
+          {bundleResult ? (
+            <Text style={styles.helper} testID="pair-link-bundle-result">
+              {bundleResult}
+            </Text>
+          ) : null}
+          <View style={styles.actions}>
+            <Button
+              style={FLEX_ONE_STYLE}
+              variant="secondary"
+              onPress={handleCancel}
+              disabled={isSaving}
+              testID="pair-link-cancel"
+              accessibilityRole="button"
+              accessibilityLabel={t("pairing.link.actions.cancel")}
+            >
+              {t("pairing.link.actions.cancel")}
+            </Button>
+            <Button
+              style={FLEX_ONE_STYLE}
+              variant="default"
+              onPress={handleSavePress}
+              disabled={isSaving || (!preview && !bundle)}
+              testID="pair-link-submit"
+              accessibilityRole="button"
+              accessibilityLabel={t("pairing.link.actions.pair")}
+              leftIcon={pairIcon}
+            >
+              {isSaving ? t("pairing.link.actions.pairing") : t("pairing.link.actions.pair")}
+            </Button>
+          </View>
+        </>
+      )}
     </AdaptiveModalSheet>
   );
 }

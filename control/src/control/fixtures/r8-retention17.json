@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "daemon": {
+    "url": null
+  },
+  "authority": {
+    "companyId": "11111111-1111-4111-8111-111111111111",
+    "programmeId": "22222222-2222-4222-8222-222222222222",
+    "issueApi": null
+  },
+  "providers": {
+    "claude": "claude",
+    "codex": "codex"
+  },
+  "localHost": {
+    "name": "This Mac",
+    "serverId": null
+  },
+  "hosts": [],
+  "defaults": {},
+  "artifacts": {},
+  "worktreeLifecycle": {
+    "retentionDays": 17
+  }
+}

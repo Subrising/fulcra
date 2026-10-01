@@ -60,30 +60,39 @@ function configureFdroidAppBuildGradle(contents) {
   return configuredContents;
 }
 
+// The overlay becomes Expo autolinking's project root, and local native modules are looked up in `./modules` relative
+// to that root. Without an explicit nativeModulesDir the app's own modules (paseo-scroll, paseo-device-key) are never
+// linked, and MainApplication's PaseoScrollPackage reference fails to compile (J9, private-preview APK).
+function fdroidAutolinkingPackageJson(packageJson, projectRoot, overlayRoot) {
+  const expo = packageJson.expo ?? {};
+  const autolinking = expo.autolinking ?? {};
+  const android = autolinking.android ?? {};
+  return {
+    ...packageJson,
+    expo: {
+      ...expo,
+      autolinking: {
+        ...autolinking,
+        android: {
+          ...android,
+          buildFromSource: [".*"],
+          exclude: EXCLUDED_ANDROID_MODULES,
+          nativeModulesDir: path.relative(overlayRoot, path.join(projectRoot, "modules")),
+        },
+      },
+    },
+  };
+}
+
 function withFdroidAutolinking(config) {
   config = withDangerousMod(config, [
     "android",
     async (modConfig) => {
-      const packageJsonPath = path.join(modConfig.modRequest.projectRoot, "package.json");
+      const projectRoot = modConfig.modRequest.projectRoot;
+      const packageJsonPath = path.join(projectRoot, "package.json");
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
-      const expo = packageJson.expo ?? {};
-      const autolinking = expo.autolinking ?? {};
-      const android = autolinking.android ?? {};
-      const fdroidPackageJson = {
-        ...packageJson,
-        expo: {
-          ...expo,
-          autolinking: {
-            ...autolinking,
-            android: {
-              ...android,
-              buildFromSource: [".*"],
-              exclude: EXCLUDED_ANDROID_MODULES,
-            },
-          },
-        },
-      };
       const overlayRoot = path.join(modConfig.modRequest.platformProjectRoot, "fdroid-autolinking");
+      const fdroidPackageJson = fdroidAutolinkingPackageJson(packageJson, projectRoot, overlayRoot);
 
       await fs.mkdir(overlayRoot, { recursive: true });
       await fs.writeFile(
@@ -120,3 +129,4 @@ function withFdroidAutolinking(config) {
 }
 
 module.exports = withFdroidAutolinking;
+module.exports.fdroidAutolinkingPackageJson = fdroidAutolinkingPackageJson;

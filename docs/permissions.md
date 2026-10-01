@@ -17,23 +17,27 @@ A pairing invitation is neither. It is an expiring, single-use exchange that cre
 
 ## Permissions
 
-| Permission          | Authority                                                                  |
-| ------------------- | -------------------------------------------------------------------------- |
-| `daemon.read`       | Daemon status, diagnostics, configuration, and provider information        |
-| `daemon.manage`     | Restart, update, configuration changes, providers, skills, and plugins     |
-| `tunnel.manage`     | Relay, Hub, service tunnel, and public endpoint relationships              |
-| `access.manage`     | Pairing invitations, principals, credentials, grants, and revocation       |
-| `workspace.read`    | Projects, workspaces, agents, timelines, files, diffs, and terminal output |
-| `workspace.write`   | Prompts, agent control, files, terminals, git operations, and scripts      |
-| `workspace.manage`  | Create, rename, archive, and remove projects and workspaces                |
-| `automation.manage` | Schedules, heartbeats, and loops                                           |
-| `hub.execute`       | Agent lifecycle, agent/workspace observation, and workspace recovery       |
+| Permission              | Authority                                                                  |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `daemon.read`           | Daemon status, diagnostics, configuration, and provider information        |
+| `daemon.manage`         | Restart, update, configuration changes, providers, skills, and plugins     |
+| `tunnel.manage`         | Relay, Hub, service tunnel, and public endpoint relationships              |
+| `access.manage`         | Pairing invitations, principals, credentials, grants, and revocation       |
+| `workspace.read`        | Projects, workspaces, agents, timelines, files, diffs, and terminal output |
+| `workspace.write`       | Prompts, agent control, files, terminals, git operations, and scripts      |
+| `workspace.manage`      | Create, rename, archive, and remove projects and workspaces                |
+| `automation.manage`     | Schedules, heartbeats, and loops                                           |
+| `command-centre.manage` | Per-request authenticated bundled controller management                    |
+| `accounts.manage`       | List, switch, set the default and take over chats onto another account     |
+| `hub.execute`           | Agent lifecycle, workspace titling, observation, and recovery              |
 
 Agents and terminals use workspace authority. Both can execute code and mutate the workspace, so separate write permissions would claim an isolation boundary the daemon cannot enforce.
 
 Owner, operator, and viewer are UI presets expanded into explicit permissions. Do not persist them as roles. Adding a permission must not silently widen an existing principal.
 
 Permissions are additive allows. Missing authority denies the operation. Do not add deny precedence.
+
+A paired device never stores `command-centre.manage` or `accounts.manage` in its permission list. The device registry adds them per admission only while this Mac's owner has granted them in Settings > Devices (`pairing/device-registry.ts`). `accounts.manage` is a separate grant that needs a full, not read-only, Command Centre grant; removing or narrowing Command Centre clears it. Remote account actions are recorded for the owner in `accounts-audit.json`, labels only. Clients without `command_centre_permission` never receive either permission on the wire: their permission enum is closed.
 
 An operation may require several existing permissions together. Session-bound quota reads require both `workspace.read` for the native session identity and `daemon.read` for account usage. Apply this conjunction to requests and replies so revocation also prevents delivery of an in-flight result. Existing arrays of alternative permissions remain any-of requirements.
 
@@ -60,8 +64,8 @@ carries the MCP server entry and the tool policy together:
 
 ```ts
 { agentId, expected: { provider, sessionId, configRevision },
-  changes: { "my-tools": { type: "stdio", command: "…", env: { MY_TOOLS_CONFIG: "…" } } },
-  toolPolicy: { preapproved: [{ kind: "mcp", server: "my-tools", tool: "lookup" }] } }
+  changes: { orca: { type: "stdio", command: "…", env: { ORCA_ROLE_FILE: "…" } } },
+  toolPolicy: { preapproved: [{ kind: "mcp", server: "orca", tool: "role-observe" }] } }
 ```
 
 `toolPolicy` omitted preserves the saved policy; `null` clears it. Both halves are needed

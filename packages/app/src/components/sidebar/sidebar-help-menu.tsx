@@ -24,6 +24,7 @@ import type { HostProfile } from "@/types/host-connection";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { resolveAppVersion } from "@/utils/app-version";
 import { buildSettingsSectionRoute } from "@/utils/host-routes";
+import { hostDisplayName } from "@/hosts/host-display-name";
 
 const ThemedActivity = withUnistyles(Activity);
 const ThemedCircleHelp = withUnistyles(CircleHelp);
@@ -59,7 +60,7 @@ function HostVersionHint({ host }: { host: HostProfile }) {
       trailing={version}
       testID={`sidebar-help-host-version-${host.serverId}`}
     >
-      {host.label}
+      {hostDisplayName(host)}
     </DropdownMenuHint>
   );
 }

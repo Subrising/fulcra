@@ -25,6 +25,7 @@ import {
 } from "./workspace-registry.js";
 import { createNoopWorkspaceGitService } from "./test-utils/workspace-git-service-stub.js";
 import type { WorkspaceGitObserverService } from "./session/workspace-git-observer/workspace-git-observer-service.js";
+import { withTrustedSurface } from "./test-utils/trusted-surface.js";
 
 interface SessionInternals {
   buildWorkspaceDescriptorMap: () => Promise<Map<string, unknown>>;
@@ -197,12 +198,14 @@ function createSessionForWorkspaceGitWatchTests(options?: {
     downloadTokenStore: createStub<SessionOptions["downloadTokenStore"]>({}),
     pushNotifications: createStub<SessionOptions["pushNotifications"]>({}),
     paseoHome: "/tmp/paseo-test",
-    agentManager: createStub<SessionOptions["agentManager"]>({
-      subscribe: () => () => {},
-      listAgents: () => [],
-      listProviderSubagentActivity: () => [],
-      getAgent: () => null,
-    }),
+    agentManager: createStub<SessionOptions["agentManager"]>(
+      withTrustedSurface({
+        subscribe: () => () => {},
+        listAgents: () => [],
+        listProviderSubagentActivity: () => [],
+        getAgent: () => null,
+      }),
+    ),
     agentStorage: createStub<SessionOptions["agentStorage"]>({
       list: async () => [],
       get: async () => null,

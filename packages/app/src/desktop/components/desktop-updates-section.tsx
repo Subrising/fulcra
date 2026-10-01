@@ -1,3 +1,5 @@
+import { getDaemonStartService } from "@/runtime/daemon-start-service";
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, { type ReactElement, useCallback, useMemo, useState } from "react";
 import { Alert, Text, View } from "react-native";
@@ -199,6 +201,7 @@ function DaemonCliStatusModal({
 }
 
 interface DaemonInfoCardProps {
+  commandCentreEnabled: boolean;
   daemonStatusStateText: string;
   daemonStatusDetailText: string;
   isDaemonManagementPaused: boolean;
@@ -258,7 +261,7 @@ function DaemonInfoCard(props: DaemonInfoCardProps) {
         <Switch
           value={!isDaemonManagementPaused}
           onValueChange={handleToggleDaemonManagement}
-          disabled={isUpdatingDaemonManagement}
+          disabled={isUpdatingDaemonManagement || props.commandCentreEnabled}
           accessibilityLabel={t("desktop.daemon.management.title")}
         />
       </View>
@@ -270,7 +273,7 @@ function DaemonInfoCard(props: DaemonInfoCardProps) {
         <Switch
           value={keepRunningAfterQuit}
           onValueChange={handleToggleKeepRunningAfterQuit}
-          disabled={isUpdatingKeepRunningAfterQuit}
+          disabled={isUpdatingKeepRunningAfterQuit || props.commandCentreEnabled}
           accessibilityLabel={t("desktop.daemon.keepRunning.title")}
         />
       </View>
@@ -314,6 +317,63 @@ function DaemonInfoCard(props: DaemonInfoCardProps) {
         </Button>
       </View>
     </View>
+  );
+}
+
+export function CommandCentreSection() {
+  return shouldUseDesktopDaemon() ? <DesktopCommandCentreSection /> : null;
+}
+
+function DesktopCommandCentreSection() {
+  const { settings, updateSettings, isLoading } = useDesktopSettings();
+  const daemonSettings = settings.daemon;
+  const [isUpdatingCommandCentre, setIsUpdatingCommandCentre] = useState(false);
+  const updateDaemonSettings = useCallback(
+    (updates: Partial<DesktopDaemonSettings>) => updateSettings({ daemon: updates }),
+    [updateSettings],
+  );
+  const { refetch } = useDaemonStatus();
+  const handleToggleCommandCentre = useCallback(
+    (value: boolean) => {
+      setIsUpdatingCommandCentre(true);
+      void updateDaemonSettings({ commandCentreEnabled: value })
+        .then(async () => {
+          await refetch();
+          if (value) {
+            const result = await getDaemonStartService({
+              store: getHostRuntimeStore(),
+            }).start();
+            if (!result.ok) Alert.alert("Command Centre", result.error);
+          }
+          return undefined;
+        })
+        .catch((error) => Alert.alert("Command Centre", String(error)))
+        .finally(() => setIsUpdatingCommandCentre(false));
+    },
+    [updateDaemonSettings, refetch],
+  );
+
+  return (
+    <SettingsSection title="Command Centre">
+      {" "}
+      <View style={settingsStyles.card}>
+        <View style={settingsStyles.row}>
+          <View style={settingsStyles.rowContent}>
+            <Text style={settingsStyles.rowTitle}>Enable Command Centre</Text>
+            <Text style={settingsStyles.rowHint}>
+              Changing this restarts the background service. Fulcra keeps running in the background
+              while Command Centre is on.
+            </Text>
+          </View>
+          <Switch
+            disabled={isLoading || isUpdatingCommandCentre}
+            accessibilityLabel="Enable Command Centre"
+            value={daemonSettings.commandCentreEnabled === true}
+            onValueChange={handleToggleCommandCentre}
+          />
+        </View>
+      </View>
+    </SettingsSection>
   );
 }
 
@@ -411,6 +471,7 @@ export function LocalDaemonSection() {
       ) : (
         <>
           <DaemonInfoCard
+            commandCentreEnabled={daemonSettings.commandCentreEnabled === true}
             daemonStatusStateText={daemonStatusStateText}
             daemonStatusDetailText={daemonStatusDetailText}
             isDaemonManagementPaused={isDaemonManagementPaused}

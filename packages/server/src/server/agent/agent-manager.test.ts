@@ -1,4 +1,6 @@
 import { expect, test, vi } from "vitest";
+import { Session } from "../session.js";
+import { SessionAuthorization, OWNER_PERMISSIONS } from "../authorization/index.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,6 +16,12 @@ import {
   type AgentManagerOptions,
   type ManagedAgent,
 } from "./agent-manager.js";
+import { NATIVE_QUEUED_FINAL } from "./agent-sdk-types.js";
+import {
+  registerNativeQueuedProvider,
+  submitNativeQueuedDispatch,
+  recordNativeQueuedAcceptance,
+} from "./native-queued-dispatch.js";
 import { AgentStorage } from "./agent-storage.js";
 import { FileAgentTimelineStore } from "./file-agent-timeline-store.js";
 import { InMemoryAgentTimelineStore } from "./agent-timeline-store.js";
@@ -769,7 +777,7 @@ test("retains native message correlation after a manager restart and invalidates
     await first.appendTimelineItem(agent.id, {
       type: "user_message",
       text: "repeated text",
-      clientMessageId: "external-client:original",
+      clientMessageId: "orca-control:original",
     });
     await first.appendTimelineItem(agent.id, {
       type: "assistant_message",
@@ -1058,6 +1066,137 @@ test("uses an injected timeline store without making it a production requirement
     await expect(manager.getTimelineRows(agent.id)).resolves.toContainEqual(
       expect.objectContaining({ item: { type: "assistant_message", text: "stored" } }),
     );
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("refreshing an agent replaces the injected timeline store instead of appending a second copy", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-timeline-rehydrate-"));
+  const store = new RecordingTimelineStore();
+  class HistorySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "user_message", text: "continue" },
+      };
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "done" },
+      };
+    }
+  }
+  class HistoryClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new HistorySession(config);
+    }
+
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new HistorySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const manager = new AgentManager({
+    clients: { codex: new HistoryClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  let agentId: string | null = null;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+
+    // What session.handleRefreshAgentRequest does for a loaded agent, twice over.
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      await manager.reloadAgentSession(agent.id, undefined, { rehydrateFromDisk: true });
+      await manager.hydrateTimelineFromProvider(agent.id, { broadcast: true });
+      await manager.flush();
+    }
+
+    const rows = await manager.getTimelineRows(agent.id);
+    expect(rows.map((row) => row.item)).toEqual([
+      { type: "user_message", text: "continue" },
+      { type: "assistant_message", text: "done" },
+    ]);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a failed history replay leaves the committed timeline intact", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-timeline-replay-fail-"));
+  const store = new RecordingTimelineStore();
+  let failReplay = false;
+  class FlakyHistorySession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "user_message", text: "continue" },
+      };
+      if (failReplay) {
+        throw new Error("history stream closed");
+      }
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "done" },
+      };
+    }
+  }
+  class FlakyHistoryClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new FlakyHistorySession(config);
+    }
+
+    override async resumeSession(
+      _handle: AgentPersistenceHandle,
+      config?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      return new FlakyHistorySession({ provider: "codex", cwd: config?.cwd ?? workdir });
+    }
+  }
+  const manager = new AgentManager({
+    clients: { codex: new FlakyHistoryClient() },
+    durableTimelineStore: store,
+    logger,
+  });
+  let agentId: string | null = null;
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    agentId = agent.id;
+    await manager.reloadAgentSession(agent.id, undefined, { rehydrateFromDisk: true });
+    await manager.hydrateTimelineFromProvider(agent.id, { broadcast: true });
+    await manager.flush();
+    const committed = await manager.getTimelineRows(agent.id);
+
+    failReplay = true;
+    await manager.reloadAgentSession(agent.id, undefined, { rehydrateFromDisk: true });
+    await expect(
+      manager.hydrateTimelineFromProvider(agent.id, { broadcast: true }),
+    ).rejects.toThrow("history stream closed");
+    await manager.flush();
+
+    expect(await manager.getTimelineRows(agent.id)).toEqual(committed);
+
+    // A retry once the provider recovers replaces that history rather than stacking on it.
+    failReplay = false;
+    await manager.hydrateTimelineFromProvider(agent.id, { broadcast: true });
+    await manager.flush();
+    expect((await manager.getTimelineRows(agent.id)).map((row) => row.item)).toEqual([
+      { type: "user_message", text: "continue" },
+      { type: "assistant_message", text: "done" },
+    ]);
   } finally {
     if (agentId) await manager.closeAgent(agentId).catch(() => undefined);
     rmSync(workdir, { recursive: true, force: true });
@@ -2154,7 +2293,7 @@ test("a provider that has not opted in is never asked to synthesize an omitted m
 });
 
 // ---------------------------------------------------------------------------------------------------------
-// a session created WITHOUT a mode stores the provider's default mode, but only for a
+// X2 / H2-P2 cause 1: a session created WITHOUT a mode stores the provider's default mode, but only for a
 // provider that opts in (persistsDefaultModeOnCreate), and never on reload, resume or a stored-record start.
 // ---------------------------------------------------------------------------------------------------------
 class DefaultModeClient extends TestAgentClient {
@@ -2200,8 +2339,8 @@ function defaultModeFixture(prefix: string) {
   return { workdir, storage, client, manager };
 }
 
-test("creating a session without a mode stores the provider's default mode", async () => {
-  const f = defaultModeFixture("default-mode-create-default-");
+test("X2: creating a session without a mode stores the provider's default mode", async () => {
+  const f = defaultModeFixture("x2-create-default-");
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
   });
@@ -2212,8 +2351,8 @@ test("creating a session without a mode stores the provider's default mode", asy
   expect((await f.storage.get(snapshot.id))?.config?.modeId).toBe("auto"); // and it is persisted
 });
 
-test("the stored default follows the provider, not a fixed value", async () => {
-  const f = defaultModeFixture("default-mode-create-bedrock-");
+test("X2: the stored default follows the provider, not a fixed value", async () => {
+  const f = defaultModeFixture("x2-create-bedrock-");
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
     env: { CLAUDE_CODE_USE_BEDROCK: "1" },
@@ -2222,8 +2361,8 @@ test("the stored default follows the provider, not a fixed value", async () => {
   expect(snapshot.config.modeId).toBe("default");
 });
 
-test("an explicit mode wins, including the explicit 'default' mode", async () => {
-  const f = defaultModeFixture("default-mode-explicit-");
+test("X2: an explicit mode wins, including the explicit 'default' mode", async () => {
+  const f = defaultModeFixture("x2-explicit-");
   const plan = await f.manager.createAgent(
     { provider: "claude", cwd: f.workdir, modeId: "plan" },
     undefined,
@@ -2241,8 +2380,8 @@ test("an explicit mode wins, including the explicit 'default' mode", async () =>
   expect(f.client.resolveDefaultModeCalls).toBe(0);
 });
 
-test("a record created without a mode keeps no mode on reload", async () => {
-  const f = defaultModeFixture("default-mode-reload-");
+test("X2: a record created without a mode keeps no mode on reload", async () => {
+  const f = defaultModeFixture("x2-reload-");
   f.client.persistsDefaultModeOnCreate = false; // a record written before the fix
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
@@ -2256,8 +2395,8 @@ test("a record created without a mode keeps no mode on reload", async () => {
   expect(f.client.resolveDefaultModeCalls).toBe(0);
 });
 
-test("a record created without a mode keeps no mode when resumed from storage", async () => {
-  const f = defaultModeFixture("default-mode-resume-");
+test("X2: a record created without a mode keeps no mode when resumed from storage", async () => {
+  const f = defaultModeFixture("x2-resume-");
   f.client.persistsDefaultModeOnCreate = false;
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
@@ -2276,8 +2415,8 @@ test("a record created without a mode keeps no mode when resumed from storage", 
   expect(f.client.resolveDefaultModeCalls).toBe(0);
 });
 
-test("starting a stored record that never ran keeps its missing mode", async () => {
-  const f = defaultModeFixture("default-mode-stored-start-");
+test("X2: starting a stored record that never ran keeps its missing mode", async () => {
+  const f = defaultModeFixture("x2-stored-start-");
   f.client.persistsDefaultModeOnCreate = false;
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
@@ -2299,11 +2438,11 @@ test("starting a stored record that never ran keeps its missing mode", async () 
 });
 
 // ---------------------------------------------------------------------------------------------------------
-// a session created WITHOUT a thinking option stores its model's default thinking option, on the same
-// terms as the default-mode tests above: opted-in providers only, never on reload, resume or a stored-record start.
+// X4: a session created WITHOUT a thinking option stores its model's default thinking option, on the same
+// terms as X2: opted-in providers only, never on reload, resume or a stored-record start.
 // ---------------------------------------------------------------------------------------------------------
-test("creating a session without a thinking option stores the model's default", async () => {
-  const f = defaultModeFixture("default-thinking-create-default-");
+test("X4: creating a session without a thinking option stores the model's default", async () => {
+  const f = defaultModeFixture("x4-create-default-");
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
   });
@@ -2315,8 +2454,8 @@ test("creating a session without a thinking option stores the model's default", 
   expect((await f.storage.get(snapshot.id))?.config?.thinkingOptionId).toBe("medium"); // and persisted
 });
 
-test("the stored default follows the chosen model", async () => {
-  const f = defaultModeFixture("default-thinking-model-");
+test("X4: the stored default follows the chosen model", async () => {
+  const f = defaultModeFixture("x4-model-");
   const snapshot = await f.manager.createAgent(
     { provider: "claude", cwd: f.workdir, model: "claude-opus-5" },
     undefined,
@@ -2325,8 +2464,8 @@ test("the stored default follows the chosen model", async () => {
   expect(snapshot.config.thinkingOptionId).toBe("high");
 });
 
-test("an explicit thinking option wins", async () => {
-  const f = defaultModeFixture("default-thinking-explicit-");
+test("X4: an explicit thinking option wins", async () => {
+  const f = defaultModeFixture("x4-explicit-");
   const snapshot = await f.manager.createAgent(
     { provider: "claude", cwd: f.workdir, thinkingOptionId: "low" },
     undefined,
@@ -2335,8 +2474,8 @@ test("an explicit thinking option wins", async () => {
   expect(snapshot.config.thinkingOptionId).toBe("low");
 });
 
-test("a model without thinking options keeps none", async () => {
-  const f = defaultModeFixture("default-thinking-no-thinking-");
+test("X4: a model without thinking options keeps none", async () => {
+  const f = defaultModeFixture("x4-no-thinking-");
   const snapshot = await f.manager.createAgent(
     { provider: "claude", cwd: f.workdir, model: "claude-haiku-4-5" },
     undefined,
@@ -2345,8 +2484,8 @@ test("a model without thinking options keeps none", async () => {
   expect(snapshot.config.thinkingOptionId ?? null).toBeNull();
 });
 
-test("a provider that has not opted in keeps no thinking option", async () => {
-  const f = defaultModeFixture("default-thinking-not-opted-in-");
+test("X4: a provider that has not opted in keeps no thinking option", async () => {
+  const f = defaultModeFixture("x4-not-opted-in-");
   f.client.persistsDefaultThinkingOnCreate = false;
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
@@ -2354,8 +2493,8 @@ test("a provider that has not opted in keeps no thinking option", async () => {
   expect(snapshot.config.thinkingOptionId ?? null).toBeNull();
 });
 
-test("a record created without a thinking option keeps none on reload", async () => {
-  const f = defaultModeFixture("default-thinking-reload-");
+test("X4: a record created without a thinking option keeps none on reload", async () => {
+  const f = defaultModeFixture("x4-reload-");
   f.client.persistsDefaultThinkingOnCreate = false; // a record written before the fix
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
@@ -2367,8 +2506,8 @@ test("a record created without a thinking option keeps none on reload", async ()
   expect(reloaded.config.thinkingOptionId ?? null).toBeNull();
 });
 
-test("a record created without a thinking option keeps none when resumed from storage", async () => {
-  const f = defaultModeFixture("default-thinking-resume-");
+test("X4: a record created without a thinking option keeps none when resumed from storage", async () => {
+  const f = defaultModeFixture("x4-resume-");
   f.client.persistsDefaultThinkingOnCreate = false;
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
@@ -2386,8 +2525,8 @@ test("a record created without a thinking option keeps none when resumed from st
   expect((await f.storage.get(snapshot.id))?.config?.thinkingOptionId ?? null).toBeNull();
 });
 
-test("starting a stored record that never ran keeps its missing thinking option", async () => {
-  const f = defaultModeFixture("default-thinking-stored-start-");
+test("X4: starting a stored record that never ran keeps its missing thinking option", async () => {
+  const f = defaultModeFixture("x4-stored-start-");
   f.client.persistsDefaultThinkingOnCreate = false;
   const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
     workspaceId: undefined,
@@ -2904,7 +3043,10 @@ test("setAgentMode persists the selected mode across session reload", async () =
 });
 
 async function quietMcpFixture(
-  managerOptions: Pick<AgentManagerOptions, "mcpRefreshAdmission" | "pluginLifecycle"> = {},
+  managerOptions: Pick<
+    AgentManagerOptions,
+    "mcpRefreshAdmission" | "pluginLifecycle" | "trustedPlugins"
+  > = {},
 ) {
   const workdir = mkdtempSync(join(tmpdir(), "agent-quiet-mcp-"));
   const storage = new AgentStorage(join(workdir, "agents"), logger);
@@ -3083,22 +3225,22 @@ test("quiet MCP refresh adopts a role capability on a retained session and refus
   const f = await quietMcpFixture();
   try {
     const before = await f.timeline.fetchCommitted(f.created.id);
-    const roleFile = "/tmp/my-tools/config.json";
+    const roleFile = "/private/home/grants/role/creation-message.json";
     // The realistic adoption: an existing session gains the role MCP server and the
     // preapproval that makes its tools reachable, in one fenced refresh.
     const adoption = {
       ...f.input,
       changes: {
-        "my-tools": {
+        orca: {
           type: "stdio" as const,
-          command: "my-tools-server",
-          env: { MY_TOOLS_CONFIG: roleFile },
+          command: "orca-role",
+          env: { ORCA_ROLE_FILE: roleFile },
         },
       },
       toolPolicy: {
         preapproved: [
           ...f.created.config.toolPolicy!.preapproved,
-          { kind: "mcp" as const, server: "my-tools", tool: "lookup" },
+          { kind: "mcp" as const, server: "orca", tool: "role-observe" },
         ],
       },
     };
@@ -3109,7 +3251,7 @@ test("quiet MCP refresh adopts a role capability on a retained session and refus
       await f.manager.refreshAgentMcp({
         ...f.input,
         changes: {},
-        toolPolicy: { preapproved: [{ kind: "mcp", server: "absent", tool: "lookup" }] },
+        toolPolicy: { preapproved: [{ kind: "mcp", server: "absent", tool: "role-observe" }] },
       }),
     ).toMatchObject({ outcome: "refused", reason: "invalid_changes" });
     expect(f.client.sessions[0].closeCount).toBe(0);
@@ -3132,7 +3274,7 @@ test("quiet MCP refresh adopts a role capability on a retained session and refus
       owner: f.created.owner,
       createdAt: f.created.createdAt,
     });
-    expect(after.config.mcpServers!["my-tools"]).toEqual(adoption.changes["my-tools"]);
+    expect(after.config.mcpServers!.orca).toEqual(adoption.changes.orca);
     expect(after.config.toolPolicy).toEqual(adoption.toolPolicy);
     await f.manager.hydrateTimelineFromProvider(f.created.id);
     expect(await f.timeline.fetchCommitted(f.created.id)).toEqual(before);
@@ -3384,6 +3526,48 @@ test("quiet MCP reconnect replaces a same-config runtime once while preserving i
       outcome: "refused",
       reason: "stale",
     });
+    expect(f.client.resumeOverrides).toHaveLength(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("update-7: a reconnect restarts a session whose provider turn failed; a plain refresh still refuses it", async () => {
+  const f = await quietMcpFixture();
+  try {
+    const session = f.client.sessions[0];
+    session.startTurn = async () => {
+      const turnId = "turn-limit";
+      setTimeout(() => {
+        session.pushEvent({ type: "turn_started", provider: "codex", turnId });
+        session.pushEvent({
+          type: "turn_failed",
+          provider: "codex",
+          turnId,
+          error: "You've hit your usage limit.",
+        });
+      }, 0);
+      return { turnId };
+    };
+    await drainAsyncGenerator(
+      f.manager.streamAgent(f.created.id, "a turn that hits the usage limit"),
+    ).catch(() => undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(f.manager.getAgent(f.created.id)?.lifecycle).toBe("error");
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    const expected = {
+      provider: state!.provider,
+      sessionId: state!.sessionId!,
+      configRevision: state!.configRevision,
+    };
+    expect(await f.manager.refreshAgentMcp({ ...f.input, expected })).toMatchObject({
+      outcome: "refused",
+      reason: "busy",
+    });
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    expect(
+      await f.manager.refreshAgentMcp({ ...f.input, expected, changes: {}, reconnect: true }),
+    ).toMatchObject({ outcome: "refreshed" });
     expect(f.client.resumeOverrides).toHaveLength(1);
   } finally {
     await f.cleanup();
@@ -5907,6 +6091,53 @@ test("persists live mode, model, and thinking changes without an external snapsh
   expect(persisted?.config?.thinkingOptionId).toBe("high");
   expect(persisted?.runtimeInfo?.modeId).toBe("build");
   expect(persisted?.runtimeInfo?.model).toBe("gpt-5.4");
+});
+
+test("model changes persist the resolved thinking and fresh provider handle before another turn", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-model-selection-"));
+  class ModelSession extends TestAgentSession {
+    selection = { model: "source", thinkingOptionId: "medium" as string | undefined };
+    async setModel(model: string | null) {
+      this.selection = { model: model ?? "default", thinkingOptionId: undefined };
+      this.pushEvent({
+        type: "thinking_option_changed",
+        provider: "codex",
+        thinkingOptionId: null,
+      });
+    }
+    describePersistence() {
+      return { provider: "codex" as const, sessionId: this.id, metadata: { ...this.selection } };
+    }
+  }
+  class ModelClient extends TestAgentClient {
+    async createSession(config: AgentSessionConfig) {
+      return new ModelSession(config);
+    }
+  }
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new ModelClient() },
+    registry: storage,
+    logger,
+  });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, model: "source", thinkingOptionId: "medium" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await manager.setAgentModel(agent.id, "target");
+    await manager.flush();
+    const stored = await storage.get(agent.id);
+    expect(stored?.config?.model).toBe("target");
+    expect(stored?.config?.thinkingOptionId).toBeUndefined();
+    expect(stored?.persistence?.metadata?.model).toBe("target");
+    expect(stored?.persistence?.metadata?.thinkingOptionId).toBeUndefined();
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("later explicit config mutations win over events emitted by earlier mutations", async () => {
@@ -11443,7 +11674,7 @@ test("provider user_message is recorded from the live stream", async () => {
     workspaceId: undefined,
   });
 
-  await manager.runAgent(snapshot.id, { text: "do something" });
+  await manager.runAgent(snapshot.id, "do something");
 
   const timeline = manager.getTimeline(snapshot.id);
   const userMessages = timeline.filter((item) => item.type === "user_message");
@@ -12062,7 +12293,7 @@ test("user_message events wrapping a paseo-system envelope are not added to the 
     workspaceId: undefined,
   });
 
-  await manager.runAgent(snapshot.id, { text: "do something" });
+  await manager.runAgent(snapshot.id, "do something");
 
   const timeline = manager.getTimeline(snapshot.id);
   const userMessages = timeline.filter((item) => item.type === "user_message");
@@ -12177,7 +12408,7 @@ test("onWorkspaceStateMayHaveChanged is called when a completed shell tool call 
     workspaceId: undefined,
   });
 
-  await manager.runAgent(snapshot.id, { text: "merge it" });
+  await manager.runAgent(snapshot.id, "merge it");
 
   expect(onWorkspaceStateMayHaveChanged).toHaveBeenCalledTimes(1);
   expect(onWorkspaceStateMayHaveChanged).toHaveBeenCalledWith({ cwd: workdir });
@@ -12213,7 +12444,7 @@ test("onWorkspaceStateMayHaveChanged is not called for non-shell tool calls", as
     workspaceId: undefined,
   });
 
-  await manager.runAgent(snapshot.id, { text: "read it" });
+  await manager.runAgent(snapshot.id, "read it");
 
   expect(onWorkspaceStateMayHaveChanged).not.toHaveBeenCalled();
 });
@@ -12248,7 +12479,7 @@ test("onWorkspaceStateMayHaveChanged is not called for running shell tool calls"
     workspaceId: undefined,
   });
 
-  await manager.runAgent(snapshot.id, { text: "merge it" });
+  await manager.runAgent(snapshot.id, "merge it");
 
   expect(onWorkspaceStateMayHaveChanged).not.toHaveBeenCalled();
 });
@@ -12304,7 +12535,7 @@ test("concurrent native restores run once before resuming the same agent", async
   }
 });
 
-// A loaded agent reporting running with nothing behind it.
+// Orca R3b (DESIGN-R R-M21, R-M22). A loaded agent reporting running with nothing behind it.
 interface InternalAgents {
   agents: Map<
     string,
@@ -12315,7 +12546,7 @@ interface InternalAgents {
     hasRun(id: string): boolean;
   };
 }
-test("stop clears a loaded agent that reports running with no run, turn or replacement behind it", async () => {
+test("R-M21: stop clears a loaded agent that reports running with no run, turn or replacement behind it", async () => {
   const fixture = await createControlledInterruptFixture({
     name: "stale-running",
     agentId: "00000000-0000-4000-8000-000000000321",
@@ -12339,7 +12570,7 @@ test("stop clears a loaded agent that reports running with no run, turn or repla
   }
 });
 
-test("stop never clears a run the manager is genuinely tracking, even with no turn ids", async () => {
+test("R-M22: stop never clears a run the manager is genuinely tracking, even with no turn ids", async () => {
   const fixture = await createControlledInterruptFixture({
     name: "tracked-running",
     agentId: "00000000-0000-4000-8000-000000000322",
@@ -12429,4 +12660,1603 @@ test("indexes a live agent against its cwd and retains its timeline when it is d
   } finally {
     rmSync(workdir, { recursive: true, force: true });
   }
+});
+
+test("commits startup notices once on create and after restored history", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-startup-notice-"));
+  const notice: AgentTimelineItem = { type: "notification", level: "info", message: "Runtime v2" };
+  const history: AgentTimelineItem = { type: "assistant_message", text: "Existing conversation" };
+  const toolOutput: AgentTimelineItem = {
+    type: "tool_call",
+    callId: "startup-output",
+    name: "shell",
+    status: "completed",
+    error: null,
+    detail: {
+      type: "shell",
+      command: "print output",
+      output: "x".repeat(1024 * 1024),
+      exitCode: 0,
+    },
+  };
+  const limitedToolOutput: AgentTimelineItem = {
+    ...toolOutput,
+    detail: { type: "shell", command: "print output", output: "x".repeat(64 * 1024), exitCode: 0 },
+  };
+  class NotifyingSession extends TestAgentSession {
+    readonly initialTimeline = [{ item: notice, timestamp: "2026-09-22T00:00:00.000Z" }];
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: history,
+        timestamp: "2026-09-21T00:00:00.000Z",
+      };
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: toolOutput,
+        timestamp: "2026-09-21T01:00:00.000Z",
+      };
+      yield { type: "timeline", provider: "codex", ...this.initialTimeline[0] };
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new NotifyingSession(config);
+    }
+    override async resumeSession() {
+      return new NotifyingSession({ provider: "codex", cwd: workdir });
+    }
+  })();
+  const store = new RecordingTimelineStore();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    durableTimelineStore: store,
+    logger,
+  });
+  const ids: string[] = [];
+  try {
+    const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {});
+    ids.push(created.id);
+    expect((await manager.getTimelineRows(created.id)).map((row) => row.item)).toEqual([notice]);
+    const resumed = await manager.resumeAgentFromPersistence({
+      provider: "codex",
+      sessionId: "existing",
+      metadata: { cwd: workdir },
+    });
+    ids.push(resumed.id);
+    await manager.hydrateTimelineFromProvider(resumed.id);
+    expect((await manager.getTimelineRows(resumed.id)).map((row) => row.item)).toEqual([
+      history,
+      limitedToolOutput,
+      notice,
+    ]);
+    await manager.hydrateTimelineFromProvider(resumed.id, { force: true });
+    expect((await manager.getTimelineRows(resumed.id)).map((row) => row.item)).toEqual([
+      history,
+      limitedToolOutput,
+      notice,
+    ]);
+    await manager.flush();
+    expect(store.writes.flat()).toContainEqual(expect.objectContaining({ item: notice }));
+  } finally {
+    for (const id of ids) await manager.closeAgent(id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("trusted admission fences every direct manager entry before side effects", async () => {
+  const { TrustedPlugins } = await import("../plugins/trusted.js");
+  const trustedPlugins = new TrustedPlugins();
+  const seen: string[] = [];
+  trustedPlugins.register("test-guard", true, (server) =>
+    server.admission.onInput((_agent, input) => {
+      seen.push(input.kind);
+      return "deny";
+    }),
+  );
+  const manager = new AgentManager({ logger: createTestLogger(), trustedPlugins });
+  try {
+    const operations: Array<[string, () => unknown]> = [
+      ["prompt", () => manager.streamAgent("unloaded", "input")],
+      ["prompt", () => manager.tryRunOutOfBand("unloaded", "/goal pause")],
+      ["replace", () => manager.replaceAgentRun("unloaded", "input")],
+      ["steer", () => manager.steerAgentRun("unloaded", "input")],
+      ["steer", () => manager.steerOrReplaceActiveTurn("unloaded", "input")],
+      ["cancel", () => manager.cancelAgentRun("unloaded")],
+      ["archive", () => manager.archiveAgent("unloaded")],
+      ["archive", () => manager.archiveSnapshot("unloaded", "2030-01-01T00:00:00.000Z")],
+      ["close", () => manager.closeAgent("unloaded")],
+    ];
+    for (const [kind, operation] of operations) {
+      await expect(Promise.resolve().then(operation)).rejects.toThrow(
+        "Trusted plugin denied admission",
+      );
+      expect(seen.at(-1)).toBe(kind);
+    }
+    expect(manager.trustedPlugins.sequence("unloaded").humanAt).toBe(0);
+  } finally {
+    trustedPlugins.close();
+  }
+});
+
+test("trusted permission rewrite reaches provider and emits resolved event", async () => {
+  const { TrustedPlugins } = await import("../plugins/trusted.js");
+  const trustedPlugins = new TrustedPlugins();
+  trustedPlugins.register("test-guard", true, (server) =>
+    server.guard("agent.permission_respond", () => ({ requestId: "canonical" })),
+  );
+  const config: AgentSessionConfig = { provider: "codex", cwd: process.cwd() };
+  const session = new TestAgentSession(config);
+  const respond = vi.spyOn(session, "respondToPermission");
+  const client = new TestAgentClient();
+  vi.spyOn(client, "createSession").mockResolvedValue(session);
+  const manager = new AgentManager({
+    clients: { codex: client },
+    logger: createTestLogger(),
+    trustedPlugins,
+  });
+  const events: AgentManagerEvent[] = [];
+  const unsubscribe = manager.subscribe((event) => events.push(event), { replayState: false });
+  const agent = await manager.createAgent(config, undefined, { workspaceId: undefined });
+  try {
+    const live = manager.getAgent(agent.id)!;
+    live.pendingPermissions.set("canonical", { id: "canonical" } as never);
+    await trustedPlugins.rpc(undefined, () =>
+      manager.respondToPermission(agent.id, "alias", { behavior: "deny" }),
+    );
+    expect(respond).toHaveBeenCalledWith("canonical", { behavior: "deny" });
+    expect(
+      events.filter(
+        (event) => event.type === "agent_stream" && event.event.type === "permission_resolved",
+      ),
+    ).toMatchObject([{ event: { requestId: "canonical", resolution: { behavior: "deny" } } }]);
+    expect(toAgentPayload(manager.getAgent(agent.id)!).inputSequence).toEqual({
+      boot: trustedPlugins.boot,
+      humanAt: 1,
+    });
+    await expect(
+      trustedPlugins.rpc(undefined, () =>
+        manager.respondToPermission(agent.id, "alias-again", { behavior: "allow" }),
+      ),
+    ).rejects.toThrow("not pending on this agent");
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(trustedPlugins.sequence(agent.id).humanAt).toBe(2);
+  } finally {
+    unsubscribe();
+    await manager.closeAgent(agent.id);
+    trustedPlugins.close();
+  }
+});
+
+test("trusted Codex admission is passed to the provider startTurn choke point", async () => {
+  const { TrustedPlugins } = await import("../plugins/trusted.js");
+  const { CODEX_TURN_ADMISSION } = await import("./agent-sdk-types.js");
+  const trustedPlugins = new TrustedPlugins();
+  const fence = vi.fn(() => "deny" as const);
+  trustedPlugins.register("test-guard", true, (server) => server.admission.codexTurn(fence));
+  const config: AgentSessionConfig = { provider: "codex", cwd: process.cwd() };
+  const session = new TestAgentSession(config);
+  const start = vi.spyOn(session, "startTurn").mockImplementation(async (...args: unknown[]) => {
+    const options = args[1] as AgentRunOptions;
+    options[CODEX_TURN_ADMISSION]!({ provider: "codex", status: "unavailable" } as never);
+    throw new Error("provider effect must not run");
+  });
+  const client = new TestAgentClient();
+  vi.spyOn(client, "createSession").mockResolvedValue(session);
+  const manager = new AgentManager({
+    clients: { codex: client },
+    logger: createTestLogger(),
+    trustedPlugins,
+  });
+  const agent = await manager.createAgent(config, undefined, { workspaceId: undefined });
+  try {
+    await expect(manager.streamAgent(agent.id, "input").next()).rejects.toThrow(
+      "Trusted plugin denied admission",
+    );
+    expect(start).toHaveBeenCalledOnce();
+    expect(fence).toHaveBeenCalledOnce();
+  } finally {
+    await manager.closeAgent(agent.id);
+    trustedPlugins.close();
+  }
+});
+
+test("trusted admission guards orchestration before storage, normalization or provider work", async () => {
+  const { TrustedPlugins } = await import("../plugins/trusted.js");
+  const { sendPromptToAgent } = await import("./agent-prompt.js");
+  const { cancelAgentRunCommand, archiveAgentCommand } = await import("./lifecycle-command.js");
+  const trustedPlugins = new TrustedPlugins();
+  trustedPlugins.register("test-guard", true, (server) => server.admission.onInput(() => "deny"));
+  const testLogger = createTestLogger();
+  const manager = new AgentManager({ logger: testLogger, trustedPlugins });
+  const storage = Object.create(AgentStorage.prototype) as AgentStorage;
+  const read = vi.fn();
+  Reflect.set(storage, "get", read);
+  const dependencies = { agentManager: manager, agentStorage: storage, logger: testLogger };
+  try {
+    await expect(
+      sendPromptToAgent({ ...dependencies, agentId: "fixture", prompt: "input" }),
+    ).rejects.toThrow("Trusted plugin denied admission");
+    await expect(startAgentRun(manager, "fixture", "input", testLogger)).rejects.toThrow(
+      "Trusted plugin denied admission",
+    );
+    await expect(cancelAgentRunCommand(dependencies, "fixture")).rejects.toThrow(
+      "Trusted plugin denied admission",
+    );
+    await expect(archiveAgentCommand(dependencies, "fixture")).rejects.toThrow(
+      "Trusted plugin denied admission",
+    );
+    expect(read).not.toHaveBeenCalled();
+  } finally {
+    trustedPlugins.close();
+  }
+});
+
+test("trusted MCP refresh admission allows, denies and fails closed before closing the provider", async () => {
+  const { TrustedPlugins } = await import("../plugins/trusted.js");
+  for (const decision of ["allow", "deny", "throw"] as const) {
+    const trustedPlugins = new TrustedPlugins();
+    trustedPlugins.register("test-guard", true, (server) =>
+      server.admission.mcpRefresh(() => {
+        if (decision === "throw") throw new Error("fixture failure");
+        return { allowed: decision === "allow", revision: "fixture-revision" };
+      }),
+    );
+    const f = await quietMcpFixture({
+      trustedPlugins,
+      mcpRefreshAdmission: (agent) => trustedPlugins.mcpRefresh(agent),
+    });
+    try {
+      const result = await f.manager.refreshAgentMcp(f.input);
+      expect(result.outcome).toBe(decision === "allow" ? "refreshed" : "refused");
+      expect(f.client.sessions[0].closeCount).toBe(decision === "allow" ? 1 : 0);
+      expect(f.client.resumeOverrides).toHaveLength(decision === "allow" ? 1 : 0);
+    } finally {
+      await f.cleanup();
+      trustedPlugins.close();
+    }
+  }
+});
+
+test("P5: real manager threads verified operation and instance through the native Codex transport boundary", async () => {
+  const { createHash } = await import("node:crypto");
+  const { TrustedPlugins } = await import("../plugins/trusted.js");
+  const { canonicalTrustedPayload } = await import("@getpaseo/protocol/trusted-input");
+  const { promptPayload } = await import("./trusted-operation.js");
+  const { CodexAppServerAgentSession } = await import("./providers/codex-app-server-agent.js");
+  const { createFakeCodexAppServer } =
+    await import("./providers/codex/test-utils/fake-app-server.js");
+  const transport = createFakeCodexAppServer({
+    "thread/start": () => ({
+      thread: { id: "owned-thread" },
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+    }),
+    "thread/loaded/list": () => ({ data: ["owned-thread"] }),
+    "account/rateLimits/read": () => ({
+      accountId: "owned-account",
+      ordinaryUsageAllowed: true,
+      rateLimits: {},
+    }),
+  });
+  const config: AgentSessionConfig = {
+    provider: "codex",
+    cwd: process.cwd(),
+    model: "gpt-5.6-sol",
+    modeId: "read-only",
+  };
+  const native = new CodexAppServerAgentSession(
+    config,
+    null,
+    createTestLogger(),
+    async () => transport.child,
+  );
+  const client = new TestAgentClient();
+  vi.spyOn(client, "createSession").mockResolvedValue(native);
+  const authority = new TrustedPlugins();
+  authority.initializeKnownAgents([]);
+  let api!: import("@getpaseo/plugin/server").TrustedPluginServerV11;
+  const turns: import("@getpaseo/plugin/server").TrustedCodexTurnV11[] = [];
+  authority.registerV11("orca-organization-next", true, (server) => {
+    api = server;
+    server.admission.onInput(() => "allow");
+    server.admission.codexTurn({
+      check: (_agent, turn) => {
+        turns.push(turn);
+        return "deny";
+      },
+      onQuotaReadFailure: () => undefined,
+    });
+  });
+  const manager = new AgentManager({
+    clients: { codex: client },
+    logger: createTestLogger(),
+    trustedPlugins: authority,
+  });
+  const agent = await manager.createAgent(config, undefined, { workspaceId: undefined });
+  try {
+    const messageId = "orca-control:owned";
+    const attemptId = "11111111-1111-4111-8111-111111111111";
+    const payload = promptPayload("owned work", { clientMessageId: messageId });
+    const digest = createHash("sha256")
+      .update(canonicalTrustedPayload({ agentId: agent.id, kind: "prompt", messageId, payload }))
+      .digest("hex") as import("@getpaseo/protocol/trusted-input").Sha256;
+    const token = api.issueProvenance({
+      agentId: agent.id,
+      kind: "prompt",
+      messageId,
+      payloadDigest: digest,
+      attemptId,
+    });
+    const iterator = authority.rpc(token, () =>
+      manager.streamAgent(agent.id, "owned work", { clientMessageId: messageId }),
+    );
+    await expect(iterator.next()).rejects.toThrow();
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({
+      instanceId: agent.instanceId,
+      nativeSessionId: "owned-thread",
+      model: "gpt-5.6-sol",
+      serviceTier: null,
+      operation: {
+        agentId: agent.id,
+        kind: "prompt",
+        messageId,
+        payloadDigest: digest,
+        attemptId,
+        pluginId: "orca-organization-next",
+      },
+    });
+    expect(transport.requests().filter((request) => request.method === "turn/start")).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id);
+    authority.close();
+  }
+});
+
+test("agent.create hooks see the creation's labels as context; label changes they return are not applied", async () => {
+  const seen: Array<{ labels?: Record<string, string> }> = [];
+  const f = await quietMcpFixture({
+    pluginLifecycle: {
+      emit: () => {},
+      before: async (
+        hook: string,
+        request: { config: AgentSessionConfig; labels?: Record<string, string> },
+      ) => {
+        if (hook !== "agent.create") return request;
+        seen.push({ labels: request.labels });
+        return {
+          ...request,
+          config: { ...request.config, model: "gpt-5.5" },
+          labels: { keep: "no", forged: "x" },
+        };
+      },
+    } as unknown as AgentManagerOptions["pluginLifecycle"],
+  });
+  try {
+    expect(seen).toEqual([{ labels: { keep: "yes" } }]);
+    expect(f.created.config.model).toBe("gpt-5.5");
+    expect(f.created.labels).toEqual({ keep: "yes" });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Update-7 W3, R1 P-1 / P-3 / P-4. The daemon's own default stays CONSERVATIVE (Codex auto-review); only a host
+// plugin's agent.create hook raises it (Fulcra's stored owner default). An internal helper agent (branch names, commit
+// and PR text -- fed untrusted repository text) skips that hook and is pinned to its provider's conservative
+// internal mode, explicitly. A create with a caller shows the hook the caller's mode class (P-3 seam; no policy yet).
+// ---------------------------------------------------------------------------------------------------------
+class ConservativeCodexClient extends TestAgentClient {
+  persistsDefaultModeOnCreate = true;
+  readonly internalModeId = "auto";
+  constructor() {
+    super("codex");
+  }
+  override async resolveDefaultModeId(): Promise<string> {
+    return "auto-review";
+  }
+}
+interface SeenCreate {
+  config: AgentSessionConfig;
+  caller?: unknown;
+}
+function conservativeFixture(
+  prefix: string,
+  before?: (request: SeenCreate) => Promise<SeenCreate>,
+) {
+  const workdir = mkdtempSync(join(tmpdir(), prefix));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new ConservativeCodexClient();
+  const seen: SeenCreate[] = [];
+  const pluginLifecycle = before
+    ? ({
+        emit: () => {},
+        before: async (hook: string, request: SeenCreate) => {
+          if (hook !== "agent.create") return request;
+          seen.push(request);
+          return before(request);
+        },
+      } as unknown as AgentManagerOptions["pluginLifecycle"])
+    : undefined;
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    ...(pluginLifecycle ? { pluginLifecycle } : {}),
+  });
+  return { workdir, client, manager, seen };
+}
+
+test("P-1: an internal helper agent with no mode is pinned to its provider's conservative internal mode", async () => {
+  const f = conservativeFixture("p1-internal-", async (request) => ({
+    ...request,
+    config: { ...request.config, modeId: "full-access" },
+  }));
+  const internal = await f.manager.createAgent(
+    { provider: "codex", cwd: f.workdir, internal: true },
+    undefined,
+    { workspaceId: undefined },
+  );
+  expect(internal.config.modeId).toBe("auto");
+  expect(f.client.createdConfigs.at(-1)?.modeId).toBe("auto");
+  expect(f.seen).toHaveLength(0); // internal creates never reach the plugin hook
+  const explicit = await f.manager.createAgent(
+    { provider: "codex", cwd: f.workdir, internal: true, modeId: "auto-review" },
+    undefined,
+    { workspaceId: undefined },
+  );
+  expect(explicit.config.modeId).toBe("auto-review");
+});
+
+test("P-4: without the hook, or when it supplies no mode, a Codex create gets the conservative default; a failing hook refuses", async () => {
+  const none = conservativeFixture("p4-nohook-");
+  const plain = await none.manager.createAgent(
+    { provider: "codex", cwd: none.workdir },
+    undefined,
+    {
+      workspaceId: undefined,
+    },
+  );
+  expect(plain.config.modeId).toBe("auto-review");
+
+  const silent = conservativeFixture("p4-silent-", async (request) => request);
+  const kept = await silent.manager.createAgent(
+    { provider: "codex", cwd: silent.workdir },
+    undefined,
+    {
+      workspaceId: undefined,
+    },
+  );
+  expect(kept.config.modeId).toBe("auto-review");
+
+  const raised = conservativeFixture("p4-raised-", async (request) => ({
+    ...request,
+    config: { ...request.config, modeId: "full-access" },
+  }));
+  const owner = await raised.manager.createAgent(
+    { provider: "codex", cwd: raised.workdir },
+    undefined,
+    {
+      workspaceId: undefined,
+    },
+  );
+  expect(owner.config.modeId).toBe("full-access"); // only the owner's stored default, via the hook
+
+  const broken = conservativeFixture("p4-broken-", async () => {
+    throw new Error("plugin not ready");
+  });
+  await expect(
+    broken.manager.createAgent({ provider: "codex", cwd: broken.workdir }, undefined, {
+      workspaceId: undefined,
+    }),
+  ).rejects.toThrow();
+  expect(broken.client.createdConfigs).toHaveLength(0);
+});
+
+test("P-3 seam: a create with a caller shows the hook the caller's provider, mode and mode class", async () => {
+  const f = conservativeFixture("p3-caller-", async (request) => request);
+  const parent = await f.manager.createAgent(
+    { provider: "codex", cwd: f.workdir, modeId: "full-access" },
+    undefined,
+    { workspaceId: undefined },
+  );
+  await f.manager.createAgent({ provider: "codex", cwd: f.workdir }, undefined, {
+    workspaceId: undefined,
+    labels: { [PARENT_AGENT_ID_LABEL]: parent.id },
+  });
+  expect(f.seen[0]?.caller).toBeUndefined(); // the parent itself had no caller
+  expect(f.seen[1]?.caller).toEqual({
+    provider: "codex",
+    modeId: "full-access",
+    modeClass: "automatic",
+  });
+});
+
+// FIX-8 W3 (gate Z): a trusted plugin may answer a permission request before the daemon surfaces it. Answered that way
+// it never becomes pending, raises no attention and reaches no stream subscriber; declined, it surfaces as before.
+async function automaticPermissionRun(
+  allow: boolean,
+  boundary?: "replace" | "revoke" | "replace-failed-answer",
+) {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-auto-permission-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const responses: Array<[string, unknown]> = [];
+  const replacementResponses: Array<[string, unknown]> = [];
+  let admitted = allow;
+  let boundaryChanged = false;
+  class AutoSession extends TestAgentSession {
+    override async startTurn(): Promise<{ turnId: string }> {
+      const turnId = "turn-auto-1";
+      setTimeout(() => {
+        this.pushEvent({ type: "turn_started", provider: this.provider, turnId });
+        this.pushEvent({
+          type: "permission_requested",
+          provider: this.provider,
+          request: {
+            id: "perm-auto",
+            provider: this.provider,
+            kind: "tool",
+            name: "mcp__docs__search",
+          },
+          turnId,
+        });
+      }, 0);
+      return { turnId };
+    }
+    override async respondToPermission(requestId: string, response: unknown): Promise<void> {
+      if (boundary === "replace-failed-answer") {
+        await new Promise<void>((resolve, reject) => {
+          queueMicrotask(() => {
+            replaceSession(agent.id);
+            boundaryChanged = true;
+            reject(new Error("Old provider answer failed after replacement"));
+          });
+        });
+      }
+      responses.push([requestId, response]);
+      this.pushEvent({
+        type: "permission_resolved",
+        provider: this.provider,
+        requestId,
+        resolution: { behavior: "allow" },
+        turnId: "turn-auto-1",
+      });
+      this.pushEvent({ type: "turn_completed", provider: this.provider, turnId: "turn-auto-1" });
+    }
+  }
+  class AutoClient implements AgentClient {
+    readonly provider = "codex" as const;
+    readonly capabilities = TEST_CAPABILITIES;
+    async isAvailable(): Promise<boolean> {
+      return true;
+    }
+    async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new AutoSession(config);
+    }
+    async resumeSession(config?: Partial<AgentSessionConfig>): Promise<AgentSession> {
+      return new AutoSession({ provider: "codex", cwd: config?.cwd ?? process.cwd() });
+    }
+  }
+  const attention: string[] = [];
+  const manager = new AgentManager({
+    clients: { codex: new AutoClient() },
+    registry: storage,
+    logger,
+    onAgentAttention: ({ reason }) => attention.push(reason),
+  });
+  const replaceSession = (id: string) => {
+    const internal = manager as unknown as {
+      agents: Map<string, { session: AgentSession; instanceId: string }>;
+    };
+    const live = internal.agents.get(id)!;
+    const replacement = new AutoSession({ provider: "codex", cwd: workdir });
+    replacement.respondToPermission = async (requestId, response) => {
+      replacementResponses.push([requestId, response]);
+    };
+    live.session = replacement;
+    live.instanceId = randomUUID();
+  };
+  const asked: unknown[] = [];
+  manager.trustedPlugins.initializeKnownAgents([]);
+  manager.trustedPlugins.registerV11("automatic-permission-test", true, (server) => {
+    server.permissions.automatic((current, request) => {
+      asked.push(request);
+      if (boundary && boundary !== "replace-failed-answer" && asked.length === 1) {
+        queueMicrotask(() => {
+          boundaryChanged = true;
+          if (boundary === "revoke") admitted = false;
+          else replaceSession(current.id);
+        });
+      }
+      return admitted ? "allow" : "ask";
+    });
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const seen: string[] = [];
+  let maxPending = 0;
+  const unsubscribe = manager.subscribe((event) => {
+    if (event.type === "agent_stream") seen.push(event.event.type);
+    if (event.type === "agent_state")
+      maxPending = Math.max(maxPending, event.agent.pendingPermissions.size);
+  });
+  void manager.streamAgent(agent.id, "use the docs tool").next();
+  if (boundary) {
+    await vi.waitFor(() => expect(boundaryChanged).toBe(true));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } else await vi.waitFor(() => expect(allow ? responses.length : maxPending).toBe(1));
+  unsubscribe();
+  return {
+    responses,
+    attention,
+    seen,
+    maxPending,
+    asked,
+    replacementResponses,
+    pending: manager.getAgent(agent.id)?.pendingPermissions.size,
+  };
+}
+
+test("FIX-8 Z: a permission a trusted plugin allows is answered before it is surfaced", async () => {
+  const run = await automaticPermissionRun(true);
+  expect(run.asked).toHaveLength(2);
+  expect(run.responses).toEqual([["perm-auto", { behavior: "allow" }]]);
+  expect(run.maxPending).toBe(0);
+  expect(run.attention).not.toContain("permission");
+  expect(run.seen).not.toContain("permission_requested");
+  expect(run.seen).not.toContain("permission_resolved");
+});
+
+test("FIX-8 Z boundary: replacement before async answer never approves the replacement", async () => {
+  const run = await automaticPermissionRun(true, "replace");
+  expect(run.responses).toEqual([]);
+  expect(run.replacementResponses).toEqual([]);
+  expect(run.pending).toBe(0);
+});
+
+test("FIX-8 Z boundary: revoked authorization before async answer asks for the current request", async () => {
+  const run = await automaticPermissionRun(true, "revoke");
+  expect(run.responses).toEqual([]);
+  expect(run.replacementResponses).toEqual([]);
+  expect(run.pending).toBe(1);
+  expect(run.attention).toContain("permission");
+});
+
+test("FIX-8 Z boundary: failed awaited answer cannot surface an old request on a replacement", async () => {
+  const run = await automaticPermissionRun(true, "replace-failed-answer");
+  expect(run.responses).toEqual([]);
+  expect(run.replacementResponses).toEqual([]);
+  expect(run.pending).toBe(0);
+  expect(run.attention).not.toContain("permission");
+});
+
+test("FIX-8 Z: a permission the trusted plugin does not allow is surfaced as before", async () => {
+  const run = await automaticPermissionRun(false);
+  expect(run.responses).toEqual([]);
+  expect(run.pending).toBe(1);
+  expect(run.seen).toContain("permission_requested");
+});
+test("failed startup history closes the session without registering an agent", async () => {
+  let closed = false;
+  class FailingHistorySession extends TestAgentSession {
+    readonly initialTimeline = [
+      {
+        item: { type: "notification", level: "info", message: "Runtime v2" } as const,
+        timestamp: "2026-09-22T00:00:00.000Z",
+      },
+    ];
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", text: "Partial history" },
+      };
+      throw new Error("History unavailable");
+    }
+    override async close() {
+      closed = true;
+      await super.close();
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async resumeSession() {
+      return new FailingHistorySession({ provider: "codex", cwd: tmpdir() });
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  try {
+    await expect(
+      manager.resumeAgentFromPersistence({
+        provider: "codex",
+        sessionId: "failed-history",
+        metadata: { cwd: tmpdir() },
+      }),
+    ).rejects.toThrow("History unavailable");
+    expect({ agents: manager.listAgents(), closed }).toEqual({ agents: [], closed: true });
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+  }
+});
+
+async function nativeQueueFixture(holdFirst = false) {
+  const { MessageReceipts } = await import("../message-receipts/index.js");
+  const { promptPayload } = await import("./trusted-operation.js");
+  const { TrustedPlugins } = await import("../plugins/trusted.js");
+  const directory = mkdtempSync(join(tmpdir(), "native-intercom-"));
+  const authority = new TrustedPlugins();
+  authority.initializeKnownAgents([]);
+  let valid = true;
+  let supported = true;
+  let starts = 0;
+  const phases: string[] = [];
+  authority.registerV11("native-queue-test", true, (server) => {
+    server.admission.onInput((_agent, input) => {
+      phases.push(input.admissionPhase ?? "effect");
+      return valid ? "allow" : "deny";
+    });
+  });
+  let native: QueueSession;
+  class QueueSession extends TestAgentSession {
+    constructor(config: AgentSessionConfig) {
+      super(config);
+      registerNativeQueuedProvider(this, () => supported);
+    }
+    override async startTurn(prompt?: AgentPromptInput, options?: AgentRunOptions) {
+      const capability = options?.[NATIVE_QUEUED_FINAL];
+      if (capability)
+        submitNativeQueuedDispatch(capability, () => {
+          starts++;
+        });
+      else starts++;
+      if (holdFirst && starts === 1) {
+        setTimeout(
+          () => this.pushEvent({ type: "turn_started", provider: "codex", turnId: "held" }),
+          0,
+        );
+        return { turnId: "held" };
+      }
+      const result = await super.startTurn();
+      if (capability) recordNativeQueuedAcceptance(capability, result.turnId);
+      return result;
+    }
+  }
+  const client = new TestAgentClient();
+  vi.spyOn(client, "createSession").mockImplementation(
+    async (config) => (native = new QueueSession(config)),
+  );
+  const manager = new AgentManager({
+    clients: { codex: client },
+    logger: createTestLogger(),
+    trustedPlugins: authority,
+  });
+  const receipts = new MessageReceipts(join(directory, "receipts"));
+  manager.setNativeMessageReceipts(receipts);
+  const agent = await manager.createAgent({ provider: "codex", cwd: directory }, undefined, {
+    workspaceId: undefined,
+  });
+  return {
+    manager,
+    agent,
+    phases,
+    directory,
+    native: () => native,
+    readReportIdentity: () => Reflect.get(manager, "currentReportIdentity").call(manager, agent.id),
+    live: () => manager.getAgent(agent.id)!,
+    changeNativeId: async (seam: "refresh" | "event" | "handle") => {
+      Reflect.set(native, "id", randomUUID());
+      if (seam === "refresh")
+        await Reflect.get(manager, "refreshRuntimeInfo").call(
+          manager,
+          Reflect.get(manager, "requireSessionAgent").call(manager, agent.id),
+        );
+      if (seam === "event") {
+        native.pushEvent({ type: "model_changed", runtimeInfo: await native.getRuntimeInfo() });
+        await Reflect.get(manager, "drainSessionEvents").call(manager, agent.id);
+      }
+    },
+    starts: () => starts,
+    unsupported: () => {
+      supported = false;
+    },
+    replace: () => {
+      (manager as unknown as { agents: Map<string, ManagedAgent> }).agents.get(
+        agent.id,
+      )!.instanceId = randomUUID();
+    },
+    release: () => native.pushEvent({ type: "turn_completed", provider: "codex", turnId: "held" }),
+    revoke: () => {
+      valid = false;
+    },
+    queue: (messageId: string) =>
+      authority.daemon(() =>
+        manager.queueNativePrompt(
+          agent.id,
+          "instruction",
+          messageId,
+          promptPayload("instruction", { clientMessageId: messageId }),
+        ),
+      ),
+    cleanup: async () => {
+      valid = true;
+      await manager.closeAgent(agent.id);
+      authority.close();
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+test("native intercom: busy queue waits for actual foreground settlement", async () => {
+  const f = await nativeQueueFixture(true);
+  const running = drainAsyncGenerator(f.manager.streamAgent(f.agent.id, "current turn"));
+  await f.manager.waitForAgentRunStart(f.agent.id);
+  try {
+    expect(await f.queue("busy-ticket")).toMatchObject({ state: "queued", pendingCount: 1 });
+    expect(await f.queue("busy-ticket")).toMatchObject({ state: "queued", pendingCount: 1 });
+    expect(f.starts()).toBe(1);
+    f.release();
+    await running;
+    await vi.waitFor(() => expect(f.starts()).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(f.starts()).toBe(2);
+    expect(f.phases).toContain("enqueue");
+    expect(f.phases).toContain("effect");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native intercom: queued revoke has no provider effect", async () => {
+  const f = await nativeQueueFixture();
+  const live = f.manager.getAgent(f.agent.id)!;
+  live.pendingPermissions.set("hold", { id: "hold" } as never);
+  try {
+    await f.queue("revoked-ticket");
+    f.revoke();
+    live.pendingPermissions.clear();
+    f.manager.notifyAgentState(f.agent.id);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(f.starts()).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native intercom: pending permission blocks delivery until resolved", async () => {
+  const f = await nativeQueueFixture();
+  const live = f.manager.getAgent(f.agent.id)!;
+  live.pendingPermissions.set("permission", { id: "permission" } as never);
+  try {
+    expect(await f.queue("permission-ticket")).toMatchObject({ state: "queued" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(f.starts()).toBe(0);
+    live.pendingPermissions.clear();
+    f.manager.notifyAgentState(f.agent.id);
+    await vi.waitFor(() => expect(f.starts()).toBe(1));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native intercom: changed live instance cancels pending authority", async () => {
+  const f = await nativeQueueFixture();
+  const live = f.manager.getAgent(f.agent.id)!;
+  live.pendingPermissions.set("hold", { id: "hold" } as never);
+  try {
+    await f.queue("replaced-ticket");
+    f.replace();
+    live.pendingPermissions.clear();
+    f.manager.notifyAgentState(f.agent.id);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(f.starts()).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native intercom: report identity reads real native session while human input fences action cursor", async () => {
+  const f = await nativeQueueFixture();
+  const readIdentity = () =>
+    Reflect.get(f.manager, "currentReportIdentity").call(f.manager, f.agent.id);
+  try {
+    const before = readIdentity();
+    expect(before).toMatchObject({ agentId: f.agent.id, boot: f.manager.trustedPlugins.boot });
+    const cursor = f.manager.trustedPlugins.requireSequence(f.agent.id).humanAt;
+    await f.manager.trustedPlugins.rpc(undefined, () =>
+      drainAsyncGenerator(f.manager.streamAgent(f.agent.id, "human input")),
+    );
+
+    expect(f.manager.trustedPlugins.requireSequence(f.agent.id).humanAt).toBe(cursor + 1);
+    expect(readIdentity()).toEqual(before);
+    f.replace();
+    expect(readIdentity()).not.toEqual(before);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+// RR2: provider identity changes on the same runtime; never remap an old registry grant.
+test.each(["refresh", "event", "handle"] as const)(
+  "native intercom RR2: %s native-session replacement fences an unchanged runtime instance",
+  async (seam) => {
+    const f = await nativeQueueFixture();
+    try {
+      const before = f.readReportIdentity();
+      const session = f.live().session;
+      const instanceId = f.live().instanceId;
+      await f.changeNativeId(seam);
+      expect(f.live().session).toBe(session);
+      expect(f.live().instanceId).toBe(instanceId);
+      expect(f.live().persistence?.sessionId).toBe(before.sessionId);
+      expect(f.native().id).not.toBe(before.sessionId);
+      if (seam !== "handle") expect(f.live().runtimeInfo?.sessionId).toBe(f.native().id);
+      expect(f.readReportIdentity()).toBeNull();
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+async function nativeReportRegistryFixture() {
+  const { NativeReportRegistry } = await import("../report-registry.js");
+  const { ManagementAuthority } = await import("../plugins/management.js");
+  const { registerNativeReportRegistry } = await import("../plugins/native-intercom-owner.js");
+  const { bundledTarget } = await import("../plugins/test-utils/management.js");
+  const { parseControllerCommand } =
+    await import("../../../../../control/orca-organization/shared/command-parser.mjs");
+  const prime = await nativeQueueFixture();
+  const child = await nativeQueueFixture();
+  const scope = { projectId: randomUUID(), taskId: randomUUID() };
+  const file = join(prime.directory, "report-authority.json");
+  const registry = new NativeReportRegistry(file, (id) => {
+    if (id === prime.agent.id) return prime.readReportIdentity();
+    if (id === child.agent.id) return child.readReportIdentity();
+    return null;
+  });
+  const authority = new ManagementAuthority({
+    enabled: () => true,
+    validate: parseControllerCommand,
+  });
+  const bridge = vi.fn(async () => null);
+  authority.register("orca-organization-next", bridge);
+  registerNativeReportRegistry(authority, registry);
+  // Host-admitted fake principal. OS authentication construction is not asserted here.
+  const invocation = authority.open(bundledTarget, () => ({
+    id: "owner",
+    authentication: "protected-local-ipc",
+    deviceId: null,
+    permissions: OWNER_PERMISSIONS,
+  }))!;
+  const call = (method: string, input: import("@getpaseo/protocol/trusted-input").JsonValue) =>
+    invocation.invoke(randomUUID(), { method, input });
+  const primeIdentity = prime.readReportIdentity(),
+    childIdentity = child.readReportIdentity();
+  const registered = (await call("report-prime-register", {
+    messageId: randomUUID(),
+    identity: primeIdentity,
+    scopes: [scope],
+    expectedEpoch: null,
+  })) as { epoch: string };
+  const adopted = (await call("report-parent-adopt", {
+    messageId: randomUUID(),
+    child: childIdentity,
+    parent: primeIdentity,
+    scopes: [scope],
+    expectedEpoch: null,
+  })) as { epoch: string };
+  return {
+    prime,
+    child,
+    file,
+    scope,
+    registry,
+    call,
+    primeIdentity,
+    childIdentity,
+    registered,
+    adopted,
+    bridge,
+    cleanup: async () => {
+      invocation.close();
+      await Promise.all([prime.cleanup(), child.cleanup()]);
+    },
+  };
+}
+
+test.each(["refresh", "event"] as const)(
+  "native intercom RR2: %s replacement refuses old prime/adoption identity and final parent fence",
+  async (seam) => {
+    const f = await nativeReportRegistryFixture();
+    try {
+      expect(f.registry.requireParent(f.childIdentity, f.scope).parent).toEqual(f.primeIdentity);
+      await f.child.changeNativeId(seam);
+      expect(() => f.registry.requireParent(f.childIdentity, f.scope)).toThrow();
+      await expect(
+        f.call("report-parent-adopt", {
+          messageId: randomUUID(),
+          child: f.childIdentity,
+          parent: f.primeIdentity,
+          scopes: [f.scope],
+          expectedEpoch: f.adopted.epoch,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        f.call("report-prime-register", {
+          messageId: randomUUID(),
+          identity: f.childIdentity,
+          scopes: [f.scope],
+          expectedEpoch: f.registered.epoch,
+        }),
+      ).rejects.toThrow();
+      expect(f.bridge).not.toHaveBeenCalled();
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test("native intercom RR2: native-session change during durable adoption refuses publication", async () => {
+  const f = await nativeReportRegistryFixture();
+  const { promises: files } = await import("node:fs");
+  const originalMkdir = files.mkdir;
+  const before = await files.readFile(f.file, "utf8");
+  let held!: () => void, release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    held = resolve;
+  });
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const spy = vi.spyOn(files, "mkdir").mockImplementation(async (...args) => {
+    held();
+    await wait;
+    return originalMkdir(...args);
+  });
+  try {
+    const pending = f.call("report-parent-adopt", {
+      messageId: randomUUID(),
+      child: f.childIdentity,
+      parent: f.primeIdentity,
+      scopes: [f.scope],
+      expectedEpoch: f.adopted.epoch,
+    });
+    const result = expect(pending).rejects.toThrow();
+    await started;
+    await f.child.changeNativeId("event");
+    expect(() => f.registry.requireParent(f.childIdentity, f.scope)).toThrow();
+    release();
+    await result;
+    expect(await files.readFile(f.file, "utf8")).toBe(before);
+    expect(f.bridge).not.toHaveBeenCalled();
+  } finally {
+    release();
+    spy.mockRestore();
+    await f.cleanup();
+  }
+});
+
+test.each(["close", "reload"] as const)(
+  "native intercom RR2: %s admission fences report identity during provider shutdown",
+  async (operation) => {
+    const f = await nativeQueueFixture();
+    let held!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      held = resolve;
+    });
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(f.native(), "close").mockImplementation(async () => {
+      held();
+      await wait;
+    });
+    try {
+      expect(f.readReportIdentity()).not.toBeNull();
+      const pending =
+        operation === "close"
+          ? f.manager.closeAgent(f.agent.id)
+          : f.manager.reloadAgentSession(f.agent.id);
+      await started;
+      expect(f.readReportIdentity()).toBeNull();
+      release();
+      await pending;
+    } finally {
+      release();
+      spy.mockRestore();
+      await f.cleanup();
+    }
+  },
+);
+
+test.each(["event", "handle"] as const)(
+  "native intercom target fence: %s native-id replacement refuses the old busy action ticket",
+  async (seam) => {
+    const f = await nativeQueueFixture(true);
+    const { readFile } = await import("node:fs/promises");
+    const { createHash } = await import("node:crypto");
+    const messageId = randomUUID();
+    const key = createHash("sha256")
+      .update(JSON.stringify(["send", f.agent.id, messageId]))
+      .digest("hex");
+    const file = join(f.directory, "receipts", `${key}.json`);
+    const running = drainAsyncGenerator(f.manager.streamAgent(f.agent.id, "current turn"));
+    await f.manager.waitForAgentRunStart(f.agent.id);
+    try {
+      const original = f.live();
+      expect(await f.queue(messageId)).toMatchObject({ state: "queued", pendingCount: 1 });
+      await f.changeNativeId(seam);
+      expect(f.live().instanceId).toBe(original.instanceId);
+      expect(f.live().session).toBe(original.session);
+      expect(f.live().persistence?.sessionId).toBe(original.persistence?.sessionId);
+      f.release();
+      await running;
+      await vi.waitFor(async () => {
+        expect(JSON.parse(await readFile(file, "utf8")).state).toBe("refused");
+      });
+      expect(f.starts()).toBe(1);
+      await expect(f.queue(messageId)).rejects.toThrow();
+    } finally {
+      f.release();
+      await running;
+      await f.cleanup();
+    }
+  },
+);
+
+test("native provider admission: an unsupported target refuses before native admission or queue", async () => {
+  const f = await nativeQueueFixture();
+  f.unsupported();
+  try {
+    await expect(f.queue("unsupported-target")).rejects.toThrow("provider unavailable");
+    expect(f.starts()).toBe(0);
+    expect(f.phases).toHaveLength(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native provider admission: a spoofed symbol callback never executes or reaches a provider", async () => {
+  const f = await nativeQueueFixture();
+  let spoofCalls = 0;
+  try {
+    await expect(
+      drainAsyncGenerator(
+        f.manager.streamAgent(f.agent.id, "spoof fixture", {
+          [NATIVE_QUEUED_FINAL]: () => {
+            spoofCalls++;
+          },
+        }),
+      ),
+    ).rejects.toThrow("capability unavailable");
+    expect(spoofCalls).toBe(0);
+    expect(f.starts()).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+for (const boundary of [
+  "accept",
+  "revoke",
+  "replace",
+  "cycle",
+  "native",
+  "scope",
+  "closed",
+  "internal",
+] as const) {
+  test(`native parent adoption ${boundary} preserves owner and native boundaries`, async () => {
+    const f = await quietMcpFixture();
+    const parent = await f.manager.createAgent(
+      { provider: "codex", cwd: f.created.cwd },
+      undefined,
+      {},
+    );
+    await f.manager.hydrateTimelineFromProvider(parent.id);
+    const liveAgents = Reflect.get(f.manager, "agents") as Map<string, ManagedAgent>;
+    const childAgent = liveAgents.get(f.created.id)!;
+    const parentAgent = liveAgents.get(parent.id)!;
+    let owner = true;
+    const input = {
+      agentId: childAgent.id,
+      parentAgentId: parentAgent.id,
+      expectedParentAgentId: null,
+      childNativeSessionId: childAgent.runtimeInfo!.sessionId!,
+      parentNativeSessionId: parentAgent.runtimeInfo!.sessionId!,
+    };
+    try {
+      if (boundary === "cycle") parentAgent.labels[PARENT_AGENT_ID_LABEL] = childAgent.id;
+      if (boundary === "native") input.parentNativeSessionId = "stale-native";
+      if (boundary === "scope") input.parentAgentId = "other-host-agent";
+      if (boundary === "closed") await f.manager.closeAgent(parentAgent.id);
+      if (boundary === "internal") parentAgent.internal = true;
+      const operation = f.manager.adoptAgentParent(input, () => owner);
+      // Initial admission was valid. Change authority/instance while the actual lifecycle lane awaits dispatch.
+      if (boundary === "revoke") owner = false;
+      if (boundary === "replace") parentAgent.instanceId = "replacement-instance";
+      if (boundary === "accept") {
+        await operation;
+        expect(childAgent.labels[PARENT_AGENT_ID_LABEL]).toBe(parentAgent.id);
+        expect((await f.storage.get(childAgent.id))?.labels[PARENT_AGENT_ID_LABEL]).toBe(
+          parentAgent.id,
+        );
+        expect(childAgent.runtimeInfo!.sessionId).toBe(input.childNativeSessionId);
+        expect(f.client.sessions[0].startCount).toBe(0);
+        await expect(
+          f.manager.setLabels(childAgent.id, { [PARENT_AGENT_ID_LABEL]: "claimed-owner" }),
+        ).rejects.toThrow("native owner");
+        await expect(
+          f.manager.updateAgentMetadata(childAgent.id, {
+            labels: { [PARENT_AGENT_ID_LABEL]: "claimed-owner" },
+          }),
+        ).rejects.toThrow("native owner");
+        await expect(
+          f.manager.adoptAgentParent({ ...input, expectedParentAgentId: null }, () => true),
+        ).rejects.toThrow("relationship changed");
+      } else {
+        await expect(operation).rejects.toThrow();
+        expect(childAgent.labels[PARENT_AGENT_ID_LABEL]).toBeUndefined();
+        expect((await f.storage.get(childAgent.id))?.labels[PARENT_AGENT_ID_LABEL]).toBeUndefined();
+      }
+    } finally {
+      parentAgent.internal = false;
+      await f.manager.closeAgent(parent.id);
+      await f.cleanup();
+    }
+  });
+}
+
+for (const boundary of [
+  "accept",
+  "owner-revoke",
+  "native-child",
+  "native-parent",
+  "pending-child",
+  "pending-parent",
+  "closing-child",
+  "closing-parent",
+  "mcp-child",
+  "mcp-parent",
+  "mutate",
+  "mutate-cas",
+  "deny",
+  "legacy",
+] as const) {
+  test(`native parent adoption integrated V11 journal ${boundary}`, async () => {
+    const { TrustedPlugins } = await import("../plugins/trusted.js");
+    const { ControlStore } = await import("../../../../../control/src/control/store.mjs");
+    const { createTrustedContribution, OWN_ID } =
+      await import("../../../../../control/src/control/trusted-contribution.mjs");
+    const { canonicalTrustedPayload } = await import("@getpaseo/protocol/trusted-input");
+    const { createHash } = await import("node:crypto");
+    const host = new TrustedPlugins();
+    const f = await quietMcpFixture({ trustedPlugins: host });
+    const parent = await f.manager.createAgent(
+      { provider: "codex", cwd: f.created.cwd },
+      undefined,
+      {},
+    );
+    await f.manager.hydrateTimelineFromProvider(parent.id);
+    const agents = Reflect.get(f.manager, "agents") as Map<string, ManagedAgent>;
+    const child = agents.get(f.created.id)!;
+    const target = agents.get(parent.id)!;
+    const home = mkdtempSync(join(tmpdir(), "adoption-journal-"));
+    const store = new ControlStore(join(home, "journal.sqlite"));
+    store.created(child.id, randomUUID(), child.cwd);
+    store.db
+      .prepare(
+        "UPDATE sessions SET mode='delegated',boot=?,grantedAt=1,token='fixture-token',expected='fixture-expected' WHERE id=?",
+      )
+      .run(host.boot, child.id);
+    store.db
+      .prepare("INSERT INTO deliveries VALUES (?,?,'send','{}','queued','{}')")
+      .run("queued", child.id);
+    host.initializeKnownAgents([...agents.keys()]);
+    host.registerV11(OWN_ID, true, createTrustedContribution({ home }));
+    let owner = true;
+    const input = {
+      agentId: child.id,
+      parentAgentId: target.id,
+      expectedParentAgentId: null as string | null,
+      childNativeSessionId: child.session!.id,
+      parentNativeSessionId: target.session!.id,
+    };
+    const expectedDigest = createHash("sha256")
+      .update(
+        canonicalTrustedPayload({
+          agentId: child.id,
+          kind: "configure",
+          messageId: null,
+          payload: {
+            type: "command",
+            command: "adopt-parent",
+            arguments: {
+              parentAgentId: input.parentAgentId,
+              expectedParentAgentId: null,
+              childNativeSessionId: input.childNativeSessionId,
+              parentNativeSessionId: input.parentNativeSessionId,
+            },
+          },
+        }),
+      )
+      .digest("hex");
+    const seen: string[] = [];
+    if (boundary === "legacy")
+      host.register("legacy-authority", true, (server) => server.admission.onInput(() => "allow"));
+    host.registerV11("adoption-boundary", true, (server) =>
+      server.admission.onInput((_agent, admission) => {
+        if (admission.cause !== "parent-adoption") return "allow";
+        expect(admission.source).toBe("daemon");
+        seen.push(admission.operation.payloadDigest);
+        if (boundary === "owner-revoke") owner = false;
+        if (boundary === "native-child") Reflect.set(child.session!, "id", "replacement-native");
+        if (boundary === "native-parent") Reflect.set(target.session!, "id", "replacement-native");
+        if (boundary === "pending-child") child.pendingReplacement = true;
+        if (boundary === "pending-parent") target.pendingReplacement = true;
+        if (boundary === "closing-child")
+          Reflect.get(f.manager, "inFlightAgentCloses").set(child.id, Promise.resolve());
+        if (boundary === "closing-parent")
+          Reflect.get(f.manager, "inFlightAgentCloses").set(target.id, Promise.resolve());
+        if (boundary === "mcp-parent") Reflect.get(f.manager, "mcpRefreshes").add(target.id);
+        if (boundary === "mcp-child") Reflect.get(f.manager, "mcpRefreshes").add(child.id);
+        return boundary === "deny" ? "deny" : "allow";
+      }),
+    );
+    const snapshot = () => ({
+      row: store.get(child.id),
+      deliveries: store.db.prepare("SELECT * FROM deliveries").all(),
+      transfers: store.db.prepare("SELECT * FROM transfers").all(),
+      observation: host.requireSequence(child.id),
+    });
+    const before = snapshot();
+    try {
+      const hold = deferred<void>();
+      if (boundary.startsWith("mutate"))
+        Reflect.get(f.manager, "lifecycleMutationTails").set(child.id, hold.promise);
+      const operation = f.manager.adoptAgentParent(input, () => owner);
+      if (boundary.startsWith("mutate")) {
+        input.parentAgentId = "retargeted";
+        input.expectedParentAgentId = "changed-old-parent";
+        input.childNativeSessionId = "retargeted-native";
+        if (boundary === "mutate-cas") child.labels[PARENT_AGENT_ID_LABEL] = "changed-old-parent";
+        hold.resolve();
+      }
+      if (boundary === "accept" || boundary === "mutate") {
+        await operation;
+        expect(child.labels[PARENT_AGENT_ID_LABEL]).toBe(target.id);
+        expect((await f.storage.get(child.id))?.labels[PARENT_AGENT_ID_LABEL]).toBe(target.id);
+      } else {
+        await expect(operation).rejects.toThrow();
+        expect(child.labels[PARENT_AGENT_ID_LABEL]).toBe(
+          boundary === "mutate-cas" ? "changed-old-parent" : undefined,
+        );
+        expect(child.labels[PARENT_AGENT_ID_LABEL]).not.toBe(target.id);
+      }
+      expect(snapshot()).toEqual(before);
+      expect(seen).toEqual(
+        boundary === "mutate-cas" || boundary === "legacy" ? [] : [expectedDigest],
+      );
+      if (boundary === "accept") {
+        await host.rpc(undefined, () =>
+          f.manager.setLabels(child.id, { "claimed-purpose": "parent-adoption" }),
+        );
+        expect(store.get(child.id).mode).toBe("human");
+        expect(store.get(child.id).generation).toBe(before.row.generation + 1);
+        expect(store.get(child.id).token).toBeNull();
+        expect(store.delivery("queued").state).toBe("refused");
+        expect(host.requireSequence(child.id).humanAt).toBe(before.observation.humanAt + 1);
+      }
+    } finally {
+      child.pendingReplacement = false;
+      target.pendingReplacement = false;
+      Reflect.get(f.manager, "inFlightAgentCloses").delete(child.id);
+      Reflect.get(f.manager, "inFlightAgentCloses").delete(target.id);
+      Reflect.get(f.manager, "mcpRefreshes").delete(child.id);
+      Reflect.get(f.manager, "mcpRefreshes").delete(target.id);
+      await f.manager.closeAgent(target.id);
+      await f.cleanup();
+      host.close();
+      store.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+}
+
+// Bind the real older read-only cache export; no Session behavior is substituted.
+vi.mock("@isaacs/ttlcache", async () => {
+  const cache = await vi.importActual<{ TTLCache?: unknown; default?: unknown }>(
+    "@isaacs/ttlcache",
+  );
+  return { ...cache, TTLCache: cache.TTLCache ?? cache.default };
+});
+
+test("native parent adoption actual Session and manager notify old/new roots through subscriptions", async () => {
+  const f = await quietMcpFixture();
+  const agents = Reflect.get(f.manager, "agents") as Map<string, ManagedAgent>;
+  const child = agents.get(f.created.id)!;
+  const created: ManagedAgent[] = [];
+  for (const workspaceId of ["old-root", "old-parent", "new-root", "new-parent"]) {
+    const record = await f.manager.createAgent({ provider: "codex", cwd: child.cwd }, undefined, {
+      workspaceId,
+    });
+    await f.manager.hydrateTimelineFromProvider(record.id);
+    created.push(agents.get(record.id)!);
+  }
+  const [oldRoot, oldParent, newRoot, newParent] = created;
+  oldParent.labels[PARENT_AGENT_ID_LABEL] = oldRoot.id;
+  newParent.labels[PARENT_AGENT_ID_LABEL] = newRoot.id;
+  child.labels[PARENT_AGENT_ID_LABEL] = oldParent.id;
+  const source = {};
+  const updates: { type: string; payload: { workspace: { id: string } } }[] = [];
+  const responses: unknown[] = [];
+  const subscription = {
+    subscriptionId: "roots",
+    owner: { source, emit: (frame: (typeof updates)[number]) => updates.push(frame) },
+    lastEmittedByWorkspaceId: new Map(),
+    isBootstrapping: false,
+  };
+  const projected: string[][] = [];
+  const session = Object.create(Session.prototype) as Session;
+  Object.assign(session, {
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    managementSources: new Map(),
+    managementInvocations: new Map(),
+    authorization: new SessionAuthorization(OWNER_PERMISSIONS),
+    workspaceUpdatesSubscriptions: new Map([["roots", subscription]]),
+    workspaceUpdateTails: new Map(),
+    delivery: {
+      request: (_source: unknown, _msg: unknown, run: () => unknown) => run(),
+      forSource: (_source: unknown, run: () => unknown) => run(),
+    },
+    workspaceDirectory: {
+      buildDescriptorMap: async ({ workspaceIds }: { workspaceIds: Set<string> }) => {
+        projected.push([...workspaceIds]);
+        return new Map(
+          [...workspaceIds].map((id) => [
+            id,
+            { id, projectId: "fixture-project", status: "running" },
+          ]),
+        );
+      },
+      matchesFilter: () => true,
+    },
+    workspaceGitObserver: { recordDescriptorState: () => undefined },
+    directorySync: { sequenceWorkspaceUpdate: (payload: unknown) => payload },
+    emit: (message: unknown) => responses.push(message),
+    inflightRequests: 0,
+    peakInflightRequests: 0,
+    sessionLogger: logger,
+  });
+  session.admitManagementSource(source, {
+    id: "owner",
+    authentication: "daemon-password",
+    deviceId: null,
+  });
+  try {
+    const request = {
+      type: "agent.parent.adopt.request",
+      requestId: "root-adoption",
+      agentId: child.id,
+      parentAgentId: newParent.id,
+      expectedParentAgentId: oldParent.id,
+      childNativeSessionId: child.session!.id,
+      parentNativeSessionId: newParent.session!.id,
+    };
+    const operation = Reflect.get(session, "dispatchAgentRelationshipMessage").call(
+      session,
+      request,
+      source,
+    );
+    request.parentAgentId = "retargeted-during-root-resolution";
+    request.expectedParentAgentId = "retargeted-old-parent";
+    request.requestId = "retargeted-response";
+    await operation;
+    expect(responses.at(-1)).toMatchObject({
+      type: "agent.parent.adopt.response",
+      payload: { accepted: true, requestId: "root-adoption" },
+    });
+    expect(child.labels[PARENT_AGENT_ID_LABEL]).toBe(newParent.id);
+    const affected = [child.workspaceId!, ...created.map((agent) => agent.workspaceId!)].sort();
+    expect(projected).toHaveLength(1);
+    expect(projected[0].sort()).toEqual(affected);
+    expect(updates.map((frame) => frame.payload.workspace.id).sort()).toEqual(affected);
+    expect(updates.every((frame) => frame.type === "workspace_update")).toBe(true);
+    expect(subscription.lastEmittedByWorkspaceId.size).toBe(5);
+  } finally {
+    for (const agent of created) await f.manager.closeAgent(agent.id);
+    await f.cleanup();
+  }
+});
+
+test("native parent adoption snapshot refuses accessors without executing them", async () => {
+  const { snapshotParentAdoption } = await import("./parent-adoption.js");
+  let accessed = false;
+  expect(() =>
+    snapshotParentAdoption({
+      agentId: "child",
+      get parentAgentId() {
+        accessed = true;
+        return "parent";
+      },
+      expectedParentAgentId: null,
+      childNativeSessionId: "child-native",
+      parentNativeSessionId: "parent-native",
+    }),
+  ).toThrow("Primitive");
+  expect(accessed).toBe(false);
+});
+
+test("pooled usage enumeration excludes unqualified runtimes before reading credentials", () => {
+  const credential = {
+    credential: { kind: "unavailable" as const },
+    label: "Captured",
+    accountId: "11111111-1111-4111-8111-111111111111",
+  };
+  const read = vi.fn(() => credential);
+  const deniedRead = vi.fn(() => {
+    throw Error("unqualified credential must not be read");
+  });
+  const base = {
+    id: "current",
+    provider: "claude",
+    internal: false,
+    archivedAt: null,
+    pendingReplacement: false,
+    lifecycle: "idle",
+    instanceId: "runtime-current",
+    session: { usageCredential: read },
+  };
+  const rejected = [
+    { internal: true },
+    { archivedAt: "archived" },
+    { pendingReplacement: true },
+    { lifecycle: "initializing" },
+    { lifecycle: "error" },
+    { lifecycle: "closed" },
+    { instanceId: undefined },
+    { session: null },
+  ];
+  const agents = new Map<string, unknown>([
+    [base.id, base],
+    ["running", { ...base, id: "running", lifecycle: "running", instanceId: "runtime-running" }],
+  ]);
+  rejected.forEach((over, i) =>
+    agents.set(`rejected-${i}`, {
+      ...base,
+      id: `rejected-${i}`,
+      session: { usageCredential: deniedRead },
+      ...over,
+    }),
+  );
+  const manager = Object.create(AgentManager.prototype) as AgentManager;
+  Object.defineProperty(manager, "agents", { value: agents });
+  const rows = manager.listPooledUsageSessions();
+  expect(
+    rows.map(({ agentId, runtimeInstanceId, account }) => ({
+      agentId,
+      runtimeInstanceId,
+      id: account.id,
+      name: account.name,
+    })),
+  ).toEqual([
+    {
+      agentId: "current",
+      runtimeInstanceId: "runtime-current",
+      id: credential.accountId,
+      name: "Captured",
+    },
+    {
+      agentId: "running",
+      runtimeInstanceId: "runtime-running",
+      id: credential.accountId,
+      name: "Captured",
+    },
+  ]);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(deniedRead).not.toHaveBeenCalled();
 });

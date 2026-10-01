@@ -16,7 +16,7 @@ describe("fulcra sign-in return link shape", () => {
 
   it("refuses every other shape", () => {
     for (const bad of [
-      // Repeated and trailing slashes.
+      // Repeated and trailing slashes (R-E-12).
       "fulcra://oauth//flow_1234abcd",
       "fulcra://oauth//flow_1234abcd/",
       "fulcra://oauth/flow_1234abcd/",

@@ -6,6 +6,8 @@ Paseo executes `index.server.ts` in a subprocess and `index.client.tsx` in every
 
 > **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugins are unsandboxed: server code and preparation commands run with the daemon user's access on the daemon host, and client contributions run inside Paseo. The repository's dependencies and future updates are part of that trust decision. With `--host`, preparation runs on that remote daemon host.
 
+Distribution authors adding synchronous security policy use [trusted bundled host plugins](../packages/plugin/TRUSTED-HOST.md). These load through an immutable host startup path and cannot be installed through ordinary plugin management.
+
 ## Install a directory source
 
 Create a typecheckable plugin project, install its development dependencies, then install it into
@@ -623,8 +625,8 @@ are refused. The daemon knows the session is a plugin's because it created it. C
 
 ## Confirm on the device (`ctx.device`)
 
-`ctx.device` lets plugin client code prove that the owner answered on a device they paired.
-The device holds a P-256 key; the private key is created on the device, never
+`ctx.device` lets plugin client code prove that the owner answered on a device they paired
+(CONTRACTS §3.6). The device holds a P-256 key; the private key is created on the device, never
 leaves it, and is never reachable from the daemon or plugin server code. Plugin server code has no
 `device`, cannot import the client SDK, and no RPC or host call signs.
 
@@ -640,12 +642,12 @@ export default function contribute(client: PluginClientContext) {
 - `status()` → `{ paired, deviceId?, publicKey?, platform, keyStorage, userPresence }`.
 - `pair({ code? })` asks for Touch ID, Face ID or a fingerprint (a confirmation where the device has
   none) and only then creates the key. It returns the device id, the public key (base64 SPKI) and
-  the protection level. The host decides whether pairing is allowed; `pair()` does not open a
+  the protection level. The controller decides whether pairing is allowed; `pair()` does not open a
   pairing window and does not bypass that decision. The pairing code, when given, is shown in the
   prompt.
 - On iOS and Android each pairing has its own key; a signature always names the device id of the
   key that made it, and pair and sign run one at a time.
-- `sign(payload, reason)` signs exactly the choice payload (`decisionId`, `revision`,
+- `sign(payload, reason)` signs exactly the §3.6 choice payload (`decisionId`, `revision`,
   `optionId`, `digest`, `messageId`, `note`, `at`, `confirmDestructive`), and nothing else, after a
   prompt that reads "Fulcra: <reason>". The signature is ES256: base64 of the raw 64-byte r‖s over
   the canonical JSON of the payload (keys sorted, no whitespace). A refused prompt rejects and
@@ -665,15 +667,15 @@ Protection per platform, as `status()` reports it:
 Limits, stated plainly:
 
 - **No attestation.** Without an Apple Developer account there is no App Attest or device
-  attestation, so the host cannot prove a public key came from Fulcra on real hardware. It
+  attestation, so the controller cannot prove a public key came from Fulcra on real hardware. It
   trusts the key it was given at pairing. That is why first pairing stays off until the owner
-  decides the trust anchor.
+  decides the trust anchor (§3.6 rule 3).
 - **The desktop key lives in the app, not in hardware.** On a Mac the private key is decrypted in
   the app's main process for each signature, after Touch ID. Software running as the same user
   cannot use it without the keychain granting the app's entry, but a compromised app build could.
   Electron has no login-password prompt, so a Mac without usable Touch ID cannot pair: a click in a
-  dialog is not user presence. Windows and Linux still pair with a dialog
-  and report `userPresence: false`; the host must not count that as presence.
+  dialog is not user presence (CONTRACTS §3.6 rule 3). Windows and Linux still pair with a dialog
+  and report `userPresence: false`; the controller must not count that as presence.
 - **The renderer can ask.** Any code in the app window, including plugin client code, can request
   a signature; each request still needs the owner's prompt, and the prompt shows the reason.
 

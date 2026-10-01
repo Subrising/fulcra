@@ -58,3 +58,11 @@ export type {
   PluginTimelineTransformerContribution,
   PluginWorkspacePanelContribution,
 };
+
+/** Host-owned presentation only: no contributions from unverified client code. */
+export interface UntrustedPlugin {
+  id: string;
+  serverId: string;
+  untrusted: true;
+  sidebarItems: PluginSidebarContribution[];
+}

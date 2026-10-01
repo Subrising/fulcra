@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
 import Svg, { G, Line, Polygon, Rect, Text as SvgText } from "react-native-svg";
 import type { TFunction } from "i18next";
@@ -48,26 +48,72 @@ function statusColor(theme: Theme, status: DiffStatus): string {
   }
 }
 
-const STATUSES: readonly DiffStatus[] = ["added", "removed", "changed", "unchanged"];
-const frameProps = new Map(
-  STATUSES.map((status) => [
-    status,
-    (theme: Theme) => ({ fill: theme.colors.surface1, stroke: statusColor(theme, status) }),
-  ]),
-);
-const strokeProps = new Map(
-  STATUSES.map((status) => [status, (theme: Theme) => ({ stroke: statusColor(theme, status) })]),
-);
-const fillProps = new Map(
-  STATUSES.map((status) => [status, (theme: Theme) => ({ fill: statusColor(theme, status) })]),
-);
-const foregroundFill = (theme: Theme) => ({ fill: theme.colors.foreground });
-const mutedFill = (theme: Theme) => ({ fill: theme.colors.foregroundMuted });
+// Colours reach the picture as one palette through withUnistyles on the canvas component. Wrapping
+// each SVG element instead makes Unistyles insert an HTML wrapper inside <svg> on web, which the
+// browser never paints (the pictures came out blank).
+interface ChangePalette {
+  status: Record<DiffStatus, string>;
+  surface: string;
+  foreground: string;
+  muted: string;
+}
+const paletteProps = (theme: Theme) => ({
+  palette: {
+    status: {
+      added: statusColor(theme, "added"),
+      removed: statusColor(theme, "removed"),
+      changed: statusColor(theme, "changed"),
+      unchanged: statusColor(theme, "unchanged"),
+    },
+    surface: theme.colors.surface1,
+    foreground: theme.colors.foreground,
+    muted: theme.colors.foregroundMuted,
+  } satisfies ChangePalette,
+});
+const FALLBACK_PALETTE: ChangePalette = {
+  status: { added: "#6cb17b", removed: "#d0695f", changed: "#c99a5b", unchanged: "#a1a5a4" },
+  surface: "#1e2120",
+  foreground: "#e8eaea",
+  muted: "#a1a5a4",
+};
 
-const ThemedLine = withUnistyles(Line);
-const ThemedPolygon = withUnistyles(Polygon);
-const ThemedRect = withUnistyles(Rect);
-const ThemedSvgText = withUnistyles(SvgText);
+function ChangeCanvas(props: {
+  palette?: ChangePalette;
+  picture: { nodes: StatusNode[]; edges: StatusEdge[] };
+  nodesById: ReadonlyMap<string, ArchitectureMapNode>;
+  frame: ViewBox;
+  zoom: number;
+  drawLabels: boolean;
+}) {
+  const { picture, nodesById, frame, zoom, drawLabels } = props;
+  const palette = props.palette ?? FALLBACK_PALETTE;
+  return (
+    <Svg
+      width={frame.width * zoom}
+      height={frame.height * zoom}
+      viewBox={`${frame.x} ${frame.y} ${frame.width} ${frame.height}`}
+    >
+      {picture.edges.map((edge) => (
+        <ChangeEdge
+          key={`${edge.status}-${edge.id}`}
+          edge={edge}
+          nodesById={nodesById}
+          drawLabel={drawLabels}
+          palette={palette}
+        />
+      ))}
+      {picture.nodes.map((node) => (
+        <ChangeNode
+          key={`${node.status}-${node.id}`}
+          node={node}
+          drawLabels={drawLabels}
+          palette={palette}
+        />
+      ))}
+    </Svg>
+  );
+}
+const ThemedChangeCanvas = withUnistyles(ChangeCanvas);
 
 function statusPicture(
   model: ArchitectureMapModel | null,
@@ -88,6 +134,12 @@ export interface ArchitectureChangeViewProps {
   onOpenPullRequest: (() => void) | null;
   /** Width to draw at before the first layout (tests and screenshots pass the viewport). */
   initialWidth?: number;
+  /** False when only committed maps, rather than the selected change's file diff, were read. */
+  showFileFacts?: boolean;
+  /** Shown under the summary: the blast radius when the maps were drawn from the code. */
+  children?: ReactNode;
+  /** Replaces the per-field note in "What changed" (maps drawn from code: the files edited). */
+  touchedNotes?: ReadonlyMap<string, string>;
 }
 
 export function ArchitectureChangeView({
@@ -96,6 +148,9 @@ export function ArchitectureChangeView({
   baseLabel,
   onOpenPullRequest,
   initialWidth = FIRST_PAINT_WIDTH,
+  showFileFacts = true,
+  children,
+  touchedNotes,
 }: ArchitectureChangeViewProps) {
   const { t } = useTranslation();
   const [measured, setWidth] = useState(0);
@@ -142,7 +197,9 @@ export function ArchitectureChangeView({
 
       {change.staleness.outOfDate ? <StaleWarning change={change} /> : null}
 
-      <Summary change={change} />
+      <Summary change={change} showFileFacts={showFileFacts} />
+
+      {children ?? null}
 
       <View style={styles.modes} accessibilityRole="tablist">
         {modes.map((item) => (
@@ -163,7 +220,7 @@ export function ArchitectureChangeView({
         />
       </View>
 
-      <Details change={change} onOpenPullRequest={onOpenPullRequest} />
+      <Details change={change} onOpenPullRequest={onOpenPullRequest} touchedNotes={touchedNotes} />
     </ScrollView>
   );
 }
@@ -315,7 +372,7 @@ function StaleWarning({ change }: { change: ReadyChange }) {
   );
 }
 
-function Summary({ change }: { change: ReadyChange }) {
+function Summary({ change, showFileFacts }: { change: ReadyChange; showFileFacts: boolean }) {
   const { t } = useTranslation();
   const { comparison, files } = change;
   const parts = comparison.touched.length;
@@ -335,20 +392,26 @@ function Summary({ change }: { change: ReadyChange }) {
           {t("panels.architectureMap.change.dependents", { count: comparison.reach.length })}
         </Text>
       ) : null}
-      <Text style={styles.summaryText}>
-        {t("panels.architectureMap.change.files", { count: files.changed })}
-        {files.checked > 0
-          ? ` ${t("panels.architectureMap.change.testsBeside", { withTests: files.withTests, checked: files.checked })}`
-          : ""}
-        {unchecked > 0 && files.checked > 0
-          ? ` ${t("panels.architectureMap.change.testsNotChecked", { count: unchecked })}`
-          : ""}
-      </Text>
+      {showFileFacts ? (
+        <Text style={styles.summaryText}>
+          {t("panels.architectureMap.change.files", { count: files.changed })}
+          {files.checked > 0
+            ? ` ${t("panels.architectureMap.change.testsBeside", { withTests: files.withTests, checked: files.checked })}`
+            : ""}
+          {unchecked > 0 && files.checked > 0
+            ? ` ${t("panels.architectureMap.change.testsNotChecked", { count: unchecked })}`
+            : ""}
+        </Text>
+      ) : null}
     </View>
   );
 }
 
-function Details(props: { change: ReadyChange; onOpenPullRequest: (() => void) | null }) {
+function Details(props: {
+  change: ReadyChange;
+  onOpenPullRequest: (() => void) | null;
+  touchedNotes?: ReadonlyMap<string, string>;
+}) {
   const { t } = useTranslation();
   const { change, onOpenPullRequest } = props;
   const { comparison } = change;
@@ -361,7 +424,9 @@ function Details(props: { change: ReadyChange; onOpenPullRequest: (() => void) |
   const touchedRows = comparison.touched.map((id) => {
     const status = comparison.nodeStatus.get(id) ?? "unchanged";
     const changed = comparison.components.changed.find((item) => item.id === id);
-    const note = touchedNote(t, status, changed?.fields.map(fieldName) ?? null);
+    const note =
+      (status === "changed" ? props.touchedNotes?.get(id) : undefined) ??
+      touchedNote(t, status, changed?.fields.map(fieldName) ?? null);
     return { id, status, name: label(id), note };
   });
   return (
@@ -480,23 +545,14 @@ function Picture(props: {
         <Text style={styles.empty}>{empty}</Text>
       ) : (
         <ScrollView horizontal ref={scroller}>
-          <Svg
-            width={frame.width * zoom}
-            height={frame.height * zoom}
-            viewBox={`${frame.x} ${frame.y} ${frame.width} ${frame.height}`}
-          >
-            {picture.edges.map((edge) => (
-              <ChangeEdge
-                key={`${edge.status}-${edge.id}`}
-                edge={edge}
-                nodesById={nodesById}
-                drawLabel={drawLabels}
-              />
-            ))}
-            {picture.nodes.map((node) => (
-              <ChangeNode key={`${node.status}-${node.id}`} node={node} drawLabels={drawLabels} />
-            ))}
-          </Svg>
+          <ThemedChangeCanvas
+            uniProps={paletteProps}
+            picture={picture}
+            nodesById={nodesById}
+            frame={frame}
+            zoom={zoom}
+            drawLabels={drawLabels}
+          />
         </ScrollView>
       )}
     </View>
@@ -507,85 +563,89 @@ function ChangeEdge(props: {
   edge: StatusEdge;
   nodesById: ReadonlyMap<string, ArchitectureMapNode>;
   drawLabel: boolean;
+  palette: ChangePalette;
 }) {
-  const { edge, nodesById, drawLabel } = props;
+  const { edge, nodesById, drawLabel, palette } = props;
+  const color = palette.status[edge.status];
   const geometry = edgeGeometry(edge, nodesById);
   if (!geometry) return null;
   const points = geometry.arrow.map((point) => `${point.x},${point.y}`).join(" ");
   const quiet = edge.status === "unchanged";
   return (
     <G opacity={quiet ? 0.55 : 1} testID={`architecture-change-edge-${edge.status}`}>
-      <ThemedLine
+      <Line
         x1={geometry.start.x}
         y1={geometry.start.y}
         x2={geometry.end.x}
         y2={geometry.end.y}
-        uniProps={strokeProps.get(edge.status)}
+        stroke={color}
         strokeWidth={quiet ? 1.5 : 2.25}
         strokeDasharray={edge.status === "removed" || edge.style === "dashed" ? "6 4" : undefined}
       />
-      <ThemedPolygon points={points} uniProps={fillProps.get(edge.status)} />
+      <Polygon points={points} fill={color} />
       {drawLabel && edge.label ? (
-        <ThemedSvgText
+        <SvgText
           x={geometry.labelAt.x}
           y={geometry.labelAt.y}
           fontSize={DETAIL_SIZE}
-          uniProps={quiet ? mutedFill : fillProps.get(edge.status)}
+          fill={quiet ? palette.muted : color}
           textAnchor="middle"
         >
           {edge.label}
-        </ThemedSvgText>
+        </SvgText>
       ) : null}
     </G>
   );
 }
 
-function ChangeNode(props: { node: StatusNode; drawLabels: boolean }) {
+function ChangeNode(props: { node: StatusNode; drawLabels: boolean; palette: ChangePalette }) {
   const { t } = useTranslation();
-  const { node, drawLabels } = props;
+  const { node, drawLabels, palette } = props;
+  const color = palette.status[node.status];
   const quiet = node.status === "unchanged";
   const badge = badgeFor(t, node.status);
   const textX = node.x + 10;
   const labelWidth = badge ? node.width - 56 : node.width;
   return (
     <G opacity={quiet ? 0.7 : 1} testID={`architecture-change-node-${node.status}`}>
-      <ThemedRect
+      <Rect
         x={node.x}
         y={node.y}
         width={node.width}
         height={node.height}
         rx={8}
-        uniProps={frameProps.get(node.status)}
+        fill={palette.surface}
+        stroke={color}
         strokeWidth={quiet ? 1.5 : 2.5}
         strokeDasharray={node.status === "removed" ? "6 3" : undefined}
       />
       {badge ? (
-        <ThemedSvgText
+        <SvgText
           x={node.x + node.width - 8}
           y={node.y + 15}
           fontSize={BADGE_SIZE}
           fontWeight="700"
           textAnchor="end"
-          uniProps={fillProps.get(node.status)}
+          fill={color}
         >
           {badge}
-        </ThemedSvgText>
+        </SvgText>
       ) : null}
       {drawLabels ? (
         <>
-          <ThemedSvgText
+          <SvgText
             x={textX}
             y={node.y + 20}
             fontSize={LABEL_SIZE}
             fontWeight="600"
-            uniProps={foregroundFill}
+            fill={palette.foreground}
           >
             {fitText(node.label, labelWidth, LABEL_SIZE)}
-          </ThemedSvgText>
+          </SvgText>
           {node.sublabel ? (
-            <ThemedSvgText x={textX} y={node.y + 38} fontSize={DETAIL_SIZE} uniProps={mutedFill}>
+            <SvgText x={textX} y={node.y + 38} fontSize={DETAIL_SIZE} fill={palette.muted}>
               {fitText(node.sublabel, node.width, DETAIL_SIZE)}
-            </ThemedSvgText>
+            </SvgText>
           ) : null}
         </>
       ) : null}

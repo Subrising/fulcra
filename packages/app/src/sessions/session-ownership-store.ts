@@ -1,5 +1,6 @@
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { pluginRegistry } from "@/plugins/registry";
+import { needsDirectConnection } from "@/plugins/command-centre-connection";
 import {
   SESSION_OWNERSHIP_RPC,
   type SessionOwnershipRequest,
@@ -12,18 +13,18 @@ import {
   type SessionOwnershipRecord,
 } from "./session-ownership";
 
-const ORGANIZATION_PLUGIN_ID = "organization";
+const ORGANIZATION_PLUGIN_ID = "orca-organization";
 /**
  * A directory plugin's id is chosen when it is installed (`--id`), not fixed by its
  * manifest, and the staging procedure deliberately registers a second build alongside the
- * live one as `organization-next`. The catalog exposes only ids and client bundles —
+ * live one as `orca-organization-next`. The catalog exposes only ids and client bundles —
  * there is no way to ask which plugin contributes an RPC — so the id is the only handle
  * the app has, and assuming exactly one was wrong.
  */
 const ORGANIZATION_PLUGIN_PREFIX = `${ORGANIZATION_PLUGIN_ID}-`;
 /** One call per host per tick, so a list of rows costs one request rather than one each. */
 const BATCH_DELAY_MS = 30;
-/** A refusing ownership service must cost one failure, not a loop. */
+/** A refusing controller must cost one failure, not a loop. */
 const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 /**
  * How long a successful answer may still be shown. Ownership changes without telling the
@@ -81,7 +82,7 @@ function notify(): void {
  * family members with no exact match is ambiguous, and guessing there would silently pick
  * whose ownership records a person is reading — so it picks none and says so once.
  */
-function resolveOrganizationPluginId(serverId: string): string | null {
+export function resolveOrganizationPluginId(serverId: string): string | null {
   const installed = pluginRegistry
     .getSnapshot()
     .filter((plugin) => plugin.serverId === serverId)
@@ -118,7 +119,7 @@ function logUnresolvedPluginId(serverId: string, family: string[]): void {
 
 /**
  * A payload shape this app does not understand is its own failure, distinct from a
- * refusal. Diagnosing it as "refused" would send someone to the ownership service for a fault
+ * refusal. Diagnosing it as "refused" would send someone to the controller for a fault
  * that lives in the seam — the precise misdiagnosis the failure log exists to prevent.
  */
 class MalformedOwnershipResponse extends Error {
@@ -146,14 +147,22 @@ function readRecordMap(response: unknown): Map<string, SessionOwnershipRecord | 
       continue;
     }
     // A non-object where a record belongs is a broken response, not an unresolvable
-    // record: treat it as absent rather than claiming the ownership service said "unknown".
+    // record: treat it as absent rather than claiming the controller said "unknown".
     records.set(agentId, typeof value === "object" ? (value as SessionOwnershipRecord) : null);
   }
   return records;
 }
 
+function diagnoseOwnershipReadFailure(message: string): string {
+  if (message.includes("does not contribute RPC"))
+    return `the plugin does not register '${SESSION_OWNERSHIP_RPC}' — this is a wiring fault on one side of the seam, not a refusal`;
+  if (message.includes("Plugin is not available"))
+    return "the organization plugin is not running on this host";
+  return "the read was refused or the controller is unavailable — expected before activation";
+}
+
 /**
- * A refusing ownership service and a method the plugin never registered fail identically at the
+ * A refusing controller and a method the plugin never registered fail identically at the
  * call site, and the row renders unassigned either way — by design, and correctly. That
  * makes a wiring fault invisible in the interface, so the one signal that distinguishes
  * them belongs in the log instead. Once per host, never repeated, never surfaced in the UI.
@@ -166,13 +175,7 @@ function logFirstFailure(serverId: string, error: unknown): void {
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
-  const wiring = message.includes("does not contribute RPC");
-  const missing = message.includes("Plugin is not available");
-  const diagnosis = wiring
-    ? `the plugin does not register '${SESSION_OWNERSHIP_RPC}' — this is a wiring fault on one side of the seam, not a refusal`
-    : missing
-      ? "the organization plugin is not running on this host"
-      : "the read was refused or the ownership service is unavailable — expected before activation";
+  const diagnosis = diagnoseOwnershipReadFailure(message);
   console.warn(`[session-ownership] ${serverId}: ${diagnosis}. Rows stay unassigned.`);
 }
 
@@ -184,7 +187,15 @@ async function flush(serverId: string): Promise<void> {
   for (const id of ids) state.queued.delete(id);
   const pluginId = resolveOrganizationPluginId(serverId);
   const client = pluginId ? getHostRuntimeStore().getClient(serverId) : null;
-  if (!client || !pluginId) {
+  // L46: a relay-only host cannot answer Command Centre reads; treat it like a disconnected one.
+  const relayOnly =
+    pluginId !== null &&
+    needsDirectConnection(
+      pluginId,
+      getHostRuntimeStore().getSnapshot(serverId)?.activeConnection,
+      client,
+    );
+  if (!client || !pluginId || relayOnly) {
     // Disconnected host: forget the request so it is retried when rows render again,
     // rather than being remembered as answered.
     for (const id of ids) state.inFlight.delete(id);
@@ -211,7 +222,7 @@ async function flush(serverId: string): Promise<void> {
       state.loggedFailure = true;
       logFirstFailure(serverId, error);
     }
-    // Refused, unsupported, or unreachable. The ownership service refuses every ownership read
+    // Refused, unsupported, or unreachable. The controller refuses every ownership read
     // until activation, so this is the expected path today: go quiet for a while and
     // report nothing rather than retrying, spinning, or inventing a state. No error text
     // is surfaced — an ownership read failing is not something a person can act on from

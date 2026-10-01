@@ -1,3 +1,5 @@
+import { safeAccountName } from "../../../services/quota-fetcher/account-usage-sanitize.js";
+import type { ProviderUsage } from "../../messages.js";
 import type pino from "pino";
 import { createHash } from "node:crypto";
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
@@ -20,6 +22,16 @@ import {
 } from "../../agent/agent-sdk-types.js";
 import type { ProviderAvailability } from "../../agent/agent-manager.js";
 import type { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
+import type { AccountUsageRegistry } from "../../../services/quota-fetcher/account-usage-registry.js";
+import {
+  providerUsageFromAccountRow,
+  unavailableAccountEntry,
+} from "../../../services/quota-fetcher/account-usage-entry.js";
+import type {
+  AccountCredential,
+  AccountProvider,
+  PooledAccount,
+} from "../../../services/quota-fetcher/account-usage-types.js";
 import { expandTilde } from "../../../utils/path.js";
 
 // COMPAT(customModeIcons): the only mode icons known to clients before v0.1.84. Any
@@ -58,6 +70,18 @@ export interface ProviderCatalogSessionOptions {
   providerSnapshotManager: ProviderSnapshotManager;
   providerUsageService: ProviderUsageService;
   logger: pino.Logger;
+  /** Native quota from the running account, without credential-file access. */
+  sessionUsage?: (agentId: string) => Promise<ProviderUsage | null>;
+  /** Fulcra account pool: the launch credential of a session this client can see (daemon-internal), or null. */
+  usageCredential?: (agentId: string) => {
+    provider: string;
+    credential: AccountCredential;
+    label: string | null;
+    accountId?: string | null;
+    isCurrent?: () => boolean;
+  } | null;
+  /** update-7c: the per-account usage cache/scheduler (Claude and Codex pooled accounts). */
+  accountUsage?: AccountUsageRegistry;
 }
 
 /**
@@ -72,6 +96,9 @@ export class ProviderCatalogSession {
   private readonly providerSnapshotManager: ProviderSnapshotManager;
   private readonly providerUsageService: ProviderUsageService;
   private readonly logger: pino.Logger;
+  private readonly sessionUsage: ProviderCatalogSessionOptions["sessionUsage"];
+  private readonly usageCredential: ProviderCatalogSessionOptions["usageCredential"];
+  private readonly accountUsage: AccountUsageRegistry | undefined;
   private unsubscribeSnapshotEvents: (() => void) | null = null;
 
   constructor(options: ProviderCatalogSessionOptions) {
@@ -79,6 +106,9 @@ export class ProviderCatalogSession {
     this.providerSnapshotManager = options.providerSnapshotManager;
     this.providerUsageService = options.providerUsageService;
     this.logger = options.logger;
+    this.usageCredential = options.usageCredential;
+    this.sessionUsage = options.sessionUsage;
+    this.accountUsage = options.accountUsage;
   }
 
   get isObserving(): boolean {
@@ -487,28 +517,76 @@ export class ProviderCatalogSession {
     }
   }
 
+  private async accountEntryFor(
+    credential: NonNullable<
+      ReturnType<NonNullable<ProviderCatalogSessionOptions["usageCredential"]>>
+    >,
+    displayName: string,
+    refresh: boolean,
+  ) {
+    const name = credential.label ?? "this account";
+    if (!this.accountUsage) return unavailableAccountEntry(credential.provider, displayName, name);
+    return providerUsageFromAccountRow(
+      await this.accountUsage.rowFor(pooledAccountOf(credential, name), { refresh }),
+      displayName,
+    );
+  }
+
   async handleProviderUsageListRequest(
     msg: Extract<SessionInboundMessage, { type: "provider.usage.list.request" }>,
   ): Promise<void> {
     try {
       const usage = await this.providerUsageService.listUsage();
+      // A pooled session: its provider's entry is the account it runs on (labelled), never the Mac's own login. When
+      // that account cannot be read the entry says "Usage unavailable for <name>" instead of falling back.
+      const credential = msg.agentId ? (this.usageCredential?.(msg.agentId) ?? null) : null;
+      const nativeUsage = msg.agentId ? await this.sessionUsage?.(msg.agentId) : null;
+      const refresh = msg.refresh === true;
+      let providers = usage.providers;
+      if (nativeUsage) {
+        const sourceLabel = nativeUsage.sourceLabel
+          ? safeAccountName(nativeUsage.sourceLabel)
+          : null;
+        const sanitized = {
+          ...nativeUsage,
+          sourceLabel,
+          error: nativeUsage.error
+            ? `Usage unavailable for ${sourceLabel ?? "this account"}`
+            : nativeUsage.error,
+        };
+        providers = providers.map((entry) =>
+          entry.providerId === nativeUsage.providerId ? sanitized : entry,
+        );
+      } else if (credential) {
+        const displayName =
+          providers.find((entry) => entry.providerId === credential.provider)?.displayName ??
+          credential.provider;
+        const entry = await this.accountEntryFor(credential, displayName, refresh);
+        providers = providers.map((p) => (p.providerId === credential.provider ? entry : p));
+      }
+      const accounts =
+        msg.accounts === true && this.accountUsage
+          ? await this.accountUsage.list({ refresh })
+          : undefined;
+      if (credential?.isCurrent && !credential.isCurrent())
+        throw new Error("Session changed during account usage read");
       this.host.emit({
         type: "provider.usage.list.response",
         payload: {
           requestId: msg.requestId,
           fetchedAt: usage.fetchedAt,
-          providers: usage.providers,
+          providers,
+          ...(accounts ? { accounts } : {}),
         },
       });
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.logger.error({ err }, "Failed to list provider usage");
+    } catch {
+      this.logger.error("Failed to list provider usage");
       this.host.emit({
         type: "rpc_error",
         payload: {
           requestId: msg.requestId,
           requestType: msg.type,
-          error: `Failed to list provider usage: ${err.message}`,
+          error: "Failed to list provider usage",
           code: "provider_usage_list_failed",
         },
       });
@@ -519,4 +597,16 @@ export class ProviderCatalogSession {
 function resolveCatalogRequestCwd(cwd?: string | null): string | undefined {
   const trimmed = cwd?.trim();
   return trimmed ? expandTilde(trimmed) : undefined;
+}
+
+function pooledAccountOf(
+  session: { provider: string; credential: AccountCredential; accountId?: string | null },
+  name: string,
+): PooledAccount {
+  return {
+    id: session.accountId ?? null,
+    provider: session.provider as AccountProvider,
+    name,
+    credential: session.credential,
+  };
 }

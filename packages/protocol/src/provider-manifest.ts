@@ -225,7 +225,9 @@ export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
     id: "codex",
     label: "Codex",
     description: "OpenAI's Codex workspace agent with sandbox controls and optional network access",
-    defaultModeId: "auto-review",
+    // FIX-8 W3 (B, owner decision 30 Sep): the built-in default for new Codex sessions on any system is Full Access,
+    // below explicit > role > Fulcra Settings > config. Internal helper agents are pinned separately (internalModeId).
+    defaultModeId: "full-access",
     modes: CODEX_MODES,
     voice: {
       enabled: true,

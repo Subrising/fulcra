@@ -1,6 +1,6 @@
 import os from "node:os";
 
-import { ConnectionOfferV2Schema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
+import { ConnectionOfferV3Schema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 
 interface BuildOfferEndpointsArgs {
   listenHost: string;
@@ -27,16 +27,20 @@ export function buildOfferEndpoints({ listenHost, port }: BuildOfferEndpointsArg
   return dedupePreserveOrder(endpoints);
 }
 
-export async function createConnectionOfferV2(args: {
+export async function createConnectionOfferV3(args: {
   serverId: string;
   daemonPublicKeyB64: string;
-  relay: { endpoint: string; useTls?: boolean };
+  relay: { endpoint: string; useTls: boolean };
+  pairing: ConnectionOffer["pairing"];
+  hostLabel?: string;
 }): Promise<ConnectionOffer> {
-  return ConnectionOfferV2Schema.parse({
-    v: 2,
+  return ConnectionOfferV3Schema.parse({
+    v: 3,
     serverId: args.serverId,
     daemonPublicKeyB64: args.daemonPublicKeyB64,
     relay: args.relay,
+    pairing: args.pairing,
+    hostLabel: args.hostLabel,
   });
 }
 
@@ -46,7 +50,7 @@ export function encodeOfferToFragmentUrl(args: {
 }): string {
   const json = JSON.stringify(args.offer);
   const encoded = Buffer.from(json, "utf8").toString("base64url");
-  return `${args.appBaseUrl.replace(/\/$/, "")}/#offer=${encoded}`;
+  return `${args.appBaseUrl.replace(/\/$/, "")}#offer=${encoded}`;
 }
 
 function getPrimaryLanIp(): string | null {

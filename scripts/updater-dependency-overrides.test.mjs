@@ -23,12 +23,12 @@ for (const [location, metadata] of yamlPackages) {
     const modulePath = path.join(yamlRoot, location);
     const yaml = require(modulePath);
     assert.deepEqual(
-      yaml.load("version: 1.2.3\nfiles:\n  - url: Fulcra.zip\n    sha512: fixture\n"),
-      { version: "1.2.3", files: [{ url: "Fulcra.zip", sha512: "fixture" }] },
+      yaml.load("version: 1.2.3\nfiles:\n  - url: Orca.zip\n    sha512: fixture\n"),
+      { version: "1.2.3", files: [{ url: "Orca.zip", sha512: "fixture" }] },
     );
     assert.deepEqual(
-      yaml.load("defaults: &defaults {enabled: true}\napp: {<<: *defaults, name: Fulcra}\n"),
-      { defaults: { enabled: true }, app: { enabled: true, name: "Fulcra" } },
+      yaml.load("defaults: &defaults {enabled: true}\napp: {<<: *defaults, name: Orca}\n"),
+      { defaults: { enabled: true }, app: { enabled: true, name: "Orca" } },
     );
     // Both upstream majors default to 10,000 units of merge work. Keep each
     // sequence below the separate 100-element guard and exceed the work budget.
@@ -54,9 +54,9 @@ for (const [location, metadata] of yamlPackages) {
 test("YAML updater call site retains valid channel metadata and refuses excessive merge work", () => {
   const { parseUpdateInfo } = updaterRequire("./out/providers/Provider.js");
   const url = new URL("https://example.invalid/latest-mac.yml");
-  assert.deepEqual(parseUpdateInfo("version: 1.2.3\npath: Fulcra.zip\n", "latest", url), {
+  assert.deepEqual(parseUpdateInfo("version: 1.2.3\npath: Orca.zip\n", "latest", url), {
     version: "1.2.3",
-    path: "Fulcra.zip",
+    path: "Orca.zip",
   });
   const source =
     `arr: &arr [${Array(80).fill("{}").join(",")}]\ntargets:\n` + "  - <<: *arr\n".repeat(200);
@@ -68,7 +68,7 @@ test("YAML native packaging configuration retains app identity and disabled publ
   const config = yaml.load(
     readFileSync(path.join(yamlRoot, "packages/desktop/electron-builder.yml"), "utf8"),
   );
-  assert.equal(config.appId, "app.fulcra.desktop");
+  assert.equal(config.appId, "dev.orca.workspace.desktop");
   const windowsShim = readFileSync(path.join(yamlRoot, "packages/desktop/bin/paseo.cmd"), "utf8");
   assert(
     windowsShim.includes(`\\${config.executableName}.exe`),
@@ -77,7 +77,7 @@ test("YAML native packaging configuration retains app identity and disabled publ
   assert.equal(config.publish, null);
   assert.equal(config.mac.minimumSystemVersion, "13.0.0");
   assert.deepEqual(config.protocols, [
-    { name: "Fulcra conversation link", schemes: ["orca"] },
+    { name: "Orca conversation link", schemes: ["orca"] },
     { name: "Fulcra sign-in link", schemes: ["fulcra"] },
   ]);
 });

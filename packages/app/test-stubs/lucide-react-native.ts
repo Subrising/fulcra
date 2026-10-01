@@ -74,6 +74,7 @@ export const MoreVertical = StubIcon;
 export const MousePointer2 = StubIcon;
 export const PackagePlus = StubIcon;
 export const PanelLeft = StubIcon;
+export const PanelRight = StubIcon;
 export const PanelsTopLeft = StubIcon;
 export const Paperclip = StubIcon;
 export const Pencil = StubIcon;

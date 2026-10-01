@@ -1,0 +1,48 @@
+[
+ {
+  "number": 42,
+  "title": "Sign-in fails after an \u202eupdate\u202c",
+  "state": "open",
+  "updated_at": "2026-09-24T09:00:00Z",
+  "repository_url": "https://api.github.com/repos/acme/app",
+  "html_url": "https://evil.example/42",
+  "labels": [
+   {
+    "name": "bug"
+   },
+   {
+    "name": "needs triage"
+   }
+  ],
+  "assignee": {
+   "login": "fake-user"
+  },
+  "body": null
+ },
+ {
+  "number": 18,
+  "title": "Add the reports page",
+  "state": "open",
+  "updated_at": "2026-09-24T08:00:00Z",
+  "repository_url": "https://api.github.com/repos/acme/app",
+  "html_url": "https://evil.example/18",
+  "labels": [],
+  "assignee": null,
+  "body": "Part of #42",
+  "pull_request": {
+   "url": "https://api.github.com/repos/acme/app/pulls/18",
+   "merged_at": null
+  }
+ },
+ {
+  "number": 99,
+  "title": "From another repository",
+  "state": "open",
+  "updated_at": "2026-09-24T07:00:00Z",
+  "repository_url": "https://api.github.com/repos/other/app",
+  "html_url": "https://evil.example/99",
+  "labels": [],
+  "assignee": null,
+  "body": null
+ }
+]

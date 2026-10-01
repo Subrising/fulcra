@@ -1,3 +1,16 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach } from "vitest";
+const homes: string[] = [];
+afterEach(() => {
+  for (const directory of homes.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+function home() {
+  const directory = mkdtempSync(join(tmpdir(), "fulcra-runtime-test-"));
+  homes.push(directory);
+  return directory;
+}
 import { describe, expect, test, vi } from "vitest";
 import pino from "pino";
 import { generateKeyPair } from "@getpaseo/relay";
@@ -5,6 +18,21 @@ import { createRelayRuntime } from "./relay-runtime.js";
 import { startRelayTransport, type RelayTransportController } from "./relay-transport.js";
 
 describe("RelayRuntime", () => {
+  test("never opens a transport without an endpoint", () => {
+    const startTransport = vi.fn();
+    const runtime = createRelayRuntime({
+      paseoHome: home(),
+      config: { enabled: true, endpoint: "", publicEndpoint: "", useTls: true, publicUseTls: true },
+      logger: pino({ level: "silent" }),
+      serverId: "srv_unconfigured",
+      daemonKeyPair: generateKeyPair(),
+      attachSocket: async () => {},
+      startTransport,
+    });
+    expect(startTransport).not.toHaveBeenCalled();
+    expect(runtime.getConfig()).toMatchObject({ state: "unconfigured" });
+  });
+
   test("starts and stops transport as enabled state changes", async () => {
     const stops: Array<ReturnType<typeof vi.fn>> = [];
     const starts: string[] = [];
@@ -15,6 +43,7 @@ describe("RelayRuntime", () => {
       return { stop } satisfies RelayTransportController;
     };
     const runtime = createRelayRuntime({
+      paseoHome: home(),
       config: {
         enabled: false,
         endpoint: "relay.example.test:443",
@@ -42,6 +71,7 @@ describe("RelayRuntime", () => {
 
   test("keeps relay disabled when transport startup fails", () => {
     const runtime = createRelayRuntime({
+      paseoHome: home(),
       config: {
         enabled: false,
         endpoint: "invalid-endpoint",

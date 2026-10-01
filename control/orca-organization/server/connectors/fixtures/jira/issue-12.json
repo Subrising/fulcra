@@ -1,0 +1,25 @@
+{
+  "id": "20012",
+  "key": "ACME-12",
+  "fields": {
+    "summary": "Sign-in fails after an update",
+    "status": {
+      "name": "In Progress",
+      "statusCategory": {
+        "key": "indeterminate"
+      }
+    },
+    "labels": [
+      "bug",
+      "web"
+    ],
+    "updated": "2026-09-24T12:30:00.000+0000",
+    "project": {
+      "id": "10001",
+      "key": "ACME"
+    },
+    "assignee": {
+      "displayName": "Test User A"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "summary": {
+    "pullrequest": {
+      "overall": {
+        "count": 3
+      },
+      "byInstanceType": {
+        "GitHub": {
+          "count": 2,
+          "name": "GitHub"
+        },
+        "bitbucket": {
+          "count": 1,
+          "name": "Bitbucket Cloud"
+        },
+        "gitlab": {
+          "count": 1,
+          "name": "GitLab"
+        }
+      }
+    },
+    "repository": {
+      "overall": {
+        "count": 1
+      },
+      "byInstanceType": {
+        "GitHub": {
+          "count": 1,
+          "name": "GitHub"
+        }
+      }
+    },
+    "branch": {
+      "overall": {
+        "count": 1
+      },
+      "byInstanceType": {}
+    }
+  }
+}

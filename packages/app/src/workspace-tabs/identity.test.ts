@@ -93,7 +93,7 @@ describe("working diff tab identity", () => {
 });
 
 describe("workspace utility panel identity", () => {
-  it.each(["files", "pull_request", "architecture_map"] as const)(
+  it.each(["files", "pull_request", "architecture_map", "context"] as const)(
     "normalizes and deterministically keys %s",
     (kind) => {
       const target = { kind };
@@ -194,5 +194,54 @@ describe("plugin panel tab identity", () => {
 
     expect(workspace).toBe("plugin_workspace_6_review_7_details");
     expect(agent).toBe("plugin_agent_6_review_7_details_7_agent-1");
+  });
+});
+
+import {
+  contextWorkspaceKey,
+  makeContextSelection,
+  matchesContextSelection,
+} from "@/context/scope";
+describe("Context scope identity", () => {
+  const agent = {
+    id: "session",
+    createdAt: new Date("2026-10-01T00:00:00Z"),
+    runtimeInfo: { provider: "claude", sessionId: "native-A" },
+    persistence: null,
+  } as const;
+  it("keeps identical workspace paths on two hosts separate", () => {
+    expect(contextWorkspaceKey("hostA", "/same/path")).not.toBe(
+      contextWorkspaceKey("hostB", "/same/path"),
+    );
+  });
+  it("rejects replacement native instances with the same persisted session", () => {
+    const live = { ...agent, runtimeInstanceId: "instance-A" };
+    const selected = makeContextSelection(live, 1);
+    expect(matchesContextSelection(selected, live, 1)).toBe(true);
+    expect(matchesContextSelection(selected, { ...live, runtimeInstanceId: "instance-B" }, 1)).toBe(
+      false,
+    );
+    expect(matchesContextSelection(selected, agent, 1)).toBe(false);
+    expect(matchesContextSelection(makeContextSelection(agent, 1), live, 1)).toBe(false);
+  });
+  it("rejects reused IDs, replaced provider runtime and reconnect generations", () => {
+    const selected = makeContextSelection(agent, 1);
+    expect(matchesContextSelection(selected, agent, 1)).toBe(true);
+    expect(
+      matchesContextSelection(
+        selected,
+        { ...agent, createdAt: new Date("2026-10-01T00:00:01Z") },
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      matchesContextSelection(
+        selected,
+        { ...agent, runtimeInfo: { ...agent.runtimeInfo, sessionId: "native-B" } },
+        1,
+      ),
+    ).toBe(false);
+    expect(matchesContextSelection(selected, agent, 2)).toBe(false);
+    expect(matchesContextSelection(selected, undefined, 1)).toBe(false);
   });
 });

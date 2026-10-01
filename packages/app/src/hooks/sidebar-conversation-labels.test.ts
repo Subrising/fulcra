@@ -9,7 +9,7 @@ import {
   buildSidebarWorkspaceEntries,
   buildSidebarWorkspacePlacementModel,
 } from "./sidebar-workspaces-view-model";
-const uuid = "123e4567-e89b-42d3-a456-426614174000";
+const uuid = "0a2a9b27-e6eb-4de9-beff-840240cbb59e";
 const agent = (id = "a", title: string | null = "Product launch", serverId = "mini") => ({
   id,
   title,
@@ -62,8 +62,12 @@ describe("generated workspace conversation labels", () => {
       "Book research",
     );
     expect(selectSidebarConversationLabels(s, ["mini"]).has("book:ws")).toBe(false);
-    expect(labels(session([agent("a", "Foreign", "book")])).size).toBe(0);
-    expect(labels(session([{ ...agent(), workspaceId: "other" }])).size).toBe(0);
+    expect(labels(session([agent("a", "Foreign", "book")])).get("mini:ws")?.workspaceName).toBe(
+      "Untitled session",
+    );
+    expect(
+      labels(session([{ ...agent(), workspaceId: "other" }])).get("mini:ws")?.workspaceName,
+    ).toBe("Untitled session");
   });
   it("preserves explicit workspace/project titles, including intentionally UUID-shaped titles", () => {
     const w = { ...workspace(), title: uuid, projectCustomName: uuid };
@@ -88,21 +92,25 @@ describe("generated workspace conversation labels", () => {
       selectSidebarConversationLabels(
         { mini: { agents: new Map([["a", agent()]]), workspaces: new Map([["ws", git]]) } },
         ["mini"],
-      ).size,
-    ).toBe(0);
+      ).get("mini:ws")?.workspaceName,
+    ).toBe("Product launch");
   });
   it("does not invent labels for missing, archived or unidentified titles", () => {
     for (const title of [null, " ", uuid])
-      expect(labels(session([agent("a", title)])).size).toBe(0);
-    expect(labels(session([{ ...agent(), archivedAt: new Date() }])).size).toBe(0);
-    expect(labels(session([])).size).toBe(0);
+      expect(labels(session([agent("a", title)])).get("mini:ws")?.workspaceName).toBe(
+        "Untitled session",
+      );
+    expect(
+      labels(session([{ ...agent(), archivedAt: new Date() }])).get("mini:ws")?.workspaceName,
+    ).toBe("Untitled session");
+    expect(labels(session([])).get("mini:ws")?.workspaceName).toBe("Untitled session");
     expect(selectSidebarConversationLabels({}, ["missing"]).size).toBe(0);
   });
   it("excludes same-workspace child conversations and unresolved parents", () => {
     const parent = agent("parent", "Lead"),
       child = { ...agent("child", "Internal helper"), parentAgentId: "parent" };
     expect(labels(session([child, parent])).get("mini:ws")?.workspaceName).toBe("Lead");
-    expect(labels(session([child])).size).toBe(0);
+    expect(labels(session([child])).get("mini:ws")?.workspaceName).toBe("Untitled session");
     expect(
       labels(session([child, { ...parent, workspaceId: "another" }])).get("mini:ws")?.workspaceName,
     ).toBe("Internal helper");
@@ -146,7 +154,9 @@ describe("generated workspace conversation labels", () => {
     });
     expect(result.projectNamesByViewKey.get("project")).toBe("Product launch");
     expect(source.projects[0]?.projectName).toBe(uuid);
-    expect(applySidebarConversationLabels(source, new Map())).toBe(source);
+    expect(applySidebarConversationLabels(source, new Map()).projects[0]?.projectName).toBe(
+      "Untitled project",
+    );
   });
   it("uses a neutral multi-workspace header regardless of eligible title count", () => {
     const source = model(["mini:ws", "mini:second"]);
@@ -160,12 +170,12 @@ describe("generated workspace conversation labels", () => {
         "Saved conversations",
       );
   });
-  it("ignores stale hints when a project becomes a Git repository", () => {
+  it("also hides generated folder names in Git projects", () => {
     const source = model();
     source.projects[0]!.projectKind = "git";
     const projected = applySidebarConversationLabels(source, labels());
-    expect(projected.projects[0]).toBe(source.projects[0]);
-    expect(projected.workspaces[0]).toBe(source.workspaces[0]);
+    expect(projected.projects[0]?.projectName).toBe("Product launch");
+    expect(projected.workspaces[0]?.conversationName).toBe("Product launch");
   });
 });
 
@@ -210,5 +220,20 @@ it("projects labels into the actual sidebar entries while respecting newer autho
       projectDisplayName: "Meaningful project",
     }).get("mini:ws"),
   ).toMatchObject({ name: "Meaningful directory", projectName: "Meaningful project" });
-  expect(entries({ ...full, projectKind: "git" }).get("mini:ws")?.name).toBe(uuid);
+  expect(entries({ ...full, projectKind: "git" }).get("mini:ws")?.name).toBe("Product launch");
+});
+
+it("never displays a generated custom project heading", () => {
+  const source = model();
+  source.projects[0]!.projectCustomName = uuid;
+  expect(applySidebarConversationLabels(source, new Map()).projects[0]?.projectName).toBe(
+    "Untitled project",
+  );
+  source.projects[0]!.projectName = "Garden";
+  expect(applySidebarConversationLabels(source, new Map()).projects[0]?.projectName).toBe("Garden");
+  source.projects[0]!.projectCustomName = "Team garden";
+  expect(applySidebarConversationLabels(source, new Map()).projects[0]?.projectName).toBe(
+    "Team garden",
+  );
+  expect(source.projects[0]?.viewKey).toBe("project");
 });

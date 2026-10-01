@@ -63,7 +63,7 @@ describe("plugin notify hook", () => {
   it("refuses a plugin whose manifest does not declare requirements.notify", async () => {
     const { notifications, pushes, added } = center();
     await expect(
-      notifications.notify({ pluginId: "organization", declared: false, request: now }),
+      notifications.notify({ pluginId: "orca-organization", declared: false, request: now }),
     ).rejects.toBeInstanceOf(PluginNotifyNotDeclaredError);
     await notifications.drain();
     expect(pushes).toEqual([]);
@@ -75,7 +75,7 @@ describe("plugin notify hook", () => {
     const { notifications, pushes, added } = center();
     for (const urgency of ["now", "today", "fyi"] as const) {
       await notifications.notify({
-        pluginId: "organization",
+        pluginId: "orca-organization",
         declared: true,
         request: { key: `k-${urgency}`, title: `Title ${urgency}`, urgency, deepLink: "/inbox/1" },
       });
@@ -95,7 +95,7 @@ describe("plugin notify hook", () => {
         data: {
           serverId: "server-1",
           kind: "plugin-notification",
-          pluginId: "organization",
+          pluginId: "orca-organization",
           notificationId: added[0].id,
           deepLink: "/inbox/1",
         },

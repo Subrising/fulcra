@@ -4,6 +4,7 @@ import { subscribeWithSelector } from "zustand/middleware";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { ViewedTimelineOwner } from "@/timeline/viewed-timeline-sync";
 import type { AgentDirectoryEntry } from "@/types/agent-directory";
+import { readBackgroundWorkCount } from "@/utils/background-work-count";
 import {
   appendSubmittedUserMessage,
   handoffCreatedAgentUserMessageToStream,
@@ -70,6 +71,8 @@ export interface AgentRuntimeInfo {
 }
 
 export interface Agent {
+  /** Volatile identity from the existing live snapshot; never inferred from a saved assignment. */
+  runtimeInstanceId?: string;
   serverId: string;
   id: string;
   provider: AgentProvider;
@@ -126,6 +129,8 @@ export interface WorkspaceDescriptor {
   githubRuntime?: WorkspaceDescriptorPayload["githubRuntime"];
   forge?: WorkspaceDescriptorPayload["forge"];
   project?: ProjectPlacementPayload;
+  /** Display-only count of the host's background jobs for this workspace; absent means none. */
+  backgroundWorkCount?: number;
 }
 
 export function normalizeWorkspaceDescriptor(
@@ -164,7 +169,15 @@ export function normalizeWorkspaceDescriptor(
     githubRuntime: payload.githubRuntime,
     forge: payload.forge,
     project: payload.project,
+    // Hosts that report background jobs add a count; absent (older hosts, or none running) stays
+    // absent so descriptors from those hosts are unchanged.
+    ...withBackgroundWorkCount(payload),
   };
+}
+
+function withBackgroundWorkCount(payload: unknown): { backgroundWorkCount?: number } {
+  const count = readBackgroundWorkCount(payload);
+  return count > 0 ? { backgroundWorkCount: count } : {};
 }
 
 export interface ProjectDescriptor {

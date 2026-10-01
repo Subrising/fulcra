@@ -6,9 +6,9 @@ import { resolveOrcaHomeAvailability } from "./host-runtime-bootstrap";
 const state = vi.hoisted(() => ({
   selection: null as { serverId: string; workspaceId: string } | null,
   hydrated: true,
-  // The home plugin is a plugin surface, so the host entry can only send you there when the host
+  // Orca home is a plugin surface, so the host entry can only send you there when the host
   // actually has that plugin. Installed by default here; the fresh-install case clears it.
-  // Shaped like the real contribution lookup: a plugin is only the home plugin when it actually
+  // Shaped like the real contribution lookup: a plugin is only Orca home when it actually
   // contributes the organization sidebar surface.
   organizationPlugin: {
     sidebarItems: [{ id: "organization", surface: "organization" }],
@@ -70,21 +70,21 @@ it("waits for saved selection hydration instead of losing the original conversat
   expect(state.redirect).not.toHaveBeenCalled();
 });
 
-it("opens the home plugin when no conversation is remembered", () => {
+it("opens Orca home when no conversation is remembered", () => {
   renderToString(<HostIndexRoute />);
   expect(state.redirect.mock.calls[0]?.[0]).toEqual({
-    href: "/h/book/plugin/organization/sidebar/organization",
+    href: "/h/book/plugin/orca-organization/sidebar/organization",
   });
 });
 
-it("opens the built-in project route when the host has no the home plugin plugin", () => {
+it("opens the built-in project route when the host has no Orca home plugin", () => {
   state.organizationPlugin = null;
   renderToString(<HostIndexRoute />);
   expect(state.redirect.mock.calls[0]?.[0]).toEqual({ href: "/open-project" });
 });
 
 // The catalog lands after connect, and Redirect is permanent. Cold start must hold rather than
-// throw a host that does have the home plugin to the fallback.
+// throw a host that does have Orca home to the fallback.
 it("waits through the cold-start catalog gap instead of redirecting", () => {
   state.organizationPlugin = null;
   state.catalogSettled = false;
@@ -92,7 +92,7 @@ it("waits through the cold-start catalog gap instead of redirecting", () => {
   expect(state.redirect).not.toHaveBeenCalled();
 });
 
-it("opens the home plugin once the delayed catalog arrives", () => {
+it("opens Orca home once the delayed catalog arrives", () => {
   state.organizationPlugin = null;
   state.catalogSettled = false;
   renderToString(<HostIndexRoute />);
@@ -105,7 +105,7 @@ it("opens the home plugin once the delayed catalog arrives", () => {
   state.catalogSettled = true;
   renderToString(<HostIndexRoute />);
   expect(state.redirect.mock.calls[0]?.[0]).toEqual({
-    href: "/h/book/plugin/organization/sidebar/organization",
+    href: "/h/book/plugin/orca-organization/sidebar/organization",
   });
 });
 
@@ -126,7 +126,7 @@ it("does not wait forever on a host without plugin support", () => {
 });
 
 // A host that has not sent its features has not said it lacks plugins. Reading that silence as
-// "no plugins" is what sent a host with the home plugin to the fallback, permanently.
+// "no plugins" is what sent a host with Orca home to the fallback, permanently.
 it("waits while the host has not reported its features yet", () => {
   state.organizationPlugin = null;
   state.pluginsSupported = null;

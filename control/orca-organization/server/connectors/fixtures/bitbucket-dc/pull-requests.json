@@ -1,0 +1,50 @@
+{
+  "size": 3,
+  "limit": 100,
+  "start": 0,
+  "isLastPage": true,
+  "values": [
+    {
+      "id": 9,
+      "title": "Tidy the sign-in form",
+      "state": "OPEN",
+      "updatedDate": 1790150000000,
+      "toRef": {
+        "repository": {
+          "id": 42
+        }
+      },
+      "fromRef": {
+        "displayId": "bugfix/ACME-11-form"
+      }
+    },
+    {
+      "id": 8,
+      "title": "ACME-12 retry",
+      "state": "MERGED",
+      "updatedDate": 1789900000000,
+      "toRef": {
+        "repository": {
+          "id": 42
+        }
+      },
+      "fromRef": {
+        "displayId": "feature/retry"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Elsewhere",
+      "state": "OPEN",
+      "updatedDate": 1790200000000,
+      "toRef": {
+        "repository": {
+          "id": 43
+        }
+      },
+      "fromRef": {
+        "displayId": "x"
+      }
+    }
+  ]
+}

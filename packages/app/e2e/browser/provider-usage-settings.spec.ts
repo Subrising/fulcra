@@ -149,4 +149,50 @@ test.describe("provider usage settings", () => {
     await expect(card.getByText("Codex", { exact: true })).toBeVisible();
     await expect(card.getByText("71%")).toBeVisible();
   });
+
+  test("shows all account rows and exposes a manual refresh failure", async ({ page }) => {
+    test.setTimeout(120_000);
+    const fixture = await installProviderUsageFixture(page, [
+      {
+        fetchedAt: "2026-09-30T00:00:00.000Z",
+        providers: [],
+        accounts: [
+          {
+            accountId: "11111111-1111-4111-8111-111111111111",
+            provider: "claude",
+            name: "Work",
+            status: "limited",
+            observedAt: "2026-09-30T00:00:00.000Z",
+            source: "session",
+            fiveHour: { usedPct: 100, resetsAt: null },
+            weekly: { usedPct: 61, resetsAt: null },
+            inUse: true,
+          },
+          {
+            accountId: "22222222-2222-4222-8222-222222222222",
+            provider: "codex",
+            name: "Codex A",
+            status: "unavailable",
+            observedAt: null,
+            source: null,
+            fiveHour: null,
+            weekly: null,
+            inUse: false,
+          },
+        ],
+      },
+      { fetchedAt: "2026-09-30T00:00:00.000Z", providers: [], error: "Synthetic refresh failure" },
+    ]);
+    await gotoAppShell(page);
+    await openSettings(page);
+    await openSettingsHostSection(page, getServerId(), "usage");
+    const card = page.getByTestId("provider-usage-card");
+    await expect(card.getByTestId("account-rundown")).toContainText("Work");
+    await expect(card.getByTestId("account-rundown")).toContainText("Limited");
+    await expect(card.getByTestId("account-rundown")).toContainText("Codex A");
+    await card.getByRole("button", { name: "Refresh account usage" }).click();
+    await fixture.waitForRequestCount(2);
+    await expect(card.getByText("Unable to refresh account usage. Try again.")).toBeVisible();
+    await expect(card.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
 });

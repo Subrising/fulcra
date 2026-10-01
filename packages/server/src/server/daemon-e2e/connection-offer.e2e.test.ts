@@ -69,7 +69,7 @@ async function getAvailablePort(): Promise<number> {
   });
 }
 
-describe("ConnectionOfferV2 (daemon E2E)", () => {
+describe("ConnectionOfferV3 (daemon E2E)", () => {
   const ORIGINAL_ENV = { ...process.env };
 
   afterEach(() => {
@@ -95,7 +95,7 @@ describe("ConnectionOfferV2 (daemon E2E)", () => {
         relayPublicEndpoint: daemon.config.relayPublicEndpoint,
         appBaseUrl: daemon.config.appBaseUrl,
       });
-      expect(offerUrl.startsWith("https://app.paseo.sh/#offer=")).toBe(true);
+      expect(offerUrl.startsWith("fulcra://pair#offer=")).toBe(true);
 
       const offer = decodeOfferFromFragmentUrl(offerUrl) as {
         v: number;
@@ -104,11 +104,11 @@ describe("ConnectionOfferV2 (daemon E2E)", () => {
         relay: { endpoint: string };
       };
 
-      expect(offer.v).toBe(2);
+      expect(offer.v).toBe(3);
       expect(typeof offer.serverId).toBe("string");
       expect(offer.serverId.length).toBeGreaterThan(0);
       expect(offer.serverId.startsWith("srv_")).toBe(true);
-      expect(offer.relay.endpoint).toBe("relay.paseo.sh:443");
+      expect(offer.relay.endpoint).toBe(daemon.config.relayEndpoint);
       expect(typeof offer.daemonPublicKeyB64).toBe("string");
       expect(offer.daemonPublicKeyB64.length).toBeGreaterThan(0);
       expect(() => Buffer.from(offer.daemonPublicKeyB64, "base64")).not.toThrow();

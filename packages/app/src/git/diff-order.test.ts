@@ -69,3 +69,31 @@ describe("checkout diff ordering", () => {
     expect(ordered.map((file) => file.additions)).toEqual([1, 2, 3]);
   });
 });
+
+// The topology consumes actual parents, including merge and window boundaries.
+import { buildCommitTopology } from "./commit-topology";
+describe("commit topology", () => {
+  it("joins both merge parents without inventing an edge between sibling commits", () => {
+    const graph = buildCommitTopology([
+      { sha: "merge", parentShas: ["left", "right"] },
+      { sha: "left", parentShas: ["base"] },
+      { sha: "right", parentShas: ["base"] },
+      { sha: "base", parentShas: [] },
+    ]);
+    expect(graph.edges).toEqual([
+      { from: 0, to: 1 },
+      { from: 0, to: 2 },
+      { from: 1, to: 3 },
+      { from: 2, to: 3 },
+    ]);
+    expect(graph.nodes[1]?.lane).not.toBe(graph.nodes[2]?.lane);
+  });
+  it("marks a parent outside the visible window and leaves unrelated roots unconnected", () => {
+    const graph = buildCommitTopology([
+      { sha: "a", parentShas: ["missing"] },
+      { sha: "root", parentShas: [] },
+    ]);
+    expect(graph.edges).toEqual([]);
+    expect(graph.nodes[0]?.outsideParents).toEqual(["missing"]);
+  });
+});

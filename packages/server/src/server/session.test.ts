@@ -1,3 +1,8 @@
+import { TrustedPlugins } from "./plugins/trusted.js";
+import { bundledTarget } from "./plugins/test-utils/management.js";
+import * as gitDraftGeneration from "./session/checkout/git-ai-draft-generation.js";
+import { randomUUID } from "node:crypto";
+import { PluginCatalogPaging, type CatalogReadState } from "./plugins/catalog-paging.js";
 import {
   createMessageReceiptsStub,
   createTestCreationService,
@@ -309,7 +314,10 @@ interface SessionForTestOptions {
     getWorkspaceGitMetadata?: ReturnType<typeof vi.fn>;
     getProjectSlug?: ReturnType<typeof vi.fn>;
   };
-  workspaceRegistry?: { get: ReturnType<typeof vi.fn> };
+  workspaceRegistry?: {
+    get: ReturnType<typeof vi.fn>;
+    subscribeToMutations?: ReturnType<typeof vi.fn>;
+  };
   projectRegistry?: Partial<SessionOptions["projectRegistry"]>;
   terminalManager?: SessionOptions["terminalManager"];
   serviceProxy?: SessionOptions["serviceProxy"];
@@ -4591,6 +4599,115 @@ describe("session stash list handling", () => {
   });
 });
 
+describe("retained stash original source authority", () => {
+  function heldList() {
+    let resume!: (
+      entries: Array<{
+        sha: string;
+        index: number;
+        message: string;
+        branch: null;
+        isPaseo: boolean;
+      }>,
+    ) => void;
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = new Promise<
+      Array<{ sha: string; index: number; message: string; branch: null; isPaseo: boolean }>
+    >((resolve) => {
+      resume = resolve;
+    });
+    const listStashes = vi.fn(() => {
+      started();
+      return pending;
+    });
+    return {
+      listStashes,
+      entered,
+      resume: () =>
+        resume([
+          { sha: "a".repeat(40), index: 1, message: "selected", branch: null, isPaseo: false },
+        ]),
+    };
+  }
+  const request = {
+    type: "stash_pop_request" as const,
+    cwd: "/original-repo",
+    stashIndex: 0,
+    stashSha: "a".repeat(40),
+    keepStash: true,
+    requestId: "retained-stash",
+  };
+  test("revocation followed by re-grant during held preparation produces zero Git effects", async () => {
+    const held = heldList();
+    const messages: unknown[] = [];
+    const session = createSessionForTest({
+      workspaceGitService: { listStashes: held.listStashes },
+      messages,
+    });
+    const source = {};
+    const effects = gitCommandMocks.runGitCommand.mock.calls.length;
+    const pending = session.handleMessage(request, source);
+    await held.entered;
+    session.setPermissions(["workspace.read"]);
+    session.setPermissions(OWNER_PERMISSIONS);
+    held.resume();
+    await pending;
+    expect(gitCommandMocks.runGitCommand.mock.calls).toHaveLength(effects);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "stash_pop_response",
+        payload: expect.objectContaining({ success: false }),
+      }),
+    );
+    await session.cleanup();
+  });
+  test("disconnect and same-source replacement during held preparation produce zero Git effects", async () => {
+    const held = heldList();
+    const session = createSessionForTest({
+      workspaceGitService: { listStashes: held.listStashes },
+    });
+    const source = {};
+    const effects = gitCommandMocks.runGitCommand.mock.calls.length;
+    const pending = session.handleMessage(request, source);
+    await held.entered;
+    session.clearAgentTimelineSubscription(source);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    session.updateClientCapabilities({}, source);
+    held.resume();
+    await pending;
+    expect(gitCommandMocks.runGitCommand.mock.calls).toHaveLength(effects);
+    await session.cleanup();
+  });
+  test("unchanged source authority applies the exact original SHA and cwd after held preparation", async () => {
+    const held = heldList();
+    const session = createSessionForTest({
+      workspaceGitService: {
+        listStashes: held.listStashes,
+        getSnapshot: vi.fn().mockResolvedValue({}),
+      },
+    });
+    gitCommandMocks.runGitCommand.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+      truncated: false,
+    });
+    const pending = session.handleMessage(request, {});
+    await held.entered;
+    held.resume();
+    await pending;
+    expect(gitCommandMocks.runGitCommand).toHaveBeenCalledWith(["stash", "apply", "a".repeat(40)], {
+      cwd: "/original-repo",
+      timeout: 120_000,
+    });
+    await session.cleanup();
+  });
+});
+
 describe("session stash mutation handling", () => {
   test("forces a workspace git snapshot refresh after pushing a stash", async () => {
     const messages: unknown[] = [];
@@ -5864,4 +5981,438 @@ test("quiet MCP refresh routes only authorized requests and returns correlated r
     type: "agent.mcp.refresh.response",
     payload: { ...result, agentId: "agent-1", requestId: "refresh-1" },
   });
+});
+
+function l17SessionFixture(permissions: readonly DaemonPermission[] = OWNER_PERMISSIONS) {
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({ messages, permissions });
+  const source = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, source);
+  const state: CatalogReadState = {
+    revision: randomUUID(),
+    entries: [{ id: "example", clientBundle: "safePlugin();", requirements: { paseo: ">=0.8.0" } }],
+  };
+  let readState: () => CatalogReadState | Promise<CatalogReadState> = () => state;
+  const pager = new PluginCatalogPaging(
+    () => readState(),
+    () => state.revision,
+  );
+  // Only this dependency is injected; real SessionAuthorization and physical SessionDelivery remain in use.
+  Reflect.set(session, "pluginRuntime", {
+    catalog: () => state.entries,
+    catalogPaging: () => pager,
+  });
+  return {
+    session,
+    source,
+    state,
+    pager,
+    messages,
+    hold: (reader: typeof readState) => {
+      readState = reader;
+    },
+  };
+}
+
+test("L17 actual Session catalog read keeps legacy path and fences foreign physical readers", async () => {
+  const f = l17SessionFixture();
+  try {
+    await f.session.handleMessage(
+      { type: "plugin.catalog.page.request", requestId: "page" },
+      f.source,
+    );
+    const page = findByType(f.messages, "plugin.catalog.page.response");
+    if (!page || page.payload.status !== "ok") throw Error("Expected host page");
+    const request = {
+      type: "plugin.catalog.bundle.get.request" as const,
+      requestId: "chunk",
+      snapshotId: page.payload.snapshotId,
+      reference: page.payload.entries[0]!.bundle.reference,
+      offset: 0,
+      length: 100,
+    };
+    await f.session.handleMessage(request, f.source);
+    const chunk = findByType(f.messages, "plugin.catalog.bundle.get.response");
+    if (!chunk || chunk.payload.status !== "ok") throw Error("Expected host chunk");
+    expect(Buffer.from(chunk.payload.data, "base64").toString()).toBe("safePlugin();");
+    const other = {};
+    f.session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, other);
+    await f.session.handleMessage({ ...request, requestId: "foreign" }, other);
+    expect(f.messages.at(-1)).toMatchObject({
+      type: "plugin.catalog.bundle.get.response",
+      payload: { requestId: "foreign", status: "refused", error: "read_revoked" },
+    });
+    await f.session.handleMessage(
+      { type: "plugin.catalog.get.request", requestId: "legacy" },
+      f.source,
+    );
+    expect(findByType(f.messages, "plugin.catalog.get.response")?.payload.plugins).toEqual(
+      f.state.entries,
+    );
+  } finally {
+    f.pager.invalidate();
+    await f.session.cleanup();
+  }
+});
+
+test("L17 actual Session denies workspace-only read before catalog preparation", async () => {
+  const f = l17SessionFixture(["workspace.read"]);
+  const read = vi.fn(() => f.state);
+  f.hold(read);
+  try {
+    await f.session.handleMessage(
+      { type: "plugin.catalog.page.request", requestId: "denied" },
+      f.source,
+    );
+    expect(findByType(f.messages, "rpc_error")?.payload).toMatchObject({
+      code: "access_denied",
+      requestId: "denied",
+    });
+    expect(read).not.toHaveBeenCalled();
+  } finally {
+    f.pager.invalidate();
+    await f.session.cleanup();
+  }
+});
+
+test("L17 actual Session held catalog prepare refuses permission revoke-regain", async () => {
+  const f = l17SessionFixture();
+  try {
+    let complete!: (value: CatalogReadState) => void;
+    f.hold(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const pending = f.session.handleMessage(
+      { type: "plugin.catalog.page.request", requestId: "held" },
+      f.source,
+    );
+    f.session.setPermissions([]);
+    f.session.setPermissions(OWNER_PERMISSIONS);
+    complete(f.state);
+    await pending;
+    expect(f.messages).not.toContainEqual(
+      expect.objectContaining({
+        type: "plugin.catalog.page.response",
+        payload: expect.objectContaining({ status: "ok" }),
+      }),
+    );
+    expect(findByType(f.messages, "plugin.catalog.page.response")?.payload).toMatchObject({
+      status: "refused",
+      error: "read_revoked",
+    });
+  } finally {
+    f.pager.invalidate();
+    await f.session.cleanup();
+  }
+});
+
+test("L17 actual Session disconnect/reuse during bundle prepare gives no old-source script publication", async () => {
+  const f = l17SessionFixture();
+  try {
+    await f.session.handleMessage(
+      { type: "plugin.catalog.page.request", requestId: "page" },
+      f.source,
+    );
+    const page = findByType(f.messages, "plugin.catalog.page.response");
+    if (!page || page.payload.status !== "ok") throw Error("Expected page");
+    let complete!: (value: CatalogReadState) => void;
+    f.hold(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const request = {
+      type: "plugin.catalog.bundle.get.request" as const,
+      requestId: "old-chunk",
+      snapshotId: page.payload.snapshotId,
+      reference: page.payload.entries[0]!.bundle.reference,
+      offset: 0,
+      length: 100,
+    };
+    const pending = f.session.handleMessage(request, f.source);
+    f.session.clearAgentTimelineSubscription(f.source);
+    await Promise.resolve();
+    f.session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, f.source);
+    complete(f.state);
+    await pending;
+    expect(
+      f.messages.filter((message) => message.type === "plugin.catalog.bundle.get.response"),
+    ).toEqual([]);
+    await f.session.handleMessage({ ...request, requestId: "reused" }, f.source);
+    expect(findByType(f.messages, "plugin.catalog.bundle.get.response")?.payload).toMatchObject({
+      status: "refused",
+      error: "unavailable",
+    });
+  } finally {
+    f.pager.invalidate();
+    await f.session.cleanup();
+  }
+});
+
+function gitDraftSessionFixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "git-ai-session-read-")));
+  const workspaceId = randomUUID();
+  const record = {
+    workspaceId,
+    projectId: randomUUID(),
+    cwd: root,
+    updatedAt: "fixed",
+    archivedAt: null,
+  };
+  const messages: SessionOutboundMessage[] = [];
+  let finish!: (value: { diff: string; structured: [] }) => void;
+  const getCheckoutDiff = vi.fn(
+    () =>
+      new Promise<{ diff: string; structured: [] }>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const provider = vi.fn(async () => {
+    throw new Error("Unexpected provider call");
+  });
+  const spy = vi
+    .spyOn(gitDraftGeneration, "createToollessGitDraftGeneration")
+    .mockReturnValue({ generate: provider });
+  const registry = { get: vi.fn(async () => record), subscribeToMutations: vi.fn(() => () => {}) };
+  const session = createSessionForTest({
+    messages,
+    workspaceRegistry: registry,
+    workspaceGitService: { getCheckoutDiff },
+  });
+  const source = {};
+  session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, source);
+  const request = {
+    type: "checkout.git_ai.draft.request" as const,
+    requestId: randomUUID(),
+    workspaceId,
+    kind: "conflict-help" as const,
+  };
+  return {
+    session,
+    messages,
+    provider,
+    request,
+    source,
+    getCheckoutDiff,
+    finish: () => finish({ diff: "+ untrusted diff", structured: [] }),
+    close: async () => {
+      await session.cleanup();
+      spy.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+test("Git AI actual Session held diff revoke-regain refuses before provider with no successful draft", async () => {
+  const f = gitDraftSessionFixture();
+  try {
+    const pending = f.session.handleMessage(f.request, f.source);
+    await vi.waitFor(() => expect(f.getCheckoutDiff).toHaveBeenCalledOnce());
+    f.session.setPermissions([]);
+    f.session.setPermissions(OWNER_PERMISSIONS);
+    f.finish();
+    await pending;
+    expect(f.provider).not.toHaveBeenCalled();
+    expect(findByType(f.messages, "checkout.git_ai.draft.response")?.payload.result).toMatchObject({
+      status: "refused",
+      error: "stale",
+    });
+  } finally {
+    await f.close();
+  }
+});
+test("Git AI actual Session held diff disconnect and same physical object reuse never publish an old draft", async () => {
+  const f = gitDraftSessionFixture();
+  try {
+    const pending = f.session.handleMessage(f.request, f.source);
+    await vi.waitFor(() => expect(f.getCheckoutDiff).toHaveBeenCalledOnce());
+    f.session.clearAgentTimelineSubscription(f.source);
+    await Promise.resolve();
+    f.session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, f.source);
+    f.finish();
+    await pending;
+    expect(f.provider).not.toHaveBeenCalled();
+    expect(findByType(f.messages, "checkout.git_ai.draft.response")).toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});
+
+function radiusOwnerSessionFixture() {
+  const messages: SessionOutboundMessage[] = [];
+  const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+  const trustedPlugins = new TrustedPlugins({
+    enabled: () => true,
+    validate: (command) => command,
+  });
+  const management = trustedPlugins.management;
+  management.register("orca-organization-next", async () => null);
+  const effect = vi.fn();
+  management.registerOwnerHandler("radius-scratch-simulate", async (_command, owner) => {
+    owner.requireOwner();
+    effect();
+    owner.requireOwner();
+    return { kind: "local-scratch-simulation" };
+  });
+  let finish!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const invokePluginRpc = vi.fn(
+    async (
+      _id: string,
+      _method: string,
+      input: unknown,
+      invocation?: import("./plugins/management.js").ManagementInvocation,
+    ) => {
+      await hold;
+      if (!invocation) throw new Error("Missing original invocation");
+      return invocation.invoke("original-call", { method: "radius-scratch-simulate", input });
+    },
+  );
+  const plugin = {
+    id: "orca-organization-next",
+    name: "Fixture",
+    version: "1.0.0",
+    path: "/fixture",
+    enabled: true,
+    status: "running" as const,
+  };
+  const pluginRuntime: NonNullable<SessionOptions["pluginRuntime"]> = {
+    managementTarget: () => bundledTarget,
+    before: async (_name, request) => request,
+    emit: () => undefined,
+    listPlugins: async () => [plugin],
+    getLogs: () => [],
+    installDirectory: async () => plugin,
+    inspectDirectory: async () => ({ id: plugin.id }),
+    installSource: async () => plugin,
+    statusSources: async () => [],
+    previewUpdates: async () => [],
+    applyUpdates: async () => [],
+    updateSources: async () => [],
+    reloadPlugin: async () => plugin,
+    enablePlugin: async () => plugin,
+    disablePlugin: async () => plugin,
+    removePlugin: async () => undefined,
+    subscribe: () => () => undefined,
+    catalog: () => [],
+    invokePluginRpc,
+  };
+  const session = createSessionForTest({
+    messages,
+    targetedMessages,
+    pluginRuntime,
+    agentManager: { trustedPlugins },
+  });
+  const source = {};
+  const admit = () => {
+    session.updateClientCapabilities({ [CLIENT_CAPS.ownedSubscriptions]: true }, source);
+    session.admitManagementSource(source, {
+      id: "owner",
+      authentication: "daemon-password",
+      deviceId: null,
+    });
+  };
+  admit();
+  const request = {
+    type: "plugin.rpc.invoke.request" as const,
+    requestId: randomUUID(),
+    pluginId: "orca-organization-next",
+    method: "organization.radius.scratch.simulate",
+    input: {},
+  };
+  return {
+    session,
+    source,
+    messages,
+    targetedMessages,
+    request,
+    invokePluginRpc,
+    effect,
+    finish,
+    admit,
+  };
+}
+test("Radius original Session revoke-regain refuses a held owner effect without retry", async () => {
+  const f = radiusOwnerSessionFixture();
+  try {
+    const pending = f.session.handleMessage(f.request, f.source);
+    await vi.waitFor(() => expect(f.invokePluginRpc).toHaveBeenCalledOnce());
+    f.session.setPermissions([]);
+    f.session.setPermissions(OWNER_PERMISSIONS);
+    f.finish();
+    await pending;
+    expect(f.effect).not.toHaveBeenCalled();
+    expect(
+      f.targetedMessages.filter(({ message }) => message.type === "plugin.rpc.invoke.response"),
+    ).toEqual([]);
+  } finally {
+    await f.session.cleanup();
+  }
+});
+test("Radius original Session physical source replacement cannot revive the held invocation", async () => {
+  const f = radiusOwnerSessionFixture();
+  try {
+    const pending = f.session.handleMessage(f.request, f.source);
+    await vi.waitFor(() => expect(f.invokePluginRpc).toHaveBeenCalledOnce());
+    f.session.revokeManagementSource(f.source);
+    f.session.clearAgentTimelineSubscription(f.source);
+    f.admit();
+    f.finish();
+    await pending;
+    expect(f.effect).not.toHaveBeenCalled();
+    expect(
+      f.targetedMessages.filter(({ message }) => message.type === "plugin.rpc.invoke.response"),
+    ).toEqual([]);
+  } finally {
+    await f.session.cleanup();
+  }
+});
+test("Radius original Session success replies to the original physical Delivery only", async () => {
+  const f = radiusOwnerSessionFixture();
+  try {
+    const pending = f.session.handleMessage(f.request, f.source);
+    await vi.waitFor(() => expect(f.invokePluginRpc).toHaveBeenCalledOnce());
+    f.finish();
+    await pending;
+    expect(f.effect).toHaveBeenCalledOnce();
+    expect(
+      f.targetedMessages.filter(({ message }) => message.type === "plugin.rpc.invoke.response"),
+    ).toEqual([
+      {
+        source: f.source,
+        message: {
+          type: "plugin.rpc.invoke.response",
+          payload: { requestId: f.request.requestId, output: { kind: "local-scratch-simulation" } },
+        },
+      },
+    ]);
+    expect(f.messages.filter((message) => message.type === "plugin.rpc.invoke.response")).toEqual(
+      [],
+    );
+  } finally {
+    await f.session.cleanup();
+  }
+});
+
+test("Git AI actual Session read-only request refuses before diff or billed provider work", async () => {
+  const f = gitDraftSessionFixture();
+  try {
+    f.session.setPermissions(["workspace.read"]);
+    await f.session.handleMessage(f.request, f.source);
+    expect(f.getCheckoutDiff).not.toHaveBeenCalled();
+    expect(f.provider).not.toHaveBeenCalled();
+    expect(findByType(f.messages, "checkout.git_ai.draft.response")).toBeUndefined();
+    expect(findByType(f.messages, "rpc_error")?.payload).toMatchObject({
+      requestId: f.request.requestId,
+      requestType: "checkout.git_ai.draft.request",
+      code: "access_denied",
+    });
+  } finally {
+    await f.close();
+  }
 });

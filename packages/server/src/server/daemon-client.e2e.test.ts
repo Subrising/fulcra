@@ -289,7 +289,7 @@ test("a delete whose history cannot be retained fails and keeps the agent", asyn
   }
 }, 30000);
 
-// Regression: fail after a segment moves, read the agent, restart with the registry record present, read
+// R-J5a-R2-1: fail after a segment moves, read the agent, restart with the registry record present, read
 // again, then retry the delete. Every acknowledged row stays readable, tail and by turn, before and after.
 test("a failed delete, reads and a retry keep every acknowledged row, across a restart", async () => {
   const paseoHomeRoot = mkdtempSync(path.join(tmpdir(), "paseo-pending-delete-"));

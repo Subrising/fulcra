@@ -109,6 +109,9 @@ describe("listCheckoutCommits", () => {
     expect(commits[0]?.subject).toBe("Add bar");
     expect(commits[1]?.subject).toBe("Add foo");
     expect(commits[2]?.subject).toBe("initial");
+    expect(commits[0]!.parentShas).toEqual([commits[1]!.sha]);
+    expect(commits[1]!.parentShas).toEqual([commits[2]!.sha]);
+    expect(commits[2]!.parentShas).toEqual([]);
 
     expect(commits[0]?.isOnRemote).toBe(false);
     expect(commits[1]?.isOnRemote).toBe(true);
@@ -128,6 +131,25 @@ describe("listCheckoutCommits", () => {
     expect(commits[0]?.sha).toHaveLength(40);
     expect((commits[0]?.shortSha.length ?? 0) > 0).toBe(true);
     expect(Number.isNaN(new Date(commits[0]?.authorDate ?? "").getTime())).toBe(false);
+  });
+
+  it("returns both actual parents of a merge rather than inferring adjacent history", async () => {
+    const { repoDir } = initRepoOnMain();
+    git(["checkout", "-b", "side"], repoDir);
+    commitFile(repoDir, "side.txt", "side\n", "side");
+    const sideSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+    git(["checkout", "main"], repoDir);
+    commitFile(repoDir, "main.txt", "main\n", "main");
+    const mainSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+    git(["-c", "commit.gpgsign=false", "merge", "--no-ff", "side", "-m", "merge"], repoDir);
+    const { commits } = await listCheckoutCommits({ cwd: repoDir });
+    expect(commits[0]?.parentShas).toEqual([mainSha, sideSha]);
   });
 
   it("shows recent history on the base branch", async () => {

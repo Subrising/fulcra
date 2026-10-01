@@ -1,6 +1,35 @@
 import {
+  captureNativeEvidence,
+  assertNativeEvidence,
+  publishNativeEvidence,
+  nativeEvidenceDigest,
+  isConsumedNativeCompletion,
+} from "../../native-evidence-origin.js";
+import {
+  materializedNativeImageFact,
+  type MaterializedProviderImage,
+} from "./provider-image-output.js";
+import { assertFinalInputCheck } from "../final-input-check.js";
+import { FINAL_INPUT_CHECK } from "../agent-sdk-types.js";
+import {
+  registerNativeQueuedProvider,
+  validateNativeQueuedDispatch,
+  refuseNativeQueuedDispatch,
+  recordNativeQueuedAcceptance,
+} from "../native-queued-dispatch.js";
+import { resolvedServiceTier } from "../runtime-observation.js";
+import type {
+  AccountCredential,
+  AccountUsageReading,
+} from "../../../services/quota-fetcher/account-usage-types.js";
+import {
+  codexUsageCredentialFromEnv,
+  readingFromRateLimitsNotification,
+} from "../../../services/quota-fetcher/providers/codex-account-usage.js";
+import {
   getAgentStreamEventTurnId,
   CODEX_TURN_ADMISSION,
+  NATIVE_QUEUED_FINAL,
   type AgentPermissionAction,
   type AgentCapabilityFlags,
   type AgentClient,
@@ -40,7 +69,13 @@ import {
   type ResolveAgentDefaultModeInput,
 } from "../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../provider-session-import.js";
+import { resolveOwnDefaultCreateConfig } from "../create-agent-mode.js";
 import { runProviderRefreshActivity } from "../provider-refresh-deadline.js";
+import {
+  mergeLiveCodexModels,
+  readCodexLiveCatalog,
+  type LiveCodexModel,
+} from "./codex/live-model-catalog.js";
 import type { Logger } from "pino";
 
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
@@ -89,6 +124,8 @@ import {
 import { type CodexUserMessageTurnIndex, revertCodexConversation } from "./codex/rewind.js";
 import {
   assertCodexTurnAdmission,
+  readCodexTurnQuota,
+  capturedCodexTurn,
   CodexQuotaError,
   readCodexQuota,
   type CodexQuotaBinding,
@@ -287,6 +324,10 @@ const CODEX_MODES: AgentMode[] = [
 ];
 
 const DEFAULT_CODEX_MODE_ID = "auto";
+// FIX-8 W3 (B, owner decision 30 Sep: "for all new sessions for claude or codex on Fulcra on any system ... the default
+// should be auto-mode/full-access"): the built-in default for a new Codex session, on a host with or without Fulcra's
+// config. Precedence is unchanged (explicit > role > Settings > config > this); internal agents use internalModeId.
+const CODEX_BUILT_IN_DEFAULT_MODE_ID = "full-access";
 
 interface CodexAppServerClientLike {
   request(method: string, params?: unknown): Promise<unknown>;
@@ -303,7 +344,9 @@ interface CodexAppServerAgentDeps {
     label: string;
     extends: string;
   };
-  customCodexConfig?: Record<string, unknown> | null;
+  customCodexConfig?: CodexCustomProviderConfig | null;
+  // The CODEX_HOME the session's app-server runs with; prompts and skills are read from it.
+  codexHome?: string;
   _createCodexClient?: (
     child: ChildProcessWithoutNullStreams,
     logger: Logger,
@@ -315,19 +358,21 @@ interface CodexAppServerAgentDeps {
 }
 
 interface CodexModePreset {
-  approvalPolicy: string;
+  approvalPolicy: Extract<NonNullable<CodexProviderOptions["approval_policy"]>, string>;
   sandbox: string;
-  approvalsReviewer?: "auto_review";
+  approvalsReviewer: "user" | "auto_review";
 }
 
 const MODE_PRESETS: Record<string, CodexModePreset> = {
   "read-only": {
     approvalPolicy: "on-request",
     sandbox: "read-only",
+    approvalsReviewer: "user",
   },
   auto: {
     approvalPolicy: "on-request",
     sandbox: "workspace-write",
+    approvalsReviewer: "user",
   },
   "auto-review": {
     approvalPolicy: "on-request",
@@ -337,6 +382,7 @@ const MODE_PRESETS: Record<string, CodexModePreset> = {
   "full-access": {
     approvalPolicy: "never",
     sandbox: "danger-full-access",
+    approvalsReviewer: "user",
   },
 };
 
@@ -344,18 +390,9 @@ function isAutoReviewReviewer(value: string | undefined): boolean {
   return value === "auto_review" || value === "guardian_subagent";
 }
 
-function applyApprovalsReviewerParam(
-  params: Record<string, unknown>,
-  preset: CodexModePreset,
-): void {
-  if (preset.approvalsReviewer) {
-    params.approvalsReviewer = preset.approvalsReviewer;
-  }
-}
-
 function shouldPromoteThreadResponseToAutoReview(params: {
   approvalsReviewer: string | undefined;
-  approvalPolicy: string;
+  approvalPolicy: string | CodexProviderOptions["approval_policy"];
   sandbox: string;
 }): boolean {
   return (
@@ -595,8 +632,8 @@ async function checkCodexLaunchAvailable(launch: ResolvedProviderLaunch) {
   });
 }
 
-function resolveCodexHomeDir(): string {
-  return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
+function resolveCodexHomeDir(env: NodeJS.ProcessEnv): string {
+  return env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
 }
 
 function decodeEscapedChar(next: string): string {
@@ -706,8 +743,7 @@ function parseFrontMatter(markdown: string): {
   return { frontMatter, body };
 }
 
-async function listCodexCustomPrompts(): Promise<AgentSlashCommand[]> {
-  const codexHome = resolveCodexHomeDir();
+async function listCodexCustomPrompts(codexHome: string): Promise<AgentSlashCommand[]> {
   const promptsDir = path.join(codexHome, "prompts");
   let entries: Dirent[];
   try {
@@ -749,6 +785,7 @@ async function listCodexCustomPrompts(): Promise<AgentSlashCommand[]> {
 
 export async function listCodexSkills(
   cwd: string,
+  codexHome: string,
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">,
 ): Promise<AgentSlashCommand[]> {
   const candidates: string[] = [];
@@ -762,7 +799,7 @@ export async function listCodexSkills(
     candidates.push(path.join(repoRoot, ".codex", "skills"));
   }
 
-  candidates.push(path.join(resolveCodexHomeDir(), "skills"));
+  candidates.push(path.join(codexHome, "skills"));
 
   const candidateReads = await Promise.all(
     candidates.map(async (dir) => {
@@ -969,7 +1006,7 @@ const CodexModelListResponseSchema = z.object({
 async function readCodexThreadWindow(
   client: Pick<CodexAppServerClientLike, "request">,
   logger: Logger,
-  window: { limit: number; cwd?: string },
+  window: { limit: number; cwd?: string; modelProviders?: string[] },
 ): Promise<Array<Record<string, unknown>>> {
   // A thread updated while the scan is paging moves under `updated_at` order
   // and can come back on a later page, so identify each one and keep it once.
@@ -985,6 +1022,7 @@ async function readCodexThreadWindow(
         // Older Codex builds ignore the unknown key and keep that order.
         sortKey: "updated_at",
         ...(window.cwd ? { cwd: window.cwd } : {}),
+        ...(window.modelProviders ? { modelProviders: window.modelProviders } : {}),
         ...(cursor ? { cursor } : {}),
       }),
     );
@@ -1929,6 +1967,7 @@ function codexImageOutputFromResult(result: unknown): ProviderImageOutput | null
 function mapCodexThreadImageItem(
   normalizedType: string,
   normalizedItem: Record<string, unknown>,
+  materialize = materializeProviderImage,
 ): AgentTimelineItem | null {
   if (normalizedType === "imageView") {
     return renderProviderImageOutputAsAssistantMarkdown({
@@ -1945,7 +1984,7 @@ function mapCodexThreadImageItem(
       data: result?.data ?? null,
       mimeType: result?.mimeType ?? null,
     },
-    { materialize: materializeProviderImage },
+    { materialize },
   );
 }
 
@@ -1962,7 +2001,11 @@ function mapCodexAgentMessage(item: Record<string, unknown>): AgentTimelineItem 
 
 export function threadItemToTimeline(
   item: unknown,
-  options?: { includeUserMessage?: boolean; cwd?: string | null },
+  options?: {
+    includeUserMessage?: boolean;
+    cwd?: string | null;
+    materialize?: typeof materializeProviderImage;
+  },
 ): AgentTimelineItem | null {
   const itemRecord = toObjectRecord(item);
   if (!itemRecord) return null;
@@ -1977,7 +2020,7 @@ export function threadItemToTimeline(
       : itemRecord;
 
   if (normalizedType === "imageView" || normalizedType === "imageGeneration") {
-    return mapCodexThreadImageItem(normalizedType, normalizedItem);
+    return mapCodexThreadImageItem(normalizedType, normalizedItem, options?.materialize);
   }
   if (normalizedType && CODEX_TOOL_THREAD_ITEM_TYPES.has(normalizedType)) {
     return mapCodexToolCallFromThreadItem(normalizedItem, { cwd });
@@ -3333,10 +3376,15 @@ function normalizeOpenAICompatibleBaseUrl(value: string): string | null {
   return `${withoutTrailingSlashes}/v1`;
 }
 
+interface CodexCustomProviderConfig {
+  model_provider: string;
+  model_providers: Record<string, Record<string, unknown>>;
+}
+
 function buildCodexCustomProviderConfig(
   runtimeSettings: ProviderRuntimeSettings | undefined,
   customProvider: CodexAppServerAgentDeps["customProvider"],
-): Record<string, unknown> | null {
+): CodexCustomProviderConfig | null {
   if (customProvider?.extends !== CODEX_PROVIDER) {
     return null;
   }
@@ -3403,6 +3451,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private readonly logger: Logger;
   private readonly config: AgentSessionConfig;
   private readonly asyncQuestions: CodexAsyncQuestions;
+  private readonly codexHome: string;
   private currentMode: string;
   private hasWorkflowModeOverride: boolean;
   private readonly providerOptions: CodexProviderOptions;
@@ -3424,6 +3473,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   } | null = null;
   private client: CodexAppServerClient | null = null;
   private quotaRevision = 0;
+  private accountNotificationEpoch = 0n;
   private quotaModelProvider: string | null = null;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
@@ -3492,6 +3542,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     name: string;
   } | null = null;
   private cachedSkills: Array<{ name: string; description: string; path: string }> | null = null;
+  // For the display-only background-job sample (agent/background-work); null before connecting.
+  private processId: number | null = null;
+  private accountUsageObservation: AccountUsageReading | null = null;
 
   constructor(
     config: AgentSessionConfig,
@@ -3504,7 +3557,18 @@ export class CodexAppServerAgentSession implements AgentSession {
     private readonly autoReviewEnabled: boolean = false,
     private readonly agentId?: string,
     private readonly initialResumePurpose: "interactive" | "history" = "interactive",
+    private readonly accountUsageLabel: string | null = null,
+    private readonly launchEnv?: Record<string, string>,
   ) {
+    registerNativeQueuedProvider(
+      this,
+      () =>
+        !this.closed &&
+        this.connectionState === "connected" &&
+        !!this.currentThreadId &&
+        this.client instanceof CodexAppServerClient &&
+        typeof this.client.requestNativeQueuedTurn === "function",
+    );
     this.logger = logger.child({
       module: "agent",
       provider: CODEX_PROVIDER,
@@ -3518,9 +3582,10 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.providerOptions = CodexProviderOptionsSchema.parse(config.providerOptions ?? {});
     this.config = config;
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
+    this.codexHome = deps.codexHome ?? resolveCodexHomeDir(process.env);
     this.config.thinkingOptionId = normalizeCodexThinkingOptionId(this.config.thinkingOptionId);
     if (this.config.featureValues?.fast_mode && codexModelSupportsFastMode(this.config.model)) {
-      this.serviceTier = "fast";
+      this.serviceTier = resolvedServiceTier(true);
     }
     if (this.config.featureValues?.plan_mode) {
       this.planModeEnabled = true;
@@ -3572,6 +3637,10 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
+  getProcessId(): number | null {
+    return this.client && !this.closed ? this.processId : null;
+  }
+
   private async establishConnection(): Promise<void> {
     if (this.initialResumePurpose === "history") {
       await this.readArchivedHistory();
@@ -3579,6 +3648,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     const child = await this.spawnAppServer();
+    this.processId = child.pid ?? null;
     const client = new CodexAppServerClient(child, this.logger, () => this.traceContext());
     if (this.closed) {
       await client.dispose();
@@ -3588,7 +3658,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     client.setUnexpectedTerminationHandler((error) => {
       this.handleUnexpectedTermination(error);
     });
-    client.setNotificationHandler((method, params) => this.handleNotification(method, params));
+    client.setNotificationHandler((method, params) =>
+      this.handleNotification(method, params, client),
+    );
     this.registerRequestHandlers();
 
     try {
@@ -3807,7 +3879,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     };
 
     if (featureId === "fast_mode") {
-      this.serviceTier = value ? "fast" : null;
+      this.serviceTier = resolvedServiceTier(value);
       this.cachedRuntimeInfo = null;
       return;
     }
@@ -4006,8 +4078,24 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
-  private async ensureThreadLoaded(): Promise<void> {
+  private async ensureThreadLoaded(queued?: () => void): Promise<void> {
     if (!this.client || !this.currentThreadId) return;
+    if (queued) {
+      const client = this.client;
+      const threadId = this.currentThreadId;
+      validateNativeQueuedDispatch(queued);
+      const response = toObjectRecord(await client.request("thread/loaded/list", {}));
+      validateNativeQueuedDispatch(queued);
+      if (
+        this.client !== client ||
+        this.currentThreadId !== threadId ||
+        !Array.isArray(response?.data) ||
+        !response.data.includes(threadId)
+      )
+        refuseNativeQueuedDispatch(queued, "Native queued thread is not loaded");
+      // Never resume/unarchive or submit developer instructions as queued preparation.
+      return;
+    }
     const params: Record<string, unknown> = { threadId: this.currentThreadId };
     const developerInstructions = composeSystemPromptParts(
       this.config.systemPrompt,
@@ -4101,8 +4189,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   ): Promise<CodexPromptInput> {
     if (commandName.startsWith("prompts:")) {
       const promptName = commandName.slice("prompts:".length);
-      const codexHome = resolveCodexHomeDir();
-      const promptPath = path.join(codexHome, "prompts", `${promptName}.md`);
+      const promptPath = path.join(this.codexHome, "prompts", `${promptName}.md`);
       const raw = await fs.readFile(promptPath, "utf8");
       const parsed = parseFrontMatter(raw);
       return expandCodexCustomPrompt(parsed.body, args);
@@ -4133,7 +4220,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   ): Promise<{
     params: Record<string, unknown>;
     thinkingOptionId?: string;
-    approvalPolicy?: string;
+    approvalPolicy?: CodexProviderOptions["approval_policy"];
     sandboxPolicyType?: string;
     hasOutputSchema: boolean;
     hasDeveloperInstructions: boolean;
@@ -4195,12 +4282,16 @@ export class CodexAppServerAgentSession implements AgentSession {
   private applyTurnWorkflowPolicy(
     params: Record<string, unknown>,
     preset: CodexModePreset,
-  ): { approvalPolicy?: string; sandboxPolicyType?: string } {
-    const approvalPolicy = this.hasWorkflowModeOverride ? preset.approvalPolicy : undefined;
+  ): { approvalPolicy?: CodexProviderOptions["approval_policy"]; sandboxPolicyType?: string } {
+    // FIX-8 W3 (gate M): provider-option pins (the controller's) win over the mode preset, and are sent as the turn's
+    // policy too, so every launch path carries its approval policy explicitly.
+    const approvalPolicy =
+      this.providerOptions.approval_policy ??
+      (this.hasWorkflowModeOverride ? preset.approvalPolicy : undefined);
     const sandboxPolicyType =
       this.providerOptions.sandbox_mode ??
       (this.hasWorkflowModeOverride ? preset.sandbox : undefined);
-    if (approvalPolicy && this.providerOptions.approval_policy === undefined) {
+    if (approvalPolicy) {
       params.approvalPolicy = approvalPolicy;
     }
     if (sandboxPolicyType) {
@@ -4215,7 +4306,7 @@ export class CodexAppServerAgentSession implements AgentSession {
           : toSandboxPolicy(sandboxPolicyType, workspaceWrite);
     }
     if (this.hasWorkflowModeOverride) {
-      applyApprovalsReviewerParam(params, preset);
+      params.approvalsReviewer = preset.approvalsReviewer;
     }
     return { approvalPolicy, sandboxPolicyType };
   }
@@ -4231,7 +4322,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }: {
     turnId: string;
     thinkingOptionId?: string;
-    approvalPolicy?: string;
+    approvalPolicy?: CodexProviderOptions["approval_policy"];
     sandboxPolicyType?: string;
     hasOutputSchema: boolean;
     hasDeveloperInstructions: boolean;
@@ -4301,14 +4392,117 @@ export class CodexAppServerAgentSession implements AgentSession {
     });
   }
 
+  private captureNativeQueuedStart(
+    prompt: AgentPromptInput,
+    queued: (() => void) | undefined,
+    pendingStart: { cancelRequested: boolean },
+  ): () => void {
+    const originalClient = this.client;
+    const originalThread = this.currentThreadId;
+    if (queued) {
+      validateNativeQueuedDispatch(queued);
+      if (typeof prompt !== "string" || prompt.trimStart().startsWith("/"))
+        refuseNativeQueuedDispatch(queued, "Native queued attachments or commands unavailable");
+      if (!(originalClient instanceof CodexAppServerClient) || !originalThread)
+        refuseNativeQueuedDispatch(queued, "Native queued prepared transport unavailable");
+    }
+    return () => {
+      if (!queued) return;
+      validateNativeQueuedDispatch(queued);
+      if (
+        this.closed ||
+        this.connectionState !== "connected" ||
+        this.client !== originalClient ||
+        this.currentThreadId !== originalThread ||
+        pendingStart.cancelRequested ||
+        this.getPendingPermissions().length > 0
+      )
+        refuseNativeQueuedDispatch(queued, "Native queued preparation changed");
+    };
+  }
+
+  private async submitNativeQueuedCodexTurn(
+    queued: () => void,
+    preparedClient: CodexAppServerClient,
+    preparedThread: string | null,
+    preparedRevision: number,
+    preparedAccountEpoch: bigint,
+    pendingStart: { cancelRequested: boolean },
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    const acknowledgement = await preparedClient.requestNativeQueuedTurn(
+      params,
+      queued,
+      () => {
+        if (
+          this.closed ||
+          this.connectionState !== "connected" ||
+          this.client !== preparedClient ||
+          this.currentThreadId !== preparedThread ||
+          this.quotaRevision !== preparedRevision ||
+          this.accountNotificationEpoch !== preparedAccountEpoch ||
+          pendingStart.cancelRequested ||
+          this.getPendingPermissions().length > 0 ||
+          params.threadId !== preparedThread
+        )
+          refuseNativeQueuedDispatch(queued, "Native queued prepared Codex turn changed");
+      },
+      TURN_START_TIMEOUT_MS,
+    );
+    if (acknowledgement.threadId !== preparedThread)
+      throw new Error("Native queued Codex acknowledgement thread changed");
+    recordNativeQueuedAcceptance(queued, acknowledgement.turnId);
+  }
+
+  private assertNativeForegroundStartAvailable(queued?: () => void): void {
+    if (this.activeForegroundTurnId || this.pendingForegroundStart) {
+      if (queued) refuseNativeQueuedDispatch(queued, "A foreground turn is already active");
+      throw new Error("A foreground turn is already active");
+    }
+  }
+
+  private rethrowNativeQueuedFailure(queued: (() => void) | undefined, error: unknown): void {
+    if (queued)
+      refuseNativeQueuedDispatch(
+        queued,
+        error instanceof Error ? error.message : "Native queued setup failed",
+      );
+  }
+
+  private assertFinishCodexPrepared(
+    client: CodexAppServerClient,
+    thread: string | null,
+    cancelled: boolean,
+  ): void {
+    if (this.client !== client || this.currentThreadId !== thread || this.closed || cancelled)
+      throw new Error("Final-checked prepared Codex start changed");
+  }
+
+  private prepareForegroundTurnIdentification(turnId: string, options?: AgentRunOptions): void {
+    this.activeForegroundTurnId = turnId;
+    this.activeClientMessageId = options?.clientMessageId ?? null;
+    this.currentTurnId = null;
+    this.pendingForegroundTurnIdentification?.resolve(null);
+    let resolveTurnIdentification!: (identifiedTurnId: string | null) => void;
+    const turnIdentification = new Promise<string | null>((resolvePromise) => {
+      resolveTurnIdentification = resolvePromise;
+    });
+    this.pendingForegroundTurnIdentification = {
+      foregroundTurnId: turnId,
+      promise: turnIdentification,
+      resolve: resolveTurnIdentification,
+    };
+  }
+
   async startTurn(
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
-    if (this.activeForegroundTurnId || this.pendingForegroundStart) {
-      throw new Error("A foreground turn is already active");
-    }
-
+    const queued = options?.[NATIVE_QUEUED_FINAL];
+    assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+    const originalAccountEpoch = this.accountNotificationEpoch;
+    const admission = options?.[CODEX_TURN_ADMISSION];
+    this.assertNativeForegroundStartAvailable(queued);
     let resolveStart!: () => void;
     const pendingStart = {
       promise: new Promise<void>((resolve) => {
@@ -4317,45 +4511,49 @@ export class CodexAppServerAgentSession implements AgentSession {
       resolve: () => resolveStart(),
       cancelRequested: false,
     };
+    const validateQueuedPreparation = this.captureNativeQueuedStart(prompt, queued, pendingStart);
     this.pendingForegroundStart = pendingStart;
-
-    this.dismissPendingPlanApprovals("Dismissed by a new prompt");
+    if (!queued) this.dismissPendingPlanApprovals("Dismissed by a new prompt");
 
     try {
       await this.connect();
+      validateQueuedPreparation();
       if (!this.client) {
         throw new Error("Codex client not initialized");
       }
 
-      const slashCommand = await this.resolveSlashCommandInvocation(prompt);
+      const slashCommand = queued ? null : await this.resolveSlashCommandInvocation(prompt);
       const effectivePrompt = slashCommand
         ? await this.buildCommandPromptInput(slashCommand.commandName, slashCommand.args)
         : prompt;
 
       if (this.currentThreadId) {
-        await this.ensureThreadLoaded();
+        await this.ensureThreadLoaded(queued);
       } else {
         await this.ensureThread();
       }
 
+      validateQueuedPreparation();
       const preparedClient = this.client;
       const preparedThread = this.currentThreadId;
-      const preparedRevision = this.quotaRevision;
-      const turnStart = await this.buildTurnStartParams(effectivePrompt, options);
+      let preparedRevision = this.quotaRevision;
+      const preparedModelProvider = this.quotaModelProvider;
+      const preparationIntent = () =>
+        JSON.stringify({
+          model: this.config.model ?? null,
+          serviceTier: this.serviceTier,
+          mode: this.currentMode,
+          thinkingOptionId: this.config.thinkingOptionId ?? null,
+          workflowModeOverride: this.hasWorkflowModeOverride,
+          outputSchema: options?.outputSchema ?? null,
+          clientMessageId: options?.clientMessageId ?? null,
+        });
+      const originalPreparationIntent = preparationIntent();
+      let turnStart = await this.buildTurnStartParams(effectivePrompt, options);
+      const originalParameters = JSON.stringify(turnStart.params);
+      validateQueuedPreparation();
       const turnId = this.createTurnId();
-      this.activeForegroundTurnId = turnId;
-      this.activeClientMessageId = options?.clientMessageId ?? null;
-      this.currentTurnId = null;
-      this.pendingForegroundTurnIdentification?.resolve(null);
-      let resolveTurnIdentification!: (identifiedTurnId: string | null) => void;
-      const turnIdentification = new Promise<string | null>((resolvePromise) => {
-        resolveTurnIdentification = resolvePromise;
-      });
-      this.pendingForegroundTurnIdentification = {
-        foregroundTurnId: turnId,
-        promise: turnIdentification,
-        resolve: resolveTurnIdentification,
-      };
+      this.prepareForegroundTurnIdentification(turnId, options);
 
       this.logTurnStartSummary({
         turnId,
@@ -4366,30 +4564,144 @@ export class CodexAppServerAgentSession implements AgentSession {
         hasDeveloperInstructions: turnStart.hasDeveloperInstructions,
         hasCodexConfig: turnStart.hasCodexConfig,
       });
-      const admission = options?.[CODEX_TURN_ADMISSION];
       if (admission !== undefined) {
-        const quota = await this.getQuota();
-        assertCodexTurnAdmission({ check: admission, quota, parameters: turnStart.params });
-        const unchanged =
-          !this.closed &&
-          this.connectionState === "connected" &&
-          this.client === preparedClient &&
-          this.currentThreadId === preparedThread &&
-          this.quotaRevision === preparedRevision;
-        if (!unchanged) throw new CodexQuotaError("session_changed");
+        if (typeof preparedThread !== "string" || !preparedThread)
+          throw new CodexQuotaError("session_changed");
+        const validateCurrent = () => {
+          validateQueuedPreparation();
+          if (
+            this.closed ||
+            this.connectionState !== "connected" ||
+            this.client !== preparedClient ||
+            this.currentThreadId !== preparedThread ||
+            this.quotaModelProvider !== preparedModelProvider ||
+            this.accountNotificationEpoch !== originalAccountEpoch ||
+            preparationIntent() !== originalPreparationIntent
+          )
+            throw new CodexQuotaError("session_changed");
+          if (pendingStart.cancelRequested)
+            throw new Error("Codex turn start was interrupted before reaching Codex");
+          if (this.getPendingPermissions().length > 0)
+            throw new Error("Codex turn start requires permission attention");
+          if (typeof admission !== "function") {
+            if (
+              !admission ||
+              typeof admission !== "object" ||
+              typeof admission.validate !== "function"
+            )
+              throw new CodexQuotaError("admission_refused");
+            admission.validate();
+          }
+        };
+        const validatePrepared = () => {
+          validateCurrent();
+          if (this.quotaRevision !== preparedRevision) throw new CodexQuotaError("session_changed");
+        };
+        let reprepared = false;
+        const reprepare = async () => {
+          // Only a host-observed revision change before policy evaluation may
+          // refresh local text parameters. Never re-enter thread or transport setup.
+          validateCurrent();
+          if (
+            reprepared ||
+            typeof admission === "function" ||
+            typeof prompt !== "string" ||
+            slashCommand ||
+            this.quotaRevision !== preparedRevision + 1
+          )
+            throw new CodexQuotaError("session_changed");
+          reprepared = true;
+          preparedRevision = this.quotaRevision;
+          const refreshed = await this.buildTurnStartParams(effectivePrompt, options);
+          validatePrepared();
+          if (JSON.stringify(refreshed.params) !== originalParameters)
+            throw new CodexQuotaError("session_changed");
+          turnStart = refreshed;
+        };
+        const readPreparedQuota = async () => {
+          if (this.quotaRevision !== preparedRevision) await reprepare();
+          validatePrepared();
+          const turn = capturedCodexTurn(admission, preparedThread, turnStart.params);
+          let staleQuotaRead = false;
+          const read = async () => {
+            try {
+              return await this.getQuota();
+            } catch (error) {
+              staleQuotaRead = error instanceof CodexQuotaError && error.code === "session_changed";
+              throw error;
+            }
+          };
+          try {
+            const quota = await readCodexTurnQuota({
+              read,
+              validate: validatePrepared,
+              admission,
+              turn,
+            });
+            return { quota, turn };
+          } catch (error) {
+            if (
+              !staleQuotaRead ||
+              !(error instanceof CodexQuotaError) ||
+              error.code !== "session_changed"
+            )
+              throw error;
+            await reprepare();
+            const quota = await readCodexTurnQuota({
+              read: () => this.getQuota(),
+              validate: validatePrepared,
+              admission,
+              turn,
+            });
+            return { quota, turn };
+          }
+        };
+        const { quota, turn } = await readPreparedQuota();
+        validatePrepared();
+        assertCodexTurnAdmission({ check: admission, turn, quota, parameters: turnStart.params });
+        // Policy mutation/refusal is outside the sole reprepare catch.
+        validatePrepared();
       }
+      if (this.accountNotificationEpoch !== originalAccountEpoch)
+        throw new CodexQuotaError("session_changed");
       if (pendingStart.cancelRequested) {
         throw new Error("Codex turn start was interrupted before reaching Codex");
       }
       // The transport writes synchronously: no await may separate the final
       // admission/cancellation checks from this request.
-      await this.client.request("turn/start", turnStart.params, TURN_START_TIMEOUT_MS);
+      if (queued) {
+        await this.submitNativeQueuedCodexTurn(
+          queued,
+          preparedClient,
+          preparedThread,
+          preparedRevision,
+          originalAccountEpoch,
+          pendingStart,
+          turnStart.params,
+        );
+      } else if (options?.[FINAL_INPUT_CHECK]) {
+        await preparedClient.requestWithFinalInputCheck(
+          "turn/start",
+          turnStart.params,
+          options[FINAL_INPUT_CHECK],
+          () =>
+            this.assertFinishCodexPrepared(
+              preparedClient,
+              preparedThread,
+              pendingStart.cancelRequested,
+            ),
+          TURN_START_TIMEOUT_MS,
+        );
+      } else {
+        await this.client.request("turn/start", turnStart.params, TURN_START_TIMEOUT_MS);
+      }
       return { turnId };
     } catch (error) {
       this.pendingForegroundTurnIdentification?.resolve(null);
       this.pendingForegroundTurnIdentification = null;
       this.activeForegroundTurnId = null;
       this.activeClientMessageId = null;
+      this.rethrowNativeQueuedFailure(queued, error);
       throw error;
     } finally {
       if (this.pendingForegroundStart === pendingStart) {
@@ -4419,7 +4731,22 @@ export class CodexAppServerAgentSession implements AgentSession {
       return { status: "unavailable" };
     }
     try {
-      const response = await client.request(
+      const request = options[FINAL_INPUT_CHECK]
+        ? (method: string, params: unknown, timeout: number) =>
+            client.requestWithFinalInputCheck(
+              method,
+              params,
+              options[FINAL_INPUT_CHECK]!,
+              () => {
+                if (
+                  !this.matchesSteerAdmission({ client, threadId, nativeTurnId, foregroundTurnId })
+                )
+                  throw new Error("Final-checked steer changed");
+              },
+              timeout,
+            )
+        : client.request.bind(client);
+      const response = await request(
         "turn/steer",
         {
           threadId,
@@ -4543,6 +4870,10 @@ export class CodexAppServerAgentSession implements AgentSession {
         timestamp: entry.timestamp,
       };
     }
+  }
+
+  usageSourceLabel(): string | null {
+    return this.accountUsageLabel;
   }
 
   getQuota() {
@@ -4938,6 +5269,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       cwd: this.config.cwd ?? null,
       model: this.config.model ?? null,
       serviceTier: this.serviceTier,
+      config: this.buildCodexInnerConfig(),
       userMessageTurns: this.codexUserMessageTurns(),
       setThreadId: async (threadId) => {
         this.currentThreadId = threadId;
@@ -5045,7 +5377,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {
-    const prompts = await listCodexCustomPrompts();
+    const prompts = await listCodexCustomPrompts(this.codexHome);
     if (this.connectionState === "disconnected") {
       await this.connect();
     } else {
@@ -5059,7 +5391,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     }));
     const fallbackSkills =
       this.cachedSkills === null
-        ? await listCodexSkills(this.config.cwd, this.deps.workspaceGitService)
+        ? await listCodexSkills(this.config.cwd, this.codexHome, this.deps.workspaceGitService)
         : [];
     const builtin: AgentSlashCommand[] = [
       {
@@ -5286,12 +5618,18 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private buildThreadStartRequest(model: string): {
     params: Record<string, unknown>;
-    approvalPolicy?: string;
+    approvalPolicy?: CodexProviderOptions["approval_policy"];
     sandbox?: string;
   } {
     const preset = MODE_PRESETS[this.currentMode] ?? MODE_PRESETS[DEFAULT_CODEX_MODE_ID];
-    const approvalPolicy = this.hasWorkflowModeOverride ? preset.approvalPolicy : undefined;
-    const sandbox = this.hasWorkflowModeOverride ? preset.sandbox : undefined;
+    // FIX-8 W3 (gate M): provider-option pins (the controller's) win over the mode preset and are sent top-level as well
+    // as in `config`, so thread/start carries the policy it launches with on every create path.
+    const approvalPolicy =
+      this.providerOptions.approval_policy ??
+      (this.hasWorkflowModeOverride ? preset.approvalPolicy : undefined);
+    const sandbox =
+      this.providerOptions.sandbox_mode ??
+      (this.hasWorkflowModeOverride ? preset.sandbox : undefined);
     const innerConfig = this.buildCodexInnerConfig();
     const developerInstructions = composeSystemPromptParts(
       this.config.systemPrompt,
@@ -5300,16 +5638,14 @@ export class CodexAppServerAgentSession implements AgentSession {
     const params: Record<string, unknown> = {
       model,
       cwd: this.config.cwd ?? null,
-      ...(approvalPolicy && this.providerOptions.approval_policy === undefined
-        ? { approvalPolicy }
-        : {}),
-      ...(sandbox && this.providerOptions.sandbox_mode === undefined ? { sandbox } : {}),
+      ...(approvalPolicy ? { approvalPolicy } : {}),
+      ...(sandbox ? { sandbox } : {}),
       ...(developerInstructions ? { developerInstructions } : {}),
       ...(innerConfig ? { config: innerConfig } : {}),
       ...(this.ephemeral ? { ephemeral: true } : {}),
     };
     if (this.hasWorkflowModeOverride) {
-      applyApprovalsReviewerParam(params, preset);
+      params.approvalsReviewer = preset.approvalsReviewer;
     }
     return { params, approvalPolicy, sandbox };
   }
@@ -5372,9 +5708,33 @@ export class CodexAppServerAgentSession implements AgentSession {
     return `codex-turn-${this.nextTurnOrdinal++}`;
   }
 
-  private handleNotification(method: string, params: unknown): void {
+  // update-7c: a pooled home's session; its account's usage is its own app-server's report (free), not a probe.
+  usageCredential(): {
+    credential: AccountCredential;
+    label: string | null;
+    accountId: string;
+    observation: AccountUsageReading | null;
+  } | null {
+    const pooled = codexUsageCredentialFromEnv(this.launchEnv);
+    return pooled ? { ...pooled, observation: this.accountUsageObservation } : null;
+  }
+
+  private handleNotification(
+    method: string,
+    params: unknown,
+    capturedClient?: CodexAppServerClient,
+  ): void {
+    if (method === "account/rateLimits/updated") {
+      this.accountUsageObservation = readingFromRateLimitsNotification(
+        this.accountUsageObservation,
+        params,
+        Date.now(),
+      );
+      return;
+    }
     if (method === "account/updated") {
       this.quotaRevision++;
+      this.accountNotificationEpoch++;
       return;
     }
     const notificationParams = toObjectRecord(params);
@@ -5409,7 +5769,11 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.dispatchSubAgentNotification(parsed, route.callId);
       return;
     }
-    this.dispatchParsedNotification(parsed);
+    if (parsed.kind === "item_completed" && capturedClient)
+      this.dispatchNativeEvidenceCompletion(parsed, capturedClient);
+    else if (parsed.kind === "turn_completed" && capturedClient)
+      this.dispatchNativeTerminal(parsed, capturedClient);
+    else this.dispatchParsedNotification(parsed);
   }
 
   private dispatchSubAgentNotification(parsed: ParsedCodexNotification, callId: string): void {
@@ -6517,8 +6881,246 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
   }
 
+  private readonly nativeCompletionWork = new Set<Promise<void>>();
+  private dispatchNativeEvidenceCompletion(
+    parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
+    client: CodexAppServerClient,
+  ): void {
+    if (shouldIgnoreMirroredLifecycleItem(parsed.source, parsed.item)) return;
+    const captured = structuredClone(parsed);
+    const preparation = this.prepareNativeEvidence(captured, client);
+    if (preparation?.consumed) return;
+    // Ordinary/unlinked items have no native evidence attempt and remain synchronous.
+    if (!preparation?.prepare) {
+      this.handleItemCompletedNotification(captured);
+      return;
+    }
+    const providerGuard = preparation.guard;
+    const prepare = preparation.prepare;
+    const refuseOrdinaryImage = () => {
+      throw new Error("Native image evidence preparation refused");
+    };
+    const ordinaryRefusal = () => {
+      try {
+        providerGuard();
+        this.handleItemCompletedNotification(captured, { guard: refuseOrdinaryImage });
+      } catch {
+        /* A replaced provider never retargets the old completion. */
+      }
+    };
+    if (this.nativeCompletionWork.size >= 32) {
+      ordinaryRefusal();
+      return;
+    }
+    const work = (async () => {
+      try {
+        const handle = await prepare();
+        const guard = () => {
+          providerGuard();
+          assertNativeEvidence(handle);
+        };
+        guard();
+        let publication: Promise<unknown> = Promise.resolve();
+        this.handleItemCompletedNotification(captured, {
+          ...preparation,
+          handle,
+          guard,
+          onPublication: (pending) => {
+            publication = pending;
+          },
+        });
+        await publication;
+      } catch {
+        ordinaryRefusal();
+        this.logger.warn("Native completion preparation refused");
+      }
+    })();
+    this.nativeCompletionWork.add(work);
+    void work.finally(() => this.nativeCompletionWork.delete(work));
+  }
+
+  private dispatchNativeTerminal(
+    parsed: Extract<ParsedCodexNotification, { kind: "turn_completed" }>,
+    client: CodexAppServerClient,
+  ): void {
+    const pending = [...this.nativeCompletionWork];
+    if (pending.length === 0) {
+      this.dispatchParsedNotification(parsed);
+      return;
+    }
+    const captured = structuredClone(parsed),
+      thread = this.currentThreadId,
+      turn = this.currentTurnId;
+    // Notification ordering only: never invokes/retries a provider operation or action queue.
+    void Promise.allSettled(pending).then(() => {
+      if (this.client === client && this.currentThreadId === thread && this.currentTurnId === turn)
+        this.dispatchParsedNotification(captured);
+      return undefined;
+    });
+  }
+
+  private evidenceOutcome(item: Record<string, unknown>, kind: string) {
+    const changes = item.changes;
+    let fileCount = 0;
+    if (Array.isArray(changes)) fileCount = changes.length;
+    else if (typeof changes === "object" && changes !== null)
+      fileCount = Object.keys(changes).length;
+    if (kind === "file_touch" && (fileCount < 1 || fileCount > 32 || item.status !== "completed"))
+      return;
+    const exitCode =
+      typeof item.exitCode === "number" &&
+      Number.isInteger(item.exitCode) &&
+      item.exitCode >= -2147483648 &&
+      item.exitCode <= 2147483647
+        ? item.exitCode
+        : null;
+    return { fileCount, exitCode };
+  }
+
+  private prepareNativeEvidence(
+    parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
+    capturedClient?: CodexAppServerClient,
+  ) {
+    const type = normalizeCodexThreadItemType(
+      typeof parsed.item.type === "string" ? parsed.item.type : undefined,
+    );
+    const kind: import("../../native-evidence-origin.js").NativeCompletion["kind"] | undefined = (
+      {
+        imageGeneration: "produced_artifact",
+        fileChange: "file_touch",
+        commandExecution: "command_result",
+      } as const
+    )[type as "imageGeneration" | "fileChange" | "commandExecution"];
+    if (!kind) return;
+    const refused = {
+      prepare: undefined,
+      kind: undefined,
+      guard: undefined,
+      fileCount: 0,
+      exitCode: null,
+      consumed: true,
+    };
+    if (
+      !capturedClient ||
+      parsed.threadId !== this.currentThreadId ||
+      parsed.turnId !== this.currentTurnId ||
+      !parsed.threadId ||
+      !parsed.turnId ||
+      !parsed.item.id ||
+      this.getSubAgentCallIdForThread(parsed.threadId)
+    )
+      return refused;
+    const thread = parsed.threadId,
+      turn = parsed.turnId;
+    const guard = () => {
+      if (
+        this.client !== capturedClient ||
+        this.currentThreadId !== thread ||
+        this.currentTurnId !== turn ||
+        this.connectionState !== "connected"
+      )
+        throw new Error("Captured native completion replaced");
+    };
+    const outcome = this.evidenceOutcome(toObjectRecord(parsed.item)!, kind);
+    if (!outcome) return refused;
+    const { fileCount, exitCode } = outcome;
+    try {
+      const prepare = captureNativeEvidence(
+        this,
+        {
+          id: parsed.item.id,
+          threadId: thread,
+          turnId: turn,
+          kind,
+          bodyHash: nativeEvidenceDigest(parsed.item),
+        },
+        guard,
+      );
+      return {
+        prepare,
+        kind,
+        guard,
+        fileCount,
+        exitCode,
+        consumed: false,
+      };
+    } catch (error) {
+      if (isConsumedNativeCompletion(error))
+        return {
+          prepare: undefined,
+          kind: undefined,
+          guard: undefined,
+          fileCount: 0,
+          exitCode: null,
+          consumed: true,
+        };
+      this.logger.warn("Native evidence source admission refused");
+      return refused;
+    }
+  }
+
+  private publishCompletedEvidence(
+    evidence:
+      | {
+          handle?: object;
+          kind?: import("../../native-evidence-origin.js").NativeCompletion["kind"];
+          guard?: () => void;
+          fileCount?: number;
+          exitCode?: number | null;
+          onPublication?: (pending: Promise<unknown>) => void;
+        }
+      | undefined,
+    materialized: MaterializedProviderImage | undefined,
+  ): void {
+    if (evidence?.handle) {
+      const kind = evidence.kind;
+      const image = materialized && materializedNativeImageFact(materialized);
+      let fact: unknown;
+      if (kind === "produced_artifact" && image)
+        fact = {
+          kind,
+          basis: "host_materialized_native_generation",
+          ...image,
+          contentAvailable: false,
+        };
+      else if (kind === "file_touch")
+        fact = { kind, basis: "native_provider_ack", fileCount: evidence.fileCount };
+      else if (kind === "command_result")
+        fact = { kind, basis: "native_provider_ack", exitCode: evidence.exitCode };
+      if (fact)
+        try {
+          const pending = publishNativeEvidence(evidence.handle, fact).catch(() =>
+            this.logger.warn("Native evidence metadata publication refused"),
+          );
+          evidence.onPublication?.(pending);
+        } catch {
+          this.logger.warn("Native evidence metadata publication refused");
+        }
+    }
+  }
+
+  private materializeCompletedImage(
+    image: { data: string; mimeType: string | null },
+    evidence?: { handle?: object; guard?: () => void },
+  ): MaterializedProviderImage {
+    if (evidence?.handle && !evidence.guard)
+      throw new Error("Captured native evidence guard required");
+    evidence?.guard?.();
+    const materialized = materializeProviderImage(image);
+    evidence?.guard?.();
+    return materialized;
+  }
+
   private handleItemCompletedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
+    evidence?: {
+      handle?: object;
+      kind?: import("../../native-evidence-origin.js").NativeCompletion["kind"];
+      guard?: () => void;
+      fileCount?: number;
+      exitCode?: number | null;
+      onPublication?: (pending: Promise<unknown>) => void;
+    },
   ): void {
     // Codex emits mirrored lifecycle notifications via both `codex/event/item_*`
     // and canonical `item/*`. Render ordinary items only from the canonical
@@ -6536,10 +7138,16 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (this.handleCompletedSpecialItem(parsed, childSubAgentCallId)) {
       return;
     }
+    let materialized: MaterializedProviderImage | undefined;
     const timelineItem = threadItemToTimeline(parsed.item, {
       includeUserMessage: false,
       cwd: this.config.cwd ?? null,
+      materialize: (image) => {
+        materialized = this.materializeCompletedImage(image, evidence);
+        return materialized;
+      },
     });
+    this.publishCompletedEvidence(evidence, materialized);
     if (!timelineItem) {
       return;
     }
@@ -7121,6 +7729,12 @@ export class CodexAppServerAgentSession implements AgentSession {
 }
 
 export class CodexAppServerAgentClient implements AgentClient {
+  // Update-7 W3: a new session without a mode takes Codex's own default -- the host's (Fulcra's owner default, via the
+  // plugin hook), else the built-in full-access (FIX-8 B) -- never its caller's, and the daemon stores it.
+  readonly resolveCreateConfig = resolveOwnDefaultCreateConfig;
+  readonly persistsDefaultModeOnCreate = true;
+  // R1 P-1: internal helper agents (fed untrusted repository text) run sandboxed, with approvals on request.
+  readonly internalModeId = "auto";
   readonly provider = CODEX_PROVIDER;
   readonly capabilities = CODEX_APP_SERVER_CAPABILITIES;
   private goalsEnabledPromise: Promise<boolean> | null = null;
@@ -7132,14 +7746,16 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
 
-  private sessionDeps(): CodexAppServerAgentDeps {
+  private sessionDeps(launchEnv: Record<string, string> | undefined): CodexAppServerAgentDeps {
     return {
       ...this.deps,
-      customCodexConfig: buildCodexCustomProviderConfig(
-        this.runtimeSettings,
-        this.deps.customProvider,
-      ),
+      codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchEnv)),
+      customCodexConfig: this.customProviderConfig(),
     };
+  }
+
+  private customProviderConfig(): CodexCustomProviderConfig | null {
+    return buildCodexCustomProviderConfig(this.runtimeSettings, this.deps.customProvider);
   }
 
   private resolveGoalsEnabled(): Promise<boolean> {
@@ -7245,11 +7861,14 @@ export class CodexAppServerAgentClient implements AgentClient {
       this.logger,
       () =>
         this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(),
+      this.sessionDeps(launchContext?.env),
       options?.persistSession === false,
       goalsEnabled,
       autoReviewEnabled,
       launchContext?.agentId,
+      "interactive",
+      launchContext?.env?.FULCRA_ACCOUNT_NAME ?? null,
+      launchContext?.env,
     );
     await session.connect();
     return session;
@@ -7276,12 +7895,14 @@ export class CodexAppServerAgentClient implements AgentClient {
       this.logger,
       () =>
         this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(),
+      this.sessionDeps(launchContext?.env),
       false,
       goalsEnabled,
       autoReviewEnabled,
       launchContext?.agentId,
       options?.purpose ?? "interactive",
+      launchContext?.env?.FULCRA_ACCOUNT_NAME ?? null,
+      launchContext?.env,
     );
     await session.connect();
     return session;
@@ -7305,9 +7926,14 @@ export class CodexAppServerAgentClient implements AgentClient {
       // filtering since most threads will be from other cwds, then keep the
       // local realpath-aware filter for symlink-equivalent workspace paths.
       const listLimit = options?.cwd ? Math.max(scanLimit, 50) : scanLimit;
+      // Codex records each thread under the model provider that ran it and,
+      // unless told otherwise, lists only the provider its own config selects.
+      // A custom provider runs under its own id, so ask for exactly that one.
+      const customProviderConfig = this.customProviderConfig();
       const allThreads = await readCodexThreadWindow(client, this.logger, {
         limit: listLimit,
         cwd: options?.cwd,
+        ...(customProviderConfig ? { modelProviders: [customProviderConfig.model_provider] } : {}),
       });
       const threads = filterCodexThreadsByCwd(allThreads, options?.cwd);
       return threads.slice(0, limit).map((thread) => {
@@ -7349,34 +7975,52 @@ export class CodexAppServerAgentClient implements AgentClient {
   }
 
   async fetchCatalog(
-    _options: FetchCatalogOptions,
+    options: FetchCatalogOptions,
     context?: ProviderRefreshContext,
   ): Promise<ProviderCatalog> {
     const [models, autoReviewEnabled] = await Promise.all([
-      this.fetchModelsFromAppServer(context),
+      this.fetchModelsFromAppServer(context, options.force),
       runProviderRefreshActivity(context, "version", () =>
         this.resolveAutoReviewEnabled(context?.signal),
       ),
     ]);
     return {
       models,
-      defaultModeId: autoReviewEnabled ? "auto-review" : DEFAULT_CODEX_MODE_ID,
+      defaultModeId: CODEX_BUILT_IN_DEFAULT_MODE_ID,
       modes: autoReviewEnabled
         ? CODEX_MODES
         : CODEX_MODES.filter((mode) => mode.id !== "auto-review"),
     };
   }
 
-  async resolveDefaultModeId(input: ResolveAgentDefaultModeInput): Promise<string> {
-    return (await this.resolveAutoReviewEnabled(input.signal))
-      ? "auto-review"
-      : DEFAULT_CODEX_MODE_ID;
+  async resolveDefaultModeId(_input: ResolveAgentDefaultModeInput): Promise<string> {
+    return CODEX_BUILT_IN_DEFAULT_MODE_ID;
+  }
+
+  private async readLiveCatalog(
+    context?: ProviderRefreshContext,
+    force = false,
+  ): Promise<LiveCodexModel[] | null> {
+    try {
+      return await runProviderRefreshActivity(context, "debug-models", async () => {
+        const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
+        return readCodexLiveCatalog({
+          command: launchPrefix.command,
+          args: launchPrefix.args,
+          env: createProviderEnv({ runtimeSettings: this.runtimeSettings }),
+          force,
+        });
+      });
+    } catch {
+      return null;
+    }
   }
 
   private async fetchModelsFromAppServer(
     context?: ProviderRefreshContext,
+    force = false,
   ): Promise<AgentModelDefinition[]> {
-    // Codex model/list is global to the app server in this flow; cwd/force are intentionally ignored.
+    // Codex model/list is global; an explicit refresh also bypasses the live CLI catalog cache.
     let client: CodexAppServerClient | undefined;
     let disposePromise: Promise<void> | undefined;
     const dispose = () => {
@@ -7403,7 +8047,11 @@ export class CodexAppServerAgentClient implements AgentClient {
         client!.request("model/list", {}),
       );
       const parsedResponse = CodexModelListResponseSchema.safeParse(rawResponse);
-      const models = parsedResponse.success ? (parsedResponse.data.data ?? []) : [];
+      // Update-7 W3: plus any listed model only the live CLI catalog reports (cached; none when the CLI has no catalog).
+      const models = mergeLiveCodexModels(
+        parsedResponse.success ? (parsedResponse.data.data ?? []) : [],
+        await this.readLiveCatalog(context, force),
+      );
       const configuredDefaults = await runProviderRefreshActivity(context, "config/read", () =>
         readCodexConfiguredDefaults(client!, this.logger),
       );

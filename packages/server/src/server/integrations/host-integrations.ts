@@ -7,6 +7,7 @@ import type { PluginHostServices } from "../plugins/plugin-host-calls.js";
 import { createFileAccountsStore } from "./accounts-store.js";
 import { createPlatformCredentialBackend, type CredentialBackend } from "./credential-backend.js";
 import { CredentialService } from "./credential-service.js";
+import { createHostGithubSignIn, type HostGithubSignIn } from "./host-github-sign-in.js";
 import { openOAuthLoopback } from "./oauth-loopback.js";
 
 export interface HostIntegrations {
@@ -24,11 +25,23 @@ export function createHostIntegrations(options: {
   oauthClientIds?: Readonly<Record<string, string>>;
   // Defaults to the platform's OS credential store; `null` means none.
   backend?: CredentialBackend | null;
+  // Defaults to this Mac's `gh` login when there is a credential store; `null` means none.
+  hostSignIn?: HostGithubSignIn | null;
   // Resolved at send time: the WebSocket server that owns device push tokens starts later.
   sendPush: (payload: PushPayload) => Promise<PushDeliveryReport>;
 }): HostIntegrations {
   const backend =
     options.backend === undefined ? createPlatformCredentialBackend() : options.backend;
+  // This Mac's own GitHub sign-in names "you" without an extra step. It is read on the first listing
+  // after each start and then on a short in-memory cache, so a daemon that never lists runs no `gh`.
+  const hostSignIn =
+    backend && options.hostSignIn !== null
+      ? (options.hostSignIn ??
+        createHostGithubSignIn({
+          log: (message, fields) =>
+            options.logger.child({ module: "host-github-sign-in" }).info(fields, message),
+        }))
+      : undefined;
   const credentials = backend
     ? new CredentialService({
         accounts: createFileAccountsStore(
@@ -37,6 +50,7 @@ export function createHostIntegrations(options: {
         backend,
         clientIds: () => options.oauthClientIds ?? {},
         openLoopback: openOAuthLoopback,
+        hostSignIn,
       })
     : undefined;
   setGitHubAccountTokenResolver(

@@ -1,0 +1,10 @@
+extends: ./electron-builder.yml
+publish: null
+extraResources:
+  - from: ../../LICENSE
+    to: Fulcra-LICENSE.txt
+directories:
+  output: release-preview
+win:
+  artifactName: "Fulcra-Preview-${version}-${arch}.${ext}"
+  signAndEditExecutable: true

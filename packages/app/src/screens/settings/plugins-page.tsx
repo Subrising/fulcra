@@ -27,9 +27,11 @@ import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { resolvePluginPageState } from "@/screens/settings/plugins-page-state";
 import { openPluginInstallForm } from "@/screens/settings/plugin-install-form-model";
-import { pluginRegistry, useInstalledPlugins } from "@/plugins/registry";
+import { pluginRegistry, useInstalledPlugins, useUntrustedPlugins } from "@/plugins/registry";
 import { settingsStyles } from "@/styles/settings";
 import { confirmDialog } from "@/utils/confirm-dialog";
+
+import { PLUGIN_TRUST_EXPLANATION } from "@/plugins/bundle-trust";
 
 const pluginQueryKey = (serverId: string) => ["plugins", serverId] as const;
 type PluginRowAction = "reload" | "enable" | "disable" | "remove";
@@ -228,6 +230,7 @@ function PluginLogsSheet({
   if (logs.isError) {
     content = (
       <Alert
+        size="sm"
         variant="error"
         title={t("settings.plugins.logs.errorTitle")}
         description={errorMessage(logs.error)}
@@ -273,6 +276,7 @@ export function HostPluginsPage({ serverId }: { serverId: string }) {
   const { config, patchConfig } = useDaemonConfig(serverId);
   const refreshQueue = useRef(Promise.resolve());
   useInstalledPlugins();
+  const untrustedPlugins = useUntrustedPlugins().filter((plugin) => plugin.serverId === serverId);
   const queryKey = useMemo(() => pluginQueryKey(serverId), [serverId]);
   const [installForm] = useState(openPluginInstallForm);
   const installState = useSyncExternalStore(
@@ -400,6 +404,7 @@ export function HostPluginsPage({ serverId }: { serverId: string }) {
   if (pageState === "offline") {
     return (
       <Alert
+        size="md"
         variant="warning"
         title={t("settings.plugins.states.offlineTitle")}
         description={t("settings.plugins.states.offlineDescription")}
@@ -407,13 +412,14 @@ export function HostPluginsPage({ serverId }: { serverId: string }) {
     );
   }
   if (pageState === "unsupported") {
-    return <Alert variant="warning" title={t("settings.plugins.states.updateTitle")} />;
+    return <Alert size="md" variant="warning" title={t("settings.plugins.states.updateTitle")} />;
   }
 
-  let catalogContent = <Alert title={t("settings.plugins.states.loading")} />;
+  let catalogContent = <Alert size="sm" title={t("settings.plugins.states.loading")} />;
   if (pageState === "error") {
     catalogContent = (
       <Alert
+        size="sm"
         variant="error"
         title={t("settings.plugins.states.errorTitle")}
         description={errorMessage(plugins.error)}
@@ -457,10 +463,19 @@ export function HostPluginsPage({ serverId }: { serverId: string }) {
     <View>
       <SettingsSection title={t("settings.plugins.title")}>
         <Alert
+          size="sm"
           variant="warning"
           title={t("settings.plugins.trustedTitle")}
           description={t("settings.plugins.trustedDescription")}
         />
+        {untrustedPlugins.map((plugin) => (
+          <Alert
+            key={plugin.id}
+            variant="error"
+            title="Plugin not trusted on this Mac"
+            description={`${plugin.id}. ${PLUGIN_TRUST_EXPLANATION.replace("Plugin not trusted on this Mac. ", "")}`}
+          />
+        ))}
         <View style={settingsStyles.card}>
           <View style={settingsStyles.row}>
             <View style={settingsStyles.rowContent}>
@@ -496,10 +511,15 @@ export function HostPluginsPage({ serverId }: { serverId: string }) {
             </Button>
           </View>
         ) : (
-          <Alert variant="warning" title={t("settings.plugins.states.sourceUpdateTitle")} />
+          <Alert
+            size="sm"
+            variant="warning"
+            title={t("settings.plugins.states.sourceUpdateTitle")}
+          />
         )}
         {feedback ? (
           <Alert
+            size="sm"
             variant={feedback.kind}
             title={feedback.message}
             testID="plugin-management-feedback"

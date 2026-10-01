@@ -2,7 +2,7 @@ import {
   createClientChannel,
   type EncryptedChannel,
   type Transport as RelayTransport,
-} from "@getpaseo/relay/e2ee";
+} from "./relay-v3/index.js";
 import type {
   DaemonTransport,
   DaemonTransportFactory,
@@ -19,17 +19,30 @@ export function createRelayE2eeTransportFactory(args: {
   baseFactory: DaemonTransportFactory;
   daemonPublicKeyB64: string;
   logger: TransportLogger;
+  serverId?: string;
+  getDeviceKeyPair?: () => Promise<import("./relay-v3/index.js").KeyPair>;
 }): DaemonTransportFactory {
-  return ({ url, headers }) => {
-    const base = args.baseFactory({ url, headers });
-    return createEncryptedTransport(base, args.daemonPublicKeyB64, args.logger);
+  return ({ url }) => {
+    const base = args.baseFactory({ url });
+    return createEncryptedTransport(base, args.daemonPublicKeyB64, args.logger, args);
   };
+}
+
+export function createRelayTransportFactory(
+  baseFactory: DaemonTransportFactory,
+): DaemonTransportFactory {
+  // The relay upgrade precedes E2EE. Only the encrypted hello may carry daemon credentials.
+  return ({ url }) => baseFactory({ url });
 }
 
 export function createEncryptedTransport(
   base: DaemonTransport,
   daemonPublicKeyB64: string,
   logger: TransportLogger,
+  identity: {
+    serverId?: string;
+    getDeviceKeyPair?: () => Promise<import("./relay-v3/index.js").KeyPair>;
+  } = {},
 ): DaemonTransport {
   let channel: EncryptedChannel | null = null;
   let opened = false;
@@ -94,15 +107,22 @@ export function createEncryptedTransport(
 
   const startHandshake = async () => {
     try {
-      channel = await createClientChannel(relayTransport, daemonPublicKeyB64, {
-        onopen: emitOpen,
-        onmessage: (data) => emitMessage(data),
-        onclose: (code, reason) => emitClose({ code, reason }),
-        onerror: (error) => emitError(error),
-      });
-    } catch (error) {
-      logger.warn({ err: normalizeTransportError(error) }, "relay_e2ee_handshake_failed");
-      emitError(error);
+      const deviceKeyPair = await identity.getDeviceKeyPair?.();
+      channel = await createClientChannel(
+        relayTransport,
+        daemonPublicKeyB64,
+        {
+          onopen: emitOpen,
+          onmessage: (data) => emitMessage(data),
+          onclose: (code, reason, trusted) =>
+            emitClose({ code, reason: trusted ? reason : "Relay connection closed", trusted }),
+          onerror: (error) => emitError(error),
+        },
+        { deviceKeyPair, serverId: identity.serverId },
+      );
+    } catch {
+      logger.warn({}, "relay_e2ee_handshake_failed");
+      emitError(new Error("Unable to establish secure relay connection"));
       // Browser WebSocket.close only accepts 1000 or 3000-4999.
       // Use an app-defined code so this path works in browser and Node runtimes.
       base.close(4001, "E2EE handshake failed");
@@ -118,7 +138,7 @@ export function createEncryptedTransport(
   base.onClose((event) => {
     const record = event as { code?: number; reason?: string } | undefined;
     relayTransport.onclose?.(record?.code ?? 0, record?.reason ?? "");
-    emitClose(event);
+    emitClose({ code: record?.code, reason: "Relay connection closed", trusted: false });
   });
   base.onError((event) => {
     relayTransport.onerror?.(event instanceof Error ? event : new Error(String(event)));
@@ -135,12 +155,13 @@ export function createEncryptedTransport(
       });
     },
     close: (code?: number, reason?: string) => {
+      // Record local intent before a synchronous base close callback can race it.
+      emitClose({ code, reason, trusted: true });
       if (channel) {
         channel.close(code, reason);
       } else {
         base.close(code, reason);
       }
-      emitClose({ code, reason });
     },
     onMessage: (handler) => {
       messageHandlers.add(handler);
@@ -182,15 +203,4 @@ function invokeHandler<TArgs extends unknown[]>(handler: (...args: TArgs) => voi
   } catch {
     // no-op
   }
-}
-
-function normalizeTransportError(error: unknown): Record<string, string> {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      ...(typeof error.stack === "string" ? { stack: error.stack } : {}),
-    };
-  }
-  return { message: String(error) };
 }

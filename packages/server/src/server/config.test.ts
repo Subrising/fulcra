@@ -65,7 +65,7 @@ describe("server config", () => {
       env: {
         PASEO_LISTEN: "127.0.0.1:7000",
         PASEO_PASSWORD: "secret",
-        PASEO_RELAY_ENDPOINT: "relay.example.test:443",
+        PASEO_RELAY_ENDPOINT: "127.0.0.1:8787",
         PASEO_TRUSTED_PROXIES: "true",
         PASEO_WEB_UI_ENABLED: "true",
         PASEO_LOG_FILE_PATH: "custom.log",
@@ -85,6 +85,8 @@ describe("server config", () => {
       "log.file.path",
     ]);
     expect(config.listen).toBe("127.0.0.1:7000");
+    expect(config.relayEndpoint).toBe("127.0.0.1:8787");
+    expect(config.relayUseTls).toBe(false);
     expect(config.trustedProxies).toBe(true);
     expect(config.log?.file?.path).toBe("custom.log");
     expect(config.voiceLlmProvider).toBe("codex");

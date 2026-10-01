@@ -281,6 +281,11 @@ export class WorkspaceDirectory {
       descriptorsByWorkspaceId,
       activityEntriesByWorkspaceId,
     });
+    this.applyBackgroundWorkContributions({
+      activeAgents,
+      descriptorsByWorkspaceId,
+      activityEntriesByWorkspaceId,
+    });
 
     const contributingAgentsByWorkspaceId = groupAgentsByWorkspaceId(
       activeAgents,
@@ -311,6 +316,39 @@ export class WorkspaceDirectory {
     }
 
     return descriptorsByWorkspaceId;
+  }
+
+  // Display only (MULTIHOST-DESIGN §6.2): an agent's background jobs make its workspace "running"
+  // under the usual priority (needs input and failed still win) and add to the workspace's count.
+  // The agent's own status is untouched; this reads `backgroundWork` and nothing else does.
+  private applyBackgroundWorkContributions(params: {
+    activeAgents: AgentSnapshotPayload[];
+    descriptorsByWorkspaceId: Map<string, WorkspaceDescriptorPayload>;
+    activityEntriesByWorkspaceId: Map<string, WorkspaceBucketTimestampEntry[]>;
+  }): void {
+    const { activeAgents, descriptorsByWorkspaceId, activityEntriesByWorkspaceId } = params;
+    const activeAgentsById = new Map(activeAgents.map((agent) => [agent.id, agent] as const));
+    for (const agent of activeAgents) {
+      const work = agent.backgroundWork;
+      if (!work || work.count <= 0) continue;
+      const workspaceId = resolveWorkspaceRootAgent(agent, activeAgentsById)?.workspaceId;
+      if (!workspaceId) continue;
+      const descriptor = descriptorsByWorkspaceId.get(workspaceId);
+      if (!descriptor) continue;
+      descriptor.backgroundWorkCount = Math.min(
+        999,
+        (descriptor.backgroundWorkCount ?? 0) + work.count,
+      );
+      if (
+        getWorkspaceStateBucketPriority("running") <
+        getWorkspaceStateBucketPriority(descriptor.status)
+      ) {
+        descriptor.status = "running";
+      }
+      const entries = activityEntriesByWorkspaceId.get(workspaceId) ?? [];
+      entries.push({ bucket: "running", changedAtIso: work.since ?? agent.updatedAt });
+      activityEntriesByWorkspaceId.set(workspaceId, entries);
+    }
   }
 
   private applyProviderSubagentContributions(params: {

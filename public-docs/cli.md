@@ -361,26 +361,19 @@ See [Daemons in Hub](/docs/hub/daemons), [Hub configuration](/docs/hub/configura
 
 ## Connecting to a remote daemon
 
-The global `--host` option accepts either a local target (`host:port`, a unix socket, or a Windows pipe) or a pairing offer URL, the same `https://app.paseo.sh/#offer=...` link the mobile app uses for QR pairing. With an offer URL the CLI connects through the Paseo relay with end-to-end encryption, so you can drive a daemon on another machine without exposing it to the network.
+The global `--host` option accepts a direct target (`host:port`, a Unix socket, or a Windows pipe). `PASEO_HOST` supplies the same default; an explicit flag overrides it.
 
-Get an offer URL from the daemon you want to control:
-
-```bash
-paseo daemon pair          # prints the QR and link when relay is enabled
-paseo daemon pair --relay  # enables relay without prompting
-paseo daemon pair --json   # structured output; never prompts
-```
-
-Relay is off for new installations. A disabled relay returns a `RELAY_DISABLED` error; pass `--relay` to provide explicit consent. For a stopped home, pairing is labelled offline; `--relay` saves relay enablement and the offer includes a start instruction. A live but unreachable home never falls back to an offline identity. Relay pairing is end-to-end encrypted. See [Security](/docs/security).
-
-Use it from anywhere:
+For outbound-only remote access in Fulcra v0.2, pair the Fulcra app from the host:
 
 ```bash
-paseo --host 'https://app.paseo.sh/#offer=eyJ2IjoyLC...' ls
-paseo --host "$OFFER_URL" run "fix the failing tests"
+paseo daemon pair          # prints a ten-minute, single-use QR and link
+paseo daemon pair --relay  # explicitly enables relay
+paseo daemon pair --json   # structured credential output; do not log it
 ```
 
-You can also set it once via `PASEO_HOST` instead of passing `--host` on every command. An explicit flag overrides the environment variable.
+Relay is off for new installations. A disabled relay returns `RELAY_DISABLED`; `--relay` provides explicit consent. Compare the host name and key fingerprint before pairing. The app keeps a per-device key for reconnects. The CLI's legacy offer-URL target does not perform v3 device enrolment and is not supported for remote v3 sessions yet. Use the paired app for those sessions.
+
+From the local host, `paseo daemon devices list` lists devices and `paseo daemon devices revoke <id>` revokes one immediately. With the daemon stopped, use `paseo daemon devices revoke <id> --offline --home <local-home>` to remove its registry entry before restarting. Local CLI pairing treats the local OS user as owner; a paired device can run code as that user, so revocation is the containment for device access, not the RPC permission list. See [Security](/docs/security).
 
 ## Multi-agent workflows
 
@@ -424,7 +417,7 @@ paseo ls -q                    # IDs only (quiet)
 
 ## Global options
 
-- `--host <target>`, connect to a different daemon (`host:port`, unix socket, or `https://app.paseo.sh/#offer=...` for relay). See [Connecting to a remote daemon](#connecting-to-a-remote-daemon).
+- `--host <target>`, connect to a different daemon (`host:port`, Unix socket, or Windows pipe). See [Connecting to a remote daemon](#connecting-to-a-remote-daemon).
 - `--json`, JSON output
 - `-q, --quiet`, minimal output
 - `--no-color`, disable colors

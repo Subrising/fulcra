@@ -444,6 +444,11 @@ export type PaseoProviderDiagnosticResult = ProviderDiagnosticResponseMessage["p
 export type PaseoProviderUsageResult = ProviderUsageListResponseMessage["payload"];
 export interface PaseoProviderUsageOptions {
   requestId?: string;
+  agentId?: string;
+  /** Include pooled account summaries on hosts advertising pooledAccountUsageList. */
+  accounts?: boolean;
+  /** update-7c: the on-demand button; the host still probes an account at most once a minute. */
+  refresh?: boolean;
 }
 
 export interface PaseoProviderListOptions {
@@ -1093,6 +1098,12 @@ function listProviderUsage(
   // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-02-28 once daemon floor >= v0.1.98.
   if (daemonClient.getLastServerInfoMessage()?.features?.providerUsageList !== true) {
     return Promise.reject(new Error("Update the host to list provider usage."));
+  }
+  if (
+    options?.accounts &&
+    daemonClient.getLastServerInfoMessage()?.features?.pooledAccountUsageList !== true
+  ) {
+    return Promise.reject(new Error("Update the host to see usage by account."));
   }
   return daemonClient.listProviderUsage(options);
 }

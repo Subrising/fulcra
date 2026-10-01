@@ -24,6 +24,7 @@ export interface DesktopDaemonStatus {
   version: string | null;
   desktopManaged: boolean;
   ownedByDesktop: boolean;
+  usesGeneratedCredential?: boolean;
   startedAt: string | null;
   error: string | null;
 }
@@ -133,6 +134,7 @@ function parseDesktopDaemonStatus(raw: unknown): DesktopDaemonStatus {
     version: toStringOrNull(raw.version),
     desktopManaged: raw.desktopManaged === true,
     ownedByDesktop: raw.ownedByDesktop === true,
+    usesGeneratedCredential: raw.usesGeneratedCredential === true,
     startedAt: typeof raw.startedAt === "string" ? raw.startedAt : null,
     error: toStringOrNull(raw.error),
   };

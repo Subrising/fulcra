@@ -81,6 +81,7 @@ describe("timeline turn index", () => {
         startedAt: timeline[0]!.timestamp,
         endedAt: timeline[5]!.timestamp,
         toolCount: 1,
+        commands: 0,
         files: ["src/a.ts"],
         externalFileCount: 0,
       },
@@ -194,6 +195,45 @@ describe("timeline turn index", () => {
       location: { kind: "external" },
       touches: [{ seq: 1, turnId: "t", kind: "write", timestamp: expect.any(String) }],
     });
+  });
+
+  it("counts a turn's shell commands, whose file changes are not indexed (L38)", () => {
+    const shell = (id: string, command: string) =>
+      mapped(
+        mapCodexToolCallFromThreadItem(
+          {
+            type: "commandExecution",
+            id,
+            status: "completed",
+            command,
+            cwd: CWD,
+            aggregatedOutput: "",
+            exitCode: 0,
+          },
+          { cwd: CWD },
+        ),
+      );
+    const builder = TimelineIndexBuilder.fromRows(
+      rows([
+        { item: prompt("write the release notes"), turnId: "codex-turn" },
+        { item: shell("c1", "printf 'a' > notes/a.md"), turnId: "codex-turn" },
+        { item: shell("c2", "sed -i '' s/x/y/ notes/b.md"), turnId: "codex-turn" },
+        { item: shell("c3", "cat > notes/c.md <<EOF\nc\nEOF"), turnId: "codex-turn" },
+        // A later update of the same call is one command, not two.
+        { item: shell("c3", "cat > notes/c.md <<EOF\nc\nEOF"), turnId: "codex-turn" },
+        { item: prompt("thanks"), turnId: "quiet-turn" },
+        { item: reply("done"), turnId: "quiet-turn" },
+      ]),
+      CWD,
+    );
+    const [commandTurn, quietTurn] = listTimelineTurns(builder.toData());
+    expect(commandTurn).toMatchObject({
+      turnId: "codex-turn",
+      toolCount: 3,
+      commands: 3,
+      files: [],
+    });
+    expect(quietTurn).toMatchObject({ turnId: "quiet-turn", toolCount: 0, commands: 0, files: [] });
   });
 
   it("indexes Claude and Codex tool calls into the same shape", () => {

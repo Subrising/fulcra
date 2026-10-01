@@ -159,3 +159,111 @@ describe("Claude SDK env", () => {
     }
   });
 });
+
+test("trusted denies cover Claude create, resume, option rebuilds and model probe", async () => {
+  const { TrustedPlugins } = await import("../../../plugins/trusted.js");
+  const { probeClaudeModels } = await import("./model-discovery.js");
+  const authority = new TrustedPlugins();
+  authority.register("fixture-deny", true, (server) =>
+    server.claude.deny(() => ["Read(/protected/**)"]),
+  );
+  const queryFactory = vi.fn(({ options }: ClaudeQueryInput) => {
+    expect(options.disallowedTools).toContain("Read(/protected/**)");
+    expect(options.settings).toMatchObject({ permissions: { deny: ["Read(/protected/**)"] } });
+    return createQueryMock([]);
+  });
+  const client = new ClaudeAgentClient({
+    logger: createTestLogger(),
+    queryFactory,
+    resolveBinary: async () => "/fixture/claude",
+    // Profile runtime settings must not bypass the global launch policy.
+    runtimeSettings: { env: { PROFILE_FIXTURE: "derived" } },
+  });
+  try {
+    for (const resume of [false, true]) {
+      const config = { provider: "claude", cwd: process.cwd(), model: "opus" };
+      const session = resume
+        ? await client.resumeSession(
+            { provider: "claude", sessionId: "fixture-session", metadata: { cwd: process.cwd() } },
+            config,
+          )
+        : await client.createSession(config);
+      const before = queryFactory.mock.calls.length;
+      try {
+        await session.setMode("plan");
+        await session.setModel!("sonnet");
+        await session.setThinkingOption!(null);
+        await session.setMode("default");
+        expect(queryFactory.mock.calls.length).toBeGreaterThanOrEqual(before + 2);
+      } finally {
+        await session.close();
+      }
+    }
+    const beforeProbe = queryFactory.mock.calls.length;
+    await probeClaudeModels({ claudeBinary: "/fixture/claude", queryFactory });
+    expect(queryFactory).toHaveBeenCalledTimes(beforeProbe + 1);
+  } finally {
+    authority.close();
+  }
+});
+
+test("trusted denies survive manager import, reload and quiet MCP replacement", async () => {
+  const { AgentManager } = await import("../../agent-manager.js");
+  const { TrustedPlugins } = await import("../../../plugins/trusted.js");
+  const authority = new TrustedPlugins();
+  authority.register("fixture-deny", true, (server) =>
+    server.claude.deny(() => ["Read(/protected/**)"]),
+  );
+  const queryFactory = vi.fn(({ options }: ClaudeQueryInput) => {
+    expect(options.disallowedTools).toContain("Read(/protected/**)");
+    expect(options.settings).toMatchObject({ permissions: { deny: ["Read(/protected/**)"] } });
+    return createQueryMock([]);
+  });
+  const client = new ClaudeAgentClient({
+    logger: createTestLogger(),
+    queryFactory,
+    resolveBinary: async () => "/fixture/claude",
+    modelProbe: async () => [],
+    resolveVersion: async () => "2.1.0",
+  });
+  vi.spyOn(client, "isAvailable").mockResolvedValue(true);
+  const manager = new AgentManager({
+    clients: { claude: client },
+    logger: createTestLogger(),
+    trustedPlugins: authority,
+  });
+  let agentId: string | undefined;
+  try {
+    const config = { provider: "claude", cwd: process.cwd(), model: "opus" };
+    const agent = await manager.resumeAgentFromPersistence(
+      { provider: "claude", sessionId: "fixture-native", metadata: config },
+      config,
+    );
+    agentId = agent.id;
+    await manager.setAgentMode(agent.id, "default");
+    const afterImport = queryFactory.mock.calls.length;
+    expect(afterImport).toBeGreaterThan(0);
+    await manager.reloadAgentSession(agent.id);
+    await manager.setAgentMode(agent.id, "default");
+    expect(queryFactory.mock.calls.length).toBeGreaterThan(afterImport);
+    const state = (await manager.getAgentMcpRefreshState(agent.id))!;
+    const afterReload = queryFactory.mock.calls.length;
+    expect(
+      await manager.refreshAgentMcp({
+        agentId: agent.id,
+        expected: {
+          provider: state.provider,
+          sessionId: state.sessionId!,
+          configRevision: state.configRevision,
+        },
+        changes: {},
+        reconnect: true,
+      }),
+    ).toMatchObject({ outcome: "refreshed" });
+    await manager.setAgentMode(agent.id, "default");
+    expect(queryFactory.mock.calls.length).toBeGreaterThan(afterReload);
+  } finally {
+    if (agentId) await manager.closeAgent(agentId);
+    authority.close();
+  }
+});

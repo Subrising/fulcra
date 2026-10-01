@@ -347,7 +347,7 @@ function runtimeSpecifierError(
 
 function checkSharedDependencies(inputs: Metafile["inputs"], pluginDirectory: string): void {
   function inputLocation(file: string): PluginModuleLocation | null {
-    const absolutePath = path.resolve(file);
+    const absolutePath = path.resolve(pluginDirectory, file);
     // Metafile keys must stay unchanged for graph traversal. Only filesystem
     // inputs have canonical paths; data URLs and external specifiers do not.
     return directoryTarget(
@@ -384,6 +384,8 @@ async function compileTarget(entryPath: string, target: PluginBuildTarget): Prom
   // when resolving type references, while the JS realpath implementation retains them.
   const pluginDirectory = realpathSync.native(path.dirname(entryPath));
   const result = await build({
+    // Stable module labels and identifiers: never embed a random staging root in client bytes.
+    absWorkingDir: pluginDirectory,
     entryPoints: [realpathSync.native(entryPath)],
     bundle: true,
     format: "cjs",

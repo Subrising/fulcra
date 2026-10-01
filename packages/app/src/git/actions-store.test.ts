@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { queryClient as appQueryClient } from "@/data/query-client";
 import { useSessionStore } from "@/stores/session-store";
+import { createGitAiDraftModel, type GitAiDraft, type GitAiTextDraft } from "./git-ai-draft-model";
 import {
   __resetCheckoutGitActionsStoreForTests,
   useCheckoutGitActionsStore,
@@ -302,5 +303,174 @@ describe("checkout-git-actions-store", () => {
         .getState()
         .getStatus({ serverId, cwd, actionId: "enable-pr-auto-merge-merge" }),
     ).toBe("idle");
+  });
+});
+
+describe("Git AI preview and deliberate use", () => {
+  it("generates only on request, edits locally and uses wording only on explicit action", async () => {
+    const requestDraft = vi.fn(
+      async (): Promise<GitAiDraft> => ({ kind: "commit-message", message: "Generated wording" }),
+    );
+    const onUseDraft = vi.fn();
+    const model = createGitAiDraftModel({ requestDraft, onUseDraft });
+    expect(requestDraft).not.toHaveBeenCalled();
+    await model.request("commit-message");
+    expect(onUseDraft).not.toHaveBeenCalled();
+    model.edit("message", "Human reviewed wording");
+    expect(onUseDraft).not.toHaveBeenCalled();
+    model.useDraft();
+    expect(onUseDraft).toHaveBeenCalledWith({
+      kind: "commit-message",
+      message: "Human reviewed wording",
+    });
+  });
+
+  it("edits PR title and description without creating or publishing a PR", async () => {
+    const onUseDraft = vi.fn();
+    const model = createGitAiDraftModel({
+      requestDraft: async () => ({
+        kind: "pull-request",
+        title: "Draft title",
+        body: "Draft body",
+      }),
+      onUseDraft,
+    });
+    await model.request("pull-request");
+    model.edit("title", "Reviewed title");
+    model.edit("body", "Reviewed body");
+    model.useDraft();
+    expect(onUseDraft).toHaveBeenCalledWith({
+      kind: "pull-request",
+      title: "Reviewed title",
+      body: "Reviewed body",
+    });
+  });
+
+  it("deduplicates pending requests and cannot use a previous draft while generating", async () => {
+    const deferred = createDeferred<GitAiDraft>();
+    const requestDraft = vi.fn(() => deferred.promise);
+    const onUseDraft = vi.fn();
+    const model = createGitAiDraftModel({ requestDraft, onUseDraft });
+    const pending = model.request("commit-message");
+    await model.request("pull-request");
+    model.useDraft();
+    expect(requestDraft).toHaveBeenCalledTimes(1);
+    expect(model.getSnapshot().phase).toBe("pending");
+    expect(onUseDraft).not.toHaveBeenCalled();
+    deferred.resolve({ kind: "commit-message", message: "Preview" });
+    await pending;
+    expect(model.getSnapshot().phase).toBe("ready");
+  });
+
+  it("conflict help has no apply callback", async () => {
+    const onUseDraft = vi.fn();
+    const model = createGitAiDraftModel({
+      requestDraft: async () => ({ kind: "conflict-help", advice: "Review both sides" }),
+      onUseDraft,
+    });
+    await model.request("conflict-help");
+    model.useDraft();
+    expect(onUseDraft).not.toHaveBeenCalled();
+  });
+
+  it("drops responses after checkout disposal even when the model is reactivated", async () => {
+    const deferred = createDeferred<GitAiDraft>();
+    const onUseDraft = vi.fn();
+    const model = createGitAiDraftModel({ requestDraft: () => deferred.promise, onUseDraft });
+    const pending = model.request("commit-message");
+    model.dispose();
+    model.activate();
+    deferred.resolve({ kind: "commit-message", message: "Stale checkout wording" });
+    await pending;
+    expect(model.getSnapshot()).toEqual({ phase: "idle", draft: null, error: null });
+    model.useDraft();
+    expect(onUseDraft).not.toHaveBeenCalled();
+  });
+
+  it("shows a safe error and allows retry after provider failure", async () => {
+    let fail = true;
+    const model = createGitAiDraftModel({
+      requestDraft: async () => {
+        if (fail) throw new Error("private provider response body");
+        return { kind: "commit-message", message: "Retry draft" };
+      },
+      onUseDraft: () => {},
+    });
+    await model.request("commit-message");
+    expect(model.getSnapshot()).toEqual({
+      phase: "error",
+      draft: null,
+      error: "Could not generate a draft. Try again.",
+    });
+    fail = false;
+    await model.request("commit-message");
+    expect(model.getSnapshot()).toEqual({
+      phase: "ready",
+      draft: { kind: "commit-message", message: "Retry draft" },
+      error: null,
+    });
+  });
+
+  it("does not use blank human-edited wording or a mismatched RPC response", async () => {
+    const used: GitAiTextDraft[] = [];
+    const model = createGitAiDraftModel({
+      requestDraft: async () => ({ kind: "commit-message", message: "Draft" }),
+      onUseDraft: (draft) => used.push(draft),
+    });
+    await model.request("commit-message");
+    model.edit("message", "   ");
+    model.useDraft();
+    expect(used).toEqual([]);
+    await model.request("pull-request");
+    expect(model.getSnapshot().phase).toBe("error");
+    model.useDraft();
+    expect(used).toEqual([]);
+  });
+});
+
+describe("explicit reviewed Git wording on separate human actions", () => {
+  afterEach(() => {
+    __resetCheckoutGitActionsStoreForTests();
+    useSessionStore.setState((state) => ({ ...state, sessions: {} }));
+  });
+  it("passes a reviewed subject only when the existing human commit action is invoked", async () => {
+    const checkoutCommit = vi.fn(async () => ({}));
+    const client = { checkoutCommit };
+    useSessionStore.setState((state) => ({
+      ...state,
+      sessions: {
+        ...state.sessions,
+        reviewed: { client } as unknown as (typeof state.sessions)[string],
+      },
+    }));
+    expect(checkoutCommit).not.toHaveBeenCalled();
+    await useCheckoutGitActionsStore
+      .getState()
+      .commit({ serverId: "reviewed", cwd: "/selected", message: "Reviewed subject" });
+    expect(checkoutCommit).toHaveBeenCalledExactlyOnceWith("/selected", {
+      addAll: true,
+      message: "Reviewed subject",
+    });
+  });
+  it("passes reviewed PR wording without changing ordinary empty-option behavior", async () => {
+    const checkoutPrCreate = vi.fn(async () => ({}));
+    const client = { checkoutPrCreate };
+    useSessionStore.setState((state) => ({
+      ...state,
+      sessions: {
+        ...state.sessions,
+        reviewed: { client } as unknown as (typeof state.sessions)[string],
+      },
+    }));
+    await useCheckoutGitActionsStore.getState().createPr({
+      serverId: "reviewed",
+      cwd: "/selected",
+      title: "Reviewed title",
+      body: "Reviewed body",
+    });
+    expect(checkoutPrCreate).toHaveBeenCalledExactlyOnceWith("/selected", {
+      title: "Reviewed title",
+      body: "Reviewed body",
+    });
   });
 });

@@ -21,6 +21,7 @@ const state = vi.hoisted(() => ({
   setCurrentTabState: vi.fn(),
   openTab: vi.fn(),
   change: null as unknown,
+  changeInputs: [] as unknown[],
 }));
 
 vi.mock("@/architecture-map/use-architecture-maps", () => ({
@@ -44,11 +45,12 @@ vi.mock("@/panels/pane-context", () => ({
     openPreferredTarget: state.openPreferredTarget,
   }),
 }));
-// The Change view's reads, answered from the fixture pair ; the comparison is real.
+// The Change view's reads, answered from the fixture pair (J7 CHANGES); the comparison is real.
 vi.mock("@/architecture-map/use-architecture-change", async () => {
   const { buildArchitectureChange } = await import("@/architecture-map/architecture-change");
   return {
     useArchitectureChange: (input: { maps: { name: string; path: string; size: number }[] }) => {
+      state.changeInputs.push(input);
       const sources = state.change as {
         changedFiles: { path: string; isDeleted: boolean }[];
         mapDiff: (path: string) => never;
@@ -93,6 +95,19 @@ vi.mock("@/architecture-map/architecture-map-view", () => ({
   ArchitectureMapView: ({ model }: { model: { title: string } }) =>
     React.createElement("div", { "data-testid": "rendered-map" }, model.title),
 }));
+// The code map, blast radius and pull request review views are tested on their own; here they only need to mount.
+// (The review view pulls in the diff renderer, whose styles need a full theme the unit stub does not have.)
+vi.mock("@/architecture-map/dependency-graph-view", () => ({
+  DependencyGraphView: () =>
+    React.createElement("div", { "data-testid": "rendered-dependency-graph" }),
+}));
+vi.mock("@/architecture-map/blast-radius-section", () => ({
+  BlastRadiusSection: () => React.createElement("div", { "data-testid": "rendered-blast-radius" }),
+}));
+vi.mock("@/architecture-map/pull-request-review-view", () => ({
+  PullRequestReviewView: () =>
+    React.createElement("div", { "data-testid": "rendered-pull-request-review" }),
+}));
 
 import {
   changeViewRequestKey,
@@ -128,6 +143,7 @@ beforeEach(async () => {
   state.list = { ...idle };
   state.document = { ...idle };
   state.documentArgs = [];
+  state.changeInputs = [];
   state.openPreferredTarget.mockReset();
   state.tabState = undefined;
   state.setCurrentTabState.mockReset();
@@ -286,7 +302,7 @@ describe("ArchitectureMapPanel", () => {
     expect(byTestId("rendered-change")?.textContent).toBe("orders,reports,search");
   });
 
-  // A pull request's comparison needs its own commits, which the host cannot read yet;
+  // R-C-J7-2: a pull request's comparison needs its own commits, which the host cannot read yet;
   // nothing is rebuilt from local files, and the one action opens the pull request.
   it("says a pull request's comparison is unavailable instead of rebuilding it, and opens the pull request", () => {
     (state.change as { pullRequest: unknown }).pullRequest = { number: 17, baseRefName: "main" };
@@ -311,8 +327,8 @@ describe("ArchitectureMapPanel", () => {
   });
 
   // F2 (v1.16): on a host that can't read a pull request's commits, the Change view says so in
-  // words the user can act on, with no commit ids or tool names, and never draws a comparison.
-  it("tells the user plainly when this computer's Fulcra can't compare a pull request yet", () => {
+  // words David can act on, with no commit ids or tool names, and never draws a comparison.
+  it("tells David plainly when this computer's Fulcra can't compare a pull request yet", () => {
     const pullRequest = {
       number: 17,
       baseRefName: "main",
@@ -356,5 +372,19 @@ describe("ArchitectureMapPanel", () => {
     render();
     expect(state.setCurrentTabState).toHaveBeenCalledWith({ view: "change" });
     expect(useChangeViewRequests.getState().pending.has(key)).toBe(false);
+  });
+  it("hands successive PR and commit selections to the existing change browser", () => {
+    state.list = {
+      ...idle,
+      data: { kind: "listed", maps: [entry("a.ir.json")], oversized: [], truncated: false },
+    };
+    state.tabState = { view: "change" };
+    const key = changeViewRequestKey("srv", "ws");
+    useChangeViewRequests.getState().request(key, { pullRequest: 27 });
+    render();
+    expect(state.changeInputs.at(-1)).toMatchObject({ selection: { pullRequest: 27 } });
+    const commit = { base: BASE_COMMIT, head: HEAD_COMMIT };
+    act(() => useChangeViewRequests.getState().request(key, { commit }));
+    expect(state.changeInputs.at(-1)).toMatchObject({ selection: { commit } });
   });
 });

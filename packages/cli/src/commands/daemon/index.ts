@@ -1,3 +1,4 @@
+import { devicesCommand, relayIdentityCommand } from "./devices.js";
 import { Command } from "commander";
 import { startCommand, daemonRunCommand } from "./start.js";
 import { daemonStatusCommand } from "./status.js";
@@ -20,6 +21,8 @@ export function createDaemonCommand(): Command {
     daemonRestartCommand(),
     daemonReloadCommand(),
     pairCommand(),
+    devicesCommand(),
+    relayIdentityCommand(),
     daemonConfigCommand(),
   ])
     daemon.addCommand(command);

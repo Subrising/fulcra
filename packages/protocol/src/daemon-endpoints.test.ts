@@ -7,6 +7,8 @@ import {
   extractHostPortFromWebSocketUrl,
   normalizeRelayProtocolVersion,
   parseConnectionUri,
+  parseRelayConnectionUri,
+  serializeRelayConnectionUri,
   serializeConnectionUri,
   serializeConnectionUriForStorage,
   shouldUseTlsForDefaultHostedRelay,
@@ -209,5 +211,69 @@ describe("shouldUseTlsForDefaultHostedRelay", () => {
 
   test("returns false for malformed endpoints", () => {
     expect(shouldUseTlsForDefaultHostedRelay("not-an-endpoint")).toBe(false);
+  });
+});
+
+describe("relay connection URI", () => {
+  test("refuses legacy relay URI rather than upgrading missing pairing authority", () => {
+    expect(() =>
+      parseRelayConnectionUri("relay://relay.paseo.sh:443/srv_test?key=legacy&ssl=true"),
+    ).toThrow("Update Fulcra to pair");
+    expect(() =>
+      parseRelayConnectionUri("relay://relay.paseo.sh:443/srv_test?v=2&key=legacy&ssl=true"),
+    ).toThrow("Update Fulcra to pair");
+  });
+
+  test("refuses missing or malformed V3 pairing credentials without exposing them", () => {
+    const valid = new URL("relay://relay.paseo.sh:443/srv_test");
+    valid.searchParams.set("v", "3");
+    valid.searchParams.set("ssl", "true");
+    valid.searchParams.set("key", Buffer.alloc(32, 1).toString("base64"));
+    valid.searchParams.set("pairingId", "A".repeat(22));
+    valid.searchParams.set("pairingSecret", "B".repeat(43));
+    valid.searchParams.set("pairingExpiresAt", "2099-01-01T00:00:00.000Z");
+    for (const field of ["pairingId", "pairingSecret", "pairingExpiresAt"]) {
+      const missing = new URL(valid);
+      missing.searchParams.delete(field);
+      expect(() => parseRelayConnectionUri(missing.toString())).toThrow("Invalid pairing offer");
+    }
+    valid.searchParams.set("pairingSecret", "PRIVATE_PAIRING_SENTINEL");
+    valid.searchParams.set("pairingExpiresAt", "not-an-expiry");
+    expect(() => parseRelayConnectionUri(valid.toString())).toThrow("Invalid pairing offer");
+  });
+
+  test("preserves strict V3 public relay TLS refusal", () => {
+    const uri =
+      "relay://relay.paseo.sh:443/srv_test?v=3&key=" +
+      encodeURIComponent(Buffer.alloc(32, 1).toString("base64")) +
+      "&pairingId=" +
+      "A".repeat(22) +
+      "&pairingSecret=" +
+      "B".repeat(43) +
+      "&pairingExpiresAt=2099-01-01T00%3A00%3A00.000Z";
+    expect(() => parseRelayConnectionUri(uri)).toThrow("secure connection");
+  });
+
+  test("round-trips the offer and password through a direct URI and connect wrapper", () => {
+    const parts = {
+      offer: {
+        v: 3 as const,
+        serverId: "srv_test",
+        daemonPublicKeyB64: Buffer.alloc(32, 1).toString("base64"),
+        pairing: {
+          id: "A".repeat(22),
+          secret: "B".repeat(43),
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        },
+        hostLabel: "Test host",
+        relay: { endpoint: "relay.paseo.sh:443", useTls: true },
+      },
+      password: "two words",
+    };
+    const uri = serializeRelayConnectionUri(parts);
+    expect(parseRelayConnectionUri(uri)).toEqual(parts);
+    expect(
+      parseRelayConnectionUri(`https://app.paseo.sh/#connect=${encodeURIComponent(uri)}`),
+    ).toEqual(parts);
   });
 });

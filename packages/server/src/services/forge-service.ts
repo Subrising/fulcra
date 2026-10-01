@@ -18,6 +18,9 @@ export function normalizeForgeSearchKinds(
 }
 
 export interface PullRequestSummary {
+  isDraft?: boolean;
+  baseRefOid?: string;
+  headRefOid?: string;
   number: number;
   title: string;
   url: string;
@@ -126,7 +129,7 @@ export interface CurrentPullRequestStatus {
   state: string;
   baseRefName: string;
   headRefName: string;
-  /** 40-hex commit of the base branch tip, when the forge reports it. */
+  /** 40-hex commit of the base branch tip, when the forge reports it (CONTRACTS v1.16). */
   baseRefOid?: string;
   /** 40-hex commit of the PR head, when the forge reports it. */
   headRefOid?: string;

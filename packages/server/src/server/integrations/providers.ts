@@ -1,4 +1,4 @@
-// Sign-in provider table for the shared credential store. One entry per
+// Sign-in provider table for the shared credential store (CONTRACTS §7.1/§7.2). One entry per
 // connector. Findings behind `publicClient` and the sources are in docs/integrations-auth.md: only a
 // provider that lets a desktop app finish sign-in without a client secret gets a working method.
 // Everything else is marked `needs-broker` and is never offered.
@@ -57,9 +57,9 @@ export interface ProviderDefinition {
   token: TokenMethodDefinition;
   device?: DeviceMethodDefinition;
   browser?: BrowserMethodDefinition;
-  // Where plugin requests may go: the provider's API base for the account and
+  // Where plugin requests may go (CONTRACTS §7.2 v1.7): the provider's API base for the account and
   // the path prefixes under it. The host never sends an account's credential anywhere else.
-  // `readOnlyPathPrefixes` are reachable with GET only, whatever the plugin declares.
+  // `readOnlyPathPrefixes` are reachable with GET only, whatever the plugin declares (CONTRACTS v1.10).
   api: {
     base(site: string | null): string;
     pathPrefixes: readonly string[];

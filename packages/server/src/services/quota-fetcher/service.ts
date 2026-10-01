@@ -71,14 +71,11 @@ export class ProviderUsageService {
       if (result.status === "fulfilled") {
         return result.value;
       }
-      this.logger.debug(
-        { err: result.reason, providerId: fetcher.providerId },
-        "Provider usage fetch failed",
-      );
+      this.logger.debug({ providerId: fetcher.providerId }, "Provider usage fetch failed");
       return unavailableUsage({
         providerId: fetcher.providerId,
         displayName: fetcher.displayName,
-        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        error: "Usage unavailable",
       });
     });
 

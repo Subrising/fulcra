@@ -53,6 +53,11 @@ const manifests = {
     supportedHosts: ["explorer"],
     resourceKey: () => "files",
   },
+  context: {
+    kind: "context",
+    supportedHosts: ["main", "explorer"],
+    resourceKey: () => "context",
+  },
   architecture_map: {
     kind: "architecture_map",
     supportedHosts: ["main"],

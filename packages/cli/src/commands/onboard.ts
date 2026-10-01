@@ -151,7 +151,7 @@ export function onboardCommand(): Command {
     .option("--listen <listen>", "Listen target (host:port, port, or unix socket path)")
     .option("--port <port>", "Port to listen on (default: 6767)")
     .option("--relay", "Enable relay connection without prompting")
-    .option("--no-relay", "Disable relay connection")
+    .option("--no-relay", "Never connect to a relay (pairing away from this network is off)")
     .option("--no-mcp", "Disable the Agent MCP HTTP endpoint")
     .option(
       "--hostnames <hosts>",

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { getParentAgentIdFromLabels, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 
+import type { TrustedInputKind } from "@getpaseo/plugin/server";
+import { TrustedPlugins } from "../plugins/trusted.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import type { StoredAgentRecord } from "./agent-storage.js";
 import {
@@ -29,6 +31,15 @@ class FakeLifecycleAgentStorage implements LifecycleAgentStorage {
 }
 
 class FakeLifecycleAgentManager implements LifecycleAgentManager {
+  private readonly trustedPlugins = new TrustedPlugins();
+  withInput<T>(
+    agentId: string,
+    kind: TrustedInputKind,
+    messageId: string | undefined,
+    operation: () => T,
+  ): T {
+    return this.trustedPlugins.input({ id: agentId }, kind, messageId, operation);
+  }
   readonly liveAgents = new Map<string, LifecycleAgentSnapshot>();
   readonly cancelledAgentIds: string[] = [];
   readonly clearedAttentionAgentIds: string[] = [];
@@ -73,6 +84,8 @@ class FakeLifecycleAgentManager implements LifecycleAgentManager {
   async clearAgentAttention(agentId: string): Promise<void> {
     this.clearedAttentionAgentIds.push(agentId);
   }
+
+  async preflightArchiveDescendants(_agentId: string): Promise<void> {}
 
   async archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
     this.archivedAgentIds.push(agentId);
@@ -360,7 +373,16 @@ function storedAgent(id: string): StoredAgentRecord {
   };
 }
 
-// Stop on an agent no process has loaded.
+function admitUnmanagedInput<T>(
+  agentId: string,
+  kind: "cancel" | "archive",
+  messageId: string | undefined,
+  operation: () => T,
+): T {
+  return new TrustedPlugins().input({ id: agentId }, kind, messageId, operation);
+}
+
+// Orca R3b (DESIGN-R R-M21). stop on an agent no process has loaded.
 describe("stop on an unloaded agent", () => {
   const at = "2026-09-23T22:10:00.000Z";
   const stale = (id: string) => ({
@@ -387,13 +409,14 @@ describe("stop on an unloaded agent", () => {
   }
   const unloaded = (live: () => LifecycleAgentSnapshot | null = () => null) =>
     ({
+      withInput: admitUnmanagedInput,
       getAgent: live,
       hasInFlightRun: () => {
         throw new Error("must not be consulted for an unloaded agent");
       },
     }) as unknown as LifecycleAgentManager;
 
-  test("clears the stored running state, marks the interruption, and reports not running", async () => {
+  test("R-M21: clears the stored running state, marks the interruption, and reports not running", async () => {
     const { storage, cleanup } = await setup();
     try {
       await storage.upsert(stale("agent-a") as never);
@@ -415,7 +438,7 @@ describe("stop on an unloaded agent", () => {
     }
   });
 
-  test("never touches an agent that was loaded between the check and the write", async () => {
+  test("R-M21: never touches an agent that was loaded between the check and the write", async () => {
     const { storage, cleanup } = await setup();
     try {
       await storage.upsert(stale("agent-b") as never);
@@ -459,7 +482,7 @@ describe("stop on an unloaded agent", () => {
   });
 });
 
-// The unloaded-stop normalisation is reachable only from the guarded stop command.
+// Orca R3b, review F2. The unloaded-stop normalisation is reachable only from the guarded stop command.
 describe("unloaded normalisation is stop-only", () => {
   test("F2: archiveAgentCommand can never trigger it, even when the agent unloads mid-call", async () => {
     const { AgentStorage } = await import("./agent-storage.js");
@@ -498,6 +521,8 @@ describe("unloaded normalisation is stop-only", () => {
         lifecycle: "running",
       } as LifecycleAgentSnapshot;
       const manager = {
+        withInput: admitUnmanagedInput,
+        preflightArchiveDescendants: async () => undefined,
         getAgent: () => (calls++ === 0 ? live : null),
       } as unknown as LifecycleAgentManager;
       await expect(
@@ -512,7 +537,10 @@ describe("unloaded normalisation is stop-only", () => {
       // The explicit stop command, with the same storage, does normalise it.
       await cancelAgentRunCommand(
         {
-          agentManager: { getAgent: () => null } as unknown as LifecycleAgentManager,
+          agentManager: {
+            withInput: admitUnmanagedInput,
+            getAgent: () => null,
+          } as unknown as LifecycleAgentManager,
           agentStorage: storage,
           logger: createTestLogger(),
         },

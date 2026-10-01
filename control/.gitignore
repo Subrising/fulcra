@@ -1,0 +1,14 @@
+research/sources/
+research/coordination-response.json
+research/openclaw-session-inventory.json
+runtime/
+node_modules/
+.DS_Store
+
+**/node_modules
+
+__pycache__/
+
+dist/
+
+.verification/

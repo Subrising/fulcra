@@ -577,7 +577,7 @@ describe("AgentStorage", () => {
   });
 });
 
-// Boot normalisation of dead turns, and the durable interruption marker.
+// Orca R3a (DESIGN-R R-M18). Boot normalisation of dead turns, and the durable interruption marker.
 describe("interrupted-turn normalisation", () => {
   let dir: string;
   const logger = createTestLogger();
@@ -606,7 +606,7 @@ describe("interrupted-turn normalisation", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("only non-archived, non-internal running/initializing records change, with timestamps byte-identical", async () => {
+  test("R-M18: only non-archived, non-internal running/initializing records change, with timestamps byte-identical", async () => {
     const storage = new AgentStorage(dir, logger);
     const records = [
       seed("run", {}),
@@ -686,7 +686,7 @@ describe("interrupted-turn normalisation", () => {
 });
 
 describe("stored-agent projection backstop", () => {
-  test("an agent no process has loaded never projects running; the marker travels with it", async () => {
+  test("R-M18: an agent no process has loaded never projects running; the marker travels with it", async () => {
     const { buildStoredAgentPayload } = await import("./agent-projections.js");
     const base = {
       id: "agent-x",
@@ -726,7 +726,7 @@ describe("stored-agent projection backstop", () => {
   });
 });
 
-// Each normalisation re-reads the record inside the write queue; nothing may be written from the
+// Orca R3a, review F1. Each normalisation re-reads the record inside the write queue; nothing may be written from the
 // snapshot taken when the records were listed.
 describe("interrupted-turn normalisation uses the current record", () => {
   let dir: string;

@@ -1,4 +1,4 @@
-import { statSync, watch as watchPath } from "node:fs";
+import { watch as watchPath } from "node:fs";
 import type { ProjectCheckoutLitePayload } from "@getpaseo/protocol/messages";
 import type pino from "pino";
 import type {
@@ -16,6 +16,11 @@ import {
 } from "./workspace-registry-model.js";
 import { workspaceIdsForProjects } from "./workspace-directory.js";
 import { deriveProjectKey } from "./project-key.js";
+import {
+  createDirectoryInspector,
+  type DirectoryState,
+  type InspectDirectories,
+} from "./directory-access.js";
 
 const DEFAULT_RESCAN_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_DEBOUNCE_MS = 100;
@@ -92,6 +97,8 @@ export interface WorkspaceReconciliationServiceOptions {
   onWorkspaceArchived?: (workspaceId: string) => void | Promise<void>;
   onWorkspacesChanged?: (workspaceIds: string[]) => Promise<void>;
   watchProjectRoot?: ProjectRootWatch;
+  /** Checks directories without blocking the daemon; see directory-access.ts. */
+  inspectDirectories?: InspectDirectories;
   clock?: ReconciliationClock;
   rescanIntervalMs?: number;
   debounceMs?: number;
@@ -110,8 +117,6 @@ interface CachedCheckoutRead {
   checkout: Promise<ProjectCheckoutLitePayload>;
 }
 
-type DirectoryState = "directory" | "missing" | "unreadable";
-
 export class WorkspaceReconciliationService {
   private readonly serverId: string | undefined;
   private readonly projectRegistry: ProjectRegistry;
@@ -123,10 +128,14 @@ export class WorkspaceReconciliationService {
   private readonly onWorkspaceArchived: ((workspaceId: string) => void | Promise<void>) | null;
   private readonly onWorkspacesChanged: ((workspaceIds: string[]) => Promise<void>) | null;
   private readonly watchProjectRoot: ProjectRootWatch;
+  private readonly inspectDirectories: InspectDirectories;
   private readonly clock: ReconciliationClock;
   private readonly rescanIntervalMs: number;
   private readonly debounceMs: number;
   private readonly watchers: Array<{ rootPath: string; watcher: ProjectRootWatcher }> = [];
+  /** Paths already reported as unreadable, so a blocked path is logged once, not on every rescan. */
+  private readonly reportedPaths = new Set<string>();
+  private watchSync: Promise<void> = Promise.resolve();
   private unsubscribeRegistry: (() => void) | null = null;
   private rescanTimer: ReconciliationTimer | null = null;
   private debounceTimer: ReconciliationTimer | null = null;
@@ -146,6 +155,7 @@ export class WorkspaceReconciliationService {
     this.onWorkspaceArchived = options.onWorkspaceArchived ?? null;
     this.onWorkspacesChanged = options.onWorkspacesChanged ?? null;
     this.watchProjectRoot = options.watchProjectRoot ?? watchProjectRoot;
+    this.inspectDirectories = options.inspectDirectories ?? createDirectoryInspector();
     this.clock = options.clock ?? systemClock;
     this.rescanIntervalMs = options.rescanIntervalMs ?? DEFAULT_RESCAN_INTERVAL_MS;
     this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -196,17 +206,21 @@ export class WorkspaceReconciliationService {
       this.projectRegistry.list(),
       this.workspaceRegistry.list(),
     ]);
+    const activeProjects = projects.filter((project) => !project.archivedAt);
+    const activeWorkspaces = workspaces.filter((workspace) => !workspace.archivedAt);
+    const states = await this.inspectPaths([
+      ...activeWorkspaces.map((workspace) => workspace.cwd),
+      ...activeProjects.map((project) => project.rootPath),
+    ]);
     const workspacesByProject = new Map<string, PersistedWorkspaceRecord[]>();
-    for (const workspace of workspaces) {
-      if (workspace.archivedAt || this.inspectDirectory(workspace.cwd) !== "directory") continue;
+    for (const workspace of activeWorkspaces) {
+      if (states.get(workspace.cwd) !== "directory") continue;
       const siblings = workspacesByProject.get(workspace.projectId) ?? [];
       siblings.push(workspace);
       workspacesByProject.set(workspace.projectId, siblings);
     }
     await this.reconcileGitMetadataForProjects(
-      projects.filter(
-        (project) => !project.archivedAt && this.inspectDirectory(project.rootPath) === "directory",
-      ),
+      activeProjects.filter((project) => states.get(project.rootPath) === "directory"),
       workspacesByProject,
       changes,
     );
@@ -223,10 +237,22 @@ export class WorkspaceReconciliationService {
 
     const activeProjects = allProjects.filter((p) => !p.archivedAt);
     const activeWorkspaces = allWorkspaces.filter((w) => !w.archivedAt);
+    const states = await this.inspectPaths([
+      ...activeWorkspaces.map((workspace) => workspace.cwd),
+      ...activeProjects.map((project) => project.rootPath),
+    ]);
     const workspaceDirectoryStates = activeWorkspaces.map((workspace) => ({
       workspace,
-      state: this.inspectDirectory(workspace.cwd),
+      state: states.get(workspace.cwd) ?? "unreadable",
     }));
+    // Project roots are read after the workspace directories, so a volume that
+    // goes away mid-pass leaves its project unreachable rather than its workspaces
+    // alone. The skew can only withhold an archive, never produce one.
+    const reachableProjectIds = new Set(
+      activeProjects
+        .filter((project) => states.get(project.rootPath) === "directory")
+        .map((project) => project.projectId),
+    );
 
     const workspacesByProject = new Map<string, PersistedWorkspaceRecord[]>();
     for (const { workspace, state } of workspaceDirectoryStates) {
@@ -236,9 +262,16 @@ export class WorkspaceReconciliationService {
       workspacesByProject.set(workspace.projectId, list);
     }
 
-    // 1. Archive workspaces whose directories no longer exist
+    // 1. Archive workspaces whose directories no longer exist, but only when the
+    //    project they belong to is still reachable. A missing project root means the
+    //    whole location is unavailable - an unmounted volume, an offline share, a disk
+    //    that has not appeared yet - and absence there proves nothing about the
+    //    workspace. Projects already persist through that; their workspaces do too.
     const missingWorkspaces = workspaceDirectoryStates
-      .filter(({ state }) => state === "missing")
+      .filter(
+        ({ workspace, state }) =>
+          state === "missing" && reachableProjectIds.has(workspace.projectId),
+      )
       .map(({ workspace }) => workspace);
     await Promise.all(
       missingWorkspaces.map(async (workspace) => {
@@ -265,7 +298,7 @@ export class WorkspaceReconciliationService {
     //    Projects persist until explicitly removed, even when they currently have
     //    zero active workspaces, so they still reconcile their own metadata.
     await this.reconcileGitMetadataForProjects(
-      activeProjects.filter((project) => this.inspectDirectory(project.rootPath) === "directory"),
+      activeProjects.filter((project) => reachableProjectIds.has(project.projectId)),
       workspacesByProject,
       changes,
     );
@@ -401,7 +434,14 @@ export class WorkspaceReconciliationService {
     );
   }
 
-  private async syncProjectRootWatches(): Promise<void> {
+  /** One watch sync at a time, so concurrent callers never install a root's watch twice. */
+  private syncProjectRootWatches(): Promise<void> {
+    const run = this.watchSync.then(() => this.syncProjectRootWatchesOnce());
+    this.watchSync = run.catch(() => undefined);
+    return run;
+  }
+
+  private async syncProjectRootWatchesOnce(): Promise<void> {
     if (this.disposed) return;
     const projects = await this.projectRegistry.list();
     if (this.disposed) return;
@@ -417,7 +457,19 @@ export class WorkspaceReconciliationService {
       this.watchers.splice(index, 1);
     }
 
-    for (const project of activeProjects) {
+    const unwatched = activeProjects.filter(
+      (project) =>
+        !this.watchers.some((target) => areEquivalentPaths(target.rootPath, project.rootPath)),
+    );
+    if (unwatched.length === 0) return;
+    // fs.watch opens the root synchronously; only watch roots known to open without waiting. The rest are
+    // retried on the next rescan or project change.
+    const states = await this.inspectPaths(unwatched.map((project) => project.rootPath));
+    if (this.disposed) return;
+
+    for (const project of unwatched) {
+      if (states.get(project.rootPath) !== "directory") continue;
+      // Legacy duplicate projects can share one root.
       const alreadyWatching = this.watchers.some((target) =>
         areEquivalentPaths(target.rootPath, project.rootPath),
       );
@@ -522,21 +574,21 @@ export class WorkspaceReconciliationService {
     return this.workspaceGitService.getCheckout(cwd);
   }
 
-  private inspectDirectory(targetPath: string): DirectoryState {
-    try {
-      return statSync(targetPath).isDirectory() ? "directory" : "missing";
-    } catch (error) {
-      if (isMissingPathError(error)) return "missing";
+  /** Directory states without blocking the daemon; an unreadable path is skipped (and logged once), never archived. */
+  private async inspectPaths(paths: string[]): Promise<Map<string, DirectoryState>> {
+    const states = await this.inspectDirectories(paths);
+    for (const [targetPath, state] of states) {
+      if (state !== "unreadable") {
+        this.reportedPaths.delete(targetPath);
+        continue;
+      }
+      if (this.reportedPaths.has(targetPath)) continue;
+      this.reportedPaths.add(targetPath);
       this.logger.warn(
-        { err: error, targetPath },
-        "Skipped workspace reconciliation after directory inspection failed",
+        { targetPath },
+        "Directory is not readable yet (e.g. waiting for macOS folder access); watching and reconciliation are off for it until it is",
       );
-      return "unreadable";
     }
+    return states;
   }
-}
-
-function isMissingPathError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) return false;
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
 }

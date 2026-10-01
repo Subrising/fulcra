@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokePluginRpc = vi.fn();
+// L46: the host "relay" reaches its Mac only through the relay.
+const connectionOf = (serverId: string) =>
+  serverId === "relay" ? { type: "relay" } : { type: "directTcp" };
 const installedPlugins: { serverId: string; id: string }[] = [];
 
 vi.mock("@/runtime/host-runtime", () => ({
   getHostRuntimeStore: () => ({
     getClient: (serverId: string) => (serverId === "offline" ? null : { invokePluginRpc }),
+    getSnapshot: (serverId: string) => ({ activeConnection: connectionOf(serverId) }),
   }),
 }));
 let catalogSettled = true;
@@ -16,11 +20,8 @@ vi.mock("@/plugins/registry", () => ({
   },
 }));
 
-const {
-  readSessionOwnership,
-  requestSessionOwnership,
-  resetSessionOwnershipStore,
-} = await import("./session-ownership-store");
+const { readSessionOwnership, requestSessionOwnership, resetSessionOwnershipStore } =
+  await import("./session-ownership-store");
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 80));
 
@@ -42,11 +43,20 @@ beforeEach(() => {
   catalogSettled = true;
   invokePluginRpc.mockReset();
   installedPlugins.length = 0;
-  installedPlugins.push({ serverId: "host", id: "organization" });
+  installedPlugins.push({ serverId: "host", id: "orca-organization" });
   resetSessionOwnershipStore();
 });
 
 describe("session ownership store", () => {
+  it("L46: a relay-only host is not asked (Command Centre cannot answer there)", async () => {
+    installedPlugins.push({ serverId: "relay", id: "orca-organization-next" });
+    invokePluginRpc.mockResolvedValue({ ownership: { "agent-1": record() } });
+    requestSessionOwnership("relay", "agent-1");
+    await settle();
+    expect(invokePluginRpc).not.toHaveBeenCalled();
+    expect(readSessionOwnership("relay", "agent-1").kind).toBe("unassigned");
+  });
+
   it("reads unassigned until an answer arrives, then the recorded owner", async () => {
     invokePluginRpc.mockResolvedValue({ ownership: { "agent-1": record() } });
     expect(readSessionOwnership("host", "agent-1").kind).toBe("unassigned");
@@ -68,7 +78,7 @@ describe("session ownership store", () => {
     // instead of silently agreeing with itself. The plugin library validates method names
     // against /^[a-z][a-z0-9._-]*$/, so a camelCase spelling cannot be registered at all —
     // and the resulting unknown-method rejection is indistinguishable from a refusal.
-    expect(invokePluginRpc.mock.calls[0][0]).toBe("organization");
+    expect(invokePluginRpc.mock.calls[0][0]).toBe("orca-organization");
     expect(invokePluginRpc.mock.calls[0][1]).toBe("organization.session-ownership");
     expect(invokePluginRpc.mock.calls[0][1]).toMatch(/^[a-z][a-z0-9._-]*$/);
   });
@@ -87,7 +97,9 @@ describe("session ownership store", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       invokePluginRpc.mockRejectedValue(
-        new Error("Plugin organization does not contribute RPC organization.session-ownership"),
+        new Error(
+          "Plugin orca-organization does not contribute RPC organization.session-ownership",
+        ),
       );
       requestSessionOwnership("host", "agent-1");
       await settle();
@@ -135,7 +147,7 @@ describe("session ownership store", () => {
       expect(readSessionOwnership("host", "agent-1").kind).toBe("unassigned");
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0][0]).toContain("diverged on the payload");
-      // Sending someone to the ownership service for a seam fault is the failure being prevented.
+      // Sending someone to the controller for a seam fault is the failure being prevented.
       expect(warn.mock.calls[0][0]).not.toContain("refused");
       expect(warn.mock.calls[0][0]).not.toContain("wiring fault");
     } finally {
@@ -169,8 +181,8 @@ describe("session ownership store", () => {
       resetSessionOwnershipStore();
       catalogSettled = true;
       installedPlugins.push(
-        { serverId: "host", id: "organization-next" },
-        { serverId: "host", id: "organization-trial" },
+        { serverId: "host", id: "orca-organization-next" },
+        { serverId: "host", id: "orca-organization-trial" },
       );
       requestSessionOwnership("host", "agent-4");
       requestSessionOwnership("host", "agent-5");
@@ -178,7 +190,7 @@ describe("session ownership store", () => {
       expect(invokePluginRpc).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0][0]).toContain("Refusing to choose");
-      expect(warn.mock.calls[0][0]).toContain("organization-next");
+      expect(warn.mock.calls[0][0]).toContain("orca-organization-next");
     } finally {
       warn.mockRestore();
       info.mockRestore();
@@ -191,14 +203,16 @@ describe("session ownership store", () => {
     await settle();
     expect(readSessionOwnership("host", "agent-1").kind).toBe("unassigned");
     resetSessionOwnershipStore();
-    // A record the ownership service cannot resolve is a real answer and reads unknown.
+    // A record the controller cannot resolve is a real answer and reads unknown.
     invokePluginRpc.mockResolvedValue({ ownership: { "agent-2": record({ state: "unknown" }) } });
     requestSessionOwnership("host", "agent-2");
     await settle();
     expect(readSessionOwnership("host", "agent-2").kind).toBe("unknown");
     resetSessionOwnershipStore();
     // An unrecognised future state reads unknown rather than owned.
-    invokePluginRpc.mockResolvedValue({ ownership: { "agent-3": record({ state: "supervised" }) } });
+    invokePluginRpc.mockResolvedValue({
+      ownership: { "agent-3": record({ state: "supervised" }) },
+    });
     requestSessionOwnership("host", "agent-3");
     await settle();
     expect(readSessionOwnership("host", "agent-3").kind).toBe("unknown");
@@ -256,19 +270,19 @@ describe("session ownership store", () => {
     // A directory plugin's id is chosen at install time, and staging registers a second
     // build alongside the live one, so a fixed id is an assumption rather than a fact.
     installedPlugins.length = 0;
-    installedPlugins.push({ serverId: "host", id: "organization-next" });
+    installedPlugins.push({ serverId: "host", id: "orca-organization-next" });
     requestSessionOwnership("host", "agent-1");
     await settle();
-    expect(invokePluginRpc.mock.calls[0][0]).toBe("organization-next");
+    expect(invokePluginRpc.mock.calls[0][0]).toBe("orca-organization-next");
 
     // With both present the exact id wins, so normal operation is unaffected by a staged
     // build sitting beside it.
     resetSessionOwnershipStore();
     invokePluginRpc.mockClear();
-    installedPlugins.push({ serverId: "host", id: "organization" });
+    installedPlugins.push({ serverId: "host", id: "orca-organization" });
     requestSessionOwnership("host", "agent-2");
     await settle();
-    expect(invokePluginRpc.mock.calls[0][0]).toBe("organization");
+    expect(invokePluginRpc.mock.calls[0][0]).toBe("orca-organization");
 
     // Two staged builds and no exact id is ambiguous: guessing would silently choose whose
     // records a person is reading, so nothing is asked.
@@ -276,8 +290,8 @@ describe("session ownership store", () => {
     invokePluginRpc.mockClear();
     installedPlugins.length = 0;
     installedPlugins.push(
-      { serverId: "host", id: "organization-next" },
-      { serverId: "host", id: "organization-trial" },
+      { serverId: "host", id: "orca-organization-next" },
+      { serverId: "host", id: "orca-organization-trial" },
     );
     requestSessionOwnership("host", "agent-3");
     await settle();
@@ -285,7 +299,7 @@ describe("session ownership store", () => {
   });
 
   it("does not record an answer for a disconnected host", async () => {
-    installedPlugins.push({ serverId: "offline", id: "organization" });
+    installedPlugins.push({ serverId: "offline", id: "orca-organization" });
     requestSessionOwnership("offline", "agent-1");
     await settle();
     expect(invokePluginRpc).not.toHaveBeenCalled();

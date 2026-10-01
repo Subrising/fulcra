@@ -1,10 +1,99 @@
+import { registerOwnerArtifactContent } from "../owner-report-read.js";
+import {
+  NativeArtifactProduceInputSchema,
+  NativeArtifactProduceOutputSchema,
+  ManagedArtifactClaimSchema,
+} from "@getpaseo/protocol/native-evidence";
+import {
+  createNativeArtifactInvocation,
+  consumeNativeArtifactInvocation,
+  type NativeArtifactInvocation,
+} from "../native-artifact-origin.js";
+import { bindReportPublication } from "../report-publication.js";
+import {
+  registerNativeEvidenceSink,
+  nativeEvidenceDigest,
+  type NativeCompletion,
+} from "../native-evidence-origin.js";
+import {
+  NativeEvidenceFactSchema,
+  NativeEvidenceJournalSchema,
+  NativeEvidenceClaimSchema,
+} from "@getpaseo/protocol/native-evidence";
+import {
+  registerOwnerReportRead,
+  registerOwnerEvidenceRead,
+  registerOwnerManagedArtifactRead,
+} from "../owner-report-read.js";
+import { assertFinalInputCheck, failFinalInputHandoff } from "./final-input-check.js";
+import { checkReportPublication } from "../report-publication.js";
+import {
+  createNativeReportOrigin,
+  forkNativeReportOrigin,
+  rememberNativeReportPublication,
+  requireNativeReportOrigin,
+  enrollNativeReportCreation,
+  type NativeReportOrigin,
+  type NativeReportCreation,
+} from "../report-origin.js";
+import { NativeReportInbox } from "../report-inbox.js";
+import { IntercomRates } from "../intercom-rates.js";
+import { requireNativeReportBatch, type NativeReportBatch } from "../report-batch.js";
+import {
+  registerNativeReceiptMaintenance,
+  registerNativeReportRegistry,
+  registerNativeIntercomRates,
+} from "../plugins/native-intercom-owner.js";
+import { NativeReportRegistry } from "../report-registry.js";
+import {
+  IntercomStatusInputSchema,
+  IntercomStatusSchema,
+  type NativeReportIdentity,
+} from "@getpaseo/protocol/native-intercom";
+import { sessionQuotaUsage } from "./session-quota-usage.js";
+import {
+  snapshotParentAdoption,
+  validateParentAdoption,
+  type ParentAdoptionInput,
+} from "./parent-adoption.js";
+import { nativeDispatch } from "../plugins/admission-outcome.js";
+import type {
+  AccountCredential,
+  LiveAccountSession,
+} from "../../services/quota-fetcher/account-usage-types.js";
+import { AdmissionDeniedError } from "../plugins/trusted.js";
+import { normalizeTrustedPermissionResponse } from "@getpaseo/protocol/trusted-input";
+import type { TrustedOperationHandle } from "../plugins/trusted.js";
+import {
+  deferredPromptPayload as promptPayload,
+  deferredCommandPayload as commandPayload,
+  snapshotRunOptions,
+} from "./trusted-operation.js";
+import type { TrustedPayloadV11 } from "@getpaseo/protocol/trusted-input";
+import type { MessageReceipts, NativeMessageReceipt } from "../message-receipts/index.js";
+import {
+  createNativeQueuedDispatch,
+  nativeQueuedAcceptance,
+  supportsNativeQueuedProvider,
+  validateNativeQueuedDispatch,
+  nativeQueuedFailure,
+} from "./native-queued-dispatch.js";
+import { TRUSTED_OPERATION, NATIVE_QUEUED_FINAL, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
+import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
+import {
+  BackgroundWorkSampler,
+  type BackgroundWorkSamplerOptions,
+} from "./background-work/sampler.js";
+import { TrustedPlugins } from "../plugins/trusted.js";
+import type { InputSequence, TrustedInputKind } from "@getpaseo/plugin/server";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
   AgentMcpRefreshInputSchema,
+  AgentQuotaSnapshotSchema,
   type AgentMcpRefreshInput,
   type AgentMcpRefreshResult,
   type AgentMcpRefreshState,
@@ -23,16 +112,19 @@ import {
   PARENT_AGENT_ID_LABEL,
 } from "@getpaseo/protocol/agent-labels";
 import type { Logger } from "pino";
+import { childModeClass, type ChildModeClass } from "./create-agent-mode.js";
 import type { ProviderOptions, ToolPolicy } from "@getpaseo/protocol/agent-types";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { z } from "zod";
 import type { TerminalManager } from "../../terminal/terminal-manager.js";
 
 import {
+  CODEX_TURN_ADMISSION,
   getAgentStreamEventTurnId,
   type AgentCapabilityFlags,
   type AgentClient,
   type AgentCreateSessionOptions,
+  type AgentResumePurpose,
   type AgentResumeSessionOptions,
   type AgentFeature,
   type AgentLaunchContext,
@@ -88,7 +180,7 @@ import {
   type PendingForegroundRun,
 } from "./agent-run-state.js";
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
-import { isSystemInjectedEnvelope } from "./agent-prompt.js";
+import { FINISH_NOTIFICATION_MESSAGE_PREFIX, isSystemInjectedEnvelope } from "./agent-prompt.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
@@ -157,6 +249,28 @@ export type AgentRunCancellationResult =
   | { status: "settled" }
   | { status: "refused" };
 
+/** A session that will run in a directory needs that directory to be there. */
+async function assertUsableWorkingDirectory(cwd: string): Promise<void> {
+  try {
+    const stats = await stat(cwd);
+    if (!stats.isDirectory()) {
+      throw new Error(`Working directory is not a directory: ${cwd}`);
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      throw new Error(`Working directory does not exist: ${cwd}`, { cause: error });
+    }
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Failed to access working directory: ${cwd}`, { cause: error });
+  }
+}
+
 interface PreparedSessionConfig {
   storedConfig: AgentSessionConfig;
   launchConfig: AgentSessionConfig;
@@ -187,6 +301,8 @@ interface NormalizeConfigOptions {
   /** Fill a missing thinking option from the model's default. OFF unless asked, for the same reason. */
   resolveDefaultThinking?: boolean;
   env?: Record<string, string>;
+  /** Defaults to interactive. A history load reads persisted state and runs nothing. */
+  purpose?: AgentResumePurpose;
 }
 
 interface TimeoutOptions {
@@ -320,6 +436,7 @@ type ProviderEnabledMap = Partial<Record<AgentProvider, ProviderEnabledFlag>>;
 type ProviderClientMap = Partial<Record<AgentProvider, AgentClient>>;
 
 export interface CreateAgentOptions {
+  reportCreation?: NativeReportCreation;
   labels?: Record<string, string>;
   initialPrompt?: string;
   env?: Record<string, string>;
@@ -337,6 +454,10 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  /** Host-private registration journal, derived from the existing private home. Not a shared config key. */
+  reportRegistryFile?: string;
+  reportGrantDirectory?: string;
+  trustedPlugins?: TrustedPlugins;
   pluginLifecycle?: PluginLifecycle;
   /** Trusted synchronous host ownership/grant fence. Never supplied by an RPC caller. */
   mcpRefreshAdmission?: (agent: ManagedAgent) => { revision: string; allowed: boolean };
@@ -421,6 +542,9 @@ interface HandleStreamEventOptions {
 }
 
 interface ManagedAgentBase {
+  archivedAt: string | null;
+  instanceId?: string;
+  inputSequence?: InputSequence;
   id: string;
   provider: AgentProvider;
   cwd: string;
@@ -453,6 +577,11 @@ interface ManagedAgentBase {
   activeTurnStartedAt: Date | null;
   lastUsage?: AgentUsage;
   lastError?: string;
+  /**
+   * Display only (MULTIHOST-DESIGN §6): background jobs the session left running. Live, never
+   * persisted, and never read by lifecycle, turns, waiters, admission or any policy.
+   */
+  backgroundWork?: AgentBackgroundWork | null;
   attention: AttentionState;
   foregroundTurnWaiters: Set<ForegroundTurnWaiter>;
   finalizedForegroundTurnIds: Set<string>;
@@ -740,12 +869,915 @@ function detachedAgentLabelPatch(labels: Record<string, string>): AgentLabelPatc
   return patch;
 }
 
+/**
+ * The configuration a quiet MCP refresh would apply, or null when the changes name a key outside
+ * this API's authority (daemon-injected tools and prototype keys).
+ */
+function mcpRefreshConfig(
+  config: AgentSessionConfig,
+  changes: AgentMcpRefreshInput["changes"],
+  toolPolicy: AgentMcpRefreshInput["toolPolicy"],
+): AgentSessionConfig | null {
+  if (
+    Object.keys(changes).some((key) =>
+      ["paseo", "__proto__", "constructor", "prototype"].includes(key),
+    )
+  ) {
+    return null;
+  }
+  const mcpServers = { ...config.mcpServers };
+  for (const [name, value] of Object.entries(changes)) {
+    if (value === null) delete mcpServers[name];
+    else mcpServers[name] = value;
+  }
+  // Omitted preserves the saved policy; null clears it. Adopting a capability on a
+  // retained session needs both halves — the server entry and the preapproval —
+  // applied together, or the resumed session sees a policy it cannot honour.
+  const nextConfig: AgentSessionConfig = { ...config, mcpServers };
+  if (toolPolicy === null) delete nextConfig.toolPolicy;
+  else if (toolPolicy !== undefined) nextConfig.toolPolicy = toolPolicy;
+  return nextConfig;
+}
+
+function resolveTrustedPlugins(plugins: TrustedPlugins | undefined): TrustedPlugins {
+  return plugins ?? new TrustedPlugins();
+}
+
+interface CascadeArchiveAdmission {
+  parentId: string;
+  detach: boolean;
+  handle?: TrustedOperationHandle;
+}
+type CascadeArchivePlan = Map<string, CascadeArchiveAdmission>;
+
 export class AgentManager {
+  readonly trustedPlugins: TrustedPlugins;
+  private readonly reportRegistry?: NativeReportRegistry;
+  private readonly reportLaunches = new Map<
+    string,
+    { origin: NativeReportOrigin; identity: NativeReportIdentity | null; witness: string }
+  >();
+
+  private prepareNativeReportLaunch(agentId: string) {
+    if (!this.reportRegistry) return undefined;
+    if (!this.reportLaunches.has(agentId) && this.reportLaunches.size >= 256)
+      throw new Error("Native report launch resource limit");
+    const launch: {
+      origin: NativeReportOrigin;
+      identity: NativeReportIdentity | null;
+      witness: string;
+    } = {
+      origin: createNativeReportOrigin(() => {
+        const current = this.currentReportIdentity(agentId);
+        if (
+          this.reportLaunches.get(agentId) !== launch ||
+          !launch.identity ||
+          JSON.stringify(current) !== JSON.stringify(launch.identity)
+        )
+          throw new Error("Native report launch replaced or unavailable");
+        return launch.identity;
+      }),
+      identity: null,
+      witness: randomUUID(),
+    };
+    this.reportLaunches.set(agentId, launch);
+    return launch;
+  }
+
+  /** HTTP authentication must already have passed; this extra witness binds the particular native launch only. */
+  nativeReportMcpOrigin(agentId: string | undefined, witness: string | undefined) {
+    if (!witness) return undefined;
+    const launch = agentId ? this.reportLaunches.get(agentId) : undefined;
+    if (!launch || launch.witness !== witness) throw new Error("Native MCP launch witness refused");
+    requireNativeReportOrigin(launch.origin);
+    return forkNativeReportOrigin(launch.origin);
+  }
+
+  captureManagedArtifactInvocation(
+    origin: NativeReportOrigin,
+    raw: unknown,
+    signal?: AbortSignal,
+  ): NativeArtifactInvocation {
+    const input = NativeArtifactProduceInputSchema.parse(structuredClone(raw));
+    const source = requireNativeReportOrigin(origin);
+    const agent = this.requireSessionAgent(source.agentId),
+      provider = agent.session;
+    const turn = agent.activeForegroundTurnId;
+    const registry = this.reportRegistry;
+    if (!turn || !registry || !this.nativeReceipts)
+      throw new Error("Active registered native artifact invocation required");
+    const relation = registry.requireParent(source, input.scope);
+    const permit = registry.captureArtifactTool(source, input.scope);
+    const sequence = this.trustedPlugins.requireSequence(source.agentId);
+    const guard = () => {
+      signal?.throwIfAborted();
+      permit();
+      const current = this.trustedPlugins.requireSequence(source.agentId);
+      if (
+        !this.acceptingAgentRegistrations ||
+        this.agents.get(source.agentId) !== agent ||
+        agent.session !== provider ||
+        agent.activeForegroundTurnId !== turn ||
+        agent.archivedAt ||
+        current.boot !== sequence.boot ||
+        current.humanAt !== sequence.humanAt ||
+        nativeEvidenceDigest(requireNativeReportOrigin(origin)) !== nativeEvidenceDigest(source) ||
+        nativeEvidenceDigest(this.currentReportIdentity(source.agentId)) !==
+          nativeEvidenceDigest(source) ||
+        nativeEvidenceDigest(registry.requireParent(source, input.scope)) !==
+          nativeEvidenceDigest(relation)
+      )
+        throw new Error("Original artifact invocation changed");
+    };
+    guard();
+    const bytes = Buffer.from(input.text, "utf8");
+    if (bytes.length < 1 || bytes.length > 128 * 1024)
+      throw new Error("Managed output byte limit exceeded");
+    const operationDigest = nativeEvidenceDigest({
+      purpose: "declared-output",
+      agentId: source.agentId,
+      native: source.sessionId,
+      turn,
+      operationId: input.operationId,
+    });
+    const id = `${operationDigest.slice(0, 8)}-${operationDigest.slice(8, 12)}-4${operationDigest.slice(13, 16)}-8${operationDigest.slice(17, 20)}-${operationDigest.slice(20, 32)}`;
+    const at = Date.now();
+    const body = {
+      version: 4 as const,
+      recordType: "native_managed_artifact_attempt" as const,
+      source,
+      sourceEpoch: relation.sourceEpoch,
+      recipient: relation.parent,
+      recipientEpoch: relation.parentEpoch,
+      completionBodyDigest: nativeEvidenceDigest(input),
+      artifactReservation: {
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      },
+      entry: { id, operationDigest, scope: input.scope, at, expiresAt: at + 6 * 60 * 60 * 1000 },
+    };
+    const claim = ManagedArtifactClaimSchema.parse({
+      ...body,
+      bytes: 4096,
+      fingerprint: nativeEvidenceDigest(body),
+    });
+    return createNativeArtifactInvocation({
+      input,
+      claim,
+      requireCurrent: guard,
+      origin,
+      identity: source,
+    });
+  }
+
+  async produceManagedArtifact(handle: NativeArtifactInvocation) {
+    const captured = consumeNativeArtifactInvocation(handle);
+    if (!this.nativeReceipts) throw new Error("Native artifact ledger unavailable");
+    const record = await this.nativeReceipts.produceDeclaredArtifact(
+      captured.claim,
+      Buffer.from(captured.input.text, "utf8"),
+      captured.requireCurrent,
+    );
+    captured.requireCurrent();
+    const result = bindReportPublication(
+      NativeArtifactProduceOutputSchema.parse({
+        id: record.entry.id,
+        scope: record.entry.scope,
+        metadataCommitted: true,
+        basis: "host_materialized_declared_output",
+        contentReadAvailable: false,
+      }),
+      captured.requireCurrent,
+    );
+    rememberNativeReportPublication(captured.origin, result);
+    return result;
+  }
+
+  captureNativeReportCreation(origin: NativeReportOrigin): NativeReportCreation {
+    if (!this.reportRegistry) throw new Error("Native report registration unavailable");
+    const parent = requireNativeReportOrigin(origin);
+    return this.reportRegistry.captureCreation(parent, () => {
+      if (JSON.stringify(requireNativeReportOrigin(origin)) !== JSON.stringify(parent))
+        throw new Error("Native report creator changed");
+    });
+  }
+
+  private intercomRates?: IntercomRates;
+  private readonly nativeReportTurns = new Set<string>();
+  private readonly nativeQuotaLimitEpisodes = new WeakMap<ActiveManagedAgent, string>();
+
+  private createReportRegistry(
+    file: string | undefined,
+    grantDirectory: string | undefined,
+  ): NativeReportRegistry | undefined {
+    if (!file) return undefined;
+    const rates = new IntercomRates(`${file}.rates.json`);
+    registerNativeIntercomRates(this.trustedPlugins.management, rates);
+    this.intercomRates = rates;
+    const registry = new NativeReportRegistry(
+      file,
+      (agentId) => this.currentReportIdentity(agentId),
+      10000,
+      grantDirectory,
+    );
+    registerNativeReportRegistry(this.trustedPlugins.management, registry);
+    registerOwnerReportRead(
+      this.trustedPlugins.management,
+      registry,
+      (id) => this.currentReportIdentity(id),
+      () => this.nativeReceipts,
+    );
+    registerOwnerEvidenceRead(
+      this.trustedPlugins.management,
+      registry,
+      (id) => this.currentReportIdentity(id),
+      () => this.nativeReceipts,
+    );
+    registerOwnerArtifactContent(
+      this.trustedPlugins.management,
+      registry,
+      (id) => this.currentReportIdentity(id),
+      () => this.nativeReceipts,
+    );
+    registerOwnerManagedArtifactRead(
+      this.trustedPlugins.management,
+      registry,
+      (id) => this.currentReportIdentity(id),
+      () => this.nativeReceipts,
+    );
+    this.trustedPlugins.management.registerOwnerHandler(
+      "intercom-status",
+      async (command, owner) => {
+        const { agentId } = IntercomStatusInputSchema.parse(command.input);
+        owner.requireOwner();
+        const identity = this.currentReportIdentity(agentId);
+        const guard = () => {
+          owner.requireOwner();
+          if (JSON.stringify(this.currentReportIdentity(agentId)) !== JSON.stringify(identity))
+            throw new Error("Native intercom status identity changed");
+        };
+        const snapshot = await rates.snapshot(guard);
+        guard();
+        const registration = identity ? await registry.ownerStatus(identity, guard) : null;
+        guard();
+        const agent = this.agents.get(agentId);
+        return IntercomStatusSchema.parse({
+          version: 1,
+          identity,
+          registration,
+          settingsInitialized: snapshot.initialized,
+          queueAvailable:
+            !!identity &&
+            snapshot.initialized &&
+            !!agent?.session &&
+            supportsNativeQueuedProvider(agent.session),
+          reportLinked:
+            !!identity &&
+            !!registration?.parent &&
+            registry.ownsFinish(identity, registration.parent.agentId),
+          supportedProviders: ["codex"],
+        });
+      },
+    );
+    this.trustedPlugins.management.registerHandoffObserver((sourceId, operationId) => {
+      const source = this.currentReportIdentity(sourceId);
+      if (!source || !this.nativeReceipts) return undefined;
+      try {
+        const batches = registry.captureLifecycleReports(
+          source,
+          "handoff",
+          operationId,
+          Date.now(),
+        );
+        return () => {
+          if (JSON.stringify(this.currentReportIdentity(sourceId)) !== JSON.stringify(source))
+            return;
+          for (const batch of batches)
+            void this.collectNativeReport(batch).catch(() => {
+              this.logger.warn({ kind: "handoff" }, "Native handoff metadata admission refused");
+            });
+        };
+      } catch {
+        return undefined;
+      }
+    });
+    return registry;
+  }
+
+  /** Host-private identity fence. No caller labels, credentials, mode or human cursor affect reports. */
+  private currentReportIdentity(agentId: string): NativeReportIdentity | null {
+    const agent = this.agents.get(agentId);
+    if (
+      !this.acceptingAgentRegistrations ||
+      !agent?.session ||
+      !agent.instanceId ||
+      agent.archivedAt ||
+      agent.lifecycle === "initializing" ||
+      agent.pendingReplacement ||
+      this.inFlightAgentCloses.has(agentId) ||
+      this.lifecycleMutationTails.has(agentId) ||
+      this.mcpRefreshes.has(agentId)
+    )
+      return null;
+    try {
+      // Provider id is synchronous and current; persisted/runtime projections may lag a replacement.
+      // All three handles must agree. Never transfer a registered old identity to a new native id.
+      const nativeId = agent.session.id;
+      const handle = agent.session.describePersistence();
+      if (
+        !nativeId ||
+        handle?.provider !== agent.provider ||
+        handle.sessionId !== nativeId ||
+        agent.persistence?.sessionId !== nativeId ||
+        agent.runtimeInfo?.sessionId !== nativeId
+      )
+        return null;
+      const sequence = this.trustedPlugins.requireSequence(agentId);
+      return {
+        agentId,
+        instanceId: agent.instanceId,
+        sessionId: nativeId,
+        boot: sequence.boot,
+      };
+    } catch {
+      return null;
+    }
+  }
+  private captureReportRelaunch(agentId: string) {
+    const source = this.currentReportIdentity(agentId);
+    const original = this.agents.get(agentId);
+    if (!source || !original?.session || !this.reportRegistry) return undefined;
+    const admission = this.readMcpRefreshAdmission(original);
+    if (!admission.allowed || ["unmanaged", "unavailable"].includes(admission.revision))
+      return undefined;
+    let commit: ReturnType<NativeReportRegistry["captureRelaunch"]>;
+    try {
+      commit = this.reportRegistry.captureRelaunch(source, admission.revision);
+    } catch {
+      return undefined;
+    } // Unknown legacy registrations cannot be adopted by refresh.
+    const sequence = this.trustedPlugins.requireSequence(agentId);
+    const cursor = { boot: sequence.boot, humanAt: sequence.humanAt };
+    const requireAdmission = (agent: ActiveManagedAgent) => {
+      const current = this.trustedPlugins.requireSequence(agentId);
+      const fresh = this.readMcpRefreshAdmission(agent);
+      if (
+        current.boot !== cursor.boot ||
+        current.humanAt !== cursor.humanAt ||
+        !fresh.allowed ||
+        fresh.revision !== admission.revision
+      )
+        throw new Error("Exact native relaunch intent changed");
+    };
+    return {
+      beforeClose: () => {
+        if (
+          this.agents.get(agentId) !== original ||
+          original.session.id !== source.sessionId ||
+          original.session.describePersistence()?.sessionId !== source.sessionId ||
+          original.persistence?.sessionId !== source.sessionId ||
+          original.runtimeInfo?.sessionId !== source.sessionId
+        )
+          throw new Error("Captured native relaunch source changed");
+        requireAdmission(original);
+      },
+      finish: async () => {
+        await this.lifecycleMutationTails.get(agentId);
+        const next = this.requireSessionAgent(agentId);
+        const identity = this.currentReportIdentity(agentId);
+        if (!identity) throw new Error("Native relaunch identity unavailable");
+        const guard = () => {
+          const fresh = this.currentReportIdentity(agentId);
+          if (
+            this.agents.get(agentId) !== next ||
+            JSON.stringify(fresh) !== JSON.stringify(identity)
+          )
+            throw new Error("Native relaunch replacement changed");
+          requireAdmission(next);
+        };
+        guard();
+        await commit(identity, guard);
+        guard();
+        const launch = this.reportLaunches.get(agentId);
+        if (launch) launch.identity = identity;
+      },
+    };
+  }
+
+  private nativeReceipts?: MessageReceipts;
+  private readonly drainingMessages = new Set<string>();
+
+  /** Attach the existing websocket ledger once; there is no second queue owner. */
+  setNativeMessageReceipts(receipts: MessageReceipts): void {
+    if (this.nativeReceipts && this.nativeReceipts !== receipts)
+      throw new Error("Native receipt owner changed");
+    if (!this.nativeReceipts)
+      registerNativeReceiptMaintenance(this.trustedPlugins.management, receipts);
+    this.nativeReceipts = receipts;
+  }
+
+  /** Native catalog read/consume domain only. The launch witness is not an action credential. */
+  async nativeReportInbox(origin: NativeReportOrigin, eventId?: string) {
+    if (!this.reportRegistry || !this.nativeReceipts)
+      throw new Error("Native report inbox unavailable");
+    const identity = requireNativeReportOrigin(origin);
+    const reader = this.reportRegistry.readerForNativeIdentity(identity);
+    const result =
+      eventId === undefined
+        ? await this.nativeReceipts.reportInbox(reader)
+        : await this.nativeReceipts.consumeReport(reader, eventId);
+    requireNativeReportOrigin(origin);
+    checkReportPublication(result);
+    rememberNativeReportPublication(origin, result);
+    return result;
+  }
+
+  /** Owned controller pipe only; reports never enter management or action dispatch. */
+  reportInboxRequest(input: unknown) {
+    if (!this.reportRegistry || !this.nativeReceipts || !this.acceptingAgentRegistrations)
+      throw new Error("Native report inbox unavailable");
+    return new NativeReportInbox(this.reportRegistry, this.nativeReceipts).request(input);
+  }
+
+  /** Registry-branded host events only. Action provenance cannot mint this report purpose. */
+  private collectNativeReport(batch: NativeReportBatch) {
+    const receipts = this.nativeReceipts;
+    const rates = this.intercomRates;
+    if (!receipts || !rates) throw new Error("Native report delivery unavailable");
+    return receipts.collectReport(
+      batch,
+      (currentBatch, messageId) => {
+        const snapshot = requireNativeReportBatch(currentBatch).data;
+        const target = this.requireSessionAgent(snapshot.parent.agentId);
+        const provider = target.session;
+        const notice = "Native report metadata is available in supervisor_inbox.";
+        let rateCheck: (() => void) | undefined;
+        const authorize = () => {
+          requireNativeReportBatch(currentBatch);
+          const identity = this.currentReportIdentity(snapshot.parent.agentId);
+          if (
+            !identity ||
+            this.agents.get(snapshot.parent.agentId) !== target ||
+            target.session !== provider ||
+            identity.instanceId !== snapshot.parent.instanceId ||
+            identity.sessionId !== snapshot.parent.sessionId ||
+            identity.boot !== snapshot.parent.boot
+          )
+            throw new Error("Native report recipient identity changed");
+          rateCheck?.();
+        };
+        const principal = {
+          parent: snapshot.parent,
+          parentEpoch: snapshot.parentEpoch,
+          digest: snapshot.digest,
+        };
+        return {
+          agentId: snapshot.parent.agentId,
+          messageId,
+          request: notice,
+          principal,
+          boot: snapshot.parent.boot,
+          attachmentBytes: 0,
+          reportBatch: currentBatch,
+          authorize,
+          canDispatch: () => {
+            authorize();
+            return supportsNativeQueuedProvider(provider);
+          },
+          prepareDispatch: async () => {
+            rateCheck = await rates.reserve(
+              messageId,
+              "report",
+              snapshot.parent.agentId,
+              principal,
+              () => {
+                requireNativeReportBatch(currentBatch);
+                const identity = this.currentReportIdentity(snapshot.parent.agentId);
+                if (
+                  !identity ||
+                  identity.sessionId !== snapshot.parent.sessionId ||
+                  identity.instanceId !== snapshot.parent.instanceId ||
+                  identity.boot !== snapshot.parent.boot ||
+                  this.agents.get(snapshot.parent.agentId) !== target ||
+                  target.session !== provider
+                )
+                  throw new Error("Native report rate identity changed");
+              },
+            );
+            authorize();
+          },
+          start: async (finalCheck: () => void) =>
+            this.trustedPlugins.daemon(async () => {
+              authorize();
+              const capability = createNativeQueuedDispatch(() => {
+                if (target.pendingPermissions.size > 0 || !supportsNativeQueuedProvider(provider))
+                  throw new Error("Native report dispatch boundary changed");
+                authorize();
+                finalCheck();
+              });
+              const iterator = this.streamAgent(snapshot.parent.agentId, notice, {
+                clientMessageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${messageId}`,
+                [NATIVE_QUEUED_FINAL]: capability,
+              });
+              this.nativeReportTurns.add(snapshot.parent.agentId);
+              try {
+                await iterator.next();
+              } catch (error) {
+                this.nativeReportTurns.delete(snapshot.parent.agentId);
+                const accepted = nativeQueuedAcceptance(capability);
+                if (accepted) return accepted;
+                throw error;
+              }
+              const accepted = nativeQueuedAcceptance(capability);
+              void (async () => {
+                for await (const event of iterator) void event;
+              })()
+                .catch(() => {})
+                .finally(() => {
+                  this.nativeReportTurns.delete(snapshot.parent.agentId);
+                });
+              if (!accepted) throw new Error("Native report provider acceptance unavailable");
+              return accepted;
+            }),
+        };
+      },
+      (agentId) => this.scheduleNativeMessages(agentId),
+    );
+  }
+
+  /** Native verified links alone suppress legacy transcript-bearing finish delivery. */
+  nativeReportOwnsFinish(childId: string, parentId: string): boolean {
+    const source = this.currentReportIdentity(childId);
+    return !!source && this.reportRegistry?.ownsFinish(source, parentId) === true;
+  }
+
+  /** A refusal-only guard for legacy notice admission; it creates no authority or report handle. */
+  captureFinishNotificationCheck(childId: string, parentId: string): () => void {
+    const child = this.agents.get(childId),
+      parent = this.agents.get(parentId);
+    const childSession = child?.session,
+      parentSession = parent?.session;
+    const childInstance = child?.instanceId,
+      parentInstance = parent?.instanceId;
+    const childNative = childSession?.id,
+      parentNative = parentSession?.id;
+    return () => {
+      if (
+        !child ||
+        !parent ||
+        !childSession ||
+        !parentSession ||
+        !childNative ||
+        !parentNative ||
+        this.agents.get(childId) !== child ||
+        this.agents.get(parentId) !== parent ||
+        child.session !== childSession ||
+        parent.session !== parentSession ||
+        child.instanceId !== childInstance ||
+        parent.instanceId !== parentInstance ||
+        childSession.id !== childNative ||
+        parentSession.id !== parentNative ||
+        child.pendingReplacement ||
+        parent.pendingReplacement ||
+        this.inFlightAgentCloses.has(parentId) ||
+        this.mcpRefreshes.has(parentId) ||
+        this.lifecycleMutationTails.has(parentId)
+      )
+        throw new Error("Finish notification native identity changed");
+    };
+  }
+
+  private reportObservedQuotaLimit(
+    agent: ActiveManagedAgent,
+    quota: AgentQuotaSnapshot,
+    operationId: string,
+  ): void {
+    const parsed = AgentQuotaSnapshotSchema.safeParse(quota);
+    if (!parsed.success) return;
+    quota = parsed.data;
+    const source = this.currentReportIdentity(agent.id);
+    const at = Date.parse(quota.observedAt),
+      now = Date.now();
+    if (
+      !source ||
+      quota.provider !== "codex" ||
+      quota.sessionId !== source.sessionId ||
+      !Number.isFinite(at) ||
+      at > now ||
+      now - at > 30000 ||
+      this.nativeReportTurns.has(agent.id)
+    )
+      return;
+    const denied =
+      quota.ordinaryUsageAllowed === false ||
+      quota.limits.some(
+        (limit) =>
+          limit.model === quota.model &&
+          limit.model !== null &&
+          (limit.spendControlReached === true || !!limit.rateLimitReachedType),
+      );
+    if (!denied) {
+      this.nativeQuotaLimitEpisodes.delete(agent);
+      return;
+    }
+    if (!this.reportRegistry || !this.nativeReceipts) return;
+    try {
+      const batches = this.reportRegistry.captureLifecycleReports(
+        source,
+        "usage-limit",
+        operationId,
+        now,
+      );
+      const key = JSON.stringify({
+        source,
+        model: quota.model,
+        tier: quota.serviceTier,
+        account: quota.accountScope,
+        epochs: batches.map((batch) => {
+          const data = requireNativeReportBatch(batch).data;
+          return [data.parentEpoch, data.members[0]?.sourceEpoch];
+        }),
+      });
+      if (this.nativeQuotaLimitEpisodes.get(agent) === key) return;
+      this.nativeQuotaLimitEpisodes.set(agent, key);
+      for (const batch of batches)
+        void this.collectNativeReport(batch).catch(() => {
+          this.logger.warn({ kind: "usage-limit" }, "Native quota metadata admission refused");
+        });
+    } catch {
+      /* Unknown/stale registrations confer no report authority. */
+    }
+  }
+
+  private reportObservedLifecycle(
+    agent: ActiveManagedAgent,
+    kind: "ended" | "needs-you" | "blocked" | "usage-limit",
+    lifecycleId: string | undefined,
+    isForegroundEvent: boolean,
+  ): void {
+    if (
+      !this.reportRegistry ||
+      !this.nativeReceipts ||
+      !lifecycleId ||
+      !isForegroundEvent ||
+      this.nativeReportTurns.has(agent.id)
+    )
+      return;
+    const source = this.currentReportIdentity(agent.id);
+    if (!source || this.agents.get(agent.id) !== agent) return;
+    try {
+      const batches = this.reportRegistry.captureLifecycleReports(
+        source,
+        kind,
+        lifecycleId,
+        Date.now(),
+      );
+      for (const batch of batches)
+        void this.collectNativeReport(batch).catch(() => {
+          // Refusal never promotes a wake to delivery or exposes provider/body/account details.
+          this.logger.warn({ kind }, "Native report metadata admission refused");
+        });
+    } catch {
+      // Unknown/legacy/root sessions do not infer report rights from labels or ownership.
+    }
+  }
+
+  private readonly nativeReceiptPublication = new WeakMap<NativeMessageReceipt, () => void>();
+
+  /** Host-only protected publication: a wire object cannot supply an admission witness. */
+  assertNativeQueuedReceiptCurrent(receipt: NativeMessageReceipt): void {
+    const requireCurrent = this.nativeReceiptPublication.get(receipt);
+    if (!requireCurrent) throw new Error("Native queued receipt publication unavailable");
+    requireCurrent();
+  }
+
+  async queueNativePrompt(
+    agentId: string,
+    prompt: AgentPromptInput,
+    messageId: string,
+    payload: TrustedPayloadV11,
+    requireSource?: () => void,
+  ): Promise<NativeMessageReceipt> {
+    const checkSource = () => {
+      const result: unknown = requireSource?.();
+      if (result && typeof result === "object" && "then" in result) {
+        void Promise.resolve(result).catch(() => {});
+        throw new Error("Native queue source check must be synchronous");
+      }
+    };
+    checkSource();
+    payload = structuredClone(payload);
+    const receipts = this.nativeReceipts;
+    if (!receipts || !this.acceptingAgentRegistrations)
+      throw new Error("Native boundary queue unavailable");
+    // Retained content is native normalized text only until resource ownership for attachments is proven.
+    if (typeof prompt !== "string") throw new Error("Native queued attachments unavailable");
+    const agent = this.requireSessionAgent(agentId);
+    const provider = agent.session;
+    // Production adapters register only after their concrete submission/acknowledgement seam is proved.
+    if (!supportsNativeQueuedProvider(provider))
+      throw new Error("Native queued provider unavailable");
+    if (prompt.trimStart().startsWith("/")) throw new Error("Native queued commands unavailable");
+    const identity = this.currentReportIdentity(agentId);
+    if (!identity) throw new Error("Native queued current identity unavailable");
+    const instanceId = agent.instanceId;
+    const nativeSessionId = identity.sessionId;
+    let handle: TrustedOperationHandle | undefined;
+    this.withInput(
+      agentId,
+      "prompt",
+      messageId,
+      (captured) => {
+        handle = captured;
+      },
+      payload,
+      undefined,
+      "enqueue",
+    );
+    if (!handle) throw new Error("Native queue operation unavailable");
+    const sequence = this.trustedPlugins.requireSequence(agentId);
+    const original = handle;
+    if (requireSource && !original.operation.pluginId)
+      throw new Error("Native queue requires authenticated delegated input provenance");
+    const options = { clientMessageId: messageId, [TRUSTED_OPERATION]: original };
+    let ratePermit: (() => void) | undefined;
+    const authorizeIdentity = () => {
+      checkSource();
+      const current = this.trustedPlugins.requireSequence(agentId);
+      if (
+        !this.acceptingAgentRegistrations ||
+        this.agents.get(agentId) !== agent ||
+        agent.instanceId !== instanceId ||
+        agent.session !== provider ||
+        !supportsNativeQueuedProvider(provider) ||
+        this.currentReportIdentity(agentId)?.sessionId !== nativeSessionId ||
+        agent.archivedAt ||
+        current.boot !== sequence.boot ||
+        current.humanAt !== sequence.humanAt
+      )
+        throw new Error("Native queued identity revoked");
+      this.withInput(agentId, "prompt", messageId, () => {}, payload, original, "enqueue");
+    };
+    const authorize = () => (ratePermit ? ratePermit() : authorizeIdentity());
+    if (requireSource) {
+      if (!this.intercomRates) throw new Error("Native queue owner Settings unavailable");
+      ratePermit = await this.intercomRates.reserve(
+        `native-message:${createHash("sha256").update(messageId).digest("hex")}`,
+        "channel",
+        agentId,
+        { agentId, messageId, payload },
+        authorizeIdentity,
+      );
+      authorize();
+    }
+    const receipt = await receipts.enqueue({
+      agentId,
+      messageId,
+      request: payload,
+      principal: {
+        agentId,
+        messageId,
+        payloadDigest: original.operation.payloadDigest,
+        pluginId: original.operation.pluginId,
+        attemptId: original.operation.attemptId,
+        instanceId,
+        nativeSessionId,
+        sequence,
+      },
+      boot: sequence.boot,
+      attachmentBytes: 0,
+      observe: (outcome) => {
+        try {
+          this.trustedPlugins.nativeQueuedReceipt(agent, original, outcome);
+        } catch {
+          this.logger.error(
+            { agentId },
+            "Native receipt observation refused; ledger fact retained",
+          );
+        }
+      },
+      authorize,
+      start: async (finalCheck) => {
+        const capability = createNativeQueuedDispatch(() => {
+          if (agent.pendingPermissions.size > 0)
+            throw new Error("Native queued permission boundary changed");
+          finalCheck();
+        });
+        const iterator = this.streamAgent(agentId, prompt, {
+          ...options,
+          [NATIVE_QUEUED_FINAL]: capability,
+        });
+        try {
+          await iterator.next();
+        } catch (error) {
+          const accepted = nativeQueuedAcceptance(capability);
+          if (accepted) return accepted; // A later close cannot undo an already observed native fact.
+          throw error;
+        }
+        const accepted = nativeQueuedAcceptance(capability);
+        void (async () => {
+          for await (const event of iterator) {
+            void event; // Manager already broadcasts each event.
+          }
+        })().catch(() => {});
+        if (!accepted) throw new Error("Native provider acceptance unavailable");
+        return accepted;
+      },
+    });
+    authorize();
+    this.nativeReceiptPublication.set(receipt, authorize);
+    this.scheduleNativeMessages(agentId);
+    return receipt;
+  }
+
+  private scheduleNativeMessages(agentId: string): void {
+    if (
+      !this.nativeReceipts ||
+      this.drainingMessages.has(agentId) ||
+      !this.acceptingAgentRegistrations
+    )
+      return;
+    const agent = this.agents.get(agentId);
+    if (
+      !agent ||
+      agent.activeForegroundTurnId ||
+      this.runs.hasRun(agentId) ||
+      agent.pendingPermissions.size > 0
+    )
+      return;
+    this.drainingMessages.add(agentId);
+    let more = false;
+    void this.runForegroundMutation(agentId, async () => {
+      const result = await this.nativeReceipts!.dispatchNext(
+        agentId,
+        () =>
+          this.agents.get(agentId) === agent &&
+          !agent.activeForegroundTurnId &&
+          !this.runs.hasRun(agentId) &&
+          agent.pendingPermissions.size === 0,
+        async (ticket, finalCheck) => {
+          if (!ticket.start) throw new Error("Native queued operation unavailable");
+          return ticket.start(finalCheck);
+        },
+      );
+      more = Boolean(result?.pendingCount);
+    })
+      .catch((error) =>
+        this.logger.error({ err: error, agentId }, "Native message boundary refused"),
+      )
+      .finally(() => {
+        this.drainingMessages.delete(agentId);
+        if (more) this.scheduleNativeMessages(agentId);
+      });
+  }
+
+  withInput<T>(
+    agentId: string,
+    kind: TrustedInputKind,
+    messageId: string | undefined,
+    operation: (handle?: TrustedOperationHandle) => T,
+    payload?: TrustedPayloadV11 | (() => TrustedPayloadV11),
+    handle?: TrustedOperationHandle,
+    phase?: "enqueue",
+  ): T {
+    const agent = this.getAgent(agentId) ?? { id: agentId };
+    return this.trustedPlugins.input(
+      agent,
+      kind,
+      messageId,
+      () => operation(this.trustedPlugins.captureOperation()),
+      payload,
+      handle,
+      phase,
+    );
+  }
+
+  private async withStoredInput<T>(
+    agentId: string,
+    kind: TrustedInputKind,
+    messageId: string | undefined,
+    operation: (handle?: TrustedOperationHandle) => T,
+    payload?: TrustedPayloadV11 | (() => TrustedPayloadV11),
+    handle?: TrustedOperationHandle,
+  ): Promise<Awaited<T>> {
+    const agent = this.getAgent(agentId) ?? (await this.registry?.get(agentId)) ?? { id: agentId };
+    return await this.trustedPlugins.input(
+      agent,
+      kind,
+      messageId,
+      () => operation(this.trustedPlugins.captureOperation()),
+      payload,
+      handle,
+    );
+  }
+
   private readonly pluginLifecycle: PluginLifecycle | undefined;
   private readonly clients = new Map<AgentProvider, AgentClient>();
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
   private readonly agents = new Map<string, LiveManagedAgent>();
+  // FIX-8 W3: permission requests a trusted plugin answered before they were surfaced, per agent.
+  private readonly automaticPermissionIds = new Map<string, Set<string>>();
   private readonly timelineStore = new InMemoryAgentTimelineStore();
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
@@ -753,6 +1785,7 @@ export class AgentManager {
   private readonly steerEventBarriers = new Map<string, SteerEventBarrier>();
   private readonly foregroundMutationTails = new Map<string, Promise<void>>();
   private readonly runs = new AgentRunState();
+  private backgroundWorkSampler: BackgroundWorkSampler | null = null;
   private readonly subscribers = new Set<SubscriptionRecord>();
   private readonly idFactory: () => string;
   private readonly registry?: AgentStorage;
@@ -791,6 +1824,17 @@ export class AgentManager {
   private acceptingAgentRegistrations = true;
 
   constructor(options: AgentManagerOptions) {
+    this.trustedPlugins = resolveTrustedPlugins(options.trustedPlugins);
+    this.trustedPlugins.setNativeIdentityReader((id) => {
+      const identity = this.currentReportIdentity(id);
+      return identity
+        ? { instanceId: identity.instanceId, nativeSessionId: identity.sessionId }
+        : null;
+    });
+    this.reportRegistry = this.createReportRegistry(
+      options.reportRegistryFile,
+      options.reportGrantDirectory,
+    );
     this.pluginLifecycle = options.pluginLifecycle;
     this.mcpRefreshAdmission = options.mcpRefreshAdmission;
     this.idFactory = options?.idFactory ?? (() => randomUUID());
@@ -873,12 +1917,14 @@ export class AgentManager {
     for (const provider of input.retiredProviders ?? []) {
       for (const agent of this.agents.values()) {
         if (agent.provider !== provider) continue;
-        void this.closeAgent(agent.id).catch((error) => {
-          this.logger.warn(
-            { err: error, agentId: agent.id, provider },
-            "Failed to close agent after provider retirement",
-          );
-        });
+        void this.trustedPlugins
+          .daemon(() => this.closeAgent(agent.id))
+          .catch((error) => {
+            this.logger.warn(
+              { err: error, agentId: agent.id, provider },
+              "Failed to close agent after provider retirement",
+            );
+          });
       }
     }
   }
@@ -1159,7 +2205,7 @@ export class AgentManager {
       return await client.listCommands(normalizedConfig);
     }
 
-    const session = await client.createSession(normalizedConfig);
+    const session = await nativeDispatch(() => client.createSession(normalizedConfig));
     try {
       if (!session.listCommands) {
         throw new Error(
@@ -1169,7 +2215,7 @@ export class AgentManager {
       return await session.listCommands();
     } finally {
       try {
-        await session.close();
+        await nativeDispatch(() => session.close());
       } catch (error) {
         this.logger.warn(
           { err: error, provider: normalizedConfig.provider },
@@ -1196,12 +2242,12 @@ export class AgentManager {
       return await client.listFeatures(normalizedConfig);
     }
 
-    const session = await client.createSession(normalizedConfig);
+    const session = await nativeDispatch(() => client.createSession(normalizedConfig));
     try {
       return session.features ?? [];
     } finally {
       try {
-        await session.close();
+        await nativeDispatch(() => session.close());
       } catch (error) {
         this.logger.warn(
           { err: error, provider: normalizedConfig.provider },
@@ -1214,6 +2260,90 @@ export class AgentManager {
   getAgent(id: string): ManagedAgent | null {
     const agent = this.agents.get(id);
     return agent ? { ...agent } : null;
+  }
+
+  /** The account credential a pooled session was launched with (for its usage), or null. Never sent to a client. */
+  getAgentUsageCredential(id: string): {
+    provider: string;
+    credential: AccountCredential;
+    label: string | null;
+    accountId?: string | null;
+    isCurrent: () => boolean;
+  } | null {
+    let agent: LiveManagedAgent;
+    try {
+      agent = this.requirePublicAgent(id);
+    } catch {
+      return null;
+    }
+    const credential = agent.session?.usageCredential?.() ?? null;
+    if (!credential) return null;
+    const { observation: _observation, ...launch } = credential;
+    const session = agent.session;
+    return {
+      provider: agent.provider,
+      ...launch,
+      isCurrent: () => {
+        const current = this.agents.get(id);
+        return (
+          !!current &&
+          !current.internal &&
+          current.session === session &&
+          !current.pendingReplacement
+        );
+      },
+    };
+  }
+
+  /** update-7c: every running session on a pooled account, with the last reading its own traffic produced. */
+  listPooledUsageSessions(): LiveAccountSession[] {
+    const sessions: LiveAccountSession[] = [];
+    for (const agent of this.agents.values()) {
+      if (
+        agent.internal ||
+        agent.archivedAt ||
+        agent.pendingReplacement ||
+        (agent.lifecycle !== "idle" && agent.lifecycle !== "running") ||
+        !agent.instanceId ||
+        !agent.session
+      )
+        continue;
+      const credential = agent.session.usageCredential?.() ?? null;
+      if (!credential || (agent.provider !== "claude" && agent.provider !== "codex")) continue;
+      sessions.push({
+        agentId: agent.id,
+        runtimeInstanceId: agent.instanceId,
+        account: {
+          id: credential.accountId ?? null,
+          provider: agent.provider,
+          name: credential.label ?? "Pooled account",
+          credential: credential.credential,
+        },
+        observation: credential.observation ?? null,
+      });
+    }
+    return sessions;
+  }
+
+  async getAgentSessionUsage(id: string) {
+    const agent = this.requirePublicAgent(id);
+    const session = agent.session;
+    if (agent.provider !== "codex") return null;
+    const label = session?.usageSourceLabel?.();
+    if (!session || !label) return null;
+    return sessionQuotaUsage(
+      label,
+      () => this.getAgentQuota(id),
+      () => {
+        const current = this.agents.get(id);
+        return (
+          !!current &&
+          !current.internal &&
+          current.session === session &&
+          !current.pendingReplacement
+        );
+      },
+    );
   }
 
   async getAgentQuota(id: string): Promise<AgentQuotaSnapshot> {
@@ -1233,6 +2363,7 @@ export class AgentManager {
     ) {
       throw new Error("Agent session changed during quota read");
     }
+    this.reportObservedQuotaLimit(current, quota, `quota:${quota.observedAt}`);
     return quota;
   }
 
@@ -1312,19 +2443,31 @@ export class AgentManager {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
     if (this.pluginLifecycle && !config.internal) {
+      // Update-7 W3 (R1 P-3 seam): a create with a caller shows the hook the caller's provider, mode and mode class,
+      // so a host policy for children can be applied there. Context only: a hook's changes to it are not applied.
+      const caller = this.describeCreateCaller(options.labels?.[PARENT_AGENT_ID_LABEL]);
       const request = await this.pluginLifecycle.before("agent.create", {
         config,
         env: options.env,
+        labels: options.labels ?? {},
+        ...(caller ? { caller } : {}),
       });
       config = { ...request.config, internal: config.internal };
       options = { ...options, env: request.env };
+    }
+    // Update-7 W3 (R1 P-1): an internal helper agent (branch names, commit and PR text -- fed untrusted repository
+    // text) skips plugin hooks, so it never gets a host's owner default; with no mode of its own it runs in its
+    // provider's conservative internal mode, explicitly, never in the daemon's general default.
+    if (config.internal && isUnsetModeId(config.modeId)) {
+      const internalModeId = this.clients.get(config.provider)?.internalModeId;
+      if (internalModeId) config = { ...config, modeId: internalModeId };
     }
     await this.deleteAgentState(resolvedAgentId);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       config,
       resolvedAgentId,
-      options?.env,
       {
+        env: options?.env,
         resolveDefaultMode: !options.fromStoredRecord,
         resolveDefaultThinking: !options.fromStoredRecord,
       },
@@ -1344,7 +2487,9 @@ export class AgentManager {
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
-    const session = await client.createSession(providerLaunchConfig, launchContext, createOptions);
+    const session = await nativeDispatch(() =>
+      client.createSession(providerLaunchConfig, launchContext, createOptions),
+    );
     await this.requireExternalMcpSupport(session, storedConfig);
     const agent = await this.registerSession(session, storedConfig, resolvedAgentId, {
       labels: options.labels,
@@ -1353,6 +2498,31 @@ export class AgentManager {
       owner: options.owner,
       historyPrimed: true,
     });
+    if (options.reportCreation) {
+      try {
+        const child = this.currentReportIdentity(agent.id);
+        if (!child) throw new Error("Native report child identity unavailable");
+        await enrollNativeReportCreation(options.reportCreation, child);
+      } catch (error) {
+        // An unacknowledged creation must not leave an active unlinked child. Close
+        // only the captured launch; never retarget cleanup to a replacement.
+        await this.runLifecycleMutation(agent.id, () =>
+          this.closeAgentRuntime(agent.id, () => {
+            const current = this.agents.get(agent.id);
+            if (
+              current?.session !== session ||
+              current.instanceId !== agent.instanceId ||
+              session.id !== agent.persistence?.sessionId ||
+              session.describePersistence()?.sessionId !== agent.persistence?.sessionId
+            )
+              throw new Error("Unlinked native child replacement prevents cleanup", {
+                cause: error,
+              });
+          }),
+        );
+        throw new Error("Native report child enrollment refused", { cause: error });
+      }
+    }
     if (!agent.internal) {
       this.pluginLifecycle?.emit("agent.created", {
         agent: describeHookAgent({ ...agent, title: agent.config.title }),
@@ -1429,17 +2599,21 @@ export class AgentManager {
       ...overrides,
       provider: handle.provider,
     } as AgentSessionConfig;
-    const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
-      mergedConfig,
-      resolvedAgentId,
-    );
-
     // Decide residency from durable state inside the lifecycle lane. A loader may
-    // have read the record before a queued archive or restore completed.
+    // have read the record before a queued archive or restore completed. Residency is
+    // settled before the config is prepared, because a history load reads an archived
+    // agent whose working directory may be gone.
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
       : resumeOptions;
+    const purpose = currentResumeOptions?.purpose ?? "interactive";
+
+    const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
+      mergedConfig,
+      resolvedAgentId,
+      { purpose },
+    );
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
     if (!available) {
@@ -1456,16 +2630,13 @@ export class AgentManager {
       undefined,
       {
         reason: "resume",
-        purpose: currentResumeOptions?.purpose ?? "interactive",
+        purpose,
         workspaceId: options?.workspaceId ?? null,
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
-    const session = await client.resumeSession(
-      handle,
-      providerLaunchConfig,
-      launchContext,
-      currentResumeOptions,
+    const session = await nativeDispatch(() =>
+      client.resumeSession(handle, providerLaunchConfig, launchContext, currentResumeOptions),
     );
     await this.requireExternalMcpSupport(session, storedConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
@@ -1650,8 +2821,9 @@ export class AgentManager {
   refreshAgentMcp(input: AgentMcpRefreshInput): Promise<AgentMcpRefreshResult> {
     // Copy and validate before queuing so a caller cannot mutate the admitted request.
     const request = AgentMcpRefreshInputSchema.parse(input);
+    const reportRelaunch = this.captureReportRelaunch(request.agentId);
     return this.trackAgentRegistrationOperation(
-      this.runLifecycleMutation(request.agentId, async () => {
+      this.runLifecycleMutation(request.agentId, async (): Promise<AgentMcpRefreshResult> => {
         const { agentId, expected, changes } = request;
         let state = await this.readAgentMcpRefreshState(agentId);
         const refused = (reason: AgentMcpRefreshResult["reason"]): AgentMcpRefreshResult => ({
@@ -1668,8 +2840,16 @@ export class AgentManager {
           state.sessionId !== expected.sessionId ||
           state.configRevision !== expected.configRevision;
         if (stale()) return refused("stale");
+        // Update-7 (and H7's provider recovery): a RECONNECT may restart a session whose provider turn failed (lifecycle
+        // "error": a usage limit, a lost login), which is exactly what it is for -- the runtime is replaced and the
+        // same session resumed with its history. Never one whose previous runtime could not be closed (explicit close
+        // recovery), and nothing else changes: every other busy condition still refuses.
+        const restartable = () =>
+          request.reconnect === true &&
+          existing.lifecycle === "error" &&
+          !this.failedMcpRefreshCloses.has(existing.session);
         const busy = () =>
-          existing.lifecycle !== "idle" ||
+          (existing.lifecycle !== "idle" && !restartable()) ||
           this.hasInFlightRun(agentId) ||
           existing.activeTurnId !== null ||
           existing.pendingReplacement ||
@@ -1678,25 +2858,9 @@ export class AgentManager {
           this.foregroundMutationTails.has(agentId) ||
           this.providerSubagents.list(agentId).some((child) => child.status === "running");
         if (busy()) return refused("busy");
-        // Daemon-injected tools and prototype keys are outside this API's authority.
-        if (
-          Object.keys(changes).some((key) =>
-            ["paseo", "__proto__", "constructor", "prototype"].includes(key),
-          )
-        ) {
-          return refused("invalid_changes");
-        }
-        const mcpServers = { ...existing.config.mcpServers };
-        for (const [name, value] of Object.entries(changes)) {
-          if (value === null) delete mcpServers[name];
-          else mcpServers[name] = value;
-        }
-        // Omitted preserves the saved policy; null clears it. Adopting a capability on a
-        // retained session needs both halves — the server entry and the preapproval —
-        // applied together, or the resumed session sees a policy it cannot honour.
-        const nextConfig: AgentSessionConfig = { ...existing.config, mcpServers };
-        if (request.toolPolicy === null) delete nextConfig.toolPolicy;
-        else if (request.toolPolicy !== undefined) nextConfig.toolPolicy = request.toolPolicy;
+        const nextConfig = mcpRefreshConfig(existing.config, changes, request.toolPolicy);
+        if (!nextConfig) return refused("invalid_changes");
+        const { mcpServers } = nextConfig;
         try {
           this.validateToolPolicyServers(nextConfig);
         } catch {
@@ -1721,6 +2885,7 @@ export class AgentManager {
               state = this.liveMcpRefreshState(existing, admission);
               if (!admission.allowed || stale()) throw new QuietMcpRefreshRefusal("stale");
               if (busy()) throw new QuietMcpRefreshRefusal("busy");
+              reportRelaunch?.beforeClose();
               closeStarted = true;
             };
           });
@@ -1740,6 +2905,9 @@ export class AgentManager {
         } finally {
           this.mcpRefreshes.delete(agentId);
         }
+      }).then(async (result) => {
+        if (result.outcome === "refreshed" && reportRelaunch) await reportRelaunch.finish();
+        return result;
       }),
     );
   }
@@ -1780,11 +2948,13 @@ export class AgentManager {
     const client = this.requireClient(existing.provider);
     // Preserve the captured tool policy and saved config; do not re-resolve provider defaults.
     const paseoToolPolicy = this.paseoToolPolicies.get(agentId);
+    const reportLaunch = this.prepareNativeReportLaunch(agentId);
     const launchConfig = this.applyDaemonAppendSystemPrompt(
       withRuntimePaseoMcpServer({
         config: storedConfig,
         agentId,
         mcpAuthToken: this.mcpAuthToken,
+        nativeReportWitness: reportLaunch?.witness,
         mcpBaseUrl:
           this.paseoToolsEnabled && isPaseoToolPolicyEnabled(paseoToolPolicy)
             ? this.mcpBaseUrl
@@ -1813,7 +2983,7 @@ export class AgentManager {
       closed = await this.prepareAgentForClosure(existing, "MCP configuration refreshed");
       await this.persistSnapshot(closed);
       this.assertAcceptingAgentRegistrations();
-      session = await client.resumeSession(handle, providerConfig, context);
+      session = await nativeDispatch(() => client.resumeSession(handle, providerConfig, context));
       await this.requireExternalMcpSupport(session, storedConfig);
       const resumed = session.describePersistence();
       if (
@@ -1855,31 +3025,57 @@ export class AgentManager {
 
   // Hot-reload an active agent session with config overrides. By default the
   // in-memory timeline is preserved (used for voice-mode toggles and similar
-  // config swaps). When `rehydrateFromDisk` is set, the timeline is wiped so a
-  // new epoch is minted and provider history is re-streamed — this is what the
+  // config swaps). When `rehydrateFromDisk` is set, a complete provider replay
+  // replaces the timeline and mints a new epoch. A failed replay keeps the old rows.
+  // This is what the
   // user-facing "Reload agent" action wants when the on-disk session was
   // mutated outside Paseo.
   reloadAgentSession(
     agentId: string,
     overrides?: Partial<AgentSessionConfig>,
     options?: { rehydrateFromDisk?: boolean },
+    handle?: TrustedOperationHandle,
   ): Promise<ManagedAgent> {
+    const reportRelaunch = this.captureReportRelaunch(agentId);
     return this.trackAgentRegistrationOperation(
       this.runLifecycleMutation(agentId, () =>
-        this.reloadAgentSessionInternal(agentId, overrides, options),
-      ),
+        this.withStoredInput(
+          agentId,
+          "configure",
+          undefined,
+          (operationHandle) =>
+            this.reloadAgentSessionInternal(
+              agentId,
+              overrides,
+              options,
+              operationHandle,
+              reportRelaunch?.beforeClose,
+            ),
+          commandPayload("reload", { overrides, options }),
+          handle,
+        ),
+      ).then(async (result) => {
+        if (reportRelaunch) await reportRelaunch.finish();
+        return result;
+      }),
     );
+  }
+
+  private invokeReportRelaunchGuard(guard?: () => void): void {
+    guard?.();
   }
 
   private async reloadAgentSessionInternal(
     agentId: string,
     overrides?: Partial<AgentSessionConfig>,
     options?: { rehydrateFromDisk?: boolean },
+    operationHandle?: TrustedOperationHandle,
+    reportRelaunchBeforeClose?: () => void,
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     let existing = this.requireSessionAgent(agentId);
     if (this.hasInFlightRun(agentId)) {
-      await this.cancelAgentRunBefore(agentId, "reload");
+      await this.cancelAgentRunBefore(agentId, "reload", operationHandle);
       existing = this.requireSessionAgent(agentId);
     }
     const rehydrateFromDisk = options?.rehydrateFromDisk ?? false;
@@ -1922,6 +3118,7 @@ export class AgentManager {
     let handedToRegistration = false;
     try {
       // A persisted thread can have only one writer, even when its turn is idle.
+      this.invokeReportRelaunchGuard(reportRelaunchBeforeClose);
       await this.closeReloadedSession(existing.session, agentId);
       await this.drainSessionEvents(agentId);
       this.cancelRunningProviderSubagents(agentId);
@@ -1931,20 +3128,12 @@ export class AgentManager {
 
       this.paseoToolPolicies.set(agentId, paseoToolPolicy);
       session = handle
-        ? await client.resumeSession(handle, providerLaunchConfig, launchContext)
-        : await client.createSession(providerLaunchConfig, launchContext);
+        ? await nativeDispatch(() =>
+            client.resumeSession(handle, providerLaunchConfig, launchContext),
+          )
+        : await nativeDispatch(() => client.createSession(providerLaunchConfig, launchContext));
       await this.requireExternalMcpSupport(session, storedConfig);
       this.assertAcceptingAgentRegistrations();
-
-      if (rehydrateFromDisk) {
-        await this.deleteCommittedTimeline(agentId);
-        // Wipe the in-memory timeline so registerSession mints a new epoch and
-        // hydrateTimelineFromProvider re-streams the freshly read provider history.
-        this.timelineStore.delete(agentId);
-        for (const event of this.providerSubagents.deleteParent(agentId)) {
-          this.dispatch({ type: "provider_subagent", event });
-        }
-      }
 
       // Preserve existing labels and timeline during reload.
       handedToRegistration = true;
@@ -1987,7 +3176,7 @@ export class AgentManager {
   private async closeReloadedSession(session: AgentSession, agentId: string): Promise<void> {
     let operation = this.reloadedSessionCloses.get(session);
     if (!operation) {
-      operation = session.close();
+      operation = nativeDispatch(() => session.close());
       this.reloadedSessionCloses.set(session, operation);
       // Keep pending closes across request timeouts; a retry must await the same release.
       void operation.catch(() => this.reloadedSessionCloses.delete(session));
@@ -2037,27 +3226,84 @@ export class AgentManager {
     }
   }
 
-  closeAgent(agentId: string): Promise<void> {
-    const existing = this.inFlightAgentCloses.get(agentId);
-    if (existing) {
-      return existing;
+  closeAgent(agentId: string, handle?: TrustedOperationHandle): Promise<void> {
+    const source = this.currentReportIdentity(agentId);
+    const sourceSession = this.agents.get(agentId)?.session;
+    let retirement: ReturnType<NativeReportRegistry["captureRetirement"]> | undefined;
+    try {
+      if (source && this.reportRegistry) retirement = this.reportRegistry.captureRetirement(source);
+    } catch {
+      /* Unknown/legacy sessions do not acquire a report link on close. */
     }
+    return this.withInput(
+      agentId,
+      "close",
+      undefined,
+      (operationHandle) => {
+        const existing = this.inFlightAgentCloses.get(agentId);
+        if (existing) {
+          return existing;
+        }
 
-    const close = this.runLifecycleMutation(agentId, async () => {
-      // A preceding reload or archive may already have closed the durable agent.
-      if (this.agents.has(agentId)) await this.closeAgentRuntime(agentId);
-    });
-    this.inFlightAgentCloses.set(agentId, close);
-    const clearClose = () => {
-      if (this.inFlightAgentCloses.get(agentId) === close) {
-        this.inFlightAgentCloses.delete(agentId);
-      }
-    };
-    void close.then(clearClose, clearClose);
-    return close;
+        const close = this.runLifecycleMutation(agentId, async () => {
+          // A preceding reload or archive may already have closed the durable agent.
+          this.withInput(
+            agentId,
+            "close",
+            undefined,
+            () => undefined,
+            commandPayload("close"),
+            operationHandle,
+          );
+          await this.nativeReceipts?.closeAgent(agentId);
+          if (this.agents.has(agentId))
+            await this.closeAgentRuntime(
+              agentId,
+              retirement && source && sourceSession
+                ? () => {
+                    const current = this.agents.get(agentId);
+                    if (
+                      current?.session !== sourceSession ||
+                      current.instanceId !== source.instanceId ||
+                      sourceSession.id !== source.sessionId ||
+                      sourceSession.describePersistence()?.sessionId !== source.sessionId ||
+                      current.persistence?.sessionId !== source.sessionId ||
+                      current.runtimeInfo?.sessionId !== source.sessionId
+                    )
+                      throw new Error("Retiring native identity changed before close");
+                  }
+                : undefined,
+            );
+          if (retirement && source && sourceSession) {
+            try {
+              const batches = await retirement(() => {
+                if (!this.acceptingAgentRegistrations || this.agents.has(agentId))
+                  throw new Error("Retired native identity replaced or unavailable");
+              });
+              for (const batch of batches) await this.collectNativeReport(batch);
+            } catch {
+              this.logger.warn("Native final report unavailable after close");
+            }
+          }
+        });
+        this.inFlightAgentCloses.set(agentId, close);
+        const clearClose = () => {
+          if (this.inFlightAgentCloses.get(agentId) === close) {
+            this.inFlightAgentCloses.delete(agentId);
+          }
+        };
+        void close.then(clearClose, clearClose);
+        return close;
+      },
+      commandPayload("close"),
+      handle,
+    );
   }
 
-  private async closeAgentRuntime(agentId: string): Promise<void> {
+  private async closeAgentRuntime(
+    agentId: string,
+    requireRetiringIdentity?: () => void,
+  ): Promise<void> {
     const agent = this.requireAgent(agentId);
     this.logger.trace(
       {
@@ -2074,7 +3320,8 @@ export class AgentManager {
     await this.drainSessionEvents(agentId);
     // Retain ownership until shutdown succeeds. A failed close may still own a
     // native writer, so publishing a resumable closed snapshot would orphan it.
-    await agent.session.close();
+    this.invokeReportRelaunchGuard(requireRetiringIdentity);
+    await nativeDispatch(() => agent.session.close());
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = await this.prepareAgentForClosure(agent, "agent closed");
 
@@ -2113,19 +3360,42 @@ export class AgentManager {
     }
   }
 
-  async archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
-    return this.runLifecycleMutation(agentId, () => this.archiveAgentUnlocked(agentId));
+  async archiveAgent(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<{ archivedAt: string }> {
+    return this.withInput(
+      agentId,
+      "archive",
+      undefined,
+      async (operationHandle) => {
+        return this.runLifecycleMutation(agentId, () =>
+          this.withInput(
+            agentId,
+            "archive",
+            undefined,
+            () => this.archiveAgentUnlocked(agentId),
+            commandPayload("archive"),
+            operationHandle,
+          ),
+        );
+      },
+      commandPayload("archive"),
+      handle,
+    );
   }
 
   private async archiveAgentUnlocked(
     agentId: string,
     requestedArchivedAt?: string,
+    admittedPlan?: CascadeArchivePlan,
   ): Promise<{ archivedAt: string }> {
     const agent = this.requireAgent(agentId);
     if (!this.registry) {
       throw new Error("Agent storage is not configured");
     }
 
+    const cascadePlan = admittedPlan ?? (await this.admitArchiveDescendants(agentId));
     await this.registry.applySnapshot(agent, {
       internal: agent.internal,
     });
@@ -2140,52 +3410,109 @@ export class AgentManager {
     await this.syncNativeArchiveState(stored.provider, stored.persistence, "archive");
     this.discardRetainedAgentState(agentId);
 
-    await this.cascadeArchiveChildren(agentId);
+    await this.cascadeArchiveChildren(agentId, cascadePlan);
 
     return { archivedAt };
   }
 
-  // Children created via the MCP `create_agent` tool carry the parent-agent-id
-  // label pointing back at the caller. Archiving the parent cascades to those
-  // children so subagent fleets don't outlive their orchestrator. Detached
-  // handoff agents omit this label, so they stand outside the cascade.
-  private async cascadeArchiveChildren(parentAgentId: string): Promise<void> {
-    const registry = this.registry;
-    if (!registry) {
-      return;
-    }
+  /** Preflight before command cancellation or any workspace sibling effect.
+   * Execution still rechecks the graph; this grants no reusable archive authority.
+   */
+  async preflightArchiveDescendants(agentId: string): Promise<void> {
+    await this.admitArchiveDescendants(agentId);
+  }
+
+  /** Freeze and admit the entire cascade before any parent storage/provider effect. */
+  private async admitArchiveDescendants(parentAgentId: string): Promise<CascadeArchivePlan> {
+    const registry = this.requireRegistry();
     const records = await registry.list();
-    const parent = records.find((record) => record.id === parentAgentId);
-    if (!parent) {
-      throw new Error(`Archived parent ${parentAgentId} not found in storage`);
-    }
-    for (const record of records) {
-      if (record.archivedAt) {
-        continue;
-      }
-      if (record.labels?.[PARENT_AGENT_ID_LABEL] !== parentAgentId) {
-        continue;
-      }
-      const child = await registry.get(record.id);
-      if (!child || child.archivedAt || child.labels?.[PARENT_AGENT_ID_LABEL] !== parentAgentId) {
-        continue;
-      }
-      await this.runLifecycleMutation(child.id, async () => {
-        const currentChild = await registry.get(child.id);
+    const plan: CascadeArchivePlan = new Map();
+    const visited = new Set([parentAgentId]);
+    const visit = async (parentId: string): Promise<void> => {
+      const parent = await registry.get(parentId);
+      if (!parent) throw new Error(`Archive parent ${parentId} not found`);
+      for (const child of records) {
         if (
-          !currentChild ||
-          currentChild.archivedAt ||
-          currentChild.labels?.[PARENT_AGENT_ID_LABEL] !== parentAgentId
-        ) {
+          child.archivedAt ||
+          child.labels?.[PARENT_AGENT_ID_LABEL] !== parentId ||
+          visited.has(child.id)
+        )
+          continue;
+        visited.add(child.id);
+        const admitted = await this.runLifecycleMutation(child.id, async () => {
+          const fresh = await this.requireRegistry().get(child.id);
+          if (!fresh || fresh.archivedAt || fresh.labels?.[PARENT_AGENT_ID_LABEL] !== parentId)
+            return null;
+          const detach = shouldDetachFromArchivedParent(parent, fresh);
+          const handle = await this.trustedPlugins.followup(() =>
+            this.withStoredInput(
+              child.id,
+              detach ? "configure" : "archive",
+              undefined,
+              (operation) => operation,
+              commandPayload(detach ? "detach" : "archive"),
+            ),
+          );
+          return { parentId, detach, handle };
+        });
+        if (!admitted) continue;
+        plan.set(child.id, admitted);
+        if (!admitted.detach) await visit(child.id);
+      }
+    };
+    await visit(parentAgentId);
+    return plan;
+  }
+
+  // Execute only the admitted graph. New/reparented descendants never inherit a parent's grant.
+  private async cascadeArchiveChildren(
+    parentAgentId: string,
+    plan: CascadeArchivePlan,
+  ): Promise<void> {
+    const registry = this.requireRegistry();
+    const parent = await registry.get(parentAgentId);
+    if (!parent) throw new Error(`Archived parent ${parentAgentId} not found in storage`);
+    // V1 has no payload-bound plan: preserve its dynamic child/open-tab reconciliation.
+    if (!this.trustedPlugins.hasV11Authority()) {
+      for (const child of await registry.list()) {
+        if (!child.archivedAt && child.labels?.[PARENT_AGENT_ID_LABEL] === parentAgentId)
+          plan.set(child.id, {
+            parentId: parentAgentId,
+            detach: shouldDetachFromArchivedParent(parent, child),
+          });
+      }
+    }
+    for (const [childId, admitted] of plan) {
+      if (admitted.parentId !== parentAgentId) continue;
+      await this.runLifecycleMutation(childId, async () => {
+        const child = await registry.get(childId);
+        if (!child || child.archivedAt || child.labels?.[PARENT_AGENT_ID_LABEL] !== parentAgentId)
           return;
-        }
-        if (shouldDetachFromArchivedParent(parent, currentChild)) {
-          await this.detachAgentUnlocked(currentChild.id);
-        } else if (this.agents.has(currentChild.id)) {
-          await this.archiveAgentUnlocked(currentChild.id);
-        } else {
-          await this.archiveSnapshotUnlocked(currentChild.id, new Date().toISOString());
-        }
+        const detach = shouldDetachFromArchivedParent(parent, child);
+        if (detach !== admitted.detach && this.trustedPlugins.hasV11Authority())
+          throw new AdmissionDeniedError("Archive descendant relationship changed");
+        if (!admitted.handle) admitted.detach = detach;
+        const execute = () =>
+          this.withStoredInput(
+            childId,
+            admitted.detach ? "configure" : "archive",
+            undefined,
+            async () => {
+              if (admitted.detach) await this.detachAgentUnlocked(childId);
+              else if (this.agents.has(childId))
+                await this.archiveAgentUnlocked(childId, undefined, plan);
+              else
+                await this.archiveSnapshotUnlocked(
+                  childId,
+                  new Date().toISOString(),
+                  admitted.handle,
+                  plan,
+                );
+            },
+            commandPayload(admitted.detach ? "detach" : "archive"),
+            admitted.handle,
+          );
+        await (admitted.handle ? execute() : this.trustedPlugins.daemon(execute));
       });
     }
   }
@@ -2244,6 +3571,7 @@ export class AgentManager {
       type: "agent_state",
       agent: {
         id: record.id,
+        archivedAt: record.archivedAt ?? null,
         provider: record.provider,
         cwd: record.cwd,
         workspaceId: record.workspaceId,
@@ -2280,8 +3608,21 @@ export class AgentManager {
     });
   }
 
-  setAgentMode(agentId: string, modeId: string): Promise<AgentProviderNotice | null> {
-    return this.runLifecycleMutation(agentId, () => this.setAgentModeUnlocked(agentId, modeId));
+  setAgentMode(
+    agentId: string,
+    modeId: string,
+    operationHandle?: TrustedOperationHandle,
+  ): Promise<AgentProviderNotice | null> {
+    return this.runLifecycleMutation(agentId, () =>
+      this.withStoredInput(
+        agentId,
+        "configure",
+        undefined,
+        () => this.setAgentModeUnlocked(agentId, modeId),
+        commandPayload("set-mode", { modeId }),
+        operationHandle,
+      ),
+    );
   }
 
   private async setAgentModeUnlocked(
@@ -2289,7 +3630,7 @@ export class AgentManager {
     modeId: string,
   ): Promise<AgentProviderNotice | null> {
     const agent = this.requireSessionAgent(agentId);
-    const notice = (await agent.session.setMode(modeId)) ?? null;
+    const notice = (await nativeDispatch(() => agent.session.setMode(modeId))) ?? null;
     await this.drainSessionEvents(agentId);
     const currentMode = (await agent.session.getCurrentMode()) ?? modeId;
     agent.config.modeId = currentMode ?? undefined;
@@ -2304,7 +3645,15 @@ export class AgentManager {
   }
 
   setAgentModel(agentId: string, modelId: string | null): Promise<void> {
-    return this.runLifecycleMutation(agentId, () => this.setAgentModelUnlocked(agentId, modelId));
+    return this.runLifecycleMutation(agentId, () =>
+      this.withStoredInput(
+        agentId,
+        "configure",
+        undefined,
+        () => this.setAgentModelUnlocked(agentId, modelId),
+        commandPayload("set-model", { modelId }),
+      ),
+    );
   }
 
   private async setAgentModelUnlocked(agentId: string, modelId: string | null): Promise<void> {
@@ -2313,7 +3662,7 @@ export class AgentManager {
       typeof modelId === "string" && modelId.trim().length > 0 ? modelId : null;
 
     if (agent.session.setModel) {
-      await agent.session.setModel(normalizedModelId);
+      await nativeDispatch(() => agent.session.setModel!(normalizedModelId));
     }
     await this.drainSessionEvents(agentId);
 
@@ -2321,6 +3670,7 @@ export class AgentManager {
     if (agent.runtimeInfo) {
       agent.runtimeInfo = { ...agent.runtimeInfo, model: normalizedModelId };
     }
+    this.refreshSessionPersistence(agent);
     this.touchUpdatedAt(agent);
     this.emitState(agent);
   }
@@ -2330,7 +3680,13 @@ export class AgentManager {
     thinkingOptionId: string | null,
   ): Promise<AgentProviderNotice | null> {
     return this.runLifecycleMutation(agentId, () =>
-      this.setAgentThinkingOptionUnlocked(agentId, thinkingOptionId),
+      this.withStoredInput(
+        agentId,
+        "configure",
+        undefined,
+        () => this.setAgentThinkingOptionUnlocked(agentId, thinkingOptionId),
+        commandPayload("set-thinking", { thinkingOptionId }),
+      ),
     );
   }
 
@@ -2346,7 +3702,10 @@ export class AgentManager {
 
     let notice: AgentProviderNotice | null = null;
     if (agent.session.setThinkingOption) {
-      notice = (await agent.session.setThinkingOption(normalizedThinkingOptionId)) ?? null;
+      notice =
+        (await nativeDispatch(() =>
+          agent.session.setThinkingOption!(normalizedThinkingOptionId),
+        )) ?? null;
     }
     await this.drainSessionEvents(agentId);
 
@@ -2370,7 +3729,13 @@ export class AgentManager {
 
   setAgentFeature(agentId: string, featureId: string, value: unknown): Promise<void> {
     return this.runLifecycleMutation(agentId, () =>
-      this.setAgentFeatureUnlocked(agentId, featureId, value),
+      this.withStoredInput(
+        agentId,
+        "configure",
+        undefined,
+        () => this.setAgentFeatureUnlocked(agentId, featureId, value),
+        commandPayload("set-feature", { featureId, value }),
+      ),
     );
   }
 
@@ -2385,7 +3750,7 @@ export class AgentManager {
       throw new Error("Agent session does not support setting features");
     }
 
-    await agent.session.setFeature(featureId, value);
+    await nativeDispatch(() => agent.session.setFeature!(featureId, value));
     await this.drainSessionEvents(agentId);
     agent.config.featureValues = { ...agent.config.featureValues, [featureId]: value };
     this.touchUpdatedAt(agent);
@@ -2411,10 +3776,17 @@ export class AgentManager {
   }
 
   async setLabels(agentId: string, labels: Record<string, string>): Promise<void> {
-    await this.runLifecycleMutation(agentId, async () => {
-      const agent = this.requireAgent(agentId);
-      await this.writeLabels(agent.id, labels);
-    });
+    if (Object.hasOwn(labels, PARENT_AGENT_ID_LABEL))
+      throw new Error("Use native owner parent adoption to change parent metadata");
+    return this.runLifecycleMutation(agentId, () =>
+      this.withStoredInput(
+        agentId,
+        "configure",
+        undefined,
+        () => this.writeLabels(this.requireAgent(agentId).id, labels).then(() => undefined),
+        commandPayload("set-labels", { labels }),
+      ),
+    );
   }
 
   private async writeLabels(agentId: string, patch: AgentLabelPatch): Promise<WriteLabelsResult> {
@@ -2452,12 +3824,70 @@ export class AgentManager {
     return nextRecord;
   }
 
+  private parentAdoptionTail: Promise<void> = Promise.resolve();
+
+  async adoptAgentParent(input: ParentAdoptionInput, ownerIsCurrent: () => boolean): Promise<void> {
+    const request = snapshotParentAdoption(input);
+    const admitted = validateParentAdoption(request, this.agents, ownerIsCurrent);
+    const childInstance = admitted.child.instanceId;
+    const parentInstance = admitted.parent.instanceId;
+    const childSession = admitted.child.session;
+    const parentSession = admitted.parent.session;
+    const validate = () => {
+      const current = validateParentAdoption(request, this.agents, ownerIsCurrent);
+      for (const agent of [current.child, current.parent]) {
+        if (this.inFlightAgentCloses.has(agent.id) || this.mcpRefreshes.has(agent.id))
+          throw new Error("Parent adoption lifecycle fence active");
+      }
+      if (
+        current.child !== admitted.child ||
+        current.parent !== admitted.parent ||
+        current.child.instanceId !== childInstance ||
+        current.parent.instanceId !== parentInstance ||
+        current.child.session !== childSession ||
+        current.parent.session !== parentSession
+      )
+        throw new Error("Native instance replaced before parent adoption");
+    };
+    validate();
+    const payload = commandPayload("adopt-parent", {
+      parentAgentId: request.parentAgentId,
+      expectedParentAgentId: request.expectedParentAgentId,
+      childNativeSessionId: request.childNativeSessionId,
+      parentNativeSessionId: request.parentNativeSessionId,
+    });
+    const operation = this.parentAdoptionTail
+      .catch(() => undefined)
+      .then(() =>
+        this.runLifecycleMutation(request.agentId, () =>
+          this.trustedPlugins.parentAdoption(admitted.child, payload(), validate, async () => {
+            await this.writeLabels(request.agentId, {
+              [PARENT_AGENT_ID_LABEL]: request.parentAgentId,
+            });
+          }),
+        ),
+      );
+    this.parentAdoptionTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
   async detachAgent(agentId: string): Promise<{
     record: StoredAgentRecord;
     live: boolean;
     previousParentAgentId: string | null;
   }> {
-    return this.runLifecycleMutation(agentId, () => this.detachAgentUnlocked(agentId));
+    return this.runLifecycleMutation(agentId, () =>
+      this.withStoredInput(
+        agentId,
+        "configure",
+        undefined,
+        () => this.detachAgentUnlocked(agentId),
+        commandPayload("detach"),
+      ),
+    );
   }
 
   private async detachAgentUnlocked(agentId: string): Promise<{
@@ -2559,21 +3989,45 @@ export class AgentManager {
     this.dispatchStoredAgentState(nextRecord);
   }
 
-  async archiveSnapshot(agentId: string, archivedAt: string): Promise<StoredAgentRecord> {
-    return this.runLifecycleMutation(agentId, () =>
-      this.archiveSnapshotUnlocked(agentId, archivedAt),
+  async archiveSnapshot(
+    agentId: string,
+    archivedAt: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<StoredAgentRecord> {
+    return this.withInput(
+      agentId,
+      "archive",
+      undefined,
+      async (operationHandle) => {
+        return this.runLifecycleMutation(agentId, () =>
+          this.archiveSnapshotUnlocked(agentId, archivedAt, operationHandle),
+        );
+      },
+      commandPayload("archive", { archivedAt }),
+      handle,
     );
   }
 
   private async archiveSnapshotUnlocked(
     agentId: string,
     archivedAt: string,
+    operationHandle?: TrustedOperationHandle,
+    admittedPlan?: CascadeArchivePlan,
   ): Promise<StoredAgentRecord> {
+    this.withInput(
+      agentId,
+      "archive",
+      undefined,
+      () => undefined,
+      commandPayload("archive", { archivedAt }),
+      operationHandle,
+    );
     const registry = this.requireRegistry();
+    const cascadePlan = admittedPlan ?? (await this.admitArchiveDescendants(agentId));
     // A stored-only archive can have waited behind a persisted resume. Reuse the
     // live archive transition so its newly acquired runtime is closed as well.
     if (this.agents.has(agentId)) {
-      await this.archiveAgentUnlocked(agentId, archivedAt);
+      await this.archiveAgentUnlocked(agentId, archivedAt, cascadePlan);
       const archivedRecord = await registry.get(agentId);
       if (!archivedRecord) throw new Error(`Agent not found: ${agentId}`);
       return archivedRecord;
@@ -2584,6 +4038,14 @@ export class AgentManager {
       throw new Error(`Agent not found: ${agentId}`);
     }
 
+    this.trustedPlugins.input(
+      record,
+      "archive",
+      undefined,
+      () => undefined,
+      commandPayload("archive", { archivedAt }),
+      operationHandle,
+    );
     const nextRecord = await this.persistArchivedRecord(record, { archivedAt });
 
     await this.syncNativeArchiveState(record.provider, record.persistence, "archive");
@@ -2592,7 +4054,7 @@ export class AgentManager {
     if (!nextRecord.internal) this.dispatchStoredAgentState(nextRecord);
 
     await this.fireAgentArchived(agentId);
-    await this.cascadeArchiveChildren(agentId);
+    await this.cascadeArchiveChildren(agentId, cascadePlan);
 
     return nextRecord;
   }
@@ -2600,9 +4062,17 @@ export class AgentManager {
   async unarchiveSnapshot(
     agentId: string,
     updates?: { workspaceId?: string; labels?: AgentLabelPatch },
+    operationHandle?: TrustedOperationHandle,
   ): Promise<boolean> {
     return this.runLifecycleMutation(agentId, () =>
-      this.unarchiveSnapshotUnlocked(agentId, updates),
+      this.withStoredInput(
+        agentId,
+        "unarchive",
+        undefined,
+        () => this.unarchiveSnapshotUnlocked(agentId, updates),
+        commandPayload("unarchive", updates),
+        operationHandle,
+      ),
     );
   }
 
@@ -2619,7 +4089,9 @@ export class AgentManager {
     // Close and native restore share the lifecycle lane with persisted resume.
     // No new history or interactive runtime can acquire the writer between them.
     if (this.agents.has(agentId)) await this.closeAgentRuntime(agentId);
-    await this.syncNativeArchiveState(record.provider, record.persistence, "restore");
+    await nativeDispatch(() =>
+      this.syncNativeArchiveState(record.provider, record.persistence, "restore"),
+    );
 
     await registry.upsert({
       ...record,
@@ -2657,8 +4129,16 @@ export class AgentManager {
       labels?: Record<string, string>;
     },
   ): Promise<void> {
-    await this.runLifecycleMutation(agentId, () =>
-      this.updateAgentMetadataUnlocked(agentId, updates),
+    if (updates.labels && Object.hasOwn(updates.labels, PARENT_AGENT_ID_LABEL))
+      throw new Error("Use native owner parent adoption to change parent metadata");
+    return this.runLifecycleMutation(agentId, () =>
+      this.withStoredInput(
+        agentId,
+        "configure",
+        undefined,
+        () => this.updateAgentMetadataUnlocked(agentId, updates),
+        commandPayload("set-metadata", { metadata: updates }),
+      ),
     );
   }
 
@@ -2748,54 +4228,70 @@ export class AgentManager {
    * broadcast like normal timeline events.
    */
   tryRunOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions): boolean {
-    const agent = this.requireSessionAgent(agentId);
-    const handler = agent.session.tryHandleOutOfBand?.(prompt);
-    if (!handler) {
-      return false;
-    }
-    let emitted = Promise.resolve();
-    const dispatch = (event: AgentStreamEvent): void => {
-      emitted = emitted.then(async () => {
-        if (event.type === "timeline") {
-          this.touchUpdatedAt(agent);
-          const row = await this.recordTimeline(agent.id, event.item);
-          this.dispatchStream(agent.id, event, {
-            seq: row.seq,
-            epoch: this.timelineStore.getEpoch(agent.id),
-            timestamp: row.timestamp,
-          });
-        } else {
-          await this.drainTimelineWrites(agent.id);
-          this.assertTimelineHealthy(agent.id);
-          this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
-        }
-        return undefined;
-      });
-      void emitted.catch(() => undefined);
-    };
-    const task = (async () => {
-      try {
-        if (options?.clientMessageId) {
-          await this.recordSubmittedPrompt(agent, prompt, options.clientMessageId);
-          this.emitState(agent);
-        }
-        try {
-          await handler.run({ emit: dispatch });
-        } catch (error) {
-          const text = error instanceof Error ? error.message : "Out-of-band command failed";
-          dispatch({
-            type: "timeline",
-            provider: agent.provider,
-            item: { type: "assistant_message", text: `[Error] ${text}` },
+    return this.withInput(
+      agentId,
+      "prompt",
+      options?.clientMessageId,
+      (handle) => {
+        if (handle) {
+          prompt = this.trustedPlugins.dispatchPrompt(handle);
+          options = snapshotRunOptions({
+            ...options,
+            [TRUSTED_OPERATION]: handle,
           });
         }
-        await emitted;
-      } catch (error) {
-        this.logger.error({ err: error, agentId }, "Failed to persist out-of-band command");
-      }
-    })();
-    this.trackBackgroundTask(task);
-    return true;
+        const agent = this.requireSessionAgent(agentId);
+        const handler = agent.session.tryHandleOutOfBand?.(prompt);
+        if (!handler) {
+          return false;
+        }
+        let emitted = Promise.resolve();
+        const dispatch = (event: AgentStreamEvent): void => {
+          emitted = emitted.then(async () => {
+            if (event.type === "timeline") {
+              this.touchUpdatedAt(agent);
+              const row = await this.recordTimeline(agent.id, event.item);
+              this.dispatchStream(agent.id, event, {
+                seq: row.seq,
+                epoch: this.timelineStore.getEpoch(agent.id),
+                timestamp: row.timestamp,
+              });
+            } else {
+              await this.drainTimelineWrites(agent.id);
+              this.assertTimelineHealthy(agent.id);
+              this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
+            }
+            return undefined;
+          });
+          void emitted.catch(() => undefined);
+        };
+        const task = (async () => {
+          try {
+            if (options?.clientMessageId) {
+              await this.recordSubmittedPrompt(agent, prompt, options.clientMessageId);
+              this.emitState(agent);
+            }
+            try {
+              await handler.run({ emit: dispatch });
+            } catch (error) {
+              const text = error instanceof Error ? error.message : "Out-of-band command failed";
+              dispatch({
+                type: "timeline",
+                provider: agent.provider,
+                item: { type: "assistant_message", text: `[Error] ${text}` },
+              });
+            }
+            await emitted;
+          } catch (error) {
+            this.logger.error({ err: error, agentId }, "Failed to persist out-of-band command");
+          }
+        })();
+        this.trackBackgroundTask(task);
+        return true;
+      },
+      promptPayload(prompt, options),
+      options?.[TRUSTED_OPERATION],
+    );
   }
 
   async appendTimelineItem(
@@ -2842,12 +4338,97 @@ export class AgentManager {
   }): Promise<string> {
     const { agent, agentId, pendingRun, prompt, options } = params;
     try {
-      const result = await agent.session.startTurn(prompt, options);
+      const previousAdmission = options?.[CODEX_TURN_ADMISSION];
+      const handle = options?.[TRUSTED_OPERATION];
+      const instanceId = agent.instanceId;
+      if (!instanceId) throw new Error("Live instance identity unavailable");
+      const validate = () => {
+        if (
+          this.agents.get(agentId) !== agent ||
+          agent.instanceId !== instanceId ||
+          pendingRun.settled
+        )
+          throw new Error("Codex live instance or pending turn changed");
+        if (handle) this.trustedPlugins.resumeOperation(handle, () => undefined);
+        if (options?.[NATIVE_QUEUED_FINAL]) {
+          if (agent.pendingPermissions.size > 0)
+            throw new Error("Native queued permission boundary changed");
+          validateNativeQueuedDispatch(options[NATIVE_QUEUED_FINAL]);
+        }
+      };
+      const legacyAdmission = (quota: AgentQuotaSnapshot): true => {
+        validate();
+        if (handle) this.reportObservedQuotaLimit(agent, quota, handle.operation.operationId);
+        if (typeof previousAdmission === "function" && previousAdmission(quota) !== true)
+          throw new Error("Codex turn denied");
+        return this.trustedPlugins.codexTurn(agent, quota);
+      };
+      let turnOptions = options;
+      if (this.trustedPlugins.hasCodexTurnHooks()) {
+        let admission: NonNullable<AgentRunOptions[typeof CODEX_TURN_ADMISSION]>;
+        if (!this.trustedPlugins.hasV11CodexTurnHooks() && typeof previousAdmission !== "object") {
+          admission = legacyAdmission;
+        } else if (handle) {
+          admission = {
+            operation: handle.operation,
+            instanceId,
+            validate,
+            check: (
+              turn: import("@getpaseo/plugin/server").TrustedCodexTurnV11,
+              quota: AgentQuotaSnapshot,
+            ): true => {
+              validate();
+              this.reportObservedQuotaLimit(agent, quota, turn.operation.operationId);
+              if (previousAdmission) {
+                if (typeof previousAdmission === "function") {
+                  if (previousAdmission(quota) !== true) throw new Error("Codex turn denied");
+                } else {
+                  previousAdmission.validate();
+                  if (previousAdmission.check(turn, quota) !== true)
+                    throw new Error("Codex turn denied");
+                }
+              }
+              return this.trustedPlugins.codexTurnV11(agent, turn, quota);
+            },
+            onQuotaReadFailure: (
+              turn: import("@getpaseo/plugin/server").TrustedCodexTurnV11,
+              failure: import("@getpaseo/plugin/server").QuotaReadFailureV11,
+            ): void => {
+              validate();
+              if (previousAdmission && typeof previousAdmission !== "function")
+                previousAdmission.onQuotaReadFailure(turn, failure);
+              this.trustedPlugins.quotaReadFailure(agent, turn, failure);
+            },
+          };
+        } else {
+          admission = () => {
+            throw new Error("Codex operation unavailable");
+          };
+        }
+        turnOptions = { ...options, [CODEX_TURN_ADMISSION]: admission };
+      }
+      const result = await this.withInput(
+        agentId,
+        "prompt",
+        options?.clientMessageId,
+        () => {
+          validate();
+          assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+          if (options?.[FINAL_INPUT_CHECK] && !["codex", "claude"].includes(agent.provider))
+            throw new Error("Final-checked notification provider unavailable");
+          return nativeDispatch(() => agent.session.startTurn(prompt, turnOptions));
+        },
+        promptPayload(prompt, options),
+        handle,
+      );
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
       }
       return result.turnId;
-    } catch (error) {
+    } catch (caught) {
+      failFinalInputHandoff(options?.[FINAL_INPUT_CHECK], caught);
+      const queued = options?.[NATIVE_QUEUED_FINAL];
+      const error = queued ? nativeQueuedFailure(queued, caught) : caught;
       if (pendingRun.settled) {
         throw error;
       }
@@ -2877,146 +4458,164 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): AsyncGenerator<AgentStreamEvent> {
-    const existingAgent = this.requireSessionAgent(agentId);
-    this.logger.trace(
-      {
-        agentId,
-        provider: existingAgent.provider,
-        sessionId: existingAgent.persistence?.sessionId ?? undefined,
-        turnId: existingAgent.activeForegroundTurnId ?? undefined,
-        lifecycle: existingAgent.lifecycle,
-        activeForegroundTurnId: existingAgent.activeForegroundTurnId,
-        hasTrackedRun: this.runs.hasRun(agentId),
-        promptType: typeof prompt === "string" ? "string" : "structured",
-        hasRunOptions: Boolean(options),
-      },
-      "agent.manager.stream.request",
-    );
-    if (existingAgent.activeForegroundTurnId || this.runs.hasRun(agentId)) {
-      this.logger.trace(
-        {
-          agentId,
-          provider: existingAgent.provider,
-          sessionId: existingAgent.persistence?.sessionId ?? undefined,
-          turnId: existingAgent.activeForegroundTurnId ?? undefined,
-          lifecycle: existingAgent.lifecycle,
-          hasTrackedRun: this.runs.hasRun(agentId),
-        },
-        "agent.manager.stream.reject",
-      );
-      throw new Error(`Agent ${agentId} already has an active run`);
-    }
-
-    const agent = existingAgent;
-    const isReplacement = agent.pendingReplacement;
-    agent.lastError = undefined;
-
-    const pendingRun = this.runs.createPendingRun(agentId);
-
-    const streamForwarder = async function* streamForwarder(this: AgentManager) {
-      let turnId: string;
-      let turnStream: ReturnType<AgentRunState["createTurnStream"]> | null = null;
-      turnId = await this.startPendingForegroundTurn({
-        agent,
-        agentId,
-        pendingRun,
-        prompt,
-        options,
-      });
-
-      if (isReplacement) {
-        agent.pendingReplacement = false;
-      }
-      const turnStartedAt = new Date();
-      agent.activeForegroundTurnId = turnId;
-      this.openActiveTurn(agent, turnId, turnStartedAt);
-      agent.lifecycle = "running";
-      this.touchUpdatedAt(agent);
-      // AgentManager owns the accepted-turn boundary. Publish liveness before the canonical
-      // prompt so clients can retire optimistic activity without painting an idle frame.
-      // The provider's duplicate start for this turn is suppressed at the ingestion boundary.
-      this.dispatchStream(
-        agent.id,
-        { type: "turn_started", provider: agent.provider, turnId },
-        { timestamp: turnStartedAt.toISOString() },
-      );
-      const stagedSubmittedPromptEcho = options?.clientMessageId
-        ? pendingRun.stagedEvents.find(
-            (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
-              event.type === "timeline" &&
-              event.item.type === "user_message" &&
-              event.item.clientMessageId === options.clientMessageId,
-          )
-        : undefined;
-      try {
-        if (options?.clientMessageId) {
-          await this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, {
-            messageId: options.clientMessageId,
-            turnId,
-            providerMessageId:
-              stagedSubmittedPromptEcho?.item.type === "user_message"
-                ? stagedSubmittedPromptEcho.item.messageId
-                : undefined,
+    return this.withInput(
+      agentId,
+      "prompt",
+      options?.clientMessageId,
+      (handle) => {
+        if (handle) {
+          prompt = this.trustedPlugins.dispatchPrompt(handle);
+          options = snapshotRunOptions({
+            ...options,
+            [TRUSTED_OPERATION]: handle,
           });
         }
-      } catch (error) {
-        pendingRun.start = {
-          status: "failed",
-          error: error instanceof Error ? error.message : "Timeline commit failed",
-        };
-        agent.lifecycle = "error";
-        agent.lastError = pendingRun.start.error;
-        this.runs.settleForegroundRun(agentId, pendingRun.token);
-        this.emitState(agent);
-        throw error;
-      }
-      pendingRun.start = { status: "started", turnId };
-      for (const stagedEvent of pendingRun.stagedEvents.splice(0)) {
-        const isAcceptedTurnStart =
-          stagedEvent.type === "turn_started" && getAgentStreamEventTurnId(stagedEvent) === turnId;
-        if (isAcceptedTurnStart || stagedEvent === stagedSubmittedPromptEcho) {
-          continue;
+        const existingAgent = this.requireSessionAgent(agentId);
+        this.logger.trace(
+          {
+            agentId,
+            provider: existingAgent.provider,
+            sessionId: existingAgent.persistence?.sessionId ?? undefined,
+            turnId: existingAgent.activeForegroundTurnId ?? undefined,
+            lifecycle: existingAgent.lifecycle,
+            activeForegroundTurnId: existingAgent.activeForegroundTurnId,
+            hasTrackedRun: this.runs.hasRun(agentId),
+            promptType: typeof prompt === "string" ? "string" : "structured",
+            hasRunOptions: Boolean(options),
+          },
+          "agent.manager.stream.request",
+        );
+        if (existingAgent.activeForegroundTurnId || this.runs.hasRun(agentId)) {
+          this.logger.trace(
+            {
+              agentId,
+              provider: existingAgent.provider,
+              sessionId: existingAgent.persistence?.sessionId ?? undefined,
+              turnId: existingAgent.activeForegroundTurnId ?? undefined,
+              lifecycle: existingAgent.lifecycle,
+              hasTrackedRun: this.runs.hasRun(agentId),
+            },
+            "agent.manager.stream.reject",
+          );
+          throw new Error(`Agent ${agentId} already has an active run`);
         }
-        this.enqueueSessionEvent(agent.id, stagedEvent);
-      }
-      this.emitState(agent);
-      this.logger.trace(
-        {
-          agentId,
-          provider: agent.provider,
-          sessionId: agent.persistence?.sessionId ?? undefined,
-          turnId,
-          lifecycle: agent.lifecycle,
-          activeForegroundTurnId: agent.activeForegroundTurnId,
-        },
-        "agent.manager.stream.start",
-      );
 
-      turnStream = this.runs.createTurnStream(turnId);
-      this.runs.addWaiter(agent, turnStream.waiter);
+        const agent = existingAgent;
+        const isReplacement = agent.pendingReplacement;
+        agent.lastError = undefined;
 
-      try {
-        const acceptedTurnStartedEvent: AgentStreamEvent = {
-          type: "turn_started",
-          provider: agent.provider,
-          turnId,
-        };
-        yield acceptedTurnStartedEvent;
-        for await (const event of turnStream.events(isTurnTerminalEvent)) {
-          yield event;
-        }
-      } finally {
-        if (turnStream) {
-          this.runs.deleteWaiter(agent, turnStream.waiter);
-        }
-        this.runs.settleForegroundRun(agentId, pendingRun.token);
-        if (!agent.activeForegroundTurnId) {
-          await this.refreshRuntimeInfo(agent);
-        }
-      }
-    }.call(this);
+        const pendingRun = this.runs.createPendingRun(agentId);
 
-    return streamForwarder;
+        const streamForwarder = async function* streamForwarder(this: AgentManager) {
+          let turnId: string;
+          let turnStream: ReturnType<AgentRunState["createTurnStream"]> | null = null;
+          turnId = await this.startPendingForegroundTurn({
+            agent,
+            agentId,
+            pendingRun,
+            prompt,
+            options,
+          });
+
+          if (isReplacement) {
+            agent.pendingReplacement = false;
+          }
+          const turnStartedAt = new Date();
+          agent.activeForegroundTurnId = turnId;
+          this.openActiveTurn(agent, turnId, turnStartedAt);
+          agent.lifecycle = "running";
+          this.touchUpdatedAt(agent);
+          // AgentManager owns the accepted-turn boundary. Publish liveness before the canonical
+          // prompt so clients can retire optimistic activity without painting an idle frame.
+          // The provider's duplicate start for this turn is suppressed at the ingestion boundary.
+          this.dispatchStream(
+            agent.id,
+            { type: "turn_started", provider: agent.provider, turnId },
+            { timestamp: turnStartedAt.toISOString() },
+          );
+          const stagedSubmittedPromptEcho = options?.clientMessageId
+            ? pendingRun.stagedEvents.find(
+                (event): event is Extract<AgentStreamEvent, { type: "timeline" }> =>
+                  event.type === "timeline" &&
+                  event.item.type === "user_message" &&
+                  event.item.clientMessageId === options?.clientMessageId,
+              )
+            : undefined;
+          try {
+            if (options?.clientMessageId) {
+              await this.recordSubmittedPrompt(agent, prompt, options.clientMessageId, {
+                messageId: options.clientMessageId,
+                turnId,
+                providerMessageId:
+                  stagedSubmittedPromptEcho?.item.type === "user_message"
+                    ? stagedSubmittedPromptEcho.item.messageId
+                    : undefined,
+              });
+            }
+          } catch (error) {
+            pendingRun.start = {
+              status: "failed",
+              error: error instanceof Error ? error.message : "Timeline commit failed",
+            };
+            agent.lifecycle = "error";
+            agent.lastError = pendingRun.start.error;
+            this.runs.settleForegroundRun(agentId, pendingRun.token);
+            this.emitState(agent);
+            throw error;
+          }
+          pendingRun.start = { status: "started", turnId };
+          for (const stagedEvent of pendingRun.stagedEvents.splice(0)) {
+            const isAcceptedTurnStart =
+              stagedEvent.type === "turn_started" &&
+              getAgentStreamEventTurnId(stagedEvent) === turnId;
+            if (isAcceptedTurnStart || stagedEvent === stagedSubmittedPromptEcho) {
+              continue;
+            }
+            this.enqueueSessionEvent(agent.id, stagedEvent);
+          }
+          this.emitState(agent);
+          this.logger.trace(
+            {
+              agentId,
+              provider: agent.provider,
+              sessionId: agent.persistence?.sessionId ?? undefined,
+              turnId,
+              lifecycle: agent.lifecycle,
+              activeForegroundTurnId: agent.activeForegroundTurnId,
+            },
+            "agent.manager.stream.start",
+          );
+
+          turnStream = this.runs.createTurnStream(turnId);
+          this.runs.addWaiter(agent, turnStream.waiter);
+
+          try {
+            const acceptedTurnStartedEvent: AgentStreamEvent = {
+              type: "turn_started",
+              provider: agent.provider,
+              turnId,
+            };
+            yield acceptedTurnStartedEvent;
+            for await (const event of turnStream.events(isTurnTerminalEvent)) {
+              yield event;
+            }
+          } finally {
+            if (turnStream) {
+              this.runs.deleteWaiter(agent, turnStream.waiter);
+            }
+            this.runs.settleForegroundRun(agentId, pendingRun.token);
+            this.scheduleNativeMessages(agentId);
+            if (!agent.activeForegroundTurnId) {
+              await this.refreshRuntimeInfo(agent);
+            }
+          }
+        }.call(this);
+
+        return streamForwarder;
+      },
+      promptPayload(prompt, options),
+      options?.[TRUSTED_OPERATION],
+    );
   }
 
   private finalizeForegroundTurn(agent: ActiveManagedAgent, turnId?: string): void {
@@ -3086,31 +4685,49 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AsyncGenerator<AgentStreamEvent>> {
-    const snapshot = this.requireAgent(agentId);
-    if (
-      snapshot.lifecycle !== "running" &&
-      !snapshot.activeForegroundTurnId &&
-      !this.runs.hasRun(agentId)
-    ) {
-      return this.streamAgent(agentId, prompt, options);
-    }
+    assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+    return this.withInput(
+      agentId,
+      "replace",
+      options?.clientMessageId,
+      async (handle) => {
+        if (handle) {
+          prompt = this.trustedPlugins.dispatchPrompt(handle);
+          options = snapshotRunOptions({
+            ...options,
+            [TRUSTED_OPERATION]: handle,
+          });
+        }
+        const snapshot = this.requireAgent(agentId);
+        if (
+          snapshot.lifecycle !== "running" &&
+          !snapshot.activeForegroundTurnId &&
+          !this.runs.hasRun(agentId)
+        ) {
+          return this.streamAgent(agentId, prompt, options);
+        }
 
-    const agent = this.requireSessionAgent(agentId);
-    agent.pendingReplacement = true;
-    agent.lifecycle = "running";
-    this.touchUpdatedAt(agent);
-    this.emitState(agent);
+        const agent = this.requireSessionAgent(agentId);
+        agent.pendingReplacement = true;
+        agent.lifecycle = "running";
+        this.touchUpdatedAt(agent);
+        this.emitState(agent);
 
-    try {
-      await this.cancelAgentRunBefore(agentId, "replace");
-      return this.streamAgent(agentId, prompt, options);
-    } catch (error) {
-      const latest = this.agents.get(agentId);
-      if (latest) {
-        latest.pendingReplacement = false;
-      }
-      throw error;
-    }
+        try {
+          await this.cancelAgentRunBefore(agentId, "replace", options?.[TRUSTED_OPERATION]);
+          assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+          return this.streamAgent(agentId, prompt, options);
+        } catch (error) {
+          const latest = this.agents.get(agentId);
+          if (latest) {
+            latest.pendingReplacement = false;
+          }
+          throw error;
+        }
+      },
+      promptPayload(prompt, options, { replaceRunning: true }),
+      options?.[TRUSTED_OPERATION],
+    );
   }
 
   async steerAgentRun(
@@ -3118,27 +4735,51 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentSteerOptions,
   ): Promise<SteerResult> {
-    const agent = this.requireSessionAgent(agentId);
-    const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
-    if (!expectedTurnId || !agent.session.steerActiveTurn) {
-      return { status: "unavailable" };
-    }
-    const result = await this.runSteerAdmission(agent, expectedTurnId, async () => {
-      const admission = await agent.session.steerActiveTurn!(prompt, {
-        ...options,
-        expectedTurnId,
-      });
-      if (admission.status === "accepted") {
-        await this.recordAcceptedSteer(agent, prompt, options?.clientMessageId, expectedTurnId);
-      }
-      return admission;
-    });
-    // An unavailable answer is only safe to fall back from while this admission
-    // still owns the active turn. Never let an A admission replace a later B.
-    if (result.status === "unavailable" && agent.activeTurnId !== expectedTurnId) {
-      throw new Error("Active turn changed before steering could be delivered");
-    }
-    return result;
+    assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+    return this.withInput(
+      agentId,
+      "steer",
+      options?.clientMessageId,
+      async (handle) => {
+        if (handle) {
+          prompt = this.trustedPlugins.dispatchPrompt(handle);
+          options = snapshotRunOptions({
+            ...options,
+            [TRUSTED_OPERATION]: handle,
+          });
+        }
+        const agent = this.requireSessionAgent(agentId);
+        if (options?.[FINAL_INPUT_CHECK] && !["codex", "claude"].includes(agent.provider))
+          throw new Error("Final-checked notification provider unavailable");
+        const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
+        if (!expectedTurnId || !agent.session.steerActiveTurn) {
+          return { status: "unavailable" };
+        }
+        const result = await this.runSteerAdmission(agent, expectedTurnId, async () => {
+          const admission = await nativeDispatch(
+            () => (
+              assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]),
+              agent.session.steerActiveTurn!(prompt, {
+                ...options,
+                expectedTurnId,
+              })
+            ),
+          );
+          if (admission.status === "accepted") {
+            await this.recordAcceptedSteer(agent, prompt, options?.clientMessageId, expectedTurnId);
+          }
+          return admission;
+        });
+        // An unavailable answer is only safe to fall back from while this admission
+        // still owns the active turn. Never let an A admission replace a later B.
+        if (result.status === "unavailable" && agent.activeTurnId !== expectedTurnId) {
+          throw new Error("Active turn changed before steering could be delivered");
+        }
+        return result;
+      },
+      promptPayload(prompt, options),
+      options?.[TRUSTED_OPERATION],
+    );
   }
 
   async steerOrReplaceActiveTurn(
@@ -3146,45 +4787,75 @@ export class AgentManager {
     prompt: AgentPromptInput,
     options?: AgentSteerOptions,
   ): Promise<ActiveTurnSteerDispatchResult> {
-    const agent = this.requireSessionAgent(agentId);
-    const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
-    if (!expectedTurnId) {
-      return { status: "inactive" };
-    }
-
-    const result = agent.session.steerActiveTurn
-      ? await this.runSteerAdmission(agent, expectedTurnId, async () => {
-          const admission = await agent.session.steerActiveTurn!(prompt, {
+    assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+    return this.withInput(
+      agentId,
+      "steer",
+      options?.clientMessageId,
+      async (handle) => {
+        if (handle) {
+          prompt = this.trustedPlugins.dispatchPrompt(handle);
+          options = snapshotRunOptions({
             ...options,
-            expectedTurnId,
+            [TRUSTED_OPERATION]: handle,
           });
-          if (admission.status === "accepted") {
-            await this.recordAcceptedSteer(agent, prompt, options?.clientMessageId, expectedTurnId);
-          }
-          return admission;
-        })
-      : { status: "unavailable" as const };
-    if (result.status === "accepted") {
-      return { status: "steered" };
-    }
+        }
+        const agent = this.requireSessionAgent(agentId);
+        if (options?.[FINAL_INPUT_CHECK] && !["codex", "claude"].includes(agent.provider))
+          throw new Error("Final-checked notification provider unavailable");
+        const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
+        if (!expectedTurnId) {
+          return { status: "inactive" };
+        }
 
-    // Providers without autonomous steering keep their existing dispatch behavior. The shared
-    // admission may recognize the turn, but only an accepted steer can own it without replacement.
-    if (agent.activeForegroundTurnId === null && agent.activeTurnId === expectedTurnId) {
-      return { status: "inactive" };
-    }
+        const result = agent.session.steerActiveTurn
+          ? await this.runSteerAdmission(agent, expectedTurnId, async () => {
+              const admission = await nativeDispatch(
+                () => (
+                  assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]),
+                  agent.session.steerActiveTurn!(prompt, {
+                    ...options,
+                    expectedTurnId,
+                  })
+                ),
+              );
+              if (admission.status === "accepted") {
+                await this.recordAcceptedSteer(
+                  agent,
+                  prompt,
+                  options?.clientMessageId,
+                  expectedTurnId,
+                );
+              }
+              return admission;
+            })
+          : { status: "unavailable" as const };
+        if (result.status === "accepted") {
+          return { status: "steered" };
+        }
 
-    await this.beforeSteerUnavailableFallback?.({ agentId, expectedTurnId });
-    this.assertSteerAdmissionOwnsTurn(agent, expectedTurnId);
-    return {
-      status: "replaced",
-      iterator: await this.replaceAdmittedForegroundTurn(
-        agent,
-        expectedTurnId,
-        prompt,
-        stripSteerOptions(options),
-      ),
-    };
+        // Providers without autonomous steering keep their existing dispatch behavior. The shared
+        // admission may recognize the turn, but only an accepted steer can own it without replacement.
+        if (agent.activeForegroundTurnId === null && agent.activeTurnId === expectedTurnId) {
+          return { status: "inactive" };
+        }
+
+        await this.beforeSteerUnavailableFallback?.({ agentId, expectedTurnId });
+        assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
+        this.assertSteerAdmissionOwnsTurn(agent, expectedTurnId);
+        return {
+          status: "replaced",
+          iterator: await this.replaceAdmittedForegroundTurn(
+            agent,
+            expectedTurnId,
+            prompt,
+            stripSteerOptions(options),
+          ),
+        };
+      },
+      promptPayload(prompt, options),
+      options?.[TRUSTED_OPERATION],
+    );
   }
 
   private assertSteerAdmissionOwnsTurn(agent: ActiveManagedAgent, expectedTurnId: string): void {
@@ -3250,7 +4921,7 @@ export class AgentManager {
     this.emitState(agent);
 
     try {
-      await this.cancelAgentRunBefore(agent.id, "replace");
+      await this.cancelAgentRunBefore(agent.id, "replace", options?.[TRUSTED_OPERATION]);
       return this.streamAgent(agent.id, prompt, options);
     } catch (error) {
       const latest = this.agents.get(agent.id);
@@ -3398,41 +5069,89 @@ export class AgentManager {
     requestId: string,
     response: AgentPermissionResponse,
   ): Promise<AgentPermissionResult | void> {
-    const agent = this.requireAgent(agentId);
-    if (agent.inFlightPermissionResponses.has(requestId)) {
-      throw new Error("A response to this permission request is already being submitted");
-    }
-    agent.inFlightPermissionResponses.add(requestId);
+    return this.withStoredInput(
+      agentId,
+      "permission",
+      requestId,
+      async () => {
+        const agent = this.requireAgent(agentId);
+        const originalRequestId = requestId;
+        requestId = this.trustedPlugins.permission(agent, requestId, response);
+        if (requestId !== originalRequestId && !agent.pendingPermissions.has(requestId)) {
+          throw new Error("Rewritten permission request is not pending on this agent");
+        }
+        if (agent.inFlightPermissionResponses.has(requestId)) {
+          throw new Error("A response to this permission request is already being submitted");
+        }
+        agent.inFlightPermissionResponses.add(requestId);
 
-    try {
-      const result = await agent.session.respondToPermission(requestId, response);
-      agent.pendingPermissions.delete(requestId);
+        try {
+          const result = await nativeDispatch(() =>
+            agent.session.respondToPermission(requestId, response),
+          );
+          agent.pendingPermissions.delete(requestId);
 
-      try {
-        await this.refreshSessionState(agent);
-      } catch {
-        // Ignore refresh errors - state sync after permission approval is best effort.
-      }
+          try {
+            await this.refreshSessionState(agent);
+          } catch {
+            // Ignore refresh errors - state sync after permission approval is best effort.
+          }
 
-      this.touchUpdatedAt(agent);
-      await this.persistSnapshot(agent);
-      this.emitState(agent);
+          this.touchUpdatedAt(agent);
+          await this.persistSnapshot(agent);
+          this.emitState(agent);
 
-      const bufferedResolution = agent.bufferedPermissionResolutions.get(requestId);
-      if (bufferedResolution) {
-        agent.bufferedPermissionResolutions.delete(requestId);
-        this.dispatchStream(agent.id, bufferedResolution, { timestamp: new Date().toISOString() });
-      }
+          const bufferedResolution = agent.bufferedPermissionResolutions.get(requestId);
+          if (bufferedResolution || this.trustedPlugins.hasPermissionGuards()) {
+            agent.bufferedPermissionResolutions.delete(requestId);
+            this.dispatchStream(
+              agent.id,
+              bufferedResolution ?? {
+                type: "permission_resolved",
+                provider: agent.provider,
+                requestId,
+                resolution: response,
+              },
+              { timestamp: new Date().toISOString() },
+            );
+          }
 
-      return result;
-    } finally {
-      agent.inFlightPermissionResponses.delete(requestId);
-      agent.bufferedPermissionResolutions.delete(requestId);
-    }
+          return result;
+        } finally {
+          agent.inFlightPermissionResponses.delete(requestId);
+          agent.bufferedPermissionResolutions.delete(requestId);
+        }
+      },
+      () => {
+        response = normalizeTrustedPermissionResponse(response);
+        return { type: "permission", requestId, response };
+      },
+    );
   }
 
-  async cancelAgentRun(agentId: string): Promise<AgentRunCancellationResult> {
-    return this.runForegroundMutation(agentId, () => this.cancelAgentRunNow(agentId));
+  async cancelAgentRun(
+    agentId: string,
+    handle?: TrustedOperationHandle,
+  ): Promise<AgentRunCancellationResult> {
+    return this.withInput(
+      agentId,
+      "cancel",
+      undefined,
+      async (operationHandle) => {
+        return this.runForegroundMutation(agentId, () =>
+          this.withInput(
+            agentId,
+            "cancel",
+            undefined,
+            () => this.cancelAgentRunNow(agentId),
+            commandPayload("cancel"),
+            operationHandle,
+          ),
+        );
+      },
+      commandPayload("cancel"),
+      handle,
+    );
   }
 
   private async cancelAgentRunNow(agentId: string): Promise<AgentRunCancellationResult> {
@@ -3454,7 +5173,7 @@ export class AgentManager {
     });
 
     if (!interruptAcknowledged) {
-      // `running` with nothing behind it: no tracked run existed (this call synthesized one), no
+      // Orca R3b. `running` with nothing behind it: no tracked run existed (this call synthesized one), no
       // foreground or provider turn, no pending replacement, and the provider acknowledged no interrupt. Nothing
       // will ever settle it, so it is cleared. A real run -- any of those present -- keeps today's refusal.
       if (
@@ -3524,8 +5243,9 @@ export class AgentManager {
   private async cancelAgentRunBefore(
     agentId: string,
     action: "reload" | "replace" | "rewind",
+    handle?: TrustedOperationHandle,
   ): Promise<void> {
-    const result = await this.cancelAgentRun(agentId);
+    const result = await this.cancelAgentRun(agentId, handle);
     if (result.status === "refused") {
       throw new AgentRunCancellationError(agentId, action);
     }
@@ -3534,7 +5254,7 @@ export class AgentManager {
   private async interruptSession(session: AgentSession, agentId: string): Promise<boolean> {
     try {
       const result = await this.waitWithTimeout({
-        operation: session.interrupt(),
+        operation: nativeDispatch(() => session.interrupt()),
         timeoutMs: this.rescueTimeouts.interruptSessionMs,
         onLateError: (error) => {
           this.logger.warn(
@@ -3580,61 +5300,71 @@ export class AgentManager {
   }
 
   async rewind(agentId: string, messageId: string, mode: RewindMode): Promise<void> {
-    const agent = this.requireSessionAgent(agentId);
-    const submittedRow = this.timelineStore
-      .getRows(agentId)
-      .find(
-        (row) =>
-          row.item.type === "user_message" &&
-          row.item.messageId === messageId &&
-          row.item.clientMessageId === messageId,
-      );
-    if (submittedRow && !submittedRow.providerMessageId) {
-      throw new Error("Cannot rewind before the provider acknowledges the submitted prompt");
-    }
-    const providerMessageId = submittedRow?.providerMessageId ?? messageId;
+    return this.withStoredInput(
+      agentId,
+      "rewind",
+      messageId,
+      async (operationHandle) => {
+        const agent = this.requireSessionAgent(agentId);
+        const submittedRow = this.timelineStore
+          .getRows(agentId)
+          .find(
+            (row) =>
+              row.item.type === "user_message" &&
+              row.item.messageId === messageId &&
+              row.item.clientMessageId === messageId,
+          );
+        if (submittedRow && !submittedRow.providerMessageId) {
+          throw new Error("Cannot rewind before the provider acknowledges the submitted prompt");
+        }
+        const providerMessageId = submittedRow?.providerMessageId ?? messageId;
 
-    if (this.hasInFlightRun(agentId)) {
-      await this.cancelAgentRunBefore(agentId, "rewind");
-    }
+        if (this.hasInFlightRun(agentId)) {
+          await this.cancelAgentRunBefore(agentId, "rewind", operationHandle);
+        }
 
-    const lock = this.runs.createPendingRun(agentId);
-    try {
-      this.logger.info(
-        { agentId, provider: agent.provider, messageId, mode },
-        "agent.rewind.start",
-      );
-      await invokeRewindCapability(agent.session, { messageId: providerMessageId, mode });
-      if (mode !== "files") {
-        await this.hydrateTimelineFromProvider(agentId, {
-          force: true,
-          broadcast: true,
-          broadcastTimeline: false,
-        });
-        this.dispatch({
-          type: "timeline_replacement",
-          agentId,
-          epoch: this.timelineStore.getEpoch(agentId),
-        });
-      }
-      // Rewind stages provider events under the run lock; publish its final state directly.
-      this.refreshSessionPersistence(agent);
-      await this.refreshSessionState(agent, { emit: false });
-      await this.persistSnapshot(agent);
-      this.emitState(agent, { persist: false });
-      this.logger.info(
-        { agentId, provider: agent.provider, messageId, mode },
-        "agent.rewind.complete",
-      );
-    } catch (error) {
-      this.logger.warn(
-        { err: error, agentId, provider: agent.provider, messageId, mode },
-        "agent.rewind.failed",
-      );
-      throw error;
-    } finally {
-      this.runs.settleForegroundRun(agentId, lock.token);
-    }
+        const lock = this.runs.createPendingRun(agentId);
+        try {
+          this.logger.info(
+            { agentId, provider: agent.provider, messageId, mode },
+            "agent.rewind.start",
+          );
+          await nativeDispatch(() =>
+            invokeRewindCapability(agent.session, { messageId: providerMessageId, mode }),
+          );
+          if (mode !== "files") {
+            await this.hydrateTimelineFromProvider(agentId, {
+              force: true,
+              broadcast: true,
+              broadcastTimeline: false,
+            });
+            this.dispatch({
+              type: "timeline_replacement",
+              agentId,
+              epoch: this.timelineStore.getEpoch(agentId),
+            });
+          }
+          // Rewind stages provider events under the run lock; publish its final state directly.
+          this.refreshSessionPersistence(agent);
+          await this.refreshSessionState(agent, { emit: false });
+          await this.persistSnapshot(agent);
+          this.emitState(agent, { persist: false });
+          this.logger.info(
+            { agentId, provider: agent.provider, messageId, mode },
+            "agent.rewind.complete",
+          );
+        } catch (error) {
+          this.logger.warn(
+            { err: error, agentId, provider: agent.provider, messageId, mode },
+            "agent.rewind.failed",
+          );
+          throw error;
+        } finally {
+          this.runs.settleForegroundRun(agentId, lock.token);
+        }
+      },
+      commandPayload("rewind", { messageId, mode }),
+    );
   }
 
   async deleteAgentState(agentId: string): Promise<void> {
@@ -3667,6 +5397,7 @@ export class AgentManager {
 
   /** Finishes a delete once the registry record is gone; retained history stays readable. */
   async finishDeletedAgentState(agentId: string): Promise<void> {
+    this.trustedPlugins.deleteKnownAgent(agentId);
     await this.durableTimelineStore?.commitRetention?.(agentId);
   }
 
@@ -4042,11 +5773,17 @@ export class AgentManager {
         options,
       });
 
+      managed.archivedAt = (await this.registry?.get(resolvedAgentId))?.archivedAt ?? null;
+      // Read history before publishing the agent: a provider failure must leave the
+      // session unregistered so the registration catch closes it.
+      const startupHistory = await this.collectStartupHistory(managed);
+
       this.assertAcceptingAgentRegistrations();
       this.agents.set(resolvedAgentId, managed);
       registered = true;
       // Initialize previousStatus to track transitions
       this.previousStatuses.set(resolvedAgentId, managed.lifecycle);
+      await this.recordStartupTimeline(managed, startupHistory);
       await this.refreshRuntimeInfo(managed, { emit: false });
       this.assertAgentRegistrationActive(managed);
       await this.persistSnapshot(managed, {
@@ -4070,6 +5807,8 @@ export class AgentManager {
       this.assertAgentRegistrationActive(managed);
       this.emitState(managed, { persist: false });
       this.subscribeToSession(managed);
+      const launch = this.reportLaunches.get(resolvedAgentId);
+      if (launch) launch.identity = this.currentReportIdentity(resolvedAgentId);
       return { ...managed };
     } catch (error) {
       if (!registered && !options?.deferFailureCleanup) {
@@ -4093,10 +5832,34 @@ export class AgentManager {
 
   private async closeUnregisteredSession(session: AgentSession): Promise<void> {
     try {
-      await session.close();
+      await nativeDispatch(() => session.close());
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to close unregistered agent session");
     }
+  }
+
+  private async collectStartupHistory(agent: ActiveManagedAgent): Promise<AgentStreamEvent[]> {
+    const history: AgentStreamEvent[] = [];
+    if (!agent.session.initialTimeline?.length || agent.historyPrimed) return history;
+    for await (const event of agent.session.streamHistory()) {
+      history.push(limitAgentStreamEventContent(event));
+    }
+    return history;
+  }
+
+  private async recordStartupTimeline(
+    agent: ActiveManagedAgent,
+    history: AgentStreamEvent[],
+  ): Promise<void> {
+    if (!agent.session.initialTimeline?.length) return;
+    if (!agent.historyPrimed) {
+      await this.primeTimelineFromLegacyProviderHistory(agent, false, history);
+    } else {
+      for (const entry of agent.session.initialTimeline) {
+        await this.recordTimeline(agent.id, entry.item, { timestamp: entry.timestamp });
+      }
+    }
+    this.refreshSessionPersistence(agent);
   }
 
   private async requireExternalMcpSupport(
@@ -4175,8 +5938,15 @@ export class AgentManager {
       | undefined;
   }): ActiveManagedAgent {
     const { resolvedAgentId, session, config, now, durableTimelineHasRows, options } = params;
+    const trustedPlugins = this.trustedPlugins;
+    trustedPlugins.addKnownAgent(resolvedAgentId);
     return {
       id: resolvedAgentId,
+      instanceId: randomUUID(),
+      archivedAt: null,
+      get inputSequence() {
+        return trustedPlugins.sequence(resolvedAgentId);
+      },
       provider: config.provider,
       cwd: config.cwd,
       workspaceId: options?.workspaceId,
@@ -4277,10 +6047,128 @@ export class AgentManager {
   private emitClosedAgent(agent: ManagedAgentClosed, options?: { persist?: boolean }): void {
     this.emitState(agent, options);
   }
+  private readonly evidenceProviders = new WeakSet<object>();
+  private registerEvidenceProvider(agent: ActiveManagedAgent): void {
+    const provider = agent.session;
+    if (!this.reportRegistry || !this.nativeReceipts) return;
+    if (this.evidenceProviders.has(provider)) return;
+    this.evidenceProviders.add(provider);
+    registerNativeEvidenceSink(
+      provider,
+      (completion: Readonly<NativeCompletion>, requireProvider) => {
+        const source = this.currentReportIdentity(agent.id);
+        const registry = this.reportRegistry;
+        const ledger = this.nativeReceipts;
+        if (!source || !registry || !ledger)
+          throw new Error("Registered native evidence source required");
+        let scopes: ReturnType<NativeReportRegistry["captureEvidenceScope"]>;
+        try {
+          scopes = registry.captureEvidenceScope(source);
+        } catch {
+          return undefined;
+        }
+        if (scopes.length === 0) return undefined;
+        if (scopes.length !== 1)
+          throw new Error("One explicitly registered native evidence task scope required");
+        const guard = () => {
+          requireProvider();
+          if (
+            this.agents.get(agent.id) !== agent ||
+            agent.session !== provider ||
+            nativeEvidenceDigest(this.currentReportIdentity(agent.id)) !==
+              nativeEvidenceDigest(source)
+          )
+            throw new Error("Native evidence source replaced");
+          for (const capture of scopes) {
+            const current = registry.requireParent(source, capture.scope);
+            if (
+              nativeEvidenceDigest(current) !==
+              nativeEvidenceDigest({
+                sourceEpoch: capture.sourceEpoch,
+                parent: capture.parent,
+                parentEpoch: capture.parentEpoch,
+              })
+            )
+              throw new Error("Native evidence scope replaced");
+          }
+        };
+        guard();
+        const at = Date.now();
+        const records = scopes.map((capture) => {
+          const operationDigest = nativeEvidenceDigest({
+            agentId: source.agentId,
+            thread: completion.threadId,
+            turn: completion.turnId,
+            id: completion.id,
+          });
+          const id = `${operationDigest.slice(0, 8)}-${operationDigest.slice(8, 12)}-4${operationDigest.slice(13, 16)}-8${operationDigest.slice(17, 20)}-${operationDigest.slice(20, 32)}`;
+          const body = {
+            version: 3 as const,
+            recordType: "native_evidence_attempt" as const,
+            source,
+            sourceEpoch: capture.sourceEpoch,
+            recipient: capture.parent,
+            recipientEpoch: capture.parentEpoch,
+            completionBodyDigest: completion.bodyHash,
+            entry: {
+              id,
+              operationDigest,
+              scope: capture.scope,
+              at,
+              expiresAt: at + 6 * 60 * 60 * 1000,
+            },
+          };
+          return NativeEvidenceClaimSchema.parse({
+            ...body,
+            fingerprint: nativeEvidenceDigest(body),
+            bytes: 4096,
+          });
+        });
+        return {
+          requireCurrent: guard,
+          prepare: async () => {
+            // All scopes reserve their permanent attempt before materialization; partial reservation never replays.
+            for (const record of records) {
+              guard();
+              if (!(await ledger.prepareEvidence(record, guard))) return false;
+              guard();
+            }
+            return true;
+          },
+          publish: (raw: unknown) => {
+            const fact = NativeEvidenceFactSchema.parse(raw);
+            guard();
+            const work = (async () => {
+              for (const claim of records) {
+                guard();
+                const { fingerprint: _fingerprint, ...captured } = claim;
+                const body = {
+                  ...captured,
+                  recordType: "native_evidence" as const,
+                  entry: { ...claim.entry, fact, metadataCommitted: true as const },
+                };
+                const { bytes: _bytes, ...immutable } = body;
+                const record = NativeEvidenceJournalSchema.parse({
+                  ...body,
+                  fingerprint: nativeEvidenceDigest(immutable),
+                });
+                await ledger.appendEvidence(record, guard);
+                guard();
+              }
+            })();
+            this.trackBackgroundTask(work);
+            return work;
+          },
+        };
+      },
+    );
+  }
+
   private subscribeToSession(agent: ActiveManagedAgent): void {
     if (agent.unsubscribeSession) {
       return;
     }
+    this.registerEvidenceProvider(agent);
     const agentId = agent.id;
     const unsubscribe = agent.session.subscribe((event: AgentStreamEvent) => {
       this.enqueueSessionEvent(agentId, event);
@@ -4374,6 +6262,10 @@ export class AgentManager {
     if (event.type === "provider_subagent") {
       const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
       this.dispatch({ type: "provider_subagent", event: update });
+      return;
+    }
+    if (event.type === "background_work_changed") {
+      this.applyBackgroundWork(agent, event.backgroundWork);
       return;
     }
     const turnId = getAgentStreamEventTurnId(event);
@@ -4585,28 +6477,34 @@ export class AgentManager {
     this.emitState(agent);
   }
 
+  private publishHistorySubagentEvent(
+    event: AgentManagerEvent,
+    broadcast: boolean | (() => boolean),
+    pending: AgentManagerEvent[],
+  ): void {
+    if (typeof broadcast === "function") pending.push(event);
+    else if (broadcast) this.dispatch(event);
+  }
+
   private async primeTimelineFromLegacyProviderHistory(
     agent: ActiveManagedAgent,
     broadcast: boolean | (() => boolean),
+    history:
+      | AsyncIterable<AgentStreamEvent>
+      | Iterable<AgentStreamEvent> = agent.session.streamHistory(),
   ): Promise<void> {
     const deferredBroadcast = typeof broadcast === "function";
-    const timelineEvents: Array<{
-      event: Extract<AgentStreamEvent, { type: "timeline" }>;
-      row: AgentTimelineRow;
-    }> = [];
-    const providerSubagentEvents: AgentManagerEvent[] = [];
+    const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
+    const historySubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
     agent.historyPrimed = false;
     try {
-      for await (const rawEvent of agent.session.streamHistory()) {
+      // Collect the whole replay before touching either store. A stream that fails
+      // halfway then leaves the committed timeline as it was, instead of a partial
+      // copy the next attempt would append to.
+      for await (const rawEvent of history) {
         const event = limitAgentStreamEventContent(rawEvent);
         if (event.type === "provider_subagent") {
-          const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
-          const managerEvent: AgentManagerEvent = { type: "provider_subagent", event: update };
-          if (deferredBroadcast) {
-            providerSubagentEvents.push(managerEvent);
-          } else if (broadcast) {
-            this.dispatch(managerEvent);
-          }
+          historySubagentEvents.push(event);
           continue;
         }
         if (event.type !== "timeline") {
@@ -4615,24 +6513,51 @@ export class AgentManager {
         if (event.item.type === "user_message" && isSystemInjectedEnvelope(event.item.text)) {
           continue;
         }
-        const row = await this.recordTimeline(
-          agent.id,
-          event.item,
-          event.timestamp ? { timestamp: event.timestamp } : undefined,
-        );
-        if (deferredBroadcast) {
-          timelineEvents.push({ event, row });
-        } else if (broadcast) {
-          this.dispatchStream(agent.id, event, {
-            seq: row.seq,
-            epoch: this.timelineStore.getEpoch(agent.id),
-            timestamp: row.timestamp,
-          });
-        }
+        historyEvents.push(event);
       }
     } catch (error) {
       this.logger.warn({ err: error, agentId: agent.id }, "Failed to hydrate provider history");
       throw error;
+    }
+
+    // The replay is the timeline, so drop the rows a previous hydration committed.
+    // Keeping them would leave getTimelineRows reading one copy per hydration.
+    await this.deleteCommittedTimeline(agent.id);
+    this.timelineStore.delete(agent.id);
+    this.timelineStore.initialize(
+      agent.id,
+      await this.loadCommittedTimelineSeed(agent.id, new Date()),
+    );
+
+    const timelineEvents: Array<{
+      event: Extract<AgentStreamEvent, { type: "timeline" }>;
+      row: AgentTimelineRow;
+    }> = [];
+    const providerSubagentEvents: AgentManagerEvent[] = [];
+    for (const event of this.providerSubagents.deleteParent(agent.id)) {
+      const managerEvent: AgentManagerEvent = { type: "provider_subagent", event };
+      this.publishHistorySubagentEvent(managerEvent, broadcast, providerSubagentEvents);
+    }
+    for (const event of historySubagentEvents) {
+      const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
+      const managerEvent: AgentManagerEvent = { type: "provider_subagent", event: update };
+      this.publishHistorySubagentEvent(managerEvent, broadcast, providerSubagentEvents);
+    }
+    for (const event of historyEvents) {
+      const row = await this.recordTimeline(
+        agent.id,
+        event.item,
+        event.timestamp ? { timestamp: event.timestamp } : undefined,
+      );
+      if (deferredBroadcast) {
+        timelineEvents.push({ event, row });
+      } else if (broadcast) {
+        this.dispatchStream(agent.id, event, {
+          seq: row.seq,
+          epoch: this.timelineStore.getEpoch(agent.id),
+          timestamp: row.timestamp,
+        });
+      }
     }
     agent.historyPrimed = true;
 
@@ -4864,6 +6789,7 @@ export class AgentManager {
       case "timeline":
         return this.onStreamTimelineEvent({ agent, event, options, flags });
       case "turn_completed":
+        this.reportObservedLifecycle(agent, "ended", eventTurnId, isForegroundEvent);
         this.onStreamTurnCompleted({
           agent,
           event,
@@ -4873,6 +6799,7 @@ export class AgentManager {
         });
         return undefined;
       case "turn_failed":
+        this.reportObservedLifecycle(agent, "blocked", eventTurnId, isForegroundEvent);
         return this.onStreamTurnFailed({
           agent,
           event,
@@ -4895,7 +6822,8 @@ export class AgentManager {
         this.onStreamTurnStarted({ agent, eventTurnId, isForegroundEvent, flags });
         return undefined;
       case "permission_requested":
-        this.onStreamPermissionRequested(agent, event);
+        this.reportObservedLifecycle(agent, "needs-you", eventTurnId, isForegroundEvent);
+        this.handlePermissionRequest(agent, event, flags, options);
         return undefined;
       case "permission_resolved":
         this.onStreamPermissionResolved({ agent, event, options, flags });
@@ -5117,6 +7045,72 @@ export class AgentManager {
     this.emitState(agent);
   }
 
+  /**
+   * FIX-8 W3 (gate Z): a trusted plugin may answer a permission request before it is surfaced (Fulcra: an ordinary tool
+   * call in an automatic mode -- Claude auto, Codex full-access -- on a session the controller does not own, with no
+   * escalation reason). Answered that way it never becomes a pending permission: no attention, no client frame, no
+   * waiter wake. If the answer cannot be delivered, the request is surfaced as usual.
+   */
+  private handlePermissionRequest(
+    agent: ActiveManagedAgent,
+    event: Extract<AgentStreamEvent, { type: "permission_requested" }>,
+    flags: StreamEventFlags,
+    options: { fromHistory?: boolean } | undefined,
+  ): void {
+    if (!options?.fromHistory && this.answerAutomatically(agent, event, flags)) return;
+    this.onStreamPermissionRequested(agent, event);
+  }
+
+  private answerAutomatically(
+    agent: ActiveManagedAgent,
+    event: Extract<AgentStreamEvent, { type: "permission_requested" }>,
+    flags: StreamEventFlags,
+  ): boolean {
+    const session = agent.session;
+    const instanceId = agent.instanceId;
+    const nativeSessionId = agent.runtimeInfo?.sessionId;
+    const current = () =>
+      this.agents.get(agent.id) === agent &&
+      agent.session === session &&
+      agent.instanceId === instanceId &&
+      agent.runtimeInfo?.sessionId === nativeSessionId &&
+      !agent.internal &&
+      !agent.archivedAt &&
+      !this.inFlightAgentCloses.has(agent.id) &&
+      !this.mcpRefreshes.has(agent.id);
+    if (agent.internal || !this.trustedPlugins.automaticPermission(agent, event.request))
+      return false;
+    let ids = this.automaticPermissionIds.get(agent.id);
+    if (!ids) this.automaticPermissionIds.set(agent.id, (ids = new Set()));
+    ids.add(event.request.id);
+    flags.shouldDispatchEvent = false;
+    flags.shouldNotifyWaiters = false;
+    void Promise.resolve()
+      .then(() => {
+        // Revalidate after the async scheduling gap, with no await between the
+        // final decision and dispatch to the captured provider session.
+        if (!current()) {
+          ids?.delete(event.request.id);
+          return;
+        }
+        if (!this.trustedPlugins.automaticPermission(agent, event.request)) {
+          ids?.delete(event.request.id);
+          this.onStreamPermissionRequested(agent, event);
+          return;
+        }
+        return session.respondToPermission(event.request.id, { behavior: "allow" });
+      })
+      .catch((error: unknown) => {
+        ids?.delete(event.request.id);
+        this.logger.warn(
+          { err: error, agentId: agent.id },
+          "Automatic permission answer failed; surfacing it",
+        );
+        if (current()) this.onStreamPermissionRequested(agent, event);
+      });
+    return true;
+  }
+
   private onStreamPermissionRequested(
     agent: ActiveManagedAgent,
     event: Extract<AgentStreamEvent, { type: "permission_requested" }>,
@@ -5137,6 +7131,11 @@ export class AgentManager {
     flags: StreamEventFlags;
   }): void {
     const { agent, event, options, flags } = params;
+    if (this.automaticPermissionIds.get(agent.id)?.delete(event.requestId)) {
+      flags.shouldDispatchEvent = false;
+      flags.shouldNotifyWaiters = false;
+      return;
+    }
     agent.pendingPermissions.delete(event.requestId);
     this.refreshSessionPersistence(agent);
     if (!options?.fromHistory && agent.inFlightPermissionResponses.has(event.requestId)) {
@@ -5374,6 +7373,45 @@ export class AgentManager {
     if (this.timelineFailures.has(agentId)) throw this.timelineFailures.get(agentId);
   }
 
+  /**
+   * Starts the display-only process sample for providers that expose a process and have no task
+   * protocol of their own (Codex). Opt-in: the daemon starts it at boot; tests build managers
+   * without it.
+   */
+  startBackgroundWorkSampling(options?: Partial<BackgroundWorkSamplerOptions>): void {
+    if (this.backgroundWorkSampler) return;
+    this.backgroundWorkSampler = new BackgroundWorkSampler({
+      listTargets: () =>
+        [...this.agents.values()].flatMap((agent) => {
+          const pid = agent.session.getProcessId?.() ?? null;
+          return pid === null ? [] : [{ agentId: agent.id, pid, idle: agent.lifecycle === "idle" }];
+        }),
+      onChange: (agentId, work) => {
+        const agent = this.agents.get(agentId);
+        if (agent) this.applyBackgroundWork(agent, work);
+      },
+      ...options,
+    });
+    this.backgroundWorkSampler.start();
+  }
+
+  stopBackgroundWorkSampling(): void {
+    this.backgroundWorkSampler?.stop();
+    this.backgroundWorkSampler = null;
+  }
+
+  /**
+   * Records the session's display-only background-job count and re-publishes the snapshot. It
+   * deliberately leaves lifecycle, turns and waiters alone (background-work/authority-fence.test.ts).
+   */
+  applyBackgroundWork(agent: ManagedAgent, next: AgentBackgroundWork | null): void {
+    const current = agent.backgroundWork ?? null;
+    const normalized = next && next.count > 0 ? next : null;
+    if (isSameBackgroundWork(current, normalized)) return;
+    agent.backgroundWork = normalized;
+    this.emitState(agent, { persist: false });
+  }
+
   private emitState(agent: ManagedAgent, options?: { persist?: boolean }): void {
     // Keep attention as an edge-triggered unread signal, not a level signal.
     this.checkAndSetAttention(agent);
@@ -5382,6 +7420,7 @@ export class AgentManager {
     }
 
     this.syncFeaturesFromSession(agent);
+    this.scheduleNativeMessages(agent.id);
 
     this.logger.trace(
       {
@@ -5489,6 +7528,7 @@ export class AgentManager {
    * either install them or close them.
    */
   async flushForShutdown(): Promise<void> {
+    this.stopBackgroundWorkSampling();
     await this.flushTasks({ includeAgentRegistrations: true });
   }
 
@@ -5589,7 +7629,7 @@ export class AgentManager {
       if (!subscriber.agentId && this.eventBelongsToInternalAgent(event)) {
         continue;
       }
-      subscriber.callback(event);
+      this.trustedPlugins.daemon(() => subscriber.callback(event));
     }
   }
 
@@ -5613,23 +7653,11 @@ export class AgentManager {
     // Always resolve cwd to absolute path for consistent history file lookup
     if (normalized.cwd) {
       normalized.cwd = resolve(normalized.cwd);
-      try {
-        const cwdStats = await stat(normalized.cwd);
-        if (!cwdStats.isDirectory()) {
-          throw new Error(`Working directory is not a directory: ${normalized.cwd}`);
-        }
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          (error as NodeJS.ErrnoException).code === "ENOENT"
-        ) {
-          throw new Error(`Working directory does not exist: ${normalized.cwd}`, { cause: error });
-        }
-        if (error instanceof Error) {
-          throw error;
-        }
-        throw new Error(`Failed to access working directory: ${normalized.cwd}`, { cause: error });
+      // Only a session that will run in the directory needs it to still be there. Reading
+      // an archived agent's history runs nothing, and must survive the worktree it ran in
+      // being removed when its workspace was archived.
+      if (options.purpose !== "history") {
+        await assertUsableWorkingDirectory(normalized.cwd);
       }
     }
 
@@ -5706,6 +7734,19 @@ export class AgentManager {
     }
   }
 
+  private describeCreateCaller(
+    parentId: string | undefined,
+  ): { provider: string; modeId: string | null; modeClass: ChildModeClass } | null {
+    const parent = parentId ? this.agents.get(parentId) : undefined;
+    if (!parent) return null;
+    const modeId = parent.currentModeId ?? parent.config.modeId ?? null;
+    return {
+      provider: parent.provider,
+      modeId,
+      modeClass: childModeClass(parent.provider, modeId),
+    };
+  }
+
   private async resolveDefaultModeIdForCreate(
     config: AgentSessionConfig,
     env: Record<string, string> | undefined,
@@ -5772,17 +7813,23 @@ export class AgentManager {
   private async prepareSessionConfig(
     config: AgentSessionConfig,
     agentId: string,
-    env?: Record<string, string>,
-    options: { resolveDefaultMode?: boolean; resolveDefaultThinking?: boolean } = {},
+    options: {
+      env?: Record<string, string>;
+      purpose?: AgentResumePurpose;
+      resolveDefaultMode?: boolean;
+      resolveDefaultThinking?: boolean;
+    } = {},
   ): Promise<PreparedSessionConfig> {
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
-      env,
+      env: options.env,
+      purpose: options.purpose,
       resolveDefaultMode: options.resolveDefaultMode,
       resolveDefaultThinking: options.resolveDefaultThinking,
     });
     const paseoToolPolicy = this.paseoToolsEnabled
       ? this.resolvePaseoToolPolicy(storedConfig.provider)
       : { enabled: false };
+    const reportLaunch = this.prepareNativeReportLaunch(agentId);
     const launchConfig = this.applyDaemonAppendSystemPrompt(
       withRuntimePaseoMcpServer({
         config: storedConfig,
@@ -5792,6 +7839,7 @@ export class AgentManager {
             ? this.mcpBaseUrl
             : null,
         mcpAuthToken: this.mcpAuthToken,
+        nativeReportWitness: reportLaunch?.witness,
       }),
     );
     return { storedConfig, launchConfig, paseoToolPolicy };
@@ -5849,7 +7897,9 @@ export class AgentManager {
       client.capabilities.supportsNativePaseoTools &&
       this.paseoToolCatalogFactory
     ) {
+      const launch = this.reportLaunches.get(agentId);
       context.paseoTools = await this.paseoToolCatalogFactory({
+        nativeReportOrigin: launch?.origin,
         callerAgentId: agentId,
         paseoToolPolicy,
       });
@@ -5997,5 +8047,19 @@ export function commandMayHaveChangedExternalState(command: string): boolean {
     // Fetches update refs/remotes/ which our watchers do not watch, so
     // ahead/behind counts can drift stale until the next refresh.
     /\bgit\s+fetch\b/.test(normalized)
+  );
+}
+
+function isSameBackgroundWork(
+  left: AgentBackgroundWork | null,
+  right: AgentBackgroundWork | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.count === right.count &&
+    left.source === right.source &&
+    left.since === right.since &&
+    left.kinds.join(",") === right.kinds.join(",")
   );
 }

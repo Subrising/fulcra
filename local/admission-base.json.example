@@ -1,0 +1,6 @@
+{
+  "agent-manager.js": "<SHA256>",
+  "agent-prompt.js": "<SHA256>",
+  "lifecycle-command.js": "<SHA256>",
+  "../session.js": "<SHA256>"
+}

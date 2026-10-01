@@ -42,7 +42,7 @@ const PERSISTENCE_HANDLE_SCHEMA = z
   .nullable()
   .optional();
 
-// A turn the daemon was running when it stopped. At boot, a stored `running`/`initializing` record on an
+// Orca R3a. A turn the daemon was running when it stopped. At boot, a stored `running`/`initializing` record on an
 // agent no process has loaded is, by definition, a turn nobody is running any more: it is normalised to `idle` and
 // this marker records what happened, so "idle" is not read as "the turn finished". The marker describes only the
 // most recent turn: it survives snapshot flushes while `lastUserMessageAt` is unchanged and is dropped by the next
@@ -62,7 +62,7 @@ export function interruptedRecord(
   if (record.archivedAt || record.internal) return null;
   if (record.lastStatus !== "running" && record.lastStatus !== "initializing") return null;
   // Only the status changes, plus the marker. updatedAt and lastUserMessageAt stay byte-identical: sidebar order
-  // depends on updatedAt, and the input fence compares lastUserMessageAt.
+  // depends on updatedAt, and Orca's input fence compares lastUserMessageAt.
   return {
     ...record,
     lastStatus: "idle",
@@ -193,7 +193,7 @@ export class AgentStorage {
     return this.queueRecordMutation(record.id, () => record);
   }
 
-  // A mutation may return null to leave the record exactly as it is (a normalisation that no longer
+  // A mutation may return null to leave the record exactly as it is (Orca R3: a normalisation that no longer
   // applies writes nothing).
   private queueRecordMutation(
     agentId: string,
@@ -301,7 +301,7 @@ export class AgentStorage {
       if (existing && existing.archivedAt !== undefined) {
         record.archivedAt = existing.archivedAt;
       }
-      // Keep the interruption marker until the agent receives a new user message.
+      // Orca R3a: keep the interruption marker until the agent receives a new user message.
       if (
         existing?.interruptedTurn &&
         existing.interruptedTurn.lastUserMessageAt === (record.lastUserMessageAt ?? null)
@@ -312,7 +312,7 @@ export class AgentStorage {
     });
   }
 
-  // Called once at daemon boot before any agent is loaded. Rewrites every stored non-archived,
+  // Orca R3a, called once at daemon boot before any agent is loaded. Rewrites every stored non-archived,
   // non-internal `running`/`initializing` record to `idle` with an interruption marker. It loads, resumes and
   // prompts nothing. Each rewrite runs inside the per-agent write queue against the record current at that moment.
   async normalizeInterruptedTurns(
@@ -337,7 +337,7 @@ export class AgentStorage {
     return changed.sort();
   }
 
-  // The same normalisation for ONE agent, for `stop` on an agent no process has loaded. `stillUnloaded`
+  // Orca R3b. The same normalisation for ONE agent, for `stop` on an agent no process has loaded. `stillUnloaded`
   // is re-checked inside the write queue, so an agent that was loaded (and may have started a real turn) in the
   // meantime is never touched.
   async normalizeInterruptedTurn(

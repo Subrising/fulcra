@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import {
   type CheckoutDiffSubscriber,
@@ -1403,6 +1403,100 @@ describe("CheckoutSession", () => {
     });
   });
 
+  describe("retained stash application", () => {
+    it("applies the selected immutable object after an index shift and retains both stashes", async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), "checkout-stash-apply-")));
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
+      try {
+        git("init", "-q");
+        git("config", "user.email", "test@example.com");
+        git("config", "user.name", "Test User");
+        writeFileSync(join(cwd, "file.txt"), "base\n");
+        git("add", ".");
+        git("-c", "commit.gpgsign=false", "commit", "-qm", "base");
+        writeFileSync(join(cwd, "file.txt"), "selected\n");
+        git("stash", "push", "-m", "selected");
+        const selectedSha = git("rev-parse", "stash@{0}");
+        writeFileSync(join(cwd, "file.txt"), "newer\n");
+        git("stash", "push", "-m", "newer");
+        const { checkout, emitted, gitMutationCalls } = makeCheckoutSession({
+          git: {
+            listStashes: async (_cwd, options, readOptions) => {
+              expect(options?.paseoOnly).toBe(false);
+              expect(readOptions).toMatchObject({ force: true });
+              return [
+                { sha: selectedSha, index: 1, message: "selected", branch: null, isPaseo: false },
+              ];
+            },
+          },
+        });
+        const assertRetainedApply = vi.fn();
+        await checkout.handleStashPopRequest(
+          {
+            type: "stash_pop_request",
+            cwd,
+            stashIndex: 0,
+            stashSha: selectedSha,
+            keepStash: true,
+            requestId: "apply",
+          },
+          assertRetainedApply,
+        );
+        expect(assertRetainedApply).toHaveBeenCalledWith({ cwd, sha: selectedSha });
+        expect(readFileSync(join(cwd, "file.txt"), "utf8")).toBe("selected\n");
+        expect(git("stash", "list").split("\n")).toHaveLength(2);
+        expect(emitted).toContainEqual({
+          type: "stash_pop_response",
+          payload: { cwd, success: true, error: null, requestId: "apply" },
+        });
+        expect(gitMutationCalls.notifyGitMutation).toContainEqual({
+          cwd,
+          reason: "stash-apply",
+          options: undefined,
+        });
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+    it("refuses a removed selected stash without applying a different index", async () => {
+      const { checkout, emitted, gitMutationCalls } = makeCheckoutSession({
+        git: { listStashes: async () => [] },
+      });
+      await checkout.handleStashPopRequest({
+        type: "stash_pop_request",
+        cwd: "/missing",
+        stashIndex: 0,
+        stashSha: "a".repeat(40),
+        keepStash: true,
+        requestId: "removed",
+      });
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "stash_pop_response",
+          payload: expect.objectContaining({ success: false }),
+        }),
+      );
+      expect(gitMutationCalls.notifyGitMutation).toEqual([]);
+    });
+    it("rejects retained application without an immutable SHA", async () => {
+      const { checkout, emitted } = makeCheckoutSession();
+      await checkout.handleStashPopRequest({
+        type: "stash_pop_request",
+        cwd: "/missing",
+        stashIndex: 0,
+        keepStash: true,
+        requestId: "missing-sha",
+      });
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "stash_pop_response",
+          payload: expect.objectContaining({ success: false }),
+        }),
+      );
+    });
+  });
+
   describe("stash list", () => {
     it("returns stash entries scoped to paseo stashes by default", async () => {
       const listStashesCalls: Array<{ cwd: string; paseoOnly: boolean | undefined }> = [];
@@ -1432,6 +1526,55 @@ describe("CheckoutSession", () => {
   });
 
   describe("pr status", () => {
+    it("reads the selected PR without consulting the current branch snapshot", async () => {
+      const calls: unknown[] = [];
+      const service = {
+        getPullRequest: async (input) => {
+          calls.push(input);
+          return {
+            number: 27,
+            title: "Selected change",
+            url: "https://github.com/example/shop/pull/27",
+            state: "MERGED",
+            body: null,
+            labels: [],
+            updatedAt: "2026-09-27T00:00:00Z",
+            baseRefName: "main",
+            headRefName: "feature",
+            baseRefOid: "a".repeat(40),
+            headRefOid: "b".repeat(40),
+          };
+        },
+      } as ForgeService;
+      const { checkout, emitted } = makeCheckoutSession({
+        git: {
+          resolveForge: async () => ({ forge: "github", host: "github.com", service }),
+          getSnapshot: async () => {
+            throw new Error("Do not read the current branch");
+          },
+        },
+      });
+      await checkout.handleCheckoutPrStatusRequest({
+        type: "checkout_pr_status_request",
+        cwd: "/repo",
+        requestId: "selected",
+        pullRequest: 27,
+      });
+      expect(calls).toEqual([{ cwd: "/repo", number: 27 }]);
+      expect(emitted[0]).toMatchObject({
+        type: "checkout_pr_status_response",
+        payload: {
+          error: null,
+          status: {
+            number: 27,
+            baseRefOid: "a".repeat(40),
+            headRefOid: "b".repeat(40),
+            isMerged: true,
+          },
+        },
+      });
+    });
+
     it("builds a pr status response from the git snapshot", async () => {
       const { checkout, emitted } = makeCheckoutSession({
         git: { getSnapshot: async (cwd) => createGitSnapshot(cwd, "main") },

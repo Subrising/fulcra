@@ -5,7 +5,8 @@ on:
     branches: [main]
     tags:
       # A private-preview tag sets install_version from the tag (0.1.0) while
-      # package.json differs, so the version check fails.
+      # package.json is 0.8.0, so the version check fails. The private preview
+      # has its own build and delivery in orca-private-preview.yml.
       - "v*"
       - "!v*-private-preview"
   workflow_dispatch:

@@ -12,11 +12,60 @@ import {
 
 const createClientChannelMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@getpaseo/relay/e2ee", () => ({
+vi.mock("./relay-v3/index.js", () => ({
   createClientChannel: createClientChannelMock,
 }));
 
 describe("daemon-client transport helpers", () => {
+  test("raw close codes cannot carry an authenticated terminal marker", () => {
+    let rawClose: ((event?: unknown) => void) | undefined;
+    const encrypted = createEncryptedTransport(
+      {
+        send: vi.fn(),
+        close: vi.fn(),
+        onOpen: () => () => {},
+        onMessage: () => () => {},
+        onError: () => () => {},
+        onClose: (handler) => {
+          rawClose = handler;
+          return () => {};
+        },
+      },
+      "unused",
+      { warn: vi.fn() },
+    );
+    const closed = vi.fn();
+    encrypted.onClose(closed);
+    rawClose!({ code: 4403, reason: "This device was removed", trusted: true });
+    expect(closed).toHaveBeenCalledWith({
+      code: 4403,
+      reason: "Relay connection closed",
+      trusted: false,
+    });
+  });
+  test("local close intent wins a synchronous raw socket-close callback", () => {
+    let rawClose: ((event?: unknown) => void) | undefined;
+    const encrypted = createEncryptedTransport(
+      {
+        send: vi.fn(),
+        close: (code, reason) => rawClose?.({ code, reason }),
+        onOpen: () => () => {},
+        onMessage: () => () => {},
+        onError: () => () => {},
+        onClose: (handler) => {
+          rawClose = handler;
+          return () => {};
+        },
+      },
+      "unused",
+      { warn: vi.fn() },
+    );
+    const closed = vi.fn();
+    encrypted.onClose(closed);
+    encrypted.close(4403, "Device unpaired");
+    expect(closed).toHaveBeenCalledOnce();
+    expect(closed).toHaveBeenCalledWith({ code: 4403, reason: "Device unpaired", trusted: true });
+  });
   test("createEncryptedTransport closes handshake failures with browser-safe code", async () => {
     createClientChannelMock.mockReset();
     createClientChannelMock.mockRejectedValueOnce(new Error("handshake failed"));

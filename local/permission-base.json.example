@@ -1,0 +1,14 @@
+{
+  "active": "<SHA256>",
+  "guard": {
+    "path": "/path/to/admission-guard.mjs",
+    "sha256": "<SHA256>"
+  },
+  "modules": {
+    "agent-manager.js": "<SHA256>"
+  },
+  "denyModules": {
+    "providers/claude/query.js": "<SHA256>"
+  },
+  "sourceHead": "<COMMIT>"
+}

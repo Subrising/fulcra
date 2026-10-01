@@ -58,6 +58,7 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
     case "changes_tree":
     case "files":
     case "pull_request":
+    case "context":
     case "architecture_map":
       return { kind: value.kind };
     case "setup": {
@@ -125,6 +126,7 @@ export function workspaceTabTargetsEqual(
         (right.context === "agent" && left.agentId === right.agentId))
     );
   }
+  if (left.kind === "context") return right.kind === "context";
   return secondaryWorkspaceTabTargetsEqual(left, right);
 }
 
@@ -227,6 +229,7 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
     target.kind === "changes_tree" ||
     target.kind === "files" ||
     target.kind === "pull_request" ||
+    target.kind === "context" ||
     target.kind === "architecture_map"
   ) {
     return target.kind;

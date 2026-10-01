@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { buildStoredAgentPayload } from "./agent/agent-projections.js";
 import type { PaseoDaemonConfig } from "./bootstrap.js";
 
-// A daemon that stops mid-turn leaves the agent's record saying `running`, and
+// Orca R3a (DESIGN-R R-M17, R-M18). A daemon that stops mid-turn leaves the agent's record saying `running`, and
 // agents initialize on demand, so nothing ever rewrote it. Boot now normalises such records -- and loads nothing.
 const originalPath = process.env.PATH;
 
@@ -22,7 +22,7 @@ describe("bootstrap interrupted-turn normalisation", () => {
     );
   });
 
-  test("boot marks a stored running turn idle and interrupted, and loads, resumes or prompts no agent", async () => {
+  test("R-M17: boot marks a stored running turn idle and interrupted, and loads, resumes or prompts no agent", async () => {
     const { createPaseoDaemon } = await import("./bootstrap.js");
     const root = await mkdtemp(path.join(os.tmpdir(), "paseo-interrupted-boot-"));
     roots.push(root);
@@ -98,7 +98,7 @@ describe("bootstrap interrupted-turn normalisation", () => {
           lastUserMessageAt: userAt,
         });
         expect(typeof r.interruptedTurn?.bootId).toBe("string");
-        // byte-identical timestamps, on disk.
+        // R-M18: byte-identical timestamps, on disk.
         // Storage may re-home a rewritten record under its per-cwd directory; read it wherever it now lives.
         const files = (await readdir(agentStoragePath, { recursive: true })).filter((f) =>
           String(f).endsWith(`${id}.json`),

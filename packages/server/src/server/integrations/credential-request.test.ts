@@ -58,7 +58,7 @@ function send(fetchImpl: typeof fetch) {
   });
 }
 
-describe("host-mediated answers: decoded scrubbing", () => {
+describe("host-mediated answers: decoded scrubbing (R-D-1)", () => {
   it("scrubs a token written entirely as \\u escapes in a JSON value", async () => {
     const result = await send(answer(`{"echo":"${escapeAll(TOKEN)}"}`, "application/json"));
     expect(result.body).toEqual({ echo: "[redacted]" });
@@ -109,7 +109,7 @@ describe("host-mediated answers: decoded scrubbing", () => {
   });
 });
 
-describe("host-mediated errors are host-written, bounded and secret-free", () => {
+describe("host-mediated errors are host-written, bounded and secret-free (R-D-1)", () => {
   it("turns a body stream failure that carries the token into a fixed message", async () => {
     const failing = (async () =>
       new Response(

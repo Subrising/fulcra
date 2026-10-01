@@ -26,7 +26,7 @@ import {
   shell,
   webContents,
 } from "electron";
-import { registerDaemonManager } from "./daemon/daemon-manager.js";
+import { registerDaemonManager, registerCommandCentreWindow } from "./daemon/daemon-manager.js";
 import { parsePassthroughCliArgsFromArgv, runPassthroughCli } from "./daemon/cli/passthrough.js";
 import { closeAllTransportSessions } from "./daemon/local-transport.js";
 import {
@@ -112,7 +112,7 @@ const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
 const APP_SCHEME = "paseo";
 const PASEO_DEBUG = process.env.PASEO_DEBUG === "1";
 const DISABLE_SINGLE_INSTANCE_LOCK = process.env.PASEO_DISABLE_SINGLE_INSTANCE_LOCK === "1";
-const APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim() || "Fulcra";
+const APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim() || "Orca";
 const DESKTOP_WINDOW_CHROME_MODE = resolveDesktopWindowChromeMode({
   platform: process.platform,
   override: process.env.PASEO_DESKTOP_WINDOW_CONTROLS,
@@ -131,8 +131,7 @@ const bootstrapComplete = new Promise<void>((resolve) => {
 });
 let bootstrapIsComplete = false;
 
-// APP_NAME names the userData directory (~/Library/Application Support/Fulcra on macOS) and the
-// safeStorage keychain item ("Fulcra Safe Storage").
+// APP_NAME names the userData directory, so it stays; people see APP_DISPLAY_NAME.
 app.setName(APP_NAME);
 app.setAboutPanelOptions({ applicationName: APP_DISPLAY_NAME });
 log.info("[desktop] app startup", {
@@ -324,7 +323,7 @@ if (forcedUserDataDir) {
     );
     const isWorktree = path.resolve(topLevel, ".git") !== commonDir;
     if (isWorktree) {
-      app.setPath("userData", path.join(app.getPath("appData"), `Fulcra-${devWorktreeName}`));
+      app.setPath("userData", path.join(app.getPath("appData"), `Orca-${devWorktreeName}`));
       log.info("[worktree] isolated userData for worktree:", devWorktreeName);
     } else {
       devWorktreeName = null;
@@ -714,6 +713,7 @@ async function createWindow(
       webviewTag: true,
     },
   });
+  registerCommandCentreWindow(mainWindow.webContents);
   applyDesktopWindowChromeMode({ win: mainWindow, mode: DESKTOP_WINDOW_CHROME_MODE });
 
   const webContentsId = mainWindow.webContents.id;
@@ -864,7 +864,7 @@ function receiveAgentDeepLink(input: string): void {
   });
 }
 
-// Sign-in return links go to the renderer, which hands them to the host that began the sign-in.
+// Fulcra J4: sign-in return links go to the renderer, which hands them to the host that began the sign-in.
 function receiveOAuthCallback(url: string): void {
   void bootstrapComplete.then(() => {
     const win =

@@ -50,7 +50,7 @@ import {
 } from "./auto-updater";
 
 describe("checkForAppUpdate", () => {
-  it("never checks or installs upstream releases in a fork product", async () => {
+  it("never checks or installs upstream releases in the Orca product", async () => {
     vi.mocked(app.getName).mockReturnValue("Orca");
     const checks = autoUpdaterMock.checkForUpdates.mock.calls.length;
     const downloads = autoUpdaterMock.downloadUpdate.mock.calls.length;

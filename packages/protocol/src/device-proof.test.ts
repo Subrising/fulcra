@@ -23,8 +23,8 @@ const FIXTURE_PAYLOAD: ChoicePayload = {
   confirmDestructive: false,
 };
 
-describe("canonical JSON (sorted keys, no whitespace)", () => {
-  it("produces the exact bytes a verifier checks", () => {
+describe("canonical JSON (CONTRACTS §3.6: sorted keys, no whitespace)", () => {
+  it("produces the exact bytes the controller verifies", () => {
     expect(canonicalJson(FIXTURE_PAYLOAD)).toBe(
       '{"at":"2026-09-24T21:04:00.000+10:00","confirmDestructive":false,' +
         '"decisionId":"00000000-0000-4000-8000-00000000d001",' +

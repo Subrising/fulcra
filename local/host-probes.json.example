@@ -1,0 +1,10 @@
+{
+  "node": "/path/to/node",
+  "miniBase": "/path/to/product",
+  "miniTaskRoots": [
+    "/path/to/tasks"
+  ],
+  "bookBase": "/path/to/remote-product",
+  "bookRootPrefix": "/path/to/enrolled-work/",
+  "bookSshTarget": "owner@host.example"
+}

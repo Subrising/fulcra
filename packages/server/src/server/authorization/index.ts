@@ -22,6 +22,12 @@ export function parseDaemonPermissions(values: readonly string[]): DaemonPermiss
 
 export const OWNER_PERMISSIONS: readonly DaemonPermission[] = DAEMON_PERMISSIONS;
 
+// U7: accounts.manage, like command-centre.manage, is never a device default; only the owner's explicit grant adds it.
+export const RELAY_DEVICE_DEFAULT_PERMISSIONS: readonly DaemonPermission[] =
+  OWNER_PERMISSIONS.filter(
+    (p) => p !== "command-centre.manage" && p !== "access.manage" && p !== "accounts.manage",
+  );
+
 export class SessionAuthorization {
   private permissions: ReadonlySet<DaemonPermission>;
 

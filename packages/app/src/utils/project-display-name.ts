@@ -1,3 +1,5 @@
+import { isGeneratedSessionName } from "./session-display-name";
+
 export function projectDisplayNameFromProjectId(projectId: string): string {
   const githubRemotePrefix = "remote:github.com/";
   if (projectId.startsWith(githubRemotePrefix)) {
@@ -16,4 +18,12 @@ export function projectIconPlaceholderLabelFromDisplayName(displayName: string):
 
   const segments = trimmedDisplayName.split("/").filter(Boolean);
   return segments[segments.length - 1] || trimmedDisplayName;
+}
+
+/** Display-only fallback: custom names do not make generated identities human-readable. */
+export function projectDisplayName(name: string, customName?: string | null): string {
+  return (
+    [customName, name].find((value) => value?.trim() && !isGeneratedSessionName(value))?.trim() ??
+    "Untitled project"
+  );
 }

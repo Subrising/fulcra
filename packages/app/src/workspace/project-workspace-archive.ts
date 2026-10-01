@@ -1,3 +1,4 @@
+import { sessionDisplayName } from "@/utils/session-display-name";
 import { confirmRiskyWorktreeArchive, toWorktreeArchiveRisk } from "@/git/worktree-archive-warning";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
 import type { WorkspaceArchiveTarget } from "@/workspace/workspace-archive";
@@ -11,7 +12,9 @@ export interface ProjectWorkspaceArchiveEntry extends Pick<
   | "archiveHasUncommittedChanges"
   | "archiveUnpushedCommitCount"
   | "diffStat"
-> {}
+> {
+  title?: string | null;
+}
 
 type ConfirmWorktreeArchive = typeof confirmRiskyWorktreeArchive;
 
@@ -24,7 +27,7 @@ export async function selectProjectWorkspacesToArchive(
   for (const workspace of workspaces) {
     if (workspace.workspaceKind === "worktree") {
       const shouldArchive = await confirmWorktreeArchive({
-        workspaceName: workspace.name,
+        workspaceName: sessionDisplayName(workspace.name, workspace.title),
         ...toWorktreeArchiveRisk(workspace),
       });
       if (!shouldArchive) {

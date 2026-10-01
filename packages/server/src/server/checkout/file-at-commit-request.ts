@@ -6,7 +6,7 @@ import type {
 import { FileAtCommitInputError, readFileAtCommit } from "../../utils/git-file-at-commit.js";
 import { expandTilde } from "../../utils/path.js";
 
-// `checkout.file-at-commit.get`. The cwd must be the directory of a workspace this
+// `checkout.file-at-commit.get` (CONTRACTS v1.16). The cwd must be the directory of a workspace this
 // daemon serves (its registry), not any folder on disk; then the read is `git cat-file` /
 // `git merge-base` only (utils/git-file-at-commit.ts).
 

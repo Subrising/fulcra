@@ -555,6 +555,39 @@ describe("WorkspaceGitServiceImpl primitive refresh entrypoint", () => {
     }
   });
 
+  test("U5-D07: a checkout whose GitHub remote is not named origin still gets its PR status poll", async () => {
+    const github = createGitHubServiceStub();
+    const runGitCommand = vi.fn(async (args: string[]) => {
+      const stdout =
+        args[0] === "config" && args[1] === "--get-regexp"
+          ? "remote.subrising.url git@github.com:Subrising/fulcra.git\n"
+          : `${REPO_CWD}\n`;
+      return { stdout, stderr: "", truncated: false, exitCode: 0, signal: null };
+    });
+    const service = createService({
+      github,
+      runGitCommand,
+      getCheckoutStatus: vi.fn(async (cwd: string) =>
+        createCheckoutStatus(cwd, { remoteUrl: null }),
+      ),
+      getCheckoutSnapshotFacts: vi.fn(async (cwd: string) => ({
+        ...createCheckoutFacts(cwd),
+        remoteUrl: null,
+      })),
+    });
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    await service.getSnapshot(REPO_CWD);
+    await vi.waitFor(() => {
+      expect(github.retainCurrentPullRequestStatusPoll).toHaveBeenCalled();
+    });
+    expect(runGitCommand).toHaveBeenCalledWith(
+      ["config", "--get-regexp", "^remote\\..*\\.url$"],
+      expect.anything(),
+    );
+    subscription.unsubscribe();
+    service.dispose();
+  });
+
   test("registerWorkspace returns a subscription without waiting for a cold snapshot", async () => {
     const checkoutStatusDeferred = createDeferred<CheckoutStatusGit>();
     const getCheckoutStatus = vi.fn(async () => checkoutStatusDeferred.promise);
@@ -1739,7 +1772,8 @@ describe("WorkspaceGitServiceImpl D2 read methods", () => {
 
   test("listStashes cold-loads, warms, forces, and coalesces per cwd", async () => {
     let nowMs = 0;
-    const stashOutput = "stash@{0}\u0000paseo-auto-stash: feature\n";
+    const stashSha = "a".repeat(40);
+    const stashOutput = `stash@{0}\u0000paseo-auto-stash: feature\u0000${stashSha}\n`;
     const stashDeferred = createDeferred<{
       stdout: string;
       stderr: string;
@@ -1775,8 +1809,24 @@ describe("WorkspaceGitServiceImpl D2 read methods", () => {
       signal: null,
     });
     await expect(Promise.all([first, second])).resolves.toEqual([
-      [{ index: 0, message: "paseo-auto-stash: feature", branch: "feature", isPaseo: true }],
-      [{ index: 0, message: "paseo-auto-stash: feature", branch: "feature", isPaseo: true }],
+      [
+        {
+          index: 0,
+          message: "paseo-auto-stash: feature",
+          branch: "feature",
+          isPaseo: true,
+          sha: stashSha,
+        },
+      ],
+      [
+        {
+          index: 0,
+          message: "paseo-auto-stash: feature",
+          branch: "feature",
+          isPaseo: true,
+          sha: stashSha,
+        },
+      ],
     ]);
 
     nowMs = 1_000;

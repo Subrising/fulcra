@@ -1,0 +1,23 @@
+{
+  "errors": [],
+  "detail": [
+    {
+      "pullRequests": [
+        {
+          "id": "#17",
+          "name": "ACME-12 fix sign-in",
+          "url": "https://github.com/acme/app/pull/17",
+          "status": "MERGED"
+        },
+        {
+          "id": "#1",
+          "name": "elsewhere",
+          "url": "https://evil.example.com/acme/app/pull/1",
+          "status": "OPEN"
+        }
+      ],
+      "branches": [],
+      "repositories": []
+    }
+  ]
+}

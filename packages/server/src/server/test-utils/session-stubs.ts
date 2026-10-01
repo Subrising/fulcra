@@ -17,6 +17,7 @@ import {
 import type { SessionOptions } from "../session.js";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { asInternals, createStub } from "./class-mocks.js";
+import { withTrustedSurface } from "./trusted-surface.js";
 
 // ---------------------------------------------------------------------------
 // Typed stub wrappers — unsafe cast is in createStub (class-mocks.ts), never
@@ -33,10 +34,14 @@ export function asSessionLogger(stub: {
 export function asAgentManager(stub: {
   [K in keyof SessionOptions["agentManager"]]?: unknown;
 }): SessionOptions["agentManager"] {
-  return createStub<SessionOptions["agentManager"]>({
-    listProviderSubagentActivity: () => [],
-    ...stub,
-  });
+  return createStub<SessionOptions["agentManager"]>(
+    withTrustedSurface({
+      listProviderSubagentActivity: () => [],
+      // V4 (#32): archive paths preflight descendants before admission.
+      preflightArchiveDescendants: async () => {},
+      ...stub,
+    }),
+  );
 }
 
 export function asAgentStorage(stub: {

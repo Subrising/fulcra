@@ -169,11 +169,11 @@ for (const name of xmlCopies) {
       },
     });
     const doc = parser.parseFromString(
-      '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="Acme &amp; Friends"/></manifest>',
+      '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="Orca &amp; Friends"/></manifest>',
       "application/xml",
     );
     assert.equal(errors.length, 0);
-    assert.equal(doc.documentElement.firstChild.getAttribute("android:label"), "Acme & Friends");
+    assert.equal(doc.documentElement.firstChild.getAttribute("android:label"), "Orca & Friends");
     parser.parseFromString("<root></root\n extra>", "application/xml");
     assert(errors.some((message) => message.includes("trailing content")));
   });
@@ -230,8 +230,8 @@ test("every installed plist consumer round-trips native configuration values", (
     const module = require(path.join(root, name));
     const plist = module.default ?? module;
     const value = {
-      CFBundleIdentifier: "test.acme.fixture",
-      CFBundleDisplayName: "Acme & <Friends>",
+      CFBundleIdentifier: "test.orca.fixture",
+      CFBundleDisplayName: "Orca & <Friends>",
       enabled: true,
       count: 3,
       fraction: 1.5,
@@ -260,10 +260,10 @@ test("each real UUID and XML consumer resolves and executes the intended release
       assert.equal(consumer("@xmldom/xmldom/package.json").version, "0.8.15", name);
       const xml = consumer("@xmldom/xmldom");
       const doc = new xml.DOMParser().parseFromString(
-        "<root>Acme &amp; Friends</root>",
+        "<root>Orca &amp; Friends</root>",
         "application/xml",
       );
-      assert.equal(doc.documentElement.textContent, "Acme & Friends", name);
+      assert.equal(doc.documentElement.textContent, "Orca & Friends", name);
     }
   }
   assert.equal(uuidConsumers, 7);

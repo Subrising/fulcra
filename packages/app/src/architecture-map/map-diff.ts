@@ -1,6 +1,8 @@
 import type { ArchitectureMapEdge, ArchitectureMapModel, ArchitectureMapNode } from "./ir-model";
 
-// Before/after comparison of two architecture maps. The rules:
+// Before/after comparison of two architecture maps (Fulcra CHANGES). This is the TypeScript twin of
+// the control repo's orca-architecture-map/diff.mjs, which agents and the decision-packet evidence
+// use; the two keep the same rules and the same test cases:
 // - identity is the authored id, so a moved box is "moved" (layout) and a relabelled box is
 //   "changed", never removed + added;
 // - a part is touched when it was added, removed or changed, or when a connection it makes was;

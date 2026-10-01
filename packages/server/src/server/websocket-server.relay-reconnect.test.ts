@@ -1,3 +1,12 @@
+import { DeviceRegistry } from "./pairing/device-registry.js";
+import { RELAY_DEVICE_DEFAULT_PERMISSIONS } from "./authorization/index.js";
+import { createControllerService } from "./plugins/controller-service.js";
+const deviceAdmission = {
+  deviceId: "dev_testdevice000001",
+  principalId: "device:dev_testdevice000001",
+  permissions: RELAY_DEVICE_DEFAULT_PERMISSIONS,
+};
+import { AccountActionsAudit } from "./plugins/account-actions.js";
 import { SessionDelivery } from "./session/owned-subscriptions/index.js";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Server as HTTPServer } from "http";
@@ -55,6 +64,8 @@ const sessionMock = vi.hoisted(() => {
     cleanup = vi.fn(async () => {
       await this.delivery.close();
     });
+    admitManagementSource = vi.fn();
+    revokeManagementSource = vi.fn();
     handleMessage = vi.fn(async () => {});
     handleBinaryFrame = vi.fn((_frame: unknown) => {});
     supports = vi.fn((capability: string) => this.args.clientCapabilities?.[capability] === true);
@@ -107,6 +118,15 @@ vi.mock("./session.js", () => ({
   Session: sessionMock.MockSession,
 }));
 
+const inviteOffer = vi.hoisted(() => ({
+  generate: vi.fn(async () => ({
+    relayEnabled: true,
+    url: "fulcra://pair#offer=invite",
+    qr: null,
+  })),
+}));
+vi.mock("./pairing-offer.js", () => ({ generateLocalPairingOffer: inviteOffer.generate }));
+
 vi.mock("./push/index.js", () => ({
   createPushNotifications: () => ({
     renew: () => undefined,
@@ -117,7 +137,7 @@ vi.mock("./push/index.js", () => ({
 
 import { z } from "zod";
 import { VoiceAssistantWebSocketServer } from "./websocket-server";
-import { DAEMON_PERMISSIONS, parseServerInfoStatusPayload } from "./messages.js";
+import { parseServerInfoStatusPayload } from "./messages.js";
 import type { SpeechReadinessSnapshot } from "./speech/speech-runtime.js";
 
 interface WebSocketServerInternals {
@@ -143,6 +163,10 @@ function parseSentEnvelope(data: unknown): z.infer<typeof WireEnvelopeSchema> {
 
 function sentEnvelopes(socket: MockSocket): z.infer<typeof WireEnvelopeSchema>[] {
   return socket.sent.filter((data) => typeof data === "string").map(parseSentEnvelope);
+}
+
+function sentSessionMessages(socket: MockSocket) {
+  return sentEnvelopes(socket).map((envelope) => envelope.message);
 }
 
 function sentServerInfoEnvelopes(socket: MockSocket): z.infer<typeof WireEnvelopeSchema>[] {
@@ -242,6 +266,7 @@ function createServer(options?: {
   speechReadiness?: SpeechReadinessSnapshot | null;
   logger?: ReturnType<typeof createLogger>;
   startPaused?: boolean;
+  auth?: { password: string; localCredential: () => string | null };
 }) {
   const speechReadiness = options?.speechReadiness ?? null;
   const daemonConfigStore = {
@@ -272,7 +297,7 @@ function createServer(options?: {
     null,
     { allowedOrigins: new Set(), startPaused: options?.startPaused },
     createWorkspaceAutoNameStub(),
-    undefined,
+    options?.auth,
     speechReadiness
       ? {
           resolveStt: () => null,
@@ -424,9 +449,12 @@ async function attachRelayAndHello(params: {
   socket: MockSocket;
   clientId: string;
 }) {
-  await params.server.attachExternalSocket(params.socket, { transport: "relay" });
+  await params.server.attachExternalSocket(params.socket, {
+    transport: "relay",
+    admission: deviceAdmission,
+  });
   params.socket.emit("message", JSON.stringify(createHelloMessage(params.clientId)));
-  expect(params.socket.sent.length).toBeGreaterThan(0);
+  await vi.waitFor(() => expect(params.socket.sent.length).toBeGreaterThan(0));
   const envelope = parseSentEnvelope(params.socket.sent[0]);
   expect(envelope.type).toBe("session");
   const serverInfo = parseServerInfoStatusPayload(envelope.message?.payload);
@@ -445,7 +473,7 @@ async function attachDirectAndHello(params: {
     createDirectRequest(),
   );
   params.socket.emit("message", JSON.stringify(createHelloMessage(params.clientId)));
-  expect(params.socket.sent.length).toBeGreaterThan(0);
+  await vi.waitFor(() => expect(params.socket.sent.length).toBeGreaterThan(0));
   const envelope = parseSentEnvelope(params.socket.sent[0]);
   expect(envelope.type).toBe("session");
   const serverInfo = parseServerInfoStatusPayload(envelope.message?.payload);
@@ -484,7 +512,392 @@ function holdSessionCleanup(session: (typeof sessionMock.instances)[number]): {
   };
 }
 
+const PLUGIN_DENIAL: Record<string, string> = {
+  "daemon.set_relay_endpoint.request": "Use a local owner connection to change the relay address",
+  "daemon.pairing.invite.request": "This device may not invite new devices to this Mac",
+  "daemon.pairing.invite.allow.request": "Choose who can invite devices from this Mac",
+};
+
 describe("relay external socket reconnect behavior", () => {
+  test("refuses relay endpoint changes from a device despite daemon.manage", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    await attachRelayAndHello({ server, socket, clientId: "cid-endpoint" });
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "session",
+        message: {
+          type: "daemon.set_relay_endpoint.request",
+          requestId: "endpoint-denial",
+          endpoint: "hostile.example.com:443",
+        },
+      }),
+    );
+    await Promise.resolve();
+    const replies = sentEnvelopes(socket);
+    expect(
+      replies.some(
+        (reply) =>
+          reply.type === "session" &&
+          reply.message.type === "rpc_error" &&
+          reply.message.payload.requestId === "endpoint-denial",
+      ),
+    ).toBe(true);
+    expect(sessionMock.instances[0].handleMessage).not.toHaveBeenCalled();
+    await server.close();
+  });
+  test.each([
+    { type: "daemon.get_pairing_offer.request" },
+    { type: "daemon.list_paired_devices.request" },
+    { type: "daemon.revoke_paired_device.request", deviceId: "dev_AAAAAAAAAAAAAAAA" },
+    { type: "daemon.set_relay_endpoint.request", endpoint: "relay.example.com:443" },
+    { type: "daemon.pairing.invite.request" },
+    { type: "daemon.pairing.invite.allow.request", deviceId: "dev_AAAAAAAAAAAAAAAA", allow: true },
+  ])("refuses plugin service RPC $type", async (rpc) => {
+    // These RPCs must be denied before storage; do not touch the shared mock home.
+    const list = vi.spyOn(DeviceRegistry.prototype, "list").mockReturnValue([]);
+    const revoke = vi.spyOn(DeviceRegistry.prototype, "revoke").mockResolvedValue(undefined);
+    const server = createServer();
+    const socket = new MockSocket();
+    const attachment = await server.attachPluginSocket("pairing-test", socket);
+    socket.emit("message", JSON.stringify(createHelloMessage("plugin:pairing-test")));
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "session", message: { ...rpc, requestId: "plugin-denied" } }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sessionMock.instances[0].handleMessage).not.toHaveBeenCalled();
+    const denial = sentEnvelopes(socket).find(
+      (reply) =>
+        reply.type === "session" &&
+        reply.message.type === "rpc_error" &&
+        reply.message.payload.requestId === "plugin-denied",
+    );
+    expect(denial).toMatchObject({
+      message: {
+        payload: {
+          error: PLUGIN_DENIAL[rpc.type] ?? "Pair new devices from this Mac",
+        },
+      },
+    });
+    expect(list).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalled();
+    socket.emit("close", 1000, "done");
+    await attachment.closed;
+    await server.close();
+    list.mockRestore();
+    revoke.mockRestore();
+  });
+  // Pair once, see every Mac: a device may ask for an invite only when this Mac's owner allowed it, and a device
+  // can never grant that itself.
+  async function inviteFromDevice(canInvite: boolean, rpc: Record<string, unknown>) {
+    const can = vi.spyOn(DeviceRegistry.prototype, "canInvite").mockReturnValue(canInvite);
+    const set = vi.spyOn(DeviceRegistry.prototype, "setInvites").mockReturnValue(undefined);
+    inviteOffer.generate.mockClear();
+    const server = createServer();
+    const socket = new MockSocket();
+    await attachRelayAndHello({ server, socket, clientId: `cid-invite-${String(canInvite)}` });
+    socket.emit(
+      "message",
+      JSON.stringify({ type: "session", message: { ...rpc, requestId: "invite" } }),
+    );
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    const reply = sentEnvelopes(socket).find(
+      (r) =>
+        r.type === "session" &&
+        (r.message.payload as { requestId?: string })?.requestId === "invite",
+    );
+    await server.close();
+    // Snapshot the calls: mockRestore() clears them.
+    const result = {
+      reply,
+      canCalls: [...can.mock.calls],
+      setCalls: [...set.mock.calls],
+      handled: sessionMock.instances[0].handleMessage,
+    };
+    can.mockRestore();
+    set.mockRestore();
+    return result;
+  }
+  test("refuses a pairing invite from a device the owner has not allowed", async () => {
+    const { reply, canCalls, handled } = await inviteFromDevice(false, {
+      type: "daemon.pairing.invite.request",
+    });
+    expect(canCalls).toEqual([[deviceAdmission.deviceId]]);
+    expect(reply).toMatchObject({
+      message: {
+        type: "rpc_error",
+        payload: { error: "This device may not invite new devices to this Mac" },
+      },
+    });
+    expect(inviteOffer.generate).not.toHaveBeenCalled();
+    expect(handled).not.toHaveBeenCalled();
+  });
+  test("gives an allowed device a fresh short-lived offer for a new device", async () => {
+    const { reply } = await inviteFromDevice(true, { type: "daemon.pairing.invite.request" });
+    expect(reply).toMatchObject({
+      message: {
+        type: "daemon.pairing.invite.response",
+        payload: { url: "fulcra://pair#offer=invite" },
+      },
+    });
+    expect(inviteOffer.generate).toHaveBeenCalledOnce();
+    expect(inviteOffer.generate.mock.calls[0]?.[0]).toMatchObject({
+      pairingOfferTtlSeconds: 300,
+      includeQr: false,
+    });
+  });
+  test("a device can never allow invites, even for itself", async () => {
+    const { reply, setCalls } = await inviteFromDevice(true, {
+      type: "daemon.pairing.invite.allow.request",
+      deviceId: deviceAdmission.deviceId,
+      allow: true,
+    });
+    expect(reply).toMatchObject({
+      message: {
+        type: "rpc_error",
+        payload: { error: "Choose who can invite devices from this Mac" },
+      },
+    });
+    expect(setCalls).toEqual([]);
+  });
+  // U7: accounts.manage is granted, and its audit read, only by this Mac's owner; a device can never do either.
+  test("accounts-manage: a device can never allow account management or read its audit, even for itself", async () => {
+    const set = vi
+      .spyOn(DeviceRegistry.prototype, "setAccountsManage")
+      .mockResolvedValue(undefined);
+    const audit = vi.spyOn(AccountActionsAudit.prototype, "list");
+    try {
+      for (const [rpc, error] of [
+        [
+          {
+            type: "daemon.pairing.accounts_manage.allow.request",
+            deviceId: deviceAdmission.deviceId,
+            allow: true,
+          },
+          "Choose which devices can manage accounts from this Mac",
+        ],
+        [
+          { type: "daemon.accounts_audit.list.request" },
+          "Only this Mac's owner can see account activity",
+        ],
+      ] as const) {
+        const { reply } = await inviteFromDevice(true, rpc);
+        expect(reply).toMatchObject({ message: { type: "rpc_error", payload: { error } } });
+      }
+      expect(set).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    } finally {
+      set.mockRestore();
+      audit.mockRestore();
+    }
+  });
+  test("accounts-manage: this Mac's owner allows it, sees it on the device list, and reads the audit", async () => {
+    const set = vi
+      .spyOn(DeviceRegistry.prototype, "setAccountsManage")
+      .mockResolvedValue(undefined);
+    const has = vi.spyOn(DeviceRegistry.prototype, "hasAccountsManage").mockReturnValue(true);
+    const list = vi.spyOn(DeviceRegistry.prototype, "list").mockReturnValue([
+      {
+        deviceId: "dev_AAAAAAAAAAAAAAAA",
+        publicKeyB64: "key",
+        name: "Phone",
+        createdAt: "2026-09-29T00:00:00.000Z",
+        lastSeenAt: null,
+        permissions: [],
+      },
+    ]);
+    const audit = vi.spyOn(AccountActionsAudit.prototype, "list").mockReturnValue([
+      {
+        at: "2026-09-30T01:00:00.000Z",
+        deviceId: "dev_AAAAAAAAAAAAAAAA",
+        action: "switch",
+        accountLabel: "Work",
+      },
+    ]);
+    const server = createServer();
+    const socket = new MockSocket();
+    try {
+      await asInternals<WebSocketServerInternals>(server).attachSocket(
+        socket,
+        createDirectRequest(),
+      );
+      socket.emit(
+        "message",
+        JSON.stringify(
+          createHelloMessage("owner-app", { capabilities: { owned_subscriptions: true } }),
+        ),
+      );
+      const send = (message: Record<string, unknown>) =>
+        socket.emit("message", JSON.stringify({ type: "session", message }));
+      send({
+        type: "daemon.pairing.accounts_manage.allow.request",
+        requestId: "am-1",
+        deviceId: "dev_AAAAAAAAAAAAAAAA",
+        allow: true,
+      });
+      send({ type: "daemon.list_paired_devices.request", requestId: "list-1" });
+      send({ type: "daemon.accounts_audit.list.request", requestId: "audit-1" });
+      await vi.waitFor(() => {
+        const replies = sentSessionMessages(socket);
+        expect(replies).toContainEqual(
+          expect.objectContaining({
+            type: "daemon.pairing.accounts_manage.allow.response",
+            payload: { requestId: "am-1", deviceId: "dev_AAAAAAAAAAAAAAAA", allow: true },
+          }),
+        );
+        expect(replies).toContainEqual(
+          expect.objectContaining({
+            type: "daemon.list_paired_devices.response",
+            payload: expect.objectContaining({
+              devices: [
+                expect.objectContaining({ deviceId: "dev_AAAAAAAAAAAAAAAA", accountsManage: true }),
+              ],
+            }),
+          }),
+        );
+        expect(replies).toContainEqual(
+          expect.objectContaining({
+            type: "daemon.accounts_audit.list.response",
+            payload: {
+              requestId: "audit-1",
+              entries: [
+                {
+                  at: "2026-09-30T01:00:00.000Z",
+                  deviceId: "dev_AAAAAAAAAAAAAAAA",
+                  deviceName: "Phone",
+                  action: "switch",
+                  accountLabel: "Work",
+                },
+              ],
+            },
+          }),
+        );
+      });
+      expect(set).toHaveBeenCalledWith("dev_AAAAAAAAAAAAAAAA", true, expect.any(Function));
+    } finally {
+      socket.emit("close", 1000, "done");
+      await server.close();
+      set.mockRestore();
+      has.mockRestore();
+      list.mockRestore();
+      audit.mockRestore();
+    }
+  });
+  // L42: a modern client's socket drops any session message without the request's delivery proof, so replies
+  // sent straight to the socket left `devices list` (and the pairing modal's device list) waiting forever.
+  test("answers a modern local owner's pairing and invite RPCs, replies and errors alike", async () => {
+    const setInvites = vi.spyOn(DeviceRegistry.prototype, "setInvites").mockReturnValue(undefined);
+    const list = vi.spyOn(DeviceRegistry.prototype, "list").mockReturnValue([
+      {
+        deviceId: "dev_AAAAAAAAAAAAAAAA",
+        publicKeyB64: "key",
+        name: "Phone",
+        createdAt: "2026-09-29T00:00:00.000Z",
+        lastSeenAt: null,
+        permissions: [],
+      },
+    ]);
+    const server = createServer();
+    const socket = new MockSocket();
+    await asInternals<WebSocketServerInternals>(server).attachSocket(socket, createDirectRequest());
+    socket.emit(
+      "message",
+      JSON.stringify(
+        createHelloMessage("owner-app", { capabilities: { owned_subscriptions: true } }),
+      ),
+    );
+    const send = (message: Record<string, unknown>) =>
+      socket.emit("message", JSON.stringify({ type: "session", message }));
+    send({ type: "daemon.list_paired_devices.request", requestId: "list-1" });
+    // The test config store cannot set a relay address, so this request fails inside the handler.
+    send({
+      type: "daemon.set_relay_endpoint.request",
+      requestId: "relay-1",
+      endpoint: "relay.example.com:443",
+    });
+    send({
+      type: "daemon.pairing.invite.allow.request",
+      requestId: "allow-1",
+      deviceId: "dev_AAAAAAAAAAAAAAAA",
+      allow: true,
+    });
+    await vi.waitFor(() => {
+      const replies = sentSessionMessages(socket);
+      expect(replies).toContainEqual(
+        expect.objectContaining({
+          type: "daemon.pairing.invite.allow.response",
+          payload: expect.objectContaining({ requestId: "allow-1", allow: true }),
+        }),
+      );
+      expect(replies).toContainEqual(
+        expect.objectContaining({
+          type: "daemon.list_paired_devices.response",
+          payload: expect.objectContaining({
+            requestId: "list-1",
+            devices: [
+              expect.objectContaining({ deviceId: "dev_AAAAAAAAAAAAAAAA", connected: false }),
+            ],
+          }),
+        }),
+      );
+      expect(replies).toContainEqual(
+        expect.objectContaining({
+          type: "rpc_error",
+          payload: expect.objectContaining({
+            requestId: "relay-1",
+            requestType: "daemon.set_relay_endpoint.request",
+          }),
+        }),
+      );
+    });
+    socket.emit("close", 1000, "done");
+    await server.close();
+    list.mockRestore();
+    setInvites.mockRestore();
+  });
+  test("refuses anonymous relay admission", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    await server.attachExternalSocket(socket, { transport: "relay" });
+    expect(socket.readyState).toBe(3);
+    expect(sessionMock.instances).toHaveLength(0);
+    await server.close();
+  });
+  test("revocation immediately detaches a live device socket", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    await attachRelayAndHello({ server, socket, clientId: "cid-revoke" });
+    expect(sessionMock.instances[0].getPermissions()).not.toContain("access.manage");
+    expect(sessionMock.instances[0].getPermissions()).not.toContain("command-centre.manage");
+    server.closeDeviceSockets(deviceAdmission.deviceId);
+    expect(socket.readyState).toBe(3);
+    expect(sessionMock.instances[0].cleanup).toHaveBeenCalledOnce();
+    expect(sessionMock.instances[0].revokeManagementSource).toHaveBeenCalledWith(socket);
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "session",
+        message: { type: "daemon.get_pairing_offer.request", requestId: "late" },
+      }),
+    );
+    expect(sessionMock.instances[0].handleMessage).not.toHaveBeenCalled();
+    await server.close();
+  });
+
+  test("revocation cleans a disconnected principal without waiting for reconnect grace", async () => {
+    const server = createServer();
+    const socket = new MockSocket();
+    await attachRelayAndHello({ server, socket, clientId: "cid-revoke-disconnected" });
+    socket.emit("close", 1006, "network lost");
+    expect(sessionMock.instances[0].cleanup).not.toHaveBeenCalled();
+    server.closeDeviceSockets(deviceAdmission.deviceId);
+    expect(sessionMock.instances[0].cleanup).toHaveBeenCalledOnce();
+    await server.close();
+  });
+
   beforeEach(() => {
     sessionMock.instances.length = 0;
     vi.useFakeTimers();
@@ -535,7 +948,7 @@ describe("relay external socket reconnect behavior", () => {
     const secondAttachment = await server.attachPluginSocket("exclusive", secondSocket);
     secondSocket.emit("message", JSON.stringify(createHelloMessage("plugin:exclusive")));
 
-    expect(sessionMock.instances).toHaveLength(2);
+    await vi.waitFor(() => expect(sessionMock.instances).toHaveLength(2));
     firstSocket.emit("close", 1000, "plugin stopped");
     await firstAttachment.closed;
     expect(sessionMock.instances[0]?.cleanup).toHaveBeenCalledOnce();
@@ -552,6 +965,7 @@ describe("relay external socket reconnect behavior", () => {
     const socket = new MockSocket();
     await server.attachPluginSocket("stalled", socket);
     socket.emit("message", JSON.stringify(createHelloMessage("plugin:stalled")));
+    await vi.waitFor(() => expect(sentServerInfoEnvelopes(socket)).toHaveLength(1));
     socket.emit("message", JSON.stringify({ type: "ping" }));
 
     // Event loop starved past the lease: no further ping arrives.
@@ -576,10 +990,10 @@ describe("relay external socket reconnect behavior", () => {
   test("rejects ordinary sockets that claim the reserved plugin client id", async () => {
     const server = createServer();
     const socket = new MockSocket();
-    await server.attachExternalSocket(socket, { transport: "relay" });
+    await server.attachExternalSocket(socket, { transport: "relay", admission: deviceAdmission });
     socket.emit("message", JSON.stringify(createHelloMessage("plugin:not-a-plugin")));
 
-    expect(socket.readyState).toBe(3);
+    await vi.waitFor(() => expect(socket.readyState).toBe(3));
     expect(sessionMock.instances).toHaveLength(0);
     await server.close();
   });
@@ -597,7 +1011,7 @@ describe("relay external socket reconnect behavior", () => {
         }),
       ),
     );
-    expect(sessionMock.instances).toHaveLength(1);
+    await vi.waitFor(() => expect(sessionMock.instances).toHaveLength(1));
     const session = sessionMock.instances[0];
     expect(session.args.clientCapabilities).toEqual({
       [CLIENT_CAPS.reasoningMergeEnum]: true,
@@ -620,7 +1034,10 @@ describe("relay external socket reconnect behavior", () => {
 
     const lateSocket = new MockSocket();
     try {
-      await server.attachExternalSocket(lateSocket, { transport: "relay" });
+      await server.attachExternalSocket(lateSocket, {
+        transport: "relay",
+        admission: deviceAdmission,
+      });
       lateSocket.emit("message", JSON.stringify(createHelloMessage("late-client")));
 
       expect({
@@ -636,16 +1053,39 @@ describe("relay external socket reconnect behavior", () => {
     }
   });
 
+  test("controller service uses the reserved plugin identity through the real hello boundary", async () => {
+    const server = createServer({ startPaused: true });
+    const frames: unknown[] = [];
+    const revoke = vi.fn();
+    const service = await createControllerService(server, {
+      epoch: "11111111-1111-4111-8111-111111111111",
+      emit: (frame) => frames.push(frame),
+      revoke,
+    });
+    try {
+      service.ready();
+      expect(revoke).not.toHaveBeenCalled();
+      expect(sessionMock.instances).toHaveLength(1);
+      expect(frames).toContainEqual(expect.objectContaining({ type: "daemon-open" }));
+    } finally {
+      service.close();
+      await server.close();
+    }
+  });
+
   test("accepts plugin startup sessions while application sessions remain paused", async () => {
     const server = createServer({ startPaused: true });
     const applicationSocket = new MockSocket();
-    await server.attachExternalSocket(applicationSocket, { transport: "relay" });
+    await server.attachExternalSocket(applicationSocket, {
+      transport: "relay",
+      admission: deviceAdmission,
+    });
     expect(applicationSocket.readyState).toBe(3);
 
     const pluginSocket = new MockSocket();
     const attachment = await server.attachPluginSocket("startup", pluginSocket);
     pluginSocket.emit("message", JSON.stringify(createHelloMessage("plugin:startup")));
-    expect(sessionMock.instances).toHaveLength(1);
+    await vi.waitFor(() => expect(sessionMock.instances).toHaveLength(1));
 
     server.beginAcceptingConnections();
     const readySocket = new MockSocket();
@@ -736,11 +1176,12 @@ describe("relay external socket reconnect behavior", () => {
       { principalId: "hub:daemon-1", permissions: ["hub.execute"] },
     );
     hubSocket.emit("message", JSON.stringify(createHelloMessage(clientId)));
+    await vi.waitFor(() => expect(hubSocket.sent.length).toBeGreaterThan(0));
     const hubEnvelope = parseSentEnvelope(hubSocket.sent[0]);
     const hubInfo = parseServerInfoStatusPayload(hubEnvelope.message?.payload);
 
     expect(sessionMock.instances).toHaveLength(2);
-    expect(ownerInfo.permissions).toEqual(DAEMON_PERMISSIONS);
+    expect(ownerInfo.permissions).toEqual(RELAY_DEVICE_DEFAULT_PERMISSIONS);
     expect(hubInfo?.permissions).toEqual(["hub.execute"]);
     await server.close();
   });
@@ -755,7 +1196,7 @@ describe("relay external socket reconnect behavior", () => {
       closeReason = typeof reason === "string" ? reason : "";
     });
 
-    await server.attachExternalSocket(socket, { transport: "relay" });
+    await server.attachExternalSocket(socket, { transport: "relay", admission: deviceAdmission });
     socket.emit(
       "message",
       JSON.stringify({
@@ -779,9 +1220,11 @@ describe("relay external socket reconnect behavior", () => {
 
     await server.attachExternalSocket(socket, {
       transport: "relay",
+      admission: deviceAdmission,
       relayConnectionId: "relay-conn-1",
     });
     socket.emit("message", JSON.stringify(createHelloMessage("cid-control-log")));
+    await vi.waitFor(() => expect(sentServerInfoEnvelopes(socket)).toHaveLength(1));
     socket.emit(
       "message",
       JSON.stringify({
@@ -970,7 +1413,7 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 
-  test("reuses one session when switching from direct to relay with the same clientId", async () => {
+  test("never resumes the owner session from a device with the same clientId", async () => {
     const server = createServer();
     const clientId = "cid-switch-path";
 
@@ -989,8 +1432,9 @@ describe("relay external socket reconnect behavior", () => {
       socket: relaySocket,
       clientId,
     });
-    expect(sessionMock.instances).toHaveLength(1);
+    expect(sessionMock.instances).toHaveLength(2);
 
+    const before = relaySocket.sent.length;
     const { onMessage } = session.args;
     expect(onMessage).toBeTypeOf("function");
     if (typeof onMessage === "function") {
@@ -1001,7 +1445,7 @@ describe("relay external socket reconnect behavior", () => {
     }
 
     expect(directSocket.sent.length).toBeGreaterThan(0);
-    expect(relaySocket.sent.length).toBeGreaterThan(0);
+    expect(relaySocket.sent.length).toBe(before);
 
     directSocket.emit("close", 1006, "");
     await vi.advanceTimersByTimeAsync(1_000);
@@ -1052,7 +1496,7 @@ describe("relay external socket reconnect behavior", () => {
     expect(serverInfo.features?.["terminal-input-mode-replay"]).toBe(true);
     expect(serverInfo.features?.["terminal-size-ownership"]).toBe(true);
     expect(serverInfo.features?.agentTurnIdentity).toBeUndefined();
-    expect(serverInfo.permissions).toEqual(DAEMON_PERMISSIONS);
+    expect(serverInfo.permissions).toEqual(RELAY_DEVICE_DEFAULT_PERMISSIONS);
     await server.close();
   });
 

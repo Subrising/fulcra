@@ -58,11 +58,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function createSkillsController({
   resolveTargets,
   selectionStore,
+  applyFrozenPlan = installSkills,
 }: {
   // Resolved per operation, not at wiring time: the bundle path depends on how
   // the app was packaged, which is not knowable when the controller is built.
   resolveTargets: () => SkillTargets;
   selectionStore: SkillSelectionStore;
+  // The frozen-plan operation is an adapter so callers can hold its real apply boundary.
+  applyFrozenPlan?: typeof installSkills;
 }): SkillsController {
   let queue: Promise<unknown> = Promise.resolve();
 
@@ -110,7 +113,7 @@ export function createSkillsController({
       const transaction = await beginSkillsTransaction(targets, previous, next, plan.ops);
       let status: SkillsStatus;
       try {
-        status = await installSkills(targets, next, {
+        status = await applyFrozenPlan(targets, next, {
           ...plan,
           // beginSkillsTransaction atomically staged these directories. Running
           // removeSkill afterward would delete a path another writer recreated.

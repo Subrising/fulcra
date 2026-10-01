@@ -271,6 +271,7 @@ export const PersistedConfigSchema = z
         relay: z
           .object({
             enabled: z.boolean().optional(),
+            pairingOfferTtlSeconds: z.number().int().optional(),
             endpoint: z.string().optional(),
             publicEndpoint: z.string().optional(),
             useTls: z.boolean().optional(),
@@ -300,7 +301,7 @@ export const PersistedConfigSchema = z
 
     app: z
       .object({
-        baseUrl: z.string().optional(),
+        baseUrl: z.string().nullable().optional(),
       })
       .strict()
       .optional(),
@@ -360,14 +361,14 @@ const DEFAULT_PERSISTED_CONFIG = PersistedConfigSchema.parse({
   daemon: {
     listen: "127.0.0.1:6767",
     cors: {
-      allowedOrigins: ["https://app.paseo.sh"],
+      allowedOrigins: [],
     },
     relay: {
       enabled: false,
     },
   },
   app: {
-    baseUrl: "https://app.paseo.sh",
+    baseUrl: null,
   },
 }) as PersistedConfig;
 
@@ -451,27 +452,9 @@ export function loadPersistedConfig(paseoHome: string, logger?: LoggerLike): Per
     });
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`[Config] Invalid JSON in ${configPath}: ${message}`, {
-      cause: err,
-    });
-  }
-
-  const migrated = stripRemovedConfigFields(parsed);
-  const result = PersistedConfigSchema.safeParse(migrated);
-  if (!result.success) {
-    const issues = result.error.issues
-      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-      .join("\n");
-    throw new Error(`[Config] Invalid config in ${configPath}:\n${issues}`);
-  }
-
+  const config = parseConfigFile(configPath, raw);
   log?.info(`Loaded from ${configPath}`);
-  return result.data as PersistedConfig;
+  return config;
 }
 
 /** Observe the file without initializing a home, identity, or default configuration. */
@@ -479,15 +462,42 @@ export function readPersistedConfig(
   paseoHome: string,
   options: { defaultsIfMissing?: boolean } = {},
 ): PersistedConfig {
+  const configPath = getConfigPath(paseoHome);
   let raw: string;
   try {
-    raw = readFileSync(getConfigPath(paseoHome), "utf8");
+    raw = readFileSync(configPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       return options.defaultsIfMissing ? structuredClone(DEFAULT_PERSISTED_CONFIG) : {};
     throw error;
   }
-  return PersistedConfigSchema.parse(stripRemovedConfigFields(JSON.parse(raw))) as PersistedConfig;
+  return parseConfigFile(configPath, raw);
+}
+
+function parseConfigFile(configPath: string, raw: string): PersistedConfig {
+  let parsed: unknown;
+  try {
+    parsed = parseConfigText(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`[Config] Invalid JSON in ${configPath}: ${message}`, {
+      cause: err,
+    });
+  }
+
+  const result = PersistedConfigSchema.safeParse(stripRemovedConfigFields(parsed));
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
+    throw new Error(`[Config] Invalid config in ${configPath}:\n${issues}`);
+  }
+  return result.data as PersistedConfig;
+}
+
+/** Editors such as Windows Notepad save UTF-8 with a byte order mark, which JSON.parse rejects. */
+function parseConfigText(raw: string): unknown {
+  return JSON.parse(raw.replace(/^\uFEFF/, ""));
 }
 
 function configPathParts(field: string): string[] {

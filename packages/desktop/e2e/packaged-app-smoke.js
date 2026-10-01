@@ -478,6 +478,24 @@ async function assertPackagedRendererLoaded(page, deadline) {
   }
 }
 
+// Orca connects to an existing controller, so the packaged app must not boot a
+// daemon of its own on launch: the main-process default for manageBuiltInDaemon
+// is false (packages/desktop/src/settings/desktop-settings.ts). The built-in
+// daemon is a deliberate opt-in, so the smoke asserts that startup contract and
+// then drives the same enable flow the settings UI uses
+// (packages/app/src/desktop/daemon/daemon-management-toggle.ts).
+async function assertNoAutoStartedDaemon({ page, stdout, stderr, userData, daemonHome }) {
+  const status = await page.evaluate(() => window.paseoDesktop.invoke("desktop_daemon_status"));
+  if (status?.desktopManaged === true || status?.status === "running") {
+    throw new Error(
+      `Packaged renderer started a daemon on launch. Orca connects to an existing controller and must leave the built-in daemon opt-in. Status: ${JSON.stringify(status)}.\n${formatLogs(
+        { stdout, stderr, userData, daemonHome },
+      )}`,
+    );
+  }
+  return status;
+}
+
 async function enableDesktopManagedDaemon({ page, stdout, stderr, userData, daemonHome }) {
   try {
     const settings = await page.evaluate(() =>
@@ -1028,7 +1046,10 @@ async function smokePackagedDesktopApp({
     page = await waitForPackagedAppPage(browser, deadline);
     await assertPackagedRendererLoaded(page, deadline);
     console.log("Packaged desktop smoke: real app renderer and preload bridge loaded");
-    console.log("Packaged desktop smoke: confirming built-in daemon management through the settings flow");
+    await assertNoAutoStartedDaemon({ page, stdout, stderr, userData, daemonHome });
+    console.log(
+      "Packaged desktop smoke: launch left the built-in daemon opt-in; enabling it through the real settings flow",
+    );
     await enableDesktopManagedDaemon({ page, stdout, stderr, userData, daemonHome });
     const status = await waitForDesktopManagedDaemon({
       page,

@@ -108,7 +108,7 @@ describe("durable native timeline", () => {
         {
           type: "user_message",
           text: "same text",
-          clientMessageId: "external-client:first",
+          clientMessageId: "orca-control:first",
         },
         { turnId: "turn-1" },
       );
@@ -130,7 +130,7 @@ describe("durable native timeline", () => {
       });
       expect(page).toMatchObject({ epoch: first.epoch, reset: false, window: { maxSeq: 3 } });
       expect(page.rows[0]).toMatchObject({
-        item: { clientMessageId: "external-client:first" },
+        item: { clientMessageId: "orca-control:first" },
         providerMessageId: "provider-1",
         turnId: "turn-1",
       });
@@ -804,7 +804,7 @@ describe("durable timeline pending delete", () => {
     messageId: `m-${label}`,
   });
 
-  // Regression: a failed delete, then a live read, then the retry. Before the fix the read minted an
+  // R-J5a-R2-1: a failed delete, then a live read, then the retry. Before the fix the read minted an
   // empty journal and the retry published it over the recovered history.
   it("keeps the history when an agent is read between a failed delete and its retry", async () => {
     const dir = mkdtempSync(join(tmpdir(), "paseo-timeline-pending-"));

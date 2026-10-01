@@ -70,7 +70,7 @@ test.describe("Architecture map", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("architecture-map-detail")).toHaveCount(0);
     // "Archify" may appear only inside the project's own authored map text (the head IR's
-    // subtitle and Source card cite it); Fulcra's chrome never names it.
+    // subtitle and Source card cite it); Fulcra's chrome never names it (J1).
     const onPage = await page.getByText(/archify/i).count();
     const inSubtitle = await page
       .getByTestId("architecture-map-subtitle")

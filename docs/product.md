@@ -1,9 +1,20 @@
 # Product
 
-Fulcra is based on Paseo. It keeps upstream package names, protocol compatibility, attribution
-and Git ancestry; changes to the product shell belong in app configuration, desktop identity and
-host-home routing rather than in renamed internal APIs (see [UPSTREAM.md](UPSTREAM.md)). The rest of
-this page describes the Paseo foundation Fulcra builds on.
+This checkout builds **Fulcra**, a native coordination product based on the Paseo
+fork. Fulcra's home explains goals, progress, decisions, impacts and readable
+outputs. The existing plugin boundary implements that home; users should not
+need to discover it in a sidebar. Technical receipts remain available in details.
+
+Fulcra uses separate native package identifiers, desktop profile and daemon home.
+It connects to an existing controller by default. Upstream publishing credentials,
+Expo project ownership and desktop updates are not reused. Local native builds
+remain private until Fulcra has its own signing and release configuration.
+
+Keep upstream package names, protocol compatibility, attribution and Git ancestry.
+Changes to the product shell belong in app configuration, desktop identity and
+host-home routing; avoid renaming internal APIs just for branding. Upstream
+updates still require review and conflict resolution. The remaining sections
+describe the Paseo foundation retained by Fulcra.
 
 Paseo is an environment for running, monitoring, and interacting with coding agents across desktop, mobile, web, and the command line.
 

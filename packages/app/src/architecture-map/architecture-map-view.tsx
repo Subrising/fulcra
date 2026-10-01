@@ -30,8 +30,7 @@ const UNSELECTED_STATE = { selected: false } as const;
 
 type Tone = NodeTone | CardTone;
 
-// Colours reach SVG props through withUnistyles uniProps (docs/unistyles.md bans the hook).
-// Each mapping is created once per tone so wrapped components keep stable props.
+// Colours reach the SVG through withUnistyles uniProps on the canvas (docs/unistyles.md bans the hook).
 function toneColor(theme: Theme, tone: Tone): string {
   const colors = theme.colors;
   switch (tone) {
@@ -57,32 +56,100 @@ function toneColor(theme: Theme, tone: Tone): string {
   }
 }
 
-function cachedByKey<K, V>(create: (key: K) => V): (key: K) => V {
-  const cache = new Map<K, V>();
-  return (key) => {
-    const existing = cache.get(key);
-    if (existing !== undefined) return existing;
-    const created = create(key);
-    cache.set(key, created);
-    return created;
-  };
+const NODE_TONE_LIST: readonly NodeTone[] = [
+  "service",
+  "client",
+  "external",
+  "data",
+  "messaging",
+  "cloud",
+  "security",
+  "neutral",
+];
+
+// The whole canvas is the one withUnistyles-wrapped component: wrapping each SVG element makes
+// Unistyles insert an HTML wrapper inside <svg> on web, which the browser never paints.
+interface MapPalette {
+  tone: Record<NodeTone, string>;
+  accent: string;
+  surface: string;
+  foreground: string;
+  muted: string;
 }
+const paletteProps = (theme: Theme) => ({
+  palette: {
+    tone: Object.fromEntries(
+      NODE_TONE_LIST.map((tone) => [tone, toneColor(theme, tone)]),
+    ) as Record<NodeTone, string>,
+    accent: theme.colors.accent,
+    surface: theme.colors.surface1,
+    foreground: theme.colors.foreground,
+    muted: theme.colors.foregroundMuted,
+  } satisfies MapPalette,
+});
+const FALLBACK_PALETTE: MapPalette = {
+  tone: {
+    service: "#8ab4f8",
+    client: "#6cb17b",
+    external: "#a1a5a4",
+    data: "#c99a5b",
+    messaging: "#b392f0",
+    cloud: "#b392f0",
+    security: "#d0695f",
+    neutral: "#a1a5a4",
+  },
+  accent: "#8ab4f8",
+  surface: "#1e2120",
+  foreground: "#e8eaea",
+  muted: "#a1a5a4",
+};
 
-const toneFill = cachedByKey((tone: Tone) => (theme: Theme) => ({ fill: toneColor(theme, tone) }));
-const accentStroke = (theme: Theme) => ({ stroke: theme.colors.accent });
-const accentFill = (theme: Theme) => ({ fill: theme.colors.accent });
-const mutedStroke = (theme: Theme) => ({ stroke: theme.colors.foregroundMuted });
-const mutedFill = (theme: Theme) => ({ fill: theme.colors.foregroundMuted });
-const foregroundFill = (theme: Theme) => ({ fill: theme.colors.foreground });
-const nodeFrame = cachedByKey((tone: NodeTone | "selected") => (theme: Theme) => ({
-  fill: theme.colors.surface1,
-  stroke: tone === "selected" ? theme.colors.accent : toneColor(theme, tone),
-}));
-
-const ThemedLine = withUnistyles(Line);
-const ThemedPolygon = withUnistyles(Polygon);
-const ThemedRect = withUnistyles(Rect);
-const ThemedSvgText = withUnistyles(SvgText);
+function MapCanvas(props: {
+  palette?: MapPalette;
+  viewBox: { x: number; y: number; width: number; height: number };
+  zoom: number;
+  title: string;
+  geometries: readonly { edge: ArchitectureMapModel["edges"][number]; geometry: EdgeGeometry }[];
+  nodes: readonly ArchitectureMapNode[];
+  drawLabels: boolean;
+  incident: { nodeIds: ReadonlySet<string>; edgeIds: ReadonlySet<string> } | null;
+  selectedId: string | null;
+  onToggle: (id: string) => void;
+}) {
+  const { viewBox, zoom, geometries, nodes, drawLabels, incident, selectedId, onToggle } = props;
+  const palette = props.palette ?? FALLBACK_PALETTE;
+  return (
+    <Svg
+      width={viewBox.width * zoom}
+      height={viewBox.height * zoom}
+      viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
+      accessibilityLabel={props.title}
+    >
+      {geometries.map(({ edge, geometry }) => (
+        <MapEdge
+          key={edge.id}
+          geometry={geometry}
+          label={drawLabels ? edge.label : null}
+          style={edge.style}
+          dimmed={incident !== null && !incident.edgeIds.has(edge.id)}
+          palette={palette}
+        />
+      ))}
+      {nodes.map((node) => (
+        <MapNode
+          key={node.id}
+          node={node}
+          drawLabels={drawLabels}
+          selected={node.id === selectedId}
+          dimmed={incident !== null && !incident.nodeIds.has(node.id)}
+          onToggle={onToggle}
+          palette={palette}
+        />
+      ))}
+    </Svg>
+  );
+}
+const ThemedMapCanvas = withUnistyles(MapCanvas);
 
 export interface ArchitectureMapViewProps {
   model: ArchitectureMapModel;
@@ -215,32 +282,18 @@ export function ArchitectureMapView({ model }: ArchitectureMapViewProps) {
 
       <View style={styles.canvasFrame} onLayout={onCanvasLayout}>
         <ScrollView horizontal>
-          <Svg
-            width={viewBox.width * effectiveZoom}
-            height={viewBox.height * effectiveZoom}
-            viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
-            accessibilityLabel={model.title}
-          >
-            {geometries.map(({ edge, geometry }) => (
-              <MapEdge
-                key={edge.id}
-                geometry={geometry}
-                label={drawLabels ? edge.label : null}
-                style={edge.style}
-                dimmed={incident !== null && !incident.edgeIds.has(edge.id)}
-              />
-            ))}
-            {model.nodes.map((node) => (
-              <MapNode
-                key={node.id}
-                node={node}
-                drawLabels={drawLabels}
-                selected={node.id === selectedId}
-                dimmed={incident !== null && !incident.nodeIds.has(node.id)}
-                onToggle={toggleSelection}
-              />
-            ))}
-          </Svg>
+          <ThemedMapCanvas
+            uniProps={paletteProps}
+            viewBox={viewBox}
+            zoom={effectiveZoom}
+            title={model.title}
+            geometries={geometries}
+            nodes={model.nodes}
+            drawLabels={drawLabels}
+            incident={incident}
+            selectedId={selectedId}
+            onToggle={toggleSelection}
+          />
         </ScrollView>
       </View>
 
@@ -335,32 +388,34 @@ function MapEdge(props: {
   label: string | null;
   style: "solid" | "emphasis" | "dashed";
   dimmed: boolean;
+  palette: MapPalette;
 }) {
-  const { geometry, label, style, dimmed } = props;
+  const { geometry, label, style, dimmed, palette } = props;
+  const color = style === "emphasis" ? palette.accent : palette.muted;
   const emphasis = style === "emphasis";
   const points = geometry.arrow.map((point) => `${point.x},${point.y}`).join(" ");
   return (
     <G opacity={dimmed ? 0.2 : 1} testID="architecture-map-edge">
-      <ThemedLine
+      <Line
         x1={geometry.start.x}
         y1={geometry.start.y}
         x2={geometry.end.x}
         y2={geometry.end.y}
-        uniProps={emphasis ? accentStroke : mutedStroke}
+        stroke={color}
         strokeWidth={emphasis ? 2 : 1.5}
         strokeDasharray={style === "dashed" ? "6 4" : undefined}
       />
-      <ThemedPolygon points={points} uniProps={emphasis ? accentFill : mutedFill} />
+      <Polygon points={points} fill={color} />
       {label ? (
-        <ThemedSvgText
+        <SvgText
           x={geometry.labelAt.x}
           y={geometry.labelAt.y}
           fontSize={DETAIL_SIZE}
-          uniProps={mutedFill}
+          fill={palette.muted}
           textAnchor="middle"
         >
           {label}
-        </ThemedSvgText>
+        </SvgText>
       ) : null}
     </G>
   );
@@ -372,48 +427,46 @@ function MapNode(props: {
   selected: boolean;
   dimmed: boolean;
   onToggle: (id: string) => void;
+  palette: MapPalette;
 }) {
-  const { node, drawLabels, selected, dimmed, onToggle } = props;
+  const { node, drawLabels, selected, dimmed, onToggle, palette } = props;
+  const toneColour = palette.tone[node.tone];
   const onPress = useCallback(() => onToggle(node.id), [node.id, onToggle]);
   const textX = node.x + 10;
   return (
     <G opacity={dimmed ? 0.2 : 1} testID="architecture-map-node">
-      <ThemedRect
+      <Rect
         x={node.x}
         y={node.y}
         width={node.width}
         height={node.height}
         rx={8}
-        uniProps={nodeFrame(selected ? "selected" : node.tone)}
+        fill={palette.surface}
+        stroke={selected ? palette.accent : toneColour}
         strokeWidth={selected ? 2.5 : 1.5}
         strokeDasharray={node.tone === "external" ? "5 3" : undefined}
         onPress={onPress}
       />
       {drawLabels ? (
         <>
-          <ThemedSvgText
+          <SvgText
             x={textX}
             y={node.y + 20}
             fontSize={LABEL_SIZE}
             fontWeight="600"
-            uniProps={foregroundFill}
+            fill={palette.foreground}
           >
             {fitText(node.label, node.width, LABEL_SIZE)}
-          </ThemedSvgText>
+          </SvgText>
           {node.sublabel ? (
-            <ThemedSvgText x={textX} y={node.y + 36} fontSize={DETAIL_SIZE} uniProps={mutedFill}>
+            <SvgText x={textX} y={node.y + 36} fontSize={DETAIL_SIZE} fill={palette.muted}>
               {fitText(node.sublabel, node.width, DETAIL_SIZE)}
-            </ThemedSvgText>
+            </SvgText>
           ) : null}
           {node.tag ? (
-            <ThemedSvgText
-              x={textX}
-              y={node.y + 51}
-              fontSize={DETAIL_SIZE}
-              uniProps={toneFill(node.tone)}
-            >
+            <SvgText x={textX} y={node.y + 51} fontSize={DETAIL_SIZE} fill={toneColour}>
               {fitText(node.tag, node.width, DETAIL_SIZE)}
-            </ThemedSvgText>
+            </SvgText>
           ) : null}
         </>
       ) : null}

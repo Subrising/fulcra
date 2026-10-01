@@ -1,6 +1,6 @@
 import { ARCHITECTURE_IR_LIMITS } from "./ir-schema";
 
-// Maps live at a fixed, workspace-relative location (a fixed product choice). Only direct children
+// Maps live at a fixed, workspace-relative location (prime decision J4). Only direct children
 // of that directory are considered, and the path handed to the daemon is always built from the
 // fixed directory plus a single validated file name, never from anything inside an IR. The
 // daemon additionally realpath-confines every read to the workspace root.

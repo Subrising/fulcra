@@ -8,13 +8,13 @@ import {
 export type { SessionOwnershipRecord, SessionOwnershipState };
 
 /**
- * What the app displays. `owned` carries the ownership service's state verbatim rather than
+ * What the app displays. `owned` carries the controller's state verbatim rather than
  * flattening it, so a leaderless session can say which kind of leaderless it is.
  */
 export type SessionOwnership =
   | {
       kind: "owned";
-      state: Exclude<SessionOwnershipState, "unknown">;
+      state: Exclude<SessionOwnershipState, "unknown" | "managed">;
       projectId: string;
       projectName: string | null;
       taskId: string | null;
@@ -23,9 +23,16 @@ export type SessionOwnership =
       leaderTitle: string | null;
       detail: string | null;
     }
-  /** The ownership service has a record and cannot resolve it. Never shown as global. */
+  | {
+      kind: "managed";
+      state: "managed";
+      leaderAgentId: string | null;
+      leaderTitle: string | null;
+      detail: string | null;
+    }
+  /** The controller has a record and cannot resolve it. Never shown as global. */
   | { kind: "unknown"; detail: string | null }
-  /** No ownership service record: this session was not created into a project. */
+  /** No controller record: this session was not created into a project. */
   | { kind: "unassigned" };
 
 export const UNASSIGNED_SESSION_OWNERSHIP: SessionOwnership = { kind: "unassigned" };
@@ -50,6 +57,13 @@ export function selectSessionOwnership(
   if (!isSessionOwnershipState(record.state)) return { kind: "unknown", detail };
   const projectId = trimmed(record.projectId);
   switch (record.state) {
+    case "managed": {
+      const leaderAgentId = trimmed(record.leaderAgentId);
+      const leaderTitle = trimmed(record.leaderTitle);
+      return leaderAgentId || leaderTitle
+        ? { kind: "managed", state: "managed", leaderAgentId, leaderTitle, detail }
+        : { kind: "unknown", detail: null };
+    }
     case "unknown":
       return { kind: "unknown", detail };
     case "recorded":
@@ -82,7 +96,7 @@ export function selectSessionOwnership(
 }
 
 export interface SessionOwnershipLabels {
-  /** Used only when the ownership service supplied no sentence of its own. */
+  /** Used only when the controller supplied no sentence of its own. */
   unknownProject: string;
   noLeaderYet: string;
   reportsTo: (leader: string) => string;
@@ -104,8 +118,18 @@ export function selectSessionProjectLabel(input: {
   accessibilityLabel: string | undefined;
 } {
   const { ownership, labels } = input;
+  if (ownership.kind === "managed") {
+    return {
+      text:
+        ownership.detail ??
+        labels.reportsTo(ownership.leaderTitle ?? ownership.leaderAgentId ?? "Recorded manager"),
+      source: "controller",
+      isUnknown: false,
+      accessibilityLabel: ownership.detail ?? undefined,
+    };
+  }
   if (ownership.kind === "unknown") {
-    // The ownership service's sentence says why; ours only says that. Prefer theirs.
+    // The controller's sentence says why; ours only says that. Prefer theirs.
     return {
       text: ownership.detail ?? labels.unknownProject,
       source: "controller",
@@ -134,6 +158,8 @@ export function selectSessionLeaderLabel(
   ownership: SessionOwnership,
   labels: SessionOwnershipLabels,
 ): string | null {
+  if (ownership.kind === "managed")
+    return labels.reportsTo(ownership.leaderTitle ?? ownership.leaderAgentId ?? "Recorded manager");
   if (ownership.kind !== "owned") return null;
   if (ownership.leaderAgentId) {
     return labels.reportsTo(ownership.leaderTitle ?? ownership.leaderAgentId);

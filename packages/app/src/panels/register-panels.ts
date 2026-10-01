@@ -17,6 +17,8 @@ import { architectureMapPanelRegistration } from "@/panels/architecture-map-pane
 import { pluginPanelRegistration } from "@/plugins/workspace-panels/panel";
 import { newTabPanelRegistration } from "@/panels/new-tab-panel";
 
+import { contextPanelRegistration } from "@/panels/context-panel";
+
 let panelsRegistered = false;
 
 export function ensurePanelsRegistered(): void {
@@ -26,6 +28,7 @@ export function ensurePanelsRegistered(): void {
   registerPanel(draftPanelRegistration);
   registerPanel(newTabPanelRegistration);
   registerPanel(agentPanelRegistration);
+  registerPanel(contextPanelRegistration);
   registerPanel(providerSubagentPanelRegistration);
   registerPanel(setupPanelRegistration);
   registerPanel(terminalPanelRegistration);

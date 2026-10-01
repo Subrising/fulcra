@@ -1,3 +1,4 @@
+import type { ArchitectureChangeSelection } from "./change-view-request";
 import { useMemo } from "react";
 import { useFetchQuery } from "@/data/query";
 import { useCheckoutDiffQuery } from "@/git/use-diff-query";
@@ -20,6 +21,7 @@ import type { PatchFile } from "./reverse-patch";
 // daemon confines every read to the workspace root.
 
 const STALE_TIME_MS = 5000;
+const EXPLICIT_COMPARISON: { number?: number } = Object.freeze({});
 
 export interface ArchitectureChangeSources {
   isLoading: boolean;
@@ -33,7 +35,7 @@ export interface ArchitectureChangeSources {
   pullRequest: {
     number: number;
     baseRefName: string | null;
-    /** The forge's commits for the base branch tip and the head, when given. */
+    /** The forge's commits for the base branch tip and the head (CONTRACTS v1.16), when given. */
     baseRefOid: string | null;
     headRefOid: string | null;
   } | null;
@@ -43,14 +45,21 @@ export function useArchitectureChangeSources(input: {
   serverId: string;
   workspaceRoot: string | null;
   enabled: boolean;
+  selection?: ArchitectureChangeSelection;
 }): ArchitectureChangeSources {
   const cwd = input.workspaceRoot ?? "";
   const prStatus = useCheckoutPrStatusQuery({
     serverId: input.serverId,
     cwd,
-    enabled: input.enabled && Boolean(cwd),
+    enabled: input.enabled && Boolean(cwd) && !input.selection?.commit,
+    pullRequest: input.selection?.pullRequest,
   });
-  const pr = prStatus.status;
+  const requestedPr = input.selection?.pullRequest;
+  const commitSelected = Boolean(input.selection?.commit);
+  const pr =
+    !commitSelected && (requestedPr === undefined || prStatus.status?.number === requestedPr)
+      ? prStatus.status
+      : null;
   const baseRef = pr?.baseRefName ?? undefined;
   const diff = useCheckoutDiffQuery({
     serverId: input.serverId,
@@ -59,22 +68,28 @@ export function useArchitectureChangeSources(input: {
     baseRef,
     // Undoing the diff must see every character, or the rebuilt base would differ from the real one.
     ignoreWhitespace: false,
-    enabled: input.enabled && Boolean(cwd) && !prStatus.isLoading,
+    enabled: input.enabled && !input.selection && Boolean(cwd) && !prStatus.isLoading,
     queryScope: "architecture-change",
   });
   return useMemo(() => {
-    const byPath = new Map(diff.files.map((file) => [file.oldPath ?? file.path, file]));
-    for (const file of diff.files) byPath.set(file.path, file);
+    const files = input.selection ? [] : diff.files;
+    const byPath = new Map(files.map((file) => [file.oldPath ?? file.path, file]));
+    for (const file of files) byPath.set(file.path, file);
+    let error = input.selection ? null : (diff.payloadError?.message ?? null);
+    if (requestedPr !== undefined && !prStatus.isLoading && !pr)
+      error = "The requested pull request is unavailable on this host.";
     return {
-      isLoading: prStatus.isLoading || diff.isLoading,
-      error: diff.payloadError ? (diff.payloadError.message ?? null) : null,
-      diffTooLarge: diff.diffTooLarge,
-      changedFiles: diff.files.map((file) => ({
+      isLoading: input.selection
+        ? requestedPr !== undefined && prStatus.isLoading
+        : prStatus.isLoading || diff.isLoading,
+      error,
+      diffTooLarge: input.selection ? true : diff.diffTooLarge,
+      changedFiles: files.map((file) => ({
         path: file.path,
         ...(file.oldPath ? { oldPath: file.oldPath } : {}),
         isDeleted: file.isDeleted,
       })),
-      deletedMaps: diff.files
+      deletedMaps: files
         .filter((file) => file.isDeleted && isArchitectureMapPath(file.path))
         .map((file) => file.path),
       mapDiff: (path: string) => byPath.get(path) ?? null,
@@ -88,7 +103,7 @@ export function useArchitectureChangeSources(input: {
             }
           : null,
     };
-  }, [diff, pr, prStatus.isLoading]);
+  }, [diff, pr, prStatus.isLoading, input.selection, requestedPr]);
 }
 
 /** The map's current text; null when the file does not exist (the branch deleted it). */
@@ -126,7 +141,7 @@ export function useArchitectureMapText(input: {
 }
 
 /**
- * The map at a pull request's commits: Before at the merge base of its base and head,
+ * The map at a pull request's commits (R-C-J7-2): Before at the merge base of its base and head,
  * After at its head. Both come from git at those commits; the working tree is never read.
  */
 export function usePullRequestMaps(input: {
@@ -134,12 +149,16 @@ export function usePullRequestMaps(input: {
   workspaceRoot: string | null;
   path: string | null;
   pullRequest: { baseRefOid: string | null; headRefOid: string | null } | null;
+  commit?: { base: string; head: string };
 }): { data: PullRequestMaps | null | undefined; isLoading: boolean; refetch: () => unknown } {
   const client = useSessionStore((state) => state.sessions[input.serverId]?.client ?? null);
   const hostCanRead = useSessionStore(
     (state) => state.sessions[input.serverId]?.serverInfo?.features?.checkoutFileAtCommit === true,
   );
-  const commits = pullRequestReadable(hostCanRead, input.pullRequest);
+  const commits = hostCanRead
+    ? (input.commit ?? pullRequestReadable(true, input.pullRequest))
+    : null;
+  const requested = Boolean(input.pullRequest || input.commit);
   const query = useFetchQuery({
     dataShape: "value",
     staleTimeMs: STALE_TIME_MS,
@@ -148,6 +167,7 @@ export function usePullRequestMaps(input: {
       input.serverId,
       input.workspaceRoot,
       input.path,
+      input.commit ? "exact" : "merge-base",
       commits?.base ?? null,
       commits?.head ?? null,
     ],
@@ -168,7 +188,11 @@ export function usePullRequestMaps(input: {
       let before, after;
       try {
         [before, after] = await Promise.all([
-          read({ kind: "merge-base", of: [commits.base, commits.head] }),
+          read(
+            input.commit
+              ? { kind: "commit", sha: commits.base }
+              : { kind: "merge-base", of: [commits.base, commits.head] },
+          ),
           read({ kind: "commit", sha: commits.head }),
         ]);
       } catch (error) {
@@ -187,14 +211,14 @@ export function usePullRequestMaps(input: {
     },
   });
   // Without the host interface or the forge's commits there is nothing to read: say so, never guess.
-  if (input.pullRequest && !commits)
+  if (requested && !commits)
     return {
       data: { kind: "unavailable", reason: "pull-request", detail: [] },
       isLoading: false,
       refetch: query.refetch,
     };
   return {
-    data: query.data ?? (input.pullRequest ? undefined : null),
+    data: query.data ?? (requested ? undefined : null),
     isLoading: query.isLoading,
     refetch: query.refetch,
   };
@@ -251,9 +275,15 @@ export function useArchitectureChange(input: {
   workspaceRoot: string;
   maps: readonly { name: string; path: string; size: number }[];
   chosenPath: string | null;
+  selection?: ArchitectureChangeSelection;
 }) {
   const { serverId, workspaceRoot, maps, chosenPath } = input;
-  const sources = useArchitectureChangeSources({ serverId, workspaceRoot, enabled: true });
+  const sources = useArchitectureChangeSources({
+    serverId,
+    workspaceRoot,
+    enabled: true,
+    selection: input.selection,
+  });
   const candidates = useMemo<ChangeCandidate[]>(
     () => [
       ...maps.map((entry) => ({ ...entry, exists: true })),
@@ -268,16 +298,19 @@ export function useArchitectureChange(input: {
   );
   const selected = candidates.find((entry) => entry.path === chosenPath) ?? candidates[0] ?? null;
   const { mapDiff, changedFiles, pullRequest } = sources;
+  const commit = input.selection?.commit;
+  const comparison = pullRequest ?? (input.selection ? EXPLICIT_COMPARISON : null);
   // A pull request reads its map at its own commits; only a branch without one reads the local file.
   const atCommits = usePullRequestMaps({
     serverId,
     workspaceRoot,
     path: selected?.path ?? null,
     pullRequest,
+    commit,
   });
   const text = useArchitectureMapText({
     serverId,
-    workspaceRoot: pullRequest ? null : workspaceRoot,
+    workspaceRoot: comparison ? null : workspaceRoot,
     path: selected?.path ?? null,
     exists: selected?.exists ?? false,
   });
@@ -288,15 +321,15 @@ export function useArchitectureChange(input: {
   });
   const change = useMemo(() => {
     if (!selected || sources.isLoading) return null;
-    if (pullRequest ? atCommits.data === undefined : text.data === undefined) return null;
+    if (comparison ? atCommits.data === undefined : text.data === undefined) return null;
     return buildArchitectureChange({
       mapPath: selected.path,
-      headText: pullRequest ? null : (text.data ?? null),
+      headText: comparison ? null : (text.data ?? null),
       mapDiff: mapDiff(selected.path),
       changedFiles,
       siblings: siblings.data ?? new Map(),
-      pullRequest,
-      pullRequestMaps: pullRequest ? (atCommits.data ?? null) : null,
+      pullRequest: comparison,
+      pullRequestMaps: comparison ? (atCommits.data ?? null) : null,
     });
   }, [
     selected,
@@ -306,7 +339,7 @@ export function useArchitectureChange(input: {
     mapDiff,
     changedFiles,
     siblings.data,
-    pullRequest,
+    comparison,
   ]);
   const error = text.error instanceof Error ? text.error.message : sources.error;
   return {
@@ -314,14 +347,15 @@ export function useArchitectureChange(input: {
     selected,
     change,
     error,
-    loading:
-      sources.isLoading ||
-      text.isLoading ||
-      atCommits.isLoading ||
-      (change === null && error === null),
+    loading: [
+      sources.isLoading,
+      text.isLoading,
+      atCommits.isLoading,
+      change === null && error === null,
+    ].some(Boolean),
     /** The host cut the diff short and the chosen map is not in what arrived. */
     diffCut: sources.diffTooLarge && selected !== null && mapDiff(selected.path) === null,
     pullRequest,
-    reload: pullRequest ? atCommits.refetch : text.refetch,
+    reload: comparison ? atCommits.refetch : text.refetch,
   };
 }

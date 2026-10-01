@@ -21,7 +21,7 @@ import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.util.UUID
 
-// The Android device key. A P-256 key generated inside the Android Keystore
+// The Android device key (CONTRACTS §3.6). A P-256 key generated inside the Android Keystore
 // (StrongBox when the phone has one), non-exportable, that requires a strong biometric for every
 // signature: the Keystore refuses to sign until BiometricPrompt authenticates this exact operation.
 // JavaScript receives only the public key (SPKI) and DER signatures.

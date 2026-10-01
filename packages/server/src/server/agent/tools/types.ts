@@ -1,8 +1,12 @@
+import type { NativeArtifactInvocation } from "../../native-artifact-origin.js";
+import type { NativeReportOrigin } from "../../report-origin.js";
 import type { z } from "zod";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 
 export interface PaseoToolExecutionContext {
   signal?: AbortSignal;
+  /** Host-captured before input parsing awaits; caller-supplied matching objects refuse. */
+  nativeArtifactInvocation?: NativeArtifactInvocation;
   sendUpdate?: (update: PaseoToolResult) => void;
 }
 
@@ -36,6 +40,7 @@ export interface PaseoToolCatalog {
 }
 
 export interface PaseoToolRuntimeContext {
+  nativeReportOrigin?: NativeReportOrigin;
   callerAgentId?: string;
   paseoToolPolicy?: ProviderPaseoToolsPolicy;
   enableVoiceTools?: boolean;

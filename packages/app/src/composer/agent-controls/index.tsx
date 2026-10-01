@@ -1,3 +1,4 @@
+import { resolveDraftEffort } from "./draft-effort";
 import {
   memo,
   useCallback,
@@ -1844,7 +1845,9 @@ export function DraftAgentControls({
   }, [thinkingOptions]);
 
   const effectiveSelectedThinkingOption =
-    selectedThinkingOptionId || mappedThinkingOptions[0]?.id || undefined;
+    resolveDraftEffort(models, selectedModel, selectedThinkingOptionId).selectedId ||
+    mappedThinkingOptions[0]?.id ||
+    undefined;
 
   const modelOptions = useMemo<AgentControlOption[]>(
     () =>

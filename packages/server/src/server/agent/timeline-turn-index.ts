@@ -13,6 +13,11 @@ export interface TimelineTurnSummary {
   startedAt: string;
   endedAt: string;
   toolCount: number;
+  /**
+   * Distinct shell commands the turn ran. Files a command changes are not in `files` (only file
+   * tools are indexed), so a turn with commands and no files may still have changed files.
+   */
+  commands: number;
   /** Paths relative to the agent's working directory, in first-touch order. */
   files: string[];
   /** Touches outside the working directory. Their paths are never stored. */
@@ -128,6 +133,7 @@ export function toolCallFileTouches(
 interface TurnState {
   record: TimelineTurnRecord;
   callIds: Set<string>;
+  commandCallIds: Set<string>;
   files: Set<string>;
 }
 
@@ -161,6 +167,10 @@ export class TimelineIndexBuilder {
     if (!turn.callIds.has(item.callId)) {
       turn.callIds.add(item.callId);
       record.toolCount = turn.callIds.size;
+    }
+    if (item.detail.type === "shell" && !turn.commandCallIds.has(item.callId)) {
+      turn.commandCallIds.add(item.callId);
+      record.commands = turn.commandCallIds.size;
     }
     for (const touch of toolCallFileTouches(item.detail)) {
       const location = locateTimelinePath(touch.path, this.cwd);
@@ -211,11 +221,13 @@ export class TimelineIndexBuilder {
         startedAt: row.timestamp,
         endedAt: row.timestamp,
         toolCount: 0,
+        commands: 0,
         files: [],
         externalFileCount: 0,
         ranges: [],
       },
       callIds: new Set(),
+      commandCallIds: new Set(),
       files: new Set(),
     };
     this.turns.set(turnId, created);

@@ -1,3 +1,8 @@
+import {
+  selectSidebarConversationLabels,
+  equalSidebarConversationLabels,
+  type SidebarConversationLabel,
+} from "./sidebar-conversation-labels";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import equal from "fast-deep-equal";
 import { useStoreWithEqualityFn } from "zustand/traditional";
@@ -95,6 +100,7 @@ function selectProjectHostReplicas(
 export function deriveProjectsFromReplica(input: {
   replicas: readonly ProjectHostReplica[];
   runtimeStates: readonly ProjectHostRuntimeState[];
+  conversationLabels?: ReadonlyMap<string, SidebarConversationLabel>;
 }): DerivedProjectsResult {
   const runtimeByServerId = new Map(
     input.runtimeStates.map((state) => [state.serverId, state] as const),
@@ -123,7 +129,7 @@ export function deriveProjectsFromReplica(input: {
   });
 
   return {
-    ...buildProjects({ hosts }),
+    ...buildProjects({ hosts, conversationLabels: input.conversationLabels }),
     hostErrors,
     isLoading: input.runtimeStates.some((state) => state.isLoading),
     isFetching: input.runtimeStates.some((state) => state.isFetching),
@@ -178,9 +184,14 @@ export function useProjects(options: UseProjectsOptions = {}): UseProjectsResult
   );
   const replicas = useStoreWithEqualityFn(useSessionStore, replicaSelector, equal);
   const runtimeStates = useProjectHostRuntimeStates(serverIds, enabled);
+  const conversationLabels = useStoreWithEqualityFn(
+    useSessionStore,
+    (state) => selectSidebarConversationLabels(state.sessions, serverIds),
+    equalSidebarConversationLabels,
+  );
   const derived = useMemo(
-    () => deriveProjectsFromReplica({ replicas, runtimeStates }),
-    [replicas, runtimeStates],
+    () => deriveProjectsFromReplica({ replicas, runtimeStates, conversationLabels }),
+    [replicas, runtimeStates, conversationLabels],
   );
   const refetch = useCallback(() => {
     if (!enabled) return;

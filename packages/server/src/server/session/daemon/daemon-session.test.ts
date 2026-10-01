@@ -312,8 +312,8 @@ describe("DaemonSession", () => {
         listen: "127.0.0.1:6767",
         getRelayConfig: () => ({
           enabled: false,
-          endpoint: "relay.paseo.sh:443",
-          publicEndpoint: "relay.paseo.sh:443",
+          endpoint: "relay.example.test:443",
+          publicEndpoint: "relay.example.test:443",
           useTls: true,
           publicUseTls: true,
         }),
@@ -361,7 +361,7 @@ describe("DaemonSession", () => {
     }
     expect(message.payload.requestId).toBe("p-2");
     expect(message.payload.relayEnabled).toBe(true);
-    expect(message.payload.url.startsWith("https://app.example.test")).toBe(true);
+    expect(message.payload.url.startsWith("fulcra://pair#offer=")).toBe(true);
     expect(typeof message.payload.qr).toBe("string");
   });
 

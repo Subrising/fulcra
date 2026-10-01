@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { InstalledPlugin } from "./types";
+import { pluginConnectionRefusal, pluginSurfaceUnavailable } from "./surface-refusal";
 import {
   getPluginSurfaceContributionServerIds,
   resolvePluginSurfaceContribution,
@@ -81,5 +82,70 @@ describe("plugin surface contribution identity", () => {
       "host-v2",
       "same-surface",
     ]);
+  });
+});
+
+import { pluginSurfaceTitle } from "./surface-contribution";
+it("P2 unavailable bundled surface uses its host-owned product name", () => {
+  expect(pluginSurfaceTitle("orca-organization-next")).toBe("Fulcra Command Centre");
+  expect(pluginSurfaceTitle("other", "A surface")).toBe("A surface");
+});
+
+describe("safe plugin connection refusal", () => {
+  const snapshot = {
+    lastError: null,
+    authFailureReason: null,
+    pairingRequired: null,
+    connectionStatus: "error",
+  } as const;
+
+  it("uses typed authentication reasons without publishing arbitrary exception text", () => {
+    expect(
+      pluginConnectionRefusal({
+        ...snapshot,
+        authFailureReason: "password_required",
+        lastError: "throwaway-secret /private/operator",
+      }),
+    ).toBe("This host requires its configured password. Connect it from Settings.");
+    expect(pluginConnectionRefusal({ ...snapshot, authFailureReason: "incorrect_password" })).toBe(
+      "This host refused the configured password. Update it in Settings.",
+    );
+  });
+
+  it("recognizes only exact host preflight diagnostics", () => {
+    expect(
+      pluginConnectionRefusal({
+        ...snapshot,
+        lastError: "Desktop daemon authentication unavailable. Retry from Settings.",
+      }),
+    ).toBe("Desktop daemon authentication is unavailable. Retry from Settings.");
+    expect(
+      pluginConnectionRefusal({
+        ...snapshot,
+        lastError: "Desktop daemon is starting or unavailable. Retrying.",
+      }),
+    ).toBe("Desktop daemon is starting or unavailable. Retry the connection.");
+    expect(
+      pluginConnectionRefusal({
+        ...snapshot,
+        lastError:
+          "Desktop daemon authentication unavailable. Retry from Settings. token=throwaway",
+      }),
+    ).toBe("The plugin host connection is unavailable. Retry the connection.");
+  });
+
+  it("leaves unknown failures unclassified and clears recovered connection diagnostics", () => {
+    expect(
+      pluginConnectionRefusal({
+        ...snapshot,
+        lastError: "password token=throwaway-secret /private/operator",
+      }),
+    ).toBe("The plugin host connection is unavailable. Retry the connection.");
+    expect(pluginConnectionRefusal({ ...snapshot, connectionStatus: "online" })).toBeNull();
+    expect(pluginConnectionRefusal(null)).toBeNull();
+    expect(pluginSurfaceUnavailable(null, true, false)).toBe("This plugin could not be loaded.");
+    expect(pluginSurfaceUnavailable("The plugin host is offline.", false, true)).toBe(
+      "The plugin host is offline.",
+    );
   });
 });

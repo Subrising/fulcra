@@ -8,6 +8,7 @@ import {
   WorkspaceProjectDescriptorPayloadSchema,
   ProviderUsageSchema,
   AgentQuotaSnapshotSchema,
+  AccountUsageRowSchema,
 } from "./messages.js";
 
 test("session quota retains unknown permission and requires a target agent", () => {
@@ -229,6 +230,62 @@ describe("provider usage list message contract", () => {
       type: "provider.usage.list.request",
       requestId: "usage-1",
     });
+  });
+
+  test("update-7c: the request may ask for the account rundown, and an old response without it still parses", () => {
+    expect(
+      SessionInboundMessageSchema.parse({
+        type: "provider.usage.list.request",
+        requestId: "usage-acc",
+        accounts: true,
+        refresh: true,
+      }),
+    ).toEqual({
+      type: "provider.usage.list.request",
+      requestId: "usage-acc",
+      accounts: true,
+      refresh: true,
+    });
+    const row = {
+      accountId: "11111111-1111-4111-8111-111111111111",
+      name: "Work",
+      provider: "claude",
+      status: "ok",
+      observedAt: "2026-09-30T00:00:00.000Z",
+      source: "session",
+      fiveHour: { usedPct: 40, resetsAt: "2026-09-30T03:00:00.000Z" },
+      weekly: { usedPct: 60, resetsAt: null },
+      inUse: true,
+    };
+    const withAccounts = SessionOutboundMessageSchema.parse({
+      type: "provider.usage.list.response",
+      payload: {
+        requestId: "usage-acc",
+        fetchedAt: "2026-09-30T00:00:00.000Z",
+        providers: [],
+        accounts: [row],
+      },
+    });
+    if (withAccounts.type !== "provider.usage.list.response") throw new Error("wrong type");
+    expect(withAccounts.payload.accounts).toEqual([row]);
+    const old = SessionOutboundMessageSchema.parse({
+      type: "provider.usage.list.response",
+      payload: { requestId: "usage-old", fetchedAt: "2026-09-30T00:00:00.000Z", providers: [] },
+    });
+    if (old.type !== "provider.usage.list.response") throw new Error("wrong type");
+    expect(old.payload.accounts).toBeUndefined();
+    // A row has no field that could carry a credential, digest or path.
+    expect(Object.keys(row).sort()).toEqual([
+      "accountId",
+      "fiveHour",
+      "inUse",
+      "name",
+      "observedAt",
+      "provider",
+      "source",
+      "status",
+      "weekly",
+    ]);
   });
 
   test("accepts new providers and new usage windows as normalized data", () => {
@@ -567,5 +624,88 @@ describe("viewed timeline subscription messages", () => {
         },
       },
     });
+  });
+});
+
+test("trusted host fields survive wire parsing and remain optional", () => {
+  const requests = [
+    {
+      type: "send_agent_message_request",
+      requestId: "r",
+      agentId: "agent",
+      text: "hello",
+      messageId: "message",
+    },
+    { type: "cancel_agent_request", requestId: "r", agentId: "agent" },
+    {
+      type: "create_agent_request",
+      requestId: "r",
+      agentId: "11111111-2222-4333-8444-555555555555",
+      config: { provider: "codex", cwd: "/fixture" },
+      initialPrompt: "Fixture",
+      clientMessageId: "first",
+    },
+    {
+      type: "agent.create.request",
+      requestId: "r",
+      agentId: "11111111-2222-4333-8444-555555555555",
+      config: { provider: "codex", cwd: "/fixture" },
+      initialPrompt: "Fixture",
+      clientMessageId: "first",
+    },
+    {
+      type: "agent_permission_response",
+      agentId: "agent",
+      requestId: "permission",
+      response: { behavior: "allow" },
+    },
+    { type: "set_agent_mode_request", requestId: "r", agentId: "agent", modeId: "default" },
+
+    { type: "archive_agent_request", requestId: "r", agentId: "agent" },
+    { type: "close_items_request", requestId: "r", agentIds: ["agent"], terminalIds: [] },
+  ];
+  for (const request of requests) {
+    expect(SessionInboundMessageSchema.safeParse(request).success).toBe(true);
+    expect(
+      SessionInboundMessageSchema.parse({ ...request, inputProvenance: "opaque-fixture-token" }),
+    ).toMatchObject({ inputProvenance: "opaque-fixture-token" });
+  }
+  const response = {
+    type: "plugin.catalog.get.response",
+    payload: {
+      requestId: "r",
+      plugins: [],
+      trustedPlugins: [{ id: "fixture", hooks: ["input", "permission", "deny", "mcp", "codex"] }],
+    },
+  };
+  expect(SessionOutboundMessageSchema.parse(response)).toEqual(response);
+  expect(
+    SessionOutboundMessageSchema.safeParse({
+      ...response,
+      payload: { requestId: "r", plugins: [] },
+    }).success,
+  ).toBe(true);
+});
+
+describe("account usage session count compatibility", () => {
+  const row = {
+    accountId: null,
+    name: "Work",
+    provider: "claude",
+    status: "unavailable",
+    observedAt: null,
+    source: null,
+    fiveHour: null,
+    weekly: null,
+    inUse: false,
+  };
+  test("legacy rows omit counts without inventing zero", () => {
+    expect(AccountUsageRowSchema.parse(row)).toEqual(row);
+    expect(AccountUsageRowSchema.parse({ ...row, sessionCount: 0 }).sessionCount).toBe(0);
+    expect(AccountUsageRowSchema.parse({ ...row, sessionCount: 2 }).sessionCount).toBe(2);
+  });
+  test("counts reject negative, fractional and non-finite values", () => {
+    for (const sessionCount of [-1, 0.5, Infinity, NaN])
+      expect(AccountUsageRowSchema.safeParse({ ...row, sessionCount }).success).toBe(false);
   });
 });

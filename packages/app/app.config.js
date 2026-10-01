@@ -82,7 +82,7 @@ const variants = {
     }),
     googleServiceInfoPlist: resolveSecretFile({
       envKey: "ORCA_GOOGLE_SERVICE_INFO_PLIST_PROD",
-      fallbackRelativePath: "./.secrets/Fulcra-GoogleService-Info.prod.plist",
+      fallbackRelativePath: "./.secrets/Orca-GoogleService-Info.prod.plist",
     }),
   },
   development: {
@@ -94,7 +94,7 @@ const variants = {
     }),
     googleServiceInfoPlist: resolveSecretFile({
       envKey: "ORCA_GOOGLE_SERVICE_INFO_PLIST_DEBUG",
-      fallbackRelativePath: "./.secrets/Fulcra-GoogleService-Info.debug.plist",
+      fallbackRelativePath: "./.secrets/Orca-GoogleService-Info.debug.plist",
     }),
   },
 };
@@ -109,7 +109,7 @@ export default {
     version: nativeReleaseVersion.appVersion,
     orientation: "portrait",
     icon: "./assets/images/fulcra-v1/icon.png",
-    // `fulcra` carries sign-in return links (fulcra://oauth/<flowId>); `orca` stays for existing links.
+    // `fulcra` carries sign-in return links (fulcra://oauth/<flowId>, CONTRACTS §7.2); `orca` stays for existing links.
     scheme: ["orca", "fulcra"],
     userInterfaceStyle: isPrivatePreview ? "dark" : "automatic",
     newArchEnabled: true,

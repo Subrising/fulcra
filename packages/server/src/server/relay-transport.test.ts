@@ -1,6 +1,16 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DeviceRegistry } from "./pairing/device-registry.js";
+import { OfferStore } from "./pairing/offer-store.js";
+import { RelayDeviceGate } from "./pairing/relay-device-gate.js";
+const homes: string[] = [];
+afterEach(() => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+});
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type pino from "pino";
-import { createClientChannel, type Transport } from "@getpaseo/relay/e2ee";
+import { createClientChannel, type Transport } from "@getpaseo/client/relay-v3";
 import { exportPublicKey, generateKeyPair } from "@getpaseo/relay";
 import { startRelayTransport } from "./relay-transport";
 
@@ -151,7 +161,7 @@ describe("relay-transport control lifecycle", () => {
     const controller = startRelayTransport({
       logger: logger as unknown as pino.Logger,
       attachSocket: async () => {},
-      relayEndpoint: "relay.paseo.sh:443",
+      relayEndpoint: "relay.example.test:443",
       relayUseTls: true,
       serverId: "srv_test",
       createWebSocket: relay.createWebSocket,
@@ -175,7 +185,7 @@ describe("relay-transport control lifecycle", () => {
     const controller = startRelayTransport({
       logger: logger as unknown as pino.Logger,
       attachSocket: async () => {},
-      relayEndpoint: "relay.paseo.sh:443",
+      relayEndpoint: "relay.example.test:443",
       relayUseTls: true,
       serverId: "srv_test",
       createWebSocket: relay.createWebSocket,
@@ -199,7 +209,7 @@ describe("relay-transport control lifecycle", () => {
     const controller = startRelayTransport({
       logger: logger as unknown as pino.Logger,
       attachSocket: async () => {},
-      relayEndpoint: "relay.paseo.sh:443",
+      relayEndpoint: "relay.example.test:443",
       relayUseTls: true,
       serverId: "srv_test",
       createWebSocket: relay.createWebSocket,
@@ -216,7 +226,7 @@ describe("relay-transport control lifecycle", () => {
     expect(control.terminateCalls).toBe(1);
   });
 
-  test("passes stable relay external session metadata when attaching data socket", async () => {
+  test("refuses data sockets without encrypted device admission", async () => {
     const logger = createMockLogger();
     const attachedSockets: unknown[] = [];
     const attachedMetadata: unknown[] = [];
@@ -227,7 +237,7 @@ describe("relay-transport control lifecycle", () => {
     const controller = startRelayTransport({
       logger: logger as unknown as pino.Logger,
       attachSocket,
-      relayEndpoint: "relay.paseo.sh:443",
+      relayEndpoint: "relay.example.test:443",
       relayUseTls: true,
       serverId: "srv_test",
       createWebSocket: relay.createWebSocket,
@@ -245,19 +255,20 @@ describe("relay-transport control lifecycle", () => {
 
     await Promise.resolve();
 
-    expect(attachedSockets).toEqual([dataSocket]);
-    expect(attachedMetadata).toEqual([
-      {
-        transport: "relay",
-        externalSessionKey: "session:clt_test",
-        relayConnectionId: "clt_test",
-      },
-    ]);
+    expect(attachedSockets).toEqual([]);
+    expect(attachedMetadata).toEqual([]);
+    expect(dataSocket.readyState).toBe(3);
   });
 
   test("encrypted sends wait for the physical data socket callback", async () => {
     const logger = createMockLogger();
     const daemonKeyPair = generateKeyPair();
+    const deviceKeyPair = generateKeyPair();
+    const home = mkdtempSync(join(tmpdir(), "fulcra-transport-test-"));
+    homes.push(home);
+    const registry = new DeviceRegistry(home);
+    registry.add(exportPublicKey(deviceKeyPair.publicKey), "Test phone");
+    const deviceGate = new RelayDeviceGate(new OfferStore(home), registry);
     let resolveAttached: ((socket: unknown) => void) | undefined;
     const attached = new Promise<unknown>((resolve) => {
       resolveAttached = resolve;
@@ -265,10 +276,11 @@ describe("relay-transport control lifecycle", () => {
     const controller = startRelayTransport({
       logger: logger as unknown as pino.Logger,
       attachSocket: async (socket) => resolveAttached?.(socket),
-      relayEndpoint: "relay.paseo.sh:443",
+      relayEndpoint: "relay.example.test:443",
       relayUseTls: true,
       serverId: "srv_test",
       daemonKeyPair,
+      deviceGate,
       createWebSocket: relay.createWebSocket,
     });
     controllers.push(controller);
@@ -299,9 +311,14 @@ describe("relay-transport control lifecycle", () => {
     const clientOpen = new Promise<void>((resolve) => {
       resolveClientOpen = resolve;
     });
-    await createClientChannel(clientTransport, exportPublicKey(daemonKeyPair.publicKey), {
-      onopen: () => resolveClientOpen?.(),
-    });
+    const clientChannel = await createClientChannel(
+      clientTransport,
+      exportPublicKey(daemonKeyPair.publicKey),
+      {
+        onopen: () => resolveClientOpen?.(),
+      },
+      { deviceKeyPair, serverId: "srv_test" },
+    );
 
     let attachedCompleted = false;
     void attached.then(() => {
@@ -309,6 +326,7 @@ describe("relay-transport control lifecycle", () => {
       return undefined;
     });
     await clientOpen;
+    await clientChannel.send(JSON.stringify({ type: "hello" }));
     await Promise.resolve();
     expect(attachedCompleted).toBe(false);
     dataSocket.completeNextSend();

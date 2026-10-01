@@ -1,0 +1,38 @@
+[
+  {
+    "kind": "vendor-pem-marker",
+    "file": "Contents/Resources/app.asar!/node_modules/dotenv/README-es.md",
+    "sha256": "f959eeb6e96caa8cd4f47fa5a280465be0d263e12ee4a2768145558feab769dd",
+    "line": 94,
+    "offset": 2266,
+    "pattern": "-----BEGIN RSA PRIVATE KEY-----",
+    "context": "PRIVATE_KEY=\"-----BEGIN RSA PRIVATE KEY-----",
+    "package": "dotenv",
+    "version": "17.3.1",
+    "justification": "Prime BRIEF-V4-R6 §4: truncated upstream documentation example with ellipses; no usable key material; OpenSSL rejects it."
+  },
+  {
+    "kind": "vendor-pem-marker",
+    "file": "Contents/Resources/app.asar!/node_modules/dotenv/README-es.md",
+    "sha256": "f959eeb6e96caa8cd4f47fa5a280465be0d263e12ee4a2768145558feab769dd",
+    "line": 104,
+    "offset": 2444,
+    "pattern": "-----BEGIN RSA PRIVATE KEY-----",
+    "context": "PRIVATE_KEY=\"-----BEGIN RSA PRIVATE KEY-----\\nKh9NV...\\n-----END RSA PRIVATE KEY-----\\n\"",
+    "package": "dotenv",
+    "version": "17.3.1",
+    "justification": "Prime BRIEF-V4-R6 §4: truncated upstream documentation example with ellipses; no usable key material; OpenSSL rejects it."
+  },
+  {
+    "kind": "vendor-pem-marker",
+    "file": "Contents/Resources/app.asar!/node_modules/jose/dist/webapi/key/import.js",
+    "sha256": "b4e122bd70624cdbca8ca2e002e85540ac6f20e2c5c72c2b4b93e8e8ba4f2f5d",
+    "line": 19,
+    "offset": 916,
+    "pattern": "-----BEGIN PRIVATE KEY-----",
+    "context": "    if (typeof pkcs8 !== 'string' || pkcs8.indexOf('-----BEGIN PRIVATE KEY-----') !== 0) {",
+    "package": "jose",
+    "version": "6.2.2",
+    "justification": "Prime BRIEF-V4-R6 §4: header-only indexOf parser string; no key payload; OpenSSL rejects it."
+  }
+]

@@ -90,16 +90,20 @@ interface PromptForDiffInput {
 export function createGitMetadataGenerator(deps: {
   workspaceGitService: GitMetadataDiffSource;
   generation: StructuredTextGeneration;
+  /** Deliberate suggestions do not read project instructions or substitute fallback wording. */
+  strictDraft?: { assertCurrent: () => void };
 }): GitMetadataGenerator {
   const { workspaceGitService, generation } = deps;
 
   async function buildPromptForDiff(input: PromptForDiffInput): Promise<string> {
+    deps.strictDraft?.assertCurrent();
     const diff = await workspaceGitService.getCheckoutDiff(input.cwd, input.diffOptions);
+    deps.strictDraft?.assertCurrent();
     const fileList = renderFileList(diff.structured);
     const patch = truncatePatch(diff.diff, input.maxPatchChars);
     return buildMetadataPrompt({
       cwd: input.cwd,
-      workspaceGitService,
+      workspaceGitService: deps.strictDraft ? undefined : workspaceGitService,
       contract: input.contract,
       styles: [{ configKey: input.styleConfigKey, default: input.styleDefault }],
       after: [
@@ -124,6 +128,7 @@ export function createGitMetadataGenerator(deps: {
         jsonFieldsHint: "Return JSON only with a single field 'message'.",
       });
       try {
+        deps.strictDraft?.assertCurrent();
         const result = await generation.generate({
           cwd,
           prompt,
@@ -131,8 +136,10 @@ export function createGitMetadataGenerator(deps: {
           schemaName: "CommitMessage",
           agentTitle: "Commit generator",
         });
+        deps.strictDraft?.assertCurrent();
         return result.message;
       } catch (error) {
+        if (deps.strictDraft) throw error;
         if (isStructuredGenerationFailure(error)) {
           return COMMIT_MESSAGE_FALLBACK;
         }
@@ -151,14 +158,18 @@ export function createGitMetadataGenerator(deps: {
         jsonFieldsHint: "Return JSON only with fields 'title' and 'body'.",
       });
       try {
-        return await generation.generate({
+        deps.strictDraft?.assertCurrent();
+        const result = await generation.generate({
           cwd,
           prompt,
           schema: PULL_REQUEST_SCHEMA,
           schemaName: "PullRequest",
           agentTitle: "PR generator",
         });
+        deps.strictDraft?.assertCurrent();
+        return result;
       } catch (error) {
+        if (deps.strictDraft) throw error;
         if (isStructuredGenerationFailure(error)) {
           return PULL_REQUEST_FALLBACK;
         }

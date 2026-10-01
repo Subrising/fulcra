@@ -38,6 +38,7 @@ import {
   CircleCheck,
   CircleDot,
   CircleX,
+  WifiOff,
 } from "lucide-react-native";
 import { useToast } from "@/contexts/toast-context";
 import { WorkspaceRenameModal } from "@/components/workspace-rename-modal";
@@ -105,6 +106,7 @@ const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedCircleAlert = withUnistyles(CircleAlert);
 const ThemedCircleCheck = withUnistyles(CircleCheck);
 const ThemedCircleDot = withUnistyles(CircleDot);
+const ThemedWifiOff = withUnistyles(WifiOff);
 const ThemedCircleX = withUnistyles(CircleX);
 const EMPTY_SHORTCUT_INDEX = new Map<string, number>();
 
@@ -339,7 +341,7 @@ function StatusGroupRows({
     expanded: workspacesExpanded,
     canToggle: canToggleWorkspaces,
     toggleExpanded: toggleWorkspacesExpanded,
-  } = useLimitedSidebarGroup(group.rows);
+  } = useLimitedSidebarGroup(group.rows, workspaceServerId);
 
   return (
     <View style={collapsed ? undefined : styles.statusGroupBlockExpanded}>
@@ -377,6 +379,11 @@ function StatusGroupRows({
       ) : null}
     </View>
   );
+}
+
+// Status groups cut rows per host, so a quiet host's sessions are never pushed out by a busy one.
+function workspaceServerId(workspace: SidebarWorkspaceEntry): string {
+  return workspace.serverId;
 }
 
 interface StatusRowProjectPresentation {
@@ -449,6 +456,15 @@ function StatusGroupHeader({
             <Text style={styles.statusGroupTitle} numberOfLines={1}>
               {group.label}
             </Text>
+            {group.hostCounts ? (
+              <Text
+                style={styles.statusGroupHostCounts}
+                numberOfLines={1}
+                testID={`sidebar-status-group-host-counts-${group.key}`}
+              >
+                {`· ${group.hostCounts.map((host) => `${host.name} ${host.count}`).join(" · ")}`}
+              </Text>
+            ) : null}
           </View>
         </View>
       </Pressable>
@@ -466,7 +482,11 @@ function StatusGroupLeadingVisual({
   showChevron: boolean;
 }) {
   if (!showChevron) {
-    return <StatusGroupIcon bucket={leading.bucket} />;
+    return leading.kind === "offline" ? (
+      <ThemedWifiOff size={14} uniProps={foregroundMutedColorMapping} />
+    ) : (
+      <StatusGroupIcon bucket={leading.bucket} />
+    );
   }
   if (collapsed) {
     return <ThemedChevronRight size={14} uniProps={foregroundMutedColorMapping} />;
@@ -1101,6 +1121,11 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     fontWeight: "400",
     minWidth: 0,
+    flexShrink: 1,
+  },
+  statusGroupHostCounts: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
     flexShrink: 1,
   },
   workspaceRowContainer: {

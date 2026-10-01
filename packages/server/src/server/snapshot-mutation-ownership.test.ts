@@ -13,6 +13,7 @@ import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
 import { asInternals, createStub } from "./test-utils/class-mocks.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
+import { withTrustedSurface } from "./test-utils/trusted-surface.js";
 
 interface SessionInternals {
   archiveAgentForClose(agentId: string): Promise<{ archivedAt: string }>;
@@ -87,6 +88,7 @@ describe("snapshot mutation ownership boundary", () => {
         updatedAt: archivedAt,
       };
     });
+    const preflightArchiveDescendants = vi.fn(async () => {});
     const updateAgentMetadata = vi.fn(async () => undefined);
     const directStorageWrite = vi.fn(async () => {
       throw new Error("Session should not write snapshots directly");
@@ -112,13 +114,16 @@ describe("snapshot mutation ownership boundary", () => {
         downloadTokenStore: createStub<SessionOptions["downloadTokenStore"]>({}),
         pushNotifications: createStub<SessionOptions["pushNotifications"]>({}),
         paseoHome: "/tmp/paseo-test",
-        agentManager: createStub<SessionOptions["agentManager"]>({
-          subscribe: () => () => {},
-          listAgents: () => [],
-          getAgent: () => null,
-          archiveSnapshot,
-          updateAgentMetadata,
-        }),
+        agentManager: createStub<SessionOptions["agentManager"]>(
+          withTrustedSurface({
+            subscribe: () => () => {},
+            listAgents: () => [],
+            getAgent: () => null,
+            archiveSnapshot,
+            preflightArchiveDescendants,
+            updateAgentMetadata,
+          }),
+        ),
         agentStorage: createStub<SessionOptions["agentStorage"]>({
           list: async () => [],
           get: async () => storedRecord,
@@ -156,6 +161,10 @@ describe("snapshot mutation ownership boundary", () => {
     );
 
     const archiveResult = await session.archiveAgentForClose("agent-1");
+    expect(preflightArchiveDescendants).toHaveBeenCalledWith("agent-1");
+    expect(preflightArchiveDescendants.mock.invocationCallOrder[0]).toBeLessThan(
+      archiveSnapshot.mock.invocationCallOrder[0]!,
+    );
     expect(archiveSnapshot).toHaveBeenCalledTimes(1);
     expect(archiveResult.archivedAt).toBeTruthy();
 

@@ -1,0 +1,9 @@
+{
+  "uuid": "{00000000-0000-4908-8706-000000002005}",
+  "full_name": "acme/web",
+  "slug": "web",
+  "workspace": {
+    "slug": "acme"
+  },
+  "has_issues": true
+}

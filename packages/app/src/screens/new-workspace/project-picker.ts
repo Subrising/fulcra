@@ -69,6 +69,7 @@ export function resolveProjectPickerLabel(
   project: HostProjectListItem,
   conversationLabels: ReadonlyMap<string, SidebarConversationLabel>,
 ): string {
+  if (project.projectCustomName != null) return project.projectCustomName;
   const name = project.projectName.trim();
   if (name && !isRawProjectId(project, name)) return name;
 

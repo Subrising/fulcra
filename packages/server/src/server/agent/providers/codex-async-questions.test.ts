@@ -7,7 +7,8 @@ import {
   waitForTimelineToolCall,
 } from "./codex/test-utils/fake-app-server.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
-import type { AgentStreamEvent } from "../agent-sdk-types.js";
+import type { AgentPermissionResponse, AgentStreamEvent } from "../agent-sdk-types.js";
+import { CodexAsyncQuestions } from "./codex/async-questions.js";
 import { AgentManager } from "../agent-manager.js";
 
 const questionItem = {
@@ -442,4 +443,112 @@ test("restores unanswered questions and does not reopen answered questions on du
   } finally {
     await resumed.session.close();
   }
+});
+
+// ---- L54: the answer shapes callers really send --------------------------------------------------------------
+const twoQuestions = {
+  type: "agentMessage",
+  id: "async-question-2",
+  delivery: "async",
+  questions: [
+    { title: "Which color?", options: ["Blue", "Green"] },
+    { title: "Which size?", options: null },
+  ],
+};
+function asked(item: Record<string, unknown> = twoQuestions) {
+  const questions = new CodexAsyncQuestions(undefined);
+  const request = questions.receive(item)!;
+  return { questions, request };
+}
+const promptOf = (questions: CodexAsyncQuestions, id: string, response: AgentPermissionResponse) =>
+  questions.prepareResponse(id, response).prompt;
+
+test("L54: the app's question form answer (the request input spread, answers by header) is accepted", async () => {
+  const { session, ask } = await setup();
+  try {
+    await ask();
+    const [permission] = session.getPendingPermissions();
+    // Exactly what QuestionFormCard sends: { ...permission.request.input, answers: { [header]: label } }.
+    await session.respondToPermission(permission.id, {
+      behavior: "allow",
+      updatedInput: { ...permission.input, answers: { "Question 1": "Green" } },
+    });
+    expect(session.getPendingPermissions()).toEqual([]);
+  } finally {
+    await session.close();
+  }
+});
+
+test("L54: answers by header, by question text, by index, or in order are accepted; multi-select joins", () => {
+  for (const answers of [
+    { "Question 1": "Blue", "Question 2": "Large" },
+    { "Which color?": "Blue", "Which size?": "Large" },
+    { "0": "Blue", "1": "Large" },
+    ["Blue", "Large"],
+    { "Question 1": ["Blue"], "Which size?": " Large " },
+  ]) {
+    const { questions, request } = asked();
+    expect(promptOf(questions, request.id, { behavior: "allow", updatedInput: { answers } })).toBe(
+      "Answers to your questions:\n\nWhich color?\nBlue\n\nWhich size?\nLarge",
+    );
+  }
+  const { questions, request } = asked();
+  expect(
+    promptOf(questions, request.id, {
+      behavior: "allow",
+      updatedInput: { answers: { "Question 1": ["Blue", "Green"], "Question 2": "Large" } },
+    }),
+  ).toContain("Which color?\nBlue, Green");
+});
+
+test("L54: malformed answers are refused with a plain message, and the question stays pending", () => {
+  for (const [answers, message] of [
+    [{ "Question 1": 7, "Question 2": "Large" }, "Answer Question 1 before submitting"],
+    [
+      { "Question 1": { text: "Blue" }, "Question 2": "Large" },
+      "Answer Question 1 before submitting",
+    ],
+    [{ "Question 1": "Blue" }, "Answer Question 2 before submitting"],
+    [{ "Question 1": "   ", "Question 2": "Large" }, "Answer Question 1 before submitting"],
+    [{ "Question 1": "x".repeat(16385), "Question 2": "Large" }, "Answer Question 1 is too long"],
+    ["Blue", "Answer the question, or dismiss it"],
+    [[1, 2], "Answer Question 1 before submitting"],
+  ] as const) {
+    const { questions, request } = asked();
+    let thrown: unknown;
+    try {
+      questions.prepareResponse(request.id, {
+        behavior: "allow",
+        updatedInput: { answers } as never,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).name).not.toBe("ZodError");
+    expect((thrown as Error).message).toBe(message);
+    expect(questions.hasPending(request.id)).toBe(true);
+  }
+});
+
+test("L54: allow without answers is refused plainly (never a ZodError) and deny dismisses", () => {
+  for (const response of [
+    { behavior: "allow" },
+    { behavior: "allow", selectedActionId: "accept" },
+    { behavior: "allow", updatedInput: { questions: [] } },
+  ] as AgentPermissionResponse[]) {
+    const { questions, request } = asked();
+    expect(() => questions.prepareResponse(request.id, response)).toThrow(
+      "Answer the question, or dismiss it",
+    );
+    expect(questions.hasPending(request.id)).toBe(true);
+  }
+  const { questions, request } = asked();
+  const prepared = questions.prepareResponse(request.id, {
+    behavior: "deny",
+    message: "Dismissed by user",
+  });
+  expect(prepared.prompt).toBeUndefined();
+  expect(prepared.complete().detail).toMatchObject({ text: expect.stringContaining("Dismissed") });
+  expect(questions.hasPending(request.id)).toBe(false);
 });

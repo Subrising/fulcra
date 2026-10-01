@@ -23,13 +23,13 @@ RESOURCES_DIR=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
 MACOS_DIR="${RESOURCES_DIR}/../MacOS"
 
 # electron-builder names the packaged executable, the Helper app and the Linux
-# launcher after productName, which has changed over time (all three names are accepted)
+# launcher after productName, which is Fulcra now, was Orca before that and Paseo
 # before that. All are accepted, current name first, so an installed bundle from
 # any of those generations still finds its own Electron. This shim is copied into the bundle and cannot
 # read that bundle's productName back out of the asar, so a shim that knows only
 # one name stops finding its own Electron the moment the product is renamed —
 # which is exactly how the installed Linux package came to fail here with
-# "not found relative to /opt/<old name>/resources".
+# "not found relative to /opt/Orca/resources".
 APP_NAMES="Fulcra Orca Paseo"
 APP_EXECUTABLE=""
 

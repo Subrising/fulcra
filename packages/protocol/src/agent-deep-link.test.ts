@@ -16,7 +16,7 @@ describe("agent deep links", () => {
     expect(parseAgentDeepLink(link)).toEqual(target);
   });
 
-  it("accepts an orca: link without weakening the exact conversation route", () => {
+  it("accepts an Orca link without weakening the exact conversation route", () => {
     expect(parseAgentDeepLink("orca://h/server/agent/agent-1")).toEqual({
       serverId: "server",
       agentId: "agent-1",

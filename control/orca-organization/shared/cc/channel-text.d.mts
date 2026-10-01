@@ -1,0 +1,10 @@
+export declare const VIA_NAME: Readonly<Record<string, string>>;
+type Choice = { by: string; proven?: boolean; via: string; at: string };
+export declare function proven(choice: Choice | null | undefined): boolean;
+export declare function answerSummary(choice: Choice, optionTitle?: string | null): string;
+export declare function alreadyAnswered(choice: Choice): string;
+export declare function answeredLine(packet: unknown): string | null;
+export declare function closedLine(packet: unknown): string | null;
+export declare function itemLine(n: number, item: { urgency: string; title: string }): string;
+export declare function decisionText(packet: unknown, n?: number | null): string;
+export declare function heldText(item: { title: string }, n?: number | null): string;

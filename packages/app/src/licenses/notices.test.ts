@@ -17,7 +17,7 @@ describe("licence notices shown in the app", () => {
   });
 
   it("keep the upstream attribution", () => {
-    expect(upstreamNotice).toContain("Fulcra is based on Paseo (Apache-2.0) by Mohamed Boudra.");
+    expect(upstreamNotice).toContain("This product is a modified fork of Paseo.");
     expect(upstreamNotice).toContain("Licensed under the Apache License, Version 2.0");
     expect(upstreamLicense).toContain("Copyright (c) 2025-present Mohamed Boudra");
   });

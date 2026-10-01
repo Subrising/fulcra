@@ -1,7 +1,7 @@
 import { readGitBlobBytes } from "./git-file-contents.js";
 import { runGitCommand } from "./run-git-command.js";
 
-// Read one file as it was at a commit. Read-only: only
+// Read one file as it was at a commit (CONTRACTS v1.16, CONTRACT-CHANGE-J7-1). Read-only: only
 // `git cat-file` and `git merge-base`, never checkout, fetch, the index or the working tree. Every
 // object spec is built as `<validated sha40>:<validated path>`, so no revision expression
 // (`HEAD~1`, `@{…}`, `:/text`, `^`, ranges) can reach git.

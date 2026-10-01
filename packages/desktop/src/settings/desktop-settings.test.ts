@@ -40,6 +40,7 @@ describe("desktop-settings", () => {
     };
 
     expect(settings).toEqual(DEFAULT_DESKTOP_SETTINGS);
+    expect(settings.daemon.manageBuiltInDaemon).toBe(false);
     expect(persisted.settings).toEqual(DEFAULT_DESKTOP_SETTINGS);
   });
 
@@ -83,7 +84,8 @@ describe("desktop-settings", () => {
       releaseChannel: "stable",
       notifications: { playSound: true },
       daemon: {
-        manageBuiltInDaemon: true,
+        commandCentreEnabled: false,
+        manageBuiltInDaemon: false,
         keepRunningAfterQuit: false,
       },
     });
@@ -105,7 +107,8 @@ describe("desktop-settings", () => {
       releaseChannel: "beta",
       notifications: { playSound: true },
       daemon: {
-        manageBuiltInDaemon: true,
+        commandCentreEnabled: false,
+        manageBuiltInDaemon: false,
         keepRunningAfterQuit: false,
       },
     });
@@ -272,6 +275,7 @@ describe("desktop-settings", () => {
       releaseChannel: "beta",
       notifications: { playSound: true },
       daemon: {
+        commandCentreEnabled: false,
         manageBuiltInDaemon: false,
         keepRunningAfterQuit: false,
       },
@@ -316,7 +320,11 @@ describe("desktop-settings", () => {
     expect(next).toEqual({
       releaseChannel: "beta",
       notifications: { playSound: false },
-      daemon: { manageBuiltInDaemon: true, keepRunningAfterQuit: false },
+      daemon: {
+        manageBuiltInDaemon: true,
+        keepRunningAfterQuit: false,
+        commandCentreEnabled: false,
+      },
     });
   });
 

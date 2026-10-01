@@ -1,3 +1,6 @@
+import { NativeArtifactProduceInputSchema } from "@getpaseo/protocol/native-evidence";
+import { stat } from "node:fs/promises";
+import type { NativeReportOrigin } from "../../report-origin.js";
 import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
@@ -60,7 +63,11 @@ import {
   toScheduleSummary,
   waitForAgentWithTimeout,
 } from "../mcp-shared.js";
-import { sendPromptToAgent, setupFinishNotification } from "../agent-prompt.js";
+import {
+  sendPromptToAgent,
+  setupFinishNotification,
+  waitForAgentRunStartWithTimeout,
+} from "../agent-prompt.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -96,6 +103,7 @@ import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-confi
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 
 export interface PaseoToolHostDependencies {
+  nativeReportOrigin?: NativeReportOrigin;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   terminalManager?: TerminalManager | null;
@@ -221,6 +229,20 @@ function assertOptionsAbsent(
   if (options.some(([, value]) => value !== undefined)) {
     throw new Error(message);
   }
+}
+
+async function isExistingDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
 function resolveWorkspaceWorktreeTarget(input: WorkspaceWorktreeOptions): WorkspaceWorktreeTarget {
@@ -588,9 +610,32 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       description: config.description ?? name,
       inputSchema: config.inputSchema,
       outputSchema: config.outputSchema,
-      handler: handler as PaseoToolDefinition["handler"],
+      handler: ((input, context) =>
+        agentManager.trustedPlugins.agentInput(() =>
+          handler(input, context),
+        )) as PaseoToolDefinition["handler"],
     });
   };
+  if (options.nativeReportOrigin)
+    registerTool(
+      "produce_artifact",
+      {
+        title: "Produce managed artifact",
+        description:
+          "Create a bounded declared text output in private host storage. Requires explicit owner tool opt-in; never imports a file path.",
+        inputSchema: NativeArtifactProduceInputSchema,
+      },
+      async (_input, context) => {
+        if (!context.nativeArtifactInvocation)
+          throw new Error("Private native artifact invocation required");
+        const result = await agentManager.produceManagedArtifact(context.nativeArtifactInvocation);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          structuredContent: result,
+        };
+      },
+    );
+
   const toCatalog = (): PaseoToolCatalog => ({
     tools,
     getTool(name: string): PaseoToolDefinition | undefined {
@@ -603,7 +648,19 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     ): Promise<PaseoToolResult> {
       const tool = tools.get(name);
       if (!tool) {
-        throw new Error(`Paseo tool not found: ${name}`);
+        throw new Error(`Fulcra tool not found: ${name}`);
+      }
+      if (name === "produce_artifact") {
+        if (!options.nativeReportOrigin)
+          throw new Error("Authenticated native producing origin required");
+        // Never accept an injected context capability. Capture exact original runtime before parse awaits.
+        const nativeArtifactInvocation = agentManager.captureManagedArtifactInvocation(
+          options.nativeReportOrigin,
+          input,
+          context.signal,
+        );
+        const parsed = await parseToolInput(tool, input);
+        return tool.handler(parsed, { signal: context.signal, nativeArtifactInvocation });
       }
       return tool.handler(await parseToolInput(tool, input), context);
     },
@@ -649,7 +706,13 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     if (callerAgent?.provider !== selectedProvider || !callerAgent.config?.providerOptions) {
       return undefined;
     }
-    return { providerOptions: callerAgent.config.providerOptions };
+    // FIX-8 W3: never the mode-derived pins; the child's own mode (and its restriction-class rule) decides them.
+    const {
+      approval_policy: _approval,
+      sandbox_mode: _sandbox,
+      ...inherited
+    } = callerAgent.config.providerOptions;
+    return Object.keys(inherited).length ? { providerOptions: inherited } : undefined;
   };
 
   const resolveScopedCwd = (requestedCwd?: string, opts?: { required?: boolean }): string => {
@@ -817,21 +880,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     }
     return schedule;
   }
-  const ProviderModelInputSchema = AgentProviderEnum.trim()
-    .refine((value) => value.includes("/"), {
-      message: "provider must be provider/model, for example codex/gpt-5.4",
-    })
-    .refine(
-      (value) => {
-        try {
-          resolveRequiredProviderModel(value);
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      { message: "provider must be provider/model, for example codex/gpt-5.4" },
-    );
   const ProviderOrProviderModelInputSchema = AgentProviderEnum.trim()
     .min(1, "provider is required")
     .refine(
@@ -985,8 +1033,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .min(1, "Title is required")
       .max(60, "Title must be 60 characters or fewer")
       .describe("Short descriptive title (<= 60 chars) summarizing the agent's focus."),
-    provider: ProviderModelInputSchema.describe(
-      "Required provider/model pair, for example codex/gpt-5.4.",
+    // Update-7 W3: a bare provider leaves the model to the role default (the agent.create hook).
+    provider: ProviderOrProviderModelInputSchema.describe(
+      "Provider, or provider/model to choose the model (for example claude or codex/gpt-6.1-sol). A bare provider uses the role default model.",
     ),
     labels: z.record(z.string(), z.string()).optional().describe("Labels to set on the agent"),
     settings: CreateAgentSettingsInputSchema.optional().describe(
@@ -1225,7 +1274,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         path: z
           .string()
           .optional()
-          .describe("Local directory or source checkout. Defaults to your current workspace."),
+          .describe(
+            "Local directory or source checkout. Defaults to your current workspace. Local isolation adopts an existing directory and never creates one.",
+          ),
         projectId: z.string().optional().describe("Existing project id to own the workspace."),
         title: z.string().trim().min(1).optional(),
         mode: z
@@ -1277,6 +1328,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       let workspace: PersistedWorkspaceRecord;
       if (isolation === "local") {
         const cwd = resolveScopedCwd(path, { required: true });
+        if (!(await isExistingDirectory(cwd))) {
+          throw new Error(`Directory not found: ${cwd}`);
+        }
         assertOptionsAbsent(
           [
             ["mode", mode],
@@ -1403,12 +1457,42 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  if (options.nativeReportOrigin) {
+    const origin = options.nativeReportOrigin;
+    registerTool(
+      "supervisor_inbox",
+      {
+        title: "Report inbox",
+        description:
+          "Read scoped native lifecycle report metadata. Wake acceptance is not human receipt or completion acceptance.",
+        inputSchema: z.object({}).strict(),
+      },
+      async () => ({
+        content: [],
+        structuredContent: ensureValidJson(await agentManager.nativeReportInbox(origin)),
+      }),
+    );
+    registerTool(
+      "supervisor_acknowledge",
+      {
+        title: "Consume report",
+        description:
+          "Consume one report metadata event only. Does not acknowledge action permissions, hand off leadership, or accept completion.",
+        inputSchema: z.object({ eventId: z.string().uuid() }).strict(),
+      },
+      async ({ eventId }: { eventId: string }) => ({
+        content: [],
+        structuredContent: ensureValidJson(await agentManager.nativeReportInbox(origin, eventId)),
+      }),
+    );
+  }
+
   registerTool(
     "create_agent",
     {
       title: "Create agent",
       description:
-        "Create an agent. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires provider/model (for example codex/gpt-5.4) and an initial prompt. Do not guess; call list_providers and list_models first if uncertain.",
+        "Create an agent. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires a provider and an initial prompt. Pass provider/model (for example codex/gpt-6.1-sol) to choose the model, or a bare provider (for example claude) to use the role default model and effort. Do not guess model ids; call list_providers and list_models first if uncertain.",
       inputSchema: createAgentInputSchema,
       outputSchema: {
         agentId: z.string(),
@@ -1424,6 +1508,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async (args: unknown) => {
+      const reportCreation = options.nativeReportOrigin
+        ? agentManager.captureNativeReportCreation(options.nativeReportOrigin)
+        : undefined;
       const resolvedArgs = await resolveCreateAgentToolArgs(args);
       const { parsedArgs, worktree } = resolvedArgs;
       let requestedBackground: boolean;
@@ -1435,7 +1522,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         requestedBackground = resolvedArgs.parsedArgs.background;
         notifyOnFinish = resolvedArgs.parsedArgs.notifyOnFinish ?? false;
       }
-      const selectedProvider = resolveRequiredProviderModel(parsedArgs.provider).provider;
+      const selectedProvider = parsedArgs.provider.includes("/")
+        ? resolveRequiredProviderModel(parsedArgs.provider).provider
+        : parsedArgs.provider.trim();
       const inheritedConfig = resolveInheritedProviderConfig(selectedProvider);
       const {
         snapshot,
@@ -1457,6 +1546,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         },
         {
           kind: "mcp",
+          reportCreation,
           provider: parsedArgs.provider,
           title: parsedArgs.title,
           initialPrompt: parsedArgs.initialPrompt,
@@ -1865,6 +1955,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     }
   }
 
+  const PROMPTED_AGENT_NOTIFICATION_GUIDANCE =
+    "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.";
+
   registerTool(
     "send_agent_prompt",
     {
@@ -1887,9 +1980,21 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       background = Boolean(callerAgentId),
       notifyOnFinish = Boolean(callerAgentId),
     }) => {
-      const shouldNotifyOnFinish = Boolean(callerAgentId && notifyOnFinish && background);
+      function armFinishNotification(): boolean {
+        if (!callerAgentId || !notifyOnFinish) {
+          return false;
+        }
+        setupFinishNotification({
+          agentManager,
+          agentStorage,
+          childAgentId: agentId,
+          callerAgentId,
+          logger: childLogger,
+        });
+        return !agentManager.nativeReportOwnsFinish(agentId, callerAgentId);
+      }
 
-      await sendPromptToAgent({
+      const { disposition } = await sendPromptToAgent({
         agentManager,
         agentStorage,
         agentId,
@@ -1898,27 +2003,24 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         logger: childLogger,
       });
 
-      if (shouldNotifyOnFinish && callerAgentId) {
-        setupFinishNotification({
-          agentManager,
-          agentStorage,
-          childAgentId: agentId,
-          callerAgentId,
-          logger: childLogger,
-        });
-      }
-
       // If not running in background, wait for completion
       if (!background) {
         const result = await waitForAgentWithTimeout(agentManager, agentId, {
           waitForActive: true,
         });
+        // The wait ran out while the agent keeps working, so its result arrives as a
+        // finish notification instead of in this response.
+        const notifying =
+          result.timedOut &&
+          agentManager.getAgent(agentId)?.lifecycle === "running" &&
+          armFinishNotification();
 
         const responseData = {
           success: true,
           status: result.status,
           lastMessage: result.lastMessage,
           permission: sanitizePermissionRequest(result.permission),
+          ...(notifying ? { guidance: PROMPTED_AGENT_NOTIFICATION_GUIDANCE } : {}),
         };
         const validJson = ensureValidJson(responseData);
 
@@ -1929,8 +2031,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         return response;
       }
 
-      // Return immediately if background=true
-      // Re-fetch snapshot since the state may have changed
+      const notifying = armFinishNotification();
+
+      // Return once the provider has accepted the turn, so the status reports it running.
+      if (disposition === "turn_started") {
+        await waitForAgentRunStartWithTimeout(agentManager, agentId);
+      }
       const currentSnapshot = agentManager.getAgent(agentId);
 
       const responseData = {
@@ -1938,12 +2044,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         status: currentSnapshot?.lifecycle ?? "idle",
         lastMessage: null,
         permission: null,
-        ...(shouldNotifyOnFinish
-          ? {
-              guidance:
-                "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.",
-            }
-          : {}),
+        ...(notifying ? { guidance: PROMPTED_AGENT_NOTIFICATION_GUIDANCE } : {}),
       };
       const validJson = ensureValidJson(responseData);
 

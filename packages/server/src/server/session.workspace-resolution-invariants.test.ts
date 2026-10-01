@@ -25,6 +25,7 @@ import {
   type PersistedWorkspaceRecord,
 } from "./workspace-registry.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
+import { withTrustedSurface } from "./test-utils/trusted-surface.js";
 
 interface Harness {
   session: Session;
@@ -102,17 +103,21 @@ function createHarness(input: {
     downloadTokenStore: createStub<SessionOptions["downloadTokenStore"]>({}),
     pushNotifications: createStub<SessionOptions["pushNotifications"]>({}),
     paseoHome: mkdtempSync(path.join(tmpdir(), "paseo-invariant-test-")),
-    agentManager: createStub<SessionOptions["agentManager"]>({
-      subscribe: () => () => {},
-      listAgents: () => [],
-      getAgent: () => null,
-      archiveAgent: async () => ({ archivedAt: new Date().toISOString() }),
-      archiveSnapshot: async () => ({}),
-      clearAgentAttention: async () => {},
-      notifyAgentState: () => {},
-    }),
+    agentManager: createStub<SessionOptions["agentManager"]>(
+      withTrustedSurface({
+        subscribe: () => () => {},
+        listAgents: () => [],
+        getAgent: () => null,
+        archiveAgent: async () => ({ archivedAt: new Date().toISOString() }),
+        preflightArchiveDescendants: vi.fn(async () => undefined),
+        archiveSnapshot: async () => ({}),
+        clearAgentAttention: async () => {},
+        notifyAgentState: () => {},
+      }),
+    ),
     agentStorage: createStub<SessionOptions["agentStorage"]>({
       list: async () => [],
+      listByWorkspace: async () => [],
       get: async () => null,
     }),
     projectRegistry: createStub<SessionOptions["projectRegistry"]>({

@@ -1,3 +1,4 @@
+import { sessionDisplayName } from "@/utils/session-display-name";
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation } from "@tanstack/react-query";
@@ -59,8 +60,8 @@ export function WorkspaceRenameModal({
     <AdaptiveRenameModal
       visible={visible}
       title={t("sidebar.workspace.rename.title")}
-      initialValue={workspace.title ?? workspace.name}
-      placeholder={workspace.name}
+      initialValue={sessionDisplayName(workspace.name, workspace.title)}
+      placeholder={sessionDisplayName(workspace.name)}
       submitLabel={t("sidebar.workspace.rename.submit")}
       onClose={onClose}
       onSubmit={handleSubmit}

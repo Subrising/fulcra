@@ -1,3 +1,5 @@
+import { sessionDisplayName } from "@/utils/session-display-name";
+import type { SidebarConversationLabel } from "@/hooks/sidebar-conversation-labels";
 import type { ProjectDescriptor, WorkspaceDescriptor } from "@/stores/session-store";
 import type { HostProjectListItem } from "@/projects/host-project-model";
 import { buildWorkspaceStructureProjects } from "@/projects/workspace-structure";
@@ -52,6 +54,7 @@ export interface ProjectHost {
 
 export interface BuildProjectsInput {
   hosts: ProjectHost[];
+  conversationLabels?: ReadonlyMap<string, SidebarConversationLabel>;
 }
 
 export interface BuildProjectsResult {
@@ -112,7 +115,7 @@ function findProjectMetadata(
     if (project.projectId === projectId) {
       return {
         customName: project.projectCustomName ?? null,
-        displayName: project.projectDisplayName,
+        displayName: project.projectCustomName ?? project.projectDisplayName,
       };
     }
   }
@@ -286,6 +289,35 @@ export function buildProjects(input: BuildProjectsInput): BuildProjectsResult {
   }
 
   const projects = Array.from(groups.values()).map(toProjectSummary);
+  // These summaries are fresh display objects; descriptors and routing identities stay untouched.
+  for (const project of projects) {
+    const labels = project.hosts
+      .flatMap((host) =>
+        host.workspaces.map(
+          (workspace) =>
+            input.conversationLabels?.get(`${host.serverId}:${workspace.id}`)?.projectName,
+        ),
+      )
+      .filter((name): name is string => Boolean(name));
+    let conversationTitle: string | null | undefined = null;
+    if (project.totalWorkspaceCount === 1) conversationTitle = labels[0];
+    else if (labels.length) conversationTitle = "Saved conversations";
+    project.projectName = sessionDisplayName(
+      project.projectName,
+      project.projectCustomName,
+      conversationTitle,
+    );
+    for (const host of project.hosts) {
+      host.projectName = project.projectName;
+      for (const workspace of host.workspaces) {
+        workspace.name = sessionDisplayName(
+          workspace.name,
+          workspace.title,
+          input.conversationLabels?.get(`${host.serverId}:${workspace.id}`)?.workspaceName,
+        );
+      }
+    }
+  }
   projects.sort((left, right) => {
     const name = left.projectName.localeCompare(right.projectName);
     if (name !== 0) {

@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  changeViewRequestKey,
+  useChangeViewRequests,
+} from "@/architecture-map/change-view-request";
 import { createPluginHostNavigation } from "./host-navigation-model";
 
 describe("plugin host navigation", () => {
@@ -86,5 +90,63 @@ describe("plugin host navigation", () => {
       "workspaceId",
     );
     expect(browsers).toEqual([]);
+  });
+});
+
+describe("architecture change navigation", () => {
+  const destinations: unknown[] = [];
+  const navigation = createPluginHostNavigation("local", {
+    browserAvailable: false,
+    openAgent() {},
+    createBrowser: () => ({ browserId: "unused" }),
+    openWorkspace: (input) => destinations.push(input),
+    resolveWorkspace: ({ serverId, workspaceId }) =>
+      serverId === "remote" && workspaceId === "alias" ? "canonical" : null,
+  });
+  it.each([{ pullRequest: 27 }, { commit: { base: "a".repeat(40), head: "b".repeat(40) } }])(
+    "routes a selected change and keeps its identity",
+    (selection) => {
+      navigation.openArchitectureChange!({
+        workspaceId: "alias",
+        serverId: "remote",
+        ...selection,
+      });
+      expect(destinations.at(-1)).toEqual({
+        serverId: "remote",
+        workspaceId: "canonical",
+        target: { kind: "architecture_map" },
+      });
+      expect(
+        useChangeViewRequests.getState().consume(changeViewRequestKey("remote", "canonical")),
+      ).toEqual(selection);
+      expect(
+        useChangeViewRequests.getState().consume(changeViewRequestKey("remote", "canonical")),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    {},
+    { pullRequest: 0 },
+    { pullRequest: -1 },
+    { pullRequest: 1.5 },
+    { pullRequest: Infinity },
+    { pullRequest: "27" },
+    { commit: { base: "main", head: "a".repeat(40) } },
+    { pullRequest: 27, commit: { base: "a".repeat(40), head: "b".repeat(40) } },
+  ])("refuses invalid selectors before navigation", (selection) => {
+    const before = destinations.length;
+    expect(() =>
+      navigation.openArchitectureChange!({
+        workspaceId: "alias",
+        serverId: "remote",
+        ...selection,
+      } as never),
+    ).toThrow("Choose one pull request or two full commit SHAs.");
+    expect(destinations).toHaveLength(before);
+  });
+  it("gives a plain message for an unknown workspace", () => {
+    expect(() =>
+      navigation.openArchitectureChange!({ workspaceId: "missing", pullRequest: 27 }),
+    ).toThrow("Workspace is unavailable on the requested host.");
   });
 });

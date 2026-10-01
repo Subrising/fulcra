@@ -1,8 +1,10 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { TrustedAgent, TrustedInput } from "@getpaseo/plugin/server";
 import { AgentManager } from "../agent/agent-manager.js";
+import { resolveDefaultAgentCreateConfig } from "../agent/create-agent-mode.js";
 import { AgentStorage } from "../agent/agent-storage.js";
 import { createAgentCommand } from "../agent/create-agent/create.js";
 import type {
@@ -212,6 +214,7 @@ async function createRegistryBackedScheduleWorkspaceDeps(rootDir: string): Promi
     projectRegistry,
     workspaceRegistry,
     workspaceGitService,
+    isDirectory: async () => true,
   });
   return {
     workspaceRegistry,
@@ -463,7 +466,7 @@ describe("ScheduleService", () => {
     );
   });
 
-  test("delivers agent-target schedules through the steer-or-interrupt path", async () => {
+  test("manual agent-target schedules count human input before steer-or-interrupt", async () => {
     const manager = new AgentManager({
       logger: createTestLogger(),
       clients: createTestAgentClients(),
@@ -471,6 +474,15 @@ describe("ScheduleService", () => {
     });
     const agent = await manager.createAgent({ provider: "claude", cwd: tempDir }, undefined, {
       workspaceId: undefined,
+    });
+    const before = manager.trustedPlugins.sequence(agent.id).humanAt;
+    const inputs: Array<{ source: string; humanAt: number }> = [];
+    const recordInput = (admittedAgent: TrustedAgent, input: TrustedInput) => {
+      inputs.push({ source: input.source, humanAt: admittedAgent.inputSequence.humanAt });
+      return "allow" as const;
+    };
+    manager.trustedPlugins.register("schedule-regression", true, (host) => {
+      host.admission.onInput(recordInput);
     });
     const steerOrReplace = vi.spyOn(manager, "steerOrReplaceActiveTurn");
     const service = createScheduleService({
@@ -489,6 +501,11 @@ describe("ScheduleService", () => {
 
     await service.runOnce(schedule.id);
 
+    expect(manager.trustedPlugins.sequence(agent.id).humanAt).toBe(before + 1);
+    expect(inputs.length).toBeGreaterThan(0);
+    expect(inputs.every((input) => input.source === "human" && input.humanAt === before + 1)).toBe(
+      true,
+    );
     expect(steerOrReplace).toHaveBeenCalledTimes(1);
     expect(steerOrReplace.mock.calls[0]).toEqual([
       agent.id,
@@ -802,7 +819,7 @@ describe("ScheduleService", () => {
     const runStarted = new Promise<void>((resolve) => {
       releaseRun = resolve;
     });
-    const store = new ScheduleStore(join(tempDir, "schedules"));
+    const store = new ScheduleStore(join(tempDir, "schedules"), createTestLogger());
     const legacy = await store.create({
       name: null,
       prompt: "finish/update race",
@@ -1688,6 +1705,82 @@ describe("ScheduleService", () => {
     expect(agent?.archivedAt).toBeTruthy();
   });
 
+  // G5 B1: an automation's backing schedule sends unattended:false, so its session starts in the mode a person's
+  // session gets (Claude's automatic-approval "auto"), never the unattended bypassPermissions.
+  test("an attended new-agent schedule starts its session in the automatic-approval mode, not bypass", async () => {
+    const manager = new AgentManager({
+      logger: createTestLogger(),
+      clients: createTestAgentClients(),
+      registry: agentStorage,
+    });
+    const seen: boolean[] = [];
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: manager,
+      agentStorage,
+      providerSnapshotManager: {
+        async resolveCreateConfig(input) {
+          seen.push(input.unattended);
+          // The real resolver, over Claude's modes (bypassPermissions is its unattended mode).
+          return resolveDefaultAgentCreateConfig({
+            ...input,
+            availableModes: [
+              { id: "default", label: "Default" },
+              { id: "auto", label: "Auto" },
+              { id: "bypassPermissions", label: "Bypass", isUnattended: true },
+            ],
+          });
+        },
+      },
+      now: () => now,
+    });
+
+    const created = await service.create({
+      prompt: "Review pull request #9 opened",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: {
+        type: "new-agent",
+        config: { provider: "claude", model: "test-model", cwd: tempDir, unattended: false },
+      },
+      runOnCreate: false,
+      paused: true,
+    });
+    await service.runOnce(created.id);
+
+    expect(seen).toEqual([false]);
+    const agentId = (await service.inspect(created.id)).runs[0]?.agentId;
+    const agent = await agentStorage.get(agentId!);
+    expect(agent?.lastModeId).toBe("auto");
+  });
+
+  test("a schedule created paused without a run on create never runs by itself", async () => {
+    const runner = vi.fn(async () => ({ agentId: null, output: null }));
+    const service = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({
+        logger: createTestLogger(),
+        clients: createTestAgentClients(),
+        registry: agentStorage,
+      }),
+      agentStorage,
+      runner,
+      now: () => now,
+    });
+    const created = await service.create({
+      prompt: "Automation",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: { type: "new-agent", config: { provider: "claude", cwd: tempDir } },
+      runOnCreate: false,
+      paused: true,
+    });
+    expect(created).toMatchObject({ status: "paused", nextRunAt: null });
+    now = new Date(now.getTime() + 10 * 60_000);
+    await service.tick();
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   test("defaults OpenCode new-agent schedules to build plus auto accept", async () => {
     const createdConfigs: AgentSessionConfig[] = [];
     const clients = createTestAgentClients();
@@ -1901,6 +1994,51 @@ describe("ScheduleService", () => {
     await service2.stop();
   });
 
+  test("starts with the valid schedules when the schedules directory holds files that are not schedules", async () => {
+    const service1 = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({ logger: createTestLogger() }),
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+      runner: async () => ({ agentId: null, output: "ok" }),
+    });
+    const created = await service1.create({
+      prompt: "Still scheduled",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: {
+        type: "new-agent",
+        config: { provider: "claude", cwd: tempDir },
+      },
+      runOnCreate: false,
+    });
+    await service1.stop();
+
+    const schedulesDir = join(tempDir, "schedules");
+    await writeFile(join(schedulesDir, "notes.json"), JSON.stringify({ hello: "world" }));
+    const { lastRunAt: _omitted, ...withoutLastRunAt } = created;
+    await writeFile(
+      join(schedulesDir, "deadbeef.json"),
+      JSON.stringify({ ...withoutLastRunAt, id: "deadbeef" }),
+    );
+    await writeFile(join(schedulesDir, "broken.json"), "{ not json");
+
+    const service2 = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({ logger: createTestLogger() }),
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+      runner: async () => ({ agentId: null, output: "ok" }),
+    });
+    await service2.start();
+
+    expect((await service2.list()).map((schedule) => schedule.id)).toEqual([created.id]);
+    await service2.stop();
+  });
+
   test("startup recovery archives an interrupted run workspace with an associated agent", async () => {
     const service1 = createScheduleService({
       paseoHome: tempDir,
@@ -1925,7 +2063,7 @@ describe("ScheduleService", () => {
     const interruptedAt = now.toISOString();
     const associatedAgentId = "11111111-1111-4111-8111-111111111111";
     const workspaceId = "wks_interrupted_with_agent";
-    const store = new ScheduleStore(join(tempDir, "schedules"));
+    const store = new ScheduleStore(join(tempDir, "schedules"), createTestLogger());
     await store.update(created.id, (schedule) => ({
       ...schedule,
       runs: [
@@ -1993,7 +2131,7 @@ describe("ScheduleService", () => {
 
     const interruptedAt = now.toISOString();
     const workspaceId = "wks_interrupted_without_agent";
-    const store = new ScheduleStore(join(tempDir, "schedules"));
+    const store = new ScheduleStore(join(tempDir, "schedules"), createTestLogger());
     await store.update(created.id, (schedule) => ({
       ...schedule,
       runs: [

@@ -1,3 +1,4 @@
+import { HostRepairBoundary } from "@/components/host-repair-banner";
 import { createContext, type ReactNode, useContext } from "react";
 
 const HostRouteServerIdContext = createContext<string | null>(null);
@@ -11,7 +12,7 @@ export function HostRouteProvider({
 }) {
   return (
     <HostRouteServerIdContext.Provider value={serverId}>
-      {children}
+      <HostRepairBoundary serverId={serverId}>{children}</HostRepairBoundary>
     </HostRouteServerIdContext.Provider>
   );
 }

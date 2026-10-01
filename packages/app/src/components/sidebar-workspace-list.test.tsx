@@ -356,7 +356,7 @@ describe("sidebar workspace render isolation", () => {
   });
 
   it("reacts to saved conversation renames without changing routing or rerendering on activity", async () => {
-    const uuid = "123e4567-e89b-42d3-a456-426614174000";
+    const uuid = "0a2a9b27-e6eb-4de9-beff-840240cbb59e";
     initializeSidebarState([
       {
         ...workspace({

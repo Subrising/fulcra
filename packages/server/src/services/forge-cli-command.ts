@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveForgeRemoteUrl } from "../utils/forge-remote.js";
 import { findExecutable } from "../executable-resolution/executable-resolution.js";
 import { runGitCommand } from "../utils/run-git-command.js";
 import { execCommand } from "../utils/spawn.js";
@@ -286,14 +287,9 @@ export function parseCliJsonOutput<T>(options: ParseCliJsonOutputOptions<T>): T 
   return parsed.data;
 }
 
+// U5-D07: the forge remote by URL, not by name (utils/forge-remote.ts); `origin` is no longer required.
 export async function defaultResolveRemoteUrl(cwd: string): Promise<string | null> {
-  try {
-    const { stdout } = await runGitCommand(["config", "--get", "remote.origin.url"], { cwd });
-    const url = stdout.trim();
-    return url.length > 0 ? url : null;
-  } catch {
-    return null;
-  }
+  return resolveForgeRemoteUrl(cwd, (args, options) => runGitCommand(args, options));
 }
 
 export async function probeHostViaCliAuthStatus(

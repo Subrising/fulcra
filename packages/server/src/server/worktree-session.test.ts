@@ -51,6 +51,7 @@ import type { WorkspaceGitService } from "./workspace-git-service.js";
 import { isPlatform } from "../test-utils/platform.js";
 import { createWorkspaceProvisioningService } from "./session/workspace-provisioning/workspace-provisioning-service.js";
 import { WorkspaceAutomationBlockedError } from "./workspace-automation-gate.js";
+import { withTrustedSurface } from "./test-utils/trusted-surface.js";
 
 interface LegacyCreateWorktreeTestOptions {
   branchName: string;
@@ -366,6 +367,7 @@ function createPaseoWorktreeForTest(options: {
     projectRegistry,
     workspaceRegistry,
     workspaceGitService,
+    isDirectory: async () => true,
     logger: createLogger(),
   });
 
@@ -595,9 +597,10 @@ describe("create-agent worktree setup boundary", () => {
   });
 });
 
-function createAgentStorageStub(): Pick<AgentStorage, "list"> {
+function createAgentStorageStub(): Pick<AgentStorage, "list" | "listByWorkspace"> {
   return {
     list: async (): Promise<StoredAgentRecord[]> => [],
+    listByWorkspace: async (): Promise<StoredAgentRecord[]> => [],
   };
 }
 
@@ -2037,13 +2040,14 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
           getSnapshot: vi.fn(async () => null),
           listWorktrees: vi.fn(async () => []),
         },
-        agentManager: {
+        agentManager: withTrustedSurface({
           listAgents: () => [],
           archiveAgent: vi.fn(async () => ({ archivedAt: new Date().toISOString() })),
+          preflightArchiveDescendants: vi.fn(async () => undefined),
           archiveSnapshot: vi.fn(async () => {
             throw new Error("not expected for empty agent list");
           }),
-        },
+        }),
         agentStorage: createAgentStorageStub(),
         findWorkspaceIdForCwd: vi.fn(async () => workspaceA),
         listActiveWorkspaces,
@@ -2108,13 +2112,14 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
           getSnapshot: vi.fn(async () => null),
           listWorktrees: vi.fn(async () => []),
         },
-        agentManager: {
+        agentManager: withTrustedSurface({
           listAgents: () => [],
           archiveAgent: vi.fn(async () => ({ archivedAt: new Date().toISOString() })),
+          preflightArchiveDescendants: vi.fn(async () => undefined),
           archiveSnapshot: vi.fn(async () => {
             throw new Error("not expected for empty agent list");
           }),
-        },
+        }),
         agentStorage: createAgentStorageStub(),
         findWorkspaceIdForCwd: vi.fn(async (cwd: string) =>
           cwd === created.worktreePath ? workspaceId : null,
@@ -2184,13 +2189,14 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
           getSnapshot: vi.fn(async () => null),
           listWorktrees: vi.fn(async () => []),
         },
-        agentManager: {
+        agentManager: withTrustedSurface({
           listAgents: () => [],
           archiveAgent: vi.fn(async () => ({ archivedAt: new Date().toISOString() })),
+          preflightArchiveDescendants: vi.fn(async () => undefined),
           archiveSnapshot: vi.fn(async () => {
             throw new Error("not expected for empty agent list");
           }),
-        },
+        }),
         agentStorage: createAgentStorageStub(),
         findWorkspaceIdForCwd: vi.fn(async (cwd: string) =>
           cwd === sharedCwd ? workspaceA : null,
@@ -2260,13 +2266,14 @@ describe("handlePaseoWorktreeArchiveRequest worktree scope", () => {
         getSnapshot: vi.fn(async () => null),
         listWorktrees: vi.fn(async () => []),
       },
-      agentManager: {
+      agentManager: withTrustedSurface({
         listAgents: () => [],
         archiveAgent: vi.fn(async () => ({ archivedAt: new Date().toISOString() })),
+        preflightArchiveDescendants: vi.fn(async () => undefined),
         archiveSnapshot: vi.fn(async () => {
           throw new Error("not expected for empty agent list");
         }),
-      },
+      }),
       agentStorage: createAgentStorageStub(),
       findWorkspaceIdForCwd: vi.fn(async (cwd: string) => (cwd === sharedCwd ? workspaceA : null)),
       listActiveWorkspaces,

@@ -1,3 +1,5 @@
+import { createManagementContext } from "./plugin-management-context.js";
+import { untrustedHostHooks } from "./trusted.js";
 import { PluginHookHandlers } from "./lifecycle/index.js";
 import {
   PluginProcessRequestSchema,
@@ -5,6 +7,7 @@ import {
   type PluginProcessMessage,
   type PluginProcessRequest,
 } from "./plugin-process-protocol.js";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import * as pluginSharedRuntime from "@getpaseo/plugin";
 import * as pluginProviderRuntime from "@getpaseo/plugin/server/provider";
@@ -56,6 +59,7 @@ type RpcHandler = (input: unknown, context: PluginHandlerContext) => unknown | P
 interface RegisteredRpc {
   contract: PluginRpcContract;
   handler: RpcHandler;
+  readOnly: boolean;
 }
 
 const hooks = new PluginHookHandlers(() => {
@@ -65,7 +69,7 @@ const handlers = new Map<string, RegisteredRpc>();
 const providers = new Map<string, ProviderRegistration>();
 const providerConnections = new Map<
   string,
-  { connection: ProviderConnection; unsubscribe: () => void }
+  { connection: ProviderConnection; unsubscribe: () => void; closing?: Promise<void> }
 >();
 const pendingProviderConnections = new Map<string, { tombstoned: boolean }>();
 let cleanup: (() => void | Promise<void>) | null = null;
@@ -97,7 +101,7 @@ function settleHostCall(
   if (!pending) return;
   pendingHostCalls.delete(message.callId);
   if (message.type === "host.result") pending.resolve(message.output);
-  else pending.reject(new Error(message.error));
+  else pending.reject(Object.assign(new Error(message.error), { code: message.code }));
 }
 
 async function notify(input: PluginNotifyInput): Promise<PluginNotifyResult> {
@@ -160,12 +164,20 @@ function validateMethod(method: string): string {
   return normalized;
 }
 
-function register(contract: PluginRpcContract, handler: RpcHandler): void {
+function register(
+  contract: PluginRpcContract,
+  handler: RpcHandler,
+  options?: { readOnly?: boolean },
+): void {
   if (typeof handler !== "function") {
     throw new Error(`Plugin RPC ${contract.name} must provide a handler`);
   }
   const method = validateMethod(contract.name);
-  handlers.set(method, { contract: { ...contract, name: method }, handler });
+  handlers.set(method, {
+    contract: { ...contract, name: method },
+    handler,
+    readOnly: options?.readOnly === true,
+  });
 }
 
 function registerProvider(provider: ProviderRegistration): void {
@@ -258,6 +270,7 @@ async function sendProviderInput(
   if (stopping) throw new Error("Plugin is stopping");
   const current = providerConnections.get(message.connectionId);
   if (!current) throw new Error(`Unknown provider connection: ${message.connectionId}`);
+  if (current.closing) throw new Error("Provider connection is closing");
   await current.connection.send(message.input);
   send({
     type: "provider.accepted",
@@ -266,13 +279,25 @@ async function sendProviderInput(
   });
 }
 
+// The connection stays registered until its close has reported, so shutdown
+// waits for a close already in flight instead of disconnecting underneath it.
 async function closeProviderConnection(connectionId: string): Promise<void> {
   const current = providerConnections.get(connectionId);
   if (!current) return;
-  providerConnections.delete(connectionId);
-  current.unsubscribe();
-  await current.connection.close();
-  send({ type: "provider.closed", connectionId });
+  if (current.closing) return current.closing;
+  const closing = (async () => {
+    current.unsubscribe();
+    try {
+      await current.connection.close();
+      send({ type: "provider.closed", connectionId });
+    } catch (error) {
+      send({ type: "provider.closed", connectionId, error: describeError(error) });
+    } finally {
+      providerConnections.delete(connectionId);
+    }
+  })();
+  current.closing = closing;
+  return closing;
 }
 
 function runtimeRequire(name: string): unknown {
@@ -299,6 +324,7 @@ function evaluateBundle(bundle: string): void {
     throw new Error("Plugin server bundle must default export a function");
   }
   const contributedCleanup = setup({
+    ...untrustedHostHooks,
     handle: register,
     registerProvider,
     registerSettings,
@@ -346,6 +372,10 @@ async function initialize(message: Extract<PluginProcessRequest, { type: "initia
   send({
     type: "ready",
     methods: [...handlers.keys()].sort(),
+    readMethods: [...handlers]
+      .filter(([, r]) => r.readOnly)
+      .map(([m]) => m)
+      .sort(),
     hooks: hooks.catalog(),
     providers: [...providers.values()]
       .sort((left, right) => left.id.localeCompare(right.id))
@@ -382,7 +412,10 @@ async function shutdown(): Promise<void> {
 process.on("message", (rawMessage: unknown) => {
   const parsed = PluginProcessRequestSchema.safeParse(rawMessage);
   if (!parsed.success) {
-    const value = rawMessage as { connectionId?: unknown; acceptanceId?: unknown } | null;
+    const value = rawMessage as {
+      connectionId?: unknown;
+      acceptanceId?: unknown;
+    } | null;
     if (value && typeof value.connectionId === "string" && typeof value.acceptanceId === "string") {
       send({
         type: "provider.rejected",
@@ -457,13 +490,7 @@ process.on("message", (rawMessage: unknown) => {
     return;
   }
   if (message.type === "provider.close") {
-    void closeProviderConnection(message.connectionId).catch((error) => {
-      send({
-        type: "provider.closed",
-        connectionId: message.connectionId,
-        error: describeError(error),
-      });
-    });
+    void closeProviderConnection(message.connectionId);
     return;
   }
   if (message.type === "paseo_frame" || message.type === "paseo_close") return;
@@ -480,12 +507,52 @@ process.on("message", (rawMessage: unknown) => {
     });
     return;
   }
+  const management = message.management
+    ? createManagementContext(
+        message.management,
+        (callId, invocationId, command) => {
+          if (stopping) return Promise.reject(new Error("Plugin is stopping"));
+          return new Promise((resolve, reject) => {
+            pendingHostCalls.set(callId, { resolve, reject });
+            try {
+              send({
+                type: "management.invoke",
+                callId,
+                invocationId,
+                command,
+              });
+            } catch (error) {
+              pendingHostCalls.delete(callId);
+              reject(error);
+            }
+          });
+        },
+        // U7: an account action is audited by the host against this invocation.
+        (invocationId, entry) => {
+          if (stopping) return Promise.reject(new Error("Plugin is stopping"));
+          const callId = randomUUID();
+          return new Promise((resolve, reject) => {
+            pendingHostCalls.set(callId, { resolve, reject });
+            try {
+              send({ type: "management.audit", callId, invocationId, entry });
+            } catch (error) {
+              pendingHostCalls.delete(callId);
+              reject(error);
+            }
+          });
+        },
+      )
+    : undefined;
   void registered.contract.input
     .parseAsync(message.input)
     .then((input) => {
-      if (!paseo) throw new Error("Plugin Paseo API is unavailable");
-      return registered.handler(input, { paseo });
+      if (!paseo) throw new Error("Plugin host API is unavailable");
+      return registered.handler(input, {
+        paseo,
+        ...(management ? { management: management.context } : {}),
+      });
     })
+    .finally(() => management?.close())
     .then((output) => registered.contract.output.parseAsync(output))
     .then((output) => guardPluginOutput(secretStore, output))
     .then(
@@ -506,7 +573,7 @@ function handleHookMessage(
       send({
         type: "error",
         requestId: message.requestId,
-        error: "Plugin Paseo API is unavailable",
+        error: "Plugin host API is unavailable",
       });
       return;
     }

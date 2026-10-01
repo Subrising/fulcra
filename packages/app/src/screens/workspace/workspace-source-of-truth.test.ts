@@ -33,12 +33,12 @@ function createWorkspaceDescriptor(input: Partial<WorkspaceDescriptor> = {}): Wo
 }
 
 describe("workspace source of truth consumption", () => {
-  const generatedName = "123e4567-e89b-42d3-a456-426614174000";
+  const generatedName = "0a2a9b27-e6eb-4de9-beff-840240cbb59e";
   function headerWithObservedConversation(
     workspace: WorkspaceDescriptor,
     agentServerId = "srv",
     agentWorkspaceId = workspace.id,
-    title: string | null = "Team leadership",
+    title: string | null = "Orca leadership",
   ) {
     const conversation = {
       id: "leader",
@@ -74,16 +74,15 @@ describe("workspace source of truth consumption", () => {
     const before = structuredClone(workspace);
     expect(headerWithObservedConversation(workspace)).toMatchObject({
       kind: "ready",
-      title: "Team leadership",
-      subtitle: "Team leadership",
+      title: "Orca leadership",
+      subtitle: "Orca leadership",
       isSubtitleDistinct: false,
     });
     expect(workspace).toEqual(before);
   });
 
   it.each([
-    { projectKind: "git" as const, name: generatedName, projectDisplayName: generatedName },
-    { projectKind: "non_git" as const, name: "Research", projectDisplayName: "Research hub" },
+    { projectKind: "non_git" as const, name: "Research", projectDisplayName: "Orca" },
     {
       projectKind: "non_git" as const,
       name: "My workspace",
@@ -112,8 +111,8 @@ describe("workspace source of truth consumption", () => {
         projectDisplayName: generatedName,
       });
       expect(headerWithObservedConversation(workspace, host, workspaceId, title)).toMatchObject({
-        title: generatedName,
-        subtitle: generatedName,
+        title: "Untitled session",
+        subtitle: "Untitled session",
       });
     },
   );
@@ -292,4 +291,18 @@ describe("workspace source of truth consumption", () => {
       }),
     ).toBe(false);
   });
+});
+
+it("a workspace title takes precedence over stale conversation metadata", () => {
+  expect(
+    resolveWorkspaceHeader({
+      workspace: createWorkspaceDescriptor({
+        name: "00000000-0000-4000-8000-000000000001",
+        title: "Fixture custom title",
+        projectDisplayName: "00000000-0000-4000-8000-000000000002",
+        projectCustomName: "Fixture project",
+      }),
+      conversationLabel: { workspaceName: "Old agent title", projectName: "Old project title" },
+    }),
+  ).toEqual({ title: "Fixture custom title", subtitle: "Fixture project" });
 });

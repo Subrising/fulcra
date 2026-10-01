@@ -1,6 +1,6 @@
 {
   "name": "paseo",
-  "version": "0.9.1",
+  "version": "0.10.2",
   "private": true,
   "description": "Paseo: voice-controlled development environment for local AI coding agents",
   "keywords": [
@@ -68,7 +68,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "typecheck:server": "npm run typecheck --workspace=@getpaseo/relay && npm run typecheck --workspace=@getpaseo/protocol && npm run typecheck --workspace=@getpaseo/client && npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/cli",
     "test": "npm run test --workspaces --if-present",
-    "test:dependency-overrides": "node --test --test-concurrency=1 scripts/dependency-overrides.test.mjs scripts/websocket-dependency-overrides.test.mjs scripts/updater-dependency-overrides.test.mjs scripts/brace-dependency-overrides.test.mjs scripts/native-build-dependency-overrides.test.mjs scripts/http-dependencies.test.mjs",
+    "test:dependency-overrides": "node --test --test-concurrency=1 scripts/dependency-overrides.test.mjs scripts/websocket-dependency-overrides.test.mjs scripts/updater-dependency-overrides.test.mjs scripts/brace-dependency-overrides.test.mjs scripts/native-build-dependency-overrides.test.mjs scripts/http-dependencies.test.mjs scripts/packaged-http-dependencies.test.mjs",
     "format": "oxfmt .",
     "format:files": "oxfmt",
     "format:check": "oxfmt --check .",
@@ -119,7 +119,9 @@
     "release:promote": "npm run release:check && npm run version:all:promote && npm run release:publish && npm run release:push",
     "release:patch": "npm run release:check && npm run version:all:patch && npm run release:publish && npm run release:push",
     "release:minor": "npm run release:check && npm run version:all:minor && npm run release:publish && npm run release:push",
-    "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push"
+    "release:major": "npm run release:check && npm run version:all:major && npm run release:publish && npm run release:push",
+    "test:bundled-plugins": "node --test scripts/assert-bundled-plugins.test.mjs",
+    "test:client-reproducibility": "node --test scripts/client-reproducibility.test.mjs"
   },
   "devDependencies": {
     "@types/ws": "^8.5.14",
@@ -148,7 +150,7 @@
     "@vitest/browser-playwright": "4.1.11",
     "@vitest/ui": "4.1.11",
     "@xmldom/xmldom": "0.8.15",
-    "body-parser@^1": "1.20.6",
+    "body-parser@^1": "1.20.8",
     "brace-expansion@^1": "1.1.21",
     "brace-expansion@^2": "2.1.7",
     "brace-expansion@^5": "5.0.12",

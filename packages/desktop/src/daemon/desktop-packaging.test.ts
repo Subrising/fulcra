@@ -23,7 +23,7 @@ function writeExecutable(filePath: string, contents: string): void {
 // The installed Linux layout: the sandbox launcher renames Electron to <name>.bin and puts a
 // shell launcher at <name>, with the CLI shim under resources/bin. `productName` is a
 // parameter because the shim has to keep working across the rename that broke it in the
-// Desktop Packages job — the installed .deb resolved to the renamed /opt/<product> directory while the shim looked for
+// Desktop Packages job — the installed .deb resolved to /opt/Orca while the shim looked for
 // Paseo.
 function createFakePortableBundle(productName: string): { root: string; shimPath: string } {
   const root = mkdtempSync(join(tmpdir(), "paseo-cli-shim-portable-"));
@@ -130,7 +130,7 @@ describe("desktop packaging", () => {
     expect(config).toContain("!node_modules/@getpaseo/server/dist/server/web-ui/**");
   });
 
-  it("uses the server skill catalog without a duplicate desktop resource", () => {
+  it("includes filesystem skills explicitly at the existing server catalog path", () => {
     const config = readFileSync(join(packageRoot, "electron-builder.yml"), "utf8");
     const serverPackage = readFileSync(join(packageRoot, "..", "server", "package.json"), "utf8");
     const runtimeTrace = readFileSync(
@@ -138,7 +138,9 @@ describe("desktop packaging", () => {
       "utf8",
     );
 
-    expect(config).not.toContain("from: ../../skills");
+    expect(config).toContain("from: ../../skills");
+    expect(config).toContain("to: node_modules/@getpaseo/server/dist/server/skills");
+    expect(config).not.toContain("to: bundled-skills");
     expect(serverPackage).toContain("fs.rmSync('dist/server/skills',{recursive:true,force:true})");
     expect(serverPackage).toContain("fs.cpSync('../../skills','dist/server/skills'");
     expect(runtimeTrace).toContain('"packages/server/dist/server/skills/**"');
@@ -148,7 +150,7 @@ describe("desktop packaging", () => {
   // one block rather than as two independent substrings: a half-finished rename that leaves
   // the branded title beside the old scheme still registers a handler, just not the one the
   // app answers to, and two separate toContain calls pass straight through that.
-  it("registers conversation links with the operating system", () => {
+  it("registers Orca conversation links with the operating system", () => {
     const config = readFileSync(join(packageRoot, "electron-builder.yml"), "utf8");
 
     // A Windows checkout materialises this file with CRLF, which is what broke the Windows
@@ -156,7 +158,7 @@ describe("desktop packaging", () => {
     // and its scheme travel together under `protocols:`, which is a fact about the YAML, not
     // about the line endings the checkout happened to use.
     const normalize = (value: string) => value.replace(/\r\n/g, "\n");
-    const protocols = /^protocols:\n\s+- name: Fulcra conversation link\n\s+schemes:\n\s+- orca$/m;
+    const protocols = /^protocols:\n\s+- name: Orca conversation link\n\s+schemes:\n\s+- orca$/m;
     const lf = normalize(config);
 
     expect(lf).toMatch(protocols);

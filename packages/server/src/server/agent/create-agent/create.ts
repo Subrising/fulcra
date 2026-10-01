@@ -1,3 +1,4 @@
+import type { NativeReportCreation } from "../../report-origin.js";
 import type { Logger } from "pino";
 
 import type { TerminalManager } from "../../../terminal/terminal-manager.js";
@@ -67,6 +68,11 @@ export interface CreateAgentFromSessionInput {
   attachments?: AgentAttachment[];
   git?: GitSetupOptions;
   labels: Record<string, string>;
+  /**
+   * Update-7 W3 (R1 P-8): the calling agent when the create comes from inside a session (`paseo run`, an app/CLI
+   * create with a caller), so the provider's create config inherits the caller's restriction class.
+   */
+  parentAgentId?: string | null;
   env?: Record<string, string>;
   provisionalTitle: string | null;
   firstAgentContext: FirstAgentContext;
@@ -79,6 +85,7 @@ export interface CreateAgentFromSessionInput {
 }
 
 export interface CreateAgentFromMcpInput {
+  reportCreation?: NativeReportCreation;
   kind: "mcp";
   provider: string;
   title: string;
@@ -184,7 +191,10 @@ export async function createAgentCommand(
   const snapshot = await dependencies.agentManager.createAgent(
     resolved.config,
     input.kind === "session" ? input.agentId : undefined,
-    resolved.createOptions,
+    {
+      ...resolved.createOptions,
+      ...(input.kind === "mcp" ? { reportCreation: input.reportCreation } : {}),
+    },
   );
 
   resolved.setupContinuation?.startAfterAgentCreate({
@@ -206,7 +216,13 @@ export async function createAgentCommand(
     initialPromptError = sendResult.error ?? null;
   }
 
-  if (input.kind === "mcp" && input.notifyOnFinish && input.callerAgentId && initialPromptStarted) {
+  if (
+    input.kind === "mcp" &&
+    !input.reportCreation &&
+    input.notifyOnFinish &&
+    input.callerAgentId &&
+    initialPromptStarted
+  ) {
     setupFinishNotification({
       agentManager: dependencies.agentManager,
       agentStorage: dependencies.agentStorage,
@@ -260,7 +276,10 @@ async function resolveSessionCreateAgent(
     provider: builtSessionConfig.provider,
     requestedMode: builtSessionConfig.modeId,
     featureValues: builtSessionConfig.featureValues,
-    parent: null,
+    // R1 P-8: the caller, when there is one, so a restricted session's child starts restricted on this path too.
+    parent: input.parentAgentId
+      ? requireParentAgent(dependencies.agentManager, input.parentAgentId)
+      : null,
     unattended: false,
   });
   const sessionConfig: AgentSessionConfig = {
@@ -325,7 +344,12 @@ async function resolveMcpCreateAgent(
   const intent = await resolveCreateAgentIntent({
     explicitWorkspaceId: setupContinuation ? createdWorkspaceId : input.workspaceId,
     caller: parentAgent
-      ? { id: parentAgent.id, cwd: parentAgent.cwd, workspaceId: parentAgent.workspaceId }
+      ? {
+          id: parentAgent.id,
+          cwd: parentAgent.cwd,
+          workspaceId: parentAgent.workspaceId,
+          labels: parentAgent.labels,
+        }
       : null,
     labels: input.labels,
     childAgentDefaultLabels: input.callerContext?.childAgentDefaultLabels,

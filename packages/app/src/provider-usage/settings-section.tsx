@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { settingsStyles } from "@/styles/settings";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
+import { AccountRundown } from "./account-rundown";
 import { providerUsageCopy } from "./copy";
 import { ProviderUsageList } from "./list";
 import type { ProviderUsageView } from "./types";
@@ -63,7 +64,12 @@ function ProviderUsageBody({
 
   if (view.kind === "error") {
     return (
-      <Alert variant="error" title={providerUsageCopy.errorTitle} description={view.message}>
+      <Alert
+        size="sm"
+        variant="error"
+        title={providerUsageCopy.errorTitle}
+        description={view.message}
+      >
         <Button variant="outline" size="sm" onPress={onRefresh}>
           {providerUsageCopy.retry}
         </Button>
@@ -71,7 +77,7 @@ function ProviderUsageBody({
     );
   }
 
-  if (view.payload.providers.length === 0) {
+  if (view.payload.providers.length === 0 && !view.payload.accounts?.length) {
     return (
       <View style={[settingsStyles.card, styles.emptyCard]}>
         <Text style={styles.emptyText}>{providerUsageCopy.empty}</Text>
@@ -79,13 +85,29 @@ function ProviderUsageBody({
     );
   }
 
-  return <ProviderUsageList providers={view.payload.providers} />;
+  return (
+    <>
+      <ProviderUsageList providers={view.payload.providers} />
+      {view.payload.accounts && view.payload.accounts.length > 0 ? (
+        <View style={[settingsStyles.card, styles.rundownCard]}>
+          <AccountRundown
+            accounts={view.payload.accounts}
+            onRefresh={onRefresh}
+            busy={view.isRefreshing}
+          />
+        </View>
+      ) : null}
+    </>
+  );
 }
 
 const styles = StyleSheet.create((theme) => ({
   emptyCard: {
     padding: theme.spacing[4],
     alignItems: "center",
+  },
+  rundownCard: {
+    padding: theme.spacing[4],
   },
   emptyText: {
     color: theme.colors.foregroundMuted,

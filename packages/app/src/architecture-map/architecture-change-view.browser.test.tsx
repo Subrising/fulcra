@@ -123,7 +123,7 @@ function wholeFileDiff(before: string, after: string) {
   };
 }
 
-// The privacy gate for the saved pictures (anchored token rule): no home or
+// The privacy gate for the saved pictures (Fulcra CONTRACTS §1a, anchored token rule): no home or
 // volume path, private host name, email address or token may appear in anything the view renders,
 // visible or not. A hit fails the test before its screenshot is written.
 const PERSONAL: readonly RegExp[] = [
@@ -141,6 +141,12 @@ function renderedLabels(element: HTMLElement): string[] {
     }
   }
   return labels;
+}
+
+function personalLabels(container: HTMLElement): string[] {
+  return renderedLabels(container).filter((label) =>
+    PERSONAL.some((pattern) => pattern.test(label)),
+  );
 }
 
 const openPullRequest = () => undefined;
@@ -219,10 +225,7 @@ describe("Architecture change view in a browser", () => {
             container.querySelector('[data-testid="architecture-change-delta"]'),
           ).not.toBeNull();
         }
-        const personal = renderedLabels(container).filter((label) =>
-          PERSONAL.some((pattern) => pattern.test(label)),
-        );
-        expect(personal).toEqual([]);
+        expect(personalLabels(container)).toEqual([]);
         await page.screenshot({
           element: container,
           path: `../../.vitest-screenshots/changes/change-${size.name}-${mode.name}.png`,

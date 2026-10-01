@@ -144,7 +144,7 @@ for (const [platform, keyStorage] of [
 
       const proof = await device.sign(PAYLOAD, "Approve the release?");
       expect(fake.prompts.at(-1)).toBe("Fulcra: Approve the release?");
-      // The platform signed exactly the canonical JSON bytes a verifier checks.
+      // The platform signed exactly the canonical JSON bytes the controller verifies.
       expect(Buffer.from(fake.signedData[0], "base64").toString("utf8")).toBe(
         canonicalJson(PAYLOAD),
       );
@@ -189,7 +189,7 @@ for (const [platform, keyStorage] of [
   });
 }
 
-describe("native signing reports the key that signed", () => {
+describe("native signing reports the key that signed (R-D-4)", () => {
   it("a re-pair that lands during a signature cannot mislabel the proof", async () => {
     let fake!: ReturnType<typeof fakeNativeModule>;
     fake = fakeNativeModule({

@@ -10,6 +10,7 @@ interface UseCheckoutPrStatusQueryOptions {
   serverId: string;
   cwd: string;
   enabled?: boolean;
+  pullRequest?: number;
 }
 
 export type { CheckoutPrStatusPayload } from "@/git/pr-status";
@@ -23,18 +24,24 @@ export function useCheckoutPrStatusQuery({
   serverId,
   cwd,
   enabled = true,
+  pullRequest,
 }: UseCheckoutPrStatusQueryOptions) {
   const { t } = useTranslation();
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
 
   const query = useQuery({
-    queryKey: checkoutPrStatusQueryKey(serverId, cwd),
+    queryKey:
+      pullRequest === undefined
+        ? checkoutPrStatusQueryKey(serverId, cwd)
+        : [...checkoutPrStatusQueryKey(serverId, cwd), "pull-request", pullRequest],
     queryFn: async () => {
       if (!client) {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
-      return normalizeCheckoutPrStatusPayload(await client.checkoutPrStatus(cwd));
+      return normalizeCheckoutPrStatusPayload(
+        await client.checkoutPrStatus(cwd, undefined, pullRequest),
+      );
     },
     enabled: !!client && isConnected && !!cwd && enabled,
     staleTime: Infinity,

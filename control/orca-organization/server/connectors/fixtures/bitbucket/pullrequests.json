@@ -1,0 +1,106 @@
+{
+  "pagelen": 50,
+  "page": 1,
+  "values": [
+    {
+      "id": 5,
+      "title": "Sign-in fix",
+      "state": "OPEN",
+      "updated_on": "2026-09-24T11:00:00.000000+00:00",
+      "source": {
+        "branch": {
+          "name": "feature/ACME-12-sign-in"
+        }
+      },
+      "destination": {
+        "repository": {
+          "uuid": "{00000000-0000-4908-8706-000000002005}",
+          "full_name": "acme/web"
+        }
+      },
+      "links": {
+        "html": {
+          "href": "https://evil.example.com/pr"
+        }
+      },
+      "author": {
+        "display_name": "Test User B"
+      }
+    },
+    {
+      "id": 4,
+      "title": "ACME-11 status page",
+      "state": "MERGED",
+      "updated_on": "2026-09-20T08:00:00.000000+00:00",
+      "source": {
+        "branch": {
+          "name": "feature/status"
+        }
+      },
+      "destination": {
+        "repository": {
+          "uuid": "{00000000-0000-4908-8706-000000002005}",
+          "full_name": "acme/web"
+        }
+      },
+      "links": {
+        "html": {
+          "href": "https://evil.example.com/pr"
+        }
+      },
+      "author": {
+        "display_name": "Test User B"
+      }
+    },
+    {
+      "id": 3,
+      "title": "An old idea",
+      "state": "DECLINED",
+      "updated_on": "2026-07-01T08:00:00.000000+00:00",
+      "source": {
+        "branch": {
+          "name": "spike/old"
+        }
+      },
+      "destination": {
+        "repository": {
+          "uuid": "{00000000-0000-4908-8706-000000002005}",
+          "full_name": "acme/web"
+        }
+      },
+      "links": {
+        "html": {
+          "href": "https://evil.example.com/pr"
+        }
+      },
+      "author": {
+        "display_name": "Test User B"
+      }
+    },
+    {
+      "id": 2,
+      "title": "From another repository",
+      "state": "OPEN",
+      "updated_on": "2026-09-24T10:00:00.000000+00:00",
+      "source": {
+        "branch": {
+          "name": "x"
+        }
+      },
+      "destination": {
+        "repository": {
+          "uuid": "{11111111-1111-4111-8111-111111111111}",
+          "full_name": "acme/web"
+        }
+      },
+      "links": {
+        "html": {
+          "href": "https://evil.example.com/pr"
+        }
+      },
+      "author": {
+        "display_name": "Test User B"
+      }
+    }
+  ]
+}

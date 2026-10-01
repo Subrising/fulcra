@@ -1,3 +1,4 @@
+import { AdmissionDeniedError } from "../plugins/trusted.js";
 import type { z } from "zod";
 import type { Logger } from "pino";
 import type { ProviderSnapshotManager } from "./provider-snapshot-manager.js";
@@ -313,6 +314,7 @@ async function rollbackArchivedImport(
     }
     await input.agentManager.archiveSnapshot(archivedRecord.id, archivedAt);
   } catch (error) {
+    if (error instanceof AdmissionDeniedError) throw error;
     input.logger.error(
       { err: error, agentId: archivedRecord.id },
       "Failed to re-archive provider session after import failure",
@@ -322,6 +324,7 @@ async function rollbackArchivedImport(
   try {
     await input.agentStorage.upsert(archivedRecord);
   } catch (error) {
+    if (error instanceof AdmissionDeniedError) throw error;
     input.logger.error(
       { err: error, agentId: archivedRecord.id },
       "Failed to restore archived agent record after import failure",

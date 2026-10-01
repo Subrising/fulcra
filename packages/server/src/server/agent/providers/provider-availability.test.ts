@@ -100,20 +100,20 @@ describe("default provider availability", () => {
     }
   });
 
-  // which REAL providers store their default mode at creation. Claude must (a mode-less Claude session is
-  // stuck in Always Ask); Codex must not (a mode-less Codex session defers approval and sandbox to the user's
-  // own Codex config, and storing a mode would make the daemon override it).
-  test("Claude opts in to storing its default mode at creation, and Codex does not", () => {
+  // X2: which REAL providers store their default mode at creation. Claude must (a mode-less Claude session is
+  // stuck in Always Ask). Codex now does too (update-7 W3, the owner's 01:29Z instruction: every new Codex session
+  // defaults to full-access, or the host's Fulcra Settings choice) instead of deferring to the user's Codex config.
+  test("X2: Claude and Codex both store their default mode at creation", () => {
     expect(new ClaudeAgentClient({ logger: createTestLogger() }).persistsDefaultModeOnCreate).toBe(
       true,
     );
-    expect(
-      new CodexAppServerAgentClient(createTestLogger()).persistsDefaultModeOnCreate,
-    ).toBeUndefined();
+    expect(new CodexAppServerAgentClient(createTestLogger()).persistsDefaultModeOnCreate).toBe(
+      true,
+    );
   });
 
-  // the same split for the thinking option. Codex without one defers reasoning effort to the user's config.
-  test("Claude opts in to storing its model's default thinking option at creation, and Codex does not", () => {
+  // X4: the same split for the thinking option. Codex without one defers reasoning effort to the user's config.
+  test("X4: Claude opts in to storing its model's default thinking option at creation, and Codex does not", () => {
     expect(
       new ClaudeAgentClient({ logger: createTestLogger() }).persistsDefaultThinkingOnCreate,
     ).toBe(true);

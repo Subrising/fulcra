@@ -13,9 +13,9 @@ import { reverseApply, type PatchFile } from "./reverse-patch";
 // Everything the Change view shows, built from what the app can read: the map as it is now (the
 // branch tip), the branch's diff against its base, and directory listings beside changed code.
 //
-// A pull request is never reconstructed this way. Its Before/After
+// A pull request is never reconstructed this way (CONTRACTS v1.14, R-C-J7-2). Its Before/After
 // are the maps at the pull request's own commits: the merge base of its base and head, and its
-// head, read through the host (`checkout.file-at-commit.get`). Nothing on this
+// head, read through the host (`checkout.file-at-commit.get`, CONTRACTS v1.16). Nothing on this
 // computer that isn't committed can change them. On a host without that interface, or when the
 // forge gives no commits, the comparison is reported as unavailable, never rebuilt locally.
 
@@ -34,7 +34,7 @@ export interface ArchitectureChangeInput {
   changedFiles: readonly ChangedFile[];
   /** Directory -> file names, for the directories that were checked. */
   siblings: ReadonlyMap<string, readonly string[]>;
-  pullRequest: { number: number } | null;
+  pullRequest: { number?: number } | null;
   /** For a pull request: the map read at its merge base and head commits, or why it could not be. */
   pullRequestMaps?: PullRequestMaps | null;
 }
@@ -45,12 +45,12 @@ export type PullRequestMaps =
   | { kind: "unavailable"; reason: "pull-request" | "too_large" | "commit-read"; detail: string[] };
 
 /** One host answer (`checkout.file-at-commit.get`) as map text: missing means "not in that commit". */
-export type FileAtCommitAnswer = {
+export interface FileAtCommitAnswer {
   status: "ok" | "missing" | "too_large" | "not_a_file" | "error";
   encoding: "utf-8" | "base64" | "none";
   content?: string;
   error?: string;
-};
+}
 export function mapTextAtCommit(
   answer: FileAtCommitAnswer,
 ):
@@ -77,7 +77,7 @@ const COMMIT = /^[0-9a-f]{40}$/;
 
 /**
  * Whether a pull request can be compared at its own commits: the host offers
- * `checkout.file-at-commit.get` and the forge gave both commits.
+ * `checkout.file-at-commit.get` (CONTRACTS v1.16) and the forge gave both commits.
  */
 export function pullRequestReadable(
   hostCanRead: boolean,
@@ -97,7 +97,7 @@ export type ArchitectureChange =
       delta: DeltaModel;
       staleness: Staleness;
       files: { changed: number; code: number; withTests: number; checked: number };
-      pullRequest: { number: number } | null;
+      pullRequest: { number?: number } | null;
     }
   | {
       kind: "unavailable";
