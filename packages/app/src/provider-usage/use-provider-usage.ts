@@ -92,7 +92,9 @@ export function useProviderUsage(
     queryKey,
     queryFn,
     enabled,
-    staleTime: PROVIDER_USAGE_STALE_TIME_MS,
+    // A fresh timestamp cannot make quota from a previous runtime attribution current.
+    staleTime: (cachedQuery) =>
+      cachedQuery.state.data?.revision === runtimeRevision ? PROVIDER_USAGE_STALE_TIME_MS : 0,
     refetchOnMount: true,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
