@@ -1,0 +1,22 @@
+{
+  "$comment": "Upstreams the sync watcher tracks. Paseo is detected from git ancestry; the others are pinned here and bumped by sync PRs.",
+  "upstreams": {
+    "paseo": {
+      "repo": "getpaseo/paseo",
+      "kind": "merge",
+      "role": "Fork base. Daemon, app, CLI and relay come from here; Fulcra changes sit on top."
+    },
+    "radius": {
+      "repo": "radius-project/radius",
+      "kind": "pin",
+      "version": "0.60.2",
+      "role": "Radius application definitions are mapped into the architecture-map fixtures and the default-off planning surface. No Radius code ships."
+    },
+    "archify": {
+      "repo": "tt-a1i/archify",
+      "kind": "pin",
+      "version": "2.16.0",
+      "role": "Source of the Architecture IR v1 format the architecture map reads. No Archify code ships; the MIT notice sits beside the fixtures."
+    }
+  }
+}

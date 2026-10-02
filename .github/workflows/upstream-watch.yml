@@ -1,0 +1,56 @@
+name: Upstream watch
+
+# Opens "Sync <upstream> <version>" PRs for new Paseo, Radius and Archify releases.
+# Never merges. See "Upstream sync" in the README.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report what would change without pushing or opening PRs
+        type: boolean
+        default: false
+      only:
+        description: Limit to one upstream (paseo, radius or archify)
+        type: choice
+        options: ["", paseo, radius, archify]
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  watch:
+    name: watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check for new upstream releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WATCH_RUN_CHECKS: "1"
+          DRY_RUN: ${{ inputs.dry_run }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          node scripts/upstream-watch.mjs "${args[@]}"
