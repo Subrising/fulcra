@@ -1,47 +1,162 @@
 <p align="center">
-  <img src="docs/presentation/fulcra-mark.svg" width="72" alt="Fulcra Keystone mark">
-</p>
-
-<h1 align="center">Fulcra</h1>
-
-<p align="center"><strong>Persistent Claude and Codex sessions. One place to lead the work.</strong></p>
-
-<p align="center">
-  Run your coding sessions on your Macs. Organise the team, inspect its work, and check in from your phone while the host stays running.
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.png">
+    <img src="docs/assets/hero-light.png" width="900" alt="Fulcra: persistent Claude and Codex sessions, one place to lead the work. The Fulcra Mac app showing a chat, its changes and a project's workspaces.">
+  </picture>
 </p>
 
 <p align="center">
-  <a href="#get-started">Get started</a> ·
-  <a href="#what-you-can-do">Features</a> ·
-  <a href="#how-it-connects">Architecture</a> ·
-  <a href="#fulcra-orchestration-skill">Skill</a> ·
-  <a href="#permissions-and-trust">Trust & limits</a> ·
-  <a href="https://github.com/Subrising/fulcra/releases/tag/v0.2.0">v0.2.0 source release</a>
+  <a href="https://github.com/Subrising/fulcra/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/release-v0.2.0%20source-5E1623?style=flat-square" alt="Release v0.2.0 (source)"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-5E1623?style=flat-square" alt="Licence Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/macOS-Apple%20silicon-FF8A5B?style=flat-square" alt="macOS Apple silicon">
+  <img src="https://img.shields.io/badge/iPhone-build%20from%20source-FF8A5B?style=flat-square" alt="iPhone: build from source">
+  <img src="https://img.shields.io/badge/Android%20%C2%B7%20Windows-untested-8F857D?style=flat-square" alt="Android and Windows: untested">
 </p>
 
-Fulcra brings persistent sessions, isolated Git worktrees and an owned Command Centre into one app. Give a session a task, keep its conversation, and return to the same work from another connected device. Use a prime to lead an area, a project lead to coordinate it, and workers to carry out focused jobs.
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#see-it-work">Demo</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#the-cli">CLI</a> ·
+  <a href="#permissions-and-trust">Trust &amp; limits</a>
+</p>
 
-Your providers and development environment run on the selected host. Fulcra connects the views and the work; it does not turn a role label or an AI suggestion into permission.
+Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives you one place to lead them. Each session keeps its conversation, its own Git worktree and its diffs. The Command Centre shows what needs you, a prime and project leads organise the work, and your phone picks up the same chat while the Mac keeps working. Your code, providers and credentials stay on the host.
 
-## What you can do
+## Features
 
-| Workflow | v0.2.0 scope and limits |
-| --- | --- |
-| **Persistent sessions & worktrees** | Claude Code and Codex sessions, timelines, files, terminals, diffs and isolated worktrees. The host must stay running and reachable; provider CLIs and authentication are separate. |
-| **Lead a team** | Prime → project lead → worker organisation, delegated work, decisions and held messages. Each operation still checks ownership and permissions. Full native supervision and end-to-end reporting remain follow-ups. |
-| **Accounts & usage** | Claude/Codex account pools, role/model defaults, session-account labels and per-account usage rundown. Unavailable readings stay unavailable. Same-chat A→B→A acceptance remains a follow-up; pools do not imply cross-host credential sync. |
-| **Understand changes** | Git/PR context and architecture maps derived from Archify, with [MIT attribution](packages/app/src/architecture-map/fixtures/NOTICE-archify-LICENSE.txt). Maps aid review rather than promise complete impact analysis. |
-| **Git AI help** | Commit-subject/PR-description drafts and conflict advice, with editable previews. Uses the host's default Claude account and requires workspace write permission. Subjects are limited to 72 characters; no implicit commit, PR creation or file resolution. |
-| **Code review** | Review context and explicit GitHub approval posting pinned to the reviewed commit. Posting is separately permitted. Line-comment creation and a complete autonomous review-to-merge loop are not advertised. |
-| **Plan environments** | Radius-derived structural planning and scratch simulation. Persistent runs are default-off; native Bicep is **not included** or bundled. Real deployment and teardown remain held. |
-| **Work across devices** | Desktop, web and compatible source-built mobile clients connect directly or through the encrypted relay. Pair and trust each host. This source-only release has no Fulcra store binary or hardware-tested phone release claim. |
-| **Guide the agents** | Bundled Fulcra orchestration skill: one Claude copy and one shared Codex-discovered copy. Installing a skill grants no role or controller authority. |
+<table>
+  <tr>
+    <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/sessions-dark.png"><img src="docs/assets/features/sessions-light.png" alt="Persistent sessions: Claude Code and Codex conversations that keep their history and survive restarts."></picture></td>
+    <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/worktrees-dark.png"><img src="docs/assets/features/worktrees-light.png" alt="Worktrees and diffs: isolated Git worktrees per task, with the changes and diff beside the chat."></picture></td>
+  </tr>
+  <tr>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/providers-dark.png"><img src="docs/assets/features/providers-light.png" alt="Claude and Codex side by side: pick the provider, model, effort and permission mode per session."></picture></td>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/today-dark.png"><img src="docs/assets/features/today-light.png" alt="Command Centre: Today shows what needs you, what is running and what finished."></picture></td>
+  </tr>
+  <tr>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/leadership-dark.png"><img src="docs/assets/features/leadership-light.png" alt="Lead a team: record primes, project leads and workers; decisions come back to you."></picture></td>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/accounts-dark.png"><img src="docs/assets/features/accounts-light.png" alt="Accounts and defaults: pool Claude and Codex accounts per host; tokens stay in the Keychain."></picture></td>
+  </tr>
+  <tr>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/phone-dark.png"><img src="docs/assets/features/phone-light.png" alt="Check in from your phone: pair a phone and continue a chat while the Mac keeps working."></picture></td>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/features/git-dark.png"><img src="docs/assets/features/git-light.png" alt="AI Git help: draft commit subjects and PR descriptions with an editable preview."></picture></td>
+  </tr>
+</table>
 
-## Get started
+<details>
+<summary><strong>Scope and limits in v0.2.0</strong></summary>
 
-**v0.2.0 is a source-only release.** Its [GitHub release](https://github.com/Subrising/fulcra/releases/tag/v0.2.0) has no uploaded binary assets. Use [the tagged source](https://github.com/Subrising/fulcra/tree/v0.2.0) or the [source ZIP](https://github.com/Subrising/fulcra/archive/refs/tags/v0.2.0.zip). There is no Fulcra DMG, Homebrew formula or published Fulcra npm package to install from this release.
+| Workflow                            | v0.2.0 scope and limits                                                                                                                                                                                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Persistent sessions & worktrees** | Claude Code and Codex sessions, timelines, files, terminals, diffs and isolated worktrees. The host must stay running and reachable; provider CLIs and authentication are separate.                                                                          |
+| **Lead a team**                     | Prime → project lead → worker organisation, delegated work, decisions and held messages. Each operation still checks ownership and permissions. Full native supervision and end-to-end reporting remain follow-ups.                                          |
+| **Accounts & usage**                | Claude/Codex account pools, role/model defaults, session-account labels and per-account usage rundown. Unavailable readings stay unavailable. Same-chat A→B→A acceptance remains a follow-up; pools do not imply cross-host credential sync.                 |
+| **Understand changes**              | Git/PR context and architecture maps derived from Archify, with [MIT attribution](packages/app/src/architecture-map/fixtures/NOTICE-archify-LICENSE.txt). Maps aid review rather than promise complete impact analysis.                                      |
+| **Git AI help**                     | Commit-subject/PR-description drafts and conflict advice, with editable previews. Uses the host's default Claude account and requires workspace write permission. Subjects are limited to 72 characters; no implicit commit, PR creation or file resolution. |
+| **Code review**                     | Review context and explicit GitHub approval posting pinned to the reviewed commit. Posting is separately permitted. Line-comment creation and a complete autonomous review-to-merge loop are not advertised.                                                 |
+| **Plan environments**               | Radius-derived structural planning and scratch simulation. Persistent runs are default-off; native Bicep is **not included** or bundled. Real deployment and teardown remain held.                                                                           |
+| **Work across devices**             | Desktop, web and compatible source-built mobile clients connect directly or through the encrypted relay. Pair and trust each host. This source-only release has no Fulcra store binary.                                                                      |
+| **Guide the agents**                | Bundled Fulcra orchestration skill: one Claude copy and one shared Codex-discovered copy. Installing a skill grants no role or controller authority.                                                                                                         |
 
-For a macOS Apple silicon desktop build, prepare Node.js 24, npm 11.12.1, Python 3 and the Xcode command-line tools. Install and authenticate the provider CLIs you intend to use separately.
+</details>
+
+## See it work
+
+<table>
+  <tr>
+    <td width="68%" valign="top"><img src="docs/assets/demo-session.gif" alt="A task is typed into a Claude session; the agent reads and edits src/auth/session.ts and the Changes panel updates."><br><sub>Send a task: the agent reads, edits, and the change lands in the panel. Real turn, demo workspace, sped up 2×.</sub></td>
+    <td width="32%" valign="top"><img src="docs/assets/demo-phone.gif" alt="The same session at phone width: a follow-up message gets a reply."><br><sub>Continue the chat at phone width. Compact layout of the web build, sped up 1.45×.</sub></td>
+  </tr>
+</table>
+
+### Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/diff-dark.png"><img src="docs/assets/screens/diff-light.png" alt="A workspace with the diff of session.ts open and the Changes panel on the right."></picture><br><sub>Diff and changes beside the session</sub></td>
+    <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/codex-dark.png"><img src="docs/assets/screens/codex-light.png" alt="A Codex session reviewing a pull request, with model, effort and Full access shown in the composer."></picture><br><sub>A Codex reviewer next to the Claude sessions</sub></td>
+  </tr>
+  <tr>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/today-dark.png"><img src="docs/assets/screens/today-light.png" alt="The Command Centre Today view."></picture><br><sub>Command Centre · Today</sub></td>
+    <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/screens/accounts-dark.png"><img src="docs/assets/screens/accounts-light.png" alt="The Accounts and Defaults settings with Claude and Codex account sign-in."></picture><br><sub>Command Centre · Accounts &amp; Defaults</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/phone-dark.png">
+    <img src="docs/assets/phone-light.png" width="900" alt="Two phone-width screens of Fulcra: a Claude implementer chat and a Codex review chat.">
+  </picture>
+</p>
+
+<sub>All screenshots are the real v0.2.0 app (desktop) and its web build (phone width) against a throwaway demo host and the demo project “Acme Web”. “Account unavailable” is shown because the demo host has no pooled accounts.</sub>
+
+## How it works
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.png">
+    <img src="docs/assets/how-it-works-light.png" width="900" alt="The Mac app and paired phone or web clients connect to the Fulcra host daemon on your Mac, directly or through an optional end-to-end encrypted relay. The daemon starts and resumes Claude Code and Codex CLI sessions and hosts the Command Centre.">
+  </picture>
+</p>
+
+The daemon on your Mac owns the sessions, worktrees and terminals and starts the provider CLIs. Clients authenticate to the host. The Command Centre controller requests work through the daemon bridge; it does not bypass the daemon to acquire provider or device authority. The relay transports encrypted frames and still sees connection metadata. Provider CLIs may send prompts and code to their configured provider services.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/team-dark.png">
+    <img src="docs/assets/team-light.png" width="900" alt="Illustration of the orchestration hierarchy: you set the direction, a prime orchestrator is accountable for an area, project leads coordinate projects, and Claude and Codex workers carry out tasks.">
+  </picture>
+</p>
+
+A **prime** leads an area, a **project lead** coordinates a project, and **workers** carry out focused jobs. Roles describe accountability, not permission: every operation still checks current ownership, capabilities and connection authority.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/accounts-dark.png">
+    <img src="docs/assets/accounts-light.png" width="900" alt="Illustration of the account pool: an enabled Claude Work account with usage bars, a disabled Personal account, a Codex account from browser sign-in, the account-selection order and model defaults by role.">
+  </picture>
+</p>
+
+Pools select eligible, enabled accounts within the chosen provider on that host. Unavailable usage readings stay unknown; account choice grants no extra authority, and pools do not sync credentials between hosts. [Architecture details](docs/architecture.md) explain the host and provider boundaries.
+
+<details>
+<summary>Text diagram</summary>
+
+```mermaid
+flowchart LR
+  desktop[Desktop app] -->|Authenticated connection| daemon[Host daemon]
+  phone[Phone or web client] -->|Paired direct connection| daemon
+  phone <-->|Encrypted frames| relay[Optional relay]
+  relay <-->|Encrypted frames| daemon
+  daemon <-->|Owned authenticated service bridge| controller[Command Centre controller]
+  daemon -->|Starts and resumes CLI sessions| claude[Claude Code]
+  daemon -->|Starts and resumes CLI sessions| codex[Codex]
+  claude --> work[Host workspaces and worktrees]
+  codex --> work
+```
+
+</details>
+
+## Install
+
+**v0.2.0 is a source-only release.** Its [GitHub release](https://github.com/Subrising/fulcra/releases/tag/v0.2.0) has no uploaded binaries: there is no Fulcra DMG, Homebrew formula, published npm package, TestFlight or store listing. Build from [the tagged source](https://github.com/Subrising/fulcra/tree/v0.2.0) on the platform you want.
+
+| Platform                  | Status                                                                                                              | Guide                                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **macOS** (Apple silicon) | Built and used from source                                                                                          | [Build, launch &amp; pair](docs/getting-started.md) |
+| **iPhone**                | Tested method: Xcode with your own free Apple Account (Personal Team); onboarding taps and re-signing not exercised | [iPhone guide](docs/ios-personal-device.md)         |
+| **Android**               | **Untested** source-derived APK build                                                                               | [Android guide](docs/android.md)                    |
+| **Windows**               | **Untested** source-derived NSIS build and CLI                                                                      | [Windows guide](docs/windows.md)                    |
+
+TestFlight and App Store distribution are planned. [Platform evidence](docs/platform-installation-status.md) records exactly what was run for each guide.
+
+### macOS
+
+Prepare Node.js 24, npm 11.12.1, Python 3 and the Xcode command-line tools. Install and sign in to the provider CLIs you want to use (Claude Code, Codex) separately.
 
 ```bash
 git clone https://github.com/Subrising/fulcra.git
@@ -52,22 +167,24 @@ npm --prefix control ci
 node scripts/package-command-centre.mjs ./control
 ```
 
-The controller uses its own `control/package-lock.json` and is not a root workspace. Install both dependency trees: the wrapper builds them but does not install control dependencies.
+The controller uses its own `control/package-lock.json` and is not a root workspace, so install both dependency trees. The wrapper builds the server, Command Centre, app and desktop and writes `packages/desktop/release/mac-arm64/Fulcra.app`. It is an **unsigned, unnotarised** developer build: open it with macOS's per-app first-open flow, and do not disable macOS security protections globally.
 
-The committed wrapper builds the server, Command Centre, app and desktop from this checkout. Its macOS arm64 output is `packages/desktop/release/mac-arm64/Fulcra.app`. It deliberately produces an **unsigned, unnotarised** developer build. Open your own built app using macOS's individual-app first-open flow; do not disable macOS security protections globally.
+### iPhone
 
-Then:
+Build the app in Xcode and run it on your own phone with a free Personal Team. In short: `npm run build:app-deps`, `expo prebuild --platform ios`, `pod install`, open `Fulcra.xcworkspace`, select your Personal Team under **Signing & Capabilities**, and **Run** on the device. A free-team profile lasts seven days; rebuild to re-sign (re-signing after expiry has not been tested). The [iPhone guide](docs/ios-personal-device.md) has the exact commands, tool versions and which steps were and were not exercised.
 
-1. Open the app and enable **Command Centre** in Settings if you want orchestration. It starts the owned controller through the daemon and restarts the background service as needed.
-2. Configure your host's **Accounts & Defaults**. Choose the provider/account, model and permission mode for your work.
-3. Create a workspace and a session. Inspect its account label and usage before delegating.
-4. To connect your phone, use **Settings → your host → Pair a device**, enable relay when appropriate, and scan or paste the offer in your compatible client. Keep pairing links and QR codes private. The host must stay running.
+## Quick start
 
-See [Build, launch & pair](docs/getting-started.md) for development commands, the actual repo-local CLI and the skill setup. See [Security](SECURITY.md) before connecting a device you do not control.
+1. Open the app and enable **Command Centre** in Settings if you want orchestration. It starts the owned controller through the daemon.
+2. In **Command Centre → Settings → Accounts &amp; Defaults**, choose accounts and the model and effort for each role.
+3. Add a project, create a workspace and start a session. Check its account label and usage before delegating.
+4. To connect your phone, open **Settings → your host → Pair device**, enable the relay if you need it, and scan or paste the offer in your client. Keep pairing links and QR codes private. The host must stay running.
 
-### The repo-local CLI
+See [Security](SECURITY.md) before connecting a device you do not control.
 
-After the source build, use the actual compatibility executable from this checkout:
+## The CLI
+
+After the source build, use the compatibility executable from your checkout:
 
 ```bash
 node packages/cli/bin/paseo --help
@@ -75,78 +192,32 @@ node packages/cli/bin/paseo daemon status
 node packages/cli/bin/paseo ls
 ```
 
-The executable remains `paseo`; there is no separate Fulcra npm install implied. Select the intended host/home rather than assuming the standalone CLI uses the desktop-managed daemon. See [CLI tasks and pairing](docs/getting-started.md#use-the-actual-cli) for explicit tasks and host selection.
+The executable is still named `paseo`; there is no separate Fulcra npm install. Select the intended host or home rather than assuming the standalone CLI uses the desktop-managed daemon. [CLI tasks and pairing](docs/getting-started.md#use-the-actual-cli) covers explicit tasks and host selection.
 
-## Fulcra orchestration skill
+### Fulcra orchestration skill
 
 Open **Settings → your host → Agents → Orchestration skills**, include **fulcra**, then install or update the selection. The bundled [Fulcra skill](skills/fulcra/SKILL.md) guides persistent sessions, delegation, messages, accounts and usage.
 
 Claude uses `~/.claude/skills/fulcra`. Codex discovers the shared `~/.agents/skills/fulcra` copy: keep one `/fulcra` entry and do not install a second `.codex/skills` copy. Existing custom selections must include Fulcra explicitly. Installing a skill does not grant a role, manager seat or controller authority.
 
-## How it connects
-
-```mermaid
-flowchart LR
-  desktop[Desktop app] -->|Authenticated connection| daemon[Host daemon]
-  phone[Phone or web client] -->|Paired direct connection| daemon
-  phone <-->|Encrypted frames| relay[Optional relay]
-  relay <-->|Encrypted frames| daemon
-  daemon <-->|Owned authenticated service bridge| controller[Owned Command Centre controller]
-  daemon -->|Starts and resumes CLI sessions| claude[Claude Code]
-  daemon -->|Starts and resumes CLI sessions| codex[Codex]
-  claude --> work[Host workspaces and worktrees]
-  codex --> work
-```
-
-The controller requests work through the daemon bridge; it does not bypass the daemon to acquire provider or device authority. Clients authenticate to the host. The relay transports encrypted frames and still sees connection metadata. Provider CLIs may send prompts and code to their configured provider services.
-
-### Team accountability
-
-```mermaid
-flowchart TD
-  human[You] --> prime[Prime: direction for an area]
-  prime --> lead[Project lead: coordinate work]
-  lead --> claudeWorker[Claude worker session]
-  lead --> codexWorker[Codex worker session]
-  claudeWorker --> decisions[Results and decisions]
-  codexWorker --> decisions
-  decisions --> human
-```
-
-Roles describe accountability, not permission. Each operation still checks current ownership, capabilities and connection authority.
-
-### Host account pools
-
-```mermaid
-flowchart TD
-  claudePool[Claude account pool] --> eligibility{Eligible and enabled?}
-  codexPool[Codex account pool] --> eligibility
-  eligibility -->|Yes: within the chosen provider| selection[Session account selection]
-  eligibility -->|Disabled or unavailable| excluded[Not selected]
-  selection --> session[Persistent provider session]
-  session --> usage[Session-bound account usage]
-```
-
-Pools select eligible enabled accounts within the chosen provider on that host. Unavailable usage readings stay unknown; this does not claim automatic cross-host credential sync or completed same-chat A→B→A acceptance. Account choice grants no extra authority. [Architecture details](docs/architecture.md) explain the host and provider boundaries.
-
 ## Permissions and trust
 
-New top-level sessions default to Claude `auto` and Codex `full-access` unless you override them through session, role, Settings or configuration choices. Internal helpers retain conservative modes.
+New top-level sessions default to Claude `auto` and Codex `full-access` unless you override them through session, role, Settings or configuration choices. Internal helpers keep conservative modes.
 
 **Codex Full Access runs commands without approval prompts. Fulcra cannot pre-check credential access, destructive Git actions or publishing in this mode.** The accepted v0.2.0 limitation applies to native Codex Full Access only. It does not exempt Claude, host-sync grants or future releases. Claude's credential, destructive Git and publishing approvals remain required.
 
 Only pair trusted devices: terminals and agents can execute as the host user. Same-user processes and trusted plugins are not an OS sandbox. Mobile/web device keys remain in app storage, and desktop plugin trust depends on matching bundled and served code. See the [security model](SECURITY.md) for these boundaries.
 
-Post-release follow-ups include complete same-chat account-switch acceptance, the remaining Full Access disclosure/device checks, and the remaining installed native supervision and reporting. These are not advertised as completed end-to-end guarantees. Persistent Radius is default-off; native Bicep and real environment deployment are outside the release. [Release notes](RELEASE-NOTES-v0.2.0.md) retain the v0.2.0 candidate scope; the [published release](https://github.com/Subrising/fulcra/releases/tag/v0.2.0) records the owner's final disposition.
+Post-release follow-ups include complete same-chat account-switch acceptance, the remaining Full Access disclosure/device checks, and the remaining installed native supervision and reporting. These are not advertised as completed end-to-end guarantees. Persistent Radius is default-off; native Bicep and real environment deployment are outside the release. [Release notes](RELEASE-NOTES-v0.2.0.md) keep the v0.2.0 scope; the [published release](https://github.com/Subrising/fulcra/releases/tag/v0.2.0) records the final disposition.
 
 ## Contribute
 
-Bug reports and proposals belong in [Subrising/fulcra](https://github.com/Subrising/fulcra/issues). Start with [Contributing](CONTRIBUTING.md), [development](docs/development.md) and [plugins](docs/plugins.md). The repository keeps `packages/` for the app, daemon, CLI and libraries, `control/` for orchestration, and ignored `local/` for machine-specific configuration.
+Bug reports, proposals and pull requests belong in [Subrising/fulcra](https://github.com/Subrising/fulcra/issues). Start with [Contributing](CONTRIBUTING.md), [development](docs/development.md) and [plugins](docs/plugins.md). The repository keeps `packages/` for the app, daemon, CLI and libraries, `control/` for orchestration, and ignored `local/` for machine-specific configuration.
 
 ## Credits and licence
 
-Fulcra is a modified fork of [Paseo](https://github.com/getpaseo/paseo), created by Mohamed Boudra. The committed root [LICENSE](LICENSE) retains **Apache-2.0**, except third-party components under their own terms; [NOTICE](NOTICE) preserves the upstream attribution and fork modification scope. This presentation change does not relicense the project or claim upstream endorsement.
+Fulcra is a modified fork of [Paseo](https://github.com/getpaseo/paseo), created by Mohamed Boudra, which it uses as its base. The root [LICENSE](LICENSE) retains **Apache-2.0**, except third-party components under their own terms; [NOTICE](NOTICE) preserves the upstream attribution and the fork's modification scope. This does not claim upstream endorsement.
 
-Archify-derived map code/assets retain their [MIT notice](packages/app/src/architecture-map/fixtures/NOTICE-archify-LICENSE.txt). Radius is an Apache-2.0 project; structural planning does not mean its native compiler or deployment service is bundled. Other nested MIT and third-party terms remain authoritative for their components.
+Archify-derived map code and assets keep their [MIT notice](packages/app/src/architecture-map/fixtures/NOTICE-archify-LICENSE.txt). Radius is an Apache-2.0 project; structural planning does not mean its native compiler or deployment service is bundled. Other nested MIT and third-party terms remain authoritative for their components.
 
-Internal `@getpaseo/*` package/API names, the `paseo` CLI executable and existing runtime identities remain where compatibility requires them. They are technical names, not a separate Fulcra install offer.
+Internal `@getpaseo/*` package and API names, the `paseo` CLI executable and existing runtime identities remain where compatibility requires them. They are technical names, not a separate Fulcra install offer.

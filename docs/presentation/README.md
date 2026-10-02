@@ -1,7 +1,10 @@
 # Presentation assets
 
-`fulcra-mark.svg` is copied unchanged from the published Fulcra Keystone mark. `social-preview.svg` composes that verified mark with typography on a solid background; `social-preview.png` is its deterministic 1280×640 render, under 1 MB. It is a brand graphic, not an app screenshot. Root uploads it to GitHub Settings → Social preview → Edit after the final changed-file privacy pass.
+`fulcra-mark.svg` is copied unchanged from the published Fulcra Keystone mark. `social-preview.png` is the 1280×640 GitHub social preview (under 1 MB): the mark, tagline and a real app screenshot. Root uploads it in GitHub Settings → Social preview.
 
-No app screenshot is included in this batch yet. The real hero capture remains dependent on an available, safe installed v0.2.0 demo view; it must come from the screenshot owner after safe-region preflight and visual inspection. It may not be fabricated or redrawn. Raw/private screenshots never enter this directory. A future real demo capture does not by itself establish provider/account/map acceptance or phone hardware proof. PNG metadata must be removed before publication.
+The README art lives in [`docs/assets/`](../assets/), in light and dark variants that the README switches with `prefers-color-scheme`:
 
-The source-only release and current feature limits are described in the [README](../../README.md). Licence and upstream notices remain unchanged.
+- `hero-*`, `features/`, `screens/`, `phone-*` and the two GIFs contain only real UI: the installed v0.2.0 desktop app and its web build, run against a throwaway demo host (“Demo Mac”) and demo project (“Acme Web”) with short real turns. Phone-width images are the web build's compact layout, not the iOS app.
+- `how-it-works-*`, `team-*` and `accounts-*` are designed illustrations. Names and usage bars in `accounts-*` are illustrative and labelled as such.
+
+Everything was rendered from HTML/CSS with Playwright at 2× in the Keystone palette (`#5E1623`, `#FF8A5B`, `#F2E7D5`). Never capture a live host, real account, pairing QR or private session for these images, and strip PNG text metadata before committing.
