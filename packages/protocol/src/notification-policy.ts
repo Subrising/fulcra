@@ -30,16 +30,21 @@ export function isPrimeOrLead(input: {
   return typeof role === "string" && LEAD_ROLES.has(role.trim().toLowerCase());
 }
 
+/**
+ * `pinned` is the host's pin state for the session's workspace (sessions have no pin of their own); a pinned
+ * session counts as one the person wants to hear from, like a prime.
+ */
 export function shouldNotifyForSession(input: {
   mode: NotificationMode;
   labels: Record<string, string> | null | undefined;
   hasChildren: boolean;
+  pinned?: boolean;
 }): boolean {
   const override = input.labels?.[NOTIFY_LABEL];
   if (override === "off") return false;
   if (input.mode === "off") return false;
   if (override === "on") return true;
   if (input.mode === "all") return true;
-  return isPrimeOrLead(input);
+  return input.pinned === true || isPrimeOrLead(input);
 }
 

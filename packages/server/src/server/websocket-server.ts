@@ -3188,9 +3188,11 @@ export class VoiceAssistantWebSocketServer {
 
     // Notification policy: workers stay quiet unless the host or the session opts in. Attention
     // events still flow to clients (unread state); only the push and the in-app alert are gated.
+    const workspace = await this.workspaceRegistry.get(agent.workspaceId);
     const notifyAllowed = shouldNotifyForSession({
       mode: this.daemonConfigStore.get().notificationMode,
       labels: agent.labels,
+      pinned: workspace?.pinnedAt != null,
       hasChildren: this.agentManager
         .listAgents()
         .some((candidate) => candidate.labels[PARENT_AGENT_ID_LABEL] === params.agentId),

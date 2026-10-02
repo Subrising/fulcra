@@ -25,4 +25,11 @@ describe("shouldNotifyForSession", () => {
     expect(shouldNotifyForSession({ mode: "all", labels: { "fulcra.notify": "off" }, hasChildren: false })).toBe(false);
     expect(shouldNotifyForSession({ mode: "off", labels: { "fulcra.notify": "on" }, hasChildren: false })).toBe(false);
   });
+
+  it("treats a pinned session as a lead in primes mode, but never over the global off or a session off", () => {
+    expect(shouldNotifyForSession({ mode: "primes", labels: worker, hasChildren: false, pinned: true })).toBe(true);
+    expect(shouldNotifyForSession({ mode: "primes", labels: worker, hasChildren: false, pinned: false })).toBe(false);
+    expect(shouldNotifyForSession({ mode: "off", labels: worker, hasChildren: false, pinned: true })).toBe(false);
+    expect(shouldNotifyForSession({ mode: "primes", labels: { ...worker, "fulcra.notify": "off" }, hasChildren: false, pinned: true })).toBe(false);
+  });
 });
