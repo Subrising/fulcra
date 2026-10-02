@@ -3,7 +3,12 @@
 A worker can publish a bounded text evidence set by writing `.orca-artifacts.json` in its own task directory after finishing its output:
 
 ```json
-{"version":1,"files":[{"path":"operator-quick-start.md","sha256":"<actual lowercase SHA256 of the file>"}]}
+{
+  "version": 1,
+  "files": [
+    { "path": "operator-quick-start.md", "sha256": "<actual lowercase SHA256 of the file>" }
+  ]
+}
 ```
 
 The existing `manager_inspect_worker` tool returns `artifacts` alongside the worker's status. No new MCP tool or native Read permission is needed. A standard-library Python helper opens files relative to one pinned directory descriptor; Node bounds its execution and response size. The worker must be idle with no pending permissions. Only the worker's current same-task manager can inspect it; takeover or changed ownership refuses access.

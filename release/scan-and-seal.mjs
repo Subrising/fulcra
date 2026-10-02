@@ -1,34 +1,115 @@
-import fs from 'node:fs';
-import path from 'node:path';
-if (process.argv.includes('--help')) { console.log('Usage: release/scan-and-seal.sh; reads local release config'); process.exit(0); }
-const app=process.env.CANDIDATE_APP, C=process.env.CONTROL_ROOT, ev=process.env.EVIDENCE_DIR;
-for (const key of ['CANDIDATE_APP','CONTROL_ROOT','EVIDENCE_DIR','REVIEWS','ADAPTER_BASELINE','PREVIOUS_HANDOFF']) if (!process.env[key]) throw Error('Missing release config key: '+key);
-fs.mkdirSync(ev,{recursive:true});
-const {auditPackagedBundle,archiveEntries}=await import(C+'/tools/packaged-audit.mjs');
-const {sha,sealBundle}=await import('./contract.mjs');
-const report=auditPackagedBundle(app,JSON.parse(fs.readFileSync(process.env.REVIEWS)));
-const entries=archiveEntries(fs.readFileSync(path.join(app,'Contents/Resources/app.asar')),'Contents/Resources/app.asar');
-const forbidden=[];
-(function walk(dir){for(const name of fs.readdirSync(dir)){const p=path.join(dir,name),st=fs.lstatSync(p);if(name.endsWith('.tsbuildinfo'))forbidden.push(path.relative(app,p));if(st.isDirectory())walk(p);}})(app);
-for(const e of entries)if(e.file.endsWith('.tsbuildinfo'))forbidden.push(e.file);
-if(entries[0].bytes.includes(Buffer.from('.tsbuildinfo')))forbidden.push('ASAR header contains .tsbuildinfo');
-fs.writeFileSync(ev+'/packaged-scan-final.json',JSON.stringify(report,null,2)+'\n');
-fs.writeFileSync(ev+'/tsbuildinfo-final.json',JSON.stringify({passed:!forbidden.length,findings:forbidden},null,2)+'\n');
-const bundle=sealBundle(app);
-const baseline=JSON.parse(fs.readFileSync(process.env.ADAPTER_BASELINE));
-const adapter={};for(const name of Object.keys(baseline.adapter))adapter[name]=sha(fs.readFileSync(path.join(C,'tools',name)));
-const adapterOk=Object.keys(baseline.adapter).every(n=>adapter[n]===baseline.adapter[n]);
-const plugin=path.join(app,'Contents/Resources/bundled-plugins/orca-organization-next');
-const manifest=JSON.parse(fs.readFileSync(path.join(plugin,'runtime-manifest.json')));
-const clientOk=sha(fs.readFileSync(path.join(plugin,'runtime.client.js')))===manifest.client;
-const old=JSON.parse(fs.readFileSync(process.env.PREVIOUS_HANDOFF));
-const key=e=>e.file, o=new Map(old.bundle.entries.map(e=>[key(e),JSON.stringify(e)])), n=new Map(bundle.entries.map(e=>[key(e),JSON.stringify(e)]));
-const diff={changed:[...n.keys()].filter(k=>o.has(k)&&o.get(k)!==n.get(k)),added:[...n.keys()].filter(k=>!o.has(k)),removed:[...o.keys()].filter(k=>!n.has(k))};
-const attempt=JSON.parse(fs.readFileSync(path.join(ev,'build-attempt.json'))), heads=attempt.heads;
-const retention={path:app,durableAcrossReboot:false,limit:'Durability requires a separately verified durable copy.'};
-fs.writeFileSync(ev+'/packaged-app-digest.json',JSON.stringify({appPath:app,bundle,pluginPin:manifest.client,retention},null,2)+'\n');
-fs.writeFileSync(ev+'/next-candidate-handoff.json',JSON.stringify({schema:1,repoCommit:attempt.repoCommit,productCommit:attempt.productCommit,controlCommit:attempt.controlCommit,kind:'fulcra-trial-adapter',bundle,adapter,label:'Private HOME and fake Keychain; not isolated-account acceptance',retention,acceptance:{status:'Single-checkout candidate; gate acceptance recorded separately; product mode '+attempt.mode,liveCutoverAuthorized:false},pluginPin:manifest.client,heads,previous:{bundleSha256:old.bundle.sha256,heads:old.heads}},null,2)+'\n');
-fs.writeFileSync(ev+'/entry-diff-vs-previous.json',JSON.stringify(diff,null,2)+'\n');
-const out={bundleSha256:bundle.sha256,entries:bundle.entries.length,scanPassed:report.passed,files:report.files,unexempted:report.unexempted.length,errors:report.errors.length,tsbuildinfoAbsent:!forbidden.length,adapterOk,clientPinOk:clientOk,pluginPin:manifest.client,diffVsPrevious:{changed:diff.changed.length,added:diff.added,removed:diff.removed}};
+import fs from "node:fs";
+import path from "node:path";
+if (process.argv.includes("--help")) {
+  console.log("Usage: release/scan-and-seal.sh; reads local release config");
+  process.exit(0);
+}
+const app = process.env.CANDIDATE_APP,
+  C = process.env.CONTROL_ROOT,
+  ev = process.env.EVIDENCE_DIR;
+for (const key of [
+  "CANDIDATE_APP",
+  "CONTROL_ROOT",
+  "EVIDENCE_DIR",
+  "REVIEWS",
+  "ADAPTER_BASELINE",
+  "PREVIOUS_HANDOFF",
+])
+  if (!process.env[key]) throw Error("Missing release config key: " + key);
+fs.mkdirSync(ev, { recursive: true });
+const { auditPackagedBundle, archiveEntries } = await import(C + "/tools/packaged-audit.mjs");
+const { sha, sealBundle } = await import("./contract.mjs");
+const report = auditPackagedBundle(app, JSON.parse(fs.readFileSync(process.env.REVIEWS)));
+const entries = archiveEntries(
+  fs.readFileSync(path.join(app, "Contents/Resources/app.asar")),
+  "Contents/Resources/app.asar",
+);
+const forbidden = [];
+(function walk(dir) {
+  for (const name of fs.readdirSync(dir)) {
+    const p = path.join(dir, name),
+      st = fs.lstatSync(p);
+    if (name.endsWith(".tsbuildinfo")) forbidden.push(path.relative(app, p));
+    if (st.isDirectory()) walk(p);
+  }
+})(app);
+for (const e of entries) if (e.file.endsWith(".tsbuildinfo")) forbidden.push(e.file);
+if (entries[0].bytes.includes(Buffer.from(".tsbuildinfo")))
+  forbidden.push("ASAR header contains .tsbuildinfo");
+fs.writeFileSync(ev + "/packaged-scan-final.json", JSON.stringify(report, null, 2) + "\n");
+fs.writeFileSync(
+  ev + "/tsbuildinfo-final.json",
+  JSON.stringify({ passed: !forbidden.length, findings: forbidden }, null, 2) + "\n",
+);
+const bundle = sealBundle(app);
+const baseline = JSON.parse(fs.readFileSync(process.env.ADAPTER_BASELINE));
+const adapter = {};
+for (const name of Object.keys(baseline.adapter))
+  adapter[name] = sha(fs.readFileSync(path.join(C, "tools", name)));
+const adapterOk = Object.keys(baseline.adapter).every((n) => adapter[n] === baseline.adapter[n]);
+const plugin = path.join(app, "Contents/Resources/bundled-plugins/orca-organization-next");
+const manifest = JSON.parse(fs.readFileSync(path.join(plugin, "runtime-manifest.json")));
+const clientOk = sha(fs.readFileSync(path.join(plugin, "runtime.client.js"))) === manifest.client;
+const old = JSON.parse(fs.readFileSync(process.env.PREVIOUS_HANDOFF));
+const key = (e) => e.file,
+  o = new Map(old.bundle.entries.map((e) => [key(e), JSON.stringify(e)])),
+  n = new Map(bundle.entries.map((e) => [key(e), JSON.stringify(e)]));
+const diff = {
+  changed: [...n.keys()].filter((k) => o.has(k) && o.get(k) !== n.get(k)),
+  added: [...n.keys()].filter((k) => !o.has(k)),
+  removed: [...o.keys()].filter((k) => !n.has(k)),
+};
+const attempt = JSON.parse(fs.readFileSync(path.join(ev, "build-attempt.json"))),
+  heads = attempt.heads;
+const retention = {
+  path: app,
+  durableAcrossReboot: false,
+  limit: "Durability requires a separately verified durable copy.",
+};
+fs.writeFileSync(
+  ev + "/packaged-app-digest.json",
+  JSON.stringify({ appPath: app, bundle, pluginPin: manifest.client, retention }, null, 2) + "\n",
+);
+fs.writeFileSync(
+  ev + "/next-candidate-handoff.json",
+  JSON.stringify(
+    {
+      schema: 1,
+      repoCommit: attempt.repoCommit,
+      productCommit: attempt.productCommit,
+      controlCommit: attempt.controlCommit,
+      kind: "fulcra-trial-adapter",
+      bundle,
+      adapter,
+      label: "Private HOME and fake Keychain; not isolated-account acceptance",
+      retention,
+      acceptance: {
+        status:
+          "Single-checkout candidate; gate acceptance recorded separately; product mode " +
+          attempt.mode,
+        liveCutoverAuthorized: false,
+      },
+      pluginPin: manifest.client,
+      heads,
+      previous: { bundleSha256: old.bundle.sha256, heads: old.heads },
+    },
+    null,
+    2,
+  ) + "\n",
+);
+fs.writeFileSync(ev + "/entry-diff-vs-previous.json", JSON.stringify(diff, null, 2) + "\n");
+const out = {
+  bundleSha256: bundle.sha256,
+  entries: bundle.entries.length,
+  scanPassed: report.passed,
+  files: report.files,
+  unexempted: report.unexempted.length,
+  errors: report.errors.length,
+  tsbuildinfoAbsent: !forbidden.length,
+  adapterOk,
+  clientPinOk: clientOk,
+  pluginPin: manifest.client,
+  diffVsPrevious: { changed: diff.changed.length, added: diff.added, removed: diff.removed },
+};
 console.log(JSON.stringify(out));
-process.exitCode=report.passed&&!forbidden.length&&adapterOk&&clientOk?0:1;
+process.exitCode = report.passed && !forbidden.length && adapterOk && clientOk ? 0 : 1;

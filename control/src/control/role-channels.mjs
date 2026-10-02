@@ -1010,7 +1010,7 @@ export class RoleChannels {
     try {
       issue = await this.control.authority(row.task);
     } catch (e) {
-      throw Error(`Originating seat task authority could not be read: ${e.message}`);
+      throw Error(`Originating seat task authority could not be read: ${e.message}`, { cause: e });
     }
     if (authorityKey(issue) !== row.authority)
       throw new SourceChanged(

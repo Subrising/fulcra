@@ -68,9 +68,7 @@ const personalScan = require("./smoke-personal-scan");
 const APP_PATH = process.env.FULCRA_APP_PATH ?? "/Applications/Fulcra.app";
 const HOST = process.env.FULCRA_HOST ?? "127.0.0.1";
 const PORT = process.env.FULCRA_PORT ?? "6791";
-const PASSWORD_FILE =
-  process.env.FULCRA_PASSWORD_FILE ??
-  localMachine("acceptancePasswordFile");
+const PASSWORD_FILE = process.env.FULCRA_PASSWORD_FILE ?? localMachine("acceptancePasswordFile");
 const EXTRA_SECRET_FILES = (process.env.FULCRA_EXTRA_SECRET_FILES ?? "").split(":").filter(Boolean);
 const EVIDENCE_DIR = process.env.FULCRA_EVIDENCE_DIR;
 const SCRATCH_DIR = process.env.FULCRA_SCRATCH_DIR;
@@ -966,9 +964,7 @@ const STEPS = [
 
 // The host label rows on this Mac carry (fleet.tsx: "Mini" | "Book" | "Unknown host").
 const LOCAL_HOST_LABEL = process.env.FULCRA_LOCAL_HOST_LABEL ?? "Mini";
-const DAEMON_PID_FILE =
-  process.env.FULCRA_DAEMON_PID_FILE ??
-  localMachine("acceptancePluginRoot");
+const DAEMON_PID_FILE = process.env.FULCRA_DAEMON_PID_FILE ?? localMachine("acceptancePluginRoot");
 const CONTROLLER_PID_FILE = process.env.FULCRA_CONTROLLER_PID_FILE ?? "";
 const RECOVERY_SETTLE_MS = Number(process.env.FULCRA_RECOVERY_SETTLE_MS ?? 90_000);
 const LIVE_STATUSES = new Set(["Working now", "Starting conversation"]);

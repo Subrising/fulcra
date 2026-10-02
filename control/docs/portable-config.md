@@ -4,17 +4,17 @@ The trusted host supplies `ORCA_HOME`, or supplies `PASEO_HOME` and uses its `co
 
 From the built controller package run `node dist/tools/init-config.mjs` with that environment. The host can instead import `firstRun` from `dist/src/config.mjs`. Edit the single `config.json` and restart the controller and plugin together after changing identity or routing settings.
 
-| Setting | Type and default |
-| --- | --- |
-| `version` | Exactly `2` |
-| `daemon.url` | WebSocket URL or `null`; default `null`. The trusted host must supply its endpoint; no fixed port. |
-| `authority.companyId`, `authority.programmeId` | Fresh UUIDs generated on first run |
-| `authority.issueApi` | HTTP(S) base URL or `null`; null uses the private local `tasks.json` catalog |
-| `providers` | `claude: "claude"`, `codex: "codex"`; provider-qualified selections supported, existing provider policy still applies |
-| `localHost` | `{name: "This Mac", serverId: null}`; host identity is explicitly configured/discovered by the host |
-| `hosts` | Zero to 64 remote `{name, serverId, sshTarget?}` records; default `[]`. Names and non-null server IDs must be unique, including the local host. |
-| `defaults` | Existing optional `thinkingOptionId`, `modes`, `ask`, `models` settings; default `{}`. Provider policy validation remains in `provider-mode.mjs`. |
-| `artifacts` | UUID-keyed arrays of relative artifact paths; default `{}` |
+| Setting                                        | Type and default                                                                                                                                  |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                                      | Exactly `2`                                                                                                                                       |
+| `daemon.url`                                   | WebSocket URL or `null`; default `null`. The trusted host must supply its endpoint; no fixed port.                                                |
+| `authority.companyId`, `authority.programmeId` | Fresh UUIDs generated on first run                                                                                                                |
+| `authority.issueApi`                           | HTTP(S) base URL or `null`; null uses the private local `tasks.json` catalog                                                                      |
+| `providers`                                    | `claude: "claude"`, `codex: "codex"`; provider-qualified selections supported, existing provider policy still applies                             |
+| `localHost`                                    | `{name: "This Mac", serverId: null}`; host identity is explicitly configured/discovered by the host                                               |
+| `hosts`                                        | Zero to 64 remote `{name, serverId, sshTarget?}` records; default `[]`. Names and non-null server IDs must be unique, including the local host.   |
+| `defaults`                                     | Existing optional `thinkingOptionId`, `modes`, `ask`, `models` settings; default `{}`. Provider policy validation remains in `provider-mode.mjs`. |
+| `artifacts`                                    | UUID-keyed arrays of relative artifact paths; default `{}`                                                                                        |
 
 Objects reject unknown fields. `all` and `unknown` are reserved host names. URL credentials and URL fragments are rejected. SSH targets are configuration metadata; the portable controller refuses remote execution because the legacy remote transport is outside v0.2.
 

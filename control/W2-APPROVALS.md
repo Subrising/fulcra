@@ -17,7 +17,7 @@ fact to the trusted permission hook. Old hosts safely retain the old scope.
    operations and credential-returning CLI/environment reads. Reason: these can
    expose or change private authentication data.
 2. Destructive shared-branch git: forced/deleting/mirroring pushes or history
-   rewrite/delete operations targeting main, master, release/* or integration.
+   rewrite/delete operations targeting main, master, release/\* or integration.
    Local history changes inspect the current branch. An unresolved destructive
    destination also escalates; an explicit task-branch destination does not.
    Reason: these can rewrite or delete other people's work.

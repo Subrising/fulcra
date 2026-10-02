@@ -1,12 +1,19 @@
 // Execute the shared validator on the supplied native JS engine, not just its compiler.
-import fs from 'node:fs';
-import path from 'node:path';
-import {createRequire} from 'node:module';
-import {execFileSync} from 'node:child_process';
-const require=createRequire(import.meta.url),{build}=require('esbuild');
-const engine=process.argv[2];if(!engine||!path.isAbsolute(engine))throw Error('Supply the native Hermes executable');
-const root=import.meta.dirname,output=path.join(root,'runtime/work-messages-hermes.js');fs.mkdirSync(path.dirname(output),{recursive:true});
-await build({stdin:{resolveDir:root,contents:`
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
+const require = createRequire(import.meta.url),
+  { build } = require("esbuild");
+const engine = process.argv[2];
+if (!engine || !path.isAbsolute(engine)) throw Error("Supply the native Hermes executable");
+const root = import.meta.dirname,
+  output = path.join(root, "runtime/work-messages-hermes.js");
+fs.mkdirSync(path.dirname(output), { recursive: true });
+await build({
+  stdin: {
+    resolveDir: root,
+    contents: `
  import {validateMessages,projectMessages} from './shared/work-messages.mjs';
  const ok=(v,n)=>{if(!v)throw Error(n);};
  const row=(seq,type,text)=>({seqStart:seq,item:{type,text}});
@@ -16,5 +23,11 @@ await build({stdin:{resolveDir:root,contents:`
  const valid={id:'1',role:'agent',text:'Report',truncated:false};
  for(const messages of [[{...valid,text:String.fromCharCode(0xd800)}],[valid,valid],[{...valid,role:'thinking'}],[{...valid,text:'x'.repeat(2001)}]]){let refused=false;try{validateMessages(messages);}catch{refused=true;}ok(refused,'Malformed excerpt accepted');}
  print('PASS native Hermes message projection, validation and Unicode bounds');
- `},bundle:true,platform:'neutral',format:'iife',outfile:output});
-process.stdout.write(execFileSync(engine,[output],{encoding:'utf8',timeout:10000}));
+ `,
+  },
+  bundle: true,
+  platform: "neutral",
+  format: "iife",
+  outfile: output,
+});
+process.stdout.write(execFileSync(engine, [output], { encoding: "utf8", timeout: 10000 }));

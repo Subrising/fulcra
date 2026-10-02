@@ -10,13 +10,23 @@ export interface NativeScope {
   identity: (string | null)[];
   lastUserAt: string | null;
 }
-export async function readOnlyNativeScope(paseo: PaseoApi, row: { id: string; task: string }): Promise<NativeScope> {
+export async function readOnlyNativeScope(
+  paseo: PaseoApi,
+  row: { id: string; task: string },
+): Promise<NativeScope> {
   const refreshed = await paseo.agents.ref(row.id).refresh();
   const agent = refreshed?.agent;
   const task = agent?.labels?.task;
-  if (!agent || agent.id !== row.id || (typeof task === "string" && task !== row.task)) throw new Error("Native activity identity unavailable");
+  if (!agent || agent.id !== row.id || (typeof task === "string" && task !== row.task))
+    throw new Error("Native activity identity unavailable");
   return {
-    identity: [agent.id, agent.provider ?? null, agent.createdAt ?? null, agent.persistence?.sessionId ?? null, agent.runtimeInstanceId ?? null],
+    identity: [
+      agent.id,
+      agent.provider ?? null,
+      agent.createdAt ?? null,
+      agent.persistence?.sessionId ?? null,
+      agent.runtimeInstanceId ?? null,
+    ],
     lastUserAt: agent.lastUserMessageAt ?? null,
   };
 }

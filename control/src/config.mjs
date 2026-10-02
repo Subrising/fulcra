@@ -1,1 +1,1 @@
-export * from '../orca-organization/server/config.mjs';
+export * from "../orca-organization/server/config.mjs";

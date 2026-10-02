@@ -9,14 +9,14 @@ squash, no fast-forward.
 
 ## 1. What was merged, in the reviewer's order
 
-| # | Change | Branch | SHA | Merge commit | Conflicts |
-|---|---|---|---|---|---|
-| 1 | C — seat survival across restart | `design/seat-survival-restart` | `07c840349` | `3319932f3` | clean |
-| 2 | A — controller default model | `fix/controller-default-model` | `8c2ff2d0b` | `70508aa57` | clean |
-| 3 | D — busy prime queue delivery | `design/prime-queue-delivery` | `c4fb7868b` | `1772cd5a1` | clean |
-| 4 | B — seating defaults | `design/seating-defaults` | `8e2815a7a` | `f839bd623` | **3 hunks + 1 add/add** |
-| 5 | grants — routine grant capacity & verification | `fix/routine-grant-capacity-and-verification` | `f3494fa6e` | `0f2e2d269` | clean |
-| — | R1 comment reword | — | — | `e8f6d49c2` | its own commit |
+| #   | Change                                         | Branch                                        | SHA         | Merge commit | Conflicts               |
+| --- | ---------------------------------------------- | --------------------------------------------- | ----------- | ------------ | ----------------------- |
+| 1   | C — seat survival across restart               | `design/seat-survival-restart`                | `07c840349` | `3319932f3`  | clean                   |
+| 2   | A — controller default model                   | `fix/controller-default-model`                | `8c2ff2d0b` | `70508aa57`  | clean                   |
+| 3   | D — busy prime queue delivery                  | `design/prime-queue-delivery`                 | `c4fb7868b` | `1772cd5a1`  | clean                   |
+| 4   | B — seating defaults                           | `design/seating-defaults`                     | `8e2815a7a` | `f839bd623`  | **3 hunks + 1 add/add** |
+| 5   | grants — routine grant capacity & verification | `fix/routine-grant-capacity-and-verification` | `f3494fa6e` | `0f2e2d269`  | clean                   |
+| —   | R1 comment reword                              | —                                             | —           | `e8f6d49c2`  | its own commit          |
 
 All five verified present on `origin` after `git fetch`, and all five verified to share base `d956718f`
 (`git merge-base --is-ancestor d956718f <sha>` → yes for each).
@@ -32,9 +32,9 @@ Every hunk mechanical. None needed a semantic decision.
 **Hunk 1 — `role-sessions.mjs` imports.** Union:
 
 ```js
-import fs from 'node:fs';
-import path from 'node:path';
-import { uuid, RecipientBusy } from './authority.mjs';
+import fs from "node:fs";
+import path from "node:path";
+import { uuid, RecipientBusy } from "./authority.mjs";
 ```
 
 **Hunk 2 — `role-channels.mjs` constants.** Took B's `DEFAULT_CHANNEL_MESSAGES = 8` /
@@ -60,7 +60,7 @@ import { uuid, RecipientBusy } from './authority.mjs';
 ## 3. R1, as its own commit (`e8f6d49c2`)
 
 C's `C1: nothing calls reestablish automatically` text-scans every non-test source for `/reestablish/i` and
-allows exactly three files. B's comment explaining why restoring a seat is *not* done in `bindings.mjs`
+allows exactly three files. B's comment explaining why restoring a seat is _not_ done in `bindings.mjs`
 contained the token `boot-reestablishment`, so the file matched.
 
 Measured, on the merged tree, before and after:
@@ -99,11 +99,11 @@ produces no output.
 node --experimental-test-module-mocks --test src/control/*.test.mjs src/*.test.mjs
 ```
 
-| Tree | Tests | Pass | Fail |
-|---|---|---|---|
-| base `d956718f` | 435 | 431 | **4** |
+| Tree                        | Tests   | Pass    | Fail  |
+| --------------------------- | ------- | ------- | ----- |
+| base `d956718f`             | 435     | 431     | **4** |
 | **integration `e8f6d49c2`** | **524** | **520** | **4** |
-| delta | +89 | +89 | **0** |
+| delta                       | +89     | +89     | **0** |
 
 **The four failing names are identical on both trees.** Eighty-nine tests added, eighty-nine passing, no new
 failure.
@@ -111,17 +111,17 @@ failure.
 ### Supplementary — book suites
 
 Not in the documented globs, but the reviewers ran them, so: `src/book/*.test.mjs` →
-**114 tests, 114 pass, 0 fail** on *both* base and integration.
+**114 tests, 114 pass, 0 fail** on _both_ base and integration.
 
 ### Per-file (the protocol the prime set), non-green files only
 
 Identical on both trees — no file is non-green on integration that was green at base:
 
-| File | Base | Integration |
-|---|---|---|
-| `mcp-refresh-fence.test.mjs` | 0/1 | 0/1 |
-| `native-memory-route.test.mjs` | 1/3 | 1/3 |
-| `session-config.test.mjs` | 9/10 | 9/10 |
+| File                           | Base | Integration |
+| ------------------------------ | ---- | ----------- |
+| `mcp-refresh-fence.test.mjs`   | 0/1  | 0/1         |
+| `native-memory-route.test.mjs` | 1/3  | 1/3         |
+| `session-config.test.mjs`      | 9/10 | 9/10        |
 
 I ran per-file as well as aggregated because the first review recorded a spurious extra failure
 (`memory.test.mjs`) that appears only in a single-process aggregated run. It did not recur here, in either
@@ -130,7 +130,7 @@ tree, in either mode.
 ### Not run
 
 **`src/control/mcp-refresh-fence.test.mjs` (1 test) was NOT RUN.** It requires `ORCA_MCP_TEST_NATIVE`
-pointing at a *pristine* compiled server dist. I searched my cwd (`find . -maxdepth 6 -type d -name dist`)
+pointing at a _pristine_ compiled server dist. I searched my cwd (`find . -maxdepth 6 -type d -name dist`)
 and there is none, so per instruction I did not set the variable and am listing the file as not run rather
 than reporting its failure as a result. It fails identically at base for the same environmental reason.
 

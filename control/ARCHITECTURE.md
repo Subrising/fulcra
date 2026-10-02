@@ -10,31 +10,31 @@ Start with one supervisor and two workers. Grow toward two or three independentl
 
 ## Requirements map
 
-| ID | Foundation requirement | Evidence required for acceptance |
-|---|---|---|
-| F1 | Claude, Codex and OpenClaw communicate in both directions; same-family and cross-Mac routes also work | Recipient acknowledgment plus a task-specific action, correlated with the originating message |
-| F2 | Persistent independent sessions | Same identity/context can resume; supervisor interruption does not destroy workers or assign a second owner |
-| F3 | Outcome ownership | One accountable owner per task; explicit scope, dependencies, acceptance criteria and next action |
-| F4 | Event-driven continuation | Completion/help/permission events reach a handler and start the appropriate action without the owner chasing |
-| F5 | Distinct execution states | Queued, delivered, consumed, started, waiting, interrupted, produced, accepted and live-verified are separate facts |
-| F6 | Routine permissions | Exact prompt identity, authority check, response and resumed work; two different prompts both handled; repeats do not repeat actions |
-| F7 | Human coexistence | Human-owned observation, delegated control and explicit takeover/handback; human takeover fences agent writes |
-| F8 | Non-Git work | Produce, revise, reopen and inspect a useful editable artifact in a plain directory |
-| F9 | Continuity | Reconnect, process restart and supervisor handoff retain responsibility and reconcile uncertain delivery without replaying completed work |
-| F10 | Cost discipline | Admission follows actual headroom; runtime waiting is cheap; usage provenance and measurement gaps are visible |
-| F11 | One operational story | Automation and UI derive task status from the same accepted records and session observations |
-| F12 | Portable interfaces | Changing Discord/app/CLI entry point preserves task identity, decisions and control ownership |
+| ID  | Foundation requirement                                                                                | Evidence required for acceptance                                                                                                          |
+| --- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | Claude, Codex and OpenClaw communicate in both directions; same-family and cross-Mac routes also work | Recipient acknowledgment plus a task-specific action, correlated with the originating message                                             |
+| F2  | Persistent independent sessions                                                                       | Same identity/context can resume; supervisor interruption does not destroy workers or assign a second owner                               |
+| F3  | Outcome ownership                                                                                     | One accountable owner per task; explicit scope, dependencies, acceptance criteria and next action                                         |
+| F4  | Event-driven continuation                                                                             | Completion/help/permission events reach a handler and start the appropriate action without the owner chasing                              |
+| F5  | Distinct execution states                                                                             | Queued, delivered, consumed, started, waiting, interrupted, produced, accepted and live-verified are separate facts                       |
+| F6  | Routine permissions                                                                                   | Exact prompt identity, authority check, response and resumed work; two different prompts both handled; repeats do not repeat actions      |
+| F7  | Human coexistence                                                                                     | Human-owned observation, delegated control and explicit takeover/handback; human takeover fences agent writes                             |
+| F8  | Non-Git work                                                                                          | Produce, revise, reopen and inspect a useful editable artifact in a plain directory                                                       |
+| F9  | Continuity                                                                                            | Reconnect, process restart and supervisor handoff retain responsibility and reconcile uncertain delivery without replaying completed work |
+| F10 | Cost discipline                                                                                       | Admission follows actual headroom; runtime waiting is cheap; usage provenance and measurement gaps are visible                            |
+| F11 | One operational story                                                                                 | Automation and UI derive task status from the same accepted records and session observations                                              |
+| F12 | Portable interfaces                                                                                   | Changing Discord/app/CLI entry point preserves task identity, decisions and control ownership                                             |
 
-| ID | Human and work-discipline requirement | Practical implementation contract |
-|---|---|---|
-| H1 | Understand before consequential action | Show current situation, alternatives, consequences, uncertainty, recommendation and decision deadline |
-| H2 | Execute / decide / understand are distinct | Three explicit fields on a workstream; an informational brief need not create an approval gate |
-| H3 | Proportionate ADW | Understand → alternatives → choose → produce → review → correct/simplify → deliver → verify → retain learning |
-| H4 | Inspectable work | Outcome, dependency, owner, model, host, confirmed state/time, blocker, next action, usage, output and evidence links |
-| H5 | Trace decisions into reality | Reviewed definition → exact implementation/artifact → deployment when applicable → observed behavior, with mismatches visible |
-| H6 | Develop judgment | Optional the owner-first judgment on selected decisions, sampled delegated decisions, and later outcome review |
-| H7 | Appropriate domain checks | Software behavior; document accuracy/usability/persistence; playable media with audio checks; decision uncertainty and outcomes |
-| H8 | Respect existing responsibility | Programme holds, repair ownership, accepted artifacts and private-data boundaries persist across interfaces |
+| ID  | Human and work-discipline requirement      | Practical implementation contract                                                                                               |
+| --- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| H1  | Understand before consequential action     | Show current situation, alternatives, consequences, uncertainty, recommendation and decision deadline                           |
+| H2  | Execute / decide / understand are distinct | Three explicit fields on a workstream; an informational brief need not create an approval gate                                  |
+| H3  | Proportionate ADW                          | Understand → alternatives → choose → produce → review → correct/simplify → deliver → verify → retain learning                   |
+| H4  | Inspectable work                           | Outcome, dependency, owner, model, host, confirmed state/time, blocker, next action, usage, output and evidence links           |
+| H5  | Trace decisions into reality               | Reviewed definition → exact implementation/artifact → deployment when applicable → observed behavior, with mismatches visible   |
+| H6  | Develop judgment                           | Optional the owner-first judgment on selected decisions, sampled delegated decisions, and later outcome review                  |
+| H7  | Appropriate domain checks                  | Software behavior; document accuracy/usability/persistence; playable media with audio checks; decision uncertainty and outcomes |
+| H8  | Respect existing responsibility            | Programme holds, repair ownership, accepted artifacts and private-data boundaries persist across interfaces                     |
 
 The later frontier backlog is preserved separately: portable supervisor; leadership council; shadow preference delegate; parallel futures; portfolio proposals; workflow learning; temporary team sizing; cross-project memory; synthetic federation; active preference learning. These are experiments after a functioning foundation, not ten concurrently authorized projects.
 
@@ -86,12 +86,12 @@ The existing OpenClaw programme owner has now confirmed the retained responsibil
 
 ## Architecture choices
 
-| Option | Composition and responsibility | Strength | Main unknown / switch trigger |
-|---|---|---|---|
-| A — recommended first trial | Paseo owns enrolled session lifecycle and conversation UI; existing task authority owns outcomes; a bounded event integration covers only proven gaps; OpenClaw is a peer and entry point | Reuses a coherent multi-provider product with non-Git directories, remote operation and permission APIs | Standalone-session wake, human enrollment/takeover, and reconnect recovery must pass without recreating a controller |
-| B — first alternative | AI Maestro owns discovery, AMP transport and its existing session/team view; existing provider controls execute; one chosen task store owns workflow | Stronger fit when already-running heterogeneous terminals across machines are non-negotiable | Provider-specific wake/approval behavior and exclusive control must pass; no assumption that pane-visible text was consumed |
-| C — second alternative | Native Codex App Server and Claude native/ACP interfaces; reuse existing OpenClaw routes; minimal correlation/ownership integration | Preserves native sessions and minimizes migration if current integrations already do enough | More integration work and less unified UI; native events alone do not schedule a cross-family supervisor |
-| D — visual-product challenger | Kepler or AO owns managed tasks and their view, only if adequate external-session control APIs are demonstrated | Rich human inspection; both have evidence of some non-Git support | No verified general API for the required independent external-session lifecycle; do a bounded API check, not a new platform build |
+| Option                        | Composition and responsibility                                                                                                                                                            | Strength                                                                                                | Main unknown / switch trigger                                                                                                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| A — recommended first trial   | Paseo owns enrolled session lifecycle and conversation UI; existing task authority owns outcomes; a bounded event integration covers only proven gaps; OpenClaw is a peer and entry point | Reuses a coherent multi-provider product with non-Git directories, remote operation and permission APIs | Standalone-session wake, human enrollment/takeover, and reconnect recovery must pass without recreating a controller              |
+| B — first alternative         | AI Maestro owns discovery, AMP transport and its existing session/team view; existing provider controls execute; one chosen task store owns workflow                                      | Stronger fit when already-running heterogeneous terminals across machines are non-negotiable            | Provider-specific wake/approval behavior and exclusive control must pass; no assumption that pane-visible text was consumed       |
+| C — second alternative        | Native Codex App Server and Claude native/ACP interfaces; reuse existing OpenClaw routes; minimal correlation/ownership integration                                                       | Preserves native sessions and minimizes migration if current integrations already do enough             | More integration work and less unified UI; native events alone do not schedule a cross-family supervisor                          |
+| D — visual-product challenger | Kepler or AO owns managed tasks and their view, only if adequate external-session control APIs are demonstrated                                                                           | Rich human inspection; both have evidence of some non-Git support                                       | No verified general API for the required independent external-session lifecycle; do a bounded API check, not a new platform build |
 
 The recommendation is qualitative, using hard requirements rather than a cosmetic weighted score. A candidate that cannot handle two distinct permissions or honor takeover fails regardless of its UI. A requires the fewest hypothesized components for **new enrolled sessions**. B may win when preserving existing arbitrary terminal sessions is the primary constraint. C may win if the existing owner's response shows the remaining integration is already small. D stays a real challenger, not a dismissed category.
 
@@ -103,12 +103,12 @@ Prefer creating independent top-level sessions through a supported manager/API e
 
 ### What to reuse, retain, replace and avoid
 
-| Treatment | Scope |
-|---|---|
-| Reuse | Existing legitimate Claude/Codex authentication contexts, supported native resume handles, accepted document/video outputs as comparators, existing task authority if suitable, current host connections |
-| Retain under current owner | Bridge/continuity and usage repair, original Claude workers/reviewers, existing worktrees, unresolved spreadsheet checkpoint, Radius holds |
-| Replace only after proof and owner agreement | A demonstrated brittle terminal-control or wake function that a selected product actually handles better |
-| Avoid building now | Generic agent framework, new terminal renderer, credential broker, second writable board, universal transcript warehouse, polling-model fleet, broad memory graph, custom diagram engine |
+| Treatment                                    | Scope                                                                                                                                                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reuse                                        | Existing legitimate Claude/Codex authentication contexts, supported native resume handles, accepted document/video outputs as comparators, existing task authority if suitable, current host connections |
+| Retain under current owner                   | Bridge/continuity and usage repair, original Claude workers/reviewers, existing worktrees, unresolved spreadsheet checkpoint, Radius holds                                                               |
+| Replace only after proof and owner agreement | A demonstrated brittle terminal-control or wake function that a selected product actually handles better                                                                                                 |
+| Avoid building now                           | Generic agent framework, new terminal renderer, credential broker, second writable board, universal transcript warehouse, polling-model fleet, broad memory graph, custom diagram engine                 |
 
 ## Leadership view and decision-to-result chain
 
@@ -135,14 +135,14 @@ The traceability experiment binds a decision ID and reviewed definition digest t
 
 ## Phased path
 
-| Phase | Deliverable and exit condition |
-|---|---|
-| 0 — this task | Source-backed comparison, requirements, responsibility boundaries and finite proof contract; consult existing owners without restarting work |
-| 1 — working communication | One foundation, independent sessions, non-Git output/revision, permissions, takeover, pause/reconnect; then tri-party and second-host evidence |
-| 2 — human visibility | Existing UI plus only necessary projection of the authoritative task/decision record; every state links to a recent observation |
-| 3 — real ADW work | One software task and one substantive non-code task delivered and independently accepted where warranted; quantify interventions and overhead |
+| Phase                                    | Deliverable and exit condition                                                                                                                           |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 — this task                            | Source-backed comparison, requirements, responsibility boundaries and finite proof contract; consult existing owners without restarting work             |
+| 1 — working communication                | One foundation, independent sessions, non-Git output/revision, permissions, takeover, pause/reconnect; then tri-party and second-host evidence           |
+| 2 — human visibility                     | Existing UI plus only necessary projection of the authoritative task/decision record; every state links to a recent observation                          |
+| 3 — real ADW work                        | One software task and one substantive non-code task delivered and independently accepted where warranted; quantify interventions and overhead            |
 | 4 — architecture/deployment traceability | Evaluate Archify and Radius separately, then prove a reviewed change links through deployment to observed behavior in an authorized isolated environment |
-| 5 — leadership and learning | Trial selected decision packets; sample decisions and outcomes; introduce retrieval-based shadow preferences only after enough examples exist |
-| 6 — scale deliberately | Compare a small effective team with more concurrent sessions; expand only if verified throughput improves relative to cost and the owner attention |
+| 5 — leadership and learning              | Trial selected decision packets; sample decisions and outcomes; introduce retrieval-based shadow preferences only after enough examples exist            |
+| 6 — scale deliberately                   | Compare a small effective team with more concurrent sessions; expand only if verified throughput improves relative to cost and the owner attention       |
 
 Do not run all phases concurrently. Maintain the frontier experiments as hypotheses with fixed budgets and common evaluation criteria. Preference agreement, recommendation quality and eventual outcomes must be measured separately.

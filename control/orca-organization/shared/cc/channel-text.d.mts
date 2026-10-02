@@ -1,5 +1,10 @@
 export declare const VIA_NAME: Readonly<Record<string, string>>;
-type Choice = { by: string; proven?: boolean; via: string; at: string };
+interface Choice {
+  by: string;
+  proven?: boolean;
+  via: string;
+  at: string;
+}
 export declare function proven(choice: Choice | null | undefined): boolean;
 export declare function answerSummary(choice: Choice, optionTitle?: string | null): string;
 export declare function alreadyAnswered(choice: Choice): string;

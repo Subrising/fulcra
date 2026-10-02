@@ -1,5 +1,22 @@
 // Types for refs.mjs, the one implementation of CONTRACTS v1.9 §2.1, §1a and §3.2 #9.
-export type RefKind = "project" | "task" | "session" | "seat" | "turn" | "repo" | "commit" | "pr" | "issue" | "file" | "decision" | "brief" | "env" | "deploy" | "promotion" | "archmap" | "outcome";
+export type RefKind =
+  | "project"
+  | "task"
+  | "session"
+  | "seat"
+  | "turn"
+  | "repo"
+  | "commit"
+  | "pr"
+  | "issue"
+  | "file"
+  | "decision"
+  | "brief"
+  | "env"
+  | "deploy"
+  | "promotion"
+  | "archmap"
+  | "outcome";
 export type ParsedRef =
   | { kind: "turn"; sessionId: string; turnId: string }
   | { kind: "repo"; repoKey: string }
@@ -10,7 +27,18 @@ export type ParsedRef =
   | { kind: "brief"; projectId: string; revision: number }
   | { kind: "archmap"; repoKey: string; sha: string; mapName: string }
   | { kind: "seat"; seat: string }
-  | { kind: "project" | "task" | "session" | "decision" | "env" | "deploy" | "promotion" | "outcome"; id: string };
+  | {
+      kind:
+        | "project"
+        | "task"
+        | "session"
+        | "decision"
+        | "env"
+        | "deploy"
+        | "promotion"
+        | "outcome";
+      id: string;
+    };
 export declare const REF_PATTERNS: Readonly<Record<RefKind, RegExp>>;
 export declare const REF_KINDS: readonly RefKind[];
 export declare const REF_MAX: number;

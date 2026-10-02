@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
-const controller = path.resolve(process.argv[2] ?? process.env.FULCRA_CONTROL_ROOT ?? path.join(root, "control"));
+const controller = path.resolve(
+  process.argv[2] ?? process.env.FULCRA_CONTROL_ROOT ?? path.join(root, "control"),
+);
 const run = (command, args, cwd = root, env = {}) =>
   execFileSync(command, args, {
     cwd,
@@ -15,9 +17,12 @@ run(process.execPath, ["scripts/build-command-centre.mjs", controller]);
 const desktop = path.join(root, "packages/desktop");
 if (process.env.FULCRA_WEB_OUTPUT) {
   run("npm", ["run", "build:app-deps"]);
-  run(path.join(root, "node_modules/.bin/expo"),
+  run(
+    path.join(root, "node_modules/.bin/expo"),
     ["export", "--platform", "web", "--output-dir", path.resolve(process.env.FULCRA_WEB_OUTPUT)],
-    path.join(root, "packages/app"), { PASEO_WEB_PLATFORM: "electron" });
+    path.join(root, "packages/app"),
+    { PASEO_WEB_PLATFORM: "electron" },
+  );
 } else {
   run("npm", ["run", "build:app-dist"], desktop);
 }
@@ -37,6 +42,10 @@ run(
   ],
   desktop,
   process.env.FULCRA_BUILDER_TMP
-    ? { TMPDIR: process.env.FULCRA_BUILDER_TMP, TMP: process.env.FULCRA_BUILDER_TMP, TEMP: process.env.FULCRA_BUILDER_TMP }
+    ? {
+        TMPDIR: process.env.FULCRA_BUILDER_TMP,
+        TMP: process.env.FULCRA_BUILDER_TMP,
+        TEMP: process.env.FULCRA_BUILDER_TMP,
+      }
     : {},
 );
