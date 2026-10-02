@@ -69,7 +69,7 @@ export interface DesktopRuntimeConfig {
   daemonLogPath?: string;
   /** Initial manageBuiltInDaemon setting. Defaults to false. */
   manageBuiltInDaemon?: boolean;
-  /** Daemon listen address reported by desktop_daemon_status. Defaults to 127.0.0.1:6767. */
+  /** Daemon listen address reported by desktop_daemon_status. Defaults to the isolated worker. */
   daemonListen?: string;
   /** Keep start_desktop_daemon pending to hold the desktop startup blocker open. */
   hangDaemonStart?: boolean;
@@ -152,7 +152,7 @@ export async function installDesktopRuntime(
         return {
           serverId: cfg.serverId,
           status: daemonRunning ? "running" : "stopped",
-          listen: cfg.daemonListen ?? "127.0.0.1:6767",
+          listen: cfg.daemonListen ?? new URL(cfg.fixtureUrl).host,
           hostname: null,
           pid: currentPid,
           home: cfg.daemonHome ?? "",
