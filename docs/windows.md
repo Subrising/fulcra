@@ -1,93 +1,59 @@
-# Windows private preview
+# Windows source build — ALL WINDOWS STEPS UNTESTED
 
-Build from an isolated Windows x64 checkout with Node 22 and npm 11.12.1:
+No Windows machine or actual Windows build/device run was available for this documentation batch. The following commands come from the committed scripts and electron-builder targets; **none is claimed working or verified on Windows**. v0.2.0 has no Windows binary asset. The existing [OPEN `cc/win-channel-fix` branch](https://github.com/Subrising/fulcra/tree/cc/win-channel-fix) is not merged and is not a promise that the channel/lifecycle problem is fixed.
+
+Use a real Windows x64 machine with Node.js 24, npm 11.12.1 and the native build tools required by Electron dependencies. Do not package on macOS and infer Windows native/runtime acceptance. Windows ARM64 requires its own actual checks despite declared targets.
+
+## Source/dependency setup
+
+PowerShell, from your own checkout:
 
 ```powershell
-npm install --global npm@11.12.1
-node scripts/npm-retry.mjs ci
+git clone https://github.com/Subrising/fulcra.git
+cd fulcra
+git checkout v0.2.0
+npm ci
+npm --prefix control ci
+```
+
+The controller is not a root workspace: its lock is installed separately. Internal `@getpaseo/*` packages, `paseo.cmd` and runtime identities remain compatibility names. These are source commands, not a new Fulcra npm installer.
+
+## Declared NSIS packaging route
+
+The committed preview script requires native Windows x64, builds the desktop stack and invokes electron-builder with `--win nsis zip --x64 --publish never --config electron-builder.preview.yml`:
+
+```powershell
 node scripts/orca-preview-build.mjs windows
 ```
 
-The build produces an unsigned per-user NSIS installer and portable ZIP in
-`artifacts/orca-preview/windows`, with a SHA-256/source-commit manifest. The app
-identity is `dev.orca.workspace.desktop`, executable/product name **Fulcra**, with the
-Fulcra icon, dark initial window and `orca:` deep links. The inherited `paseo.cmd`
-helper and internal package names remain for compatibility with the upstream host.
+**UNTESTED.** The declared output is an unsigned per-user NSIS installer and portable ZIP under `artifacts/orca-preview/windows`. The preview configuration extends the normal builder configuration; NSIS is not a verified public download. The script runs its packaged smoke if a build is reached, but no such Windows result is supplied here. Do not bypass failures, substitute another platform's native packages or force the unresolved channel branch into this docs change.
 
-This target requires a native Windows x64 runner. Building on macOS can package
-native dependencies for the wrong OS and cannot run the Windows package smoke.
-Windows ARM64 is outside this preview target until it has a native smoke check.
-The existing packaged-app smoke launches the newly built executable using temporary
-state and validates the bundled desktop/daemon integration. This is separate from
-manual Windows installer, SmartScreen and real-agent acceptance.
+For a source-derived explicit target after building/staging the required server, Command Centre, app and desktop main:
 
-## Hosted build
-
-Use the manually dispatched **Fulcra private preview (build only)** workflow on the
-prepared Fulcra commit, selecting `windows` or `all`. Its Windows job uses the existing
-desktop build stack, publishes nothing and takes no signing secrets. Choose an
-Fulcra-owned private repository for private artifact access. No workflow was dispatched
-as part of preparing this target; the integrating parent owns that step.
-
-The `delivery` input chooses where the output is left. `artifacts` (the default)
-saves an Actions artifact for 14 days and uploads failed package smoke logs
-separately. `private-draft` runs the draft release delivery below instead, for when
-Actions artifact storage is unavailable; on that route the smoke logs stay in the job
-log, since the same storage quota blocks them too.
-
-Do not use the inherited Desktop Release/tag workflows for this preview. There is
-no Fulcra auto-update feed; update by installing a later reviewed preview manually.
-Unsigned Windows applications may show an unknown-publisher warning. Verify the
-provided hash and source before choosing to run a preview.
-
-### Draft release delivery
-
-When Actions artifact storage is unavailable, deliver an already-built preview to a
-private draft release instead:
-
-```bash
-GH_TOKEN=… node scripts/orca-preview-release.mjs windows --repo <owner>/<name>
-GH_TOKEN=… node scripts/orca-preview-release.mjs windows --repo <owner>/<name> --confirm
+```powershell
+npm run build:server:clean
+node scripts/build-command-centre.mjs ./control
+npm --prefix packages/desktop run build:app-dist
+npm --prefix packages/desktop run build:main
+cd packages/desktop
+npm exec -- electron-builder --config electron-builder.preview.yml --win nsis zip --x64 --publish never
 ```
 
-The first form only checks and prints what it would do. The `private-draft` delivery
-input runs the second form. The script takes `android` too.
+This alternate sequence is also **UNTESTED**, not a repair or a claim that the wrapper works on Windows. No signing identity or auto-update feed is provided. Keep source/dependency declarations intact and retain actual errors for a Windows owner to reproduce.
 
-It validates the manifest before touching any listed file or the network: the build
-must record `sourceDirty: false` and the matching target, and every entry must be a
-flat non-hidden basename with a valid SHA-256, a build-output extension, and no name
-resembling a key or credential. It then reads each file with `lstat`, rejecting
-symlinks, non-regular files, hard-linked files and empty or oversized ones, and
-hashes the exact bytes it uploads. It talks only to `api.github.com` and
-`uploads.github.com`, never following a redirect with the token attached, and it
-pages the release list so an uncertain lookup can never create a second draft. The
-repository must be private and the release a draft when checked before the run,
-before every upload and after the last one; each upload is verified by size, and by
-digest when GitHub returns one. It refuses a published tag and an existing asset name
-rather than deleting anything.
+## Actual compatibility CLI syntax
 
-The tag is not created and the files stay visible only to collaborators until a human
-publishes. The script never sets `draft: false` — but it cannot stop someone
-publishing the draft in the GitHub UI while it runs. The rechecks narrow that window;
-they do not close it. Publishing, tagging and signing stay manual decisions. This is
-a delivery route, not an approval — the acceptance limits above still apply.
+After a successful local CLI build, these are the committed executable/command names, **not Windows-tested output**:
 
-## Install and connect
+```powershell
+node packages/cli/bin/paseo --help
+node packages/cli/bin/paseo daemon status
+node packages/cli/bin/paseo ls
+node packages/cli/bin/paseo daemon start
+```
 
-Extract the portable ZIP into a writable folder and open `Fulcra.exe`, or run the
-NSIS installer and select a per-user location. The packaged desktop includes the
-host runtime; install and authenticate your chosen agent CLIs separately. Provider
-availability and Windows shell behavior still need a real Windows acceptance run.
+Run the CLI from the repository root. Starting its standalone daemon is an intentional local effect with its own configured home; it does not implicitly select the desktop-managed daemon. A built desktop includes `paseo.cmd` as its compatibility shim.
 
-Use **Add host** to connect to another host with its hostname, port, TLS choice and
-authentication. Use your own private network/VPN or TLS endpoint for remote access.
-No developer hostname is embedded by the preview build, and no hosted Fulcra service
-is included. Do not use another machine's `localhost` address.
+## Installation acceptance still needed
 
-Before distributing, record the installer/ZIP hash and test install, launch, dark
-mode, pairing with your own host, one real agent turn, reconnect, and uninstall on
-Windows. A packaging result alone does not prove these user flows.
-
-[Android preview](android.md) documents the phone build and its separate signing
-and device-acceptance requirements. Upstream ancestry and Apache-2.0 licensing are
-retained in this repository and its `LICENSE`.
+Only after building and verifying your own artifacts: install the NSIS package or extract the portable ZIP, launch Fulcra, pair a host you own, test a real intended agent workflow, reconnect, upgrade and uninstall. Unsigned apps may show an unknown-publisher warning; investigate it rather than disable system protections globally. Provider CLIs/authentication are installed separately. No developer hostname, signing certificate, paired-device grant, store link or Windows PASS is invented by these instructions.
