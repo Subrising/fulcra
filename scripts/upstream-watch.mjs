@@ -43,8 +43,8 @@ function latestRelease(repo) {
   return { tag: sha, version: sha.slice(0, 7), body: `Head of \`${branch}\`: ${msg}`, url: `https://github.com/${repo}/commit/${sha}`, head: true };
 }
 
-function alreadyHandled(branch, title) {
-  if (gitTry("ls-remote", "--exit-code", "--heads", ORIGIN, branch) !== null) return `branch ${branch} exists`;
+// sync/* branches are bot-owned: a leftover branch without a PR (e.g. PR creation was refused) is re-pushed, not skipped.
+function alreadyHandled(_branch, title) {
   const prs = ghTry("pr", "list", "--state", "all", "--search", `"${title}" in:title`, "--json", "number,title", "--jq", `[.[]|select(.title=="${title}")]|length`);
   if (prs && Number(prs) > 0) return `a PR titled "${title}" exists`;
   return null;
@@ -53,7 +53,7 @@ function alreadyHandled(branch, title) {
 const trim = (s, n = 3500) => (s.length > n ? `${s.slice(0, n)}\n\n_(truncated)_` : s || "_No changelog published._");
 
 function openPr({ branch, title, body, draft }) {
-  git("push", ORIGIN, branch);
+  git("push", "--force", ORIGIN, branch);
   const a = ["pr", "create", "--base", BASE, "--head", branch, "--title", title, "--body", body];
   if (draft) a.push("--draft");
   return gh(...a);
