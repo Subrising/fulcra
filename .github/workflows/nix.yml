@@ -116,14 +116,18 @@ jobs:
 
           # Names come from electron-builder config, which this fork renames.
           # Reading them keeps the assertions real without pinning upstream's.
-          product="$(node -p "require('./packages/desktop/package.json').productName")"
-          appId="$(node -p "
-            const fs = require('node:fs');
-            const yml = fs.readFileSync('packages/desktop/electron-builder.yml', 'utf8');
-            const m = yml.match(/^appId:\s*(\S+)/m);
-            if (!m) { throw new Error('electron-builder.yml has no appId'); }
-            m[1];
-          ")"
+          # package.json's productName is not what electron-builder names the bundle after.
+          builder_key() {
+            node -p "
+              const fs = require('node:fs');
+              const yml = fs.readFileSync('packages/desktop/electron-builder.yml', 'utf8');
+              const m = yml.match(/^$1:\s*(\S+)/m);
+              if (!m) { throw new Error('electron-builder.yml has no $1'); }
+              m[1];
+            "
+          }
+          product="$(builder_key productName)"
+          appId="$(builder_key appId)"
           echo "Expecting $product.app with bundle identifier $appId"
 
           app="result-desktop/Applications/$product.app"
