@@ -5,7 +5,14 @@
 const NAME = /^[a-z_]+$/;
 export function assertColumns(db, table, columns) {
   // Table names are literals from this source only; never interpolate a caller-supplied name here.
-  if (!NAME.test(table)) throw new Error('Invalid schema assertion target');
-  const actual = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name).join(',');
-  if (actual !== columns) throw new Error(`Unsupported ${table} schema; explicit migration required before control starts`);
+  if (!NAME.test(table)) throw new Error("Invalid schema assertion target");
+  const actual = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .map((row) => row.name)
+    .join(",");
+  if (actual !== columns)
+    throw new Error(
+      `Unsupported ${table} schema; explicit migration required before control starts`,
+    );
 }

@@ -99,8 +99,15 @@ test("P3: a closed live-instance descriptor cannot assert current runtime or per
 });
 
 test("U7 runtime reports the current permission mode ahead of saved config", () => {
-  const a: any = { provider: "claude", instanceId: "instance", lastUserMessageAt: null,
-    runtimeInfo: { sessionId: "native", model: "fixture" }, currentModeId: "auto", config: { modeId: "default" } };
+  // oxlint-disable-next-line typescript/no-explicit-any -- fixture is mutated with out-of-contract values below
+  const a: any = {
+    provider: "claude",
+    instanceId: "instance",
+    lastUserMessageAt: null,
+    runtimeInfo: { sessionId: "native", model: "fixture" },
+    currentModeId: "auto",
+    config: { modeId: "default" },
+  };
   expect(runtimeFacts(a)).toMatchObject({ status: "known", modeId: "auto" });
   a.currentModeId = "default";
   expect(runtimeFacts(a)).toMatchObject({ status: "known", modeId: "default" });

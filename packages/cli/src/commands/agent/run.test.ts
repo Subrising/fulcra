@@ -188,24 +188,20 @@ describe("explicit run cwd workspace precedence", () => {
         ],
         pageInfo: { nextCursor: null },
       }),
-      createWorkspace: vi
-        .fn()
-        .mockResolvedValue({
-          workspace: {
-            id: "requested-workspace",
-            name: "Requested",
-            workspaceDirectory: "/fixtures/requested",
-          },
-        }),
-      createAgent: vi
-        .fn()
-        .mockImplementation(async (input) => ({
-          id: "child-agent",
-          status: "running",
-          title: "Fixture",
-          provider: input.provider,
-          cwd: input.cwd,
-        })),
+      createWorkspace: vi.fn().mockResolvedValue({
+        workspace: {
+          id: "requested-workspace",
+          name: "Requested",
+          workspaceDirectory: "/fixtures/requested",
+        },
+      }),
+      createAgent: vi.fn().mockImplementation(async (input) => ({
+        id: "child-agent",
+        status: "running",
+        title: "Fixture",
+        provider: input.provider,
+        cwd: input.cwd,
+      })),
       close: vi.fn().mockResolvedValue(undefined),
     };
     connection.mockResolvedValue(client);

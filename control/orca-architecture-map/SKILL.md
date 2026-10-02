@@ -64,7 +64,7 @@ source.
 
 ## Keep the map current (the gate)
 
-Fulcra shows every significant change as a *Before* and *After* picture of the system, built
+Fulcra shows every significant change as a _Before_ and _After_ picture of the system, built
 from the map at the branch's starting point and the map at its tip. That picture is only true if
 you update the map in the same branch as the change. So before hand-off, on any branch:
 
@@ -75,11 +75,11 @@ node orca-architecture-map/validate.mjs <project root> --since <base branch>
 - **Significant change.** Your branch changes 10 or more files (map files not counted;
   `--threshold N` changes the number), or it changes any file a map cites as its source.
 - **Then you must update the map in this branch.** Otherwise the gate fails with
-  *"Map not updated"*. Draw what the change adds, removes or alters, and nothing else.
+  _"Map not updated"_. Draw what the change adds, removes or alters, and nothing else.
 - **Keep every existing id (rule 6).** Change a label, not an id. A part whose id changed shows
-  up as "removed" plus "added", and the gate warns: *"looks renamed"*.
+  up as "removed" plus "added", and the gate warns: _"looks renamed"_.
 - **Re-cite what you re-read.** Every cited source is re-hashed. If a source changed since the
-  map cited it, the gate says the map *"is out of date"* and names the file. Read it again, update
+  map cited it, the gate says the map _"is out of date"_ and names the file. Read it again, update
   the map, and write the new SHA-256.
 - **No change to the system's shape?** Some big changes don't alter it (a rename across files,
   tests only). Say so in one sentence on the map's "Bindings & limits" card. That updates the map

@@ -13,30 +13,60 @@ export const ROLE_LABEL = "fulcra.role";
 export const SUBAGENT_TOOLS = ["Task", "Agent"] as const;
 export const ORCHESTRATION_NOTE = [
   "Fulcra orchestration: you lead; workers do the work.",
-  "Start every implementation or review worker as its own session, never as an Agent-tool subagent: run `paseo run --title \"<what it does>\" \"<its brief>\"` from this session (or use your manager tools). Fulcra records you as its parent, gives it your task and project, and starts it with the implementation role's model and effort, so it shows under you in Sessions and Organisation on every Mac.",
+  'Start every implementation or review worker as its own session, never as an Agent-tool subagent: run `paseo run --title "<what it does>" "<its brief>"` from this session (or use your manager tools). Fulcra records you as its parent, gives it your task and project, and starts it with the implementation role\'s model and effort, so it shows under you in Sessions and Organisation on every Mac.',
   "Use a subagent only for a read-only digest (reading and summarising), never to change files or to review for acceptance.",
 ].join("\n");
 
-type Request = { config: { provider: string; systemPrompt?: string; providerOptions?: Record<string, unknown> } & Record<string, unknown>; labels?: Record<string, string> } & Record<string, unknown>;
+type Request = {
+  config: {
+    provider: string;
+    systemPrompt?: string;
+    providerOptions?: Record<string, unknown>;
+  } & Record<string, unknown>;
+  labels?: Record<string, string>;
+} & Record<string, unknown>;
 export function applyOrchestration<R extends Request>(request: R, guard: boolean): R {
   const role = request.labels?.[ROLE_LABEL];
   if (!role || !(LEAD_ROLES as readonly string[]).includes(role)) return request;
-  const prompt = typeof request.config.systemPrompt === "string" && request.config.systemPrompt ? request.config.systemPrompt : "";
-  const config: R["config"] = { ...request.config, systemPrompt: prompt.includes("Fulcra orchestration:") ? prompt : [prompt, ORCHESTRATION_NOTE].filter(Boolean).join("\n\n") };
+  const prompt =
+    typeof request.config.systemPrompt === "string" && request.config.systemPrompt
+      ? request.config.systemPrompt
+      : "";
+  const config: R["config"] = {
+    ...request.config,
+    systemPrompt: prompt.includes("Fulcra orchestration:")
+      ? prompt
+      : [prompt, ORCHESTRATION_NOTE].filter(Boolean).join("\n\n"),
+  };
   if (guard && request.config.provider === "claude") {
     const options = (request.config.providerOptions ?? {}) as { disallowedTools?: unknown };
-    const current = Array.isArray(options.disallowedTools) ? options.disallowedTools.filter((t): t is string => typeof t === "string") : [];
-    config.providerOptions = { ...options, disallowedTools: [...new Set([...current, ...SUBAGENT_TOOLS])] };
+    const current = Array.isArray(options.disallowedTools)
+      ? options.disallowedTools.filter((t): t is string => typeof t === "string")
+      : [];
+    config.providerOptions = {
+      ...options,
+      disallowedTools: [...new Set([...current, ...SUBAGENT_TOOLS])],
+    };
   }
   return { ...request, config };
 }
-export function orchestrationHook(readGuard: () => boolean = () => {
-  const c = loadConfig() as { home: string; defaults?: { roles?: unknown } };
-  return readRoleDefaults(c.home, (c.defaults?.roles ?? null) as any).orchestrationGuard;
-}) {
+export function orchestrationHook(
+  readGuard: () => boolean = () => {
+    const c = loadConfig() as { home: string; defaults?: { roles?: unknown } };
+    return readRoleDefaults(c.home, (c.defaults?.roles ?? null) as any).orchestrationGuard;
+  },
+) {
   return async ({ request }: { request: Request }) => {
     let guard = false;
-    try { guard = readGuard(); } catch { guard = false; }
-    try { return applyOrchestration(request, guard); } catch { return request; }
+    try {
+      guard = readGuard();
+    } catch {
+      guard = false;
+    }
+    try {
+      return applyOrchestration(request, guard);
+    } catch {
+      return request;
+    }
   };
 }

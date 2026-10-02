@@ -1,1 +1,7 @@
-{ "uuid": "{00000000-0000-4000-8000-000000002004}", "slug": "quiet", "workspace": { "slug": "team" }, "full_name": "team/quiet", "has_issues": false }
+{
+  "uuid": "{00000000-0000-4000-8000-000000002004}",
+  "slug": "quiet",
+  "workspace": { "slug": "team" },
+  "full_name": "team/quiet",
+  "has_issues": false
+}

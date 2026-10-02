@@ -341,7 +341,7 @@ try {
     const CC = path.join(mini.PH, "command-centre"),
       f = path.join(CC, "config.json"),
       cfg = JSON.parse(fs.readFileSync(f, "utf8"));
-    cfg.defaults = { ...(cfg.defaults ?? {}), modes: { claude: "auto", codex: "auto-review" } };
+    cfg.defaults = { ...cfg.defaults, modes: { claude: "auto", codex: "auto-review" } };
     const tmp = path.join(CC, `.config.json-${crypto.randomUUID()}`);
     fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
     fs.renameSync(tmp, f);

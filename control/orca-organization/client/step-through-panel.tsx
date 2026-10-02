@@ -8,7 +8,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function AgentStepThroughPanel(props: PluginAgentPanelProps) {
   const c = props.theme.colors;
-  return <ScrollView style={{ flex: 1, backgroundColor: c.surface0 }} contentContainerStyle={{ padding: 16, gap: 16 }}>
-    {UUID.test(props.agentId) && <StepThrough sessionId={props.agentId.toLowerCase()} theme={props.theme} layout={{ ...props.layout, compact: true }} host={props.host} />}
-  </ScrollView>;
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: c.surface0 }}
+      contentContainerStyle={{ padding: 16, gap: 16 }}
+    >
+      {UUID.test(props.agentId) && (
+        <StepThrough
+          sessionId={props.agentId.toLowerCase()}
+          theme={props.theme}
+          layout={{ ...props.layout, compact: true }}
+          host={props.host}
+        />
+      )}
+    </ScrollView>
+  );
 }

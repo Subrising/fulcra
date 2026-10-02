@@ -29,25 +29,33 @@ export const PRIME_SEAT = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
  * field from the controller reply instead of spreading it, so a new controller field cannot reach
  * the renderer by accident.
  */
-export const seatSchema = z.object({
-  role: z.enum(ROLES),
-  seat: z.string().min(1).max(64),
-  projectId: id.nullable(),
-  state: z.enum(["assigned", "vacant"]),
-  revision: z.number().int().nonnegative(),
-  task: id.nullable(),
-  sessionId: id.nullable(),
-  /** Enough to route a conversation and to fence a write. No working directory, no capability. */
-  session: z.object({ id, task: id, mode: z.string().max(32), generation: z.number().int().min(1) }).strict().nullable(),
-  note: note.nullable(),
-  at: stamp.nullable(),
-  membershipAt: stamp.nullable(),
-  sessionPresent: z.boolean(),
-  sessionGenerationChanged: z.boolean(),
-  sessionTaskMatches: z.boolean(),
-  /** Remote seats have no dispatch path; the reason is the controller's own words. */
-  dispatch: z.object({ host: z.string().max(32), supported: z.boolean(), reason: note.nullable() }).strict().nullable(),
-}).strict();
+export const seatSchema = z
+  .object({
+    role: z.enum(ROLES),
+    seat: z.string().min(1).max(64),
+    projectId: id.nullable(),
+    state: z.enum(["assigned", "vacant"]),
+    revision: z.number().int().nonnegative(),
+    task: id.nullable(),
+    sessionId: id.nullable(),
+    /** Enough to route a conversation and to fence a write. No working directory, no capability. */
+    session: z
+      .object({ id, task: id, mode: z.string().max(32), generation: z.number().int().min(1) })
+      .strict()
+      .nullable(),
+    note: note.nullable(),
+    at: stamp.nullable(),
+    membershipAt: stamp.nullable(),
+    sessionPresent: z.boolean(),
+    sessionGenerationChanged: z.boolean(),
+    sessionTaskMatches: z.boolean(),
+    /** Remote seats have no dispatch path; the reason is the controller's own words. */
+    dispatch: z
+      .object({ host: z.string().max(32), supported: z.boolean(), reason: note.nullable() })
+      .strict()
+      .nullable(),
+  })
+  .strict();
 export type Seat = z.infer<typeof seatSchema>;
 
 /**
@@ -57,65 +65,98 @@ export type Seat = z.infer<typeof seatSchema>;
  * project's tasks, and that is a different question from who owns them. Ownership is a separate
  * per-session controller read (`roles-ownership`) and is never inferred from this list.
  */
-export const projectSession = z.object({
-  sessionId: id,
-  taskId: id,
-  mode: z.string().max(32),
-  generation: z.number().int().min(1),
-}).strict();
+export const projectSession = z
+  .object({
+    sessionId: id,
+    taskId: id,
+    mode: z.string().max(32),
+    generation: z.number().int().min(1),
+  })
+  .strict();
 
 /** A thing the project needs, or something blocking it. Flattened from the controller's variants. */
-export const roleNeed = z.object({ kind: z.string().max(64), detail: note, taskId: id.nullable(), sessionId: id.nullable(), at: stamp.nullable() }).strict();
+export const roleNeed = z
+  .object({
+    kind: z.string().max(64),
+    detail: note,
+    taskId: id.nullable(),
+    sessionId: id.nullable(),
+    at: stamp.nullable(),
+  })
+  .strict();
 
-const membership = z.object({
-  known: z.boolean(), available: z.boolean(), partial: z.boolean(),
-  observedAt: stamp.nullable(), memberTaskCount: z.number().int().nonnegative(),
-  truncated: z.boolean(), note: note,
-}).strict();
+const membership = z
+  .object({
+    known: z.boolean(),
+    available: z.boolean(),
+    partial: z.boolean(),
+    observedAt: stamp.nullable(),
+    memberTaskCount: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    note: note,
+  })
+  .strict();
 
-const progress = z.object({
-  memberTasks: z.number().int().nonnegative(), recorded: z.number().int().nonnegative(),
-  unresolved: z.number().int().nonnegative(), sessions: z.number().int().nonnegative(),
-  truncated: z.boolean(), basis: note,
-}).strict();
+const progress = z
+  .object({
+    memberTasks: z.number().int().nonnegative(),
+    recorded: z.number().int().nonnegative(),
+    unresolved: z.number().int().nonnegative(),
+    sessions: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    basis: note,
+  })
+  .strict();
 
 /** Every seat the controller records, plus whether the read succeeded at all. */
 export const roleDirectoryRpc = defineContract({
   name: "organization.role-directory",
   input: z.object({}).strict(),
-  output: z.object({
-    observedAt: z.string().datetime(),
-    available: z.boolean(),
-    /** Present only when `available` is false; the controller's own refusal, never invented. */
-    unavailable: note.nullable(),
-    primes: z.array(seatSchema).max(64),
-    projectSeats: z.array(seatSchema).max(128),
-    programme: id.nullable(),
-    note: note,
-  }).strict(),
+  output: z
+    .object({
+      observedAt: z.string().datetime(),
+      available: z.boolean(),
+      /** Present only when `available` is false; the controller's own refusal, never invented. */
+      unavailable: note.nullable(),
+      primes: z.array(seatSchema).max(64),
+      projectSeats: z.array(seatSchema).max(128),
+      programme: id.nullable(),
+      note: note,
+    })
+    .strict(),
 });
 
 /** Clicking a project: its recorded orchestrator, the escalation address, and what it needs. */
 export const roleProjectRpc = defineContract({
   name: "organization.role-project",
   input: z.object({ projectId: id }).strict(),
-  output: z.object({
-    observedAt: z.string().datetime(),
-    available: z.boolean(),
-    unavailable: note.nullable(),
-    projectId: id,
-    /** Null when the project source could not confirm this project; not the same as no leader. */
-    summary: z.object({ id, name: z.string().max(160), description: z.string().max(2000).nullable(), status: z.string().max(64) }).strict().nullable(),
-    membership: membership.nullable(),
-    leader: seatSchema.nullable(),
-    primes: z.array(seatSchema).max(64),
-    progress: progress.nullable(),
-    needed: z.array(roleNeed).max(64),
-    blockers: z.array(roleNeed).max(64),
-    /** Sessions recorded on this project's member tasks. Membership, not ownership. */
-    sessions: z.array(projectSession).max(128),
-    note: note,
-  }).strict(),
+  output: z
+    .object({
+      observedAt: z.string().datetime(),
+      available: z.boolean(),
+      unavailable: note.nullable(),
+      projectId: id,
+      /** Null when the project source could not confirm this project; not the same as no leader. */
+      summary: z
+        .object({
+          id,
+          name: z.string().max(160),
+          description: z.string().max(2000).nullable(),
+          status: z.string().max(64),
+        })
+        .strict()
+        .nullable(),
+      membership: membership.nullable(),
+      leader: seatSchema.nullable(),
+      primes: z.array(seatSchema).max(64),
+      progress: progress.nullable(),
+      needed: z.array(roleNeed).max(64),
+      blockers: z.array(roleNeed).max(64),
+      /** Sessions recorded on this project's member tasks. Membership, not ownership. */
+      sessions: z.array(projectSession).max(128),
+      note: note,
+    })
+    .strict(),
 });
 
 /**
@@ -126,29 +167,41 @@ export const roleProjectRpc = defineContract({
 export const roleAssignRpc = defineContract({
   name: "organization.role-assign",
   input: z.discriminatedUnion("action", [
-    z.object({
-      action: z.literal("assign"), role: z.enum(ROLES), seat: z.string().min(1).max(64),
-      sessionId: id, expectedRevision: z.number().int().nonnegative(),
-      expectedSessionGeneration: z.number().int().min(1),
-      reason: z.string().min(12).max(2000),
-    }).strict(),
-    z.object({
-      action: z.literal("vacate"), role: z.enum(ROLES), seat: z.string().min(1).max(64),
-      expectedRevision: z.number().int().min(1), reason: z.string().min(12).max(2000),
-    }).strict(),
+    z
+      .object({
+        action: z.literal("assign"),
+        role: z.enum(ROLES),
+        seat: z.string().min(1).max(64),
+        sessionId: id,
+        expectedRevision: z.number().int().nonnegative(),
+        expectedSessionGeneration: z.number().int().min(1),
+        reason: z.string().min(12).max(2000),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("vacate"),
+        role: z.enum(ROLES),
+        seat: z.string().min(1).max(64),
+        expectedRevision: z.number().int().min(1),
+        reason: z.string().min(12).max(2000),
+      })
+      .strict(),
   ]),
-  output: z.object({
-    status: z.enum(["assigned", "replaced", "reaffirmed", "vacated", "error"]),
-    message: note,
-    observedAt: z.string().datetime(),
-    role: z.enum(ROLES).nullable(),
-    seat: z.string().max(64).nullable(),
-    revision: z.number().int().nonnegative().nullable(),
-    sessionId: id.nullable(),
-    previousSessionId: id.nullable(),
-    /** Always false. A seat records accountability; it never grants authority. */
-    grantsAuthority: z.literal(false),
-  }).strict(),
+  output: z
+    .object({
+      status: z.enum(["assigned", "replaced", "reaffirmed", "vacated", "error"]),
+      message: note,
+      observedAt: z.string().datetime(),
+      role: z.enum(ROLES).nullable(),
+      seat: z.string().max(64).nullable(),
+      revision: z.number().int().nonnegative().nullable(),
+      sessionId: id.nullable(),
+      previousSessionId: id.nullable(),
+      /** Always false. A seat records accountability; it never grants authority. */
+      grantsAuthority: z.literal(false),
+    })
+    .strict(),
 });
 
 /**
@@ -164,55 +217,63 @@ export const roleAssignRpc = defineContract({
  */
 export const projectRequestSessionRpc = defineContract({
   name: "organization.project-request-session",
-  input: z.object({
-    /** The seat asked to do the work. A project orchestrator seat is the project UUID. */
-    seat: id,
-    /** Seat revision actually observed, so a replaced or vacated seat cannot be spent. */
-    expectedRevision: z.number().int().min(1),
-    taskId: id,
-    provider: z.enum(["claude", "codex"]),
-    title: z.string().min(3).max(120),
-    reason: z.string().min(12).max(2000),
-  }).strict(),
-  output: z.object({
-    /**
-     * `requested` means a request row exists and the seat has been asked. `unavailable` means this
-     * controller does not expose seat requests — the state on the running controller today.
-     */
-    status: z.enum(["requested", "refused", "unavailable"]),
-    message: note,
-    observedAt: z.string().datetime(),
-    requestId: id.nullable(),
-    state: z.string().max(32).nullable(),
-    /** Always false: asking a seat for work grants the seat no authority over the result. */
-    grantsAuthority: z.literal(false),
-  }).strict(),
+  input: z
+    .object({
+      /** The seat asked to do the work. A project orchestrator seat is the project UUID. */
+      seat: id,
+      /** Seat revision actually observed, so a replaced or vacated seat cannot be spent. */
+      expectedRevision: z.number().int().min(1),
+      taskId: id,
+      provider: z.enum(["claude", "codex"]),
+      title: z.string().min(3).max(120),
+      reason: z.string().min(12).max(2000),
+    })
+    .strict(),
+  output: z
+    .object({
+      /**
+       * `requested` means a request row exists and the seat has been asked. `unavailable` means this
+       * controller does not expose seat requests — the state on the running controller today.
+       */
+      status: z.enum(["requested", "refused", "unavailable"]),
+      message: note,
+      observedAt: z.string().datetime(),
+      requestId: id.nullable(),
+      state: z.string().max(32).nullable(),
+      /** Always false: asking a seat for work grants the seat no authority over the result. */
+      grantsAuthority: z.literal(false),
+    })
+    .strict(),
 });
 
 /** One outstanding request published against a seat. */
-export const sessionRequest = z.object({
-  requestId: id,
-  seat: z.string().max(64),
-  seatRole: z.string().max(32).nullable(),
-  taskId: id.nullable(),
-  provider: z.string().max(32).nullable(),
-  title: z.string().max(160).nullable(),
-  state: z.string().max(32),
-  sessionId: id.nullable(),
-  at: stamp.nullable(),
-  detail: note.nullable(),
-}).strict();
+export const sessionRequest = z
+  .object({
+    requestId: id,
+    seat: z.string().max(64),
+    seatRole: z.string().max(32).nullable(),
+    taskId: id.nullable(),
+    provider: z.string().max(32).nullable(),
+    title: z.string().max(160).nullable(),
+    state: z.string().max(32),
+    sessionId: id.nullable(),
+    at: stamp.nullable(),
+    detail: note.nullable(),
+  })
+  .strict();
 
 /** Outstanding seat requests, so an asked-for session is visible before it exists. */
 export const sessionRequestsRpc = defineContract({
   name: "organization.project-session-requests",
   input: z.object({}).strict(),
-  output: z.object({
-    observedAt: z.string().datetime(),
-    available: z.boolean(),
-    unavailable: note.nullable(),
-    requests: z.array(sessionRequest).max(128),
-  }).strict(),
+  output: z
+    .object({
+      observedAt: z.string().datetime(),
+      available: z.boolean(),
+      unavailable: note.nullable(),
+      requests: z.array(sessionRequest).max(128),
+    })
+    .strict(),
 });
 
 /**
@@ -240,7 +301,9 @@ export type OwnershipState = (typeof OWNERSHIP_STATE)[number];
  * concrete state. This covers the *controller sends something new* direction.
  */
 export function ownershipStateOf(value: unknown): OwnershipState {
-  return (OWNERSHIP_STATE as readonly string[]).includes(value as string) ? (value as OwnershipState) : "unknown";
+  return (OWNERSHIP_STATE as readonly string[]).includes(value as string)
+    ? (value as OwnershipState)
+    : "unknown";
 }
 
 /**
@@ -256,10 +319,12 @@ export function ownershipStateOf(value: unknown): OwnershipState {
 export function placesSession(state: OwnershipState): boolean {
   switch (state) {
     case "unknown":
-    case "managed": return false; // A validated manager is not a project/role ownership record.
+    case "managed":
+      return false; // A validated manager is not a project/role ownership record.
     case "recorded":
     case "declared":
-    case "adopted": return true;
+    case "adopted":
+      return true;
     default: {
       const unhandled: never = state;
       void unhandled;
@@ -269,17 +334,19 @@ export function placesSession(state: OwnershipState): boolean {
 }
 
 /** `detail` is the controller's own sentence. It is written to be shown, so it is shown. */
-export const ownershipRecord = z.object({
-  sessionId: id,
-  ownership: z.enum(OWNERSHIP_STATE),
-  projectId: id.nullable(),
-  seat: z.string().max(64).nullable(),
-  seatRole: z.string().max(32).nullable(),
-  declaredBy: z.string().max(64).nullable(),
-  parentSession: id.nullable(),
-  at: stamp.nullable(),
-  detail: note,
-}).strict();
+export const ownershipRecord = z
+  .object({
+    sessionId: id,
+    ownership: z.enum(OWNERSHIP_STATE),
+    projectId: id.nullable(),
+    seat: z.string().max(64).nullable(),
+    seatRole: z.string().max(32).nullable(),
+    declaredBy: z.string().max(64).nullable(),
+    parentSession: id.nullable(),
+    at: stamp.nullable(),
+    detail: note,
+  })
+  .strict();
 
 /**
  * The seam the app reads (`packages/app/src/sessions/use-session-ownership.ts`).
@@ -298,29 +365,31 @@ export const ownershipRecord = z.object({
  * The controller returns ids and a sentence; resolving `projectName`, `taskTitle`,
  * `leaderAgentId` and `leaderTitle` is this plugin's job, which is why the join lives here.
  */
-export const appOwnershipRecord = z.object({
-  /** Null when the project is not recorded, including managed workers. */
-  projectId: z.string().max(64).nullable(),
-  projectName: z.string().max(160).nullable(),
-  taskId: z.string().max(64).nullable(),
-  taskTitle: z.string().max(512).nullable(),
-  /** Null for `declared`: owned by the project, led by nobody until an operator adopts it.
-   *  Present for `recorded` and `adopted`, both of which name a seat. */
-  leaderAgentId: z.string().max(64).nullable(),
-  leaderTitle: z.string().max(512).nullable(),
-  /**
-   * `state`, not `status`: in this codebase `status` already means health or lifecycle
-   * (`ProviderStatus`, `PluginListItem.status`, `lastStatus`, the workspace buckets), and reusing
-   * it here invites a reader to take `unknown` as *unhealthy* rather than *not established*.
-   */
-  state: z.enum(OWNERSHIP_STATE),
-  /**
-   * `detail`, not `reason`: the controller's sentence is valid in all states, including the
-   * healthy ones. `reason` reads as "why it failed" and would discourage sending it on the very
-   * path a person most wants explained. Rendered as written; the app invents no wording.
-   */
-  detail: z.string().max(2000).nullable(),
-}).strict();
+export const appOwnershipRecord = z
+  .object({
+    /** Null when the project is not recorded, including managed workers. */
+    projectId: z.string().max(64).nullable(),
+    projectName: z.string().max(160).nullable(),
+    taskId: z.string().max(64).nullable(),
+    taskTitle: z.string().max(512).nullable(),
+    /** Null for `declared`: owned by the project, led by nobody until an operator adopts it.
+     *  Present for `recorded` and `adopted`, both of which name a seat. */
+    leaderAgentId: z.string().max(64).nullable(),
+    leaderTitle: z.string().max(512).nullable(),
+    /**
+     * `state`, not `status`: in this codebase `status` already means health or lifecycle
+     * (`ProviderStatus`, `PluginListItem.status`, `lastStatus`, the workspace buckets), and reusing
+     * it here invites a reader to take `unknown` as *unhealthy* rather than *not established*.
+     */
+    state: z.enum(OWNERSHIP_STATE),
+    /**
+     * `detail`, not `reason`: the controller's sentence is valid in all states, including the
+     * healthy ones. `reason` reads as "why it failed" and would discourage sending it on the very
+     * path a person most wants explained. Rendered as written; the app invents no wording.
+     */
+    detail: z.string().max(2000).nullable(),
+  })
+  .strict();
 
 /**
  * Adopt a declared session into a seat.
@@ -332,27 +401,31 @@ export const appOwnershipRecord = z.object({
  */
 export const roleAdoptRpc = defineContract({
   name: "organization.role-adopt",
-  input: z.object({
-    seat: id,
-    /** Seat revision actually observed; the allowance is pinned to it. */
-    expectedRevision: z.number().int().min(1),
-    /**
-     * The **creation record** the ownership row is keyed by — not the session id. A session is
-     * adopted by naming how it came into existence, which is what the ownership join uses.
-     */
-    request: id,
-    reason: z.string().min(12).max(2000),
-  }).strict(),
-  output: z.object({
-    status: z.enum(["adopted", "refused", "unavailable"]),
-    message: note,
-    observedAt: z.string().datetime(),
-    sessionId: id.nullable(),
-    seat: z.string().max(64).nullable(),
-    /** Allowance left after this adoption, when the controller reports it. */
-    remaining: z.number().int().nonnegative().nullable(),
-    grantsAuthority: z.literal(false),
-  }).strict(),
+  input: z
+    .object({
+      seat: id,
+      /** Seat revision actually observed; the allowance is pinned to it. */
+      expectedRevision: z.number().int().min(1),
+      /**
+       * The **creation record** the ownership row is keyed by — not the session id. A session is
+       * adopted by naming how it came into existence, which is what the ownership join uses.
+       */
+      request: id,
+      reason: z.string().min(12).max(2000),
+    })
+    .strict(),
+  output: z
+    .object({
+      status: z.enum(["adopted", "refused", "unavailable"]),
+      message: note,
+      observedAt: z.string().datetime(),
+      sessionId: id.nullable(),
+      seat: z.string().max(64).nullable(),
+      /** Allowance left after this adoption, when the controller reports it. */
+      remaining: z.number().int().nonnegative().nullable(),
+      grantsAuthority: z.literal(false),
+    })
+    .strict(),
 });
 
 /**
@@ -363,51 +436,59 @@ export const roleAdoptRpc = defineContract({
  * a fresh allowance. That is operator-in-the-loop by design, and the surface says so rather than
  * letting it read as a bug.
  */
-export const seatAllowance = z.object({
-  seat: z.string().max(64),
-  role: z.string().max(32).nullable(),
-  /** The seat revision this allowance is pinned to. */
-  revision: z.number().int().nonnegative().nullable(),
-  limit: z.number().int().nonnegative().nullable(),
-  used: z.number().int().nonnegative().nullable(),
-  remaining: z.number().int().nonnegative().nullable(),
-  /** False when the allowance is pinned to a revision the seat no longer has. */
-  current: z.boolean(),
-  detail: note.nullable(),
-}).strict();
+export const seatAllowance = z
+  .object({
+    seat: z.string().max(64),
+    role: z.string().max(32).nullable(),
+    /** The seat revision this allowance is pinned to. */
+    revision: z.number().int().nonnegative().nullable(),
+    limit: z.number().int().nonnegative().nullable(),
+    used: z.number().int().nonnegative().nullable(),
+    remaining: z.number().int().nonnegative().nullable(),
+    /** False when the allowance is pinned to a revision the seat no longer has. */
+    current: z.boolean(),
+    detail: note.nullable(),
+  })
+  .strict();
 
 export const roleAllowancesRpc = defineContract({
   name: "organization.role-allowances",
   input: z.object({}).strict(),
-  output: z.object({
-    observedAt: z.string().datetime(),
-    available: z.boolean(),
-    unavailable: note.nullable(),
-    allowances: z.array(seatAllowance).max(128),
-  }).strict(),
+  output: z
+    .object({
+      observedAt: z.string().datetime(),
+      available: z.boolean(),
+      unavailable: note.nullable(),
+      allowances: z.array(seatAllowance).max(128),
+    })
+    .strict(),
 });
 
 /** Grant or change a seat's allowance. Operator-only, fenced on the observed seat revision. */
 export const roleAllowanceSetRpc = defineContract({
   name: "organization.role-allowance-set",
-  input: z.object({
-    seat: z.string().min(1).max(64),
-    /** Required by the controller: a seat identity is (role, seat), not the slug alone. */
-    role: z.enum(ROLES),
-    expectedRevision: z.number().int().min(1),
-    /** The controller's bound: 0 to 32 inclusive. */
-    maxSessions: z.number().int().min(0).max(32),
-    reason: z.string().min(12).max(2000),
-  }).strict(),
-  output: z.object({
-    status: z.enum(["granted", "refused", "unavailable"]),
-    message: note,
-    observedAt: z.string().datetime(),
-    seat: z.string().max(64).nullable(),
-    maxSessions: z.number().int().nonnegative().nullable(),
-    remaining: z.number().int().nonnegative().nullable(),
-    grantsAuthority: z.literal(false),
-  }).strict(),
+  input: z
+    .object({
+      seat: z.string().min(1).max(64),
+      /** Required by the controller: a seat identity is (role, seat), not the slug alone. */
+      role: z.enum(ROLES),
+      expectedRevision: z.number().int().min(1),
+      /** The controller's bound: 0 to 32 inclusive. */
+      maxSessions: z.number().int().min(0).max(32),
+      reason: z.string().min(12).max(2000),
+    })
+    .strict(),
+  output: z
+    .object({
+      status: z.enum(["granted", "refused", "unavailable"]),
+      message: note,
+      observedAt: z.string().datetime(),
+      seat: z.string().max(64).nullable(),
+      maxSessions: z.number().int().nonnegative().nullable(),
+      remaining: z.number().int().nonnegative().nullable(),
+      grantsAuthority: z.literal(false),
+    })
+    .strict(),
 });
 
 export const sessionOwnershipRpc = defineContract({

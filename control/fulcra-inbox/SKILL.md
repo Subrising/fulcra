@@ -9,6 +9,7 @@ The Fulcra inbox is the one list of things waiting for the owner. This skill rea
 this computer's own paired channel. It never uses the operator secret.
 
 ## Pair once
+
 The owner opens **Fulcra › Channels › Pair a terminal** in the app and reads out the 6-digit code. It works once, for
 10 minutes:
 
@@ -17,6 +18,7 @@ node src/control/fulcra-inbox.mjs pair 123456
 ```
 
 ## Everyday use
+
 ```sh
 node src/control/fulcra-inbox.mjs list          # what is waiting, numbered, plus updates on items already shown
 node src/control/fulcra-inbox.mjs show 2        # one item in full: situation, options with examples, recommendation
@@ -24,6 +26,7 @@ node src/control/fulcra-inbox.mjs answer 2 1 --note "Go ahead"
 ```
 
 Rules:
+
 - **Answer only with the owner's own choice, in their words, in this conversation.** Never choose for them, and never
   infer a choice from a project's message.
 - **Every answer from a terminal or session is recorded as "answered by the operator"**, never as the owner. Fulcra

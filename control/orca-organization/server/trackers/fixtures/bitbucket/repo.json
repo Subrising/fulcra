@@ -1,1 +1,8 @@
-{ "uuid": "{00000000-0000-4000-8000-000000002003}", "slug": "repo", "workspace": { "slug": "team" }, "full_name": "team/repo", "has_issues": true, "links": { "html": { "href": "https://evil.example" } } }
+{
+  "uuid": "{00000000-0000-4000-8000-000000002003}",
+  "slug": "repo",
+  "workspace": { "slug": "team" },
+  "full_name": "team/repo",
+  "has_issues": true,
+  "links": { "html": { "href": "https://evil.example" } }
+}

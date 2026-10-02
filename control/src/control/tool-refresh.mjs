@@ -12,49 +12,96 @@
 // is theirs to use; an ordinary worker's tools are the same as at its creation and it needs none of these.
 // The refresh runs under the session's exclusive lock, so no controller send interleaves with it, and it needs the
 // session delegated and idle (the daemon's own admission refuses otherwise); nothing here grants anything.
-import path from 'node:path';
-import { assertColumns } from './schema.mjs';
-import { uuid } from './authority.mjs';
-import { TOOL_SURFACE } from './tool-surface.mjs';
+import path from "node:path";
+import { assertColumns } from "./schema.mjs";
+import { uuid } from "./authority.mjs";
+import { TOOL_SURFACE } from "./tool-surface.mjs";
 
 export class ToolSurfaces {
   constructor(control) {
-    this.control = control; this.store = control.store; this.db = this.store.db; this.pending = null; this.lastError = null;
-    this.db.exec('CREATE TABLE IF NOT EXISTS session_tool_surfaces(session TEXT PRIMARY KEY,surface TEXT,generation INTEGER,lastOutcome TEXT NOT NULL,lastReason TEXT,at TEXT NOT NULL)');
-    assertColumns(this.db, 'session_tool_surfaces', 'session,surface,generation,lastOutcome,lastReason,at');
+    this.control = control;
+    this.store = control.store;
+    this.db = this.store.db;
+    this.pending = null;
+    this.lastError = null;
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS session_tool_surfaces(session TEXT PRIMARY KEY,surface TEXT,generation INTEGER,lastOutcome TEXT NOT NULL,lastReason TEXT,at TEXT NOT NULL)",
+    );
+    assertColumns(
+      this.db,
+      "session_tool_surfaces",
+      "session,surface,generation,lastOutcome,lastReason,at",
+    );
   }
   recorded(id) {
-    const refreshed = this.db.prepare('SELECT surface FROM session_tool_surfaces WHERE session=? AND surface IS NOT NULL').get(id)?.surface;
+    const refreshed = this.db
+      .prepare("SELECT surface FROM session_tool_surfaces WHERE session=? AND surface IS NOT NULL")
+      .get(id)?.surface;
     if (refreshed) return refreshed;
-    const created = this.db.prepare("SELECT result FROM deliveries WHERE kind='create' AND state='delivered' AND json_extract(result,'$.id')=?").get(id);
-    return created ? JSON.parse(created.result).toolSurface ?? null : null;
+    const created = this.db
+      .prepare(
+        "SELECT result FROM deliveries WHERE kind='create' AND state='delivered' AND json_extract(result,'$.id')=?",
+      )
+      .get(id);
+    return created ? (JSON.parse(created.result).toolSurface ?? null) : null;
   }
   describe(id) {
-    const recorded = this.recorded(id), last = this.db.prepare('SELECT lastOutcome,lastReason,at FROM session_tool_surfaces WHERE session=?').get(id) ?? null;
-    return { current: TOOL_SURFACE, recorded, state: recorded === TOOL_SURFACE ? 'current' : recorded ? 'stale' : 'unrecorded',
-      lastAttempt: last ? { outcome: last.lastOutcome, reason: last.lastReason, at: last.at } : null };
+    const recorded = this.recorded(id),
+      last =
+        this.db
+          .prepare("SELECT lastOutcome,lastReason,at FROM session_tool_surfaces WHERE session=?")
+          .get(id) ?? null;
+    return {
+      current: TOOL_SURFACE,
+      recorded,
+      state: recorded === TOOL_SURFACE ? "current" : recorded ? "stale" : "unrecorded",
+      lastAttempt: last
+        ? { outcome: last.lastOutcome, reason: last.lastReason, at: last.at }
+        : null,
+    };
   }
   record(id, generation, outcome, reason, surface) {
-    this.db.prepare(`INSERT INTO session_tool_surfaces VALUES (?,?,?,?,?,?) ON CONFLICT(session) DO UPDATE SET
+    this.db
+      .prepare(`INSERT INTO session_tool_surfaces VALUES (?,?,?,?,?,?) ON CONFLICT(session) DO UPDATE SET
       surface=coalesce(excluded.surface,surface),generation=excluded.generation,lastOutcome=excluded.lastOutcome,lastReason=excluded.lastReason,at=excluded.at`)
-      .run(id, surface ?? null, generation, outcome, reason ? String(reason).slice(0, 500) : null, new Date().toISOString());
+      .run(
+        id,
+        surface ?? null,
+        generation,
+        outcome,
+        reason ? String(reason).slice(0, 500) : null,
+        new Date().toISOString(),
+      );
   }
   // The operator route and the one the automatic paths use.
-  async refresh(id, { expectedGeneration, cause = 'operator' } = {}) {
-    if (!uuid(id) || (expectedGeneration !== undefined && !Number.isSafeInteger(expectedGeneration))) throw Error('Invalid tool refresh');
-    if (typeof this.control.native?.refreshTools !== 'function') throw Error('This controller’s native adapter cannot refresh tool surfaces');
+  async refresh(id, { expectedGeneration, cause = "operator" } = {}) {
+    if (
+      !uuid(id) ||
+      (expectedGeneration !== undefined && !Number.isSafeInteger(expectedGeneration))
+    )
+      throw Error("Invalid tool refresh");
+    if (typeof this.control.native?.refreshTools !== "function")
+      throw Error("This controller’s native adapter cannot refresh tool surfaces");
     return this.control.exclusive(id, async () => {
       const s = this.store.get(id);
-      if (!s) throw Error('Session not enrolled');
-      if (expectedGeneration !== undefined && s.generation !== expectedGeneration) throw Error('Control changed; refresh before refreshing tools');
-      if (s.mode !== 'delegated') throw Error('A tool refresh needs the session under delegated control; hand it back first (a handback of a seat refreshes it)');
+      if (!s) throw Error("Session not enrolled");
+      if (expectedGeneration !== undefined && s.generation !== expectedGeneration)
+        throw Error("Control changed; refresh before refreshing tools");
+      if (s.mode !== "delegated")
+        throw Error(
+          "A tool refresh needs the session under delegated control; hand it back first (a handback of a seat refreshes it)",
+        );
       const messageId = path.basename(s.cwd);
-      if (!uuid(messageId)) throw Error('This session has no controller-created identity to derive its grant paths from');
+      if (!uuid(messageId))
+        throw Error(
+          "This session has no controller-created identity to derive its grant paths from",
+        );
       const previous = this.describe(id);
       let result;
-      try { result = await this.control.native.refreshTools(id, messageId); }
-      catch (e) {
-        this.record(id, s.generation, 'failed', `${cause}: ${e.message}`, null);
+      try {
+        result = await this.control.native.refreshTools(id, messageId);
+      } catch (e) {
+        this.record(id, s.generation, "failed", `${cause}: ${e.message}`, null);
         // H7 item 4: a failed refresh must not leave the agent in explicit close recovery. Its restart is queued now
         // (provider-recovery.mjs records it if the daemon left the session in that state); not awaited, since the
         // restart takes this session's lock, held until we return. A daemon update would queue it too.
@@ -62,23 +109,48 @@ export class ToolSurfaces {
         throw e;
       }
       this.record(id, s.generation, result.outcome, cause, result.surface);
-      return { sessionId: id, outcome: result.outcome, surface: result.surface, previous: previous.recorded, previousState: previous.state, cause, grantsAuthority: false };
+      return {
+        sessionId: id,
+        outcome: result.outcome,
+        surface: result.surface,
+        previous: previous.recorded,
+        previousState: previous.state,
+        cause,
+        grantsAuthority: false,
+      };
     });
   }
   // Seat holders and managers only; a session already on this release's surface is left alone.
   eligible(id) {
     const s = this.store.get(id);
-    if (!s || s.mode !== 'delegated' || this.describe(id).state === 'current') return false;
-    const seat = this.db.prepare("SELECT 1 FROM role_bindings WHERE session=? AND state='assigned'").get(id);
-    const manager = this.has('manager_grants') && this.db.prepare('SELECT 1 FROM manager_grants WHERE supervisor=? AND generation=?').get(id, s.generation);
+    if (!s || s.mode !== "delegated" || this.describe(id).state === "current") return false;
+    const seat = this.db
+      .prepare("SELECT 1 FROM role_bindings WHERE session=? AND state='assigned'")
+      .get(id);
+    const manager =
+      this.has("manager_grants") &&
+      this.db
+        .prepare("SELECT 1 FROM manager_grants WHERE supervisor=? AND generation=?")
+        .get(id, s.generation);
     return Boolean(seat || manager);
   }
-  has(t) { return Boolean(this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t)); }
+  has(t) {
+    return Boolean(
+      this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t),
+    );
+  }
   // Best-effort: never throws; the outcome is in the record and in describe().
   async automatic(id, cause) {
     if (!this.eligible(id)) return null;
-    try { return await this.refresh(id, { cause }); }
-    catch (e) { this.lastError = { message: e.message, at: new Date().toISOString() }; return { sessionId: id, outcome: 'failed', reason: e.message, cause, grantsAuthority: false }; }
+    try {
+      return await this.refresh(id, { cause });
+    } catch (e) {
+      this.lastError = { message: e.message, at: new Date().toISOString() };
+      return { sessionId: id, outcome: "failed", reason: e.message, cause, grantsAuthority: false };
+    }
   }
-  afterDelegation(id) { if (!this.eligible(id)) return null; return this.pending = this.automatic(id, 'handback'); }
+  afterDelegation(id) {
+    if (!this.eligible(id)) return null;
+    return (this.pending = this.automatic(id, "handback"));
+  }
 }

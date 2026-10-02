@@ -1,6 +1,7 @@
 # IMPLEMENTATION — Stage 1 seat re-establishment across a verified daemon restart
 
 Task `00000000-0000-4000-8000-000000000000`, worker C, branch `design/seat-survival-restart`.
+
 > **Filename note for the prime:** this was asked for as `IMPLEMENTATION.md`, but that name is already
 > taken by a tracked repo-level document (the Fulcra implementation contract, owner task
 > `01a08fd4-…`). Writing there would have destroyed it, so this report uses the convention its
@@ -15,13 +16,13 @@ Implements `DESIGN.md` Stage 1 under `PRIME-DECISIONS.md` §C. Stage 2 (automati
 
 ## 1. What changed
 
-| File | Lines | Change |
-|---|---|---|
-| `src/control/boot-reestablishment.mjs` | +131 (new) | The gate and its helpers. Pure, no I/O, no journal reads — every branch reachable from a unit test. Exports `reestablishable`, `promptIdentityUnchanged`, `sessionQuiescent`, `humanInputFence`, `observationStable`, `ensureReestablishmentJournal`, and the three disposition constants. |
-| `src/control/controller.mjs` | +95 / −2 | `Controller.reestablish(id, reason)` beside `handback`, plus `claimReestablishment` / `finishReestablishment`; one import; `ensureReestablishmentJournal(this.store.db)` in the constructor. |
-| `src/control/rpc.mjs` | +3 | `case 'reestablish'` inside the operator-gated `switch`, next to `takeover`/`handback`. |
-| `src/control/bindings.mjs` | +3 | `seatedRow(id)` read helper. |
-| `src/control/boot-reestablishment.test.mjs` | +448 (new) | 20 tests: 16 named for the mutations they kill, 4 for review conditions C1-C4. |
+| File                                        | Lines      | Change                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/control/boot-reestablishment.mjs`      | +131 (new) | The gate and its helpers. Pure, no I/O, no journal reads — every branch reachable from a unit test. Exports `reestablishable`, `promptIdentityUnchanged`, `sessionQuiescent`, `humanInputFence`, `observationStable`, `ensureReestablishmentJournal`, and the three disposition constants. |
+| `src/control/controller.mjs`                | +95 / −2   | `Controller.reestablish(id, reason)` beside `handback`, plus `claimReestablishment` / `finishReestablishment`; one import; `ensureReestablishmentJournal(this.store.db)` in the constructor.                                                                                               |
+| `src/control/rpc.mjs`                       | +3         | `case 'reestablish'` inside the operator-gated `switch`, next to `takeover`/`handback`.                                                                                                                                                                                                    |
+| `src/control/bindings.mjs`                  | +3         | `seatedRow(id)` read helper.                                                                                                                                                                                                                                                               |
+| `src/control/boot-reestablishment.test.mjs` | +448 (new) | 20 tests: 16 named for the mutations they kill, 4 for review conditions C1-C4.                                                                                                                                                                                                             |
 
 **Not changed, deliberately:** `admission-guard.mjs`; the boot fences at `controller.mjs:151`
 (`inspect`) and `:206` (`send`); `store.transfer` / `transferRows`; `handback`; every role table.
@@ -64,8 +65,8 @@ precedent: `send` takes over on `archivedAt` but merely throws on busy / lapsed 
 
 The anti-grind property does **not** rest on `takeover`; it rests on the unique index
 `boot_reestablishments(session, boot)`, so one attempt per daemon boot holds for both dispositions
-(test `M13`). The attempt is claimed *after* the authority re-derivation, so a project-source outage
-costs a retry rather than the boot's only attempt, and *before* the gate runs, so a crash burns the
+(test `M13`). The attempt is claimed _after_ the authority re-derivation, so a project-source outage
+costs a retry rather than the boot's only attempt, and _before_ the gate runs, so a crash burns the
 attempt fail-closed.
 
 ### New journal table
@@ -77,7 +78,7 @@ CREATE TABLE IF NOT EXISTS boot_reestablishments(
 CREATE UNIQUE INDEX boot_reestablishments_once ON boot_reestablishments(session, boot);
 ```
 
-Additive, `assertColumns`-guarded like every other role table, asserted *before* the index so a
+Additive, `assertColumns`-guarded like every other role table, asserted _before_ the index so a
 wrong-shaped table reports the migration refusal rather than a bare SQLite `no such column`.
 `sessions` is untouched, so `ControlStore`'s strict column check is unaffected and an older controller
 still opens the journal.
@@ -100,14 +101,14 @@ than re-implement the checks.
 
 Importable from `src/control/boot-reestablishment.mjs`, all pure:
 
-| Export | Signature | Use in `bindings-restore` |
-|---|---|---|
-| `promptIdentityUnchanged(row, current)` | → `boolean` | The load-bearing check. Strict equality on both `lastPromptId` and `lastUserAt`; **no `controlDispatched` exemption** — see below. |
-| `sessionQuiescent(current)` | → `null` \| refusal | Archived ⇒ revoke; busy / pending ⇒ decline. Same preconditions `handback` requires. |
-| `humanInputFence(current)` | → `{ ok, grantedAt, reason }` | Wraps `delegationFence` without throwing; enforces protocol, `saturated === false`, and `humanAt === 0`. |
-| `observationStable(a, b)` | → `boolean` | Two-observation comparison. Deliberately excludes `status` and `pending`: re-run `sessionQuiescent` against the second observation instead, so a session that merely becomes busy declines rather than being treated as a revocation (review C2). |
-| `REESTABLISH` / `REVOKE` / `DECLINE` | constants | The refusal-class convention above. |
-| `reestablishable(row, current, facts)` | → verdict | The full restart gate. **B should not call this** — its `R2` requires a boot *change*, so it declines at an unchanged boot by design. |
+| Export                                  | Signature                     | Use in `bindings-restore`                                                                                                                                                                                                                         |
+| --------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `promptIdentityUnchanged(row, current)` | → `boolean`                   | The load-bearing check. Strict equality on both `lastPromptId` and `lastUserAt`; **no `controlDispatched` exemption** — see below.                                                                                                                |
+| `sessionQuiescent(current)`             | → `null` \| refusal           | Archived ⇒ revoke; busy / pending ⇒ decline. Same preconditions `handback` requires.                                                                                                                                                              |
+| `humanInputFence(current)`              | → `{ ok, grantedAt, reason }` | Wraps `delegationFence` without throwing; enforces protocol, `saturated === false`, and `humanAt === 0`.                                                                                                                                          |
+| `observationStable(a, b)`               | → `boolean`                   | Two-observation comparison. Deliberately excludes `status` and `pending`: re-run `sessionQuiescent` against the second observation instead, so a session that merely becomes busy declines rather than being treated as a revocation (review C2). |
+| `REESTABLISH` / `REVOKE` / `DECLINE`    | constants                     | The refusal-class convention above.                                                                                                                                                                                                               |
+| `reestablishable(row, current, facts)`  | → verdict                     | The full restart gate. **B should not call this** — its `R2` requires a boot _change_, so it declines at an unchanged boot by design.                                                                                                             |
 
 `facts` is `{ seated: boolean, authorityKey: string, dispatchSupported: boolean }`, re-derived by the
 caller and passed in, so the gate stays a function of its arguments. `dispatchSupported` is R8 (review
@@ -117,7 +118,7 @@ that repairs a seat without bumping the generation -- which is exactly what `bin
 **The one thing B must not do:** substitute `Controller.promptIdentityChanged` for
 `promptIdentityUnchanged`. The former forgives a mismatch when the prompt claims control and
 `controlDispatched()` confirms it is the newest send row at this generation — correct in steady state
-(a worker that merely *finished* the turn we sent it must not be revoked), wrong for a repair path,
+(a worker that merely _finished_ the turn we sent it must not be revoked), wrong for a repair path,
 where the same shape means the dispatch's outcome is unknown. Test `M2` asserts the distinction
 directly: it constructs a state where `promptIdentityChanged(current, row) === false` and requires the
 gate to refuse anyway.
@@ -146,11 +147,11 @@ add --detach ./baseline-check HEAD`, removed afterwards):
 > **Correction to the previous revision of this report.** It gave the sweep as "296 / 299 tests". That
 > denominator was wrong — an arithmetic slip, not a different measurement. The correct figure at
 > `51338b5c4` was **425 pass / 2 fail**, which matches the independent reviewer's 425 and now reads
-> **429 / 2** with the four condition tests added. The pass/fail *files* figure (42 / 44) was right.
+> **429 / 2** with the four condition tests added. The pass/fail _files_ figure (42 / 44) was right.
 
-| File | Result | Cause | Mine? |
-|---|---|---|---|
-| `mcp-refresh-fence.test.mjs` | 0 pass / 1 fail | Requires `ORCA_MCP_TEST_NATIVE` pointing at a **pristine compiled server dist**, which lives outside my cwd. **Could not run** — see §5. | No — identical at HEAD |
+| File                           | Result          | Cause                                                                                                                                          | Mine?                  |
+| ------------------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `mcp-refresh-fence.test.mjs`   | 0 pass / 1 fail | Requires `ORCA_MCP_TEST_NATIVE` pointing at a **pristine compiled server dist**, which lives outside my cwd. **Could not run** — see §5.       | No — identical at HEAD |
 | `native-memory-route.test.mjs` | 1 pass / 2 fail | Needs `--experimental-test-module-mocks` even to load; with the flag it is 1 pass / 2 fail. Unrelated to this change (canonical memory route). | No — identical at HEAD |
 
 Suites most likely to be disturbed by the `controller.mjs` / `bindings.mjs` / `rpc.mjs` edits, all
@@ -175,40 +176,40 @@ Each mutation was applied to the shipped source, the suite run, and the source r
 **verified the patch changed bytes before running**, so a regex that failed to match is reported as
 `NO-OP (INVALID)` rather than scoring a false kill. **19 / 19 killed, 0 survived, 0 no-ops.**
 
-| # | Mutation applied | Result | Killed by |
-|---|---|---|---|
-| M1 | Drop the `row.mode !== 'delegated'` precondition | killed (2) | `M1` |
-| M2 | Reinstate the `controlDispatched` exemption in `promptIdentityUnchanged` | killed (1) | `M2` |
-| M3 | `&&` → `\|\|` in `promptIdentityUnchanged` | killed (4) | `M3/M4`, `M9`, gate unit |
-| M4 | Drop the `lastUserAt === expectedAt` conjunct | killed (2) | `M3/M4`, gate unit |
-| M5 | `grantedAt !== 1` → `grantedAt < 1` | killed (2) | `M5/M19`, gate unit |
-| M6 | Write `row.grantedAt` (preserve) instead of the observed value | killed (1) | `M6` |
-| M7 | Make the `UPDATE` unconditional | killed (4) | `M7/M8` + 3 others |
-| M8 | Treat `changes === 0` as success | killed (1) | `M7/M8` |
-| M9 | Refusal returns without `takeover` | killed (6) | `M9` + 5 others |
-| M10 | Bump `generation` during re-establishment | killed (1) | happy path (credential + generation) |
-| M11 | Accept a caller-supplied `boot` in the RPC input | killed (1) | `M11` |
-| M12 | `sessionQuiescent` always returns `null` | killed (4) | `M12`, `M9`, `M13`, gate unit |
-| M13 | Drop `UNIQUE` from the attempt index | killed (1) | `M13` |
-| M14 | Remove the `observationStable` check | killed (1) | `M14` |
-| M15 | `exclusive` no longer refuses a second in-flight operation | killed (1) | `M15` |
-| M16 | Drop the authority re-derivation check | killed (2) | `M16/M17/M18`, gate unit |
-| M17 | Drop the boot-change requirement (gate **and** controller) | killed (2) | `M16/M17/M18` |
-| M18 | Drop the `seated` requirement | killed (2) | `M16/M17/M18`, gate unit |
-| M19 | `humanInputFence` swallows `delegationFence`'s refusal | killed (2) | `M5/M19`, gate unit |
+| #   | Mutation applied                                                         | Result     | Killed by                            |
+| --- | ------------------------------------------------------------------------ | ---------- | ------------------------------------ |
+| M1  | Drop the `row.mode !== 'delegated'` precondition                         | killed (2) | `M1`                                 |
+| M2  | Reinstate the `controlDispatched` exemption in `promptIdentityUnchanged` | killed (1) | `M2`                                 |
+| M3  | `&&` → `\|\|` in `promptIdentityUnchanged`                               | killed (4) | `M3/M4`, `M9`, gate unit             |
+| M4  | Drop the `lastUserAt === expectedAt` conjunct                            | killed (2) | `M3/M4`, gate unit                   |
+| M5  | `grantedAt !== 1` → `grantedAt < 1`                                      | killed (2) | `M5/M19`, gate unit                  |
+| M6  | Write `row.grantedAt` (preserve) instead of the observed value           | killed (1) | `M6`                                 |
+| M7  | Make the `UPDATE` unconditional                                          | killed (4) | `M7/M8` + 3 others                   |
+| M8  | Treat `changes === 0` as success                                         | killed (1) | `M7/M8`                              |
+| M9  | Refusal returns without `takeover`                                       | killed (6) | `M9` + 5 others                      |
+| M10 | Bump `generation` during re-establishment                                | killed (1) | happy path (credential + generation) |
+| M11 | Accept a caller-supplied `boot` in the RPC input                         | killed (1) | `M11`                                |
+| M12 | `sessionQuiescent` always returns `null`                                 | killed (4) | `M12`, `M9`, `M13`, gate unit        |
+| M13 | Drop `UNIQUE` from the attempt index                                     | killed (1) | `M13`                                |
+| M14 | Remove the `observationStable` check                                     | killed (1) | `M14`                                |
+| M15 | `exclusive` no longer refuses a second in-flight operation               | killed (1) | `M15`                                |
+| M16 | Drop the authority re-derivation check                                   | killed (2) | `M16/M17/M18`, gate unit             |
+| M17 | Drop the boot-change requirement (gate **and** controller)               | killed (2) | `M16/M17/M18`                        |
+| M18 | Drop the `seated` requirement                                            | killed (2) | `M16/M17/M18`, gate unit             |
+| M19 | `humanInputFence` swallows `delegationFence`'s refusal                   | killed (2) | `M5/M19`, gate unit                  |
 
 ### Re-run after the review conditions — 23 / 23 killed
 
 All 19 re-run against the amended code, plus the reviewer's surviving `K7` and three new mutations,
 one per code-changing condition. **23 / 23 killed, 0 survived, 0 no-ops.**
 
-| # | Mutation | Result | Killed by |
-|---|---|---|---|
-| M1–M19 | as above, re-run against the amended source | all **killed** | unchanged |
-| **K7** | write + attempt-journal finish no longer one transaction (`store.atomic` removed) | **killed (1)** — it **survived** the previous revision (review F4) | `C4` |
-| **N1** | drop the second-observation quiescence re-run | **killed (1)** | `C2` |
-| **N2** | drop R8 (`dispatchSupported`) | **killed (2)** | `C3`, gate unit |
-| **N3** | add a `setInterval` sweep in `server.mjs` calling `control.reestablish` | **killed (1)** | `C1` |
+| #      | Mutation                                                                          | Result                                                             | Killed by       |
+| ------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------- |
+| M1–M19 | as above, re-run against the amended source                                       | all **killed**                                                     | unchanged       |
+| **K7** | write + attempt-journal finish no longer one transaction (`store.atomic` removed) | **killed (1)** — it **survived** the previous revision (review F4) | `C4`            |
+| **N1** | drop the second-observation quiescence re-run                                     | **killed (1)**                                                     | `C2`            |
+| **N2** | drop R8 (`dispatchSupported`)                                                     | **killed (2)**                                                     | `C3`, gate unit |
+| **N3** | add a `setInterval` sweep in `server.mjs` calling `control.reestablish`           | **killed (1)**                                                     | `C1`            |
 
 N3 is the one that matters most: it is the exact change the review says would turn an acceptable gap
 into a dangerous one, and the tripwire catches it.
@@ -224,7 +225,7 @@ M6 — are each killed by a dedicated test, not incidentally.
 ## 5. Unverified, and what this does not protect against
 
 1. **The interrupt gap is still open, and it is the reason a human is still the trigger.** A human
-   *interrupt* increments `humanAt` and writes no `user_message`, so after the counter resets at the
+   _interrupt_ increments `humanAt` and writes no `user_message`, so after the counter resets at the
    restart it leaves no trace. `DESIGN.md` §3.4 case D, §5 case 3. Stage 1 is safe because an operator
    decides to call this; **an automatic sweep would launder that revocation, and must not be built
    until §7 lands.** Nothing in this change makes Stage 2 safer than it was when the prime deferred it.
@@ -237,7 +238,7 @@ M6 — are each killed by a dedicated test, not incidentally.
    `EMPTY-SESSION-PERSISTENCE.md` treating the loss of a native conversation across a restart as a bug
    (AIN80), but the Paseo store is outside my cwd and I did not read it. **Still the single most
    important thing to verify before this is enabled anywhere real.** The fixture asserts the
-   controller's behaviour *given* a persisted timeline; it cannot prove the timeline persists.
+   controller's behaviour _given_ a persisted timeline; it cannot prove the timeline persists.
 4. **No end-to-end test against a real two-boot daemon.** `activation.integration.mjs` already restarts
    a real daemon and asserts distinct boots, and is the natural home for one — but it needs the live
    host, which is out of scope for this worker and a prime decision. The 16 tests here use a fake
@@ -257,14 +258,14 @@ M6 — are each killed by a dedicated test, not incidentally.
 
 ## 6. Review conditions (C-REVIEW.md, GO WITH CONDITIONS)
 
-| # | Prime decision | Disposition |
-|---|---|---|
-| **C1** | ACCEPT and PIN with a test | **Done.** New test `C1` scans every non-test `.mjs` under `src/`: only `boot-reestablishment.mjs`, `controller.mjs` and `rpc.mjs` may mention re-establishment at all; `server.mjs` must contain no sweep; exactly one `control.reestablish(` call exists in the tree and it sits *after* the operator check; `controller.mjs` may not call it on its own behalf and may not reference `setInterval`/`setTimeout`/`cron`/`schedule`. Mutation **N3** (a real `setInterval` sweep added to `server.mjs`) goes red. |
-| **C2** | FIX — `A4c` must refuse | **Done**, via the second option the prime offered: `sessionQuiescent` is re-run against the second observation (`controller.mjs`) rather than widening `observationStable`. That keeps the *disposition* right — a session that merely goes busy declines; one that goes archived revokes — which folding `status`/`pending` into `observationStable` would not. Test `C2` covers busy, pending and archived. Mutation **N1** goes red. `handback` checks quiescence on its second observation only, so this path now checks the same observation plus the first. |
-| **C3** | DECIDED — refuse when `dispatch(id).capability.supported === false` | **Done.** New gate condition **R8**. Declines (unroutable dispatch is not evidence of human input, and takeover+handback is the correct repair). Test `C3` covers both a Book-shaped route and absent routing — absent routing reports unsupported, so an unattached native runtime refuses rather than being skipped. Mutation **N2** goes red. This closes the reviewer's `A9b` and makes "strictly weaker than takeover+handback" literally true. |
-| **C4** | FIX — removing `store.atomic` must go red | **Done.** Test `C4` makes `finishReestablishment` throw and asserts the `UPDATE` was rolled back with it (`boot` still `b1`, audit row still `attempted`). Mutation **K7**, which survived the reviewer's harness, is now killed. |
-| **C5** | Prime's deploy gate — live two-boot measurement | **Not code. Nothing here discharges it.** The whole gate rests on the daemon still remembering, after a restart, exactly which prompt the session last saw. Both I and the reviewer inferred this and neither verified it; it needs the live host, which is the prime's call. **If it is false, this gate is not weak — it is inoperative**, and `promptIdentityUnchanged` would have to be replaced rather than tuned. Measure before enabling against a real daemon. The same measurement should check the cheaper question: whether a real interrupt moves `lastUserMessageAt` — if it does, review finding F1 closes outright. |
-| **C6** | FIX `DESIGN.md` §3.4 | **Done**, and two adjacent inaccuracies the reviewer found are corrected alongside it, each marked in place: §3.4 "refusal is terminal" (true for `revoke`, false for `decline` — the anti-grind property survives because it rests on the unique index, not on the takeover); §5 case 2's "and the refusal path takes over" (F6 — false when the session is busy running the human's turn; still fenced, but the promptness was overstated); and §3.5.6's Book paragraph, which addressed dispatch and missed the credential case C3 now closes. §2's gate table gains R8 and the C2 note; §6 gains N1–N3. |
+| #      | Prime decision                                                      | Disposition                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **C1** | ACCEPT and PIN with a test                                          | **Done.** New test `C1` scans every non-test `.mjs` under `src/`: only `boot-reestablishment.mjs`, `controller.mjs` and `rpc.mjs` may mention re-establishment at all; `server.mjs` must contain no sweep; exactly one `control.reestablish(` call exists in the tree and it sits _after_ the operator check; `controller.mjs` may not call it on its own behalf and may not reference `setInterval`/`setTimeout`/`cron`/`schedule`. Mutation **N3** (a real `setInterval` sweep added to `server.mjs`) goes red.                                                                                                                  |
+| **C2** | FIX — `A4c` must refuse                                             | **Done**, via the second option the prime offered: `sessionQuiescent` is re-run against the second observation (`controller.mjs`) rather than widening `observationStable`. That keeps the _disposition_ right — a session that merely goes busy declines; one that goes archived revokes — which folding `status`/`pending` into `observationStable` would not. Test `C2` covers busy, pending and archived. Mutation **N1** goes red. `handback` checks quiescence on its second observation only, so this path now checks the same observation plus the first.                                                                  |
+| **C3** | DECIDED — refuse when `dispatch(id).capability.supported === false` | **Done.** New gate condition **R8**. Declines (unroutable dispatch is not evidence of human input, and takeover+handback is the correct repair). Test `C3` covers both a Book-shaped route and absent routing — absent routing reports unsupported, so an unattached native runtime refuses rather than being skipped. Mutation **N2** goes red. This closes the reviewer's `A9b` and makes "strictly weaker than takeover+handback" literally true.                                                                                                                                                                               |
+| **C4** | FIX — removing `store.atomic` must go red                           | **Done.** Test `C4` makes `finishReestablishment` throw and asserts the `UPDATE` was rolled back with it (`boot` still `b1`, audit row still `attempted`). Mutation **K7**, which survived the reviewer's harness, is now killed.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **C5** | Prime's deploy gate — live two-boot measurement                     | **Not code. Nothing here discharges it.** The whole gate rests on the daemon still remembering, after a restart, exactly which prompt the session last saw. Both I and the reviewer inferred this and neither verified it; it needs the live host, which is the prime's call. **If it is false, this gate is not weak — it is inoperative**, and `promptIdentityUnchanged` would have to be replaced rather than tuned. Measure before enabling against a real daemon. The same measurement should check the cheaper question: whether a real interrupt moves `lastUserMessageAt` — if it does, review finding F1 closes outright. |
+| **C6** | FIX `DESIGN.md` §3.4                                                | **Done**, and two adjacent inaccuracies the reviewer found are corrected alongside it, each marked in place: §3.4 "refusal is terminal" (true for `revoke`, false for `decline` — the anti-grind property survives because it rests on the unique index, not on the takeover); §5 case 2's "and the refusal path takes over" (F6 — false when the session is busy running the human's turn; still fenced, but the promptness was overstated); and §3.5.6's Book paragraph, which addressed dispatch and missed the credential case C3 now closes. §2's gate table gains R8 and the C2 note; §6 gains N1–N3.                        |
 
 **What I did not change.** The review's F1 (the interrupt gap) is untouched and still open — by design,
 and C1 is its control. F7 (`mcp-refresh-fence` not run) is environmental and unchanged. F8 (the native

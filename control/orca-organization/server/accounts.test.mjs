@@ -63,7 +63,7 @@ test("spread policy balances live sessions across accounts", async () => {
 test("a usage limit marks the account limited until its reset, moves the session, and new sessions avoid it; all limited -> the earliest reset", async () => {
   const root = scratch();
   const a = await addAccount(root, { provider: "claude", name: "A" }, T0),
-    b = await addAccount(root, { provider: "claude", name: "B" }, T0 + 1);
+    _b = await addAccount(root, { provider: "claude", name: "B" }, T0 + 1);
   assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
   const reset = new Date(T0 + 3600000).toISOString();
   const r = await rotate(

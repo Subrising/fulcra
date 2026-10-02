@@ -1,1 +1,6 @@
-{ "number": 14, "title": "Foreign", "state": "open", "repository_url": "https://api.github.com/repos/Evil/other" }
+{
+  "number": 14,
+  "title": "Foreign",
+  "state": "open",
+  "repository_url": "https://api.github.com/repos/Evil/other"
+}

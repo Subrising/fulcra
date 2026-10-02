@@ -24,7 +24,8 @@ import type { RoleDirectory, Seat } from "../shared/roles";
 
 export const UNGROUPED_PROJECT = "ungrouped";
 const TRAVERSAL_LIMIT = 64;
-const ROLE_BINDING_NOTE = "Naming a project orchestrator records who is accountable for the project. It does not start, stop or message any session.";
+const ROLE_BINDING_NOTE =
+  "Naming a project orchestrator records who is accountable for the project. It does not start, stop or message any session.";
 
 type Supervisor = NonNullable<Fleet["supervisors"]>[number];
 
@@ -85,14 +86,29 @@ export type OrchestratorAssignment =
  * adding a variant — the durable project role binding included — is a compile error here rather
  * than a silent fall-through to "Unassigned" over a genuinely assigned orchestrator.
  */
-export function orchestratorView(orchestrator: OrchestratorAssignment): { heading: string; detail: string; note: string; sessionId: string | null } {
+export function orchestratorView(orchestrator: OrchestratorAssignment): {
+  heading: string;
+  detail: string;
+  note: string;
+  sessionId: string | null;
+} {
   switch (orchestrator.state) {
     case "unknown":
     case "unassigned":
     case "unassigned-with-leaders":
-      return { heading: orchestrator.heading, detail: orchestrator.detail, note: orchestrator.note, sessionId: null };
+      return {
+        heading: orchestrator.heading,
+        detail: orchestrator.detail,
+        note: orchestrator.note,
+        sessionId: null,
+      };
     case "assigned":
-      return { heading: orchestrator.heading, detail: orchestrator.detail, note: orchestrator.note, sessionId: orchestrator.sessionId };
+      return {
+        heading: orchestrator.heading,
+        detail: orchestrator.detail,
+        note: orchestrator.note,
+        sessionId: orchestrator.sessionId,
+      };
     default: {
       const unhandled: never = orchestrator;
       throw new Error(`Unhandled project orchestrator state: ${JSON.stringify(unhandled)}`);
@@ -165,16 +181,16 @@ export interface Hierarchy {
 }
 
 function leaderView(role: Supervisor, leaderIds: Set<string>): LeaderView {
-  const linked = role.workers.filter(w => w.ownership === "linked" && w.workerId);
+  const linked = role.workers.filter((w) => w.ownership === "linked" && w.workerId);
   return {
     sessionId: role.id,
     taskId: role.task,
     active: role.active,
     workers: role.workers.length,
-    leads: linked.filter(w => leaderIds.has(w.workerId!)).map(w => w.workerId!),
-    unresolvedWorkers: role.workers.filter(w => w.ownership !== "linked").length,
-    waitingAcknowledgement: role.workers.filter(w => w.lastEvent && !w.lastEvent.consumed).length,
-    faults: role.workers.filter(w => w.fault).length,
+    leads: linked.filter((w) => leaderIds.has(w.workerId!)).map((w) => w.workerId!),
+    unresolvedWorkers: role.workers.filter((w) => w.ownership !== "linked").length,
+    waitingAcknowledgement: role.workers.filter((w) => w.lastEvent && !w.lastEvent.consumed).length,
+    faults: role.workers.filter((w) => w.fault).length,
   };
 }
 
@@ -184,11 +200,16 @@ function leaderView(role: Supervisor, leaderIds: Set<string>): LeaderView {
  * truncation, which is a different fact: the hierarchy is deeper than we followed, not circular.
  */
 function span(start: LeaderView, byId: Map<string, LeaderView>) {
-  const tasks = new Set([start.taskId]), seen = new Set([start.sessionId]);
-  let queue = [...start.leads], cyclic = false;
+  const tasks = new Set([start.taskId]),
+    seen = new Set([start.sessionId]);
+  let queue = [...start.leads],
+    cyclic = false;
   while (queue.length && seen.size < TRAVERSAL_LIMIT) {
     const next = queue.shift()!;
-    if (seen.has(next)) { cyclic = true; continue; }
+    if (seen.has(next)) {
+      cyclic = true;
+      continue;
+    }
     seen.add(next);
     const sub = byId.get(next);
     if (!sub) continue;
@@ -212,7 +233,10 @@ function assignedFrom(seat: Seat): OrchestratorAssignment {
       : seat.sessionGenerationChanged
         ? " Control of the bound session has changed since the seat was recorded; re-confirm before relying on it."
         : "";
-  const remote = seat.dispatch && !seat.dispatch.supported ? ` ${seat.dispatch.reason ?? "This seat's session cannot be reached from here."}` : "";
+  const remote =
+    seat.dispatch && !seat.dispatch.supported
+      ? ` ${seat.dispatch.reason ?? "This seat's session cannot be reached from here."}`
+      : "";
   return {
     state: "assigned",
     heading: "Assigned",
@@ -222,15 +246,21 @@ function assignedFrom(seat: Seat): OrchestratorAssignment {
   };
 }
 
-const ROLES_UNREADABLE = "Recorded leadership roles could not be read, so no project orchestrator can be named or ruled out. This is not the same as the seat being empty.";
+const ROLES_UNREADABLE =
+  "Recorded leadership roles could not be read, so no project orchestrator can be named or ruled out. This is not the same as the seat being empty.";
 
-export function buildHierarchy(fleet?: Fleet, directory?: ProjectDirectory, briefing?: Briefing, roles?: RoleDirectory): Hierarchy {
+export function buildHierarchy(
+  fleet?: Fleet,
+  directory?: ProjectDirectory,
+  briefing?: Briefing,
+  roles?: RoleDirectory,
+): Hierarchy {
   const supervisionAvailable = fleet?.supervisionAvailable === true;
-  const supervisorRows = supervisionAvailable ? fleet?.supervisors ?? [] : [];
-  const leaderIds = new Set(supervisorRows.map(r => r.id));
-  const leaders = supervisorRows.map(row => leaderView(row, leaderIds));
-  const byId = new Map(leaders.map(l => [l.sessionId, l]));
-  const ledBy = new Set(leaders.flatMap(l => l.leads));
+  const supervisorRows = supervisionAvailable ? (fleet?.supervisors ?? []) : [];
+  const leaderIds = new Set(supervisorRows.map((r) => r.id));
+  const leaders = supervisorRows.map((row) => leaderView(row, leaderIds));
+  const byId = new Map(leaders.map((l) => [l.sessionId, l]));
+  const ledBy = new Set(leaders.flatMap((l) => l.leads));
 
   const projectsAvailable = directory?.available === true;
   const projectsPartial = projectsAvailable && directory!.partial === true;
@@ -238,65 +268,159 @@ export function buildHierarchy(fleet?: Fleet, directory?: ProjectDirectory, brie
   const groupingComplete = projectsAvailable && !projectsPartial && !fleetPartial;
 
   const briefCoverage: Coverage = briefing
-    ? { available: true, complete: !briefing.partial && briefing.nextCursor === null && briefing.unavailable === 0 && !fleetPartial, scanned: briefing.scanned, total: briefing.total, missing: briefing.missing, unavailable: briefing.unavailable, morePages: briefing.nextCursor !== null }
-    : { available: false, complete: false, scanned: 0, total: 0, missing: 0, unavailable: 0, morePages: false };
+    ? {
+        available: true,
+        complete:
+          !briefing.partial &&
+          briefing.nextCursor === null &&
+          briefing.unavailable === 0 &&
+          !fleetPartial,
+        scanned: briefing.scanned,
+        total: briefing.total,
+        missing: briefing.missing,
+        unavailable: briefing.unavailable,
+        morePages: briefing.nextCursor !== null,
+      }
+    : {
+        available: false,
+        complete: false,
+        scanned: 0,
+        total: 0,
+        missing: 0,
+        unavailable: 0,
+        morePages: false,
+      };
 
-  const primes: PrimeView[] = [], soloLeaders: LeaderView[] = [];
-  const membership = new Map(projectsAvailable ? directory!.membership.map(m => [m.taskId, m.projectId]) : []);
+  const primes: PrimeView[] = [],
+    soloLeaders: LeaderView[] = [];
+  const membership = new Map(
+    projectsAvailable ? directory!.membership.map((m) => [m.taskId, m.projectId]) : [],
+  );
   for (const leader of leaders) {
     if (ledBy.has(leader.sessionId)) continue;
-    if (!leader.leads.length) { soloLeaders.push(leader); continue; }
+    if (!leader.leads.length) {
+      soloLeaders.push(leader);
+      continue;
+    }
     const reach = span(leader, byId);
-    const reaches = [...new Set(reach.tasks.map(id => membership.get(id) ?? null).filter((id): id is string => id !== null))];
-    primes.push({ ...leader, reachedTasks: reach.tasks, reaches, reachKnown: groupingComplete && !reach.truncated, cyclic: reach.cyclic, truncated: reach.truncated });
+    const reaches = [
+      ...new Set(
+        reach.tasks
+          .map((id) => membership.get(id) ?? null)
+          .filter((id): id is string => id !== null),
+      ),
+    ];
+    primes.push({
+      ...leader,
+      reachedTasks: reach.tasks,
+      reaches,
+      reachKnown: groupingComplete && !reach.truncated,
+      cyclic: reach.cyclic,
+      truncated: reach.truncated,
+    });
   }
 
-  const entries = new Map((briefing?.entries ?? []).map(e => [e.taskId, e]));
-  const tasks = new Map((fleet?.tasks ?? []).map(t => [t.id, t]));
+  const entries = new Map((briefing?.entries ?? []).map((e) => [e.taskId, e]));
+  const tasks = new Map((fleet?.tasks ?? []).map((t) => [t.id, t]));
 
   // Every task any read mentioned, not just the ones that fit on the capped fleet page. A task
   // named only by membership or only by a brief is still a task this project contains.
-  const allTaskIds = new Set<string>([...(fleet?.tasks ?? []).map(t => t.id), ...membership.keys(), ...entries.keys()]);
+  const allTaskIds = new Set<string>([
+    ...(fleet?.tasks ?? []).map((t) => t.id),
+    ...membership.keys(),
+    ...entries.keys(),
+  ]);
   const buckets = new Map<string, string[]>();
   for (const taskId of allTaskIds) {
     // Directory membership is authoritative; a brief's own `projectId` fills a gap only when the
     // directory answered, so an unavailable directory still reads as ungrouped rather than guessed.
-    const projectId = membership.get(taskId) ?? (projectsAvailable ? entries.get(taskId)?.projectId ?? null : null);
+    const projectId =
+      membership.get(taskId) ??
+      (projectsAvailable ? (entries.get(taskId)?.projectId ?? null) : null);
     const key = projectId ?? UNGROUPED_PROJECT;
     buckets.set(key, [...(buckets.get(key) ?? []), taskId]);
   }
 
-  const listed = projectsAvailable ? directory!.projects.map(p => ({ id: p.id, name: p.name, status: p.status, description: p.description })) : [];
-  const known = new Set(listed.map(p => p.id));
-  const extra = [...buckets.keys()].filter(key => key !== UNGROUPED_PROJECT && !known.has(key));
+  const listed = projectsAvailable
+    ? directory!.projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        description: p.description,
+      }))
+    : [];
+  const known = new Set(listed.map((p) => p.id));
+  const extra = [...buckets.keys()].filter((key) => key !== UNGROUPED_PROJECT && !known.has(key));
   const shells = [
     ...listed,
-    ...extra.map(id => ({ id, name: "Project not in the directory", status: null, description: null })),
-    ...(buckets.has(UNGROUPED_PROJECT) || !projectsAvailable ? [{ id: UNGROUPED_PROJECT, name: "Work without a recorded project", status: null, description: null }] : []),
+    ...extra.map((id) => ({
+      id,
+      name: "Project not in the directory",
+      status: null,
+      description: null,
+    })),
+    ...(buckets.has(UNGROUPED_PROJECT) || !projectsAvailable
+      ? [
+          {
+            id: UNGROUPED_PROJECT,
+            name: "Work without a recorded project",
+            status: null,
+            description: null,
+          },
+        ]
+      : []),
   ];
 
   const rolesAvailable = roles?.available === true;
-  const seats = new Map((roles?.projectSeats ?? []).filter(s => s.projectId).map(s => [s.projectId!, s]));
+  const seats = new Map(
+    (roles?.projectSeats ?? []).filter((s) => s.projectId).map((s) => [s.projectId!, s]),
+  );
 
   const observed = groupingComplete ? "" : " in what could be observed";
-  const projects = shells.map<ProjectLeadership>(shell => {
+  const projects = shells.map<ProjectLeadership>((shell) => {
     const taskIds = buckets.get(shell.id) ?? [];
-    const memberLeaders = leaders.filter(l => taskIds.includes(l.taskId));
+    const memberLeaders = leaders.filter((l) => taskIds.includes(l.taskId));
     const need = (text: string | null, taskId: string, verified = true): ProjectNeed[] =>
-      text ? [{ taskId, title: tasks.get(taskId)?.title ?? entries.get(taskId)?.title ?? "Workstream name unavailable", text, verified }] : [];
-    const statuses: ProjectStatus[] = [], decisions: ProjectNeed[] = [], nextActions: ProjectNeed[] = [], dependencies: ProjectNeed[] = [];
+      text
+        ? [
+            {
+              taskId,
+              title:
+                tasks.get(taskId)?.title ??
+                entries.get(taskId)?.title ??
+                "Workstream name unavailable",
+              text,
+              verified,
+            },
+          ]
+        : [];
+    const statuses: ProjectStatus[] = [],
+      decisions: ProjectNeed[] = [],
+      nextActions: ProjectNeed[] = [],
+      dependencies: ProjectNeed[] = [];
     let briefed = 0;
     for (const taskId of taskIds) {
       const entry = entries.get(taskId);
       if (!entry) continue;
       briefed++;
-      statuses.push({ taskId, title: tasks.get(taskId)?.title ?? entry.title, outcome: entry.outcome, currentState: entry.currentState });
+      statuses.push({
+        taskId,
+        title: tasks.get(taskId)?.title ?? entry.title,
+        outcome: entry.outcome,
+        currentState: entry.currentState,
+      });
       decisions.push(...need(entry.question, taskId));
       nextActions.push(...need(entry.nextStep, taskId));
-      for (const dep of entry.dependencies) dependencies.push({ taskId, title: dep.title ?? "Work that cannot be verified", text: dep.reason, verified: dep.taskId !== null });
+      for (const dep of entry.dependencies)
+        dependencies.push({
+          taskId,
+          title: dep.title ?? "Work that cannot be verified",
+          text: dep.reason,
+          verified: dep.taskId !== null,
+        });
     }
     const leadersComplete = groupingComplete;
-    const seat = shell.id === UNGROUPED_PROJECT ? null : seats.get(shell.id) ?? null;
+    const seat = shell.id === UNGROUPED_PROJECT ? null : (seats.get(shell.id) ?? null);
     const assigned = seat && seat.state === "assigned" && seat.sessionId ? seat : null;
     return {
       ...shell,
@@ -309,24 +433,72 @@ export function buildHierarchy(fleet?: Fleet, directory?: ProjectDirectory, brie
       orchestrator: assigned
         ? assignedFrom(assigned)
         : !rolesAvailable
-          ? { state: "unknown", heading: "Unknown", detail: ROLES_UNREADABLE, note: roles?.unavailable ? `Controller reported: ${roles.unavailable}` : ROLE_BINDING_NOTE }
+          ? {
+              state: "unknown",
+              heading: "Unknown",
+              detail: ROLES_UNREADABLE,
+              note: roles?.unavailable
+                ? `Controller reported: ${roles.unavailable}`
+                : ROLE_BINDING_NOTE,
+            }
           : shell.id === UNGROUPED_PROJECT
-            ? { state: "unknown", heading: "Not applicable", detail: "Work without a recorded project has no project seat to fill. A project orchestrator is bound to a registered project, never to a task.", note: ROLE_BINDING_NOTE }
+            ? {
+                state: "unknown",
+                heading: "Not applicable",
+                detail:
+                  "Work without a recorded project has no project seat to fill. A project orchestrator is bound to a registered project, never to a task.",
+                note: ROLE_BINDING_NOTE,
+              }
             : memberLeaders.length
-              ? { state: "unassigned-with-leaders", heading: "Unassigned", detail: `This project's orchestrator seat is recorded as empty. ${memberLeaders.length} recorded ${memberLeaders.length === 1 ? "leader leads a workstream" : "leaders lead workstreams"} inside it${observed}; leading a workstream is not accountability for the project.`, note: ROLE_BINDING_NOTE }
+              ? {
+                  state: "unassigned-with-leaders",
+                  heading: "Unassigned",
+                  detail: `This project's orchestrator seat is recorded as empty. ${memberLeaders.length} recorded ${memberLeaders.length === 1 ? "leader leads a workstream" : "leaders lead workstreams"} inside it${observed}; leading a workstream is not accountability for the project.`,
+                  note: ROLE_BINDING_NOTE,
+                }
               : leadersComplete
-                ? { state: "unassigned", heading: "Unassigned", detail: "This project's orchestrator seat is recorded as empty, and no workstream leader is recorded here.", note: ROLE_BINDING_NOTE }
-                : { state: "unassigned", heading: "Unassigned", detail: "This project's orchestrator seat is recorded as empty. No workstream leader is recorded in what could be observed either, and work or grouping was missing from this read, so a leader here is not ruled out.", note: ROLE_BINDING_NOTE },
-      statuses, decisions, nextActions, dependencies, briefed, unbriefed: taskIds.length - briefed,
-      briefCoverage, membershipComplete: leadersComplete,
+                ? {
+                    state: "unassigned",
+                    heading: "Unassigned",
+                    detail:
+                      "This project's orchestrator seat is recorded as empty, and no workstream leader is recorded here.",
+                    note: ROLE_BINDING_NOTE,
+                  }
+                : {
+                    state: "unassigned",
+                    heading: "Unassigned",
+                    detail:
+                      "This project's orchestrator seat is recorded as empty. No workstream leader is recorded in what could be observed either, and work or grouping was missing from this read, so a leader here is not ruled out.",
+                    note: ROLE_BINDING_NOTE,
+                  },
+      statuses,
+      decisions,
+      nextActions,
+      dependencies,
+      briefed,
+      unbriefed: taskIds.length - briefed,
+      briefCoverage,
+      membershipComplete: leadersComplete,
     };
   });
 
   return {
-    supervisionAvailable, supervisionUnreadable: fleet?.supervisionIssues?.unreadable ?? 0, supervisionTruncated: fleet?.supervisionIssues?.truncated ?? 0, primes, soloLeaders, projects, projectsAvailable, projectsPartial, fleetPartial, briefCoverage,
-    rolesAvailable, rolesUnavailable: roles && !roles.available ? roles.unavailable : null,
-    primeSeats: rolesAvailable ? roles!.primes.filter(s => s.state === "assigned") : [],
-    tasksWithoutLeader: supervisionAvailable ? (fleet?.tasks ?? []).filter(t => !leaders.some(l => l.taskId === t.id)).length : 0,
+    supervisionAvailable,
+    supervisionUnreadable: fleet?.supervisionIssues?.unreadable ?? 0,
+    supervisionTruncated: fleet?.supervisionIssues?.truncated ?? 0,
+    primes,
+    soloLeaders,
+    projects,
+    projectsAvailable,
+    projectsPartial,
+    fleetPartial,
+    briefCoverage,
+    rolesAvailable,
+    rolesUnavailable: roles && !roles.available ? roles.unavailable : null,
+    primeSeats: rolesAvailable ? roles!.primes.filter((s) => s.state === "assigned") : [],
+    tasksWithoutLeader: supervisionAvailable
+      ? (fleet?.tasks ?? []).filter((t) => !leaders.some((l) => l.taskId === t.id)).length
+      : 0,
     tasksWithoutLeaderComplete: supervisionAvailable && !fleetPartial,
   };
 }

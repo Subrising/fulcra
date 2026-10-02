@@ -43,6 +43,7 @@ The distribution's trusted in-process contribution owns the child. The ordinary 
 Lock recovery needs a captured file identity and matching child PID/epoch. Unknown or changed files remain untouched, including remnants from a previous daemon lifetime whose ownership cannot be established. The supervisor's recovery callback runs only after its own child emits exit. This intentionally prefers a visible startup failure to deleting another process's resources.
 
 This utility is not wired into the ordinary entry or shipped path yet. The V1.1 transport needs a specified host-to-child welcome/subscription-event path for the real SDK before desktop activation and release-route deletion. Fakes prove lifecycle fences only, not shipped packaging or provider parity.
+
 ## Fix round 1 decisions
 
 External input is now a journal authority event. Before allowing a non-own operation on a delegated session, the input hook commits a transfer to human mode, increments the generation, clears the capability and expected prompt, and records source/kind/operation identity in transfer history. Queued deliveries are cancelled in the same transaction. A plain mode read precedes any write; non-delegated or unknown sessions are allowed without writing. For a known delegated session, a failed revocation transaction or commit refuses the input after a bounded two-second writer wait. An unreadable initial journal read allows human input; controller-own operations retain their refusal behavior. This covers agent/MCP, daemon, human and foreign-plugin input; subsequent sends, permissions and MCP refresh fail their existing live-delegation predicates. A nested effect carrying the controller's verified operation remains own input. A detached `TrustedPlugins.followup()` deliberately strips that operation and therefore is external; an unverified daemon label alone cannot claim the exemption.
@@ -62,7 +63,6 @@ A pre-mint activation failure has a module-private no-dispatch brand and is reco
 
 The supplied B1 proof observes only the host's human-only counter. A controller-journal revocation does not change that counter's contract. The original proof remains unchanged in the task evidence, with its actual result reported separately from the new journal-authority tests; no proof assertion is weakened to hide this distinction.
 
-
 ### Fix round 1 verification
 
 All 49 original role-channel assertions pass unchanged. The expanded core passes 72/72, including external agent prompt/cancel/archive, daemon prompt, foreign-plugin input, own bound nested effects, journal-lock refusal, transfer-write rollback and later send/permission/MCP refusal. Same-user anonymous socket reads are denied; controller management passes 22/22 and the built plugin entry passes. Companion host refusal passes 12/12 including native restore; archive, cascade, trusted-v11 and management regression files pass. All five product typechecks pass.
@@ -70,7 +70,6 @@ All 49 original role-channel assertions pass unchanged. The expanded core passes
 The unchanged reviewer proof fails with `{injectedReachedProvider:true,fenceAdvanced:false,controllerSendAdmittedAfterInjection:false}`. The unsafe later-send behavior is gone; its separate expectation that agent input increments the host human counter remains unmet. The orchestrator and R-V3B re-check accepted that counter expectation as superseded by durable journal revocation and closed B1. The historical proof result is retained without relabeling it as a passing execution. See `CONTRACT-CHANGE-V3b-2.md` and task evidence `v3b-r1/reviewer-proof.log`.
 
 Mutations (k)–(r), (x) and (y) all fail behavioral assertions and restore their source bytes. In particular, skipping agent-origin revocation fails nine external-input cases; restoring anonymous reads leaks the fixture projection and fails the same-user socket test. Builds/typechecks use heavy-lock and tests use test-slot. The MacBook SSH probe was sandbox-blocked, so verification used the Mini.
-
 
 ## Fix round 2 (N1/N2)
 

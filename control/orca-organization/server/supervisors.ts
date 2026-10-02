@@ -13,17 +13,25 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export function readSupervisors(value: unknown, limit = 32): SupervisorRead {
   const issues = { unreadable: 0, ids: [] as string[], truncated: 0 };
   if (!Array.isArray(value)) return { available: false, supervisors: [], issues };
-  const seen = new Set<string>(), supervisors: Supervisor[] = [];
+  const seen = new Set<string>(),
+    supervisors: Supervisor[] = [];
   for (const entry of value) {
     const parsed = supervisorSchema.safeParse(entry);
     if (!parsed.success || seen.has(parsed.data.id)) {
       issues.unreadable += 1;
       const id = (entry as { id?: unknown } | null)?.id;
-      if (typeof id === "string" && UUID.test(id) && issues.ids.length < 8 && !issues.ids.includes(id)) issues.ids.push(id);
+      if (
+        typeof id === "string" &&
+        UUID.test(id) &&
+        issues.ids.length < 8 &&
+        !issues.ids.includes(id)
+      )
+        issues.ids.push(id);
       continue;
     }
     seen.add(parsed.data.id);
-    if (supervisors.length < limit) supervisors.push(parsed.data); else issues.truncated += 1;
+    if (supervisors.length < limit) supervisors.push(parsed.data);
+    else issues.truncated += 1;
   }
   return { available: true, supervisors, issues };
 }

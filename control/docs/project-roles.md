@@ -15,8 +15,8 @@ Two identities, kept apart everywhere here:
 
 | Identity                  | Checked by                                  |
 | ------------------------- | ------------------------------------------- |
-| **project** (`projectId`) | `projects.mjs` — the company project source  |
-| **task**                  | `authority.mjs` — `authorizeTask` ancestry   |
+| **project** (`projectId`) | `projects.mjs` — the company project source |
+| **task**                  | `authority.mjs` — `authorizeTask` ancestry  |
 
 A task ID is never a project ID, and task ancestry never implies membership. A
 project seat whose value is a task ID is refused, because no such project exists
@@ -63,25 +63,35 @@ seats refused, prime seats unaffected.
 {
   "version": 1,
   "issues": [
-    { "id": "<task uuid>", "companyId": "<company uuid>", "title": "…", "status": "todo",
-      "projectId": "<project uuid> | null" }
+    {
+      "id": "<task uuid>",
+      "companyId": "<company uuid>",
+      "title": "…",
+      "status": "todo",
+      "projectId": "<project uuid> | null"
+    }
   ],
   "projects": [
-    { "id": "<project uuid>", "companyId": "<company uuid>", "name": "…",
-      "description": "… | null", "status": "…" }
+    {
+      "id": "<project uuid>",
+      "companyId": "<company uuid>",
+      "name": "…",
+      "description": "… | null",
+      "status": "…"
+    }
   ]
 }
 ```
 
-| Field | Rule |
-| --- | --- |
-| `projects` | optional array, ≤64, unique `id`; anything else makes the **whole catalog invalid** |
-| `projects[].id` | lowercase UUID, distinct from any task ID |
-| `projects[].companyId` | must equal `COMPANY`; a foreign row is dropped and the read is `partial` |
-| `projects[].name` | 1–160 chars |
-| `projects[].description` | string ≤2000 or `null` — required, nullable, not absent |
-| `projects[].status` | 1–64 chars |
-| `issues[].projectId` | optional UUID or `null`; membership **only** when that ID is in `projects` |
+| Field                    | Rule                                                                                |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| `projects`               | optional array, ≤64, unique `id`; anything else makes the **whole catalog invalid** |
+| `projects[].id`          | lowercase UUID, distinct from any task ID                                           |
+| `projects[].companyId`   | must equal `COMPANY`; a foreign row is dropped and the read is `partial`            |
+| `projects[].name`        | 1–160 chars                                                                         |
+| `projects[].description` | string ≤2000 or `null` — required, nullable, not absent                             |
+| `projects[].status`      | 1–64 chars                                                                          |
+| `issues[].projectId`     | optional UUID or `null`; membership **only** when that ID is in `projects`          |
 
 `localProjects()` in `portable-config.mjs` reads and structurally validates it;
 `localProjectDirectory` applies the per-row rules and emits the same
@@ -102,13 +112,13 @@ both session identities, the project, the member task, both revisions and the
 note. Nothing is deleted and no session row is written, so replacing a leader
 preserves the previous session's identity and its whole delivery history.
 
-**A reaffirmation carries the seat forward (H6).** Re-seating the *same* session still moves the seat to a new
+**A reaffirmation carries the seat forward (H6).** Re-seating the _same_ session still moves the seat to a new
 revision, but everything the seat already had moves with it in the same transaction: its session allowance (used
 count and "conferred by seating" marker unchanged), its OPEN channels on either side, a pending role credential,
 reserved or pending briefs, open session requests, a human hold on the seat, and the seat record of a seat-conferred
 manager grant. Nothing new is conferred and no conferral is counted; the result names what moved in `carried`.
 Closed channels, creation history, adoptions and operator replies in flight stay pinned to the revision they
-happened at. A *replacement* (a new holder) is unchanged: the new holder gets fresh seating defaults and nothing of
+happened at. A _replacement_ (a new holder) is unchanged: the new holder gets fresh seating defaults and nothing of
 the old holder's. A reaffirmation with `manager` issues the manager grant and its inbox, as a fresh seating does,
 unless the session already holds a live manager grant: re-issuing would start a new epoch and orphan that grant's
 workers, so that case is refused with the reason and left to a deliberate `manager-grant`.
@@ -186,7 +196,7 @@ Four properties worth knowing before you rely on it:
 - **The pump re-derives the originator too**, not only the seats: still seated,
   still delegated, and still holding a capability at its current generation —
   the same facts `host-native.send` re-derives for a Book recipient. A takeover
-  of the *sender* stops a pending message on every host, not only the one that
+  of the _sender_ stops a pending message on every host, not only the one that
   happened to re-check. Failure reasons have their own `failure` column and are
   shown to both seats in `channels-thread`; they are never written into the
   receipt note.
@@ -208,7 +218,7 @@ Four properties worth knowing before you rely on it:
   allowance is **not** refunded on expiry; a sender that needs the report
   delivered sends a fresh one, with content that is true at the time.
 - **`expired` means the recipient never became free. `failed` means something
-  changed.** An expired *approval* is a changed approval, so a message still
+  changed.** An expired _approval_ is a changed approval, so a message still
   waiting when its channel expires is recorded `failed`, not `expired` — the
   channel check runs first, and classifying a lapsed approval as a slow recipient
   would be wrong. The distinction is what an operator reads in `channels-status`
@@ -255,14 +265,14 @@ holding several seats keeps its capability while any one of them remains. This i
 `manager_grants` and `event_credentials`; the delegation capability itself is
 never handed to a model, and the operator secret never reaches the tool process.
 
-| Tool | Calls | For |
-| --- | --- | --- |
-| `role_status` | `bindings-self` | which seats I hold, which primes exist |
-| `role_channels` | `channels-list` | approved channels, allowance, unread, what is waiting, why blocked |
-| `role_thread` | `channels-thread` | the conversation with IDs, replies, receipts and how long anything waited |
-| `role_message` | `channels-send` | send one message, optionally `inReplyTo` |
-| `role_mark_read` | `channels-read` | record consumption with a note |
-| `role_request_channel` | `channels-request` | ask an operator for a channel to another seat |
+| Tool                   | Calls              | For                                                                       |
+| ---------------------- | ------------------ | ------------------------------------------------------------------------- |
+| `role_status`          | `bindings-self`    | which seats I hold, which primes exist                                    |
+| `role_channels`        | `channels-list`    | approved channels, allowance, unread, what is waiting, why blocked        |
+| `role_thread`          | `channels-thread`  | the conversation with IDs, replies, receipts and how long anything waited |
+| `role_message`         | `channels-send`    | send one message, optionally `inReplyTo`                                  |
+| `role_mark_read`       | `channels-read`    | record consumption with a note                                            |
+| `role_request_channel` | `channels-request` | ask an operator for a channel to another seat                             |
 
 A role grant reaches only `bindings-*` and `channels-*`. It is not the manager
 lane and not the inbox lane, and it cannot call `send`, `inspect` or any operator
@@ -274,11 +284,11 @@ method.
 left a message deferred against a busy seat invisible in the one cheap summary
 either seat reads, so each channel also carries, for the calling session:
 
-| Field | Meaning |
-| --- | --- |
+| Field      | Meaning                                                                      |
+| ---------- | ---------------------------------------------------------------------------- |
 | `awaiting` | messages **to** this seat sitting in `pending` — a report is waiting for you |
-| `inbound` | every message **to** this seat, counted by state |
-| `outbound` | every message **from** this seat, counted by state |
+| `inbound`  | every message **to** this seat, counted by state                             |
+| `outbound` | every message **from** this seat, counted by state                           |
 
 `inbound` and `outbound` are the same shape: a named count for each state a row
 can hold — `pending`, `delivered`, `held`, `failed`, `expired`, `reserved`,
@@ -304,15 +314,15 @@ is refused.
 The `role_credentials` row is **authoritative**; the grant file is only how the
 token reaches the session. The rule:
 
-| Event | Capability |
-| --- | --- |
-| Human takeover | inert at once — generation moved |
-| Re-delegation while still seated | **reissued** at the same path, new token |
-| Re-delegation after the seat was vacated or replaced | not reissued, stays inert |
-| Last seat released | **destroyed** — credential row deleted, grant file unlinked |
-| Seat replaced, holder left with none | **destroyed**, same way |
-| One of several seats released | unaffected while any seat remains |
-| Session that never held one, handed back | still none; a handback hands back no role |
+| Event                                                | Capability                                                  |
+| ---------------------------------------------------- | ----------------------------------------------------------- |
+| Human takeover                                       | inert at once — generation moved                            |
+| Re-delegation while still seated                     | **reissued** at the same path, new token                    |
+| Re-delegation after the seat was vacated or replaced | not reissued, stays inert                                   |
+| Last seat released                                   | **destroyed** — credential row deleted, grant file unlinked |
+| Seat replaced, holder left with none                 | **destroyed**, same way                                     |
+| One of several seats released                        | unaffected while any seat remains                           |
+| Session that never held one, handed back             | still none; a handback hands back no role                   |
 
 Revocation destroys rather than suspends. When a session stops holding any seat —
 through `unassign` or by being replaced — the `role_credentials` row is deleted
@@ -390,12 +400,12 @@ An explicitly receiver-enrolled Book **Claude** session can hold a seat, be
 addressed, and receive role messages. It cannot originate them. The two
 capabilities differ and `bindings.dispatch(sessionId)` reports them separately:
 
-| | `supported` (receive) | `capability.supported` (originate) |
-| --- | --- | --- |
-| Mini | yes | yes |
-| Book, receiver-acknowledged | yes | **no** |
-| Book, revoking or stale generation | no | no |
-| No routing table readable | no | no |
+|                                    | `supported` (receive) | `capability.supported` (originate) |
+| ---------------------------------- | --------------------- | ---------------------------------- |
+| Mini                               | yes                   | yes                                |
+| Book, receiver-acknowledged        | yes                   | **no**                             |
+| Book, revoking or stale generation | no                    | no                                 |
+| No routing table readable          | no                    | no                                 |
 
 `capability.supported` is always false on Book because a Book session reaches no
 controller socket and `book/native.mjs` creates it without the supervisor MCP
@@ -433,17 +443,17 @@ admission guard.
 seat-hold (operator)  →  project sends: held  →  seat-inbox / seat-receipt / seat-reply (operator)
 ```
 
-| Operator method | Input | Effect |
-| --- | --- | --- |
-| `seat-hold` | `{role:'prime', seat, expectedRevision, expectedSessionGeneration, note}` | Declares the seat human-held at its current revision. Refused unless the seat is a **prime** seat and its holder is **`mode='human'`** now. Writes a `role_binding_history` row (`action: 'hold'`). Does **not** bump the revision, so channels stay valid. |
-| `seat-unhold` | `{role:'prime', seat, expectedRevision, note}` | Releases it (`action: 'unhold'`). Messages already held stay held. |
-| `seat-inbox` | `{role:'prime', seat}` | Read-only. Held and delivered messages to the seat, with `untrustedText`, and any operator receipt or reply. |
-| `seat-receipt` | `{channelId, messageId, note}` | Records that an operator consumed one **held** message. Shown as `operatorReceipt`, never as the holder's own receipt. |
-| `seat-reply` | `{channelId, messageId, inReplyTo, text, expectedSeatRevision, expectedHolderGeneration}` | Answers **one** message held or delivered to the seat, once — and never one the holder session already answered itself with `role_message`. Sent through the operator-send path; labelled in the recipient's thread. |
-| `seat-reply-reconcile` | `{messageId, reason}` | Settles a reply stuck `reserved` (the controller stopped between reservation and dispatch): voided if it has no delivery-journal row, otherwise given that row's state. |
+| Operator method        | Input                                                                                     | Effect                                                                                                                                                                                                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `seat-hold`            | `{role:'prime', seat, expectedRevision, expectedSessionGeneration, note}`                 | Declares the seat human-held at its current revision. Refused unless the seat is a **prime** seat and its holder is **`mode='human'`** now. Writes a `role_binding_history` row (`action: 'hold'`). Does **not** bump the revision, so channels stay valid. |
+| `seat-unhold`          | `{role:'prime', seat, expectedRevision, note}`                                            | Releases it (`action: 'unhold'`). Messages already held stay held.                                                                                                                                                                                          |
+| `seat-inbox`           | `{role:'prime', seat}`                                                                    | Read-only. Held and delivered messages to the seat, with `untrustedText`, and any operator receipt or reply.                                                                                                                                                |
+| `seat-receipt`         | `{channelId, messageId, note}`                                                            | Records that an operator consumed one **held** message. Shown as `operatorReceipt`, never as the holder's own receipt.                                                                                                                                      |
+| `seat-reply`           | `{channelId, messageId, inReplyTo, text, expectedSeatRevision, expectedHolderGeneration}` | Answers **one** message held or delivered to the seat, once — and never one the holder session already answered itself with `role_message`. Sent through the operator-send path; labelled in the recipient's thread.                                        |
+| `seat-reply-reconcile` | `{messageId, reason}`                                                                     | Settles a reply stuck `reserved` (the controller stopped between reservation and dispatch): voided if it has no delivery-journal row, otherwise given that row's state.                                                                                     |
 
 A hold is **effective** only while all of these are true, re-derived on every
-call: a hold row exists at the seat's *current* revision, it names the session
+call: a hold row exists at the seat's _current_ revision, it names the session
 that holds the seat, and that session is under human control. Re-seating the
 prime bumps the revision and ends the hold with no cleanup. Handing the lead back
 suspends it: a delegated holder receives natively and replies as itself with
@@ -466,9 +476,9 @@ fences and the pinned guard's ordinary admission — plus this path's own
 preconditions re-run synchronously at dispatch. `role_thread` labels every
 message with its `origin`:
 
-| `origin` | Proven by |
-| --- | --- |
-| `delegated-seat` | the sender's own role capability, pinned to its session and generation |
+| `origin`                       | Proven by                                                                                    |
+| ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `delegated-seat`               | the sender's own role capability, pinned to its session and generation                       |
 | `operator-for-human-held-seat` | the operator secret, as a reply on a declared human-held prime seat; carries `holderSession` |
 
 The text of an operator reply is prefixed by the controller with
@@ -477,7 +487,7 @@ The text of an operator reply is prefixed by the controller with
 establishes who sent a message.** The operator secret is one bearer credential at
 uid granularity, so nothing can stop a holder of it from speaking for a seat — it
 can already re-seat the prime. What this path guarantees is that doing so is
-never *silent*. It is reply-only, one reply per message, for declared
+never _silent_. It is reply-only, one reply per message, for declared
 human-held prime seats only, bounded by the channel allowance, journaled, and
 labelled for the recipient.
 
@@ -577,7 +587,7 @@ ownership without an operator act. Adoption **spends the seat's allowance** for
 the same reason, so the allowance keeps bounding how many sessions a seat owns
 rather than only how many it started. **Adoption re-verifies membership now, not only at creation.** The ownership row
 proves membership held when the session was created; adoption grants ongoing
-leadership and spends allowance *now*, so it re-checks, as `assign`,
+leadership and spends allowance _now_, so it re-checks, as `assign`,
 `startSession` and `accept` all do. Without it a task that had since left the
 project could be adopted, and two reads would disagree: `roles-sessions` would
 list the session while `bindings-project`, which derives member tasks live, could
@@ -614,10 +624,10 @@ receives instructions back the same way.
 inlines its own options object. It reads the pinned runtime's own
 `AGENT_PROVIDER_DEFINITIONS`:
 
-| Provider | Automatic mode | What it is | Refused |
-| --- | --- | --- | --- |
-| `claude` | `auto` | model classifier reviews permission prompts | `bypassPermissions` |
-| `codex` | `auto-review` | same workspace-write permissions as its default, eligible `on-request` approvals routed through the auto-reviewer subagent | `full-access` |
+| Provider | Automatic mode | What it is                                                                                                                 | Refused             |
+| -------- | -------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `claude` | `auto`         | model classifier reviews permission prompts                                                                                | `bypassPermissions` |
+| `codex`  | `auto-review`  | same workspace-write permissions as its default, eligible `on-request` approvals routed through the auto-reviewer subagent | `full-access`       |
 
 Thinking option defaults to `medium` for Claude and `high` for Codex (`DEFAULT_THINKING_BY_PROVIDER`), unless a role default or an installation setting says otherwise (see `session-defaults.md`). Codex also carries its sandbox and approval
 pins **explicitly**, derived from the chosen mode rather than hardcoded, so a
@@ -632,7 +642,7 @@ approval.
 `isUnattended`, in both directions. A new unattended mode added upstream fails
 the test rather than becoming quietly selectable.
 
-**Codex has no classifier mode.** `auto-review` is its closest *supported*
+**Codex has no classifier mode.** `auto-review` is its closest _supported_
 automatic policy and is named as such rather than relabelled "Auto".
 `bypassPermissions` and `full-access` are refused outright — both are marked
 `isUnattended` by the runtime, and using either would broaden access to imitate

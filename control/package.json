@@ -2,13 +2,10 @@
   "name": "@fulcra/command-centre",
   "version": "0.2.0",
   "private": true,
-  "type": "module",
-  "engines": {
-    "node": ">=24"
-  },
   "files": [
     "dist"
   ],
+  "type": "module",
   "scripts": {
     "verify:portable": "node tools/no-machine-ties.mjs",
     "build:portable": "node tools/build-portable.mjs"
@@ -20,5 +17,8 @@
   },
   "devDependencies": {
     "esbuild": "0.25.12"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

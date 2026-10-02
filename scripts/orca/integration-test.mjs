@@ -8,8 +8,11 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { initHome, task } from "./bootstrap.mjs";
-const defaultControl = process.env.FULCRA_CONTROL_ROOT ?? new URL("../../control/", import.meta.url).pathname;
-const [runtime, conversation, workspace] = [0, 1, 2].map((i) => fs.realpathSync(process.argv[i + 2] ?? defaultControl));
+const defaultControl =
+  process.env.FULCRA_CONTROL_ROOT ?? new URL("../../control/", import.meta.url).pathname;
+const [runtime, conversation, workspace] = [0, 1, 2].map((i) =>
+  fs.realpathSync(process.argv[i + 2] ?? defaultControl),
+);
 const scratch = fs.realpathSync(
   fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "orca-integration-")),
 );

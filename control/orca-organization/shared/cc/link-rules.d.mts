@@ -8,5 +8,8 @@ export declare const NOT_ALLOWED: string;
 export declare function pairProblem(from: unknown, relation: unknown, to: unknown): string | null;
 export declare function allowedPair(from: unknown, relation: unknown, to: unknown): boolean;
 export declare function strength(link: { provenance: string; confidence: string }): number;
-export declare function automaticWrite(existing: { provenance: string; confidence: string; state: string } | null, incoming: { provenance: string; confidence: string }): "insert" | "upgrade" | "keep";
+export declare function automaticWrite(
+  existing: { provenance: string; confidence: string; state: string } | null,
+  incoming: { provenance: string; confidence: string },
+): "insert" | "upgrade" | "keep";
 export declare function evidenceProblem(evidence: unknown): string | null;
