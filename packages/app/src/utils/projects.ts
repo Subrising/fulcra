@@ -308,7 +308,11 @@ export function buildProjects(input: BuildProjectsInput): BuildProjectsResult {
       conversationTitle,
     );
     for (const host of project.hosts) {
-      host.projectName = project.projectName;
+      host.projectName = sessionDisplayName(
+        host.projectName,
+        host.projectCustomName,
+        conversationTitle,
+      );
       for (const workspace of host.workspaces) {
         workspace.name = sessionDisplayName(
           workspace.name,

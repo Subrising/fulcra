@@ -294,6 +294,12 @@ test("creates, renames, copies, and deletes entries through the file explorer", 
 
   await entry("renamed.txt").click({ button: "right" });
   const deleteAction = page.getByTestId(/file-explorer-row-\d+-delete$/);
+  await expect(deleteAction).toBeVisible();
+  const deleteLabel = deleteAction.getByText("Delete", { exact: true });
+  await expect(deleteLabel).toBeVisible();
+  await expect
+    .poll(() => deleteLabel.evaluate((element) => getComputedStyle(element).color))
+    .not.toBe("");
   const deleteLabelColor = await deleteAction
     .getByText("Delete", { exact: true })
     .evaluate((element) => getComputedStyle(element).color);

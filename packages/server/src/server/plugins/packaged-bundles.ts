@@ -1,3 +1,4 @@
+import { requireTrustedBundleHost } from "./trusted-platform.js";
 import { readFile, realpath, lstat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -12,6 +13,7 @@ const Manifest = z
   .strict();
 /** Precompiled distribution only. Never performs ancestor node_modules resolution. */
 export async function readPackagedBundles(directory: string, sdkVersion: string) {
+  requireTrustedBundleHost();
   const root = await realpath(directory);
   const manifest = Manifest.parse(
     JSON.parse(await readFile(path.join(root, "runtime-manifest.json"), "utf8")),

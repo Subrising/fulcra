@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@/stores/session-store";
 import type { AccountUsageRow, ProviderUsageListPayload } from "@/provider-usage/types";
 import { describeAccountRow } from "@/provider-usage/account-rundown-format";
+import { useProviderUsage } from "@/provider-usage/use-provider-usage";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ContextAccountSummary, ContextSessionMetadata } from "./account-sessions";
 
 const harness = vi.hoisted(() => ({
@@ -48,6 +50,7 @@ vi.mock("@/stores/session-store", async () => {
       host: {
         client,
         clientGeneration: harness.generation,
+        serverInfo: harness.info,
         agents: harness.agents,
         workspaces: new Map([["workspace", { id: "workspace" }]]),
       },
@@ -174,6 +177,11 @@ function held() {
 }
 const props = { serverId: "host", workspaceId: "workspace", active: true, agentId: "agent" };
 
+function UsageProbe({ active }: { active: boolean }) {
+  const { view } = useProviderUsage("host", { accounts: true, enabled: active });
+  return <span>{view.kind === "ready" ? view.payload.accounts?.[0]?.name : view.kind}</span>;
+}
+
 beforeEach(() => {
   // This unit runner uses classic JSX; Expo uses the automatic runtime.
   vi.stubGlobal("React", React);
@@ -192,6 +200,40 @@ afterEach(() => {
 });
 
 describe("Context account surface lifecycle", () => {
+  it.each([false, true])(
+    "reopening quota after an account runtime changes refreshes a fresh cache (remount: %s)",
+    async (remount) => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+      });
+      const surface = (active: boolean) => (
+        <QueryClientProvider client={queryClient}>
+          <UsageProbe active={active} />
+        </QueryClientProvider>
+      );
+      let view = render(surface(true));
+      try {
+        expect(await screen.findByText("fresh")).toBeTruthy();
+        expect(harness.read).toHaveBeenCalledTimes(1);
+        if (remount) view.unmount();
+        else view.rerender(surface(false));
+        act(() => {
+          harness.agents = new Map([["agent", agent("instance-2", "B")]]);
+          notifyAll(harness.storeListeners);
+        });
+        harness.read.mockResolvedValue(payload("current-B", 1));
+        if (remount) view = render(surface(true));
+        else view.rerender(surface(true));
+        expect(await screen.findByText("current-B")).toBeTruthy();
+        expect(screen.queryByText("fresh")).toBeNull();
+        expect(harness.read).toHaveBeenCalledTimes(2);
+      } finally {
+        view.unmount();
+        queryClient.clear();
+      }
+    },
+  );
+
   it("shows each managed row's own live label and updates it on switch", () => {
     const view = render(<ContextSessionMetadata agent={agent("one", "child-own")} />);
     expect(screen.getByText("Account: child-own")).toBeTruthy();

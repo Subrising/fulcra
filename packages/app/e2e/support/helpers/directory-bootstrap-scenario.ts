@@ -1,3 +1,4 @@
+import { workspaceAgentTabByTitle } from "./workspace-tabs";
 import { expect, type Page } from "@playwright/test";
 import { buildHostAgentDetailRoute } from "@/utils/host-routes";
 import { installDaemonWebSocketGate } from "./daemon-websocket-gate";
@@ -57,7 +58,7 @@ export class DirectoryBootstrapScenario {
       (url) => url.pathname.includes("/workspace/") && !url.searchParams.has("open"),
     );
     await waitForWorkspaceTabsVisible(page);
-    await expect(page.getByRole("button", { name: agent.title, exact: true })).toBeVisible();
+    await expect(workspaceAgentTabByTitle(page, agent.title)).toBeVisible();
     return scenario;
   }
 
@@ -79,7 +80,9 @@ export class DirectoryBootstrapScenario {
     await expect(workspaceLink).toHaveCount(1);
     await expect(workspaceLink).toBeVisible();
     await openCommandCenter(this.page);
-    const agentLink = this.page.getByText(agent.title, { exact: true });
+    const agentLink = this.page
+      .getByTestId(`command-center-agent-${getServerId()}:${agent.id}`)
+      .filter({ visible: true });
     await expect(agentLink).toHaveCount(1);
     await expect(agentLink).toBeVisible();
     await this.page.keyboard.press("Escape");
@@ -112,7 +115,9 @@ export class DirectoryBootstrapScenario {
     await expect(workspaceLink).toHaveCount(1);
     await expect(workspaceLink).toBeVisible();
     await openCommandCenter(this.page);
-    const agentLink = this.page.getByText(agent.title, { exact: true });
+    const agentLink = this.page
+      .getByTestId(`command-center-agent-${getServerId()}:${agent.id}`)
+      .filter({ visible: true });
     await expect(agentLink).toHaveCount(1);
     await expect(agentLink).toBeVisible();
     await agentLink.click();
@@ -121,7 +126,7 @@ export class DirectoryBootstrapScenario {
         `/workspace/${workspace.workspaceId}/agent/${agent.id}|/workspace/${workspace.workspaceId}`,
       ),
     );
-    await expect(this.page.getByRole("button", { name: agent.title, exact: true })).toHaveAttribute(
+    await expect(workspaceAgentTabByTitle(this.page, agent.title)).toHaveAttribute(
       "aria-selected",
       "true",
     );

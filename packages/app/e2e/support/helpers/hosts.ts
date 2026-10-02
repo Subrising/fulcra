@@ -118,7 +118,9 @@ export async function waitForConnectedHost(
 ): Promise<void> {
   await page.getByTestId("sidebar-hosts-trigger").click();
   const host = page.getByTestId(`sidebar-host-row-${input.serverId}`);
-  await expect(host).toContainText(input.endpoint, { timeout: 30_000 });
+  await expect(host).toContainText(input.endpoint.replace(/^localhost:/, "127.0.0.1:"), {
+    timeout: 30_000,
+  });
   await page.keyboard.press("Escape");
   await expect(host).not.toBeVisible();
 }

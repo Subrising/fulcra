@@ -10,6 +10,8 @@ const SHELL_ROW_TEST_IDS = {
   history: "sidebar-sessions",
   search: "sidebar-search",
   schedules: "sidebar-schedules",
+  automations: "sidebar-automations",
+  insights: "sidebar-insights",
 } as const;
 
 export type SidebarNavKey = keyof typeof SHELL_ROW_TEST_IDS;
@@ -35,6 +37,8 @@ function itemLabel(key: SidebarNavKey): string {
     history: "History",
     search: "Search",
     schedules: "Schedules",
+    automations: "Automations",
+    insights: "Insights",
   }[key];
 }
 

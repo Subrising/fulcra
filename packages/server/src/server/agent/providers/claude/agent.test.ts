@@ -976,52 +976,56 @@ describe("ClaudeAgentSession features", () => {
     }
   });
 
-  test("native queued final boundary: actual local Claude handoff persists UNCERTAIN and cannot replay", async () => {
-    const { MessageReceipts } = await import("../../../message-receipts/index.js");
-    const { nativeQueuedAcceptance } = await import("../../native-queued-dispatch.js");
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "native-claude-receipt-"));
-    const ledger = new MessageReceipts(directory);
-    const input = {
-      agentId: "target",
-      messageId: "throwaway",
-      request: { text: "queued" },
-      principal: { source: "host-fixture" },
-      boot: "fixture-boot",
-      attachmentBytes: 0,
-      authorize() {},
-    };
-    const { queryFactory } = createQueryMock();
-    const session = await new ClaudeAgentClient({
-      logger,
-      queryFactory,
-      resolveBinary: async () => "/fixture/provider-cli",
-    }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
-    let dispatches = 0;
-    try {
-      await ledger.enqueue(input);
-      const outcome = await ledger.dispatchNext(
-        "target",
-        () => true,
-        async (_ticket, finalCheck) => {
-          dispatches++;
-          const capability = createNativeQueuedDispatch(finalCheck);
-          await session.startTurn("queued", { [NATIVE_QUEUED_FINAL]: capability });
-          const accepted = nativeQueuedAcceptance(capability);
-          if (!accepted) throw new Error("Claude correlated acknowledgement unavailable");
-          return accepted;
-        },
-      );
-      expect(outcome).toMatchObject({ state: "uncertain", pendingCount: 0 });
-      expect(await ledger.enqueue(input)).toMatchObject({ state: "uncertain" });
-      expect(await new MessageReceipts(directory).enqueue(input)).toMatchObject({
-        state: "uncertain",
-      });
-      expect(dispatches).toBe(1);
-    } finally {
-      await session.close();
-      await fs.rm(directory, { recursive: true, force: true });
-    }
-  });
+  // Durable native queue behavior is POSIX-only; message-receipts/index.test.ts proves Windows refusal.
+  test.runIf(process.platform !== "win32")(
+    "native queued final boundary: actual local Claude handoff persists UNCERTAIN and cannot replay",
+    async () => {
+      const { MessageReceipts } = await import("../../../message-receipts/index.js");
+      const { nativeQueuedAcceptance } = await import("../../native-queued-dispatch.js");
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "native-claude-receipt-"));
+      const ledger = new MessageReceipts(directory);
+      const input = {
+        agentId: "target",
+        messageId: "throwaway",
+        request: { text: "queued" },
+        principal: { source: "host-fixture" },
+        boot: "fixture-boot",
+        attachmentBytes: 0,
+        authorize() {},
+      };
+      const { queryFactory } = createQueryMock();
+      const session = await new ClaudeAgentClient({
+        logger,
+        queryFactory,
+        resolveBinary: async () => "/fixture/provider-cli",
+      }).createSession({ provider: "claude", cwd: process.cwd(), model: "claude-fable-5" });
+      let dispatches = 0;
+      try {
+        await ledger.enqueue(input);
+        const outcome = await ledger.dispatchNext(
+          "target",
+          () => true,
+          async (_ticket, finalCheck) => {
+            dispatches++;
+            const capability = createNativeQueuedDispatch(finalCheck);
+            await session.startTurn("queued", { [NATIVE_QUEUED_FINAL]: capability });
+            const accepted = nativeQueuedAcceptance(capability);
+            if (!accepted) throw new Error("Claude correlated acknowledgement unavailable");
+            return accepted;
+          },
+        );
+        expect(outcome).toMatchObject({ state: "uncertain", pendingCount: 0 });
+        expect(await ledger.enqueue(input)).toMatchObject({ state: "uncertain" });
+        expect(await new MessageReceipts(directory).enqueue(input)).toMatchObject({
+          state: "uncertain",
+        });
+        expect(dispatches).toBe(1);
+      } finally {
+        await session.close();
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("publishes a resolution when the SDK aborts a permission callback", async () => {
     const { queryFactory } = createQueryMock();

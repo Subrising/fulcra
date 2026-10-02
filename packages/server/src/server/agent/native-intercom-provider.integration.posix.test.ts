@@ -115,7 +115,13 @@ async function fixture(
     },
     requests: () => servers.flatMap((process) => process.requests()),
   });
-  const provider = new CodexAppServerAgentClient(createTestLogger());
+  // This fixture owns the fake app-server transport; an installed Codex CLI is not a dependency.
+  class FixtureCodexClient extends CodexAppServerAgentClient {
+    override async isAvailable(): Promise<boolean> {
+      return true;
+    }
+  }
+  const provider = new FixtureCodexClient(createTestLogger());
   Reflect.set(provider, "goalsEnabledPromise", Promise.resolve(false));
   Reflect.set(provider, "autoReviewEnabledPromise", Promise.resolve(false));
   Reflect.set(provider, "spawnAppServer", async () => {
@@ -1735,7 +1741,7 @@ test.each(["valid", "paired", "wrong-epoch", "unknown-scope", "disconnect", "own
   },
 );
 
-test.each(["native-replace", "parent-revoke"])(
+test.each(["native-replace", "registration-revoke"])(
   "native evidence actual manager %s after held durable reservation refuses artifact effect",
   async (mutation) => {
     const f = await fixture("valid", true);
@@ -1762,7 +1768,7 @@ test.each(["native-replace", "parent-revoke"])(
     )!;
     let release!: () => void;
     try {
-      await owner.invoke(randomUUID(), {
+      const childRegistration = await owner.invoke(randomUUID(), {
         method: "report-parent-adopt",
         input: {
           messageId: randomUUID(),
@@ -1816,8 +1822,8 @@ test.each(["native-replace", "parent-revoke"])(
           method: "report-registration-revoke",
           input: {
             messageId: randomUUID(),
-            identity: identity(f.agent.id),
-            expectedEpoch: (receipt as { epoch: string }).epoch,
+            identity: identity(child.id),
+            expectedEpoch: (childRegistration as { epoch: string }).epoch,
           },
         });
       release();

@@ -1,5 +1,5 @@
 import { GitAiDraftSchema } from "@getpaseo/protocol/git-ai-draft";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";

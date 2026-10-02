@@ -69,7 +69,7 @@ export interface DesktopRuntimeConfig {
   daemonLogPath?: string;
   /** Initial manageBuiltInDaemon setting. Defaults to false. */
   manageBuiltInDaemon?: boolean;
-  /** Daemon listen address reported by desktop_daemon_status. Defaults to 127.0.0.1:6767. */
+  /** Daemon listen address reported by desktop_daemon_status. Defaults to the isolated worker. */
   daemonListen?: string;
   /** Keep start_desktop_daemon pending to hold the desktop startup blocker open. */
   hangDaemonStart?: boolean;
@@ -128,6 +128,7 @@ export async function installDesktopRuntime(
   page: Page,
   config: DesktopRuntimeConfig,
 ): Promise<void> {
+  const fixtureUrl = `ws://127.0.0.1:${getE2EDaemonPort()}/ws`;
   if (config.editorRecordPath) {
     await page.exposeFunction(
       "__recordDesktopEditorOpen",
@@ -137,183 +138,190 @@ export async function installDesktopRuntime(
     );
   }
 
-  await page.addInitScript((cfg) => {
-    // Mutable state shared across IPC calls within this page
-    let manageDaemon = cfg.manageBuiltInDaemon ?? false;
-    let daemonRunning = true;
-    let currentPid: number | null = cfg.daemonPid ?? null;
-    let ownedByDesktop = cfg.ownedByDesktop ?? false;
-    let manualUpdateAdmitted = false;
-    window.__desktopDaemonStartRequested = false;
+  await page.addInitScript(
+    (cfg) => {
+      // Mutable state shared across IPC calls within this page
+      let manageDaemon = cfg.manageBuiltInDaemon ?? false;
+      let daemonRunning = true;
+      let currentPid: number | null = cfg.daemonPid ?? null;
+      let ownedByDesktop = cfg.ownedByDesktop ?? false;
+      let manualUpdateAdmitted = false;
+      window.__desktopDaemonStartRequested = false;
 
-    function buildDaemonStatus() {
-      return {
-        serverId: cfg.serverId,
-        status: daemonRunning ? "running" : "stopped",
-        listen: cfg.daemonListen ?? "127.0.0.1:6767",
-        hostname: null,
-        pid: currentPid,
-        home: cfg.daemonHome ?? "",
-        startedAt: currentPid === null ? null : "2026-09-01T00:00:00.000Z",
-        ownedByDesktop,
-        version: cfg.daemonVersion ?? null,
-        desktopManaged: manageDaemon,
-        error: null,
-      };
-    }
-
-    function startDesktopDaemon() {
-      window.__desktopDaemonStartRequested = true;
-      if (cfg.hangDaemonStart) {
-        return new Promise(() => undefined);
-      }
-      if (!daemonRunning) {
-        currentPid = (cfg.daemonPid ?? 10000) + 1000;
-        ownedByDesktop = true;
-      }
-      daemonRunning = true;
-      return buildDaemonStatus();
-    }
-
-    async function waitForDesktopSettingsResponse() {
-      const delayMs = cfg.desktopSettingsDelayMs ?? 0;
-      if (delayMs > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-
-    function buildAppUpdateCheckResult(hasUpdate: boolean, readyToInstall: boolean) {
-      return {
-        hasUpdate,
-        readyToInstall,
-        currentVersion: "1.0.0",
-        latestVersion: hasUpdate ? (cfg.latestVersion ?? "1.2.3") : null,
-        body: null,
-        date: null,
-      };
-    }
-
-    function checkAppUpdate(intent: unknown) {
-      if (!cfg.manualUpdateBypassesRollout) {
-        return buildAppUpdateCheckResult(
-          cfg.updateAvailable === true,
-          cfg.updateAvailable === true && (cfg.updateReadyToInstall ?? true),
-        );
+      function buildDaemonStatus() {
+        return {
+          serverId: cfg.serverId,
+          status: daemonRunning ? "running" : "stopped",
+          listen: cfg.daemonListen ?? new URL(cfg.fixtureUrl).host,
+          hostname: null,
+          pid: currentPid,
+          home: cfg.daemonHome ?? "",
+          startedAt: currentPid === null ? null : "2026-09-01T00:00:00.000Z",
+          ownedByDesktop,
+          version: cfg.daemonVersion ?? null,
+          desktopManaged: manageDaemon,
+          error: null,
+        };
       }
 
-      if (intent === "manual") {
-        manualUpdateAdmitted = true;
-        return buildAppUpdateCheckResult(true, false);
+      function startDesktopDaemon() {
+        window.__desktopDaemonStartRequested = true;
+        if (cfg.hangDaemonStart) {
+          return new Promise(() => undefined);
+        }
+        if (!daemonRunning) {
+          currentPid = (cfg.daemonPid ?? 10000) + 1000;
+          ownedByDesktop = true;
+        }
+        daemonRunning = true;
+        return buildDaemonStatus();
       }
 
-      return buildAppUpdateCheckResult(manualUpdateAdmitted, manualUpdateAdmitted);
-    }
+      async function waitForDesktopSettingsResponse() {
+        const delayMs = cfg.desktopSettingsDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
 
-    const desktopBridge: {
-      platform: string;
-      invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-      dialog: {
-        ask: (message: string, options?: Record<string, unknown>) => Promise<boolean>;
-        open: (options?: Record<string, unknown>) => Promise<string | string[] | null>;
-      };
-      getPendingOpenProject: () => Promise<string | null>;
-      events: { on: () => Promise<() => void> };
-      editor?: {
-        listTargets: () => Promise<DesktopEditorTargetConfig[]>;
-        openTarget: (input: DesktopEditorOpenRecord) => Promise<void>;
-      };
-    } = {
-      platform: "darwin",
-      invoke: async (command: string, args?: Record<string, unknown>) => {
-        if (command === "check_app_update") {
-          return checkAppUpdate(args?.intent);
+      function buildAppUpdateCheckResult(hasUpdate: boolean, readyToInstall: boolean) {
+        return {
+          hasUpdate,
+          readyToInstall,
+          currentVersion: "1.0.0",
+          latestVersion: hasUpdate ? (cfg.latestVersion ?? "1.2.3") : null,
+          body: null,
+          date: null,
+        };
+      }
+
+      function checkAppUpdate(intent: unknown) {
+        if (!cfg.manualUpdateBypassesRollout) {
+          return buildAppUpdateCheckResult(
+            cfg.updateAvailable === true,
+            cfg.updateAvailable === true && (cfg.updateReadyToInstall ?? true),
+          );
         }
 
-        if (command === "install_app_update") {
-          if (cfg.slowInstall) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+        if (intent === "manual") {
+          manualUpdateAdmitted = true;
+          return buildAppUpdateCheckResult(true, false);
+        }
+
+        return buildAppUpdateCheckResult(manualUpdateAdmitted, manualUpdateAdmitted);
+      }
+
+      const desktopBridge: {
+        platform: string;
+        invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+        dialog: {
+          ask: (message: string, options?: Record<string, unknown>) => Promise<boolean>;
+          open: (options?: Record<string, unknown>) => Promise<string | string[] | null>;
+        };
+        getPendingOpenProject: () => Promise<string | null>;
+        events: { on: () => Promise<() => void> };
+        editor?: {
+          listTargets: () => Promise<DesktopEditorTargetConfig[]>;
+          openTarget: (input: DesktopEditorOpenRecord) => Promise<void>;
+        };
+      } = {
+        platform: "darwin",
+        invoke: async (command: string, args?: Record<string, unknown>) => {
+          if (command === "check_app_update") {
+            return checkAppUpdate(args?.intent);
           }
-          return {
-            installed: true,
-            version: cfg.latestVersion ?? "1.2.3",
-            message: "App update installed. Restart required.",
-          };
-        }
 
-        if (command === "desktop_daemon_status") {
-          return buildDaemonStatus();
-        }
-
-        if (command === "desktop_daemon_logs") {
-          return { logPath: cfg.daemonLogPath ?? "", contents: "" };
-        }
-
-        if (command === "get_desktop_settings") {
-          await waitForDesktopSettingsResponse();
-          return {
-            releaseChannel: "stable",
-            daemon: { manageBuiltInDaemon: manageDaemon, keepRunningAfterQuit: true },
-          };
-        }
-
-        if (command === "patch_desktop_settings") {
-          const daemon = args?.daemon;
-          if (
-            daemon !== null &&
-            typeof daemon === "object" &&
-            "manageBuiltInDaemon" in daemon &&
-            typeof daemon.manageBuiltInDaemon === "boolean"
-          ) {
-            manageDaemon = daemon.manageBuiltInDaemon;
+          if (command === "install_app_update") {
+            if (cfg.slowInstall) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+            }
+            return {
+              installed: true,
+              version: cfg.latestVersion ?? "1.2.3",
+              message: "App update installed. Restart required.",
+            };
           }
-          return {
-            releaseChannel: "stable",
-            daemon: { manageBuiltInDaemon: manageDaemon, keepRunningAfterQuit: true },
-          };
-        }
 
-        if (command === "stop_desktop_daemon") {
-          ownedByDesktop = false;
-          daemonRunning = false;
-          currentPid = null;
-          return buildDaemonStatus();
-        }
+          if (command === "desktop_daemon_status") {
+            return buildDaemonStatus();
+          }
 
-        if (command === "start_desktop_daemon") {
-          return startDesktopDaemon();
-        }
+          if (command === "desktop_daemon_connection_check") {
+            return args?.url === cfg.fixtureUrl;
+          }
 
-        return null;
-      },
-      dialog: {
-        ask: async (message: string, options?: Record<string, unknown>) => {
-          window.__capturedDialogCall = {
-            message,
-            title: typeof options?.title === "string" ? options.title : undefined,
-          };
-          return cfg.confirmShouldAccept ?? false;
+          if (command === "desktop_daemon_logs") {
+            return { logPath: cfg.daemonLogPath ?? "", contents: "" };
+          }
+
+          if (command === "get_desktop_settings") {
+            await waitForDesktopSettingsResponse();
+            return {
+              releaseChannel: "stable",
+              daemon: { manageBuiltInDaemon: manageDaemon, keepRunningAfterQuit: true },
+            };
+          }
+
+          if (command === "patch_desktop_settings") {
+            const daemon = args?.daemon;
+            if (
+              daemon !== null &&
+              typeof daemon === "object" &&
+              "manageBuiltInDaemon" in daemon &&
+              typeof daemon.manageBuiltInDaemon === "boolean"
+            ) {
+              manageDaemon = daemon.manageBuiltInDaemon;
+            }
+            return {
+              releaseChannel: "stable",
+              daemon: { manageBuiltInDaemon: manageDaemon, keepRunningAfterQuit: true },
+            };
+          }
+
+          if (command === "stop_desktop_daemon") {
+            ownedByDesktop = false;
+            daemonRunning = false;
+            currentPid = null;
+            return buildDaemonStatus();
+          }
+
+          if (command === "start_desktop_daemon") {
+            return startDesktopDaemon();
+          }
+
+          return null;
         },
-        open: async (options?: Record<string, unknown>) => {
-          window.__capturedDialogOpenCalls.push(options);
-          return cfg.dialogOpenResult ?? null;
+        dialog: {
+          ask: async (message: string, options?: Record<string, unknown>) => {
+            window.__capturedDialogCall = {
+              message,
+              title: typeof options?.title === "string" ? options.title : undefined,
+            };
+            return cfg.confirmShouldAccept ?? false;
+          },
+          open: async (options?: Record<string, unknown>) => {
+            window.__capturedDialogOpenCalls.push(options);
+            return cfg.dialogOpenResult ?? null;
+          },
         },
-      },
-      getPendingOpenProject: async () => null,
-      events: { on: async () => () => undefined },
-    };
-
-    if (cfg.editorTargets) {
-      desktopBridge.editor = {
-        listTargets: async () => cfg.editorTargets ?? [],
-        openTarget: async (input: DesktopEditorOpenRecord) => {
-          await window.__recordDesktopEditorOpen?.(input);
-        },
+        getPendingOpenProject: async () => null,
+        events: { on: async () => () => undefined },
       };
-    }
 
-    window.__capturedDialogOpenCalls = [];
-    (window as unknown as { paseoDesktop: unknown }).paseoDesktop = desktopBridge;
-  }, config);
+      if (cfg.editorTargets) {
+        desktopBridge.editor = {
+          listTargets: async () => cfg.editorTargets ?? [],
+          openTarget: async (input: DesktopEditorOpenRecord) => {
+            await window.__recordDesktopEditorOpen?.(input);
+          },
+        };
+      }
+
+      window.__capturedDialogOpenCalls = [];
+      (window as unknown as { paseoDesktop: unknown }).paseoDesktop = desktopBridge;
+    },
+    { ...config, fixtureUrl },
+  );
 }
 
 export async function waitForDesktopDaemonStartRequest(page: Page): Promise<void> {

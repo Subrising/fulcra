@@ -2222,6 +2222,9 @@ describe("WorkspaceGitService checkout observation", () => {
       if (args[0] === "rev-parse") {
         return { stdout: `${REPO_CWD}\n`, stderr: "", truncated: false, exitCode: 0, signal: null };
       }
+      if (args[0] !== "ls-files") {
+        return { stdout: "", stderr: "", truncated: false, exitCode: 0, signal: null };
+      }
       lsFilesCallCount += 1;
       // The seed load at registration (call 1) succeeds. The refresh
       // triggered by the newly discovered "deps" directory (call 2) fails

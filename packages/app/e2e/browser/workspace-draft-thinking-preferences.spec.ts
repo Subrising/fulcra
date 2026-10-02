@@ -76,6 +76,8 @@ async function seedLegacyModelPreference(page: Page): Promise<void> {
           ...(preferences.providerPreferences as Record<string, unknown> | undefined),
           mock: {
             model: "legacy-five-minute-stream",
+            modelChosenByUser: true,
+            thinkingChosenByModel: { "legacy-five-minute-stream": true },
             thinkingByModel: { "legacy-five-minute-stream": "medium" },
           },
         },
@@ -102,6 +104,7 @@ test.describe("Workspace draft thinking preferences", () => {
       );
       await chooseDraftControl(page, "medium", "Thinking › Medium");
       await expectThinkingSelected(page, "Medium");
+      await expect.poll(() => readRememberedThinking(page, "five-minute-stream")).toBe("medium");
       await chooseDraftControl(
         page,
         "ten second stream",

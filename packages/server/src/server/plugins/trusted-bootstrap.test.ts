@@ -6,17 +6,20 @@ import { initializeTrustedPlugins } from "./trusted-bootstrap.js";
 import { trustedClaudeDenyRules } from "./trusted.js";
 import type { StoredAgentRecord } from "../agent/agent-storage.js";
 
-test("P4: completed storage index precedes trusted setup and Claude provider policy", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "trusted-boot-"));
-  const home = path.join(root, "home");
-  const bundle = path.join(root, "bundle");
-  const directory = path.join(bundle, "fixture");
-  const id = "11111111-1111-4111-8111-111111111111";
-  await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, "paseo-plugin.json"), JSON.stringify({ id: "fixture" }));
-  await writeFile(
-    path.join(directory, "index.host.js"),
-    `
+// POSIX ownership admission; the paired Win32 case below asserts host refusal.
+test.runIf(process.platform !== "win32")(
+  "P4: completed storage index precedes trusted setup and Claude provider policy",
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trusted-boot-"));
+    const home = path.join(root, "home");
+    const bundle = path.join(root, "bundle");
+    const directory = path.join(bundle, "fixture");
+    const id = "11111111-1111-4111-8111-111111111111";
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "paseo-plugin.json"), JSON.stringify({ id: "fixture" }));
+    await writeFile(
+      path.join(directory, "index.host.js"),
+      `
     export const hostContract='1.1';
     export default server=>{
       const observed=server.inputObservations.require('${id}');
@@ -24,35 +27,36 @@ test("P4: completed storage index precedes trusted setup and Claude provider pol
       server.claude.deny(()=>['Read(/fixture/private/**)']);
     };
   `,
-  );
-  const order: string[] = [];
-  let host: Awaited<ReturnType<typeof initializeTrustedPlugins>> | undefined;
-  try {
-    host = await initializeTrustedPlugins(
-      {
-        initialize: async () => {
-          order.push("initialized");
-        },
-        list: async () => {
-          expect(order).toEqual(["initialized"]);
-          order.push("listed");
-          return [{ id } as StoredAgentRecord];
-        },
-      },
-      bundle,
-      home,
     );
-    order.push("setup-complete");
-    expect(host.requireSequence(id)).toEqual({ boot: host.boot, humanAt: 0 });
-    // Same global deny choke point used before Claude's native query/probe.
-    expect(trustedClaudeDenyRules()).toContain("Read(/fixture/private/**)");
-    order.push("provider-policy");
-    expect(order).toEqual(["initialized", "listed", "setup-complete", "provider-policy"]);
-  } finally {
-    host?.close();
-    await rm(root, { recursive: true, force: true });
-  }
-});
+    const order: string[] = [];
+    let host: Awaited<ReturnType<typeof initializeTrustedPlugins>> | undefined;
+    try {
+      host = await initializeTrustedPlugins(
+        {
+          initialize: async () => {
+            order.push("initialized");
+          },
+          list: async () => {
+            expect(order).toEqual(["initialized"]);
+            order.push("listed");
+            return [{ id } as StoredAgentRecord];
+          },
+        },
+        bundle,
+        home,
+      );
+      order.push("setup-complete");
+      expect(host.requireSequence(id)).toEqual({ boot: host.boot, humanAt: 0 });
+      // Same global deny choke point used before Claude's native query/probe.
+      expect(trustedClaudeDenyRules()).toContain("Read(/fixture/private/**)");
+      order.push("provider-policy");
+      expect(order).toEqual(["initialized", "listed", "setup-complete", "provider-policy"]);
+    } finally {
+      host?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("P4: unavailable storage index prevents trusted startup", async () => {
   await expect(
@@ -68,3 +72,26 @@ test("P4: unavailable storage index prevents trusted startup", async () => {
     ),
   ).rejects.toThrow("storage unavailable");
 });
+
+test.runIf(process.platform === "win32")(
+  "Windows indexed startup refuses trusted bundle admission",
+  async () => {
+    const order: string[] = [];
+    await expect(
+      initializeTrustedPlugins(
+        {
+          initialize: async () => {
+            order.push("initialized");
+          },
+          list: async () => {
+            order.push("listed");
+            return [];
+          },
+        },
+        process.cwd(),
+        path.join(process.cwd(), "unused-home"),
+      ),
+    ).rejects.toMatchObject({ code: "TRUSTED_PLUGIN_HOST_UNSUPPORTED" });
+    expect(order).toEqual(["initialized", "listed"]);
+  },
+);

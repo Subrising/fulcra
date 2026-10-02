@@ -41,10 +41,15 @@ test.afterAll(async () => {
   await withoutMaps?.cleanup();
 });
 
-async function openArchitectureMap(page: Page, workspaceId: string) {
+async function openArchitectureMap(
+  page: Page,
+  workspaceId: string,
+  source: "code" | "drawn" = "drawn",
+) {
   await gotoWorkspace(page, workspaceId);
   await openNewTabMenuWithShortcut(page);
   await page.getByTestId("workspace-new-tab-architecture-map").filter({ visible: true }).click();
+  if (source === "drawn") await page.getByRole("tab", { name: "Drawn map", exact: true }).click();
 }
 
 test.describe("Architecture map", () => {
@@ -112,10 +117,9 @@ test.describe("Architecture map", () => {
     await expect(page.getByTestId("architecture-map-error")).toContainText("schema_version");
   });
 
-  test("shows the empty state when the project has no maps", async ({ page }) => {
-    await openArchitectureMap(page, withoutMaps.workspaceId);
-    await expect(page.getByTestId("architecture-map-empty")).toContainText(
-      "Fulcra shows maps stored in .fulcra/architecture.",
-    );
+  test("shows the empty code map when the project has no drawn maps", async ({ page }) => {
+    await openArchitectureMap(page, withoutMaps.workspaceId, "code");
+    await expect(page.getByTestId("dependency-graph")).toContainText("0 modules");
+    await expect(page.getByRole("tab", { name: "Drawn map", exact: true })).toHaveCount(0);
   });
 });

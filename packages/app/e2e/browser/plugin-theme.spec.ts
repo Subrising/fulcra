@@ -181,7 +181,7 @@ test("scrolls to the last theme when a plugin contributes more themes than fit",
     await expect(page.getByTestId("settings-sidebar")).toBeVisible();
     await openSettingsSection(page, "appearance");
 
-    await page.getByLabel("Theme: System", { exact: true }).click();
+    await page.getByLabel(DEFAULT_THEME_LABEL, { exact: true }).click();
     await scrollThemeMenuToLastTheme(page);
     await page.screenshot({
       path: testInfo.outputPath("plugin-theme-picker-scrolled.png"),

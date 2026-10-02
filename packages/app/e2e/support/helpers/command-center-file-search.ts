@@ -13,6 +13,10 @@ interface SurfaceRect {
 interface LayoutObservation {
   active: boolean;
   layoutShift: number;
+  shiftSources: Array<{
+    value: number;
+    nodes: Array<{ tag: string | null; testId: string | null; inPanel: boolean }>;
+  }>;
   samples: Record<string, SurfaceRect[]>;
 }
 
@@ -93,7 +97,12 @@ export async function failDirectorySuggestionRequests(page: Page): Promise<void>
 export async function startCommandCenterLayoutObservation(page: Page): Promise<void> {
   await page.evaluate((selectors) => {
     const oracleWindow = window as LayoutOracleWindow;
-    const observation: LayoutObservation = { active: true, layoutShift: 0, samples: {} };
+    const observation: LayoutObservation = {
+      active: true,
+      layoutShift: 0,
+      shiftSources: [],
+      samples: {},
+    };
     oracleWindow.__commandCenterLayoutObservation = observation;
 
     const observedElements = new WeakSet<Element>();
@@ -143,7 +152,23 @@ export async function startCommandCenterLayoutObservation(page: Page): Promise<v
       try {
         const performanceObserver = new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
-            observation.layoutShift += (entry as PerformanceEntry & { value?: number }).value ?? 0;
+            const shift = entry as PerformanceEntry & {
+              value?: number;
+              sources?: Array<{ node?: Node }>;
+            };
+            const panel = document.querySelector('[data-testid="command-center-panel"]');
+            observation.layoutShift += shift.value ?? 0;
+            observation.shiftSources.push({
+              value: shift.value ?? 0,
+              nodes: (shift.sources ?? []).map(({ node }) => ({
+                tag: node?.nodeName ?? null,
+                testId:
+                  node instanceof Element
+                    ? (node.closest("[data-testid]")?.getAttribute("data-testid") ?? null)
+                    : null,
+                inPanel: Boolean(node && panel?.contains(node)),
+              })),
+            });
           }
         });
         performanceObserver.observe({ type: "layout-shift", buffered: false });

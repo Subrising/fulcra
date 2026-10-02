@@ -118,6 +118,7 @@ function createServer(terminalManager: TerminalManager, workspaceRegistry?: Work
   const pushNotifications = new RecordingPushNotificationSender();
   const agentManager = {
     setAgentAttentionCallback: vi.fn(),
+    setNativeMessageReceipts: vi.fn(),
     subscribe: vi.fn(() => () => {}),
     getAgent: vi.fn(() => null),
     getLastAssistantMessage: vi.fn(async () => null),

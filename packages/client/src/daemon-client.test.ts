@@ -897,7 +897,7 @@ test("refuses relay password auth without an encrypted hello", async () => {
     },
   });
   clients.push(client);
-  await expect(client.connect()).rejects.toThrow("Relay credentials require E2EE");
+  await expect(client.connect()).rejects.toThrow("Couldn't open a connection to this Mac");
   expect(requests).toEqual([]);
 });
 
@@ -925,7 +925,7 @@ test("stops reconnecting after a password rejection on an established connection
   expect(attempts).toBe(1);
 });
 
-test("sends a password containing spaces in hello without an invalid WebSocket subprotocol", async () => {
+test("encodes a password containing spaces for both header and WebSocket subprotocol admission", async () => {
   const mock = createMockTransport();
   const transportFactory = vi.fn(() => mock.transport);
   const client = new DaemonClient({
@@ -942,7 +942,8 @@ test("sends a password containing spaces in hello without an invalid WebSocket s
   await connected;
   expect(transportFactory).toHaveBeenCalledWith({
     url: "ws://test",
-    headers: {},
+    headers: { Authorization: "Bearer b64u.dHdvIHdvcmRz" },
+    protocols: ["fulcra.v1", "fulcra.auth.dHdvIHdvcmRz"],
   });
   expect(JSON.parse(assertStr(mock.sent[0]))).toMatchObject({
     type: "hello",

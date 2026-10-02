@@ -1,3 +1,4 @@
+// Confined-image cases require POSIX descriptor proofs; provider-image-output.test.ts pairs them with real Win32 refusal.
 import {
   closeSync,
   existsSync,
@@ -1807,66 +1808,72 @@ describe("PiRpcAgentSession", () => {
     expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("medium");
   });
 
-  test("materializes image prompts as text hints for text-only Pi models", async () => {
-    const { pi, session } = await createSession();
-    const fakeSession = pi.latestSession();
-    fakeSession.setModelResult = {
-      provider: "openrouter",
-      id: "openai/gpt-oss-20b:free",
-      name: "OpenAI: gpt-oss-20b (free)",
-      input: ["text"],
-    };
+  test.runIf(process.platform !== "win32")(
+    "materializes image prompts as text hints for text-only Pi models",
+    async () => {
+      const { pi, session } = await createSession();
+      const fakeSession = pi.latestSession();
+      fakeSession.setModelResult = {
+        provider: "openrouter",
+        id: "openai/gpt-oss-20b:free",
+        name: "OpenAI: gpt-oss-20b (free)",
+        input: ["text"],
+      };
 
-    await session.setModel("openrouter/openai/gpt-oss-20b:free");
-    await session.startTurn([
-      { type: "text", text: "Describe this image." },
-      { type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" },
-    ]);
+      await session.setModel("openrouter/openai/gpt-oss-20b:free");
+      await session.startTurn([
+        { type: "text", text: "Describe this image." },
+        { type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" },
+      ]);
 
-    let imagePath: string | undefined;
-    try {
-      expect(fakeSession.prompts).toHaveLength(1);
-      const prompt = fakeSession.prompts[0]!;
-      expect(prompt.imageCount).toBe(0);
-      expect(prompt.message).toContain("Describe this image.");
-      expect(prompt.message).not.toContain(ONE_BY_ONE_PNG_BASE64);
-      imagePath = prompt.message.match(/\[Image available at: (.+)\]/)?.[1];
-      expect(imagePath).toBeTypeOf("string");
-      expect(imagePath).toMatch(
-        /paseo-attachments(?:-[^\\/]+)?[\\/](?:[^\\/]+[\\/])?[0-9a-f]{64}\.png$/,
-      );
-      expect(existsSync(imagePath!)).toBe(true);
-    } finally {
-      if (imagePath) {
-        rmSync(imagePath, { force: true });
+      let imagePath: string | undefined;
+      try {
+        expect(fakeSession.prompts).toHaveLength(1);
+        const prompt = fakeSession.prompts[0]!;
+        expect(prompt.imageCount).toBe(0);
+        expect(prompt.message).toContain("Describe this image.");
+        expect(prompt.message).not.toContain(ONE_BY_ONE_PNG_BASE64);
+        imagePath = prompt.message.match(/\[Image available at: (.+)\]/)?.[1];
+        expect(imagePath).toBeTypeOf("string");
+        expect(imagePath).toMatch(
+          /paseo-attachments(?:-[^\\/]+)?[\\/](?:[^\\/]+[\\/])?[0-9a-f]{64}\.png$/,
+        );
+        expect(existsSync(imagePath!)).toBe(true);
+      } finally {
+        if (imagePath) {
+          rmSync(imagePath, { force: true });
+        }
       }
-    }
-  });
+    },
+  );
 
-  test("materializes image prompts when Pi model capabilities are unknown", async () => {
-    const { pi, session } = await createSession();
-    const fakeSession = pi.latestSession();
+  test.runIf(process.platform !== "win32")(
+    "materializes image prompts when Pi model capabilities are unknown",
+    async () => {
+      const { pi, session } = await createSession();
+      const fakeSession = pi.latestSession();
 
-    await session.startTurn([
-      { type: "text", text: "Describe this image." },
-      { type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" },
-    ]);
+      await session.startTurn([
+        { type: "text", text: "Describe this image." },
+        { type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" },
+      ]);
 
-    let imagePath: string | undefined;
-    try {
-      expect(fakeSession.prompts).toHaveLength(1);
-      const prompt = fakeSession.prompts[0]!;
-      expect(prompt.imageCount).toBe(0);
-      expect(prompt.message).toContain("Describe this image.");
-      imagePath = prompt.message.match(/\[Image available at: (.+)\]/)?.[1];
-      expect(imagePath).toBeTypeOf("string");
-      expect(existsSync(imagePath!)).toBe(true);
-    } finally {
-      if (imagePath) {
-        rmSync(imagePath, { force: true });
+      let imagePath: string | undefined;
+      try {
+        expect(fakeSession.prompts).toHaveLength(1);
+        const prompt = fakeSession.prompts[0]!;
+        expect(prompt.imageCount).toBe(0);
+        expect(prompt.message).toContain("Describe this image.");
+        imagePath = prompt.message.match(/\[Image available at: (.+)\]/)?.[1];
+        expect(imagePath).toBeTypeOf("string");
+        expect(existsSync(imagePath!)).toBe(true);
+      } finally {
+        if (imagePath) {
+          rmSync(imagePath, { force: true });
+        }
       }
-    }
-  });
+    },
+  );
 
   test("forwards raw image prompts for vision-capable Pi models", async () => {
     const { pi, session } = await createSession();

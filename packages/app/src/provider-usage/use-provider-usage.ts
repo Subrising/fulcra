@@ -1,5 +1,5 @@
 import { runtimeUsageRevision, readUsageSnapshot, currentUsageSnapshot } from "./runtime-snapshot";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
@@ -92,7 +92,9 @@ export function useProviderUsage(
     queryKey,
     queryFn,
     enabled,
-    staleTime: PROVIDER_USAGE_STALE_TIME_MS,
+    // A fresh timestamp cannot make quota from a previous runtime attribution current.
+    staleTime: (cachedQuery) =>
+      cachedQuery.state.data?.revision === runtimeRevision ? PROVIDER_USAGE_STALE_TIME_MS : 0,
     refetchOnMount: true,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
@@ -108,8 +110,12 @@ export function useProviderUsage(
     },
     onSuccess: (payload) => queryClient.setQueryData(queryKey, payload),
   });
+  const previousUsageRevision = useRef(runtimeRevision);
   useEffect(() => {
-    if (!enabled) return;
+    const previousRevision = previousUsageRevision.current;
+    previousUsageRevision.current = runtimeRevision;
+    // Opening already refetches through the query/refresh path. Only live attribution changes invalidate it.
+    if (!enabled || previousRevision === runtimeRevision) return;
     // Collapse bursts of agent upserts. Superseded replies are hidden immediately until this projection is read.
     const timer = setTimeout(() => {
       void queryClient.invalidateQueries({ queryKey, exact: true });

@@ -22,40 +22,50 @@ export async function prepareLocalPairingHost(
   daemon: IsolatedHostDaemon | OutdatedDaemon,
   additionalHosts: PairingHostInput[] = [],
 ): Promise<void> {
-  await page.addInitScript((localServerId) => {
-    (window as unknown as { paseoDesktop: unknown }).paseoDesktop = {
-      platform: "darwin",
-      invoke: async (command: string) => {
-        if (command === "desktop_daemon_status") {
-          return {
-            serverId: localServerId,
-            status: "running",
-            listen: null,
-            hostname: null,
-            pid: null,
-            home: "",
-            version: null,
-            desktopManaged: true,
-            error: null,
-          };
-        }
-        if (command === "get_desktop_settings") {
-          return {
-            releaseChannel: "stable",
-            daemon: { manageBuiltInDaemon: false, keepRunningAfterQuit: true },
-          };
-        }
-        return null;
-      },
-      getPendingOpenProject: async () => null,
-      events: { on: async () => () => undefined },
-      opener: {
-        openUrl: async (url: string) => {
-          localStorage.setItem("@paseo:e2e-opened-url", url);
+  const endpoint = "port" in daemon ? `127.0.0.1:${daemon.port}` : daemon.endpoint;
+  const fixtureUrls = [endpoint, ...additionalHosts.map((host) => host.endpoint)].map(
+    (address) => `ws://${address}/ws`,
+  );
+  await page.addInitScript(
+    ({ localServerId, fixtureUrls: knownUrls }) => {
+      (window as unknown as { paseoDesktop: unknown }).paseoDesktop = {
+        platform: "darwin",
+        invoke: async (command: string, args?: { url?: string }) => {
+          if (command === "desktop_daemon_connection_check") {
+            return typeof args?.url === "string" && knownUrls.includes(args.url);
+          }
+          if (command === "desktop_daemon_status") {
+            return {
+              serverId: localServerId,
+              status: "running",
+              listen: null,
+              hostname: null,
+              pid: null,
+              home: "",
+              version: null,
+              desktopManaged: true,
+              error: null,
+            };
+          }
+          if (command === "get_desktop_settings") {
+            return {
+              releaseChannel: "stable",
+              daemon: { manageBuiltInDaemon: false, keepRunningAfterQuit: true },
+            };
+          }
+          return null;
         },
-      },
-    };
-  }, daemon.serverId);
+        getPendingOpenProject: async () => null,
+        events: { on: async () => () => undefined },
+        opener: {
+          openUrl: async (url: string) => {
+            localStorage.setItem("@paseo:e2e-opened-url", url);
+          },
+        },
+      };
+    },
+    { localServerId: daemon.serverId, fixtureUrls },
+  );
 
   await preparePairingHost(page, daemon, additionalHosts);
 }
@@ -90,7 +100,8 @@ export async function expectRelayConsent(page: Page): Promise<void> {
   const modal = page.getByTestId("host-page-pair-device-card");
   await expect(modal.getByText("Enable relay?", { exact: true })).toBeVisible();
   await expect(modal.getByText(/end-to-end encrypted/)).toBeVisible();
-  await expect(modal.getByRole("link", { name: "Read how Paseo relay works" })).toBeVisible();
+  await expect(modal.getByRole("button", { name: "Enable relay", exact: true })).toBeVisible();
+  await expect(modal.getByRole("button", { name: "Not now", exact: true })).toBeVisible();
   await expect(modal.getByText(/TCP, Tailscale, or another VPN/)).toBeVisible();
   await expect(modal.getByRole("img", { name: "Pairing QR code" })).toHaveCount(0);
   await expect(modal.getByRole("textbox", { name: "Pairing link" })).toHaveCount(0);
@@ -115,7 +126,8 @@ export async function expectPairingOffer(page: Page): Promise<void> {
   await expect(page.getByRole("textbox", { name: "Pairing link" })).toHaveValue(/#offer=/);
   await expect(
     page.getByRole("alert").filter({
-      hasText: "Treat this pairing link like a password. Anyone with it can access this daemon.",
+      hasText:
+        "This link pairs one device and expires in 10 minutes by default. Share it only with a device you trust.",
     }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
@@ -175,7 +187,7 @@ export async function openPairDeviceFromHome(page: Page): Promise<void> {
 export async function expectRelayUpdateRequired(page: Page): Promise<void> {
   const modal = page.getByTestId("host-page-pair-device-card");
   await expect(
-    modal.getByText("Update the host to enable relay from Paseo Desktop."),
+    modal.getByText("Update the host to enable relay from Fulcra Desktop."),
   ).toBeVisible();
   await expect(modal.getByRole("button", { name: "Enable relay", exact: true })).toHaveCount(0);
   await expect(modal.getByRole("textbox", { name: "Pairing link" })).toHaveCount(0);
