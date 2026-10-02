@@ -115,7 +115,13 @@ async function fixture(
     },
     requests: () => servers.flatMap((process) => process.requests()),
   });
-  const provider = new CodexAppServerAgentClient(createTestLogger());
+  // This fixture owns the fake app-server transport; an installed Codex CLI is not a dependency.
+  class FixtureCodexClient extends CodexAppServerAgentClient {
+    override async isAvailable(): Promise<boolean> {
+      return true;
+    }
+  }
+  const provider = new FixtureCodexClient(createTestLogger());
   Reflect.set(provider, "goalsEnabledPromise", Promise.resolve(false));
   Reflect.set(provider, "autoReviewEnabledPromise", Promise.resolve(false));
   Reflect.set(provider, "spawnAppServer", async () => {

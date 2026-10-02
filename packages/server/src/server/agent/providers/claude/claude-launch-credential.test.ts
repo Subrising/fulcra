@@ -34,7 +34,8 @@ async function waitFor(file: string, timeoutMs = 20000): Promise<void> {
   }
 }
 
-describe("Claude launch credential", () => {
+// The real SDK spawn uses a POSIX executable stub; Windows provider/env adapter coverage remains elsewhere.
+describe.runIf(process.platform !== "win32")("Claude launch credential", () => {
   test("a pooled account's token is in the CLI's environment and nowhere in its argv", async () => {
     dir = realpathSync(mkdtempSync(path.join(tmpdir(), "fulcra-claude-argv-")));
     const argvFile = path.join(dir, "argv.json");
@@ -85,3 +86,24 @@ describe("Claude launch credential", () => {
     expect(argv.join("\n")).not.toContain("sk-ant-");
   }, 60000);
 });
+
+test.runIf(process.platform === "win32")(
+  "Windows cannot report a successful Claude turn through a POSIX credential stub",
+  async () => {
+    dir = realpathSync(mkdtempSync(path.join(tmpdir(), "claude-posix-stub-windows-")));
+    const marker = path.join(dir, "executed");
+    const stub = path.join(dir, "claude");
+    writeFileSync(stub, `#!/bin/sh\ntouch '${marker}'\n`);
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      resolveBinary: async () => stub,
+    });
+    const session = await client.createSession({ provider: "claude", cwd: dir });
+    try {
+      await expect(session.run("hello")).rejects.toThrow();
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await session.close().catch(() => undefined);
+    }
+  },
+);

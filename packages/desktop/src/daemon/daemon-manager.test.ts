@@ -577,18 +577,33 @@ describe("L39 local service of this home", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("gives the window owner access to this home's service, as a main-process header only", async () => {
-    const { manager, request } = await freshWindow();
-    expect(await request(`ws://${listen}/ws`)).toEqual({
-      requestHeaders: { Authorization: "Bearer synthetic-launchd-secret" },
-    });
-    // The renderer-facing check says only "available": the secret never crosses IPC.
-    expect(
-      await manager.createDaemonCommandHandlers().desktop_daemon_connection_check({
-        url: `ws://${listen}/ws`,
-      }),
-    ).toBe(true);
-  });
+  it.runIf(process.platform === "win32")(
+    "Windows window admission cannot turn a launchd-style secret into owner headers",
+    async () => {
+      const { manager, request } = await freshWindow();
+      expect(await request()).toEqual({ requestHeaders: {} });
+      expect(
+        await manager.createDaemonCommandHandlers().desktop_local_credential({ url }),
+      ).toBeUndefined();
+    },
+  );
+
+  // The launchd-service fixture relies on POSIX uid and private-file modes.
+  it.runIf(process.platform !== "win32")(
+    "gives the window owner access to this home's service, as a main-process header only",
+    async () => {
+      const { manager, request } = await freshWindow();
+      expect(await request(`ws://${listen}/ws`)).toEqual({
+        requestHeaders: { Authorization: "Bearer synthetic-launchd-secret" },
+      });
+      // The renderer-facing check says only "available": the secret never crosses IPC.
+      expect(
+        await manager.createDaemonCommandHandlers().desktop_daemon_connection_check({
+          url: `ws://${listen}/ws`,
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("gives nothing for a remote target, another port, or another home", async () => {
     const { request } = await freshWindow();
@@ -608,53 +623,57 @@ describe("L39 local service of this home", () => {
     }
   });
 
-  it("switching Command Centre on beside the running service keeps the setting and gives the window owner access", async () => {
-    mocks.settings = {
-      ...DEFAULT_DESKTOP_SETTINGS,
-      daemon: { ...DEFAULT_DESKTOP_SETTINGS.daemon, commandCentreEnabled: false },
-    };
-    mocks.runExternalCliJsonCommand.mockReset().mockResolvedValue({
-      localDaemon: "running",
-      pid: process.pid,
-      startedAt: "launchd",
-      listen,
-      desktopManaged: false,
-    });
-    mocks.startDaemonInstance.mockReset();
-    const { manager, request } = await freshWindow();
-    expect(await request(`ws://${listen}/ws`)).toEqual({ requestHeaders: {} });
+  // The launchd-service fixture relies on POSIX uid and private-file modes.
+  it.runIf(process.platform !== "win32")(
+    "switching Command Centre on beside the running service keeps the setting and gives the window owner access",
+    async () => {
+      mocks.settings = {
+        ...DEFAULT_DESKTOP_SETTINGS,
+        daemon: { ...DEFAULT_DESKTOP_SETTINGS.daemon, commandCentreEnabled: false },
+      };
+      mocks.runExternalCliJsonCommand.mockReset().mockResolvedValue({
+        localDaemon: "running",
+        pid: process.pid,
+        startedAt: "launchd",
+        listen,
+        desktopManaged: false,
+      });
+      mocks.startDaemonInstance.mockReset();
+      const { manager, request } = await freshWindow();
+      expect(await request(`ws://${listen}/ws`)).toEqual({ requestHeaders: {} });
 
-    const handlers = manager.createDaemonCommandHandlers();
-    await handlers.patch_desktop_settings({ daemon: { commandCentreEnabled: true } });
+      const handlers = manager.createDaemonCommandHandlers();
+      await handlers.patch_desktop_settings({ daemon: { commandCentreEnabled: true } });
 
-    expect(mocks.settings.daemon.commandCentreEnabled).toBe(true);
-    // Not this app's service: never stopped, never replaced by a daemon of this app.
-    expect(mocks.runExternalCliJsonCommand.mock.calls.flat()).not.toContain("stop");
-    expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
-    expect(await request(`ws://${listen}/ws`)).toEqual({
-      requestHeaders: { Authorization: "Bearer synthetic-launchd-secret" },
-    });
+      expect(mocks.settings.daemon.commandCentreEnabled).toBe(true);
+      // Not this app's service: never stopped, never replaced by a daemon of this app.
+      expect(mocks.runExternalCliJsonCommand.mock.calls.flat()).not.toContain("stop");
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+      expect(await request(`ws://${listen}/ws`)).toEqual({
+        requestHeaders: { Authorization: "Bearer synthetic-launchd-secret" },
+      });
 
-    // The app's own status probe of the service signs in the same way (the bundled CLI only), so the window gets
-    // the service's server id and connects.
-    mocks.runExternalCliJsonCommand.mockClear();
-    const status = await handlers.desktop_daemon_status();
-    expect(status).toMatchObject({ status: "running", usesGeneratedCredential: true });
-    expect(mocks.runExternalCliJsonCommand).toHaveBeenCalledWith(
-      expect.arrayContaining(["status"]),
-      { env: { PASEO_PASSWORD: "synthetic-launchd-secret" } },
-    );
+      // The app's own status probe of the service signs in the same way (the bundled CLI only), so the window gets
+      // the service's server id and connects.
+      mocks.runExternalCliJsonCommand.mockClear();
+      const status = await handlers.desktop_daemon_status();
+      expect(status).toMatchObject({ status: "running", usesGeneratedCredential: true });
+      expect(mocks.runExternalCliJsonCommand).toHaveBeenCalledWith(
+        expect.arrayContaining(["status"]),
+        { env: { PASEO_PASSWORD: "synthetic-launchd-secret" } },
+      );
 
-    // Switching it off again is kept too, and the window stops signing in.
-    await handlers.patch_desktop_settings({ daemon: { commandCentreEnabled: false } });
-    expect(mocks.settings.daemon.commandCentreEnabled).toBe(false);
-    expect(await request(`ws://${listen}/ws`)).toEqual({ requestHeaders: {} });
-    mocks.runExternalCliJsonCommand.mockClear();
-    await handlers.desktop_daemon_status();
-    expect(mocks.runExternalCliJsonCommand.mock.calls.every((call) => call.length === 1)).toBe(
-      true,
-    );
-  });
+      // Switching it off again is kept too, and the window stops signing in.
+      await handlers.patch_desktop_settings({ daemon: { commandCentreEnabled: false } });
+      expect(mocks.settings.daemon.commandCentreEnabled).toBe(false);
+      expect(await request(`ws://${listen}/ws`)).toEqual({ requestHeaders: {} });
+      mocks.runExternalCliJsonCommand.mockClear();
+      await handlers.desktop_daemon_status();
+      expect(mocks.runExternalCliJsonCommand.mock.calls.every((call) => call.length === 1)).toBe(
+        true,
+      );
+    },
+  );
 
   it("gives nothing when Command Centre is off", async () => {
     mocks.settings = {

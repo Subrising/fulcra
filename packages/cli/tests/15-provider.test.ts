@@ -52,85 +52,6 @@ interface ProviderDiagnostic {
   diagnostic: string;
 }
 
-const EXPECTED_CLAUDE_MODELS = [
-  {
-    id: "claude-opus-5-5",
-    model: "Opus 5.5",
-  },
-  {
-    id: "claude-opus-5",
-    model: "Opus 5",
-  },
-  {
-    id: "claude-fable-5-1",
-    model: "Fable 5.1",
-  },
-  {
-    id: "claude-fable-5",
-    model: "Fable 5",
-  },
-  {
-    id: "claude-opus-4-8[1m]",
-    model: "Opus 4.8 1M",
-  },
-  {
-    id: "claude-opus-4-8",
-    model: "Opus 4.8",
-  },
-  {
-    id: "claude-sonnet-5-5",
-    model: "Sonnet 5.5",
-  },
-  {
-    id: "claude-sonnet-5",
-    model: "Sonnet 5",
-  },
-  {
-    id: "claude-opus-4-7[1m]",
-    model: "Opus 4.7 1M",
-  },
-  {
-    id: "claude-opus-4-7",
-    model: "Opus 4.7",
-  },
-  {
-    id: "claude-opus-4-6[1m]",
-    model: "Opus 4.6 1M",
-  },
-  {
-    id: "claude-sonnet-4-6[1m]",
-    model: "Sonnet 4.6 1M",
-  },
-  {
-    id: "claude-sonnet-4-6",
-    model: "Sonnet 4.6",
-  },
-  {
-    id: "claude-opus-4-6",
-    model: "Opus 4.6",
-  },
-  {
-    id: "claude-haiku-4-5",
-    model: "Haiku 4.5",
-  },
-] as const;
-
-const EXPECTED_CLAUDE_CONTEXT_MODELS = [
-  {
-    id: "claude-sonnet-5[1m]",
-    model: "Sonnet 5 1M",
-  },
-] as const;
-
-const EXPECTED_CLAUDE_CATALOG_MODELS = [
-  ...new Map(
-    [...EXPECTED_CLAUDE_MODELS, ...EXPECTED_CLAUDE_CONTEXT_MODELS].map((model) => [
-      model.id,
-      model,
-    ]),
-  ).values(),
-];
-
 let claudeModelIdsFromJson: string[] = [];
 let claudeModelsFromJson: ProviderModel[] = [];
 
@@ -160,48 +81,33 @@ async function runProviderModelsJson(provider: string): Promise<ProviderModel[]>
   return attemptRun(1);
 }
 
-async function assertClaudeModels(data: ProviderModel[]): Promise<void> {
+async function assertRuntimeModels(
+  data: ProviderModel[],
+  provider: "claude" | "codex" | "opencode",
+): Promise<void> {
   const client = await connectToDaemon({ target: { kind: "instance", home: ctx.paseoHome } });
-  const runtimeDescriptions = new Map<string, string>();
   try {
-    const result = await client.listProviderModels("claude");
+    const result = await client.listProviderModels(provider);
     assert.strictEqual(result.error, null);
-    for (const model of result.models ?? [])
-      runtimeDescriptions.set(model.id, model.description ?? "");
+    const expected = (result.models ?? []).map((model) => ({
+      id: model.id,
+      model: model.label,
+      description: model.description ?? "",
+    }));
+    assert(expected.length > 0, `${provider} runtime catalog should not be empty`);
+    assert.strictEqual(
+      new Set(data.map((model) => model.id)).size,
+      data.length,
+      `${provider} model IDs should be unique`,
+    );
+    // Claude Code owns availability and descriptions. The CLI must preserve its complete daemon catalog.
+    assert.deepStrictEqual(
+      data.map(({ id, model, description }) => ({ id, model, description })),
+      expected,
+    );
   } finally {
     await client.close();
   }
-  const byId = new Map(data.map((model) => [model.id, model]));
-
-  assert.strictEqual(byId.size, data.length, "claude model IDs should be unique");
-
-  for (const expectedModel of EXPECTED_CLAUDE_CATALOG_MODELS) {
-    const actualModel = byId.get(expectedModel.id);
-    assert(actualModel, `claude output should include ${expectedModel.id}`);
-    assert.strictEqual(
-      actualModel.model,
-      expectedModel.model,
-      `${expectedModel.id} should keep its display name`,
-    );
-    // Runtime descriptions override manifest wording; CLI must preserve the daemon's catalog.
-    assert.strictEqual(
-      actualModel.description,
-      runtimeDescriptions.get(expectedModel.id),
-      `${expectedModel.id} description should match the daemon catalog`,
-    );
-  }
-
-  const fable51Index = data.findIndex((model) => model.id === "claude-fable-5-1");
-  const fable5Index = data.findIndex((model) => model.id === "claude-fable-5");
-  assert.strictEqual(
-    fable5Index,
-    fable51Index + 1,
-    "Fable models should stay adjacent and newest-first",
-  );
-  assert(
-    !byId.has("claude-fable-5[1m]"),
-    "compatibility-only Fable aliases should not appear in CLI output",
-  );
 }
 
 try {
@@ -337,12 +243,12 @@ try {
     console.log("✓ provider ls --quiet outputs provider names only\n");
   }
 
-  // Test 6: provider models claude lists canonical model aliases
+  // Test 6: provider models claude lists the daemon runtime catalog unchanged
   {
-    console.log("Test 6: provider models claude lists canonical model aliases");
+    console.log("Test 6: provider models claude lists the daemon runtime catalog unchanged");
     const data = await runProviderModelsJson("claude");
-    await assertClaudeModels(data);
-    console.log("✓ provider models claude lists canonical model aliases\n");
+    await assertRuntimeModels(data, "claude");
+    console.log("✓ provider models claude lists the daemon runtime catalog unchanged\n");
   }
 
   // Test 7: provider models codex includes concrete codex model IDs
@@ -356,10 +262,7 @@ try {
       ids.every((id) => id.startsWith("gpt-")),
       "all codex model IDs should be from the gpt family",
     );
-    assert(
-      ids.some((id) => id.includes("codex")),
-      "codex model list should include at least one codex-optimized model",
-    );
+    await assertRuntimeModels(data, "codex");
     assert(
       data.every((m) => m.model && m.id && m.description),
       "every codex model should have model, id, and description fields",
@@ -410,7 +313,7 @@ try {
       data.every((m) => m.model && m.id),
       "each model should have name and id",
     );
-    await assertClaudeModels(data);
+    await assertRuntimeModels(data, "claude");
     claudeModelIdsFromJson = data.map((m) => m.id);
     claudeModelsFromJson = data;
     console.log("✓ provider models --json outputs valid JSON\n");

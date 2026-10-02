@@ -31,5 +31,14 @@ it("keeps at most four offers and stores only hashes in a private file", () => {
   expect(store.claim(first.id, first.secret)).toBe(false);
   const path = join(home, "pairing-offers.json");
   expect(readFileSync(path, "utf8")).not.toContain(first.secret);
-  expect(statSync(path).mode & 0o777).toBe(0o600);
 });
+
+// Hash secrecy above is cross-platform; synthesized Win32 modes do not prove ownership.
+it.runIf(process.platform !== "win32")(
+  "stores offer hashes with POSIX owner-only permissions",
+  () => {
+    const { home, store } = setup();
+    store.mint();
+    expect(statSync(join(home, "pairing-offers.json")).mode & 0o777).toBe(0o600);
+  },
+);

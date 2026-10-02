@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink, chmod, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -228,28 +228,32 @@ it("leaves Claude settings and admission unchanged without trusted plugins", () 
   expect(host().input(agent, "prompt", undefined, () => 42)).toBe(42);
 });
 
-it("loads distribution entries but refuses home plugins and escaped symlinks", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "trusted-bundle-test-"));
-  directories.push(directory);
-  const home = path.join(directory, "home");
-  const bundles = path.join(directory, "bundled-plugins");
-  await mkdir(home);
-  await mkdir(path.join(bundles, "fixture"), { recursive: true });
-  await writeFile(
-    path.join(bundles, "fixture", "paseo-plugin.json"),
-    JSON.stringify({ id: "fixture" }),
-  );
-  await writeFile(
-    path.join(bundles, "fixture", "index.host.js"),
-    'module.exports = (s) => { s.admission.onInput(() => "allow"); };',
-  );
-  const loaded = await loadTrustedPlugins(bundles, home);
-  hosts.push(loaded);
-  expect(loaded.catalog()).toEqual([{ id: "fixture", hooks: ["input"] }]);
-  await expect(loadTrustedPlugins(home, home)).rejects.toThrow(/outside PASEO_HOME/);
-  await symlink(home, path.join(bundles, "escape"));
-  await expect(loadTrustedPlugins(bundles, home)).rejects.toThrow(/directories/);
-});
+// POSIX ownership admission; the paired Win32 case below asserts host refusal.
+it.runIf(process.platform !== "win32")(
+  "loads distribution entries but refuses home plugins and escaped symlinks",
+  async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "trusted-bundle-test-"));
+    directories.push(directory);
+    const home = path.join(directory, "home");
+    const bundles = path.join(directory, "bundled-plugins");
+    await mkdir(home);
+    await mkdir(path.join(bundles, "fixture"), { recursive: true });
+    await writeFile(
+      path.join(bundles, "fixture", "paseo-plugin.json"),
+      JSON.stringify({ id: "fixture" }),
+    );
+    await writeFile(
+      path.join(bundles, "fixture", "index.host.js"),
+      'module.exports = (s) => { s.admission.onInput(() => "allow"); };',
+    );
+    const loaded = await loadTrustedPlugins(bundles, home);
+    hosts.push(loaded);
+    expect(loaded.catalog()).toEqual([{ id: "fixture", hooks: ["input"] }]);
+    await expect(loadTrustedPlugins(home, home)).rejects.toThrow(/outside PASEO_HOME/);
+    await symlink(home, path.join(bundles, "escape"));
+    await expect(loadTrustedPlugins(bundles, home)).rejects.toThrow(/directories/);
+  },
+);
 
 // m1: a hook that returns a rejected Promise is refused (good) but the rejection is never
 // observed, so Node reports an unhandled rejection (daemon crash under --unhandled-rejections=throw).
@@ -366,5 +370,34 @@ it.each(["permission", "mcp", "codex", "deny", "setup"])(
     }
     // Vitest reports any unobserved rejection as an error even after this assertion.
     await new Promise((resolve) => setTimeout(resolve, 20));
+  },
+);
+
+it.runIf(process.platform === "win32")(
+  "Windows refuses even readonly trusted distribution code before setup",
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "trusted-windows-"));
+    const bundles = path.join(root, "bundles"),
+      directory = path.join(bundles, "fixture");
+    const entry = path.join(directory, "index.host.js"),
+      marker = path.join(root, "executed");
+    try {
+      await mkdir(directory, { recursive: true });
+      await writeFile(path.join(directory, "paseo-plugin.json"), JSON.stringify({ id: "fixture" }));
+      await writeFile(
+        entry,
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed"); module.exports = () => {};`,
+      );
+      await chmod(entry, 0o444);
+      await chmod(directory, 0o555);
+      await expect(loadTrustedPlugins(bundles, path.join(root, "home"))).rejects.toMatchObject({
+        code: "TRUSTED_PLUGIN_HOST_UNSUPPORTED",
+      });
+      await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await chmod(directory, 0o700);
+      await chmod(entry, 0o600);
+      await rm(root, { recursive: true, force: true });
+    }
   },
 );

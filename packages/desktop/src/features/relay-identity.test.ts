@@ -52,9 +52,18 @@ describe("relay device identity store (FC-2)", () => {
       wrap: "safe-storage",
       publicKeyB64: identity.publicKeyB64,
     });
-    expect(statSync(storePath).mode & 0o777).toBe(0o600);
     expect(await relay.load()).toEqual(identity);
   });
+
+  // Win32 has no POSIX owner-only mode bits; encryption/readback above remains cross-platform.
+  it.runIf(process.platform !== "win32")(
+    "stores the wrapped relay identity with POSIX owner-only permissions",
+    async () => {
+      const { storePath, identity: relay } = store();
+      await relay.store(identity);
+      expect(statSync(storePath).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("never replaces a stored identity with a different one", async () => {
     const { identity: relay } = store();

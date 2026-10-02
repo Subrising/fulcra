@@ -278,7 +278,7 @@ test.describe("Viewed agent timelines", () => {
       subscriptions.reset();
       await page.reload();
       await waitForWorkspaceTabsVisible(page);
-      await expect(page.getByRole("button", { name: restored.title, exact: true })).toHaveAttribute(
+      await expect(workspaceAgentTabByTitle(page, restored.title)).toHaveAttribute(
         "aria-selected",
         "true",
       );

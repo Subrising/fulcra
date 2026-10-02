@@ -30,8 +30,14 @@ export async function writeJsonFileDurable(
   value: unknown,
   requireEffect?: () => void,
 ): Promise<void> {
-  const directory = path.dirname(filePath);
   requireEffect?.();
+  // Node cannot flush directory entries on Windows; never acknowledge native authority as durable there.
+  if (process.platform === "win32") {
+    throw Object.assign(new Error("Native durable writes unavailable on Windows"), {
+      code: "NATIVE_DURABILITY_UNAVAILABLE",
+    });
+  }
+  const directory = path.dirname(filePath);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   const temporary = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
   try {

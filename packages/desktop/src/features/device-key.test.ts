@@ -113,11 +113,20 @@ describe("desktop device key (Electron main process)", () => {
 
     // At rest: owner-only file, private key wrapped, never plaintext PEM.
     const stored = readFileSync(storePath, "utf8");
-    expect(statSync(storePath).mode & 0o777).toBe(0o600);
     expect(Buffer.from(JSON.parse(stored).privateKey, "base64").toString()).toMatch(/^wrapped:/);
     expect(stored).not.toContain("PRIVATE KEY");
     await expect(key.status()).resolves.toMatchObject({ paired: true, deviceId: paired.deviceId });
   });
+
+  // Win32 exposes synthesized mode bits, so file-mode privacy is a POSIX contract.
+  it.runIf(process.platform !== "win32")(
+    "stores the wrapped device key with POSIX owner-only permissions",
+    async () => {
+      const { key, storePath } = desktop({ platform: "darwin", touchId: true });
+      await key.pair({ code: "123456" });
+      expect(statSync(storePath).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("a refused Touch ID prompt pairs nothing and signs nothing", async () => {
     const refuse = async () => {

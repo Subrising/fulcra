@@ -2020,6 +2020,8 @@ function fakeCodexEmitting(args: FakeCodexEmitterArgs): AgentClient {
   };
 }
 
+// Native receipt-backed cases are paired by the Win32 fail-closed receipt tests in message-receipts/index.test.ts.
+const nativeHostTest = test.runIf(process.platform !== "win32");
 const logger = createTestLogger();
 
 test("does not register a session that finishes starting after shutdown begins", async () => {
@@ -13490,7 +13492,7 @@ async function nativeQueueFixture(holdFirst = false) {
   };
 }
 
-test("native intercom: busy queue waits for actual foreground settlement", async () => {
+nativeHostTest("native intercom: busy queue waits for actual foreground settlement", async () => {
   const f = await nativeQueueFixture(true);
   const running = drainAsyncGenerator(f.manager.streamAgent(f.agent.id, "current turn"));
   await f.manager.waitForAgentRunStart(f.agent.id);
@@ -13510,7 +13512,7 @@ test("native intercom: busy queue waits for actual foreground settlement", async
   }
 });
 
-test("native intercom: queued revoke has no provider effect", async () => {
+nativeHostTest("native intercom: queued revoke has no provider effect", async () => {
   const f = await nativeQueueFixture();
   const live = f.manager.getAgent(f.agent.id)!;
   live.pendingPermissions.set("hold", { id: "hold" } as never);
@@ -13526,7 +13528,7 @@ test("native intercom: queued revoke has no provider effect", async () => {
   }
 });
 
-test("native intercom: pending permission blocks delivery until resolved", async () => {
+nativeHostTest("native intercom: pending permission blocks delivery until resolved", async () => {
   const f = await nativeQueueFixture();
   const live = f.manager.getAgent(f.agent.id)!;
   live.pendingPermissions.set("permission", { id: "permission" } as never);
@@ -13542,7 +13544,7 @@ test("native intercom: pending permission blocks delivery until resolved", async
   }
 });
 
-test("native intercom: changed live instance cancels pending authority", async () => {
+nativeHostTest("native intercom: changed live instance cancels pending authority", async () => {
   const f = await nativeQueueFixture();
   const live = f.manager.getAgent(f.agent.id)!;
   live.pendingPermissions.set("hold", { id: "hold" } as never);
@@ -13667,7 +13669,7 @@ async function nativeReportRegistryFixture() {
   };
 }
 
-test.each(["refresh", "event"] as const)(
+nativeHostTest.each(["refresh", "event"] as const)(
   "native intercom RR2: %s replacement refuses old prime/adoption identity and final parent fence",
   async (seam) => {
     const f = await nativeReportRegistryFixture();
@@ -13699,45 +13701,48 @@ test.each(["refresh", "event"] as const)(
   },
 );
 
-test("native intercom RR2: native-session change during durable adoption refuses publication", async () => {
-  const f = await nativeReportRegistryFixture();
-  const { promises: files } = await import("node:fs");
-  const originalMkdir = files.mkdir;
-  const before = await files.readFile(f.file, "utf8");
-  let held!: () => void, release!: () => void;
-  const started = new Promise<void>((resolve) => {
-    held = resolve;
-  });
-  const wait = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const spy = vi.spyOn(files, "mkdir").mockImplementation(async (...args) => {
-    held();
-    await wait;
-    return originalMkdir(...args);
-  });
-  try {
-    const pending = f.call("report-parent-adopt", {
-      messageId: randomUUID(),
-      child: f.childIdentity,
-      parent: f.primeIdentity,
-      scopes: [f.scope],
-      expectedEpoch: f.adopted.epoch,
+nativeHostTest(
+  "native intercom RR2: native-session change during durable adoption refuses publication",
+  async () => {
+    const f = await nativeReportRegistryFixture();
+    const { promises: files } = await import("node:fs");
+    const originalMkdir = files.mkdir;
+    const before = await files.readFile(f.file, "utf8");
+    let held!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      held = resolve;
     });
-    const result = expect(pending).rejects.toThrow();
-    await started;
-    await f.child.changeNativeId("event");
-    expect(() => f.registry.requireParent(f.childIdentity, f.scope)).toThrow();
-    release();
-    await result;
-    expect(await files.readFile(f.file, "utf8")).toBe(before);
-    expect(f.bridge).not.toHaveBeenCalled();
-  } finally {
-    release();
-    spy.mockRestore();
-    await f.cleanup();
-  }
-});
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(files, "mkdir").mockImplementation(async (...args) => {
+      held();
+      await wait;
+      return originalMkdir(...args);
+    });
+    try {
+      const pending = f.call("report-parent-adopt", {
+        messageId: randomUUID(),
+        child: f.childIdentity,
+        parent: f.primeIdentity,
+        scopes: [f.scope],
+        expectedEpoch: f.adopted.epoch,
+      });
+      const result = expect(pending).rejects.toThrow();
+      await started;
+      await f.child.changeNativeId("event");
+      expect(() => f.registry.requireParent(f.childIdentity, f.scope)).toThrow();
+      release();
+      await result;
+      expect(await files.readFile(f.file, "utf8")).toBe(before);
+      expect(f.bridge).not.toHaveBeenCalled();
+    } finally {
+      release();
+      spy.mockRestore();
+      await f.cleanup();
+    }
+  },
+);
 
 test.each(["close", "reload"] as const)(
   "native intercom RR2: %s admission fences report identity during provider shutdown",
@@ -13772,7 +13777,7 @@ test.each(["close", "reload"] as const)(
   },
 );
 
-test.each(["event", "handle"] as const)(
+nativeHostTest.each(["event", "handle"] as const)(
   "native intercom target fence: %s native-id replacement refuses the old busy action ticket",
   async (seam) => {
     const f = await nativeQueueFixture(true);
