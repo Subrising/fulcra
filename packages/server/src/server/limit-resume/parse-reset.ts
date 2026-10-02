@@ -38,6 +38,20 @@ function offsetMs(instant: number, zone: string): number {
   return asUtc - Math.floor(instant / 1000) * 1000;
 }
 
+/** The instant at which the wall clock in `zone` shows y-mo-d h:mm (mo is 0-based; two passes cover a DST edge). */
+function zonedInstant(
+  zone: string,
+  y: number,
+  mo: number,
+  d: number,
+  h: number,
+  mi: number,
+): number {
+  const guess = Date.UTC(y, mo, d, h, mi);
+  const first = guess - offsetMs(guess, zone);
+  return guess - offsetMs(first, zone);
+}
+
 /** The instant at which the wall clock in `zone` shows `hour:minute` on the zone's calendar day `dayShift` from `now`. */
 function wallClockInstant(
   now: number,
@@ -47,16 +61,14 @@ function wallClockInstant(
   dayShift: number,
 ): number {
   const zoned = new Date(now + offsetMs(now, zone));
-  const guess = Date.UTC(
+  return zonedInstant(
+    zone,
     zoned.getUTCFullYear(),
     zoned.getUTCMonth(),
     zoned.getUTCDate() + dayShift,
     hour,
     minute,
   );
-  let instant = guess - offsetMs(guess, zone);
-  instant = guess - offsetMs(instant, zone);
-  return instant;
 }
 
 function parseRelative(text: string, now: number): number | null {
@@ -69,28 +81,46 @@ function parseRelative(text: string, now: number): number | null {
   return total > 0 ? now + total : null;
 }
 
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+// Claude's CLI: "resets 12:50am (Australia/Brisbane)", and its weekly forms "resets Sep 29 at 8am (...)" and
+// "resets Oct 3, 5pm (...)".
+const CLOCK =
+  /resets?(?:\s+at)?\s+(?:([A-Z][a-z]{2})\s+(\d{1,2})(?:,|\s+at)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*\(([A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)*)\))?/i;
+
 function parseClock(text: string, now: number, zoneDefault: string): number | null {
-  const clock =
-    /resets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*\(([A-Za-z_]+(?:\/[A-Za-z_+-]+)*)\))?/i.exec(
-      text,
-    );
-  if (clock && (clock[3] || clock[2])) {
-    let hour = Number(clock[1]);
-    const minute = Number(clock[2] ?? "0");
-    const meridiem = clock[3]?.toLowerCase();
-    if (meridiem === "pm" && hour < 12) hour += 12;
-    if (meridiem === "am" && hour === 12) hour = 0;
-    if (hour > 23 || minute > 59) return null;
-    const zone = clock[4] ?? zoneDefault;
-    try {
-      let at = wallClockInstant(now, zone, hour, minute, 0);
-      if (at <= now) at = wallClockInstant(now, zone, hour, minute, 1);
+  const clock = CLOCK.exec(text);
+  if (!clock || !(clock[5] || clock[4])) return null;
+  const month = clock[1] ? MONTHS.indexOf(clock[1].toLowerCase()) : -1;
+  if (clock[1] && month < 0) return null;
+  let hour = Number(clock[3]);
+  const minute = Number(clock[4] ?? "0");
+  const meridiem = clock[5]?.toLowerCase();
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (hour > 23 || minute > 59) return null;
+  const zone = clock[6] ?? zoneDefault;
+  try {
+    if (month >= 0) {
+      const year = new Date(now + offsetMs(now, zone)).getUTCFullYear();
+      let at = zonedInstant(zone, year, month, Number(clock[2]), hour, minute);
+      if (at <= now) at = zonedInstant(zone, year + 1, month, Number(clock[2]), hour, minute);
       return plausible(at, now);
-    } catch {
-      return null;
     }
+    let at = wallClockInstant(now, zone, hour, minute, 0);
+    if (at <= now) at = wallClockInstant(now, zone, hour, minute, 1);
+    return plausible(at, now);
+  } catch {
+    return null;
   }
-  return null;
+}
+
+// Codex: "Usage limit reached. Try again at Oct 4, 2026 5:42 PM." in the host's local time.
+function parseTryAgainAt(text: string, now: number): number | null {
+  const match = /Try again at ([A-Z][a-z]{2} \d{1,2}, \d{4},? \d{1,2}:\d{2} ?[AP]M)/.exec(text);
+  if (!match) return null;
+  const at = Date.parse(match[1].replace(",", "").replace(/(\d)([AP]M)$/, "$1 $2"));
+  return plausible(at, now);
 }
 
 export function parseLimitReset(input: {
@@ -118,6 +148,9 @@ export function parseLimitReset(input: {
 
   const relative = parseRelative(text, now);
   if (relative !== null) return plausible(relative, now);
+
+  const tryAgain = parseTryAgainAt(text, now);
+  if (tryAgain !== null) return tryAgain;
 
   return parseClock(text, now, zoneDefault);
 }

@@ -1,29 +1,44 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  HANDOFF_MS,
   LimitResumeService,
   MAX_CHAIN,
   RESUME_PROMPT,
   STAGGER_MS,
+  limitResumeFilePath,
   type LimitResumeAgent,
   type LimitResumeEvent,
 } from "./service.js";
 
 const T0 = Date.parse("2026-10-03T10:00:00Z");
-const limitEvent = (agentId: string, error: string): LimitResumeEvent => ({
+const failed = (agentId: string, error: string, turnId = "t1"): LimitResumeEvent => ({
   type: "agent_stream",
   agentId,
-  event: { type: "turn_failed", error },
+  event: { type: "turn_failed", error, turnId },
+});
+const completed = (agentId: string, turnId = "t1"): LimitResumeEvent => ({
+  type: "agent_stream",
+  agentId,
+  event: { type: "turn_completed", turnId },
+});
+const started = (agentId: string): LimitResumeEvent => ({
+  type: "agent_stream",
+  agentId,
+  event: { type: "turn_started" },
 });
 
 describe("LimitResumeService", () => {
   let home: string;
   let enabled: boolean;
   let agents: Map<string, LimitResumeAgent>;
+  let lastMessage: Map<string, string | null>;
   let sent: Array<{ agentId: string; prompt: string; at: number }>;
   let markers: Map<string, string | null>;
+  let onMarker: ((id: string, at: string | null) => Promise<void> | void) | null;
+  let getAgentDelay: Promise<void> | null;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -31,8 +46,11 @@ describe("LimitResumeService", () => {
     home = mkdtempSync(path.join(os.tmpdir(), "limit-resume-"));
     enabled = true;
     agents = new Map();
+    lastMessage = new Map();
     sent = [];
     markers = new Map();
+    onMarker = null;
+    getAgentDelay = null;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -43,9 +61,19 @@ describe("LimitResumeService", () => {
     new LimitResumeService({
       paseoHome: home,
       isEnabled: () => enabled,
-      getAgent: async (id) => agents.get(id) ?? null,
-      setMarker: async (id, at) => void markers.set(id, at),
-      sendResume: async (agentId, prompt) => void sent.push({ agentId, prompt, at: Date.now() }),
+      getAgent: async (id) => {
+        if (getAgentDelay) await getAgentDelay;
+        return agents.get(id) ?? null;
+      },
+      getLastAssistantMessage: async (id) => lastMessage.get(id) ?? null,
+      setMarker: async (id, at) => {
+        markers.set(id, at);
+        await onMarker?.(id, at);
+      },
+      sendResume: async (agentId, prompt, stillWanted) => {
+        if (!stillWanted()) return;
+        sent.push({ agentId, prompt, at: Date.now() });
+      },
       onError: (e) => {
         throw e;
       },
@@ -53,22 +81,154 @@ describe("LimitResumeService", () => {
     });
   const idle = (): LimitResumeAgent => ({ labels: {}, archived: false, busy: false });
   const resetIn = (ms: number) => `usage limit reached|${Math.floor((Date.now() + ms) / 1000)}`;
+  const queued = () =>
+    (JSON.parse(readFileSync(limitResumeFilePath(home), "utf8")) as { entries: unknown[] }).entries;
 
-  it("resumes a limit-stopped session at the reset time, and only once", async () => {
+  it("resumes a limit-stopped session after the reset plus the controller's window, and only once", async () => {
     agents.set("a", idle());
     const svc = make();
     svc.start();
-    await svc.onAgentEvent(limitEvent("a", resetIn(60 * 60_000)));
-    expect(markers.get("a")).toBe(new Date(T0 + 3_600_000).toISOString());
+    await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
+    const due = T0 + 3_600_000 + HANDOFF_MS;
+    expect(markers.get("a")).toBe(new Date(due).toISOString());
 
-    await vi.advanceTimersByTimeAsync(3_599_000);
+    await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS - 1_000);
     expect(sent).toEqual([]);
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(sent).toEqual([{ agentId: "a", prompt: RESUME_PROMPT, at: T0 + 3_600_000 }]);
+    expect(sent).toEqual([{ agentId: "a", prompt: RESUME_PROMPT, at: due }]);
     expect(markers.get("a")).toBeNull();
 
     await vi.advanceTimersByTimeAsync(3 * 3_600_000);
     expect(sent).toHaveLength(1);
+  });
+
+  describe("detection", () => {
+    it("queues the Claude CLI's failed-turn wording with its named zone", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(
+        failed("a", "You've hit your session limit · resets 12:50am (Australia/Brisbane)"),
+      );
+      // 12:50am Brisbane (UTC+10) is 14:50Z; the clock now is 10:00Z the same day.
+      expect(svc.pendingResumeAt("a")).toBe(Date.parse("2026-10-03T14:50:00Z") + HANDOFF_MS);
+    });
+
+    it("queues a turn that completed on the CLI's limit line (weekly dated form too)", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      lastMessage.set("a", "You've hit your weekly limit · resets Oct 6 at 8am (Australia/Brisbane)");
+      await svc.onAgentEvent(completed("a"));
+      expect(svc.pendingResumeAt("a")).toBe(Date.parse("2026-10-05T22:00:00Z") + HANDOFF_MS);
+    });
+
+    it("reads Codex's stated reset instead of falling back to a 15 minute retry", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      const stated = new Date(T0 + 5 * 3_600_000);
+      const text = `Usage limit reached. Try again at ${stated.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })}.`;
+      await svc.onAgentEvent(failed("a", text));
+      const at = svc.pendingResumeAt("a") ?? 0;
+      // Within the minute resolution of the printed time, nowhere near 15 minutes.
+      expect(Math.abs(at - (T0 + 5 * 3_600_000 + HANDOFF_MS))).toBeLessThan(60_000);
+    });
+
+    it("ignores prose that merely mentions a limit, and failures that are not limits", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      lastMessage.set("a", "Done. Note the API usage limit reached|1760000000 string in the docs.");
+      await svc.onAgentEvent(completed("a"));
+      lastMessage.set("a", "I wrote the rate limiter.\nYou've hit your session limit · resets 3pm");
+      await svc.onAgentEvent(completed("a", "t2"));
+      await svc.onAgentEvent(failed("a", "Tool crashed", "t3"));
+      expect(svc.pendingResumeAt("a")).toBeNull();
+    });
+  });
+
+  describe("races", () => {
+    it("keeps one entry and sends one resume when the same stop is delivered twice at once", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      const event = failed("a", resetIn(60_000), "same-turn");
+      await Promise.all([svc.onAgentEvent(event), svc.onAgentEvent(event)]);
+      expect(queued()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("drops a stop whose admission was overtaken by a newer turn", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      let release: () => void = () => {};
+      getAgentDelay = new Promise((resolve) => (release = resolve));
+      const admission = svc.onAgentEvent(failed("a", resetIn(60_000)));
+      await vi.advanceTimersByTimeAsync(0);
+      // The epoch moves synchronously; the cancel itself queues behind the admission, which is still waiting.
+      const newerTurn = svc.onAgentEvent(started("a"));
+      release();
+      await Promise.all([admission, newerTurn]);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(svc.pendingResumeAt("a")).toBeNull();
+      expect(sent).toEqual([]);
+    });
+
+    it("does not send when the toggle is turned off while the marker is being cleared", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(failed("a", resetIn(60_000)));
+      onMarker = (_id, at) => {
+        if (at === null) enabled = false;
+      };
+      await vi.advanceTimersByTimeAsync(60_000 + HANDOFF_MS + 1_000);
+      expect(sent).toEqual([]);
+    });
+
+    it("does not send when a user turn started and finished after the stop", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(failed("a", resetIn(60_000)));
+      await svc.onAgentEvent(started("a"));
+      await svc.onAgentEvent(completed("a", "t-user"));
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toEqual([]);
+    });
+  });
+
+  describe("controller handoff", () => {
+    it("steps aside when the controller resumed the session inside its own window", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
+      // The controller resumes at reset + 30..120 s; that starts a turn on the session.
+      await vi.advanceTimersByTimeAsync(3_600_000 + 60_000);
+      await svc.onAgentEvent(started("a"));
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toEqual([]);
+      expect(markers.get("a")).toBeNull();
+    });
+
+    it("never acts before the controller's window has closed", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
+      await vi.advanceTimersByTimeAsync(3_600_000 + 120_000);
+      expect(sent).toEqual([]);
+    });
   });
 
   it("does not queue or resume when the toggle is off", async () => {
@@ -76,13 +236,12 @@ describe("LimitResumeService", () => {
     enabled = false;
     const svc = make();
     svc.start();
-    await svc.onAgentEvent(limitEvent("a", resetIn(60_000)));
+    await svc.onAgentEvent(failed("a", resetIn(60_000)));
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(sent).toEqual([]);
 
-    // Turned off after queueing: the entry is dropped at fire time.
     enabled = true;
-    await svc.onAgentEvent(limitEvent("a", resetIn(60_000)));
+    await svc.onAgentEvent(failed("a", resetIn(60_000), "t2"));
     enabled = false;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(sent).toEqual([]);
@@ -94,30 +253,11 @@ describe("LimitResumeService", () => {
     agents.set("busy", idle());
     const svc = make();
     svc.start();
-    await svc.onAgentEvent(limitEvent("opt", resetIn(60_000)));
-    await svc.onAgentEvent(limitEvent("busy", resetIn(60_000)));
+    await svc.onAgentEvent(failed("opt", resetIn(60_000)));
+    await svc.onAgentEvent(failed("busy", resetIn(60_000)));
     agents.set("busy", { ...idle(), busy: true });
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(sent).toEqual([]);
-  });
-
-  it("ignores failures that are not usage limits", async () => {
-    agents.set("a", idle());
-    const svc = make();
-    svc.start();
-    await svc.onAgentEvent(limitEvent("a", "Tool crashed"));
-    expect(svc.pendingResumeAt("a")).toBeNull();
-  });
-
-  it("cancels when something else starts a turn", async () => {
-    agents.set("a", idle());
-    const svc = make();
-    svc.start();
-    await svc.onAgentEvent(limitEvent("a", resetIn(60_000)));
-    await svc.onAgentEvent({ type: "agent_stream", agentId: "a", event: { type: "turn_started" } });
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(sent).toEqual([]);
-    expect(markers.get("a")).toBeNull();
   });
 
   it("falls back to 15, 30, 60 minute backoff and gives up after MAX_CHAIN limit events", async () => {
@@ -127,10 +267,10 @@ describe("LimitResumeService", () => {
     const waits: number[] = [];
     for (let i = 0; i < MAX_CHAIN + 1; i += 1) {
       const before = Date.now();
-      await svc.onAgentEvent(limitEvent("a", "usage limit reached"));
+      await svc.onAgentEvent(failed("a", "usage limit reached", `t${i}`));
       const at = svc.pendingResumeAt("a");
       if (at === null) break;
-      waits.push((at - before) / 60_000);
+      waits.push((at - before - HANDOFF_MS) / 60_000);
       await vi.advanceTimersByTimeAsync(at - before + 1);
     }
     expect(waits).toEqual([15, 30, 60, 60]);
@@ -141,13 +281,13 @@ describe("LimitResumeService", () => {
     agents.set("a", idle());
     const first = make();
     first.start();
-    await first.onAgentEvent(limitEvent("a", resetIn(60 * 60_000)));
+    await first.onAgentEvent(failed("a", resetIn(60 * 60_000)));
     first.stop();
 
     const second = make();
     second.start();
-    expect(second.pendingResumeAt("a")).toBe(T0 + 3_600_000);
-    await vi.advanceTimersByTimeAsync(3_601_000);
+    expect(second.pendingResumeAt("a")).toBe(T0 + 3_600_000 + HANDOFF_MS);
+    await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
     expect(sent.map((s) => s.agentId)).toEqual(["a"]);
   });
 
@@ -157,9 +297,9 @@ describe("LimitResumeService", () => {
     svc.start();
     for (const id of ids) {
       agents.set(id, idle());
-      await svc.onAgentEvent(limitEvent(id, resetIn(60_000)));
+      await svc.onAgentEvent(failed(id, resetIn(60_000)));
     }
-    await vi.advanceTimersByTimeAsync(60_000 + 1);
+    await vi.advanceTimersByTimeAsync(60_000 + HANDOFF_MS + 1);
     await vi.advanceTimersByTimeAsync(10 * STAGGER_MS);
     expect(sent).toHaveLength(5);
     for (let i = 1; i < sent.length; i += 1) {
