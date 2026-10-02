@@ -1978,14 +1978,7 @@ test("original conversation errors expose no private exception text", () => {
 
 test("original conversation label is readable on light and dark activity cards", () => {
   const luminance = (hex) => {
-    const full =
-      hex.length === 4
-        ? "#" +
-          hex
-            .slice(1)
-            .map((c) => c + c)
-            .join("")
-        : hex;
+    const full = hex.length === 4 ? "#" + [...hex.slice(1)].map((c) => c + c).join("") : hex;
     const linear = [1, 3, 5]
       .map((i) => parseInt(full.slice(i, i + 2), 16) / 255)
       .map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));

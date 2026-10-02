@@ -228,15 +228,18 @@ export async function hostOverview({ probe = probeHost, ownership = async () => 
             ...(row ? { sessionId: row.id, remote: row.remote ?? null } : {}),
           };
         });
-        return Object.assign({ host, available: true }, state, {
+        return {
+          host,
+          available: true,
+          ...state,
           sessions,
           counts: {
             saved: sessions.length,
             activeTurns: sessions.filter((s) => s.activeTurn).length,
-            closed: sessions.filter((s) => s.status === `closed`).length,
+            closed: sessions.filter((s) => s.status === "closed").length,
             pendingPermissions: sessions.reduce((n, s) => n + s.pendingPermissions, 0),
           },
-        });
+        };
       } catch {
         return {
           host,

@@ -231,26 +231,24 @@ export function fakeHost({
             if (!p) external += 1;
             else if (!files.includes(p)) files.push(p);
           }
-        return Object.assign(
-          {
-            turnId,
-            implicit: false,
-            seqStart: rows[0].seqStart,
-            seqEnd: rows.at(-1)!.seqEnd,
-            startedAt: rows[0].timestamp,
-            endedAt: rows.at(-1)!.timestamp,
-            toolCount: new Set(tools.map((e) => e.item.callId)).size,
-            files,
-            externalFileCount: external,
-          },
-          !countsCommands
+        return {
+          turnId,
+          implicit: false,
+          seqStart: rows[0].seqStart,
+          seqEnd: rows.at(-1)!.seqEnd,
+          startedAt: rows[0].timestamp,
+          endedAt: rows.at(-1)!.timestamp,
+          toolCount: new Set(tools.map((e) => e.item.callId)).size,
+          files,
+          externalFileCount: external,
+          ...(!countsCommands
             ? {}
             : {
                 commands: new Set(
-                  tools.filter((e) => e.item.detail?.type === `shell`).map((e) => e.item.callId),
+                  tools.filter((e) => e.item.detail?.type === "shell").map((e) => e.item.callId),
                 ).size,
-              },
-        );
+              }),
+        };
       });
       const page = all.slice(cursor, cursor + limit);
       return {

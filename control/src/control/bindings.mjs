@@ -1196,7 +1196,7 @@ export class Bindings {
         "SELECT id,role,seat,projectId,task,action,previousSession,session,previousRevision,revision,note,at FROM role_binding_history WHERE seat=? OR projectId=? ORDER BY rowid DESC LIMIT 20",
       )
       .all(projectId, projectId)
-      .map((h) => Object.assign({ kind: `role-binding` }, h));
+      .map((h) => ({ kind: "role-binding", ...h }));
     for (const f of facts) {
       for (const w of f.unresolved)
         blockers.push({
