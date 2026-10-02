@@ -36,7 +36,9 @@ to target. Review is one gate inside the loop.
   must verify. Do not add hash/pin/seal/receipt/intake/board requirements — the
   ADW ledger, git, CI and test output are the record, and the gate re-hashes.
 - ACK means "received, proceeding". Never wait on an ACK before continuing work.
-- Fold all items for a worker into one message; keep its original ID.
+- Fold all items for a worker into one message to the SAME worker session. A new or
+  revised instruction gets a fresh `messageId`; reuse a `messageId` only to retry
+  identical text when the tool's receipt permits it.
 - Write owner process decisions into the contract (nonGoals/acceptance) or policy,
   not only into an inbox, so later briefs cannot re-import retired rules.
 - Report milestones in ≤3 lines: outcome or blocker, commit/artifact, next step.
