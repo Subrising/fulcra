@@ -404,7 +404,7 @@ async function fetchWorkspaceStatuses(
 }
 
 test.describe("Workspace model restart regressions", () => {
-  test("browser-created same-cwd workspace preserves restarted agent status and migrated tab ownership", async ({
+  test("browser-created same-cwd workspace preserves settled legacy agent status and migrated tab ownership", async ({
     page,
     baseURL,
   }) => {
@@ -423,7 +423,7 @@ test.describe("Workspace model restart regressions", () => {
         .toMatchObject({
           id: LEGACY_AGENT_ID,
           workspaceId: seeded.workspaceA,
-          status: "running",
+          status: "idle",
         });
 
       await page.goto(buildHostWorkspaceRoute(serverId, seeded.workspaceA));
@@ -476,10 +476,9 @@ test.describe("Workspace model restart regressions", () => {
           [createdWorkspaceId]: "done",
         });
 
-      // The restarted provider session may settle while the browser creates the sibling. Its
-      // initial running status is asserted above; this phase verifies that ownership never moves.
+      // A persisted running flag without a live provider handle settles on startup. Ownership must not move.
       const workspaceStatuses = await fetchWorkspaceStatuses(client, [seeded.workspaceA]);
-      expect(["running", "done"]).toContain(workspaceStatuses[seeded.workspaceA]);
+      expect(workspaceStatuses[seeded.workspaceA]).toBe("done");
 
       await expectWorkspaceRowDoesNotShowIndicator(page, {
         serverId,

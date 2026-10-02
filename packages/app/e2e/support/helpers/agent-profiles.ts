@@ -530,6 +530,12 @@ export async function selectModelRow(
 
 export async function searchAllModels(page: Page, query: string): Promise<void> {
   const input = page.getByTestId("model-search-all-input");
+  await expect(
+    input.or(page.getByTestId("model-search-input")).filter({ visible: true }),
+  ).toBeVisible({ timeout: 30_000 });
+  if (await page.getByTestId("model-search-input").isVisible()) {
+    await pickerViewport(page).getByRole("button", { name: "Back", exact: true }).click();
+  }
   await expect(input).toBeVisible({ timeout: 30_000 });
   await input.fill(query);
 }

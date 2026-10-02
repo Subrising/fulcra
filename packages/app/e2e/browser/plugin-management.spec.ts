@@ -245,27 +245,10 @@ async function installPlugin(page: Page, source: string): Promise<void> {
   await page.getByRole("button", { name: "Install plugin" }).click();
 }
 
-async function expectPluginSourceDocsOpen(page: Page): Promise<void> {
-  const requestedPage = page
-    .context()
-    .waitForEvent(
-      "request",
-      (request) => request.isNavigationRequest() && request.url().startsWith("https://paseo.sh/"),
-    );
-  const docsPagePromise = page.context().waitForEvent("page");
-  await page.getByRole("link", { name: "Docs", exact: true }).click();
-  const request = await requestedPage;
-  const docsPage = await docsPagePromise;
-  try {
-    expect(new URL(request.url()).pathname).toBe("/docs/plugins/reference");
-    // The deployed site can redirect while the matching website change is still in this PR.
-    await docsPage.waitForURL(
-      (url) => url.origin === "https://paseo.sh" && url.hash === "#plugin-sources",
-      { waitUntil: "commit" },
-    );
-  } finally {
-    await docsPage.close();
-  }
+async function expectPluginSourceEntry(page: Page): Promise<void> {
+  // Fulcra's source installer is self-contained; upstream marketing documentation is no longer linked here.
+  await expect(page.getByLabel("Plugin source", { exact: true })).toBeEditable();
+  await expect(page.getByRole("button", { name: "Install plugin", exact: true })).toBeVisible();
 }
 
 async function createGitPluginRepository(root: string): Promise<string> {
@@ -424,7 +407,7 @@ async function installLocalPluginWithStatusExamples(
   await openPluginSettings(page);
   await catalog.waitForInitialFetch();
   await expect(page.getByRole("textbox", { name: "Plugin installation ID" })).toHaveCount(0);
-  await expectPluginSourceDocsOpen(page);
+  await expectPluginSourceEntry(page);
   await client.patchDaemonConfig({ pluginsEnabled: false });
   await page.getByRole("switch", { name: "Enable plugins" }).click();
   await expect(page.getByText("Plugins enabled", { exact: true })).toBeVisible();

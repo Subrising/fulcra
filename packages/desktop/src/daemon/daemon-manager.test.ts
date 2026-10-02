@@ -581,10 +581,11 @@ describe("L39 local service of this home", () => {
     "Windows window admission cannot turn a launchd-style secret into owner headers",
     async () => {
       const { manager, request } = await freshWindow();
-      expect(await request()).toEqual({ requestHeaders: {} });
+      const url = `ws://${listen}/ws`;
+      expect(await request(url)).toEqual({ requestHeaders: {} });
       expect(
-        await manager.createDaemonCommandHandlers().desktop_local_credential({ url }),
-      ).toBeUndefined();
+        await manager.createDaemonCommandHandlers().desktop_local_credential({ listen }),
+      ).toBeNull();
     },
   );
 

@@ -282,7 +282,7 @@ test.describe("Viewed agent timelines", () => {
         "aria-selected",
         "true",
       );
-      await expect(page.getByRole("button", { name: sibling.title, exact: true })).toBeVisible();
+      await expect(workspaceAgentTabByTitle(page, sibling.title)).toBeVisible();
       await subscriptions.waitForSubscribedAgents([restored.agentId]);
 
       // Opening the restored sibling is what adds it, and it adds only itself.

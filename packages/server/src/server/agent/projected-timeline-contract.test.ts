@@ -51,17 +51,25 @@ test("projects Codex child history and confines old-client degradation to the ch
     });
     app.startsTurn({ threadId: "thread-1" });
     app.startsSubAgent({ callId: "spawn-child", threadId: "child-thread", agentPath: "child" });
-    for (const delta of ["A", "B", "C"]) {
+    await expect
+      .poll(() => ctx.daemon.daemon.agentManager.listProviderSubagents(agent.id).length)
+      .toBe(1);
+    for (const [index, delta] of ["A", "B", "C"].entries()) {
       app.child.stdout.write(
         JSON.stringify({
           method: "item/agentMessage/delta",
           params: { threadId: "child-thread", itemId: "message-1", delta },
         }) + "\n",
       );
+      // Separate canonical events deliberately; transport coalescing may merge a same-buffer burst.
+      await expect
+        .poll(
+          () =>
+            ctx.daemon.daemon.agentManager.fetchProviderSubagentTimeline(agent.id, "child-thread")
+              .window.maxSeq,
+        )
+        .toBe(index + 1);
     }
-    await expect
-      .poll(() => ctx.daemon.daemon.agentManager.listProviderSubagents(agent.id).length)
-      .toBe(1);
     await expect
       .poll(
         () =>
