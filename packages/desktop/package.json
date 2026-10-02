@@ -52,6 +52,6 @@
     "vitest": "^4.1.6",
     "wait-on": "8.0.5"
   },
-  "desktopName": "Orca.desktop",
+  "desktopName": "Fulcra.desktop",
   "productName": "Orca"
 }
