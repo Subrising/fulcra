@@ -2,6 +2,10 @@ name: Upstream watch
 
 # Opens "Sync <upstream> <version>" PRs for new Paseo, Radius and Archify releases.
 # Never merges. See "Upstream sync" in the README.
+#
+# Trust split: only `watch` holds a write token, and it runs no npm code. `verify`
+# installs and typechecks the merged upstream tree with a read-only token and no
+# persisted credentials. `report` holds pull-requests: write but checks out nothing.
 on:
   schedule:
     - cron: "17 5 * * *"
@@ -17,9 +21,7 @@ on:
         options: ["", paseo, radius, archify]
         default: ""
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: upstream-watch
@@ -32,21 +34,23 @@ jobs:
   watch:
     name: watch
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      paseo_branch: ${{ steps.watch.outputs.paseo_branch }}
+      paseo_pr: ${{ steps.watch.outputs.paseo_pr }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
       - name: Check for new upstream releases
+        id: watch
         env:
           GH_TOKEN: ${{ github.token }}
-          WATCH_RUN_CHECKS: "1"
           DRY_RUN: ${{ inputs.dry_run }}
           ONLY: ${{ inputs.only }}
         run: |
@@ -54,3 +58,54 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
           node scripts/upstream-watch.mjs "${args[@]}"
+
+  verify:
+    name: verify
+    needs: watch
+    if: ${{ needs.watch.outputs.paseo_branch != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.checks.outcome }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.watch.outputs.paseo_branch }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install, build client and typecheck
+        id: checks
+        continue-on-error: true
+        run: |
+          npm ci
+          npm run build:client
+          npm run typecheck
+
+  report:
+    name: report
+    needs: [watch, verify]
+    if: ${{ needs.watch.outputs.paseo_branch != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment check result on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.watch.outputs.paseo_pr }}
+          OUTCOME: ${{ needs.verify.outputs.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$OUTCOME" = "success" ]; then
+            msg="Watcher checks passed: npm ci, build:client, typecheck."
+          else
+            msg="Watcher checks did not pass (outcome: ${OUTCOME:-unknown}). Logs: $RUN_URL"
+          fi
+          gh pr comment "$PR" --body "$msg"

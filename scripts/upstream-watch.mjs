@@ -3,7 +3,7 @@
 // Usage: node scripts/upstream-watch.mjs [--dry-run] [--only paseo|radius|archify]
 // Needs the gh CLI with GH_TOKEN (contents: write, pull-requests: write) and a full-history checkout.
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 const MANIFEST = ".github/upstream-watch.json";
 const ORIGIN = process.env.WATCH_ORIGIN || "origin";
@@ -74,6 +74,14 @@ function holdWorkflowsAt(baseRef) {
   return changed;
 }
 
+function setOutputs(values) {
+  if (!process.env.GITHUB_OUTPUT) return;
+  for (const [k, v] of Object.entries(values)) appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+}
+
+// Tags and branch names come from third parties: accept only plain version strings.
+const SAFE_VERSION = /^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/;
+
 function syncPaseo(cfg, rel) {
   const title = `Sync paseo ${rel.version}`;
   const branch = `sync/paseo-${rel.version}`;
@@ -95,17 +103,6 @@ function syncPaseo(cfg, rel) {
   git("add", "-A");
   git("commit", "--no-verify", "-m", `Sync paseo ${rel.version}${conflicts.length ? " (unresolved conflicts)" : ""}`);
 
-  let checks = "Skipped: merge has conflicts.";
-  if (!conflicts.length && process.env.WATCH_RUN_CHECKS === "1") {
-    try {
-      run("npm", ["ci"]);
-      run("npm", ["run", "build:client"]);
-      run("npm", ["run", "typecheck"]);
-      checks = "`npm ci`, `build:client` and `typecheck` passed. Full CI runs once a maintainer pushes to this branch or reopens the PR (PRs opened with `GITHUB_TOKEN` do not trigger workflows).";
-    } catch (error) {
-      checks = `Failed:\n\`\`\`\n${String(error.message).slice(-1500)}\n\`\`\``;
-    }
-  }
   const body = `## Sync paseo ${rel.version}
 
 Upstream release: ${rel.url}
@@ -121,13 +118,14 @@ ${conflicts.length ? "Branch contains conflict markers. Resolve before merging.\
 Paseo is the fork base: this merge replaces Fulcra's copy of the upstream daemon, app, CLI and relay code. Areas touched: ${dirs.map((d) => `\`${d}\``).join(", ")}. Fulcra-side changes (branding, orchestration, accounts, Radius surfaces) must be re-checked wherever the files above overlap them.
 ${heldWorkflows.length ? `\n### Upstream workflow changes not applied\n\`GITHUB_TOKEN\` cannot modify \`.github/workflows\`. Fulcra's versions were kept; review these upstream changes by hand:\n${heldWorkflows.map((f) => `- \`${f}\``).join("\n")}\n` : ""}
 ### Checks
-${checks}
+\`npm ci\`, \`build:client\` and \`typecheck\` run in a separate read-only job; the result is posted as a comment. Full CI runs once a maintainer pushes to this branch or reopens the PR (PRs opened with \`GITHUB_TOKEN\` do not trigger workflows).
 
 _Opened by the upstream watcher. Never auto-merged._
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
   const url = openPr({ branch, title, body, draft: conflicts.length > 0 });
   log(`opened ${url}`);
+  setOutputs({ paseo_branch: conflicts.length ? "" : branch, paseo_pr: url });
 }
 
 function syncPin(name, cfg, rel, manifest) {
@@ -170,6 +168,7 @@ for (const [name, cfg] of Object.entries(manifest.upstreams)) {
   if (only && only !== name) continue;
   try {
     const rel = latestRelease(cfg.repo);
+    if (!SAFE_VERSION.test(rel.version)) throw new Error(`unsafe version string ${JSON.stringify(rel.version)}`);
     log(`${name}: latest ${rel.tag}${rel.head ? " (head, no releases)" : ""}`);
     if (cfg.kind === "merge") syncPaseo(cfg, rel);
     else syncPin(name, cfg, rel, manifest);
