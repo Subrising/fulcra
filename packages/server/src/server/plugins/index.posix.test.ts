@@ -36,6 +36,7 @@ function createStore(
     metadataGeneration: { providers: [] },
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
+    autoResumeOnLimit: true,
     appendSystemPrompt: "",
     pluginsEnabled: true,
     plugins,

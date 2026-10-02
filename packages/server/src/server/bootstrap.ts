@@ -1,6 +1,7 @@
 import { checkNativeReportOriginPublication } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
+import { startLimitResume } from "./limit-resume/start.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
@@ -429,6 +430,7 @@ export interface PaseoDaemonConfig {
   };
   autoArchiveAfterMerge?: boolean;
   enableTerminalAgentHooks?: boolean;
+  autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
@@ -632,6 +634,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     },
     autoArchiveAfterMerge: config.autoArchiveAfterMerge ?? false,
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
+    autoResumeOnLimit: config.autoResumeOnLimit ?? true,
     appendSystemPrompt: config.appendSystemPrompt ?? "",
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
@@ -1498,6 +1501,14 @@ export async function createPaseoDaemon(
     subscribe: (listener) => agentManager.subscribe(listener),
     onError: (error) => logger.warn({ err: error }, "Insights recorder could not start"),
   });
+  // Resumes sessions that stopped on a usage limit once it resets (durable queue; Settings toggle).
+  const limitResume = startLimitResume({
+    paseoHome: config.paseoHome,
+    agentManager,
+    agentStorage,
+    daemonConfigStore,
+    logger,
+  });
   // Automations ("when X, do Y") drive the Schedule service above; see automations/automation-service.ts.
   const automationService = await startHostAutomations({
     paseoHome: config.paseoHome,
@@ -2072,6 +2083,7 @@ export async function createPaseoDaemon(
     terminalManager.killAll();
     await speechService.stop();
     automationService?.stop();
+    limitResume.stop();
     setHostAutomations(null);
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);
