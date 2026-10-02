@@ -3,6 +3,14 @@ import { i18n } from "@/i18n/i18next";
 import { encodeFilePathForPathSegment, encodeWorkspaceIdForPathSegment } from "@/utils/host-routes";
 import { buildDeterministicWorkspaceTabId } from "@/workspace-tabs/identity";
 
+/** Per-session "Notify me" control; absent when the host cannot apply a notification policy. */
+export interface AgentNotifyControls {
+  /** False when the host-wide setting is Off, so a per-session choice cannot take effect. */
+  available: boolean;
+  isEnabled: (agentId: string) => boolean;
+  onToggle: (agentId: string, next: boolean) => Promise<void> | void;
+}
+
 export type WorkspaceTabMenuSurface = "desktop" | "mobile";
 
 export interface WorkspaceTabMenuLabels {
@@ -49,6 +57,8 @@ export type WorkspaceTabMenuEntry =
         | "arrow-right-to-line"
         | "copy-x"
         | "pencil"
+        | "bell"
+        | "bell-off"
         | "x";
       hint?: string;
       tooltip?: string;
@@ -73,6 +83,7 @@ interface BuildWorkspaceTabMenuEntriesInput {
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsBefore: (tabId: string) => Promise<void> | void;
@@ -90,6 +101,7 @@ interface BuildWorkspaceDesktopTabActionsInput {
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
@@ -182,6 +194,7 @@ export function buildWorkspaceTabMenuEntries(
     onCopyTerminalId,
     onCopyFilePath,
     onReloadAgent,
+    notifications,
     onRenameTab,
     onCloseTab,
     onCloseTabsBefore,
@@ -217,6 +230,21 @@ export function buildWorkspaceTabMenuEntries(
         void onCopyAgentId(agentId);
       },
     });
+    if (notifications) {
+      const enabled = notifications.isEnabled(agentId);
+      entries.push({
+        kind: "item",
+        key: "notify-me",
+        label: "Notify me",
+        icon: enabled ? "bell" : "bell-off",
+        hint: enabled ? "On" : "Off",
+        disabled: !notifications.available,
+        testID: `${menuTestIDBase}-notify-me`,
+        onSelect: () => {
+          void notifications.onToggle(agentId, !enabled);
+        },
+      });
+    }
   }
 
   if (tab.target.kind === "terminal") {
@@ -343,6 +371,7 @@ export function buildWorkspaceDesktopTabActions(
       onCopyTerminalId: input.onCopyTerminalId,
       onCopyFilePath: input.onCopyFilePath,
       onReloadAgent: input.onReloadAgent,
+      notifications: input.notifications,
       onRenameTab: input.onRenameTab,
       onCloseTab: input.onCloseTab,
       onCloseTabsBefore: input.onCloseTabsToLeft,

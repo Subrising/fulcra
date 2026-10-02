@@ -616,6 +616,7 @@ export function resolveConfigFromPersisted(
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
+    notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
     appendSystemPrompt,
     terminalProfiles,
@@ -665,6 +666,7 @@ export function resolveConfigFromPersisted(
 function resolvePersistedPassThroughSettings(persisted: PersistedConfig) {
   return {
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    notificationMode: persisted.daemon?.notificationMode ?? ("primes" as const),
     skillSelection: persisted.agents?.skills?.selection,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     oauthClientIds: persisted.integrations?.oauthClientIds ?? {},
