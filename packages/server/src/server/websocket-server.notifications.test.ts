@@ -328,6 +328,31 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     expect(worker.pushNotifications.sent).toHaveLength(0);
   });
 
+  it("pushes a pinned worker in primes mode and not an unpinned one", async () => {
+    const getAgent = vi.fn(() => ({
+      config: { title: "Pinned" },
+      workspaceId: WORKSPACE_ID,
+      labels: { "fulcra.role": "implementation" },
+      pendingPermissions: new Map(),
+    }));
+    const pinned = createServer({ getAgent }, "primes");
+    const unpinned = createServer({ getAgent }, "primes");
+    Object.assign(pinned.server, {
+      workspaceRegistry: { get: async () => ({ pinnedAt: "2026-10-01T00:00:00.000Z" }) },
+    });
+
+    for (const { server } of [pinned, unpinned]) {
+      await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+        agentId: "agent-1",
+        provider: "claude",
+        reason: "finished",
+      });
+    }
+
+    expect(pinned.pushNotifications.sent).toHaveLength(1);
+    expect(unpinned.pushNotifications.sent).toHaveLength(0);
+  });
+
   it("pushes for a worker that has children and honours the per-session off toggle", async () => {
     const base = { config: { title: "Lead" }, workspaceId: WORKSPACE_ID, pendingPermissions: new Map() };
     const parent = createServer(

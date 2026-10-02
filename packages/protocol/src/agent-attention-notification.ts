@@ -82,12 +82,32 @@ const stripMarkdownToText = (markdown: string): string => {
   return text;
 };
 
+// A push leaves the machine through Apple/Google/Expo, so no text path may carry a credential. Redaction runs on the
+// whole text before truncation, so a cut can never leave the front of a secret behind.
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /\b[A-Za-z_][A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|apikey|auth|credential|cookie|private[_-]?key)[A-Za-z0-9_.-]*\s*[=:]\s*\S+/gi,
+  /\b[A-Z][A-Z0-9_]{2,}=\S+/g,
+  /--?(?:token|password|passwd|secret|api-?key|auth|key)(?:[= ]\S+)/gi,
+  /\b(?:authorization|bearer|basic)\b[:\s]+\S+(?:\s+\S+)?/gi,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@\S+/gi,
+  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g,
+  /\b(?:gh[opsur]_|github_pat_|xox[abpr]-|AKIA|AIza)[A-Za-z0-9_-]{8,}/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
+  /\b[A-Za-z0-9+/_=-]{32,}/g,
+];
+
+export function redactNotificationSecrets(text: string): string {
+  let out = text;
+  for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, "[redacted]");
+  return out;
+}
+
 const buildNotificationPreview = (text: string | null | undefined): string | null => {
   if (!text) {
     return null;
   }
 
-  const normalized = normalizeNotificationText(stripMarkdownToText(text));
+  const normalized = redactNotificationSecrets(normalizeNotificationText(stripMarkdownToText(text)));
   if (!normalized) {
     return null;
   }
@@ -95,29 +115,16 @@ const buildNotificationPreview = (text: string | null | undefined): string | nul
   return truncateNotificationText(normalized, NOTIFICATION_PREVIEW_LIMIT);
 };
 
+// A permission's title, description and input are built from the raw command and can hold secrets, so the push
+// carries only the tool name: a bounded summary, never the command.
 const buildPermissionDetails = (
   request: NotificationPermissionRequest | null | undefined,
 ): string | null => {
   if (!request) {
     return null;
   }
-
-  const title = request.title?.trim();
-  const description = request.description?.trim();
-  const details: string[] = [];
-
-  if (title) {
-    details.push(title);
-  }
-  if (description && description !== title) {
-    details.push(description);
-  }
-  if (details.length > 0) {
-    return details.join(" - ");
-  }
-
-  // Tool input and metadata can carry secrets (tokens, env, file contents); never put them in a push.
-  return request.name?.trim() || request.kind;
+  const name = request.name?.trim();
+  return name ? `Wants to use ${name}` : `Needs your approval (${request.kind})`;
 };
 
 export function findLatestAssistantMessageFromTimeline(
