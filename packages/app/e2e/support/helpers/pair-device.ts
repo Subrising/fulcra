@@ -23,13 +23,16 @@ export async function prepareLocalPairingHost(
   additionalHosts: PairingHostInput[] = [],
 ): Promise<void> {
   const endpoint = "port" in daemon ? `127.0.0.1:${daemon.port}` : daemon.endpoint;
+  const fixtureUrls = [endpoint, ...additionalHosts.map((host) => host.endpoint)].map(
+    (address) => `ws://${address}/ws`,
+  );
   await page.addInitScript(
-    ({ localServerId, fixtureUrl }) => {
+    ({ localServerId, fixtureUrls: knownUrls }) => {
       (window as unknown as { paseoDesktop: unknown }).paseoDesktop = {
         platform: "darwin",
         invoke: async (command: string, args?: { url?: string }) => {
           if (command === "desktop_daemon_connection_check") {
-            return args?.url === fixtureUrl;
+            return typeof args?.url === "string" && knownUrls.includes(args.url);
           }
           if (command === "desktop_daemon_status") {
             return {
@@ -61,7 +64,7 @@ export async function prepareLocalPairingHost(
         },
       };
     },
-    { localServerId: daemon.serverId, fixtureUrl: `ws://${endpoint}/ws` },
+    { localServerId: daemon.serverId, fixtureUrls },
   );
 
   await preparePairingHost(page, daemon, additionalHosts);
