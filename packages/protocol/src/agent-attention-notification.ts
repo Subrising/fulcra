@@ -22,6 +22,7 @@ interface BuildAgentAttentionNotificationPayloadInput {
   workspaceId: string;
   agentId: string;
   assistantMessage?: string | null;
+  agentTitle?: string | null;
   permissionRequest?: NotificationPermissionRequest | null;
 }
 
@@ -94,14 +95,6 @@ const buildNotificationPreview = (text: string | null | undefined): string | nul
   return truncateNotificationText(normalized, NOTIFICATION_PREVIEW_LIMIT);
 };
 
-const safeStringify = (value: unknown): string | null => {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return null;
-  }
-};
-
 const buildPermissionDetails = (
   request: NotificationPermissionRequest | null | undefined,
 ): string | null => {
@@ -123,16 +116,7 @@ const buildPermissionDetails = (
     return details.join(" - ");
   }
 
-  const inputPreview = request.input ? safeStringify(request.input) : null;
-  if (inputPreview) {
-    return inputPreview;
-  }
-
-  const metadataPreview = request.metadata ? safeStringify(request.metadata) : null;
-  if (metadataPreview) {
-    return metadataPreview;
-  }
-
+  // Tool input and metadata can carry secrets (tokens, env, file contents); never put them in a push.
   return request.name?.trim() || request.kind;
 };
 
@@ -196,7 +180,10 @@ function resolveAgentAttentionFallbackBody(reason: AgentAttentionReason): string
 export function buildAgentAttentionNotificationPayload(
   input: BuildAgentAttentionNotificationPayloadInput,
 ): AgentAttentionNotificationPayload {
-  const title = resolveAgentAttentionTitle(input.reason);
+  const sessionTitle = buildNotificationPreview(input.agentTitle);
+  const title = sessionTitle
+    ? truncateNotificationText(sessionTitle, 80)
+    : resolveAgentAttentionTitle(input.reason);
   const preview = resolveAgentAttentionPreview(input);
   const body = preview ?? resolveAgentAttentionFallbackBody(input.reason);
 

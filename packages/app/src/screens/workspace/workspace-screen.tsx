@@ -1,6 +1,8 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
-import { getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
+import { PARENT_AGENT_ID_LABEL, getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
+import { NOTIFY_LABEL, shouldNotifyForSession } from "@getpaseo/protocol/notification-policy";
+import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import {
   memo,
   useCallback,
@@ -138,6 +140,7 @@ import {
 } from "@/screens/workspace/workspace-desktop-tabs-row";
 import {
   buildWorkspaceTabMenuEntries,
+  type AgentNotifyControls,
   type WorkspaceTabMenuLabels,
 } from "@/screens/workspace/workspace-tab-menu";
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
@@ -431,6 +434,7 @@ interface MobileWorkspaceTabSwitcherProps {
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
@@ -538,6 +542,7 @@ function MobileWorkspaceTabOption({
   onCopyTerminalId,
   onCopyFilePath,
   onReloadAgent,
+  notifications,
   onRenameTab,
   onCloseTab,
   onCloseTabsAbove,
@@ -557,6 +562,7 @@ function MobileWorkspaceTabOption({
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
@@ -594,6 +600,7 @@ function MobileWorkspaceTabOption({
     onCopyTerminalId,
     onCopyFilePath,
     onReloadAgent,
+    notifications,
     onRenameTab,
     onCloseTab,
     onCloseTabsBefore: onCloseTabsAbove,
@@ -667,6 +674,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
   onCopyTerminalId,
   onCopyFilePath,
   onReloadAgent,
+  notifications,
   onRenameTab,
   onCloseTab,
   onCloseTabsAbove,
@@ -724,6 +732,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
           onCopyTerminalId={onCopyTerminalId}
           onCopyFilePath={onCopyFilePath}
           onReloadAgent={onReloadAgent}
+          notifications={notifications}
           onRenameTab={onRenameTab}
           onCloseTab={onCloseTab}
           onCloseTabsAbove={onCloseTabsAbove}
@@ -743,6 +752,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
       onCopyTerminalId,
       onCopyFilePath,
       onReloadAgent,
+      notifications,
       onRenameTab,
       onCloseTab,
       onCloseTabsAbove,
@@ -2780,6 +2790,35 @@ function WorkspaceScreenContent({
     [normalizedServerId, toast, t],
   );
 
+  const { config: hostConfig } = useDaemonConfig(normalizedServerId);
+  const notificationMode = hostConfig?.notificationMode ?? "primes";
+  const agentNotifyControls = useMemo<AgentNotifyControls>(
+    () => ({
+      available: notificationMode !== "off",
+      isEnabled: (agentId) => {
+        const agents = useSessionStore.getState().sessions[normalizedServerId]?.agents;
+        const agent = agents?.get(agentId);
+        if (!agents || !agent) return false;
+        return shouldNotifyForSession({
+          mode: notificationMode,
+          labels: agent.labels,
+          hasChildren: [...agents.values()].some(
+            (candidate) => candidate.labels[PARENT_AGENT_ID_LABEL] === agentId,
+          ),
+        });
+      },
+      onToggle: async (agentId, next) => {
+        if (!client) return;
+        try {
+          await client.updateAgent(agentId, { labels: { [NOTIFY_LABEL]: next ? "on" : "off" } });
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+      },
+    }),
+    [client, normalizedServerId, notificationMode, toast],
+  );
+
   const handleReloadAgent = useCallback(
     async (agentId: string) => {
       if (!client || !isConnected) {
@@ -4015,6 +4054,7 @@ function WorkspaceScreenContent({
         onCopyTerminalId={handleCopyTerminalId}
         onCopyFilePath={handleCopyFilePath}
         onReloadAgent={handleReloadAgent}
+        notifications={agentNotifyControls}
         onRenameTab={handleRenameTab}
         onCloseTabsToLeft={handleCloseTabsToLeftInPane}
         onCloseTabsToRight={handleCloseTabsToRightInPane}
@@ -4094,6 +4134,7 @@ function WorkspaceScreenContent({
           onCopyTerminalId={handleCopyTerminalId}
           onCopyFilePath={handleCopyFilePath}
           onReloadAgent={handleReloadAgent}
+        notifications={agentNotifyControls}
           onRenameTab={handleRenameTab}
           onCloseTab={handleCloseTabById}
           onCloseTabsAbove={handleCloseTabsToLeft}
@@ -4118,6 +4159,7 @@ function WorkspaceScreenContent({
             onCopyTerminalId={handleCopyTerminalId}
             onCopyFilePath={handleCopyFilePath}
             onReloadAgent={handleReloadAgent}
+        notifications={agentNotifyControls}
             onRenameTab={handleRenameTab}
             onCloseTabsToLeft={handleCloseTabsToLeft}
             onCloseTabsToRight={handleCloseTabsToRight}

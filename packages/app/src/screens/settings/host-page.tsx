@@ -28,6 +28,7 @@ import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { Alert as InlineAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, type StatusBadgeVariant } from "@/components/ui/status-badge";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Switch } from "@/components/ui/switch";
 import {
   ProfileDraft,
@@ -322,6 +323,7 @@ export function HostWorkspacesPage({ serverId }: { serverId: string }) {
       {isConnected ? (
         <SettingsSection title={t("settings.hostSections.workspaces")}>
           <AutoArchiveMergedWorkspacesCard serverId={serverId} />
+          <NotificationModeCard serverId={serverId} />
         </SettingsSection>
       ) : (
         <View style={[settingsStyles.card, styles.emptyCard]}>
@@ -906,6 +908,53 @@ function InjectPaseoToolsCard({ serverId }: { serverId: string }) {
           value={config?.mcp.injectIntoAgents !== false}
           onValueChange={handleValueChange}
           accessibilityLabel={t("settings.host.orchestration.enableTools.accessibilityLabel")}
+        />
+      </View>
+    </View>
+  );
+}
+
+const NOTIFICATION_MODE_OPTIONS = [
+  { value: "all", label: "All" },
+  { value: "primes", label: "Primes & leads" },
+  { value: "off", label: "Off" },
+] as const;
+
+// Applies to push and desktop notifications alike: the host decides before anything is sent.
+function NotificationModeCard({ serverId }: { serverId: string }) {
+  const isConnected = useHostRuntimeIsConnected(serverId);
+  const { config, patchConfig } = useDaemonConfig(serverId);
+
+  const handleValueChange = useCallback(
+    (next: "all" | "primes" | "off") => {
+      void patchConfig({ notificationMode: next }).catch((error) => {
+        console.error("[HostPage] Failed to update notification mode", error);
+        Alert.alert(
+          "Unable to update notifications",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    },
+    [patchConfig],
+  );
+
+  if (!isConnected) return null;
+
+  return (
+    <View style={settingsStyles.card} testID="host-page-notification-mode-card">
+      <View style={settingsStyles.row}>
+        <View style={settingsStyles.rowContent}>
+          <Text style={settingsStyles.rowTitle}>Notify me</Text>
+          <Text style={settingsStyles.rowHint}>
+            Which sessions send a notification when they finish, ask a question, or need permission
+          </Text>
+        </View>
+        <SegmentedControl
+          options={[...NOTIFICATION_MODE_OPTIONS]}
+          value={config?.notificationMode ?? "primes"}
+          onValueChange={handleValueChange}
+          size="sm"
+          testID="host-page-notification-mode"
         />
       </View>
     </View>
