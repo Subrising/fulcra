@@ -123,7 +123,8 @@ export async function expectPairingOffer(page: Page): Promise<void> {
   await expect(page.getByRole("textbox", { name: "Pairing link" })).toHaveValue(/#offer=/);
   await expect(
     page.getByRole("alert").filter({
-      hasText: "Treat this pairing link like a password. Anyone with it can access this daemon.",
+      hasText:
+        "This link pairs one device and expires in 10 minutes by default. Share it only with a device you trust.",
     }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
@@ -183,7 +184,7 @@ export async function openPairDeviceFromHome(page: Page): Promise<void> {
 export async function expectRelayUpdateRequired(page: Page): Promise<void> {
   const modal = page.getByTestId("host-page-pair-device-card");
   await expect(
-    modal.getByText("Update the host to enable relay from Paseo Desktop."),
+    modal.getByText("Update the host to enable relay from Fulcra Desktop."),
   ).toBeVisible();
   await expect(modal.getByRole("button", { name: "Enable relay", exact: true })).toHaveCount(0);
   await expect(modal.getByRole("textbox", { name: "Pairing link" })).toHaveCount(0);
