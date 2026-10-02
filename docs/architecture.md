@@ -1,6 +1,6 @@
 # Architecture
 
-Paseo is a client-server system for monitoring and controlling local AI coding agents. The daemon runs on your machine, manages agent processes, and streams their output in real time over WebSocket. Clients (mobile app, CLI, desktop app) connect to the daemon to observe and interact with agents.
+Fulcra is a client-server system for monitoring and controlling local AI coding agents. The daemon runs on your machine, manages agent processes, and streams their output in real time over WebSocket. Clients (mobile app, CLI, desktop app) connect to the daemon to observe and interact with agents.
 
 Your code never leaves your machine. Paseo is local-first.
 
@@ -31,6 +31,12 @@ Your code never leaves your machine. Paseo is local-first.
 └───────────┘ └────────┘ └────────────┘ └──────────┘ └─────────┘
 ```
 
+## Command Centre and authority
+
+The desktop owns the Command Centre controller lifecycle. The controller exchanges events and requests with the daemon through its authenticated owned service bridge; the daemon remains the provider-session host. Mobile/web clients connect to the daemon directly or through the optional encrypted relay, not directly to the controller. See the [README diagram](../README.md#how-it-connects).
+
+Prime, project lead and worker labels describe accountability. They do not mint capabilities: current ownership, principal, epoch, connection/lifetime and operation permissions still govern each action. A host account pool selects provider accounts for sessions; it does not export credentials or grant cross-host synchronization. Full installed native adoption/report-up/watch retirement and same-chat account-switch acceptance remain post-release follow-ups.
+
 ## Components at a glance
 
 - **Daemon:** Local server that spawns and manages agent processes and exposes the WebSocket API.
@@ -43,7 +49,7 @@ Your code never leaves your machine. Paseo is local-first.
 
 ### `packages/server` — The daemon
 
-The heart of Paseo. A Node.js process that:
+The shared host/server layer inherited from Paseo. A Node.js process that:
 
 - Listens for WebSocket connections from clients
 - Manages agent lifecycle (create, run, stop, resume, archive)

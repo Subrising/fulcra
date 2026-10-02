@@ -1,3 +1,5 @@
+> **Inherited Paseo documentation:** this is an upstream reference, not a maintained Fulcra translation. Use the [Fulcra README](README.md) for the current source-only release, installation and supported scope. Upstream download/package links below are not Fulcra install offers.
+
 <p align="center">
   <img src="packages/website/public/logo.svg" width="64" height="64" alt="Paseo logo">
 </p>

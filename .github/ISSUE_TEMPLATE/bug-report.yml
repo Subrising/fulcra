@@ -6,13 +6,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        Issues are only for bugs. Product discussions go in [GitHub Discussions](https://github.com/getpaseo/paseo/discussions) or `#product` in [Discord](https://discord.gg/jz8T2uahpH) — feature requests opened as issues get closed automatically.
+        Report Fulcra bugs here. For workflow proposals, use a clearly labelled issue in [Subrising/fulcra](https://github.com/Subrising/fulcra/issues). Security reports follow [SECURITY.md](https://github.com/Subrising/fulcra/blob/main/SECURITY.md).
 
         Before opening, please:
 
         - search existing issues for the same symptom
         - try to reproduce on the latest version
-        - if it's a UI bug, capture a screenshot or short video. text descriptions of UI bugs almost always lose detail.
+        - if it's a UI bug, include a clean demo screenshot or short video
+        - remove credentials, pairing links/QR codes, private account/session IDs, machine paths and image metadata
 
   - type: textarea
     id: description
@@ -54,11 +55,11 @@ body:
       required: true
 
   - type: input
-    id: paseo-version
+    id: fulcra-version
     attributes:
-      label: Paseo version
-      description: Settings → About in the app, or `paseo --version` from the CLI.
-      placeholder: "0.1.71"
+      label: Fulcra release / source revision
+      description: Settings → About or the release/source revision. The compatibility CLI executable remains `paseo`.
+      placeholder: "v0.2.0 (or a source commit)"
     validations:
       required: true
 
@@ -101,9 +102,9 @@ body:
         Paste relevant log output. Strongly preferred for crashes and daemon issues.
 
         - **Daemon log:** `~/.paseo/daemon.log` (override with `$PASEO_HOME`)
-        - **Electron log (macOS):** `~/Library/Logs/Paseo/main.log`
-        - **Electron log (Windows):** `%APPDATA%\Paseo\logs\main.log`
-        - **Electron log (Linux):** `~/.config/Paseo/logs/main.log`
+        - **Electron log (macOS):** the desktop user-data log directory configured by your build (retain compatibility names)
+        - **Electron log (Windows):** the desktop user-data log directory configured by your build (retain compatibility names)
+        - **Electron log (Linux):** the desktop user-data log directory configured by your build (retain compatibility names)
 
         Paste the **full log around the time of the bug**, not a summary. If you used an AI to investigate, paste the raw log it read, not the AI's interpretation. AI summaries skew the signal and waste my time.
       render: text

@@ -1,8 +1,8 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: Product discussion on Discord
-    url: https://discord.gg/jz8T2uahpH
-    about: Product discussion, including feature requests
-  - name: Product discussion on GitHub
-    url: https://github.com/getpaseo/paseo/discussions
-    about: Product discussion, including feature requests
+  - name: Fulcra documentation and source setup
+    url: https://github.com/Subrising/fulcra#readme
+    about: Source-only release, build instructions, features and current limits
+  - name: Security reporting
+    url: https://github.com/Subrising/fulcra/security
+    about: Use private reporting when available; do not disclose vulnerabilities or secrets in public

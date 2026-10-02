@@ -1,6 +1,6 @@
 # Command Centre packaging design
 
-This path is under construction. The current branch does not ship an enabled Command Centre or an installable V4 artifact.
+Fulcra v0.2.0 ships the Command Centre source in the consolidated repository. The public release is source-only: no signed/notarised binary or public installation asset is provided. Use [Build, launch & pair](getting-started.md) for the current entry points. The Round/V4/V5 sections below are historical engineering records, not the current release installation or acceptance checklist.
 
 ## Ownership
 

@@ -18,7 +18,7 @@ Closes #
 
 ### Reasoning
 
-<!-- A short description of the reasoning of this change in your own words. What was wrong, and how do you hope this PR fixes it. If you can't explain this briefly, the PR is probably too big. This description must be grounded in real user flows and framed as value provided to Paseo users. -->
+<!-- A short description of the reasoning of this change in your own words. What was wrong, and how do you hope this PR fixes it. If you can't explain this briefly, the PR is probably too big. This description must be grounded in real user flows and framed as value provided to Fulcra users. -->
 
 ### Goals
 
@@ -40,7 +40,7 @@ This is the section I read most carefully. I need to see that *you* tested this,
 
 ### Checklist
 
-- [ ] Plugin changes follow the [SDK import boundaries](../docs/plugins.md#sdk-import-boundaries) (if applicable)
+- [ ] Plugin changes follow the [SDK import boundaries](https://github.com/Subrising/fulcra/blob/main/docs/plugins.md#sdk-import-boundaries) (if applicable)
 - [ ] One focused change
 - [ ] `npm run typecheck` passes
 - [ ] `npm run lint` passes
