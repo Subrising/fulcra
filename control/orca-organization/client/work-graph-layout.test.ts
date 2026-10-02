@@ -229,23 +229,19 @@ function trackerView(
     observedAt: "2026-09-23T00:00:00.000Z",
     partial: false,
     projects: [],
-    items: keys.map((key) =>
-      Object.assign(
-        {
-          key,
-          projectId: U(0),
-          ref: `#` + key.split(`:`)[2],
-          title: `<b>x</b> ` + key,
-          state: `open`,
-          labels: [],
-          url: `https://github.com/a/b/issues/${key.split(`:`)[2]}`,
-          updatedAt: null,
-          stale: false,
-          fromPreviousMapping: false,
-        },
-        extra,
-      ),
-    ),
+    items: keys.map((key) => ({
+      key,
+      projectId: U(0),
+      ref: "#" + key.split(":")[2],
+      title: "<b>x</b> " + key,
+      state: "open",
+      labels: [],
+      url: `https://github.com/a/b/issues/${key.split(":")[2]}`,
+      updatedAt: null,
+      stale: false,
+      fromPreviousMapping: false,
+      ...extra,
+    })),
     links: links.map((l, i) => ({ id: U(i + 1), itemKey: l.key, subject: l.subject, revision: 1 })),
   };
 }
