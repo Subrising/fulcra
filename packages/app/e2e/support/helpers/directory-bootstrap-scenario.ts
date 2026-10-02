@@ -1,3 +1,4 @@
+import { workspaceAgentTabByTitle } from "./workspace-tabs";
 import { expect, type Page } from "@playwright/test";
 import { buildHostAgentDetailRoute } from "@/utils/host-routes";
 import { installDaemonWebSocketGate } from "./daemon-websocket-gate";
@@ -57,7 +58,7 @@ export class DirectoryBootstrapScenario {
       (url) => url.pathname.includes("/workspace/") && !url.searchParams.has("open"),
     );
     await waitForWorkspaceTabsVisible(page);
-    await expect(page.getByRole("button", { name: agent.title, exact: true })).toBeVisible();
+    await expect(workspaceAgentTabByTitle(page, agent.title)).toBeVisible();
     return scenario;
   }
 
@@ -121,7 +122,7 @@ export class DirectoryBootstrapScenario {
         `/workspace/${workspace.workspaceId}/agent/${agent.id}|/workspace/${workspace.workspaceId}`,
       ),
     );
-    await expect(this.page.getByRole("button", { name: agent.title, exact: true })).toHaveAttribute(
+    await expect(workspaceAgentTabByTitle(this.page, agent.title)).toHaveAttribute(
       "aria-selected",
       "true",
     );

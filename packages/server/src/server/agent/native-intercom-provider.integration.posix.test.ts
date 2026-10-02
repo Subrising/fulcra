@@ -1735,7 +1735,7 @@ test.each(["valid", "paired", "wrong-epoch", "unknown-scope", "disconnect", "own
   },
 );
 
-test.each(["native-replace", "parent-revoke"])(
+test.each(["native-replace", "registration-revoke"])(
   "native evidence actual manager %s after held durable reservation refuses artifact effect",
   async (mutation) => {
     const f = await fixture("valid", true);
@@ -1762,7 +1762,7 @@ test.each(["native-replace", "parent-revoke"])(
     )!;
     let release!: () => void;
     try {
-      await owner.invoke(randomUUID(), {
+      const childRegistration = await owner.invoke(randomUUID(), {
         method: "report-parent-adopt",
         input: {
           messageId: randomUUID(),
@@ -1816,8 +1816,8 @@ test.each(["native-replace", "parent-revoke"])(
           method: "report-registration-revoke",
           input: {
             messageId: randomUUID(),
-            identity: identity(f.agent.id),
-            expectedEpoch: (receipt as { epoch: string }).epoch,
+            identity: identity(child.id),
+            expectedEpoch: (childRegistration as { epoch: string }).epoch,
           },
         });
       release();

@@ -229,13 +229,13 @@ test("native queue bounds actual resources and releases cancelled target capacit
   const { requests } = await fixture();
   const input = queued();
   await expect(requests.enqueue({ ...input, attachmentBytes: 512 * 1024 })).rejects.toThrow(
-    "resource_limit",
+    "Native evidence shared resource refusal",
   );
   await expect(
     requests.enqueue({ ...input, request: { text: "x".repeat(16 * 1024) } }),
-  ).rejects.toThrow("resource_limit");
+  ).rejects.toThrow("agent_queue_resource_limit");
   for (let i = 0; i < 32; i++) await requests.enqueue({ ...input, messageId: `ticket-${i}` });
-  await expect(requests.enqueue(input)).rejects.toThrow("resource_limit");
+  await expect(requests.enqueue(input)).rejects.toThrow("Native evidence shared resource refusal");
   await requests.cancel("target", "ticket-0", input.principal, input.authorize);
   expect(await requests.enqueue(input)).toMatchObject({ pendingCount: 32 });
 });
@@ -317,7 +317,7 @@ test("native global count cap applies across targets", async () => {
       messageId: `ticket-${i}`,
     });
   await expect(requests.enqueue({ ...input, agentId: "extra-target" })).rejects.toThrow(
-    "resource_limit",
+    "Native evidence shared resource refusal",
   );
 });
 
@@ -328,7 +328,7 @@ test("native global byte cap includes actual retained attachment resource sizes"
     await requests.enqueue({ ...input, agentId: `target-${i}`, attachmentBytes: 400 * 1024 });
   await expect(
     requests.enqueue({ ...input, agentId: "extra-target", attachmentBytes: 400 * 1024 }),
-  ).rejects.toThrow("resource_limit");
+  ).rejects.toThrow("Native evidence shared resource refusal");
 });
 
 test("native dedup exhaustion is explicit maintenance refusal; old ids never become new", async () => {

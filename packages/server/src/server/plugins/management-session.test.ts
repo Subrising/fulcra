@@ -510,7 +510,7 @@ test("report registry owner IPC: forged identity, self-link, cycle, unknown pare
   }
 });
 
-test("report registry owner IPC: prime rotation and unlink fence prior descendants, native replacement refuses", async () => {
+test("report registry owner IPC: prime rotation retains child relationships, unlink fences descendants and native replacement refuses", async () => {
   const f = await registryFixture();
   try {
     f.authenticate();
@@ -528,8 +528,11 @@ test("report registry owner IPC: prime rotation and unlink fence prior descendan
     });
     expect(() => f.registry.requireParent(f.grandchild, f.scope)).toThrow();
     await f.adopt();
-    await f.register(prime.epoch);
-    expect(() => f.registry.requireParent(f.child, f.scope)).toThrow();
+    const rotated = await f.register(prime.epoch);
+    expect(f.registry.requireParent(f.child, f.scope)).toMatchObject({
+      parent: f.prime,
+      parentEpoch: rotated.epoch,
+    });
   } finally {
     await f.cleanup();
   }
@@ -654,7 +657,7 @@ test("report registry owner IPC: pending durable epoch publication fences old pa
       spy.mockRestore();
     }
     expect(observed).toBe(true);
-    expect(() => f.registry.requireParent(f.child, f.scope)).toThrow();
+    expect(f.registry.requireParent(f.child, f.scope)).toMatchObject({ parent: f.prime });
   } finally {
     await f.cleanup();
   }

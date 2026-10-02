@@ -179,15 +179,9 @@ async function fixture() {
         hash,
       );
     else
-      await Reflect.get(server, "attachSocket").call(
-        server,
-        socket,
-        undefined,
-        undefined,
-        false,
-        admission,
-      );
+      await Reflect.get(server, "attachSocket").call(server, socket, undefined, false, admission);
     socket.hello(capable);
+    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
     return socket;
   };
   const session = (s: Socket): Session => Reflect.get(server, "sessions").get(s).session;

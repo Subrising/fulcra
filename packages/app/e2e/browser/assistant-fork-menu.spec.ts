@@ -1,3 +1,4 @@
+import { workspaceAgentTabByTitle } from "../support/helpers/workspace-tabs";
 import { expect, test as base } from "../support/fixtures";
 import { awaitAssistantMessage } from "../support/helpers/agent-stream";
 import {
@@ -86,7 +87,7 @@ test.describe("Assistant fork menu", () => {
     expect(await forkAttachment.waitForText()).toContain(visibleBeforeFork);
     await expect(page.getByRole("button", { name: "Menu backdrop", exact: true })).toHaveCount(0);
 
-    await page.getByRole("button", { name: sourceAgentTitle }).click();
+    await workspaceAgentTabByTitle(page, sourceAgentTitle).click();
     await expectLiveAssistantText(page, visibleAfterFork);
   });
 

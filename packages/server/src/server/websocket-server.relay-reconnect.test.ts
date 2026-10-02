@@ -281,6 +281,7 @@ function createServer(options?: {
     createStub<AgentManager>({
       subscribe: vi.fn(() => () => {}),
       setAgentAttentionCallback: vi.fn(),
+      setNativeMessageReceipts: vi.fn(),
       getAgent: vi.fn(() => null),
       getMetricsSnapshot: vi.fn(() => ({
         totalAgents: 0,
@@ -730,6 +731,8 @@ describe("relay external socket reconnect behavior", () => {
           createHelloMessage("owner-app", { capabilities: { owned_subscriptions: true } }),
         ),
       );
+      await vi.waitFor(() => expect(sentServerInfoEnvelopes(socket)).toHaveLength(1));
+      await vi.waitFor(() => expect(sentServerInfoEnvelopes(socket)).toHaveLength(1));
       const send = (message: Record<string, unknown>) =>
         socket.emit("message", JSON.stringify({ type: "session", message }));
       send({
@@ -809,6 +812,7 @@ describe("relay external socket reconnect behavior", () => {
         createHelloMessage("owner-app", { capabilities: { owned_subscriptions: true } }),
       ),
     );
+    await vi.waitFor(() => expect(sentServerInfoEnvelopes(socket)).toHaveLength(1));
     const send = (message: Record<string, unknown>) =>
       socket.emit("message", JSON.stringify({ type: "session", message }));
     send({ type: "daemon.list_paired_devices.request", requestId: "list-1" });

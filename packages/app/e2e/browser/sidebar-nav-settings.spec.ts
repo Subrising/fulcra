@@ -73,6 +73,8 @@ test.describe("Sidebar items in Appearance settings", () => {
         { key: "schedules", visible: true },
         { key: "history", visible: false },
         { key: "search", visible: true },
+        { key: "automations", visible: true },
+        { key: "insights", visible: true },
       ]);
 
       await leaveSettings(page);
@@ -93,6 +95,8 @@ test.describe("Sidebar items in Appearance settings", () => {
       { key: "history", visible: false },
       { key: "search", visible: false },
       { key: "schedules", visible: false },
+      { key: "automations", visible: false },
+      { key: "insights", visible: false },
     ]);
     await gotoAppShell(page);
 
@@ -104,5 +108,7 @@ test.describe("Sidebar items in Appearance settings", () => {
     await expectSidebarItemHidden(page, "history");
     await expectSidebarItemHidden(page, "search");
     await expectSidebarItemHidden(page, "schedules");
+    await expectSidebarItemHidden(page, "automations");
+    await expectSidebarItemHidden(page, "insights");
   });
 });

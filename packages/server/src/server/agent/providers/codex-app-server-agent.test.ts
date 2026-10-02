@@ -1366,11 +1366,14 @@ describe("Codex app-server provider", () => {
     );
 
     try {
-      await session.connect();
+      const run = session.run("Merge the change.");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "silent-turn" });
       const nextTimelineItem = waitForNextTimelineItem(session);
 
       appServer.completesSilentCommand({
         threadId: "thread-1",
+        turnId: "silent-turn",
         callId: "silent-merge",
         command: "gh pr merge 2030 --squash",
         cwd: "/workspace/project",
@@ -1380,6 +1383,7 @@ describe("Codex app-server provider", () => {
       await expect(nextTimelineItem).resolves.toEqual({
         type: "timeline",
         provider: "codex",
+        turnId: "codex-turn-0",
         item: {
           type: "tool_call",
           callId: "silent-merge",
@@ -1394,6 +1398,8 @@ describe("Codex app-server provider", () => {
           },
         },
       });
+      appServer.completeTurn({ threadId: "thread-1" });
+      await run;
       appServer.assertNoErrors();
     } finally {
       await session.close();

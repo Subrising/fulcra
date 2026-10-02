@@ -50,7 +50,10 @@ vi.mock("@/components/ui/button", () => ({
     </button>
   ),
 }));
-vi.mock("../../../../../control/orca-organization/shared/intercom", () => ({
+vi.mock("../../../../../control/orca-organization/shared/intercom", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../../../control/orca-organization/shared/intercom")
+  >()),
   intercomRateSettingsGetRpc: { name: "get" },
   intercomRateSettingsRpc: { name: "set" },
   intercomStatusRpc: { name: "status" },

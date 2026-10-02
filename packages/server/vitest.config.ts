@@ -25,6 +25,13 @@ export default defineConfig({
     // Windows runners intermittently starve subprocess-heavy Git tests at the
     // default worker count, leaving child processes alive past their deadlines.
     maxWorkers: process.platform === "win32" ? 2 : undefined,
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/**", "**/.dev/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.claude/**",
+      "**/.dev/**",
+      // Controller private-store tests require POSIX ownership and file modes.
+      ...(process.platform === "win32" ? ["**/*.posix.test.ts"] : []),
+    ],
   },
 });

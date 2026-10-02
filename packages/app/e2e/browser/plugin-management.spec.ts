@@ -115,7 +115,11 @@ function observePluginCatalog(page: Page) {
           message?: { type?: unknown };
         };
         const message = envelope.type === "session" ? envelope.message : envelope;
-        if (message?.type === "plugin.catalog.get.response") responses += 1;
+        if (
+          message?.type === "plugin.catalog.get.response" ||
+          message?.type === "plugin.catalog.page.response"
+        )
+          responses += 1;
       } catch {
         return;
       }
@@ -382,8 +386,8 @@ async function expectSourceHierarchy(page: Page, description: string, source: st
     Number.parseFloat(getComputedStyle(element).fontSize),
   );
   expect(sourceSize).toBeLessThan(descriptionSize);
-  await expect(sourceText).toHaveCSS("color", "rgb(161, 161, 170)");
-  await expect(descriptionText).toHaveCSS("color", "rgb(113, 113, 122)");
+  await expect(sourceText).toHaveCSS("color", "rgb(113, 117, 116)");
+  await expect(descriptionText).toHaveCSS("color", "rgb(161, 165, 164)");
 }
 
 async function installLocalPluginWithStatusExamples(

@@ -45,6 +45,7 @@ async function openArchitectureMap(page: Page, workspaceId: string) {
   await gotoWorkspace(page, workspaceId);
   await openNewTabMenuWithShortcut(page);
   await page.getByTestId("workspace-new-tab-architecture-map").filter({ visible: true }).click();
+  await page.getByRole("tab", { name: "Drawn map", exact: true }).click();
 }
 
 test.describe("Architecture map", () => {

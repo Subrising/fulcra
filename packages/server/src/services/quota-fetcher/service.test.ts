@@ -333,7 +333,7 @@ describe("ProviderUsageService", () => {
           windows: [],
           balances: [],
           details: [],
-          error: "Claude auth expired",
+          error: "Usage unavailable",
         },
         {
           providerId: "codex",
