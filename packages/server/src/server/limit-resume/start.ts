@@ -3,7 +3,7 @@ import { ensureAgentLoaded } from "../agent/agent-loading.js";
 import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import type { DaemonConfigStore } from "../daemon-config-store.js";
-import { LIMIT_RESUME_AT_LABEL, LimitResumeService } from "./service.js";
+import { LIMIT_RESUME_AT_LABEL, LIMIT_RESUME_OPT_OUT_LABEL, LimitResumeService } from "./service.js";
 
 /** Starts auto-resume for this host: listens to agent events, keeps the durable queue, resumes at reset. */
 export function startLimitResume(input: {
@@ -30,15 +30,27 @@ export function startLimitResume(input: {
       if (!record) return null;
       return { labels: record.labels ?? {}, archived: Boolean(record.archivedAt), busy: false };
     },
+    getLastAssistantMessage: (agentId) => agentManager.getLastAssistantMessage(agentId),
     // An empty value clears the marker; labels cannot be deleted through the metadata path.
     setMarker: async (agentId, resumeAtIso) => {
       await agentManager.updateAgentMetadata(agentId, {
         labels: { [LIMIT_RESUME_AT_LABEL]: resumeAtIso ?? "" },
       });
     },
-    sendResume: async (agentId, prompt) => {
+    sendResume: async (agentId, prompt, stillWanted) => {
       // After a restart the session may not be loaded; load it like a client message would.
       await ensureAgentLoaded(agentId, { agentManager, agentStorage, logger });
+      // Last gate, with no await between it and the turn starting: the toggle, a newer turn, an opt-out set while
+      // the session loaded, or a run that began meanwhile all stop the resume here.
+      const live = agentManager.getAgent(agentId);
+      if (
+        !stillWanted() ||
+        !live ||
+        live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off" ||
+        agentManager.hasInFlightRun(agentId)
+      ) {
+        return;
+      }
       // Start the turn and return: the turn can run for a long time and must not hold the queue.
       void agentManager.runAgent(agentId, prompt).catch((error: unknown) => {
         logger.warn({ err: error, agentId }, "Auto-resume turn failed");

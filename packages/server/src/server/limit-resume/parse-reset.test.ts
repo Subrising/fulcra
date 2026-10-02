@@ -48,3 +48,39 @@ describe("backoffMs", () => {
     ]);
   });
 });
+
+describe("provider fixtures", () => {
+  it("reads Claude's CLI limit lines, including weekly dated forms", () => {
+    expect(
+      parseLimitReset({
+        text: "You've hit your session limit · resets 12:50am (Australia/Brisbane)",
+        now: NOW,
+      }),
+    ).toBe(Date.parse("2026-10-03T14:50:00Z"));
+    expect(
+      parseLimitReset({
+        text: "You've hit your weekly limit · resets Sep 29 at 8am (Australia/Brisbane)",
+        now: Date.parse("2026-09-26T10:00:00Z"),
+      }),
+    ).toBe(Date.parse("2026-09-28T22:00:00Z"));
+    expect(
+      parseLimitReset({
+        text: "You've hit your weekly limit · resets Oct 6, 5pm (Europe/London)",
+        now: NOW,
+      }),
+    ).toBe(Date.parse("2026-10-06T16:00:00Z"));
+  });
+
+  it("reads Codex's 'Try again at' in the host's local time", () => {
+    const target = new Date(NOW + 7 * 3_600_000);
+    const printed = target.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    const at = parseLimitReset({ text: `Usage limit reached. Try again at ${printed}.`, now: NOW });
+    expect(Math.abs((at ?? 0) - target.getTime())).toBeLessThan(60_000);
+  });
+});
