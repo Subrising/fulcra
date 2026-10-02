@@ -62,7 +62,7 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/browser-capture-harness.md](docs/browser-capture-harness.md)   | Real-Electron browser screenshot harness and compositor-surface gotcha                                                         |
 | [docs/ios-personal-device.md](docs/ios-personal-device.md)           | Local iPhone builds with a personal Apple team and no remote push                                                              |
 | [docs/pipelines.md](docs/pipelines.md)                               | Which inherited workflows publish, what a fork must configure first, and why release tags are filtered                         |
-| [docs/windows.md](docs/windows.md)                                   | Fulcra Windows build-only preview, artifact retrieval and acceptance limits                                                      |
+| [docs/windows.md](docs/windows.md)                                   | Fulcra Windows build-only preview, artifact retrieval and acceptance limits                                                    |
 | [docs/android.md](docs/android.md)                                   | App variants, local/cloud builds, EAS workflows, version codes, F-Droid source builds and store metadata                       |
 | [docs/docker.md](docs/docker.md)                                     | Running the daemon and bundled web UI in Docker, volumes, agent images, security                                               |
 | [docs/release.md](docs/release.md)                                   | Release playbook, draft releases, completion checklist                                                                         |

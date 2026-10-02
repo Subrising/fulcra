@@ -33,7 +33,6 @@ import { managementRpc, taskManagementRpc } from "./shared/management";
 import { createManagement, createTaskManagement, localCall } from "./server/management";
 import { operatorInvokeRpc } from "./shared/operator-invoke";
 import { operatorInvoke } from "./server/operator-invoke.mjs";
-import { NotConfigured } from "./server/installation";
 import { taskCatalogRpc, usageRpc } from "./shared/tasks";
 import { readTaskCatalog, taskPage, singleFlight, createUsageReader } from "./server/tasks";
 import { outcomeRpc, outcomeArtifactRpc } from "./shared/outcomes";
@@ -264,7 +263,7 @@ export default function contribute(
   const manage = createManagement(),
     taskManage = createTaskManagement(),
     catalog = singleFlight(() => readTaskCatalog());
-  let authError: string | undefined;
+  let authError: string | undefined = undefined;
   // Availability is checked on every invocation, including cached reads; read contexts permit only read commands.
   handleRead(cleanupPreviewRpc, (input) => {
     if (authError) throw new Error(authError);

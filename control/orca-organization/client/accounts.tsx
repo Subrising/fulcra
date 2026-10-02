@@ -375,7 +375,7 @@ export function AccountsSurface({ theme, layout, host }: Props) {
             {v.rotations.length > 0 && (
               <Text style={{ color: c.foregroundMuted }}>{`Recent moves: ${v.rotations
                 .slice(-3)
-                .reverse()
+                .toReversed()
                 .map((r) =>
                   r.to
                     ? `${when(r.at)}${r.reason === "manual" ? " (your switch)" : ""} ${r.from ? `from ${r.from} ` : ""}to ${r.to}`

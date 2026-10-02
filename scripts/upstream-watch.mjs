@@ -15,10 +15,15 @@ const only = onlyIdx >= 0 ? args[onlyIdx + 1] : "";
 
 function run(cmd, cmdArgs, { allowFail = false } = {}) {
   try {
-    return execFileSync(cmd, cmdArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    return execFileSync(cmd, cmdArgs, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   } catch (error) {
     if (allowFail) return null;
-    throw new Error(`${cmd} ${cmdArgs.join(" ")} failed: ${error.stderr || error.message}`, { cause: error });
+    throw new Error(`${cmd} ${cmdArgs.join(" ")} failed: ${error.stderr || error.message}`, {
+      cause: error,
+    });
   }
 }
 const git = (...a) => run("git", a);
@@ -40,23 +45,56 @@ function latestRelease(repo) {
   const branch = gh("api", `repos/${repo}`, "--jq", ".default_branch");
   const sha = gh("api", `repos/${repo}/commits/${branch}`, "--jq", ".sha");
   const msg = gh("api", `repos/${repo}/commits/${branch}`, "--jq", ".commit.message");
-  return { tag: sha, version: sha.slice(0, 7), body: `Head of \`${branch}\`: ${msg}`, url: `https://github.com/${repo}/commit/${sha}`, head: true };
+  return {
+    tag: sha,
+    version: sha.slice(0, 7),
+    body: `Head of \`${branch}\`: ${msg}`,
+    url: `https://github.com/${repo}/commit/${sha}`,
+    head: true,
+  };
 }
 
 // sync/* branches are bot-owned: a leftover branch without a PR (e.g. PR creation was refused) is re-pushed, not skipped.
 function alreadyHandled(_branch, title) {
-  const prs = ghTry("pr", "list", "--state", "all", "--search", `"${title}" in:title`, "--json", "number,title", "--jq", `[.[]|select(.title=="${title}")]|length`);
+  const prs = ghTry(
+    "pr",
+    "list",
+    "--state",
+    "all",
+    "--search",
+    `"${title}" in:title`,
+    "--json",
+    "number,title",
+    "--jq",
+    `[.[]|select(.title=="${title}")]|length`,
+  );
   if (prs && Number(prs) > 0) return `a PR titled "${title}" exists`;
   return null;
 }
 
-const trim = (s, n = 3500) => (s.length > n ? `${s.slice(0, n)}\n\n_(truncated)_` : s || "_No changelog published._");
+const trim = (s, n = 3500) =>
+  s.length > n ? `${s.slice(0, n)}\n\n_(truncated)_` : s || "_No changelog published._";
 
+// Returns the PR URL, or null when the repository forbids Actions from opening PRs. In that case
+// the branch is already pushed, so say how to open the PR by hand and name the setting that fixes it.
 function openPr({ branch, title, body, draft }) {
   git("push", "--force", ORIGIN, branch);
   const a = ["pr", "create", "--base", BASE, "--head", branch, "--title", title, "--body", body];
   if (draft) a.push("--draft");
-  return gh(...a);
+  try {
+    return gh(...a);
+  } catch (error) {
+    if (!/Resource not accessible by integration|not permitted to create/i.test(error.message))
+      throw error;
+    const repo = process.env.GITHUB_REPOSITORY || "<owner>/<repo>";
+    const server = process.env.GITHUB_SERVER_URL || "https://github.com";
+    const compare = `${server}/${repo}/compare/${BASE}...${branch}?expand=1`;
+    console.log(
+      `::warning title=Upstream watch could not open "${title}"::Branch ${branch} is pushed. ` +
+        `Open the PR at ${compare}, or enable Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".`,
+    );
+    return null;
+  }
 }
 
 function setupGit() {
@@ -66,9 +104,13 @@ function setupGit() {
 
 // GITHUB_TOKEN cannot push changes under .github/workflows, so keep ours and report upstream's.
 function holdWorkflowsAt(baseRef) {
-  const changed = gitTry("diff", "--name-only", baseRef, "--", ".github/workflows")?.split("\n").filter(Boolean) ?? [];
+  const changed =
+    gitTry("diff", "--name-only", baseRef, "--", ".github/workflows")
+      ?.split("\n")
+      .filter(Boolean) ?? [];
   for (const file of changed) {
-    if (gitTry("cat-file", "-e", `${baseRef}:${file}`) !== null) git("checkout", baseRef, "--", file);
+    if (gitTry("cat-file", "-e", `${baseRef}:${file}`) !== null)
+      git("checkout", baseRef, "--", file);
     else gitTry("rm", "-f", "--quiet", file);
   }
   return changed;
@@ -76,7 +118,8 @@ function holdWorkflowsAt(baseRef) {
 
 function setOutputs(values) {
   if (!process.env.GITHUB_OUTPUT) return;
-  for (const [k, v] of Object.entries(values)) appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+  for (const [k, v] of Object.entries(values))
+    appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
 }
 
 // Tags and branch names come from third parties: accept only plain version strings.
@@ -87,21 +130,38 @@ function syncPaseo(cfg, rel) {
   const branch = `sync/paseo-${rel.version}`;
   gitTry("remote", "add", "upstream", `https://github.com/${cfg.repo}.git`);
   git("fetch", "--no-tags", "upstream", `refs/tags/${rel.tag}:refs/tags/${rel.tag}`);
-  const merged = gitTry("merge-base", "--is-ancestor", `refs/tags/${rel.tag}^{commit}`, `${ORIGIN}/${BASE}`);
+  const merged = gitTry(
+    "merge-base",
+    "--is-ancestor",
+    `refs/tags/${rel.tag}^{commit}`,
+    `${ORIGIN}/${BASE}`,
+  );
   if (merged !== null) return log(`paseo ${rel.version}: already in ${BASE}`);
   const skip = alreadyHandled(branch, title);
   if (skip) return log(`paseo ${rel.version}: skipped, ${skip}`);
   const ahead = git("rev-list", "--count", `${ORIGIN}/${BASE}..refs/tags/${rel.tag}`);
   const stat = git("diff", "--shortstat", `${ORIGIN}/${BASE}...refs/tags/${rel.tag}`);
-  const dirs = [...new Set(git("diff", "--name-only", `${ORIGIN}/${BASE}...refs/tags/${rel.tag}`).split("\n").map((f) => f.split("/").slice(0, 2).join("/")))].slice(0, 25);
-  if (dryRun) return log(`[dry-run] would merge paseo ${rel.tag} (${ahead} commits, ${stat}) into ${branch}`);
+  const dirs = [
+    ...new Set(
+      git("diff", "--name-only", `${ORIGIN}/${BASE}...refs/tags/${rel.tag}`)
+        .split("\n")
+        .map((f) => f.split("/").slice(0, 2).join("/")),
+    ),
+  ].slice(0, 25);
+  if (dryRun)
+    return log(`[dry-run] would merge paseo ${rel.tag} (${ahead} commits, ${stat}) into ${branch}`);
 
   git("checkout", "-B", branch, `${ORIGIN}/${BASE}`);
   gitTry("merge", "--no-ff", "--no-commit", `refs/tags/${rel.tag}`);
   const conflicts = git("diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean);
   const heldWorkflows = holdWorkflowsAt(`${ORIGIN}/${BASE}`);
   git("add", "-A");
-  git("commit", "--no-verify", "-m", `Sync paseo ${rel.version}${conflicts.length ? " (unresolved conflicts)" : ""}`);
+  git(
+    "commit",
+    "--no-verify",
+    "-m",
+    `Sync paseo ${rel.version}${conflicts.length ? " (unresolved conflicts)" : ""}`,
+  );
 
   const body = `## Sync paseo ${rel.version}
 
@@ -124,26 +184,32 @@ _Opened by the upstream watcher. Never auto-merged._
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
   const url = openPr({ branch, title, body, draft: conflicts.length > 0 });
+  if (!url) return log(`pushed ${branch}; PR not opened (see warning)`);
   log(`opened ${url}`);
   setOutputs({ paseo_branch: conflicts.length ? "" : branch, paseo_pr: url });
 }
 
-function syncPin(name, cfg, rel, manifest) {
+function syncPin(name, cfg, rel) {
   const title = `Sync ${name} ${rel.version}`;
   const branch = `sync/${name}-${rel.version}`;
   if (rel.version === cfg.version) return log(`${name} ${rel.version}: already pinned`);
   const skip = alreadyHandled(branch, title);
   if (skip) return log(`${name} ${rel.version}: skipped, ${skip}`);
-  if (dryRun) return log(`[dry-run] would bump ${name} ${cfg.version} -> ${rel.version} on ${branch}`);
+  if (dryRun)
+    return log(`[dry-run] would bump ${name} ${cfg.version} -> ${rel.version} on ${branch}`);
 
   git("checkout", "-B", branch, `${ORIGIN}/${BASE}`);
-  manifest.upstreams[name].version = rel.version;
-  writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+  // Read the manifest from the branch just checked out so another upstream's bump on a previous
+  // branch cannot leak into this one, and keep the old version for the PR body.
+  const from = cfg.version;
+  const branchManifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  branchManifest.upstreams[name].version = rel.version;
+  writeFileSync(MANIFEST, `${JSON.stringify(branchManifest, null, 2)}\n`);
   git("add", MANIFEST);
   git("commit", "--no-verify", "-m", `Sync ${name} ${rel.version}`);
   const body = `## Sync ${name} ${rel.version}
 
-Tracked version moves from \`${cfg.version}\` to \`${rel.version}\`. Upstream: ${rel.url}
+Tracked version moves from \`${from}\` to \`${rel.version}\`. Upstream: ${rel.url}
 
 ### Upstream changelog
 ${trim(rel.body)}
@@ -158,7 +224,8 @@ Nothing is replaced automatically. A maintainer should check the changelog for f
 _Opened by the upstream watcher. Never auto-merged._
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
-  log(`opened ${openPr({ branch, title, body, draft: false })}`);
+  const url = openPr({ branch, title, body, draft: false });
+  log(url ? `opened ${url}` : `pushed ${branch}; PR not opened (see warning)`);
 }
 
 const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
@@ -168,10 +235,11 @@ for (const [name, cfg] of Object.entries(manifest.upstreams)) {
   if (only && only !== name) continue;
   try {
     const rel = latestRelease(cfg.repo);
-    if (!SAFE_VERSION.test(rel.version)) throw new Error(`unsafe version string ${JSON.stringify(rel.version)}`);
+    if (!SAFE_VERSION.test(rel.version))
+      throw new Error(`unsafe version string ${JSON.stringify(rel.version)}`);
     log(`${name}: latest ${rel.tag}${rel.head ? " (head, no releases)" : ""}`);
     if (cfg.kind === "merge") syncPaseo(cfg, rel);
-    else syncPin(name, cfg, rel, manifest);
+    else syncPin(name, cfg, rel);
   } catch (error) {
     console.error(`[upstream-watch] ${name} failed: ${error.message}`);
     process.exitCode = 1;

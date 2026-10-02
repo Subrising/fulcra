@@ -2,25 +2,191 @@ import { defineContract } from "./rpc-contract";
 import { z } from "zod";
 import { nativeServerId } from "./host-binding";
 import { supervisorSchema } from "./management";
-const text = z.string().max(512), id = z.string().uuid();
-export const quotaWaitSchema = z.object({ messageId: id, sessionId: id, taskId: id, state: z.enum(["waiting", "checking", "attention"]), reason: z.enum(["provider-limit", "model-limit", "verification"]), since: z.string().datetime().nullable(), checkedAt: z.string().datetime().nullable(), nextCheckAt: z.string().datetime().nullable() }).strict();
-export const quotaStatusSchema = z.object({ version: z.literal(1), observedAt: z.string().datetime(), partial: z.boolean(), entries: z.array(quotaWaitSchema).max(64) }).strict();
-export const fleetNode = z.object({ id, task: id, host: z.string().min(1).max(256), serverId: nativeServerId.nullable().optional(), agentId: id.nullable(), title: text, provider: text, model: text.nullable(), effort: text.nullable().optional(), mode: text, status: text, pending: z.number().int().nonnegative().nullable(), observedAt: text.nullable(), updatedAt: text.nullable(), error: text.nullable(), quotaWait: quotaWaitSchema.nullable().optional(), quotaObservedAt: z.string().datetime().nullable().optional(),
+const text = z.string().max(512),
+  id = z.string().uuid();
+export const quotaWaitSchema = z
+  .object({
+    messageId: id,
+    sessionId: id,
+    taskId: id,
+    state: z.enum(["waiting", "checking", "attention"]),
+    reason: z.enum(["provider-limit", "model-limit", "verification"]),
+    since: z.string().datetime().nullable(),
+    checkedAt: z.string().datetime().nullable(),
+    nextCheckAt: z.string().datetime().nullable(),
+  })
+  .strict();
+export const quotaStatusSchema = z
+  .object({
+    version: z.literal(1),
+    observedAt: z.string().datetime(),
+    partial: z.boolean(),
+    entries: z.array(quotaWaitSchema).max(64),
+  })
+  .strict();
+export const fleetNode = z.object({
+  id,
+  task: id,
+  host: z.string().min(1).max(256),
+  serverId: nativeServerId.nullable().optional(),
+  agentId: id.nullable(),
+  title: text,
+  provider: text,
+  model: text.nullable(),
+  effort: text.nullable().optional(),
+  mode: text,
+  status: text,
+  pending: z.number().int().nonnegative().nullable(),
+  observedAt: text.nullable(),
+  updatedAt: text.nullable(),
+  error: text.nullable(),
+  quotaWait: quotaWaitSchema.nullable().optional(),
+  quotaObservedAt: z.string().datetime().nullable().optional(),
   // Display only (MULTIHOST-DESIGN §5.4): the native host's count of background jobs for a local session. Absent when none or unknown.
-  backgroundWork: z.object({ count: z.number().int().min(1).max(999) }).strict().optional(),
+  backgroundWork: z
+    .object({ count: z.number().int().min(1).max(999) })
+    .strict()
+    .optional(),
   // Update-7: ownership and the account a session runs on. `parent` is the session that started it (a manager, a seat
   // holder, or a session that ran `paseo run`); `origin` "spawned" marks a session the controller did not create but a
   // session here did. `account` is the pool account of its current launch (this host's pool; null when none).
-  parent: id.nullable().optional(), project: id.nullable().optional(), role: text.nullable().optional(), origin: z.enum(["enrolled", "spawned"]).optional(),
-  account: z.object({ name: z.string().max(60), provider: z.string().max(20) }).strict().nullable().optional() });
-export const fleetSchema = z.object({ observedAt: text, hosts: z.array(z.string().min(1).max(256)).max(65).optional(), total: z.number().int().nonnegative(), partial: z.boolean(), matching: z.number().int().nonnegative().optional(), nextOffset: z.number().int().nonnegative().nullable().optional(), note: text, quotaNote: text.optional(), supervisors: z.array(supervisorSchema).max(32).optional(), supervisionAvailable: z.boolean().optional(), supervisionIssues: z.object({ unreadable: z.number().int().nonnegative(), ids: z.array(z.string().max(64)).max(8), truncated: z.number().int().nonnegative() }).strict().optional(), nodes: z.array(fleetNode).max(64), tasks: z.array(z.object({ id, title: text, identifier: text.nullable() })).max(64), edges: z.array(z.object({ from: id, to: id, active: z.boolean(), state: text, event: text.nullable() })).max(128) });
-export const fleetRpc = defineContract({ name: "organization.fleet", input: z.object({ search: z.string().max(160).optional(), offset: z.number().int().min(0).max(2048).optional(), host: z.string().min(1).max(256).optional(), projectId: id.optional() }).strict(), output: fleetSchema });
+  parent: id.nullable().optional(),
+  project: id.nullable().optional(),
+  role: text.nullable().optional(),
+  origin: z.enum(["enrolled", "spawned"]).optional(),
+  account: z
+    .object({ name: z.string().max(60), provider: z.string().max(20) })
+    .strict()
+    .nullable()
+    .optional(),
+});
+export const fleetSchema = z.object({
+  observedAt: text,
+  hosts: z.array(z.string().min(1).max(256)).max(65).optional(),
+  total: z.number().int().nonnegative(),
+  partial: z.boolean(),
+  matching: z.number().int().nonnegative().optional(),
+  nextOffset: z.number().int().nonnegative().nullable().optional(),
+  note: text,
+  quotaNote: text.optional(),
+  supervisors: z.array(supervisorSchema).max(32).optional(),
+  supervisionAvailable: z.boolean().optional(),
+  supervisionIssues: z
+    .object({
+      unreadable: z.number().int().nonnegative(),
+      ids: z.array(z.string().max(64)).max(8),
+      truncated: z.number().int().nonnegative(),
+    })
+    .strict()
+    .optional(),
+  nodes: z.array(fleetNode).max(64),
+  tasks: z.array(z.object({ id, title: text, identifier: text.nullable() })).max(64),
+  edges: z
+    .array(z.object({ from: id, to: id, active: z.boolean(), state: text, event: text.nullable() }))
+    .max(128),
+});
+export const fleetRpc = defineContract({
+  name: "organization.fleet",
+  input: z
+    .object({
+      search: z.string().max(160).optional(),
+      offset: z.number().int().min(0).max(2048).optional(),
+      host: z.string().min(1).max(256).optional(),
+      projectId: id.optional(),
+    })
+    .strict(),
+  output: fleetSchema,
+});
 // MH4: the Sessions page's machine switch and its app-link lists need the configured hosts even when the
 // fleet read itself fails. Portable config only; no controller call.
-export const fleetHostsSchema = z.object({ local: z.string().min(1).max(256), hosts: z.array(z.object({ name: z.string().min(1).max(256), serverId: nativeServerId.nullable() }).strict()).max(65) }).strict();
-export const fleetHostsRpc = defineContract({ name: "organization.fleet-hosts", input: z.object({}).strict(), output: fleetHostsSchema });
+export const fleetHostsSchema = z
+  .object({
+    local: z.string().min(1).max(256),
+    hosts: z
+      .array(
+        z
+          .object({ name: z.string().min(1).max(256), serverId: nativeServerId.nullable() })
+          .strict(),
+      )
+      .max(65),
+  })
+  .strict();
+export const fleetHostsRpc = defineContract({
+  name: "organization.fleet-hosts",
+  input: z.object({}).strict(),
+  output: fleetHostsSchema,
+});
 export type FleetHosts = z.infer<typeof fleetHostsSchema>;
-export const activityRpc = defineContract({ name: "organization.activity", input: z.object({ sessionId: id, taskId: id }).strict(), output: z.object({ observedAt: text, sessionId: id, taskId: id, note: text, receipts: z.array(z.object({ id, kind: text, state: text, notification: text.nullable(), evidenceHash: z.string().regex(/^[a-f0-9]{64}$/).nullable() })).max(20), activity: z.array(z.object({ id: text, kind: text, label: text, state: text.nullable(), files: z.array(text).max(8) })).max(50) }) });
+export const activityRpc = defineContract({
+  name: "organization.activity",
+  input: z.object({ sessionId: id, taskId: id }).strict(),
+  output: z.object({
+    observedAt: text,
+    sessionId: id,
+    taskId: id,
+    note: text,
+    receipts: z
+      .array(
+        z.object({
+          id,
+          kind: text,
+          state: text,
+          notification: text.nullable(),
+          evidenceHash: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .nullable(),
+        }),
+      )
+      .max(20),
+    activity: z
+      .array(
+        z.object({
+          id: text,
+          kind: text,
+          label: text,
+          state: text.nullable(),
+          files: z.array(text).max(8),
+        }),
+      )
+      .max(50),
+  }),
+});
 export type Fleet = z.infer<typeof fleetSchema>;
-const bookRow=z.object({id:z.string().regex(/^\d{1,16}$/),kind:z.enum(["tool_call","user_message","assistant_message"]),label:z.string().regex(/^[A-Za-z_][\w .:-]{0,127}$/),state:z.enum(["pending","running","completed","failed","cancelled","unknown"]).nullable(),files:z.array(z.string().max(512).regex(/^[^\u0000-\u001f\u007f]*$/)).max(1)}).strict().refine(a=>a.kind==="tool_call" ? a.state!==null && !a.label.includes(" ") : a.state===null && !a.files.length && a.label===(a.kind==="user_message"?"User instruction":"Assistant response"));
-export const bookActivitySchema = z.object({sessionId:id,taskId:id,agentId:id,nativeId:id.nullable(),observedAt:text,hasOlder:z.boolean(),skippedCount:z.number().int().nonnegative().max(50),withheldPaths:z.number().int().nonnegative().max(50),activity:z.array(bookRow).max(50)}).strict().refine(p=>p.activity.length+p.skippedCount<=50&&p.withheldPaths<=p.activity.length);
+const bookRow = z
+  .object({
+    id: z.string().regex(/^\d{1,16}$/),
+    kind: z.enum(["tool_call", "user_message", "assistant_message"]),
+    label: z.string().regex(/^[A-Za-z_][\w .:-]{0,127}$/),
+    state: z.enum(["pending", "running", "completed", "failed", "cancelled", "unknown"]).nullable(),
+    files: z
+      .array(
+        z
+          .string()
+          .max(512)
+          .regex(/^[^\u0000-\u001f\u007f]*$/),
+      )
+      .max(1),
+  })
+  .strict()
+  .refine((a) =>
+    a.kind === "tool_call"
+      ? a.state !== null && !a.label.includes(" ")
+      : a.state === null &&
+        !a.files.length &&
+        a.label === (a.kind === "user_message" ? "User instruction" : "Assistant response"),
+  );
+export const bookActivitySchema = z
+  .object({
+    sessionId: id,
+    taskId: id,
+    agentId: id,
+    nativeId: id.nullable(),
+    observedAt: text,
+    hasOlder: z.boolean(),
+    skippedCount: z.number().int().nonnegative().max(50),
+    withheldPaths: z.number().int().nonnegative().max(50),
+    activity: z.array(bookRow).max(50),
+  })
+  .strict()
+  .refine((p) => p.activity.length + p.skippedCount <= 50 && p.withheldPaths <= p.activity.length);

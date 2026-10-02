@@ -89,7 +89,7 @@ const assistant = (content) =>
       usage,
     },
   });
-async function useTool(name, input, what) {
+async function runTool(name, input, what) {
   const id = "toolu_" + crypto.randomUUID().replace(/-/g, "").slice(0, 24);
   assistant([{ type: "tool_use", id, name, input }]);
   const decision = await control({
@@ -125,15 +125,15 @@ async function useTool(name, input, what) {
 async function turn(text) {
   init();
   if (text.includes("SCRIPT_TOOLS")) {
-    await useTool("mcp__docs__search", { query: "release notes" }, "mcp");
-    await useTool(
+    await runTool("mcp__docs__search", { query: "release notes" }, "mcp");
+    await runTool(
       "Write",
       { file_path: `${process.cwd()}/notes.txt`, content: "scripted write\n" },
       "file-write",
     );
   }
   if (text.includes("SCRIPT_CRED"))
-    await useTool(
+    await runTool(
       "Bash",
       {
         command: "security find-generic-password -s 'Claude Code-credentials' -w",

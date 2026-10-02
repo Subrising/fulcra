@@ -7,4 +7,6 @@ import type { Contract, ContractReceive, ContractSend } from "../shared/rpc-cont
  */
 export const useContract = useRpc as unknown as <Input, Output>(
   contract: Contract<Input, Output>,
-) => (input: ContractSend<Contract<Input, Output>>) => Promise<ContractReceive<Contract<Input, Output>>>;
+) => (
+  input: ContractSend<Contract<Input, Output>>,
+) => Promise<ContractReceive<Contract<Input, Output>>>;

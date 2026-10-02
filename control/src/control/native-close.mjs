@@ -7,6 +7,16 @@ export const NATIVE_CLOSE_MS = 2000;
 // process cannot drain its loop and exit before the caller's store.close().
 export function closeWithin(close, ms = NATIVE_CLOSE_MS) {
   let timer;
-  const deadline = new Promise(resolve => { timer = setTimeout(resolve, ms, false); });
-  return Promise.race([Promise.resolve().then(close).then(() => true, () => true), deadline]).finally(() => clearTimeout(timer));
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(resolve, ms, false);
+  });
+  return Promise.race([
+    Promise.resolve()
+      .then(close)
+      .then(
+        () => true,
+        () => true,
+      ),
+    deadline,
+  ]).finally(() => clearTimeout(timer));
 }

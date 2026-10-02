@@ -1,1 +1,9 @@
-{ "id": 3, "title": "Bitbucket issue", "state": "resolved", "kind": "bug", "priority": "major", "updated_on": "2026-09-19T00:00:00.000000+00:00", "repository": { "uuid": "{00000000-0000-4000-8000-000000002003}" } }
+{
+  "id": 3,
+  "title": "Bitbucket issue",
+  "state": "resolved",
+  "kind": "bug",
+  "priority": "major",
+  "updated_on": "2026-09-19T00:00:00.000000+00:00",
+  "repository": { "uuid": "{00000000-0000-4000-8000-000000002003}" }
+}

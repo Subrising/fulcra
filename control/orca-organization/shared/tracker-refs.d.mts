@@ -1,13 +1,24 @@
-export type Tracker = 'github' | 'jira' | 'bitbucket';
-export type TrackerAuth = 'keychain' | 'gh-cli';
-export type MappingIdentity = { tracker: Tracker; auth: TrackerAuth; site: string; remoteId: string; remoteName: string };
+export type Tracker = "github" | "jira" | "bitbucket";
+export type TrackerAuth = "keychain" | "gh-cli";
+export interface MappingIdentity {
+  tracker: Tracker;
+  auth: TrackerAuth;
+  site: string;
+  remoteId: string;
+  remoteName: string;
+}
 export const TRACKERS: readonly Tracker[];
 export const AUTH: Readonly<Record<Tracker, readonly TrackerAuth[]>>;
 export function validMapping(m: unknown): m is MappingIdentity;
 export function validRemoteName(tracker: string, name: unknown): boolean;
 export function validRemoteId(tracker: string, id: unknown): boolean;
 export function validItemRef(tracker: string, remoteName: string, ref: unknown): boolean;
-export function canonicalUrl(tracker: Tracker, site: string, remoteName: string, itemRef: string): string;
+export function canonicalUrl(
+  tracker: Tracker,
+  site: string,
+  remoteName: string,
+  itemRef: string,
+): string;
 export function itemKey(tracker: Tracker, remoteId: string, itemRef: string): string;
 export function displayRef(tracker: Tracker, itemRef: string): string;
 export function credentialAccount(tracker: Tracker, site: string): string;

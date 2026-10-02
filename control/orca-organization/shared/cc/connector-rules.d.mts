@@ -7,7 +7,12 @@ export declare const MAPPING_STATES: readonly string[];
 export declare const HOSTNAME: RegExp;
 export declare const UUID: RegExp;
 export declare function connectorProblem(connector: unknown): string | null;
-export declare function issueRef(connector: string, site: string | null, remoteId: string, ref: string): string;
+export declare function issueRef(
+  connector: string,
+  site: string | null,
+  remoteId: string,
+  ref: string,
+): string;
 export declare function repoKey(connector: string, site: string | null, path: string): string;
 export declare function prRef(repoKey: string, number: number | string): string;
 export declare function commitRef(repoKey: string, sha: string): string;

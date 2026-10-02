@@ -178,7 +178,9 @@ export function isWorkingForDisplay(node: Node, live: LiveState | undefined): bo
   return node.status === "running" || readBackgroundWorkCount(node) > 0;
 }
 
-export type AgentsApi = { agents: { list(options: unknown): Promise<unknown> } };
+export interface AgentsApi {
+  agents: { list(options: unknown): Promise<unknown> };
+}
 
 function bounded<T>(work: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {

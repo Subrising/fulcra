@@ -18,9 +18,15 @@ import { defineRpc } from "@getpaseo/plugin";
  * The plugin peer-depends on `zod: ^4.4.3`, which `4.6.2` satisfies, so this is a genuine upstream
  * incompatibility inside the accepted range rather than a pin violation. See contract-types-report.
  */
-export type Contract<Input, Output> = { name: string; input: Input; output: Output };
+export interface Contract<Input, Output> {
+  name: string;
+  input: Input;
+  output: Output;
+}
 
-export const defineContract = defineRpc as unknown as <Input, Output>(definition: Contract<Input, Output>) => Contract<Input, Output>;
+export const defineContract = defineRpc as unknown as <Input, Output>(
+  definition: Contract<Input, Output>,
+) => Contract<Input, Output>;
 
 /**
  * Read zod's own inferred input/output off the schema's internals. Structural inference, so no

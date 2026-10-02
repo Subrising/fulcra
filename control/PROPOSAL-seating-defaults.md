@@ -4,7 +4,7 @@ Worker B, task `00000000-0000-4000-8000-000000000000`, branch `design/seating-de
 **Design only. No behaviour is changed by this commit; no production code is touched.**
 
 Read this as five independently approvable items. Each has: the behaviour change, where it
-lives, the security trade-off stated as *what a compromised orchestrator gains*, the bound, and
+lives, the security trade-off stated as _what a compromised orchestrator gains_, the bound, and
 what stays operator-only.
 
 ---
@@ -13,21 +13,21 @@ what stays operator-only.
 
 The fence that matters is one line. `src/control/rpc.mjs:43` compares the operator secret; every
 method in the `switch` below it is operator-only, and every method above it is reachable with a
-*seat capability* — a token a seated model holds. So:
+_seat capability_ — a token a seated model holds. So:
 
-| Capability | Route | Line | Who may call it today |
-|---|---|---|---|
-| Set a seat's session allowance | `roles-allowance-set` | `rpc.mjs:72` | operator only |
-| Open a prime↔project channel | `channels-open` | `rpc.mjs:61` | operator only |
-| Close a channel | `channels-close` | `rpc.mjs:62` | operator only |
-| Assign a seat | `bindings-assign` | `rpc.mjs:54` | operator only |
-| Start a session in your own project | `roles-create-session` | `rpc.mjs:24` | **seat** (but needs an allowance an operator set) |
-| Ask for a channel | `channels-request` | `rpc.mjs:23` | **seat** (writes a request row and nothing else — `role-channels.mjs:284-305`) |
+| Capability                          | Route                  | Line         | Who may call it today                                                          |
+| ----------------------------------- | ---------------------- | ------------ | ------------------------------------------------------------------------------ |
+| Set a seat's session allowance      | `roles-allowance-set`  | `rpc.mjs:72` | operator only                                                                  |
+| Open a prime↔project channel        | `channels-open`        | `rpc.mjs:61` | operator only                                                                  |
+| Close a channel                     | `channels-close`       | `rpc.mjs:62` | operator only                                                                  |
+| Assign a seat                       | `bindings-assign`      | `rpc.mjs:54` | operator only                                                                  |
+| Start a session in your own project | `roles-create-session` | `rpc.mjs:24` | **seat** (but needs an allowance an operator set)                              |
+| Ask for a channel                   | `channels-request`     | `rpc.mjs:23` | **seat** (writes a request row and nothing else — `role-channels.mjs:284-305`) |
 
 Assigning a seat grants nothing. `bindings.assign` (`src/control/bindings.mjs:145-183`) writes a
 binding row and a history row; it confers no allowance and opens no channel. The system says so
-in its own words at `role-sessions.mjs:61-62`: *"Assigning a seat grants nothing; an operator sets
-its allowance with roles-allowance-set."* That is the correct description of today and the exact
+in its own words at `role-sessions.mjs:61-62`: _"Assigning a seat grants nothing; an operator sets
+its allowance with roles-allowance-set."_ That is the correct description of today and the exact
 thing GOAL item 3 asks to change.
 
 The briefing gap is also verified, not inferred. `role_start_session` is declared at
@@ -50,11 +50,11 @@ automatically, pinned to the new seat revision, instead of leaving the seat with
 
 **Where.** `src/control/bindings.mjs:166-180`, inside the existing `this.store.atomic(...)` block
 in `assign()`, immediately after the `role_bindings` / `role_binding_history` inserts at `:175-176`
-(so the default is conferred in the *same* transaction as the seating — there is never a window
+(so the default is conferred in the _same_ transaction as the seating — there is never a window
 where a seat exists without its default, and a rolled-back seating confers nothing).
 
-**How.** Today `RoleSessions.setAllowance` (`role-sessions.mjs:31-46`) both *authorizes* (operator
-route + `expectedRevision` check) and *writes*. Split it:
+**How.** Today `RoleSessions.setAllowance` (`role-sessions.mjs:31-46`) both _authorizes_ (operator
+route + `expectedRevision` check) and _writes_. Split it:
 
 - extract the write into `RoleSessions.conferAllowance({role, seat, seatRevision, maxSessions, note, actor})`
   — the `INSERT OR REPLACE` at `role-sessions.mjs:43` plus the used-count rule at `:41-42`;
@@ -87,7 +87,7 @@ CREATE TABLE role_seat_default_grants(seat TEXT PRIMARY KEY, conferred INTEGER N
 
 **What a compromised or confused orchestrator gains that it does not have today:** the ability to
 bring 2 persistent agent sessions into existence with no operator act at all. Today it can bring
-zero into existence; `startSession` throws *"This seat has no current operator session allowance"*
+zero into existence; `startSession` throws _"This seat has no current operator session allowance"_
 at `role-sessions.mjs:171`. That is a real, non-trivial escalation and it should be approved with
 open eyes.
 
@@ -116,10 +116,10 @@ quo where every legitimate project start needs a human.
 **Stays operator-only, and why:**
 
 - Raising above the default — the default is a floor for routine work, not a budget the seat sets.
-- `roles-adopt` (`rpc.mjs:71`, `role-sessions.mjs:127`). Claiming an *already existing* session is
+- `roles-adopt` (`rpc.mjs:71`, `role-sessions.mjs:127`). Claiming an _already existing_ session is
   categorically different from creating one: the comment at `role-sessions.mjs:121-126` is right,
   and I am not proposing to weaken it. Adoption also spends allowance, so a default allowance
-  would otherwise silently become a default *claiming* power.
+  would otherwise silently become a default _claiming_ power.
 - Anything cross-project or cross-host.
 
 ---
@@ -144,12 +144,12 @@ blocked reason, exactly the way `allowances()` reports an ungranted seat at
 
 ### Proposed bounds
 
-| | Operator `channels-open` today | Proposed default |
-|---|---|---|
-| `maxMessages` | 1–64 (`role-channels.mjs:50`) | **8**, shared across both directions |
-| expiry | up to 30 days (`MAX_DAYS`, `:5`, `:55`) | **7 days** |
-| purpose | operator-authored, ≥12 chars | machine-authored, marked `actor: 'seating'` |
-| revision pinning | both seats (`:36-37`) | **unchanged** |
+|                  | Operator `channels-open` today          | Proposed default                            |
+| ---------------- | --------------------------------------- | ------------------------------------------- |
+| `maxMessages`    | 1–64 (`role-channels.mjs:50`)           | **8**, shared across both directions        |
+| expiry           | up to 30 days (`MAX_DAYS`, `:5`, `:55`) | **7 days**                                  |
+| purpose          | operator-authored, ≥12 chars            | machine-authored, marked `actor: 'seating'` |
+| revision pinning | both seats (`:36-37`)                   | **unchanged**                               |
 
 All existing refusals in `open` are kept and must be re-checked in `openChannel`: both seats
 assigned and session-present (`:58`), both reachable (`:61`), distinct sessions (`:63`), at least
@@ -187,14 +187,14 @@ the system, and it is the single most consequential item in this proposal.
   compare-and-swapped so a zero-row update cannot be mistaken for a spend (`:173-174`).
 - Revision pinning: `assertUsable` (`:36-37`) invalidates the channel the moment either seat moves.
 - 7 days, and `channels-close` (operator) plus `role_close_channel` (either seat) both end it.
-- The prime is a *seat*, not the human. the owner authority is not on this channel.
+- The prime is a _seat_, not the human. the owner authority is not on this channel.
 
 **Residual risk I would accept:** 8 injected messages into a prime seat, revocable by the prime
 itself, by the operator, or by moving either seat. I accept it because the alternative — a human
 approving a channel for every project start — is the exact cost GOAL item 3 exists to remove, and
 because `role_close_channel` gives the injected party a unilateral exit it does not have today.
 
-**Stays operator-only, and why:** *opening* a channel with chosen bounds, raising `maxMessages`,
+**Stays operator-only, and why:** _opening_ a channel with chosen bounds, raising `maxMessages`,
 extending expiry beyond 7 days, and opening a channel to a seat other than the single usable
 prime. A seat must never choose its own counterpart or its own budget — `role-channels.mjs:282-283`
 states this principle and I am keeping it. Seating picks the counterpart from unambiguous system
@@ -232,15 +232,15 @@ Uniqueness is enforced by the creation request id, which is already `PRIMARY KEY
   and passes the full admission guard (`admission-guard.mjs:117`) like any other message.
 - Recorded verbatim in the journal and readable by the operator.
 
-### Security trade-off — and why this one is arguably a net *improvement*
+### Security trade-off — and why this one is arguably a net _improvement_
 
 **What a compromised orchestrator gains:** 8 KB of chosen instruction into a fresh session, versus
 120 characters today.
 
-**Why the marginal risk is smaller than it looks:** the orchestrator *already* has this capability
+**Why the marginal risk is smaller than it looks:** the orchestrator _already_ has this capability
 through a worse channel. It can write any text it likes into the worker's worktree and point the
 120-char title at the absolute path — which is exactly what happened to produce `BRIEF.md` in this
-worktree. So the realistic change is not *whether* an orchestrator can brief a worker; it is
+worktree. So the realistic change is not _whether_ an orchestrator can brief a worker; it is
 whether that brief is **journalled, bounded and auditable** or an off-journal file that the control
 plane never sees. Today the control plane's record of my instructions is the string
 `"…/wt/b/BRIEF.md"`. Under this proposal it would be the instructions themselves.
@@ -251,7 +251,7 @@ unbounded capability into a visible, bounded one. It does not create the capabil
 **Residual risk I would accept:** an 8 KB injection into a session the orchestrator is already
 entitled to create and already leads.
 
-**Stays operator-only:** everything else. In particular this is deliberately *not* a general
+**Stays operator-only:** everything else. In particular this is deliberately _not_ a general
 send — an orchestrator still cannot message a running worker it started without an approved route.
 
 ### Rejected: seating confers a scoped manager grant
@@ -281,7 +281,7 @@ the trade-off: the manager grant is less new code and much more new power.
 
 ---
 
-## 4. Per-worker model and effort (confirmed gap 2) — I recommend *deferring* this
+## 4. Per-worker model and effort (confirmed gap 2) — I recommend _deferring_ this
 
 The gap is real: `role_start_session` takes `provider: z.enum(['claude','codex'])`
 (`inbox.mjs:32`) and nothing else, so an orchestrator cannot choose Opus 5.5 / medium vs high for a
@@ -289,7 +289,7 @@ worker it starts. The natural shape is an allowlisted `model` / `effort` on the 
 so a seat can never select a tier above the one it is itself running at.
 
 **I am not proposing a concrete design for it, and I want to be explicit about why.** I verified
-that `native.mjs:115` *reads* `snapshot.runtimeInfo?.model` — that is observation, not selection. I
+that `native.mjs:115` _reads_ `snapshot.runtimeInfo?.model` — that is observation, not selection. I
 did **not** find the code path that sets a model at creation, and it may live outside this repo
 (provider config, `src/control/provider-model.mjs`, or the native runtime). Proposing a code
 location I have not read would be guessing, and this proposal is meant to be approvable item by
@@ -313,15 +313,15 @@ human input — `humanInput` is incremented (`:124-126`) and the function return
 journal or filesystem check. `observation()` exposes that counter as `humanAt` (`:11`), and
 `Controller.inspect` takes over the session when `humanAt >= grantedAt`
 (`src/control/controller.mjs:151`), as does the send path before dispatch (`:206`). The test at
-`takeover-control-prompt.test.mjs:232-247` asserts exactly this and nothing more: *one signal, read
-twice*. There is also a second route to the same takeover — `promptIdentityChanged`
+`takeover-control-prompt.test.mjs:232-247` asserts exactly this and nothing more: _one signal, read
+twice_. There is also a second route to the same takeover — `promptIdentityChanged`
 (`controller.mjs:132-136`) compares `lastPromptId` and `lastUserAt`.
 
 ### What I did NOT verify
 
 **I could not confirm which of those two paths actually fired when the prime answered a Write
 permission prompt and the orchestrator lost its seat.** I found no code that routes a permission
-*decision* through `guard()`. Candidates: (a) the answer is delivered as an unprefixed prompt and
+_decision_ through `guard()`. Candidates: (a) the answer is delivered as an unprefixed prompt and
 hits `guard`'s human branch; (b) it advances the native `lastUserMessageAt` and trips
 `promptIdentityChanged` at `controller.mjs:151`. `controller.mjs:207` also refuses any send while
 `current.pending > 0`, so a pending prompt already blocks delegated sends by a separate mechanism.
@@ -330,7 +330,7 @@ this proposal that I would not paper over.
 
 ### Why I would not weaken it either way
 
-The fence's whole value is that it *cannot* tell a permission answer from a typed instruction.
+The fence's whole value is that it _cannot_ tell a permission answer from a typed instruction.
 Teaching it to distinguish them means trusting the native payload's self-description about what
 kind of input it is — and `controller.mjs:125-126` carries a withdrawn claim from commit `a9900b3f`
 that warns about precisely this class of over-trust. "It is only a permission answer" is exactly
@@ -362,7 +362,7 @@ changing: **nothing in this proposal touches `admission-guard.mjs` or the takeov
    `permissions.grant` / `permissions.inherit` (`src/control/permissions.mjs:50`) is the designed
    path; `manager.create` already calls `permissions.inherit` for a new worker (`manager.mjs:141`).
    Answering a delegated session's prompt interactively should be treated as an operator
-   *mistake*, and the docs should say so.
+   _mistake_, and the docs should say so.
 
 **Security trade-off of changing it (for completeness, since the brief asks):** if answering a
 permission prompt stopped counting as human input, then any input the native runtime labels as a
@@ -390,7 +390,7 @@ convenience, and it is the guardrail my brief explicitly protects.
    both an injection multiplier and ambiguous about who owns the project. One unambiguous prime or
    nothing.
 5. **Letting the seat choose its own default bounds ("I need 10 sessions").** Rejected: that is
-   `channels-request` / `requestSession` by another name, and those already exist as the *correct*
+   `channels-request` / `requestSession` by another name, and those already exist as the _correct_
    shape — a seat asks, an operator decides.
 6. **Making seating fail when a default cannot be conferred.** Rejected: a project source outage or
    a missing prime would then block seating entirely. Defaults degrade to absent-with-a-reason,
@@ -412,7 +412,7 @@ convenience, and it is the guardrail my brief explicitly protects.
 - A seat cannot reach another project or another host — `role-sessions.mjs:164, 190-191`;
   `bindings.mjs:134-143`.
 - Channel bounds and the compare-and-swap spend — `role-channels.mjs:50, 55, 148, 165-177`.
-- `channels-close` is operator-only — `rpc.mjs:62`; a seat can only *request* — `:23`,
+- `channels-close` is operator-only — `rpc.mjs:62`; a seat can only _request_ — `:23`,
   `role-channels.mjs:284-305`.
 - Manager grants carry `text`, accept `host: 'macbook'`, use a separate `maxWorkers` budget, and
   write a second token file — `manager.mjs:101, 105, 110, 76-78, 160-165`.
@@ -435,7 +435,7 @@ convenience, and it is the guardrail my brief explicitly protects.
   to confirm there is no initialisation cycle.
 - **Cost of the `actor` column migration.** `assertColumns` (`schema.mjs`) asserts an exact column
   list, so adding a column to `role_session_allowances` requires updating `role-sessions.mjs:17`
-  *and* a migration for existing rows. I did not read the migration machinery.
+  _and_ a migration for existing rows. I did not read the migration machinery.
 
 **Ran nothing.** No tests were executed, no controller was contacted, nothing outside this
 worktree was read or touched.
@@ -450,17 +450,19 @@ existing suites are the right homes: `bindings.test.mjs`, `role-sessions` covera
 `role-revocation.test.mjs`, `role-channel-admission.test.mjs`.
 
 **Item 1 — default allowance**
+
 - Seating a project-orchestrator yields `remaining === 2` with `actor: 'seating'`; the seat can
   `startSession` twice and is refused on the third with the existing allowance message.
 - `reaffirm` (same holder re-assigned) does **not** confer a fresh count or increment
   `role_seat_default_grants`.
-- `replace` confers a fresh count, and the *predecessor's* unspent default is unusable —
+- `replace` confers a fresh count, and the _predecessor's_ unspent default is unusable —
   `startSession` at the old revision throws.
 - A 4th conferral on the same seat is refused; seating still succeeds, with a recorded reason.
 - An operator `setAllowance` to 0 takes the default away; to a value below `used` still throws.
 - Prime seats get no default.
 
 **Item 2 — default channel**
+
 - Exactly one usable prime ⇒ channel with `maxMessages: 8`, expiry ≤ 7 days, both revisions pinned.
 - Zero or ≥2 usable primes, unreachable prime, duplicate open channel, or capacity reached ⇒ **no
   channel, seating still succeeds**, reason recorded. (Property test: seating never throws because
@@ -469,9 +471,10 @@ existing suites are the right homes: `bindings.test.mjs`, `role-sessions` covera
 - The 9th send is refused; the 8-message counter is shared across directions.
 - `role_close_channel`: a seat holding a side can close; a seat holding neither is refused by
   `side()`; a closed channel's history stays readable via `thread`.
-- **Negative:** no new path lets a seat *open*, *extend* or *widen* a channel.
+- **Negative:** no new path lets a seat _open_, _extend_ or _widen_ a channel.
 
 **Item 3 — brief**
+
 - A brief is delivered exactly once; a retry with the same `messageId` does not redeliver.
 - Crash between reservation and delivery leaves a visible reservation and no orphan session
   (the existing property at `role-sessions.mjs:172-173`).
@@ -481,12 +484,14 @@ existing suites are the right homes: `bindings.test.mjs`, `role-sessions` covera
 - **Negative:** `brief` is not a channel — a second send to the same worker has no route.
 
 **Item 5 — fence unchanged**
+
 - `admission-guard.mjs` and `controller.mjs:151/206` are untouched;
   `takeover-control-prompt.test.mjs` passes unmodified. This is the regression gate for the
   guardrail my brief protects.
 
 **Cross-cutting**
-- Every default is conferred in the *same transaction* as the seating: a forced failure after the
+
+- Every default is conferred in the _same transaction_ as the seating: a forced failure after the
   `role_bindings` insert leaves no allowance row and no channel row.
 - `roles-allowance-set` and `channels-open` remain below the `rpc.mjs:43` operator fence; a seat
   capability calling either is refused.
@@ -523,5 +528,5 @@ existing suites are the right homes: `bindings.test.mjs`, `role-sessions` covera
 
 ---
 
-*No behaviour changed. No production code touched. No host, controller, launchd job or installed
-app was contacted. Nothing outside this worktree was read.*
+_No behaviour changed. No production code touched. No host, controller, launchd job or installed
+app was contacted. Nothing outside this worktree was read._

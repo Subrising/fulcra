@@ -40,7 +40,7 @@ retains the row, by design, for audit. Capacity was therefore spent permanently 
   in value; what changed is what it counts).
 - A **separate** hard bound, `GRANT_HISTORY_LIMIT = 512`, on total rows. Revoked rows no longer fall out of
   the live count, so something must still stop the table growing without limit. Its message names
-  *retention*, not business, so the two conditions can never be confused again — which is precisely the
+  _retention_, not business, so the two conditions can never be confused again — which is precisely the
   confusion that hid this defect.
 - `capacity()` is now reported in `status()`, **including for a session that holds no grant**. This failure
   was invisible because nothing surfaced how much of the bound was occupied or by what.
@@ -81,18 +81,18 @@ busy agent is most likely to touch the file again, which is why it hit three wor
 
 `verifyPermissionOutput` checked several things through one channel. They are not the same kind of fact:
 
-| Check | Meaning | Now |
-|---|---|---|
-| parent path identity (dev/ino/realpath) | something moved the directory under us | **incident** (unchanged) |
+| Check                                         | Meaning                                            | Now                      |
+| --------------------------------------------- | -------------------------------------------------- | ------------------------ |
+| parent path identity (dev/ino/realpath)       | something moved the directory under us             | **incident** (unchanged) |
 | regular file, `nlink === 1`, no symlink, size | the target is not the owned file that was approved | **incident** (unchanged) |
-| bytes equal `expectedHash` | the file's *current* content | **typed separately** |
+| bytes equal `expectedHash`                    | the file's _current_ content                       | **typed separately**     |
 
 Only the last one is ambiguous, and only it changed:
 
 1. **`OutputSuperseded`** (new, `permission-policy.mjs`) is thrown for the content mismatch **only after
    every structural check has passed**, carrying the digest actually on disk. Every genuine tamper signal
    still throws a plain `Error` and still raises an incident that revokes the pool.
-   *Correction (GRANTS-REVIEW.md H-6):* the **size** comparison is NOT among those — it shares its condition
+   _Correction (GRANTS-REVIEW.md H-6):_ the **size** comparison is NOT among those — it shares its condition
    with the digest (`data.length !== proof.expectedBytes || digest(data) !== proof.expectedHash`) and now
    throws `OutputSuperseded` too. Harmless in effect, since differing sizes imply differing digests, but the
    earlier claim that size still revokes was wrong and is withdrawn.
@@ -101,7 +101,7 @@ Only the last one is ambiguous, and only it changed:
    reviewer showed it was **unreachable in production**: `reconcile` refuses to create a second intent while
    the pool has a pending one, and verification only runs on a pending row, so the witness it needs can never
    exist. Every `chained` test had to plant that witness by direct `INSERT`. Worse, two of its invariants were
-   untested and one was unsound as mutated — an *earlier* observation would have confirmed, and bytes seen
+   untested and one was unsound as mutated — an _earlier_ observation would have confirmed, and bytes seen
    before the approved call say nothing about what that call produced. A trust-granting path with no
    production trigger and untested ordering is worse than absent. Gone, along with the `'chained'`
    verification value. If the pool gate is ever relaxed, it comes back **with** those two tests.
@@ -125,20 +125,20 @@ at all: with `chained()` removed there is no path that confirms an unobserved ou
 
 New:
 
-| Test | Proves |
-|---|---|
-| `revoking a grant reclaims its capacity immediately…` | F: revoke frees a slot; dead/generation-moved/closed sessions stop occupying the bound; history retained |
-| `the history bound is separate from the live bound…` | F: 400 revoked rows never block a grant; the 512 bound refuses with a retention message while only 1 grant is live |
-| **`REGRESSION E: two quick edits to one file keep the grant`** | E: the exact reproduction above — now `superseded`, grant still active, `revoked = 0` |
-| `real tamper signals remain incidents that revoke the pool` (×3) | replaced parent directory, hard link, symlink swap — all still incidents that revoke |
-| **`B1: re-granting a session that holds a revoked row must hold at the live bound`** | B1: `live` stays 32, never 33 |
-| **`B2: revoking a pool stops its inherited children occupying live slots`** | B2: operator revoke, child-only revoke, and incident revoke; no slot leaked |
-| **`R2: a superseded mismatch wakes the supervisor and is countable`** | R2: event state `queued`, pool-scoped count |
+| Test                                                                                 | Proves                                                                                                             |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `revoking a grant reclaims its capacity immediately…`                                | F: revoke frees a slot; dead/generation-moved/closed sessions stop occupying the bound; history retained           |
+| `the history bound is separate from the live bound…`                                 | F: 400 revoked rows never block a grant; the 512 bound refuses with a retention message while only 1 grant is live |
+| **`REGRESSION E: two quick edits to one file keep the grant`**                       | E: the exact reproduction above — now `superseded`, grant still active, `revoked = 0`                              |
+| `real tamper signals remain incidents that revoke the pool` (×3)                     | replaced parent directory, hard link, symlink swap — all still incidents that revoke                               |
+| **`B1: re-granting a session that holds a revoked row must hold at the live bound`** | B1: `live` stays 32, never 33                                                                                      |
+| **`B2: revoking a pool stops its inherited children occupying live slots`**          | B2: operator revoke, child-only revoke, and incident revoke; no slot leaked                                        |
+| **`R2: a superseded mismatch wakes the supervisor and is countable`**                | R2: event state `queued`, pool-scoped count                                                                        |
 
 **One existing test encoded the bug** and had to change:
 `inheritance failure leaves a worker usable without routine authority` filled capacity with **31 revoked
 rows** and asserted refusal — i.e. it asserted that revoked history consumes capacity. It now asserts the
-corrected behaviour (revoked history does *not* consume; 31 **live** grants do), keeping its original
+corrected behaviour (revoked history does _not_ consume; 31 **live** grants do), keeping its original
 inheritance-failure and journal-capacity assertions intact.
 
 ### Whole suite
@@ -149,17 +149,17 @@ Using the command `README.md` documents, extended to the book and top-level suit
 node --experimental-test-module-mocks --test src/control/*.test.mjs src/book/*.test.mjs src/*.test.mjs
 ```
 
-| Tree | Tests | Pass | Fail |
-|---|---|---|---|
-| base `d956718f` | 549 | 545 | **4** (reviewer-measured) |
-| `6b71d3425` (first commit) | 561 | 557 | **4** (I re-measured this myself) |
-| **this commit** | 559 | 555 | **4** |
+| Tree                       | Tests | Pass | Fail                              |
+| -------------------------- | ----- | ---- | --------------------------------- |
+| base `d956718f`            | 549   | 545  | **4** (reviewer-measured)         |
+| `6b71d3425` (first commit) | 561   | 557  | **4** (I re-measured this myself) |
+| **this commit**            | 559   | 555  | **4**                             |
 
 The four failing names are **identical on all three**: `src/control/mcp-refresh-fence.test.mjs` (file-level;
 needs a pristine dist outside this worktree — **unrun**), two in `native-memory-route`, and one in
 `src/session-config.test.mjs`. All pre-existing; this change introduces none.
 
-*Correction (H-5):* my first report said "536 pass / 3 fail" from a narrower glob that omitted
+_Correction (H-5):_ my first report said "536 pass / 3 fail" from a narrower glob that omitted
 `src/*.test.mjs`, which is why it missed the fourth pre-existing failure (`session-config`). The command is
 now stated exactly, and the conclusion is unchanged.
 
@@ -167,23 +167,23 @@ now stated exactly, and the conclusion is unchanged.
 
 16 in total across both rounds, **all now caught**. The five for this round:
 
-| # | Mutation | Caught |
-|---|---|---|
-| P1 | B1 fix reverted — the live bound becomes exceedable again | ✓ |
-| P2 | B2 — `revoke()` stops reaching children | ✓ (6 tests) |
-| P3 | B2 — `incident()` stops reaching children | ✓ (10 tests) |
-| P4 | R2 — superseded goes silent again (`wake=false`) | ✓ *(survived first)* |
-| P5 | `supersededCount` ignores the pool | ✓ *(survived first)* |
+| #   | Mutation                                                  | Caught               |
+| --- | --------------------------------------------------------- | -------------------- |
+| P1  | B1 fix reverted — the live bound becomes exceedable again | ✓                    |
+| P2  | B2 — `revoke()` stops reaching children                   | ✓ (6 tests)          |
+| P3  | B2 — `incident()` stops reaching children                 | ✓ (10 tests)         |
+| P4  | R2 — superseded goes silent again (`wake=false`)          | ✓ _(survived first)_ |
+| P5  | `supersededCount` ignores the pool                        | ✓ _(survived first)_ |
 
 Both first-pass survivors were my assertions being too weak, again:
 
-- **P4** — I asserted that an event *row* appeared. `notify` writes a row either way; `wake` only decides
+- **P4** — I asserted that an event _row_ appeared. `notify` writes a row either way; `wake` only decides
   whether its state is `queued` or `observed`. Asserting the row proved nothing about whether anyone is
   woken, which is the entire point of R2. Now asserts `state === 'queued'`.
 - **P5** — with one pool in the fixture, a count that ignored the pool was indistinguishable from one that
   respected it. A second pool's superseded intent is now planted and must not be counted.
 
-*Correction (H-6/mutation table):* my first report claimed "11 mutations, all caught". The reviewer re-ran an
+_Correction (H-6/mutation table):_ my first report claimed "11 mutations, all caught". The reviewer re-ran an
 overlapping set and found **two survivors**, both inside `chained()` — its pool restriction and its
 later-ness. Both were real gaps. `chained()` is now removed entirely, so those two properties no longer exist
 to be tested; the claim should have been "11 mutations of my own choosing, all caught", which is a weaker
@@ -193,16 +193,16 @@ statement than it sounded.
 
 ## Review fixes in this commit
 
-| Review item | Fix |
-|---|---|
-| **B1** blocking | `if ((!old \|\| !this.live(old)) && this.liveRows().length >= LIVE_GRANT_LIMIT)`. Reaching the check with `old` truthy means the existing row is non-live, so replacing it **adds** a live grant and must be counted. Guarding on `!old` alone let a session holding a revoked row be re-granted straight past the bound to `live=33`. At `d956718f` the bound held only incidentally — total rows could never exceed 32 either — and counting live rows removed that accident without replacing it. |
+| Review item     | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **B1** blocking | `if ((!old \|\| !this.live(old)) && this.liveRows().length >= LIVE_GRANT_LIMIT)`. Reaching the check with `old` truthy means the existing row is non-live, so replacing it **adds** a live grant and must be counted. Guarding on `!old` alone let a session holding a revoked row be re-granted straight past the bound to `live=33`. At `d956718f` the bound held only incidentally — total rows could never exceed 32 either — and counting live rows removed that accident without replacing it.                                                      |
 | **B2** blocking | `revoke()` now `WHERE session=? OR (rootSession=? AND rootEpoch=?)`; `incident()` now `WHERE epoch=? OR rootEpoch=?`. A child row carries its own `epoch` and points at the root through `rootEpoch`, so neither path ever marked a child. Children were then unable to authorise (`binding()` checks `root.revoked`) yet still counted live, leaking one slot per still-delegated worker per revoked pool — the permanent ratchet this change exists to remove, on exactly the pooled configuration. Revoking a **child** still revokes only that child. |
-| **R1** | `chained()` removed — see above. |
-| **R2** | `superseded()` now passes `wake=true`, so it wakes the supervisor exactly as an incident does, and `status()` reports a pool-scoped `superseded` count. Not revoking was the approved fix; being silent was a separate choice that was not required, and since every content mismatch now lands here, an agent that always writes twice would otherwise be never-verified and invisible. |
-| **R3** | The size claim and the mutation claim are corrected above, and this commit's message states the exact test command and numbers. |
+| **R1**          | `chained()` removed — see above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **R2**          | `superseded()` now passes `wake=true`, so it wakes the supervisor exactly as an incident does, and `status()` reports a pool-scoped `superseded` count. Not revoking was the approved fix; being silent was a separate choice that was not required, and since every content mismatch now lands here, an agent that always writes twice would otherwise be never-verified and invisible.                                                                                                                                                                  |
+| **R3**          | The size claim and the mutation claim are corrected above, and this commit's message states the exact test command and numbers.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
-The reviewer's own correction is worth recording: the comment at `live()` said *"binding() already refuses on
-exactly these facts"*. That was wrong, and it is what produced B2 — `binding()` refuses on **strictly more**
+The reviewer's own correction is worth recording: the comment at `live()` said _"binding() already refuses on
+exactly these facts"_. That was wrong, and it is what produced B2 — `binding()` refuses on **strictly more**
 facts (root revoked, root epoch, root session mode/generation, supervision link validity), so `live()`
 over-counted. The comment is now accurate.
 

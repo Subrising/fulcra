@@ -104,8 +104,9 @@ buildNpmPackage {
     # App workspace deps not covered by build:server
     npm run build --workspace=@getpaseo/expo-two-way-audio
 
-    # Expo web export for the Electron renderer
-    ( cd packages/app && PASEO_WEB_PLATFORM=electron npx expo export --platform web )
+    # Expo web export for the Electron renderer. Metro's default ~2 GB heap runs out near the end of the
+    # bundle (5000+ modules) and the jest worker is killed; desktop-packages.yml gives the same export 4 GB.
+    ( cd packages/app && NODE_OPTIONS=--max-old-space-size=4096 PASEO_WEB_PLATFORM=electron npx expo export --platform web )
 
     # Desktop main process
     npm run build:main --workspace=@getpaseo/desktop

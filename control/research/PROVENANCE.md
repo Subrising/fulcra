@@ -20,14 +20,14 @@ The reconstruction reports 491 chronological messages and original artifacts/tra
 
 ## Fresh local observations
 
-| Observation | Evidence / limit |
-|---|---|
-| Mini Claude CLI | `claude --version` returned 2.1.267; not proof the remote parked process uses that binary |
-| Mini Codex CLI | `codex --version` returned 0.154.0; not proof all app/server sessions share it |
-| OpenClaw CLI | Help reported OpenClaw 2026.9.2; exact session-key and message-file invocation documented locally |
-| Current programme context | Supported session listing identified the intended orchestration context; private routing and session identifiers are withheld |
-| Consultation | Exact-context request returned a task-specific reply acknowledging `orca-comms-consult-20260911-01`; CLI exit 0 and top-level status `ok` |
-| Claude local surface | No default tmux server; local Claude sessions directory empty at inspection. This does not prove absence of every Claude process |
+| Observation                | Evidence / limit                                                                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mini Claude CLI            | `claude --version` returned 2.1.267; not proof the remote parked process uses that binary                                                            |
+| Mini Codex CLI             | `codex --version` returned 0.154.0; not proof all app/server sessions share it                                                                       |
+| OpenClaw CLI               | Help reported OpenClaw 2026.9.2; exact session-key and message-file invocation documented locally                                                    |
+| Current programme context  | Supported session listing identified the intended orchestration context; private routing and session identifiers are withheld                        |
+| Consultation               | Exact-context request returned a task-specific reply acknowledging `orca-comms-consult-20260911-01`; CLI exit 0 and top-level status `ok`            |
+| Claude local surface       | No default tmux server; local Claude sessions directory empty at inspection. This does not prove absence of every Claude process                     |
 | Retained remote tmux route | One read through `/path/to/user/.openclaw/bridge-mbp-20260905.sock` failed with `server exited unexpectedly`; no retries, input injection or restart |
 
 The initial `lifeos` agent lookup failed because that historical directory is not a configured current agent ID. `openclaw agents list` resolved the correct current `main` owner. A bounded 30-session metadata listing was used; only the relevant programme-session entry was retained in the local research inventory. No broad transcript search or private workplace data access was performed.
@@ -61,14 +61,14 @@ The [initial source manifest](/path/to/user/Documents/ChatGPT/Fulcra/research/so
 
 Fetched does not mean fully read. Broad repository trees were used only to locate exact implementation files. Large source files were searched around relevant lifecycle, permission and delivery code; this was not a whole-codebase audit. The comparison cites the specific documentation and release paths relied upon.
 
-| Identity | Latest release returned by GitHub API | Date | License evidence |
-|---|---|---|---|
-| `getpaseo/paseo` | v0.8.0 | Sep 10 | Released LICENSE: Apache-2.0 with third-party terms; API classifier returned NOASSERTION |
-| `23blocks-OS/ai-maestro` | v0.38.9 | Sep 10 | MIT repository metadata |
-| `aannoo/hcom` | v0.7.25 | Aug 9 | MIT repository metadata |
-| `Untrivial-ai/agent-orchestrator` | v0.12.12 | Sep 6 | Apache-2.0 repository metadata |
-| `tt-a1i/archify` | v2.16.0 | Aug 30 | MIT repository metadata |
-| `radius-project/radius` | v0.60.2 | Sep 3 | Apache-2.0 repository metadata |
+| Identity                          | Latest release returned by GitHub API | Date   | License evidence                                                                         |
+| --------------------------------- | ------------------------------------- | ------ | ---------------------------------------------------------------------------------------- |
+| `getpaseo/paseo`                  | v0.8.0                                | Sep 10 | Released LICENSE: Apache-2.0 with third-party terms; API classifier returned NOASSERTION |
+| `23blocks-OS/ai-maestro`          | v0.38.9                               | Sep 10 | MIT repository metadata                                                                  |
+| `aannoo/hcom`                     | v0.7.25                               | Aug 9  | MIT repository metadata                                                                  |
+| `Untrivial-ai/agent-orchestrator` | v0.12.12                              | Sep 6  | Apache-2.0 repository metadata                                                           |
+| `tt-a1i/archify`                  | v2.16.0                               | Aug 30 | MIT repository metadata                                                                  |
+| `radius-project/radius`           | v0.60.2                               | Sep 3  | Apache-2.0 repository metadata                                                           |
 
 All six repositories reported `archived=false`. This demonstrates current availability/activity only. Paseo's version navigation and current SDK docs differ from the pinned release; Archify search excerpts also showed an older stable version than current release metadata. The report uses the explicit release result rather than assuming search snippets are current.
 

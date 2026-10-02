@@ -13,4 +13,5 @@
 export const JOURNAL_CAPACITY = 10000;
 export const MANUAL_RESERVE = 1000;
 export const AUTOMATION_LIMIT = JOURNAL_CAPACITY - MANUAL_RESERVE;
-export const deliveryCount = db => Number(db.prepare('SELECT count(*) n FROM deliveries').get().n);
+export const deliveryCount = (db) =>
+  Number(db.prepare("SELECT count(*) n FROM deliveries").get().n);

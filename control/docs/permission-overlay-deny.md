@@ -18,6 +18,7 @@ Claude profiles built on Claude, and the model check. All of these start Claude 
 provider's `claudeQuery`), and the rules are added there rather than at each caller, so a new caller can't miss
 them. The rules are passed to Claude Code as flag settings, so they apply in every permission mode, including
 full access, and a session can't turn them off.
+
 - **File tools.** Read, Edit and Write rules cover the files above. Claude Code applies Read rules to its
   search tools too.
 - **Shell commands.** Commands that name these files directly are also refused. This part is best effort:
@@ -32,16 +33,17 @@ pairing can still be edited.
 ## What it does not stop
 
 This is defence in depth, not a wall. Plainly:
+
 - **Codex sessions with full access** aren't covered. They don't use Claude Code's permission rules.
 - **Any other program running as you on this Mac** can still read these files, as can a Claude shell command
   that reaches them indirectly.
 - Anything that gets hold of `operator.secret` can act as the operator. It can't answer as you from a paired
   device.
 
-In the words the Inbox uses under "About this answer": *Answers you give on your paired device are signed by
+In the words the Inbox uses under "About this answer": _Answers you give on your paired device are signed by
 it. Claude sessions can't read Fulcra's control files. Codex sessions with full access, or another program
 running as you on this Mac, could still get around this. Stronger protection comes when Fulcra can check your
-iPhone's hardware (needs an Apple Developer membership).*
+iPhone's hardware (needs an Apple Developer membership)._
 
 ## Where it lives
 

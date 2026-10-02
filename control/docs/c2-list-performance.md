@@ -4,9 +4,9 @@ The focused `src/control/list-batch.test.mjs` check uses a temporary SQLite jour
 
 Observed on Node 24.21.0:
 
-| Projection | SQL reads | Elapsed |
-| --- | ---: | ---: |
-| Original per-session projection | 335 | 4.784 ms |
-| Batched projection | 4 | 0.852 ms |
+| Projection                      | SQL reads |  Elapsed |
+| ------------------------------- | --------: | -------: |
+| Original per-session projection |       335 | 4.784 ms |
+| Batched projection              |         4 | 0.852 ms |
 
 The outputs passed strict deep equality, including child-record order and SQLite row prototypes. The timing covers the list query and projection, excluding fixture setup. These are fixture timings, not a measurement of a live controller. Reads count executed SQL statements, including the initial session list. The test enforces at most ten.

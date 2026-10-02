@@ -47,11 +47,11 @@ function fixture(t) {
       status: "idle",
       pending: 0,
       lastPromptId: null,
-      ...(states.get(id) ?? {}),
+      ...states.get(id),
     }),
     send: async (id, _text, messageId) => {
       sends++;
-      states.set(id, { ...(states.get(id) ?? {}), lastPromptId: messageId });
+      states.set(id, { ...states.get(id), lastPromptId: messageId });
     },
   };
   const source = {

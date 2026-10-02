@@ -293,15 +293,44 @@ export async function compose(home) {
   write(path.join(home, "installed.json"), receipt);
   return { home, url: `http://127.0.0.1:${c.daemon.port}`, components: receipt.components };
 }
+function cloneLegacyComponents(options, pins, home, env, selected) {
+  for (const name of ["native", "runtime", "conversation", "workspace"]) {
+    const local = options[name];
+    const repository = local ? fs.realpathSync(path.resolve(local)) : pins.repository;
+    const revision = local ? git(["rev-parse", "HEAD"], repository) : pins[name];
+    if (!/^[a-f0-9]{40}$/.test(revision)) throw Error(`Pinned ${name} commit required.`);
+    if (local && git(["status", "--porcelain", "--untracked-files=no"], repository))
+      throw Error(`Commit ${name} source changes before installing.`);
+    const destination = path.join(home, "sources", name);
+    run(
+      "git",
+      ["clone", "--no-hardlinks", "--no-checkout", "--", repository, destination],
+      undefined,
+      env,
+    );
+    run("git", ["checkout", "--detach", revision], destination, env);
+    selected[name] = revision;
+  }
+}
+
 export async function install(target, options = {}) {
-  const consolidated = options.source ?? (!options.runtime && !options.conversation && !options.workspace
-    ? options.native ?? path.resolve(here, "../..") : null);
+  const consolidated =
+    options.source ??
+    (!options.runtime && !options.conversation && !options.workspace
+      ? (options.native ?? path.resolve(here, "../.."))
+      : null);
   let pins;
   if (!consolidated) {
     const pinsFile = path.resolve(here, "../../local/components.json");
     pins = fs.existsSync(pinsFile) ? json(pinsFile) : {};
-    if (!["native", "runtime", "conversation", "workspace"].every(name => options[name] || typeof pins[name] === "string"))
-      throw Error("Populate local/components.json or pass all four component source options before installing.");
+    if (
+      !["native", "runtime", "conversation", "workspace"].every(
+        (name) => options[name] || typeof pins[name] === "string",
+      )
+    )
+      throw Error(
+        "Populate local/components.json or pass all four component source options before installing.",
+      );
   }
   const home = initHome(target, options.port ?? 6791),
     env = cleanEnvironment(home);
@@ -316,7 +345,12 @@ export async function install(target, options = {}) {
     if (git(["status", "--porcelain", "--untracked-files=no"], repository))
       throw Error("Commit consolidated source changes before installing.");
     const destination = path.join(home, "sources/native");
-    run("git", ["clone", "--no-hardlinks", "--no-checkout", "--", repository, destination], undefined, env);
+    run(
+      "git",
+      ["clone", "--no-hardlinks", "--no-checkout", "--", repository, destination],
+      undefined,
+      env,
+    );
     run("git", ["checkout", "--detach", revision], destination, env);
     selected.native = revision;
     for (const name of ["runtime", "conversation", "workspace"]) {
@@ -325,23 +359,7 @@ export async function install(target, options = {}) {
     }
   } else {
     // Explicit legacy component overrides retain the original setup interface.
-    for (const name of ["native", "runtime", "conversation", "workspace"]) {
-      const local = options[name];
-      const repository = local ? fs.realpathSync(path.resolve(local)) : pins.repository;
-      const revision = local ? git(["rev-parse", "HEAD"], repository) : pins[name];
-      if (!/^[a-f0-9]{40}$/.test(revision)) throw Error(`Pinned ${name} commit required.`);
-      if (local && git(["status", "--porcelain", "--untracked-files=no"], repository))
-        throw Error(`Commit ${name} source changes before installing.`);
-      const destination = path.join(home, "sources", name);
-      run(
-        "git",
-        ["clone", "--no-hardlinks", "--no-checkout", "--", repository, destination],
-        undefined,
-        env,
-      );
-      run("git", ["checkout", "--detach", revision], destination, env);
-      selected[name] = revision;
-    }
+    cloneLegacyComponents(options, pins, home, env, selected);
   }
   write(path.join(home, "sources.json"), selected);
   if (options.prepareOnly) return { home, state: "sources-prepared" };

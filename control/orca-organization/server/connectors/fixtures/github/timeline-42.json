@@ -1,98 +1,98 @@
 [
- {
-  "event": "cross-referenced",
-  "source": {
-   "type": "issue",
-   "issue": {
-    "number": 17,
-    "title": "Fix sign-in after an update",
-    "state": "closed",
-    "updated_at": "2026-09-24T13:10:00Z",
-    "repository_url": "https://api.github.com/repos/acme/app",
-    "html_url": "https://evil.example/17",
-    "labels": [],
-    "assignee": null,
-    "body": "Fixes #42",
-    "pull_request": {
-     "url": "https://api.github.com/repos/acme/app/pulls/17",
-     "merged_at": "2026-09-24T13:10:00Z"
+  {
+    "event": "cross-referenced",
+    "source": {
+      "type": "issue",
+      "issue": {
+        "number": 17,
+        "title": "Fix sign-in after an update",
+        "state": "closed",
+        "updated_at": "2026-09-24T13:10:00Z",
+        "repository_url": "https://api.github.com/repos/acme/app",
+        "html_url": "https://evil.example/17",
+        "labels": [],
+        "assignee": null,
+        "body": "Fixes #42",
+        "pull_request": {
+          "url": "https://api.github.com/repos/acme/app/pulls/17",
+          "merged_at": "2026-09-24T13:10:00Z"
+        }
+      }
     }
-   }
-  }
- },
- {
-  "event": "cross-referenced",
-  "source": {
-   "type": "issue",
-   "issue": {
-    "number": 19,
-    "title": "Also fixes it elsewhere",
-    "state": "open",
-    "updated_at": "2026-09-24T12:00:00Z",
-    "repository_url": "https://api.github.com/repos/other/app",
-    "html_url": "https://evil.example/19",
-    "labels": [],
-    "assignee": null,
-    "body": "Fixes #42",
-    "pull_request": {
-     "url": "https://api.github.com/repos/other/app/pulls/19",
-     "merged_at": null
+  },
+  {
+    "event": "cross-referenced",
+    "source": {
+      "type": "issue",
+      "issue": {
+        "number": 19,
+        "title": "Also fixes it elsewhere",
+        "state": "open",
+        "updated_at": "2026-09-24T12:00:00Z",
+        "repository_url": "https://api.github.com/repos/other/app",
+        "html_url": "https://evil.example/19",
+        "labels": [],
+        "assignee": null,
+        "body": "Fixes #42",
+        "pull_request": {
+          "url": "https://api.github.com/repos/other/app/pulls/19",
+          "merged_at": null
+        }
+      }
     }
-   }
-  }
- },
- {
-  "event": "cross-referenced",
-  "source": {
-   "type": "issue",
-   "issue": {
-    "number": 18,
-    "title": "Add the reports page",
-    "state": "open",
-    "updated_at": "2026-09-24T08:00:00Z",
-    "repository_url": "https://api.github.com/repos/acme/app",
-    "html_url": "https://evil.example/18",
-    "labels": [],
-    "assignee": null,
-    "body": "Part of #42",
-    "pull_request": {
-     "url": "https://api.github.com/repos/acme/app/pulls/18",
-     "merged_at": null
+  },
+  {
+    "event": "cross-referenced",
+    "source": {
+      "type": "issue",
+      "issue": {
+        "number": 18,
+        "title": "Add the reports page",
+        "state": "open",
+        "updated_at": "2026-09-24T08:00:00Z",
+        "repository_url": "https://api.github.com/repos/acme/app",
+        "html_url": "https://evil.example/18",
+        "labels": [],
+        "assignee": null,
+        "body": "Part of #42",
+        "pull_request": {
+          "url": "https://api.github.com/repos/acme/app/pulls/18",
+          "merged_at": null
+        }
+      }
     }
-   }
+  },
+  {
+    "event": "cross-referenced",
+    "source": {
+      "type": "issue",
+      "issue": {
+        "number": 43,
+        "title": "A plain issue that fixes #42",
+        "state": "open",
+        "updated_at": "2026-09-24T08:00:00Z",
+        "repository_url": "https://api.github.com/repos/acme/app",
+        "html_url": "https://evil.example/43",
+        "labels": [],
+        "assignee": null,
+        "body": null
+      }
+    }
+  },
+  {
+    "event": "closed",
+    "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "commit_url": "https://api.github.com/repos/acme/app/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "event": "referenced",
+    "commit_id": "cccccccccccccccccccccccccccccccccccccccc",
+    "commit_url": "https://api.github.com/repos/other/app/commits/cccccccccccccccccccccccccccccccccccccccc"
+  },
+  {
+    "event": "labeled",
+    "label": {
+      "name": "bug"
+    }
   }
- },
- {
-  "event": "cross-referenced",
-  "source": {
-   "type": "issue",
-   "issue": {
-    "number": 43,
-    "title": "A plain issue that fixes #42",
-    "state": "open",
-    "updated_at": "2026-09-24T08:00:00Z",
-    "repository_url": "https://api.github.com/repos/acme/app",
-    "html_url": "https://evil.example/43",
-    "labels": [],
-    "assignee": null,
-    "body": null
-   }
-  }
- },
- {
-  "event": "closed",
-  "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "commit_url": "https://api.github.com/repos/acme/app/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
- },
- {
-  "event": "referenced",
-  "commit_id": "cccccccccccccccccccccccccccccccccccccccc",
-  "commit_url": "https://api.github.com/repos/other/app/commits/cccccccccccccccccccccccccccccccccccccccc"
- },
- {
-  "event": "labeled",
-  "label": {
-   "name": "bug"
-  }
- }
 ]

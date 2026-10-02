@@ -16,8 +16,10 @@ const WINDOWS_ROOTED = /^(?:[A-Za-z]:[\\/]|[\\/]{2}|\\)/;
 const WINDOWS_DRIVE_RELATIVE = /^[A-Za-z]:(?![\\/])/;
 const isWindowsPlacement = (cwd: string) => /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(cwd);
 const storable = (candidate: string) =>
-  !!candidate && !candidate.startsWith("/") && !/^[A-Za-z]:/.test(candidate)
-  && candidate.split("/").every(part => part !== "" && part !== "." && part !== "..");
+  !!candidate &&
+  !candidate.startsWith("/") &&
+  !/^[A-Za-z]:/.test(candidate) &&
+  candidate.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 
 /** `\\?\C:\x` is `C:\x` and `\\?\UNC\server\share\x` is `\\server\share\x`. */
 function withoutExtendedLengthPrefix(value: string): string {
@@ -30,7 +32,11 @@ function normalise(parts: string): string {
   const out: string[] = [];
   for (const part of parts.split("/")) {
     if (part === "" || part === ".") continue;
-    if (part === "..") { if (!out.length || out[out.length - 1] === "..") out.push(".."); else out.pop(); continue; }
+    if (part === "..") {
+      if (!out.length || out[out.length - 1] === "..") out.push("..");
+      else out.pop();
+      continue;
+    }
     out.push(part);
   }
   return out.join("/");
@@ -38,9 +44,10 @@ function normalise(parts: string): string {
 
 /** The part of `target` below `cwd`, keeping its own letter case; Windows placement compares case-insensitively. */
 function relativeUnder(cwd: string, target: string, windows: boolean): string | null {
-  const slashes = (value: string) => windows ? value.replace(/\\/g, "/") : value;
-  const fold = (value: string) => windows ? value.toLowerCase() : value;
-  const base = normalise(slashes(cwd)), original = normalise(slashes(target));
+  const slashes = (value: string) => (windows ? value.replace(/\\/g, "/") : value);
+  const fold = (value: string) => (windows ? value.toLowerCase() : value);
+  const base = normalise(slashes(cwd)),
+    original = normalise(slashes(target));
   if (fold(original) === fold(base)) return "";
   if (!fold(original).startsWith(fold(base) + "/")) return null;
   return original.slice(base.length + 1);
@@ -54,7 +61,8 @@ export function placePath(filePath: string, cwd: string | null): string | null {
   const trimmed = withoutExtendedLengthPrefix(filePath.trim());
   const base = cwd === null ? null : withoutExtendedLengthPrefix(cwd);
   if (!trimmed || trimmed.startsWith("~") || WINDOWS_DRIVE_RELATIVE.test(trimmed)) return null;
-  const windowsRooted = WINDOWS_ROOTED.test(trimmed), posixRooted = trimmed.startsWith("/") && !windowsRooted;
+  const windowsRooted = WINDOWS_ROOTED.test(trimmed),
+    posixRooted = trimmed.startsWith("/") && !windowsRooted;
   let relative: string | null;
   if (windowsRooted || posixRooted) {
     if (!base || windowsRooted !== isWindowsPlacement(base)) return null;
@@ -68,7 +76,8 @@ export function placePath(filePath: string, cwd: string | null): string | null {
 
 // Candidates: POSIX-rooted (not the "//" of a URL or a fraction like 1/2), Windows drive, UNC or extended-length,
 // and home-relative paths. A path ends at whitespace, a quote or bracket, or a comma/semicolon.
-const PATH_TOKEN = /(?:(?<![\w.:/\\~-])\/(?!\/)[^\s'"`<>|;,(){}[\]]*|(?<![\w\\])(?:\\\\\?\\)?[A-Za-z]:[\\/][^\s'"`<>|;,(){}[\]]*|(?<![\w\\])\\\\[^\s\\'"`<>|;,(){}[\]]+\\[^\s'"`<>|;,(){}[\]]*|(?<![\w/])~\/[^\s'"`<>|;,(){}[\]]*)/g;
+const PATH_TOKEN =
+  /(?:(?<![\w.:/\\~-])\/(?!\/)[^\s'"`<>|;,(){}[\]]*|(?<![\w\\])(?:\\\\\?\\)?[A-Za-z]:[\\/][^\s'"`<>|;,(){}[\]]*|(?<![\w\\])\\\\[^\s\\'"`<>|;,(){}[\]]+\\[^\s'"`<>|;,(){}[\]]*|(?<![\w/])~\/[^\s'"`<>|;,(){}[\]]*)/g;
 // Punctuation that ends a sentence rather than a path.
 const TRAILING = /[.:!?]+$/;
 
@@ -96,7 +105,7 @@ function redactPersonal(text: string): string {
 
 /** The scrubbed text: paths placed against `cwd` (null means unknown), then §1a personal data removed. */
 export function scrubFreeText(text: string, cwd: string | null): string {
-  const placed = text.replace(PATH_TOKEN, token => placeToken(token, cwd));
+  const placed = text.replace(PATH_TOKEN, (token) => placeToken(token, cwd));
   const scrubbed = noPersonal(placed) ? placed : redactPersonal(placed);
   return noPersonal(scrubbed) ? scrubbed : REMOVED;
 }

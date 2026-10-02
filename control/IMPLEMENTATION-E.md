@@ -15,14 +15,14 @@ Task `00000000-0000-4000-8000-000000000000`. Approved in `PRIME-DECISIONS.md` §
 The review's verdict: the security properties held, but hand variants of E4, E6, E11 and E17 survived the shipped
 suite, and there were five findings. Each prime decision below lists what changed and the test that pins it.
 
-| Decision | Change | Pinned by |
-|---|---|---|
-| **(1) M1: the reviewer's attacks in the suite** | `seat-inbox.test.mjs` gains **Q1, Q5, Q5b, Q6, Q7, Q8 and A6** from `reviewer-artifacts/reviewer-attacks.test.mjs`. I rewrote them as hard assertions: the reviewer's versions mostly logged instead of asserting. | The reviewer's hand variants were added to the harness (below). **All are killed by `seat-inbox.test.mjs` alone.** |
-| **(2) F2: a reply never parks on quota** | `quota-runtime.admission` honours `supervision.neverPark`. If quota is not ready, it throws a typed `RecipientBusy` *before* `park`, so no queued delivery is ever written. `seatReply` passes `neverPark: true`. The reply comes back `busy`, and the operator retries with the identical resend. | `F2:` (quota waits → `busy`, no delivery row, `quota.pump` replays nothing, `native.send` uncalled; then quota recovers → resend `delivered`). `F2:` A10 scenario (quota wait → `seat-unhold` → re-seat → pump → resend refused, `native.send` never called). Mutations F2a (flag dropped) and F2b (runtime ignores it). |
-| **(3) F1: no second answer across paths** | `assertReplyable` refuses a parent when any `role_channel_messages` row from the holder session has `inReplyTo = parent`. It runs before reservation, inside the transaction, and in `control.send`'s `check()`. | `F1:` (a natively answered parent is refused with nothing reserved or spent; an unanswered pre-hold parent is still answerable). Mutation F1. |
-| **(4) F3: visibility** | `channels-status` gains `operatorActs` (every reply and receipt, with `origin` and published state) and `capacity.operatorActs`. `channels-list` counts an unread delivered operator reply in `unread` and separately as `operatorUnread`. | `F3:`. Mutations F3a and F3b. |
-| **(5) F4: no burnt parent on a failure that admitted nothing** | A reply that throws with **no delivery-journal row** never reached intent. It is voided (`kind='void-reply'`, `failed`): its allowance stays spent, but it is no longer the parent's reply. A failure *with* a delivery row keeps the parent for good. "Session operation already in flight" is treated as busy. A per-process in-flight set means a concurrent identical resend is reported and never dispatches or overwrites the live act. The unique `(kind,parent)` index is now **partial** (`WHERE kind IN ('reply','receipt')`) so voids can repeat, and an index from `0ad8104c8` without the `WHERE` is dropped and recreated. | `F4:` (two unadmitted failures, then a delivered reply to the same parent; a mid-flight identical resend leaves the act's `failure` untouched; a unit check that `settleFailure` keeps the parent when a delivery row exists). The E17 T5 test was updated: pre-intent refusal gives `void-reply`, a guard refusal gives a kept `reply`. Mutations F4a-F4d. |
-| **(5) F5: reconcile a stuck `reserved` act** | The new operator RPC is `seat-reply-reconcile {messageId, reason}`. It applies only to an act in `reserved`, and refuses while that act or its recipient is in flight. With no delivery row the act is voided and the parent freed; otherwise the act takes the delivery journal's state. An identical resend never re-dispatches a `reserved` act. | `F5:` (a resend of a reserved act is a status read; the operator gate is enforced; a void frees the parent; a mirrored act keeps it). Mutations F5a-F5c. |
+| Decision                                                       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Pinned by                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **(1) M1: the reviewer's attacks in the suite**                | `seat-inbox.test.mjs` gains **Q1, Q5, Q5b, Q6, Q7, Q8 and A6** from `reviewer-artifacts/reviewer-attacks.test.mjs`. I rewrote them as hard assertions: the reviewer's versions mostly logged instead of asserting.                                                                                                                                                                                                                                                                                                                                                                                                                       | The reviewer's hand variants were added to the harness (below). **All are killed by `seat-inbox.test.mjs` alone.**                                                                                                                                                                                                                                          |
+| **(2) F2: a reply never parks on quota**                       | `quota-runtime.admission` honours `supervision.neverPark`. If quota is not ready, it throws a typed `RecipientBusy` _before_ `park`, so no queued delivery is ever written. `seatReply` passes `neverPark: true`. The reply comes back `busy`, and the operator retries with the identical resend.                                                                                                                                                                                                                                                                                                                                       | `F2:` (quota waits → `busy`, no delivery row, `quota.pump` replays nothing, `native.send` uncalled; then quota recovers → resend `delivered`). `F2:` A10 scenario (quota wait → `seat-unhold` → re-seat → pump → resend refused, `native.send` never called). Mutations F2a (flag dropped) and F2b (runtime ignores it).                                    |
+| **(3) F1: no second answer across paths**                      | `assertReplyable` refuses a parent when any `role_channel_messages` row from the holder session has `inReplyTo = parent`. It runs before reservation, inside the transaction, and in `control.send`'s `check()`.                                                                                                                                                                                                                                                                                                                                                                                                                         | `F1:` (a natively answered parent is refused with nothing reserved or spent; an unanswered pre-hold parent is still answerable). Mutation F1.                                                                                                                                                                                                               |
+| **(4) F3: visibility**                                         | `channels-status` gains `operatorActs` (every reply and receipt, with `origin` and published state) and `capacity.operatorActs`. `channels-list` counts an unread delivered operator reply in `unread` and separately as `operatorUnread`.                                                                                                                                                                                                                                                                                                                                                                                               | `F3:`. Mutations F3a and F3b.                                                                                                                                                                                                                                                                                                                               |
+| **(5) F4: no burnt parent on a failure that admitted nothing** | A reply that throws with **no delivery-journal row** never reached intent. It is voided (`kind='void-reply'`, `failed`): its allowance stays spent, but it is no longer the parent's reply. A failure _with_ a delivery row keeps the parent for good. "Session operation already in flight" is treated as busy. A per-process in-flight set means a concurrent identical resend is reported and never dispatches or overwrites the live act. The unique `(kind,parent)` index is now **partial** (`WHERE kind IN ('reply','receipt')`) so voids can repeat, and an index from `0ad8104c8` without the `WHERE` is dropped and recreated. | `F4:` (two unadmitted failures, then a delivered reply to the same parent; a mid-flight identical resend leaves the act's `failure` untouched; a unit check that `settleFailure` keeps the parent when a delivery row exists). The E17 T5 test was updated: pre-intent refusal gives `void-reply`, a guard refusal gives a kept `reply`. Mutations F4a-F4d. |
+| **(5) F5: reconcile a stuck `reserved` act**                   | The new operator RPC is `seat-reply-reconcile {messageId, reason}`. It applies only to an act in `reserved`, and refuses while that act or its recipient is in flight. With no delivery row the act is voided and the parent freed; otherwise the act takes the delivery journal's state. An identical resend never re-dispatches a `reserved` act.                                                                                                                                                                                                                                                                                      | `F5:` (a resend of a reserved act is a status read; the operator gate is enforced; a void frees the parent; a mirrored act keeps it). Mutations F5a-F5c.                                                                                                                                                                                                    |
 
 **The admission guard is still byte-identical to `bbc624cf9`** (test E21 and `git diff`). `quota-runtime.mjs` is a
 controller module, not a pinned artefact.
@@ -50,6 +50,7 @@ controller module, not a pinned artefact.
 
   I pinned each with an observable fact rather than dropping it: a direct `settleFailure` unit assertion, and the
   act's `failure` field read mid-flight.
+
 - **The reviewer's own `reviewer-attacks.test.mjs`**, copied in unmodified, run, then removed: **16 of 17 pass.**
   - It now shows F2 fixed (A10: `busy`, no delivery), F3 fixed (Q4: `unread 1`, `operatorActs`), F4 fixed (A11: a
     retry with a new id is `delivered`) and F1 fixed (Q3b: "already answered this message itself").
@@ -60,7 +61,7 @@ controller module, not a pinned artefact.
 ### Not changed, by decision or scope
 
 - **Q4 caveat.** An operator can still hand the lead back, grant it a capability and send as `delegated-seat`. That
-  is pre-existing, and the origin names the *path*, not the principal. It is recorded, not fixed.
+  is pre-existing, and the origin names the _path_, not the principal. It is recorded, not fixed.
 - **F3 as a whole.** The prime asked for `channels-status` and `channels-list`. Replies and receipts are **not**
   added to `role_binding_history` or to the project projection's `decisions`, which DESIGN-E §2.1 had also promised.
   That is still open.
@@ -70,21 +71,21 @@ controller module, not a pinned artefact.
 
 ## 1. What was built
 
-| Piece | Where | What |
-|---|---|---|
-| Hold declaration | `bindings.mjs`: `hold`, `unhold`, `heldBy`; table `seat_human_holds` | An operator declares a **prime** seat human-held at its current revision. The declaration is refused unless the holder is `mode='human'`. It writes a `role_binding_history` row (`hold` or `unhold`) and **never bumps the revision**. `heldBy` is derived on every call: a row exists at the *current* revision, it names *this* holder, and the holder is `human`. |
-| Held inbound | `role-channels.mjs`: `send()` | A message to an effectively held prime passes every existing sender check and spends one allowance, then rests **`held`**. There is no `control.send` call and no deliveries row. Hold and mode are re-checked **inside** the reservation transaction. A human prime **without** a hold keeps D's hard refusal, byte for byte. |
-| Pending → held | `role-channels.mjs`: `deliverPending()` | A message deferred against the prime rests `held` instead of `failed`, but only if the prime is taken back *and* has an effective hold, and only **after** the originator checks pass. It is also handled when the takeover lands mid-pass inside `control.send`, and then only if no deliveries row exists. Every other case is unchanged. |
-| Operator inbox | `role-channels.mjs`: `inbox()` | Read-only. Held and delivered messages to the seat, as `untrustedText`, with any operator receipt or reply. |
-| Operator receipt | `role-channels.mjs`: `seatReceipt()`; table `seat_operator_acts` (`kind='receipt'`) | Consumption of a **held** message by the operator. It is kept separate from the holder's own `readAt`. |
-| Operator reply | `role-channels.mjs`: `seatReply()`, `assertReplyable()`; table `seat_operator_acts` (`kind='reply'`) | Answers **one** message held or delivered to the seat, **once**, enforced by a unique `(kind, parent)` index. The seat revision and holder generation are pinned, the allowance CAS applies, and the identity is unique across all three message tables. It is dispatched with **`control.send(..., undefined, generation, {source:{kind:'direct'}, check})`**, the same call `operator-send` makes. A busy recipient gives `busy`; only an identical resend retries it, and that costs no further allowance. |
-| Labelled thread | `role-channels.mjs`: `thread()`, `read()`, the `inReplyTo` check | Every message carries `origin`: `delegated-seat` or `operator-for-human-held-seat`, the latter with `holderSession`. Held messages show an `operatorReceipt`. The thread also returns `authority: "Only role_thread establishes who sent a message…"`. The orchestrator can mark an operator reply read and answer it; that answer is held in turn. |
-| Buckets | `buckets()` | `held` is named, so it never falls into `other`. |
-| Route | `bindings.route()` | Returns `routing.held` and `routing.inbox`, plus an accurate `blocked` text for a held seat. |
-| RPC | `rpc.mjs` | Adds `seat-hold`, `seat-unhold`, `seat-inbox`, `seat-receipt` and `seat-reply`, **only** inside the operator-gated switch. |
-| Tool text | `inbox.mjs` `role_thread` | The authority sentence. |
-| Status | `bindings-status` | Adds `holds[]`, each with an `effective` flag. |
-| Docs | `docs/project-roles.md` | A new section, "A prime seat held by a human"; the bucket list; Storage. |
+| Piece            | Where                                                                                                | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hold declaration | `bindings.mjs`: `hold`, `unhold`, `heldBy`; table `seat_human_holds`                                 | An operator declares a **prime** seat human-held at its current revision. The declaration is refused unless the holder is `mode='human'`. It writes a `role_binding_history` row (`hold` or `unhold`) and **never bumps the revision**. `heldBy` is derived on every call: a row exists at the _current_ revision, it names _this_ holder, and the holder is `human`.                                                                                                                                         |
+| Held inbound     | `role-channels.mjs`: `send()`                                                                        | A message to an effectively held prime passes every existing sender check and spends one allowance, then rests **`held`**. There is no `control.send` call and no deliveries row. Hold and mode are re-checked **inside** the reservation transaction. A human prime **without** a hold keeps D's hard refusal, byte for byte.                                                                                                                                                                                |
+| Pending → held   | `role-channels.mjs`: `deliverPending()`                                                              | A message deferred against the prime rests `held` instead of `failed`, but only if the prime is taken back _and_ has an effective hold, and only **after** the originator checks pass. It is also handled when the takeover lands mid-pass inside `control.send`, and then only if no deliveries row exists. Every other case is unchanged.                                                                                                                                                                   |
+| Operator inbox   | `role-channels.mjs`: `inbox()`                                                                       | Read-only. Held and delivered messages to the seat, as `untrustedText`, with any operator receipt or reply.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Operator receipt | `role-channels.mjs`: `seatReceipt()`; table `seat_operator_acts` (`kind='receipt'`)                  | Consumption of a **held** message by the operator. It is kept separate from the holder's own `readAt`.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Operator reply   | `role-channels.mjs`: `seatReply()`, `assertReplyable()`; table `seat_operator_acts` (`kind='reply'`) | Answers **one** message held or delivered to the seat, **once**, enforced by a unique `(kind, parent)` index. The seat revision and holder generation are pinned, the allowance CAS applies, and the identity is unique across all three message tables. It is dispatched with **`control.send(..., undefined, generation, {source:{kind:'direct'}, check})`**, the same call `operator-send` makes. A busy recipient gives `busy`; only an identical resend retries it, and that costs no further allowance. |
+| Labelled thread  | `role-channels.mjs`: `thread()`, `read()`, the `inReplyTo` check                                     | Every message carries `origin`: `delegated-seat` or `operator-for-human-held-seat`, the latter with `holderSession`. Held messages show an `operatorReceipt`. The thread also returns `authority: "Only role_thread establishes who sent a message…"`. The orchestrator can mark an operator reply read and answer it; that answer is held in turn.                                                                                                                                                           |
+| Buckets          | `buckets()`                                                                                          | `held` is named, so it never falls into `other`.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Route            | `bindings.route()`                                                                                   | Returns `routing.held` and `routing.inbox`, plus an accurate `blocked` text for a held seat.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| RPC              | `rpc.mjs`                                                                                            | Adds `seat-hold`, `seat-unhold`, `seat-inbox`, `seat-receipt` and `seat-reply`, **only** inside the operator-gated switch.                                                                                                                                                                                                                                                                                                                                                                                    |
+| Tool text        | `inbox.mjs` `role_thread`                                                                            | The authority sentence.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Status           | `bindings-status`                                                                                    | Adds `holds[]`, each with an `effective` flag.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Docs             | `docs/project-roles.md`                                                                              | A new section, "A prime seat held by a human"; the bucket list; Storage.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 **The admission guard is untouched.** Its sha256 is
 `<SHA256>`, the same as `bbc624cf9`. That is asserted by
@@ -121,10 +122,10 @@ boundary, so "delivered" means the unchanged guard admitted the message.
 
 **Per-file sweep, all 52 files under `src/control/` and `src/`:**
 
-| Tree | Files | Pass | Fail |
-|---|---|---|---|
-| base `bbc624cf9` | 51 | 520 | 4 |
-| this branch | 52 | **536** | **4** |
+| Tree             | Files | Pass    | Fail  |
+| ---------------- | ----- | ------- | ----- |
+| base `bbc624cf9` | 51    | 520     | 4     |
+| this branch      | 52    | **536** | **4** |
 
 The pass count rose by 16 (the new suite) and the failures did not change. **Every existing file's pass and fail
 counts are identical to base.** The three non-green files are the same environmental ones recorded in
@@ -148,6 +149,7 @@ The harness is `node src/control/seat-inbox.mutations.mjs [ids…]`, committed w
 `.test.`, so the ordinary sweep never runs it.
 
 For each mutation it:
+
 1. applies exact-anchor edits, and aborts if an anchor does not occur exactly once, so a mutation can never silently
    mutate nothing;
 2. runs the suite;
@@ -157,36 +159,36 @@ For each mutation it:
 After the run, `cmp` confirmed that `bindings.mjs`, `role-channels.mjs`, `rpc.mjs` and `admission-guard.mjs` were
 byte-identical to their state before it.
 
-| # | Mutation | Red test |
-|---|---|---|
-| E1 | hold not restricted to prime seats | E1 E19 E13 E14 |
-| E2 | `heldBy` ignores holder `mode='human'` | E2 |
-| E3a | hold not pinned to the revision | E3 (re-seat the same lead at revision 3) |
-| E3b | hold not pinned to the holder session | E3 (a hold row naming another session at the current revision) |
-| E4a | the pump selects `held` rows | E4 E9 |
-| E4b | the held path writes a dispatchable state | E4 E9 (and 6 others) |
-| E5 | operator reply also written to `role_channel_messages` | E5 E12 |
-| E6 | `inReplyTo` optional | E6 E7 E8 E10 |
-| E7 | a second reply to the same parent (check **and** unique index removed) | E6 E7 E8 E10 |
-| E8 | parent not constrained to a message for the seat | E6 E7 E8 E10 |
-| E9 | reply spends no allowance | E5 E12 |
-| E10 | revision and generation pins ignored | E6 E7 E8 E10 |
-| E11 | `seat-reply` reachable without the operator secret | E11 |
-| E12 | operator reply labelled `delegated-seat` | E5 E12 |
-| E13 | hold without a history row | E1 E19 E13 E14 |
-| E14 | hold bumps the revision | E1 E19 E13 E14 (and 12 others) |
-| E15 | a human prime without a hold treated as held | E15 |
-| E16a | pending→held without the hold check | E16 |
-| E16b | pending→held for any seat, not only the prime side | E16 |
-| E16c | mid-pass conversion without the hold check | E16 |
-| E16d | pending→held before the originator checks | E16 |
-| E17 | reply dispatched natively, bypassing `control.send` | E17 T5 (and E5, E6, E17-busy, E22) |
-| E18 | held inbound skips sender authority | E18 |
-| E19 | hold accepts a delegated holder | E1 E19 E13 E14 |
-| E20 | no in-transaction re-check of the hold | E20 |
-| E21 | admission guard edited | E21 |
-| E22 | a hold writes a session control column | E22 |
-| E23 | raw permission answers exempted from human input (option 3b) | `permission-revocation.test.mjs` REPRODUCTION (all 3) |
+| #    | Mutation                                                               | Red test                                                       |
+| ---- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| E1   | hold not restricted to prime seats                                     | E1 E19 E13 E14                                                 |
+| E2   | `heldBy` ignores holder `mode='human'`                                 | E2                                                             |
+| E3a  | hold not pinned to the revision                                        | E3 (re-seat the same lead at revision 3)                       |
+| E3b  | hold not pinned to the holder session                                  | E3 (a hold row naming another session at the current revision) |
+| E4a  | the pump selects `held` rows                                           | E4 E9                                                          |
+| E4b  | the held path writes a dispatchable state                              | E4 E9 (and 6 others)                                           |
+| E5   | operator reply also written to `role_channel_messages`                 | E5 E12                                                         |
+| E6   | `inReplyTo` optional                                                   | E6 E7 E8 E10                                                   |
+| E7   | a second reply to the same parent (check **and** unique index removed) | E6 E7 E8 E10                                                   |
+| E8   | parent not constrained to a message for the seat                       | E6 E7 E8 E10                                                   |
+| E9   | reply spends no allowance                                              | E5 E12                                                         |
+| E10  | revision and generation pins ignored                                   | E6 E7 E8 E10                                                   |
+| E11  | `seat-reply` reachable without the operator secret                     | E11                                                            |
+| E12  | operator reply labelled `delegated-seat`                               | E5 E12                                                         |
+| E13  | hold without a history row                                             | E1 E19 E13 E14                                                 |
+| E14  | hold bumps the revision                                                | E1 E19 E13 E14 (and 12 others)                                 |
+| E15  | a human prime without a hold treated as held                           | E15                                                            |
+| E16a | pending→held without the hold check                                    | E16                                                            |
+| E16b | pending→held for any seat, not only the prime side                     | E16                                                            |
+| E16c | mid-pass conversion without the hold check                             | E16                                                            |
+| E16d | pending→held before the originator checks                              | E16                                                            |
+| E17  | reply dispatched natively, bypassing `control.send`                    | E17 T5 (and E5, E6, E17-busy, E22)                             |
+| E18  | held inbound skips sender authority                                    | E18                                                            |
+| E19  | hold accepts a delegated holder                                        | E1 E19 E13 E14                                                 |
+| E20  | no in-transaction re-check of the hold                                 | E20                                                            |
+| E21  | admission guard edited                                                 | E21                                                            |
+| E22  | a hold writes a session control column                                 | E22                                                            |
+| E23  | raw permission answers exempted from human input (option 3b)           | `permission-revocation.test.mjs` REPRODUCTION (all 3)          |
 
 **Two mutations survived the first run and I fixed the tests, not the mutations:**
 
@@ -201,7 +203,7 @@ The attacker-shaped mutations the design named are E2, E3, E4, E5, E6, E11, E17 
 
 - **P1 / E22.** `seat-hold`, the held inbound path, `seat-inbox`, `seat-receipt` and `seat-unhold` leave every
   `sessions` control and fence column, `role_credentials` and `transfers` byte-identical. `seat-reply` leaves the
-  holder and all credentials untouched. It advances only the *recipient's* `expected`, exactly as any delivered
+  holder and all credentials untouched. It advances only the _recipient's_ `expected`, exactly as any delivered
   `operator-send` does.
 - **P2 / E4.** A held row is never dispatched: not by the pump, not after a handback. The unchanged guard refuses one
   directly: an `admit()` call on a crafted intent for a held row throws "changed role channel approval".
