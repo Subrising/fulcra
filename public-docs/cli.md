@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "Paseo CLI reference: manage projects, workspaces, agents, plugins, scripts, schedules, daemons, and permissions from your terminal."
+description: "Fulcra CLI reference: manage projects, workspaces, agents, plugins, scripts, schedules, daemons, and permissions from your terminal."
 nav: CLI reference
 order: 35
 category: Orchestration
@@ -8,9 +8,9 @@ category: Orchestration
 
 # CLI reference
 
-The Paseo CLI lets you manage agents from your terminal. It's the same interface exposed by the daemon's API, so anything you can do in the app you can do from the command line.
+The Fulcra CLI lets you manage agents from your terminal. It's the same interface exposed by the daemon's API, so anything you can do in the app you can do from the command line.
 
-> **Agent orchestration:** You can tell coding agents to use the Paseo CLI to spawn and manage other agents. Paseo recognizes the calling agent, so CLI-created workers get the same workspace and parent defaults as MCP-created workers.
+> **Agent orchestration:** You can tell coding agents to use the Fulcra CLI to spawn and manage other agents. Fulcra recognizes the calling agent, so CLI-created workers get the same workspace and parent defaults as MCP-created workers.
 
 ## Quick reference
 
@@ -53,7 +53,7 @@ From a human shell, a bare `paseo run` creates a new local workspace for the cur
 
 Worktree creation accepts `--worktree-mode branch-off|checkout-branch|checkout-pr` plus the matching `--new-branch`/`--base`, `--branch`, or `--pr-number`/`--forge` options. Use `--worktree-slug` to choose the managed directory slug.
 
-When an existing Paseo agent runs the same command, Paseo recognizes it through `PASEO_AGENT_ID`. Without explicit placement, the new agent becomes its subagent in the same workspace. `--workspace` can place that subagent elsewhere without changing its parent.
+When an existing Fulcra agent runs the same command, Fulcra recognizes it through `PASEO_AGENT_ID`. Without explicit placement, the new agent becomes its subagent in the same workspace. `--workspace` can place that subagent elsewhere without changing its parent.
 
 Use `--output-schema` to return only matching JSON output. You can pass a schema file path or an inline JSON schema object. This mode cannot be used with `--background`.
 
@@ -77,7 +77,7 @@ paseo project rename <project-id> --reset
 paseo project delete <project-id>
 ```
 
-`--reset` restores the name derived from the project directory. Deleting a project archives its active workspaces and removes the project from Paseo. It does not delete the project directory.
+`--reset` restores the name derived from the project directory. Deleting a project archives its active workspaces and removes the project from Fulcra. It does not delete the project directory.
 
 For a local daemon, `paseo project create [path]` defaults to the current directory and resolves relative paths on the CLI machine. When you use the global `--host` option or `PASEO_HOST`, provide a path that the target daemon can access:
 
@@ -85,7 +85,7 @@ For a local daemon, `paseo project create [path]` defaults to the current direct
 paseo --host devbox:6767 project create /srv/repos/api
 ```
 
-The remote daemon interprets that path on its own machine. See [Workspaces](/docs/workspaces) for how projects group working directories and sessions.
+The remote daemon interprets that path on its own machine. See [Workspaces](workspaces.md) for how projects group working directories and sessions.
 
 ## Workspaces
 
@@ -126,7 +126,7 @@ paseo workspace rename <workspace-id> --reset   # back to the branch or director
 paseo workspace archive <workspace-id>
 ```
 
-Add `--forge <name>` to PR checkout when Paseo cannot infer the forge from the source checkout. See [Git worktrees](/docs/worktrees) for setup hooks and services.
+Add `--forge <name>` to PR checkout when Fulcra cannot infer the forge from the source checkout. See [Git worktrees](worktrees.md) for setup hooks and services.
 
 ## Terminals
 
@@ -145,7 +145,7 @@ Creation defaults to the workspace directory. Add `--cwd <absolute-path>` to cha
 
 Without `--workspace`, creation opens the project at `--cwd` or the current directory and reuses its oldest active workspace. Listing without `--workspace` filters by `--cwd` or the current directory and can include multiple workspaces. `ls --all` lists every terminal on the host and cannot be combined with directory or workspace filters.
 
-Create and list results include `id`, `name`, `cwd`, and `workspaceId`. Use `--json` for structured output and the global `--host` option to target another daemon. These commands require a host that supports the [workspace terminal API](/docs/sdk/reference#clientterminals); older hosts return an update message.
+Create and list results include `id`, `name`, `cwd`, and `workspaceId`. Use `--json` for structured output and the global `--host` option to target another daemon. These commands require a host that supports the [workspace terminal API](sdk/reference.md#clientterminals); older hosts return an update message.
 
 ## Workspace scripts
 
@@ -157,13 +157,13 @@ paseo script start web
 paseo script stop web
 ```
 
-By default, Paseo selects the workspace whose directory is the current directory. Pass `--cwd <path>` to select a different directory, or `--workspace <workspace-id>` when a directory has multiple workspaces. Use the global `--host` option to target another daemon. These commands also accept standard output options such as `--json`.
+By default, Fulcra selects the workspace whose directory is the current directory. Pass `--cwd <path>` to select a different directory, or `--workspace <workspace-id>` when a directory has multiple workspaces. Use the global `--host` option to target another daemon. These commands also accept standard output options such as `--json`.
 
-The output includes each script's lifecycle and supervised terminal ID. Services also include their assigned port, proxy URL, and health. See [Git worktrees](/docs/worktrees#scripts-and-services) for `paseo.json` configuration.
+The output includes each script's lifecycle and supervised terminal ID. Services also include their assigned port, proxy URL, and health. See [Git worktrees](worktrees.md#scripts-and-services) for `paseo.json` configuration.
 
 ## Plugins
 
-> **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugin server code and Git preparation commands run unsandboxed with the daemon user's access on the daemon host; client contributions run inside Paseo. Dependencies and future updates are part of that decision. With the global `--host` option, commands run on the remote daemon host.
+> **Trust every plugin you add.** `paseo plugin add` and `paseo plugin install` mean “I trust this codebase.” Plugin server code and Git preparation commands run unsandboxed with the daemon user's access on the daemon host; client contributions run inside Fulcra. Dependencies and future updates are part of that decision. With the global `--host` option, commands run on the remote daemon host.
 
 Create and manage trusted plugins on a daemon:
 
@@ -187,7 +187,7 @@ GitHub shorthand checks an existing host directory first. Append `:<directory>` 
 monorepo. `paseo plugin ls [id]` does not contact the remote. `paseo plugin logs <id>` returns the
 plugin's recent daemon-side stdout and stderr. Add `--json` for structured entries, or run
 `paseo --host <target> plugin logs <id>` for another daemon. See the
-[Plugin reference](/docs/plugins/reference) for installation, trust, lifecycle, and log-retention
+[Plugin reference](plugins/reference.md) for installation, trust, lifecycle, and log-retention
 behavior.
 
 ## Listing agents
@@ -213,7 +213,7 @@ Agent IDs can be shortened, `abc` works if it's unambiguous.
 
 Send follow-up tasks to a running or idle agent:
 
-Use the recipient's agent ID from `paseo ls`, or [copy it from the agent's tab](/docs/orchestration-workflows#send-a-prompt-to-another-agent).
+Use the recipient's agent ID from `paseo ls`, or [copy it from the agent's tab](orchestration-workflows.md#send-a-prompt-to-another-agent).
 
 ```bash
 paseo send <id> "now run the tests"
@@ -243,7 +243,7 @@ Useful in scripts or when one agent needs to wait for another.
 
 ## Schedules
 
-Run an agent on a cron schedule. The CLI also accepts simple cadence presets and compiles them to cron. See [Schedules from the CLI](/docs/schedules-cli) for the full reference.
+Run an agent on a cron schedule. The CLI also accepts simple cadence presets and compiles them to cron. See [Schedules from the CLI](schedules-cli.md) for the full reference.
 
 ```bash
 paseo schedule create --every 30m --cwd ~/dev/my-app "Continue the refactor and leave a note."
@@ -309,7 +309,7 @@ PASEO_LISTEN=127.0.0.1:6799 PASEO_RELAY_ENABLED=false paseo daemon run --home ~/
 
 It stays attached until the supervisor exits or you cancel, without a readiness timeout. Worker restart retains these launch inputs. Stop and relaunch the deployment to change them. If the home already has a live supervisor, `run` returns `already_running` without owning or launching a foreground process.
 
-Managed `start` ignores inherited daemon-setting overrides, including `PORT`, `PASEO_LISTEN`, relay, voice, and web UI settings. It preserves provider credentials and executable/runtime controls. `start --foreground` is removed; use `daemon run`. Former start/restart configuration flags such as `--port`, `--no-relay`, and `--web-ui` fail before side effects, with the corresponding `config set` migration. See [configuration edits](/docs/configuration#apply-changes).
+Managed `start` ignores inherited daemon-setting overrides, including `PORT`, `PASEO_LISTEN`, relay, voice, and web UI settings. It preserves provider credentials and executable/runtime controls. `start --foreground` is removed; use `daemon run`. Former start/restart configuration flags such as `--port`, `--no-relay`, and `--web-ui` fail before side effects, with the corresponding `config set` migration. See [configuration edits](configuration.md#apply-changes).
 
 ### Select one daemon
 
@@ -343,13 +343,13 @@ paseo hub logout               # Remove the active stored CLI login
 
 Run deploy from the repository root. By default it reads every direct `.paseo/triggers/*.yml` file in deterministic path order. It validates all triggers before installing them one at a time. If an installation fails after earlier ones succeeded, the error lists the installed files. `--dry-run` only validates; it does not create or activate revisions.
 
-Pass `-p, --project <slug>` for an existing legacy bundle: `.paseo/hub.yml`, direct `.paseo/workflows/*.yml` files, and referenced workflow partials. See [Deploy from the CLI](/docs/hub/configuration#deploy-from-the-cli).
+Pass `-p, --project <slug>` for an existing legacy bundle: `.paseo/hub.yml`, direct `.paseo/workflows/*.yml` files, and referenced workflow partials. See [Deploy from the CLI](hub/configuration/index.md#deploy-from-the-cli).
 
 `login` opens the Hub approval page and stores a durable organization-scoped CLI credential under `PASEO_HOME`. In an interactive terminal it offers to connect this daemon, then separately asks whether to allow Hub automations to run agents. Connection defaults to yes; execution permission defaults to no. It then links to Hub's **Triggers** page and prints `paseo hub init` for setup as code. `--json` and non-TTY login remain login-only and never prompt. The stored login is separate from the daemon relationship created by `connect`.
 
 `init` requires a TTY. It signs in and connects the daemon as needed, then lists the organization's app connections that can back a starter trigger. One usable connection is selected automatically; with several, you choose a **Trigger connection**. If none is ready, setup sends you to **Hub → Apps** and stops before selecting an agent or writing files.
 
-Setup asks which agent provider, model, and mode to run. Providers must be enabled and expose both a selectable model and an execution mode. Suggested model and mode entries are the daemon's defaults; a mode is still selected explicitly when there is no default. Setup then asks for the identity allowed to trigger the bot: a GitHub username, Slack member ID, or Discord user ID. It validates the trigger, writes `.paseo/triggers/<provider>-help.yml`, and asks whether to deploy. Replacing that file requires confirmation; existing legacy bundles and other trigger files are preserved. See the [generated starter trigger](/docs/hub/configuration#generated-starter-trigger).
+Setup asks which agent provider, model, and mode to run. Providers must be enabled and expose both a selectable model and an execution mode. Suggested model and mode entries are the daemon's defaults; a mode is still selected explicitly when there is no default. Setup then asks for the identity allowed to trigger the bot: a GitHub username, Slack member ID, or Discord user ID. It validates the trigger, writes `.paseo/triggers/<provider>-help.yml`, and asks whether to deploy. Replacing that file requires confirmation; existing legacy bundles and other trigger files are preserved. See the [generated starter trigger](hub/configuration/index.md#generated-starter-trigger).
 
 Interactive logout checks the same-origin daemon relationship and asks whether to disconnect before deleting the login. Declining removes only the login. JSON and noninteractive logout never prompt or disconnect implicitly; `--disconnect-daemon` is the explicit automation path, and `--force` applies to that daemon disconnection. If a requested disconnection fails, the login is preserved.
 
@@ -357,7 +357,7 @@ Every command resolves and normalizes its destination before Hub or daemon work.
 
 Human output reports the resolved destination before each action. JSON output keeps stdout machine-readable and includes the normalized Hub origin. Bundle diagnostics identify paths without printing configuration contents or credentials.
 
-See [Daemons in Hub](/docs/hub/daemons), [Hub configuration](/docs/hub/configuration), and the [Hub public API](/docs/hub/api).
+See [Daemons in Hub](hub/daemons.md), [Hub configuration](hub/configuration/index.md), and the [Hub public API](hub/api.md).
 
 ## Connecting to a remote daemon
 
@@ -373,7 +373,7 @@ paseo daemon pair --json   # structured credential output; do not log it
 
 Relay is off for new installations. A disabled relay returns `RELAY_DISABLED`; `--relay` provides explicit consent. Compare the host name and key fingerprint before pairing. The app keeps a per-device key for reconnects. The CLI's legacy offer-URL target does not perform v3 device enrolment and is not supported for remote v3 sessions yet. Use the paired app for those sessions.
 
-From the local host, `paseo daemon devices list` lists devices and `paseo daemon devices revoke <id>` revokes one immediately. With the daemon stopped, use `paseo daemon devices revoke <id> --offline --home <local-home>` to remove its registry entry before restarting. Local CLI pairing treats the local OS user as owner; a paired device can run code as that user, so revocation is the containment for device access, not the RPC permission list. See [Security](/docs/security).
+From the local host, `paseo daemon devices list` lists devices and `paseo daemon devices revoke <id>` revokes one immediately. With the daemon stopped, use `paseo daemon devices revoke <id> --offline --home <local-home>` to remove its registry entry before restarting. Local CLI pairing treats the local OS user as owner; a paired device can run code as that user, so revocation is the containment for device access, not the RPC permission list. See [Security](security.md).
 
 ## Multi-agent workflows
 

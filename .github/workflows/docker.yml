@@ -24,7 +24,7 @@ on:
           - "false"
           - "true"
       publish_latest:
-        description: "Also publish ghcr.io/getpaseo/paseo:latest. Ignored for prereleases."
+        description: "Also publish the configured image with the latest tag. Ignored for prereleases."
         required: false
         default: "false"
         type: choice

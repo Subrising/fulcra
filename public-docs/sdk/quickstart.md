@@ -1,6 +1,6 @@
 ---
 title: SDK quickstart
-description: Connect to a Paseo daemon, run one coding agent, and read its reply.
+description: Connect to a compatible Fulcra daemon, run one coding agent, and read its reply.
 nav: Quickstart
 order: 51
 category: TypeScript SDK
@@ -12,7 +12,7 @@ category: TypeScript SDK
 npm install @getpaseo/client
 ```
 
-Requires Node.js 22 or newer.
+Requires Node.js 22 or newer. `@getpaseo/client` and `createPaseoClient` are the retained package/API names. This is the upstream-named SDK interface, not a published Fulcra npm package; use a client version compatible with your host.
 
 ## Connect
 
@@ -42,9 +42,9 @@ const agent = await client.agents.create({
 });
 ```
 
-`config.provider` is always `provider/model`. [Providers](/docs/sdk/providers) lists what the daemon has available and how to discover it at runtime.
+`config.provider` is always `provider/model`. [Providers](providers.md) lists what the daemon has available and how to discover it at runtime.
 
-`cwd` is the directory the agent works in. Paseo creates the workspace behind it. [Workspaces](/docs/sdk/workspaces) covers reusing one instead.
+`cwd` is the directory the agent works in. Paseo creates the workspace behind it. [Workspaces](workspaces.md) covers reusing one instead.
 
 `create()` resolves as soon as the session exists. The prompt is still running.
 
@@ -83,8 +83,8 @@ await agent.run("Now write the fix.");
 
 ## Next
 
-- [Agents](/docs/sdk/agents), follow-up prompts, finding existing agents, archiving.
-- [Providers](/docs/sdk/providers), discovering models and modes from the daemon.
-- [Provider options](/docs/sdk/provider-options), sandboxing and provider-native settings.
-- [Workspaces](/docs/sdk/workspaces), reusing a workspace or creating a worktree.
-- [Events](/docs/sdk/events), streaming updates instead of waiting.
+- [Agents](agents.md), follow-up prompts, finding existing agents, archiving.
+- [Providers](providers.md), discovering models and modes from the daemon.
+- [Provider options](provider-options.md), sandboxing and provider-native settings.
+- [Workspaces](workspaces.md), reusing a workspace or creating a worktree.
+- [Events](events.md), streaming updates instead of waiting.
