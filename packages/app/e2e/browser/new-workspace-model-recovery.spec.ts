@@ -24,7 +24,7 @@ async function rememberModel(page: Page) {
         "@paseo:create-agent-preferences",
         JSON.stringify({
           provider,
-          providerPreferences: { [provider]: { model } },
+          providerPreferences: { [provider]: { model, modelChosenByUser: true } },
         }),
       );
     },
@@ -34,7 +34,6 @@ async function rememberModel(page: Page) {
 
 async function expectRecoveredModelInPicker(page: Page) {
   await openModelPicker(page);
-  await page.getByRole("dialog").getByRole("button", { name: "Back", exact: true }).click();
   await drillIntoProvider(page, PROVIDER);
   await expect(
     page.getByTestId("combobox-desktop-container").getByText(LABEL, { exact: true }),

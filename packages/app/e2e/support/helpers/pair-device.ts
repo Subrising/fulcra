@@ -90,7 +90,7 @@ export async function expectRelayConsent(page: Page): Promise<void> {
   const modal = page.getByTestId("host-page-pair-device-card");
   await expect(modal.getByText("Enable relay?", { exact: true })).toBeVisible();
   await expect(modal.getByText(/end-to-end encrypted/)).toBeVisible();
-  await expect(modal.getByRole("link", { name: "Read how Paseo relay works" })).toBeVisible();
+  await expect(modal.getByRole("link", { name: "Read how Fulcra relay works" })).toBeVisible();
   await expect(modal.getByText(/TCP, Tailscale, or another VPN/)).toBeVisible();
   await expect(modal.getByRole("img", { name: "Pairing QR code" })).toHaveCount(0);
   await expect(modal.getByRole("textbox", { name: "Pairing link" })).toHaveCount(0);

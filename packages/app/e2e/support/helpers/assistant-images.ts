@@ -1,3 +1,4 @@
+import { workspaceAgentTabByTitle } from "./workspace-tabs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
@@ -217,7 +218,7 @@ export async function sendFollowUpAndExpectVisibleResponse(
 }
 
 async function selectSettledAgentTab(page: Page, agent: ArchiveTabAgent): Promise<void> {
-  const tab = page.getByRole("button", { name: agent.title, exact: true });
+  const tab = workspaceAgentTabByTitle(page, agent.title);
   await tab.click();
   await expect(page).toHaveTitle(agent.title);
   await expect(tab).toHaveAttribute("aria-selected", "true");

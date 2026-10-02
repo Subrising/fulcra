@@ -1,3 +1,4 @@
+import { workspaceAgentTabByTitle } from "../support/helpers/workspace-tabs";
 import { expect, type Page } from "@playwright/test";
 import { buildHostAgentDetailRoute } from "@/utils/host-routes";
 import { test } from "../support/fixtures";
@@ -118,7 +119,7 @@ async function openAgent(
 }
 
 async function selectAgent(page: Page, title: string) {
-  await page.getByRole("button", { name: title, exact: true }).click();
+  await workspaceAgentTabByTitle(page, title).click();
 }
 
 async function expectForkFailureWithoutOverlappingStatus(page: Page) {
@@ -204,7 +205,7 @@ async function startVisibleTurn(
 }
 
 async function expectAgentConsistentlyIdle(page: Page, title: string): Promise<void> {
-  const tab = page.getByRole("button", { name: title, exact: true });
+  const tab = workspaceAgentTabByTitle(page, title);
   await expect(tab.locator('[data-status-bucket="running"]')).toHaveCount(0);
   await expectAgentIdle(page);
   await expect(page.getByTestId("turn-working-indicator")).toHaveCount(0);
@@ -364,18 +365,12 @@ test.describe("Viewed agent timelines", () => {
       await runWorkspaceActionFromCommandCenter(page, "Split pane right");
       await selectAgent(page, "Second viewed chat");
       await moveActiveTabRight(page);
-      await expect(
-        page.getByRole("button", { name: "First viewed chat", exact: true }),
-      ).toBeVisible();
-      await expect(
-        page.getByRole("button", { name: "Second viewed chat", exact: true }),
-      ).toBeVisible();
+      await expect(workspaceAgentTabByTitle(page, "First viewed chat")).toBeVisible();
+      await expect(workspaceAgentTabByTitle(page, "Second viewed chat")).toBeVisible();
       await expect(page.getByRole("textbox", { name: "Message agent..." })).toHaveCount(2);
       await commitMessage(scenario, scenario.firstAgentId, "First visible pane update.");
       await expect(page.getByText("First visible pane update.", { exact: true })).toBeVisible();
-      await expect(
-        page.getByRole("button", { name: "Second viewed chat", exact: true }),
-      ).toBeVisible();
+      await expect(workspaceAgentTabByTitle(page, "Second viewed chat")).toBeVisible();
     } finally {
       await scenario.cleanup();
     }
@@ -393,7 +388,7 @@ test.describe("Viewed agent timelines", () => {
         exact: true,
       });
       await expect(previousMessage).toBeVisible();
-      await expect(page.getByRole("button", { name: "First viewed chat" })).toHaveAttribute(
+      await expect(workspaceAgentTabByTitle(page, "First viewed chat")).toHaveAttribute(
         "aria-selected",
         "true",
       );

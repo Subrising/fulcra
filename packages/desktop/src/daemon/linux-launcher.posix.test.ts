@@ -51,8 +51,19 @@ async function launch(
     }
     writeFileSync(join(app, "chrome-sandbox"), "helper");
     chmodSync(join(app, "chrome-sandbox"), 0o755);
-    await afterPack({ appOutDir: app, electronPlatformName: "linux", arch: 1 });
-    if (options.rerun) await afterPack({ appOutDir: app, electronPlatformName: "linux", arch: 1 });
+    await afterPack({
+      appOutDir: app,
+      electronPlatformName: "linux",
+      arch: 1,
+      packager: { appInfo: { productFilename: EXECUTABLE_NAME } },
+    });
+    if (options.rerun)
+      await afterPack({
+        appOutDir: app,
+        electronPlatformName: "linux",
+        arch: 1,
+        packager: { appInfo: { productFilename: EXECUTABLE_NAME } },
+      });
     // The symlink keeps its own name: it stands in for the ~/.local/bin/paseo CLI symlink,
     // which still points at the launcher and is not renamed with the product.
     const executablePath = options.symlink ? join(root, "paseo") : join(app, EXECUTABLE_NAME);

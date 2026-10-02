@@ -46,10 +46,13 @@ async function seedCodexDefaultPermissionPreferences(page: Page, cwd: string): P
             providerPreferences: {
               codex: {
                 model: modelId,
+                modelChosenByUser: true,
+                modeChosenByUser: true,
+                thinkingChosenByModel: { [modelId]: true },
                 mode: "auto",
                 thinkingByModel: { [modelId]: thinkingOptionId },
               },
-              mock: { model: "ten-second-stream" },
+              mock: { model: "ten-second-stream", modelChosenByUser: true },
             },
           } satisfies FormPreferences),
         );

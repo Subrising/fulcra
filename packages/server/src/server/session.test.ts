@@ -4703,6 +4703,7 @@ describe("retained stash original source authority", () => {
     expect(gitCommandMocks.runGitCommand).toHaveBeenCalledWith(["stash", "apply", "a".repeat(40)], {
       cwd: "/original-repo",
       timeout: 120_000,
+      beforeSpawn: expect.any(Function),
     });
     await session.cleanup();
   });

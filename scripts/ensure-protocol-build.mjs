@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Build @getpaseo/protocol only when its `dist` is missing or older than its sources.
  *

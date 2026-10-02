@@ -1,3 +1,4 @@
+import { workspaceAgentTabByTitle } from "./workspace-tabs";
 import { expect, type Page } from "@playwright/test";
 import { readScrollMetrics, waitForContentGrowth, expectNearBottom } from "./agent-bottom-anchor";
 
@@ -23,7 +24,7 @@ export async function expectInlineWorkingIndicator(page: Page): Promise<void> {
 }
 
 export async function expectRunningAgentChrome(page: Page, title: string): Promise<void> {
-  const tab = page.getByRole("button", { name: title, exact: true });
+  const tab = workspaceAgentTabByTitle(page, title);
 
   await expect(tab).toBeVisible({ timeout: 30_000 });
   await expect(tab.getByRole("progressbar", { name: "Agent running" })).toBeVisible({
@@ -56,7 +57,7 @@ export async function expectVisibleAgentSurfacesIdle(page: Page): Promise<void> 
 }
 
 export async function expectAgentSurfacesIdle(page: Page, title: string): Promise<void> {
-  const tab = page.getByRole("button", { name: title, exact: true });
+  const tab = workspaceAgentTabByTitle(page, title);
 
   await expect(tab).toBeVisible({ timeout: 30_000 });
   await expect(tab.getByRole("progressbar", { name: "Agent running" })).toHaveCount(0);

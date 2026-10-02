@@ -1,7 +1,7 @@
 import type { WorkspaceCreateRequest } from "@getpaseo/protocol/messages";
 import { expect, type Page } from "@playwright/test";
 import { daemonWsRoutePattern } from "./daemon-port";
-import { gotoAppShell } from "./app";
+import { gotoAppShell, selectModel } from "./app";
 import { gotoWorkspace } from "./launcher";
 import { fillComposerDraft } from "./composer";
 import { createAgentTabFromMenu } from "./workspace-tabs";
@@ -148,6 +148,7 @@ export async function createCreationScenario(page: Page) {
       await waitForSidebarHydration(page);
       await openNewWorkspaceComposer(page, project);
       await selectWorkspaceIsolation(page, isolation);
+      await selectModel(page, "ten-second-stream");
     },
     async openAgentDraft() {
       await gotoWorkspace(page, project.workspaceId);

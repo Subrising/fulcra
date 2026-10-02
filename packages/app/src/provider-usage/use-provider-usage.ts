@@ -1,5 +1,5 @@
 import { runtimeUsageRevision, readUsageSnapshot, currentUsageSnapshot } from "./runtime-snapshot";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
@@ -108,8 +108,12 @@ export function useProviderUsage(
     },
     onSuccess: (payload) => queryClient.setQueryData(queryKey, payload),
   });
+  const previousUsage = useRef({ enabled: false, revision: runtimeRevision });
   useEffect(() => {
-    if (!enabled) return;
+    const previous = previousUsage.current;
+    previousUsage.current = { enabled, revision: runtimeRevision };
+    // Opening already refetches through the query/refresh path. Only live attribution changes invalidate it.
+    if (!enabled || !previous.enabled || previous.revision === runtimeRevision) return;
     // Collapse bursts of agent upserts. Superseded replies are hidden immediately until this projection is read.
     const timer = setTimeout(() => {
       void queryClient.invalidateQueries({ queryKey, exact: true });

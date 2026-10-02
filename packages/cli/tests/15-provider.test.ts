@@ -22,6 +22,7 @@
  */
 
 import assert from "node:assert";
+import { connectToDaemon } from "../src/utils/client.ts";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -55,77 +56,62 @@ const EXPECTED_CLAUDE_MODELS = [
   {
     id: "claude-opus-5-5",
     model: "Opus 5.5",
-    descriptionFragment: "Latest release",
   },
   {
     id: "claude-opus-5",
     model: "Opus 5",
-    descriptionFragment: "Previous release",
   },
   {
     id: "claude-fable-5-1",
     model: "Fable 5.1",
-    descriptionFragment: "Most powerful",
   },
   {
     id: "claude-fable-5",
     model: "Fable 5",
-    descriptionFragment: "Previous release",
   },
   {
     id: "claude-opus-4-8[1m]",
     model: "Opus 4.8 1M",
-    descriptionFragment: "1M context window",
   },
   {
     id: "claude-opus-4-8",
     model: "Opus 4.8",
-    descriptionFragment: "Previous release",
   },
   {
     id: "claude-sonnet-5-5",
     model: "Sonnet 5.5",
-    descriptionFragment: "Best for everyday tasks",
   },
   {
     id: "claude-sonnet-5",
     model: "Sonnet 5",
-    descriptionFragment: "Previous release",
   },
   {
     id: "claude-opus-4-7[1m]",
     model: "Opus 4.7 1M",
-    descriptionFragment: "1M context window",
   },
   {
     id: "claude-opus-4-7",
     model: "Opus 4.7",
-    descriptionFragment: "Previous release",
   },
   {
     id: "claude-opus-4-6[1m]",
     model: "Opus 4.6 1M",
-    descriptionFragment: "1M context window",
   },
   {
     id: "claude-sonnet-4-6[1m]",
     model: "Sonnet 4.6 1M",
-    descriptionFragment: "1M context window",
   },
   {
     id: "claude-sonnet-4-6",
     model: "Sonnet 4.6",
-    descriptionFragment: "Best for everyday tasks",
   },
   {
     id: "claude-opus-4-6",
     model: "Opus 4.6",
-    descriptionFragment: "Most capable",
   },
   {
     id: "claude-haiku-4-5",
     model: "Haiku 4.5",
-    descriptionFragment: "Fastest",
   },
 ] as const;
 
@@ -133,7 +119,6 @@ const EXPECTED_CLAUDE_CONTEXT_MODELS = [
   {
     id: "claude-sonnet-5[1m]",
     model: "Sonnet 5 1M",
-    descriptionFragment: "1M context window",
   },
 ] as const;
 
@@ -175,7 +160,17 @@ async function runProviderModelsJson(provider: string): Promise<ProviderModel[]>
   return attemptRun(1);
 }
 
-function assertClaudeModels(data: ProviderModel[]): void {
+async function assertClaudeModels(data: ProviderModel[]): Promise<void> {
+  const client = await connectToDaemon({ target: { kind: "instance", home: ctx.paseoHome } });
+  const runtimeDescriptions = new Map<string, string>();
+  try {
+    const result = await client.listProviderModels("claude");
+    assert.strictEqual(result.error, null);
+    for (const model of result.models ?? [])
+      runtimeDescriptions.set(model.id, model.description ?? "");
+  } finally {
+    await client.close();
+  }
   const byId = new Map(data.map((model) => [model.id, model]));
 
   assert.strictEqual(byId.size, data.length, "claude model IDs should be unique");
@@ -188,9 +183,11 @@ function assertClaudeModels(data: ProviderModel[]): void {
       expectedModel.model,
       `${expectedModel.id} should keep its display name`,
     );
-    assert(
-      (actualModel.description ?? "").includes(expectedModel.descriptionFragment),
-      `${expectedModel.id} description should mention ${expectedModel.descriptionFragment}`,
+    // Runtime descriptions override manifest wording; CLI must preserve the daemon's catalog.
+    assert.strictEqual(
+      actualModel.description,
+      runtimeDescriptions.get(expectedModel.id),
+      `${expectedModel.id} description should match the daemon catalog`,
     );
   }
 
@@ -344,7 +341,7 @@ try {
   {
     console.log("Test 6: provider models claude lists canonical model aliases");
     const data = await runProviderModelsJson("claude");
-    assertClaudeModels(data);
+    await assertClaudeModels(data);
     console.log("✓ provider models claude lists canonical model aliases\n");
   }
 
@@ -413,7 +410,7 @@ try {
       data.every((m) => m.model && m.id),
       "each model should have name and id",
     );
-    assertClaudeModels(data);
+    await assertClaudeModels(data);
     claudeModelIdsFromJson = data.map((m) => m.id);
     claudeModelsFromJson = data;
     console.log("✓ provider models --json outputs valid JSON\n");

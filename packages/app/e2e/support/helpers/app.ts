@@ -356,7 +356,7 @@ export const selectModel = async (page: Page, model: string) => {
   }
 
   // Wait for the model dropdown to open
-  const searchInput = page.getByRole("textbox", { name: /search model/i });
+  const searchInput = page.getByTestId("model-search-all-input");
   await expect(searchInput).toBeVisible({ timeout: 10000 });
 
   // Type to search/filter models
