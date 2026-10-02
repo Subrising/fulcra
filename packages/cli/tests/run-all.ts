@@ -14,6 +14,7 @@ import { mkdtemp, readdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join, dirname, delimiter } from "path";
 import { fileURLToPath } from "url";
+import { FIRST_TEST_PORT, LAST_TEST_PORT, TEST_PORT_BLOCK_SIZE } from "./helpers/network.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..", "..");
@@ -192,6 +193,10 @@ function formatDuration(ms: number): string {
 }
 
 async function runSingleTest(testFile: string): Promise<TestOutcome> {
+  const portBase = FIRST_TEST_PORT + testFiles.indexOf(testFile) * TEST_PORT_BLOCK_SIZE;
+  if (portBase + TEST_PORT_BLOCK_SIZE - 1 > LAST_TEST_PORT) {
+    throw new Error("CLI test files exceed the available private port blocks");
+  }
   const testPath = join(__dirname, testFile);
   const testName = testFile.replace(/\.test\.ts$/, "");
   const startedAt = Date.now();
@@ -212,6 +217,7 @@ async function runSingleTest(testFile: string): Promise<TestOutcome> {
           PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: testEnvDefaults.PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD,
           PASEO_DICTATION_ENABLED: testEnvDefaults.PASEO_DICTATION_ENABLED,
           PASEO_VOICE_MODE_ENABLED: testEnvDefaults.PASEO_VOICE_MODE_ENABLED,
+          PASEO_CLI_TEST_PORT_BASE: String(portBase),
         },
         stdio: ["ignore", "pipe", "pipe"],
       });

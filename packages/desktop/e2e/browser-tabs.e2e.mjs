@@ -15,7 +15,12 @@ import { chromium } from "playwright";
 import { runAppearanceFontSizeRegression } from "./appearance-font-size.electron.mjs";
 import { runSettingsMemoryRegression } from "./settings-memory.electron.mjs";
 
-import { seedPluginLinks, runPluginLinksRegression } from "./plugin-links.electron.mjs";
+import {
+  seedPluginLinks,
+  stagePluginLinkPin,
+  expectPluginLinksRefused,
+  runPluginLinksRegression,
+} from "./plugin-links.electron.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopDir = path.resolve(scriptDir, "..");
@@ -1082,14 +1087,16 @@ async function main() {
   const listen = `127.0.0.1:${daemonPort}`;
   seedPaseoHome(paseoHome, listen, workspaceRoot);
   const target = await startTargetPage();
-  seedPluginLinks(paseoHome, workspaceIds[0], target.url, workspaceIds[1]);
+  const pluginDirectory = seedPluginLinks(paseoHome, workspaceIds[0], target.url, workspaceIds[1]);
   const remoteHome = path.join(runtimeDir, "remote-home");
   seedPaseoHome(remoteHome, `127.0.0.1:${remotePort}`, path.join(runtimeDir, "remote-workspaces"));
   const children = [];
   let browser = null;
   let client = null;
+  let removePluginPin = null;
 
   try {
+    removePluginPin = await stagePluginLinkPin(pluginDirectory, desktopDir);
     // Observe the real Electron shell handoff without launching a user's browser.
     const openerDirectory = path.join(runtimeDir, "url-handler");
     const externalOpenLog = path.join(artifactDir, "external-opens.txt");
@@ -1191,6 +1198,8 @@ async function main() {
       });
     if (process.env.PASEO_DESKTOP_PLUGIN_LINKS_ONLY === "1") {
       const pluginLinks = await checkPluginLinks();
+      removePluginPin();
+      await expectPluginLinksRefused(page);
       writeJson(path.join(artifactDir, "result.json"), { pluginLinks });
       console.log("Plugin external links and workspace browser passed.");
       return;
@@ -1224,6 +1233,8 @@ async function main() {
       artifactDir,
     });
     const pluginLinks = await checkPluginLinks();
+    removePluginPin();
+    await expectPluginLinksRefused(page);
     writeJson(path.join(artifactDir, "result.json"), { ...report, settingsMemory, pluginLinks });
     console.log(
       `Browser desktop browser E2E passed: WebContents ${report.originalWebContentsId} remained ${report.finalWebContentsId}; viewport, inactive capture, focus continuity, list, snapshot, click, local-page selectors passed.`,
@@ -1233,6 +1244,7 @@ async function main() {
     console.error(error);
     throw error;
   } finally {
+    removePluginPin?.();
     await client?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
     for (const child of children.toReversed()) stopProcess(child);
