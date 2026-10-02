@@ -75,11 +75,26 @@ function alreadyHandled(_branch, title) {
 const trim = (s, n = 3500) =>
   s.length > n ? `${s.slice(0, n)}\n\n_(truncated)_` : s || "_No changelog published._";
 
+// Returns the PR URL, or null when the repository forbids Actions from opening PRs. In that case
+// the branch is already pushed, so say how to open the PR by hand and name the setting that fixes it.
 function openPr({ branch, title, body, draft }) {
   git("push", "--force", ORIGIN, branch);
   const a = ["pr", "create", "--base", BASE, "--head", branch, "--title", title, "--body", body];
   if (draft) a.push("--draft");
-  return gh(...a);
+  try {
+    return gh(...a);
+  } catch (error) {
+    if (!/Resource not accessible by integration|not permitted to create/i.test(error.message))
+      throw error;
+    const repo = process.env.GITHUB_REPOSITORY || "<owner>/<repo>";
+    const server = process.env.GITHUB_SERVER_URL || "https://github.com";
+    const compare = `${server}/${repo}/compare/${BASE}...${branch}?expand=1`;
+    console.log(
+      `::warning title=Upstream watch could not open "${title}"::Branch ${branch} is pushed. ` +
+        `Open the PR at ${compare}, or enable Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".`,
+    );
+    return null;
+  }
 }
 
 function setupGit() {
@@ -169,11 +184,12 @@ _Opened by the upstream watcher. Never auto-merged._
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
   const url = openPr({ branch, title, body, draft: conflicts.length > 0 });
+  if (!url) return log(`pushed ${branch}; PR not opened (see warning)`);
   log(`opened ${url}`);
   setOutputs({ paseo_branch: conflicts.length ? "" : branch, paseo_pr: url });
 }
 
-function syncPin(name, cfg, rel, manifest) {
+function syncPin(name, cfg, rel) {
   const title = `Sync ${name} ${rel.version}`;
   const branch = `sync/${name}-${rel.version}`;
   if (rel.version === cfg.version) return log(`${name} ${rel.version}: already pinned`);
@@ -183,13 +199,17 @@ function syncPin(name, cfg, rel, manifest) {
     return log(`[dry-run] would bump ${name} ${cfg.version} -> ${rel.version} on ${branch}`);
 
   git("checkout", "-B", branch, `${ORIGIN}/${BASE}`);
-  manifest.upstreams[name].version = rel.version;
-  writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+  // Read the manifest from the branch just checked out so another upstream's bump on a previous
+  // branch cannot leak into this one, and keep the old version for the PR body.
+  const from = cfg.version;
+  const branchManifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  branchManifest.upstreams[name].version = rel.version;
+  writeFileSync(MANIFEST, `${JSON.stringify(branchManifest, null, 2)}\n`);
   git("add", MANIFEST);
   git("commit", "--no-verify", "-m", `Sync ${name} ${rel.version}`);
   const body = `## Sync ${name} ${rel.version}
 
-Tracked version moves from \`${cfg.version}\` to \`${rel.version}\`. Upstream: ${rel.url}
+Tracked version moves from \`${from}\` to \`${rel.version}\`. Upstream: ${rel.url}
 
 ### Upstream changelog
 ${trim(rel.body)}
@@ -204,7 +224,8 @@ Nothing is replaced automatically. A maintainer should check the changelog for f
 _Opened by the upstream watcher. Never auto-merged._
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
-  log(`opened ${openPr({ branch, title, body, draft: false })}`);
+  const url = openPr({ branch, title, body, draft: false });
+  log(url ? `opened ${url}` : `pushed ${branch}; PR not opened (see warning)`);
 }
 
 const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
@@ -218,7 +239,7 @@ for (const [name, cfg] of Object.entries(manifest.upstreams)) {
       throw new Error(`unsafe version string ${JSON.stringify(rel.version)}`);
     log(`${name}: latest ${rel.tag}${rel.head ? " (head, no releases)" : ""}`);
     if (cfg.kind === "merge") syncPaseo(cfg, rel);
-    else syncPin(name, cfg, rel, manifest);
+    else syncPin(name, cfg, rel);
   } catch (error) {
     console.error(`[upstream-watch] ${name} failed: ${error.message}`);
     process.exitCode = 1;
