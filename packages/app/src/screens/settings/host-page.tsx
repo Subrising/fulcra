@@ -384,8 +384,11 @@ export function HostSettingsPage({
     <View>
       <HostStatusBadges serverId={serverId} />
       <HostConnectionError serverId={serverId} />
+<<<<<<< HEAD
 
       <ReplaceOldHostCard serverId={serverId} />
+=======
+>>>>>>> refs/tags/v0.10.2
 
       <HostAppearanceSection host={host} />
 

@@ -24,7 +24,11 @@ export function createRelayE2eeTransportFactory(args: {
 }): DaemonTransportFactory {
   return ({ url }) => {
     const base = args.baseFactory({ url });
+<<<<<<< HEAD
     return createEncryptedTransport(base, args.daemonPublicKeyB64, args.logger, args);
+=======
+    return createEncryptedTransport(base, args.daemonPublicKeyB64, args.logger);
+>>>>>>> refs/tags/v0.10.2
   };
 }
 

@@ -1,6 +1,7 @@
-import { compare, compareSync, hashSync } from "bcryptjs";
+import { compare, hashSync } from "bcryptjs";
 import { timingSafeEqual } from "node:crypto";
 import type { RequestHandler } from "express";
+<<<<<<< HEAD
 import {
   DAEMON_AUTH_PROTOCOL_PREFIX,
   DAEMON_PLAIN_PROTOCOL,
@@ -8,6 +9,8 @@ import {
   passwordFromBearerToken,
   passwordFromProtocol,
 } from "@getpaseo/protocol/daemon-credential";
+=======
+>>>>>>> refs/tags/v0.10.2
 import { matchesLocalCredential } from "./local-credential.js";
 
 export const DAEMON_PASSWORD_BCRYPT_COST = 12;
@@ -39,6 +42,7 @@ export async function isBearerTokenValidAsync(input: BearerValidationInput): Pro
   return compare(input.token, input.password);
 }
 
+<<<<<<< HEAD
 export function isBearerTokenValid(input: BearerValidationInput): boolean {
   return isBearerTokenValidSync(input);
 }
@@ -54,6 +58,8 @@ export function isBearerTokenValidSync(input: BearerValidationInput): boolean {
   return compareSync(input.token, input.password);
 }
 
+=======
+>>>>>>> refs/tags/v0.10.2
 export function hashDaemonPassword(password: string): string {
   return hashSync(password, DAEMON_PASSWORD_BCRYPT_COST);
 }

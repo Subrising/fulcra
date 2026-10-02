@@ -26,9 +26,12 @@ import type {
 } from "../../agent-sdk-types.js";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import { buildAgentPrompt, renderPromptAttachmentAsText } from "../../prompt-attachments.js";
+<<<<<<< HEAD
 import { createNativeQueuedDispatch } from "../../native-queued-dispatch.js";
 import { NATIVE_QUEUED_FINAL, FINAL_INPUT_CHECK } from "../../agent-sdk-types.js";
 import { createFinalInputCheck } from "../../final-input-check.js";
+=======
+>>>>>>> refs/tags/v0.10.2
 
 interface TestClaudeSession {
   translateMessageToEvents(message: SDKMessage): AgentStreamEvent[];
@@ -433,9 +436,12 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         resolveBinary: async () => "/test/claude/bin",
         resolveVersion: async () => "2.1.219",
         runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
+<<<<<<< HEAD
         modelProbe: async () => {
           throw new Error("no Claude Code in unit tests");
         },
+=======
+>>>>>>> refs/tags/v0.10.2
       });
       const { models } = await client.fetchCatalog({
         scope: "workspace",
@@ -483,9 +489,12 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
           throw new Error("unrecognized version output");
         },
         runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
+<<<<<<< HEAD
         modelProbe: async () => {
           throw new Error("no Claude Code in unit tests");
         },
+=======
+>>>>>>> refs/tags/v0.10.2
       });
       const { models } = await client.fetchCatalog({
         scope: "workspace",
@@ -508,9 +517,12 @@ describe("ClaudeAgentClient.fetchCatalog", () => {
         resolveBinary: async () => "/test/claude/bin",
         resolveVersion: async () => "2.1.284",
         runtimeSettings: { env: { CLAUDE_CONFIG_DIR: emptyConfigDir } },
+<<<<<<< HEAD
         modelProbe: async () => {
           throw new Error("no Claude Code in unit tests");
         },
+=======
+>>>>>>> refs/tags/v0.10.2
       });
       const { models } = await client.fetchCatalog({
         scope: "workspace",

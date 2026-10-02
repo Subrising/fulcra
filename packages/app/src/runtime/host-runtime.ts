@@ -9,7 +9,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import equal from "fast-deep-equal/es6";
 import {
   DaemonClient,
+<<<<<<< HEAD
   PairingRequiredError,
+=======
+>>>>>>> refs/tags/v0.10.2
   DaemonAuthenticationError,
   type DaemonClientConfig,
   type ConnectionState,
@@ -1157,12 +1160,15 @@ export class HostRuntimeController {
             });
             publishProbeState();
           } catch (error) {
+<<<<<<< HEAD
             if (
               this.isCurrentProbeRequest(requestVersion) &&
               error instanceof PairingRequiredError
             ) {
               this.requirePairing(error.pairingRequired);
             }
+=======
+>>>>>>> refs/tags/v0.10.2
             if (this.isCurrentProbeRequest(requestVersion)) {
               const authFailure = getConnectionAuthFailureReason(error);
               if (authFailure) {
@@ -1405,12 +1411,15 @@ export class HostRuntimeController {
 
     const failConnection = async (error: unknown) => {
       if (!this.isCurrentSwitchRequest(requestVersion) || this.activeClient !== client) return;
+<<<<<<< HEAD
       if (client.pairingRequired || error instanceof PairingRequiredError) {
         this.requirePairing(
           client.pairingRequired ?? (error as PairingRequiredError).pairingRequired,
         );
         return;
       }
+=======
+>>>>>>> refs/tags/v0.10.2
       const authFailure = getConnectionAuthFailureReason(error);
       if (authFailure) this.authRejectedConnectionIds.add(connection.id);
       this.unsubscribeClientStatus?.();
@@ -1453,10 +1462,13 @@ export class HostRuntimeController {
         this.deps.mountClientHandlers?.({ client, host: this.host, connection }) ?? null;
       this.unsubscribeClientStatus = client.subscribeConnectionStatus((state) => {
         if (!this.isCurrentSwitchRequest(requestVersion) || this.activeClient !== client) return;
+<<<<<<< HEAD
         if (client.pairingRequired) {
           this.requirePairing(client.pairingRequired);
           return;
         }
+=======
+>>>>>>> refs/tags/v0.10.2
         if (client.authFailureReason) {
           void failConnection(new DaemonAuthenticationError(client.authFailureReason));
           return;
@@ -1537,7 +1549,11 @@ function parseOfferConnectionUrl(input: string): { offer: ConnectionOffer; passw
   const encoded = input.slice(idx + marker.length).trim();
   if (!encoded) throw new Error("Offer payload is empty");
   const payload = decodeOfferFragmentPayload(encoded);
+<<<<<<< HEAD
   return { offer: parseConnectionOffer(payload) };
+=======
+  return { offer: ConnectionOfferSchema.parse(payload) };
+>>>>>>> refs/tags/v0.10.2
 }
 
 export function hasConfiguredLocalDaemonOverride(): boolean {
@@ -2083,16 +2099,25 @@ export class HostRuntimeStore {
     label?: string,
     password?: string,
   ): Promise<HostProfile> {
+<<<<<<< HEAD
     offer = parseConnectionOffer(offer);
     await this.assertRelayHostPin(offer.serverId, offer.daemonPublicKeyB64);
     const deviceId = await this.claimRelayDevice(offer, this.storage);
+=======
+    // COMPAT(oldRelayOfferTls): added in v0.1.73, remove after 2026-11-10.
+    const useTls = offer.relay.useTls ?? shouldUseTlsForDefaultHostedRelay(offer.relay.endpoint);
+>>>>>>> refs/tags/v0.10.2
     return this.upsertRelayConnection({
       serverId: offer.serverId,
       relayEndpoint: offer.relay.endpoint,
       useTls: offer.relay.useTls,
       daemonPublicKeyB64: offer.daemonPublicKeyB64,
+<<<<<<< HEAD
       deviceId,
       label: label ?? offer.hostLabel ?? "Unnamed host",
+=======
+      label,
+>>>>>>> refs/tags/v0.10.2
       password,
     });
   }
@@ -2317,7 +2342,10 @@ export class HostRuntimeStore {
     serverId: string;
     label?: string;
     password?: string;
+<<<<<<< HEAD
     clearPassword?: boolean;
+=======
+>>>>>>> refs/tags/v0.10.2
     connection: HostConnection;
     existingClient?: DaemonClient;
     preferConnection?: boolean;
@@ -2334,7 +2362,10 @@ export class HostRuntimeStore {
       serverId: input.serverId,
       label: input.label,
       connection: input.connection,
+<<<<<<< HEAD
       preferConnection: input.preferConnection,
+=======
+>>>>>>> refs/tags/v0.10.2
       password: input.password,
       now,
     });

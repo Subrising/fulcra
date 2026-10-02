@@ -41,16 +41,19 @@ import {
   Smartphone,
   Sparkles,
   Blocks,
+<<<<<<< HEAD
+=======
+  Globe,
+  PanelLeft,
+  MessageSquare,
+>>>>>>> refs/tags/v0.10.2
   ChevronRight,
 } from "lucide-react-native";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
-import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
 import { HostPicker as SharedHostPicker } from "@/components/hosts/host-picker";
 import { HostStatusDot } from "@/components/host-status-dot";
-import { ScreenTitle } from "@/components/headers/screen-title";
-import { HeaderIconBadge } from "@/components/headers/header-icon-badge";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { AppearanceSection } from "@/screens/settings/appearance/appearance-section";
 import { OpenLocationSection } from "@/screens/settings/open-location/open-location-section";
@@ -116,7 +119,6 @@ import {
   HostWorkspacesPage,
   HostTerminalsPage,
 } from "@/screens/settings/host-page";
-import { resolvePluginIcon } from "@/plugins/icons";
 import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
@@ -220,10 +222,14 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   { id: "about", labelKey: "settings.sections.about", icon: Info },
 ];
 
+function isSectionAvailable(item: SidebarSectionItem, isDesktopApp: boolean): boolean {
+  return (!item.desktopOnly || isDesktopApp) && (!item.webOnly || isWeb);
+}
+
 interface HostSectionItem {
   id: HostSectionSlug;
   labelKey: string;
-  icon: ComponentType<{ size: number; color: string }>;
+  icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
 }
 
 const HOST_SECTION_ITEMS: HostSectionItem[] = [
@@ -753,10 +759,13 @@ function useSortedHosts(hosts: HostProfile[], localServerId: string | null): Hos
 interface SidebarSectionButtonProps {
   itemId: SettingsSectionSlug;
   label: string;
-  icon: ComponentType<{ size: number; color: string }>;
+  icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
   isSelected: boolean;
   onSelect: (section: SettingsSectionSlug) => void;
 }
+
+// Lighter than lucide's default 2px stroke so the nav reads quieter than the content.
+const SIDEBAR_ICON_STROKE_WIDTH = 1.5;
 
 function SidebarSectionButton({
   itemId,
@@ -784,6 +793,7 @@ function SidebarSectionButton({
       <IconComponent
         size={theme.iconSize.md}
         color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+        strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
       />
       <Text style={labelStyle} numberOfLines={1}>
         {label}
@@ -795,7 +805,7 @@ function SidebarSectionButton({
 interface SidebarHostSectionButtonProps {
   itemId: HostSectionSlug;
   label: string;
-  icon: ComponentType<{ size: number; color: string }>;
+  icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
   isSelected: boolean;
   onSelect: (section: HostSectionSlug) => void;
 }
@@ -827,6 +837,7 @@ function SidebarHostSectionButton({
       <IconComponent
         size={theme.iconSize.md}
         color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+        strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
       />
       <Text style={labelStyle} numberOfLines={1}>
         {label}
@@ -946,9 +957,7 @@ function SettingsSidebar({
   const hasHosts = sortedHosts.length > 0;
   const enableBuiltInDaemonOption = useEnableBuiltInDaemonOption();
   const isDesktopApp = isElectronRuntime();
-  const items = SIDEBAR_SECTION_ITEMS.filter(
-    (item) => (!item.desktopOnly || isDesktopApp) && (!item.webOnly || isWeb),
-  );
+  const items = SIDEBAR_SECTION_ITEMS.filter((item) => isSectionAvailable(item, isDesktopApp));
   const insets = useSafeAreaInsets();
   const isDesktop = layout === "desktop";
   const outerContainerStyle = useMemo(
@@ -980,7 +989,6 @@ function SettingsSidebar({
           />
         ))}
       </View>
-      <SidebarSeparator />
       {hasHosts ? (
         <View style={sidebarStyles.list}>
           <Text style={sidebarStyles.groupLabel}>{t("settings.groups.host")}</Text>
@@ -1011,7 +1019,11 @@ function SettingsSidebar({
             testID="settings-add-host"
             style={sidebarItemStyle}
           >
-            <Plus size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+            <Plus
+              size={theme.iconSize.md}
+              color={theme.colors.foregroundMuted}
+              strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+            />
             <Text style={sidebarStyles.label} numberOfLines={1}>
               {t("settings.addHost")}
             </Text>
@@ -1024,7 +1036,11 @@ function SettingsSidebar({
               testID="settings-enable-built-in-daemon"
               style={sidebarItemStyle}
             >
-              <Server size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+              <Server
+                size={theme.iconSize.md}
+                color={theme.colors.foregroundMuted}
+                strokeWidth={SIDEBAR_ICON_STROKE_WIDTH}
+              />
               <Text style={sidebarStyles.label} numberOfLines={1}>
                 {t("settings.enableBuiltInDaemon")}
               </Text>
@@ -1080,7 +1096,6 @@ export interface SettingsScreenProps {
 
 export default function SettingsScreen({ view, openAddHostIntent = null }: SettingsScreenProps) {
   const router = useRouter();
-  const { theme } = useUnistyles();
   const { t } = useTranslation();
   const voiceAudioEngine = useVoiceAudioEngineOptional();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
@@ -1308,35 +1323,35 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const installedPlugins = useInstalledPlugins();
   const detailHeader = ((): {
     title: string;
-    Icon: ComponentType<{ size: number; color: string }>;
     titleAccessory?: ReactNode;
   } | null => {
     if (view.kind === "plugin") {
       const screen = installedPlugins
         .find((plugin) => plugin.serverId === view.serverId && plugin.id === view.pluginId)
         ?.settingsScreens.find((candidate) => candidate.id === view.screenId);
-      return {
-        title: `${view.pluginId} · ${screen?.title ?? t("settings.title")}`,
-        Icon: screen ? resolvePluginIcon(screen.icon) : Blocks,
-      };
+      return { title: `${view.pluginId} · ${screen?.title ?? t("settings.title")}` };
     }
     if (view.kind === "host") {
       const item = HOST_SECTION_ITEMS.find((s) => s.id === view.section);
       if (!item) return null;
-      return { title: t(item.labelKey), Icon: item.icon };
+      return { title: t(item.labelKey) };
     }
     if (view.kind === "section") {
       const item = SIDEBAR_SECTION_ITEMS.find((s) => s.id === view.section);
       if (!item) return null;
-      return { title: t(item.labelKey), Icon: item.icon };
+      return { title: t(item.labelKey) };
     }
     if (view.kind === "project") {
-      return { title: t("settings.projects"), Icon: FolderGit2 };
+      return { title: t("settings.projects") };
     }
     return null;
   })();
 
+<<<<<<< HEAD
   const content = (() => {
+=======
+  const content: ReactNode = (() => {
+>>>>>>> refs/tags/v0.10.2
     if (view.kind === "plugin")
       return (
         <PluginSettingsContent
@@ -1359,14 +1374,20 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
       );
     }
     if (view.kind === "section") {
+<<<<<<< HEAD
       const PropFreeSection = PROP_FREE_SECTIONS[view.section];
       if (PropFreeSection) return <PropFreeSection />;
+=======
+      const item = SIDEBAR_SECTION_ITEMS.find((candidate) => candidate.id === view.section);
+      if (!item || !isSectionAvailable(item, isDesktopApp)) return null;
+>>>>>>> refs/tags/v0.10.2
       switch (view.section) {
         case "general":
           return (
             <>
               <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
               <SendingSection />
+<<<<<<< HEAD
               {isDesktopApp ? (
                 <>
                   <OpenLocationSection />
@@ -1385,6 +1406,11 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
           return isDesktopApp ? <DesktopNotificationsSection /> : null;
         case "permissions":
           return isDesktopApp ? <DesktopPermissionsSection /> : null;
+=======
+              {isDesktopApp ? <OpenLocationSection /> : null}
+            </>
+          );
+>>>>>>> refs/tags/v0.10.2
         case "diagnostics":
           return (
             <DiagnosticsSection
@@ -1404,6 +1430,11 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
               isDesktopApp={isDesktopApp}
             />
           );
+<<<<<<< HEAD
+=======
+        default:
+          return item.Content ? <item.Content /> : null;
+>>>>>>> refs/tags/v0.10.2
       }
     }
     return null;
@@ -1417,14 +1448,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     );
   }
 
-  const desktopDetailHeaderLeft = detailHeader ? (
-    <>
-      <HeaderIconBadge>
-        <detailHeader.Icon size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
-      </HeaderIconBadge>
-      <ScreenTitle testID="settings-detail-header-title">{detailHeader.title}</ScreenTitle>
+  const desktopPageTitle = detailHeader ? (
+    <View style={styles.pageTitleRow}>
+      <Text style={styles.pageTitle} testID="settings-detail-header-title">
+        {detailHeader.title}
+      </Text>
       {detailHeader.titleAccessory}
-    </>
+    </View>
   ) : null;
 
   const addHostModals = (
@@ -1516,13 +1546,14 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         </WindowChromeRegion>
         <WindowChromeRegion corners="top-right">
           <View style={desktopStyles.contentPane} testID="settings-detail-pane">
-            <ScreenHeader
-              borderless={!detailHeader}
-              left={desktopDetailHeaderLeft}
-              leftStyle={desktopStyles.detailLeft}
-            />
+            {/* Keeps the titlebar drag region and window controls; the page
+                title lives in the content, like a document heading. */}
+            <ScreenHeader borderless />
             <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
-              <View style={styles.content}>{content}</View>
+              <View style={styles.content}>
+                {desktopPageTitle}
+                {content}
+              </View>
             </ScrollView>
           </View>
         </WindowChromeRegion>
@@ -1561,6 +1592,19 @@ const styles = StyleSheet.create((theme) => ({
     maxWidth: 720,
     alignSelf: "center",
   },
+  pageTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    // Line up with the section titles, which sit inset from their cards.
+    marginLeft: theme.spacing[1],
+    marginBottom: theme.spacing[6],
+  },
+  pageTitle: {
+    fontSize: theme.fontSize["4xl"],
+    fontWeight: theme.fontWeight.medium,
+    color: theme.colors.foreground,
+  },
   aboutValue: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
@@ -1578,33 +1622,6 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
   },
-  themeTrigger: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
-    paddingVertical: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  themeTriggerText: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-  },
-  terminalScrollbackInput: {
-    width: 112,
-    minHeight: 36,
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[3],
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface2,
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    textAlign: "right",
-  },
   placeholder: {
     flex: 1,
     alignItems: "center",
@@ -1617,7 +1634,7 @@ const styles = StyleSheet.create((theme) => ({
   },
 }));
 
-const desktopStyles = StyleSheet.create((theme) => ({
+const desktopStyles = StyleSheet.create({
   row: {
     flex: 1,
     flexDirection: "row",
@@ -1625,10 +1642,7 @@ const desktopStyles = StyleSheet.create((theme) => ({
   contentPane: {
     flex: 1,
   },
-  detailLeft: {
-    gap: theme.spacing[2],
-  },
-}));
+});
 
 const sidebarStyles = StyleSheet.create((theme) => ({
   desktopContainer: {
@@ -1650,12 +1664,12 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   list: {
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
-    gap: theme.spacing[1],
+    gap: theme.spacing[0.5],
   },
   groupLabel: {
     fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
-    color: theme.colors.foregroundMuted,
+    fontWeight: theme.fontWeight.normal,
+    color: theme.colors.foregroundExtraMuted,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
   },
@@ -1663,8 +1677,8 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
-    minHeight: 36,
-    paddingVertical: theme.spacing[2],
+    minHeight: 28,
+    paddingVertical: theme.spacing[1],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
   },
@@ -1684,8 +1698,8 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
-    minHeight: 36,
-    paddingVertical: theme.spacing[2],
+    minHeight: 28,
+    paddingVertical: theme.spacing[1],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
   },

@@ -2040,11 +2040,20 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+<<<<<<< HEAD
     await distribution?.stop();
     hostIntegrations.dispose();
     localCredential = null;
     await deleteLocalCredential(config.paseoHome);
     // Keep registrations stable until the provider sessions close; stop plugins below.
+=======
+    localCredential = null;
+    await deleteLocalCredential(config.paseoHome);
+    // Stop tracking plugin provider registrations before anything tears plugins
+    // down, so plugin shutdown cannot withdraw a provider from under an agent
+    // that is still open. Plugins themselves are stopped once every session
+    // they serve has been closed, further down.
+>>>>>>> refs/tags/v0.10.2
     unsubscribePluginProviders();
     await hubRelationships.stop();
     workspaceReconciliation.dispose();
@@ -2057,6 +2066,7 @@ export async function createPaseoDaemon(
     detachAgentStoragePersistence();
     await agentStorage.flush().catch(() => undefined);
     await agentProviderRuntime.shutdown();
+<<<<<<< HEAD
     // W1 row 9: seal this boot at the end of the orderly shutdown, synchronously before the host closes, so no
     // input can be admitted after the counters are captured. A boot that never gets here has no seal.
     try {
@@ -2068,6 +2078,8 @@ export async function createPaseoDaemon(
       logger.warn({ err }, "Failed to seal the daemon boot record");
     }
     trustedPlugins.close();
+=======
+>>>>>>> refs/tags/v0.10.2
     await pluginRuntime.stopAllPlugins();
     terminalManager.killAll();
     await speechService.stop();

@@ -33,6 +33,8 @@ See [self-hosting and recovery](docs/relay-self-host.md). Identity rotation requ
 
 Relay admission requires the paired-device handshake and its fresh owner grants. A password or anonymous `hello` never substitutes for the device identity.
 
+When a daemon password is configured, new relay clients send it in the encrypted `hello` message. This release still admits relay clients that send no credential so existing mobile builds continue to connect. A wrong password is rejected. The next release will require the password for relay connections after updated mobile builds are available.
+
 ## Local daemon trust boundary
 
 By default, the daemon binds to `127.0.0.1`. With no password configured, anything that can reach the daemon socket can control the daemon. Loopback is reachable by other users on the machine and by some forwarding tools.
