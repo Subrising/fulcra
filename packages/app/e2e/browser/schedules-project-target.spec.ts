@@ -35,7 +35,10 @@ async function selectModelByLabel(page: Page, label: string): Promise<void> {
   await page.getByRole("button", { name: /select model/i }).click();
   const popup = page.getByTestId("combobox-desktop-container");
   await expect(popup).toBeVisible({ timeout: 30_000 });
-  const searchInput = page.getByTestId("model-search-input").first();
+  const searchInput = page
+    .getByTestId("model-search-input")
+    .or(page.getByTestId("model-search-all-input"))
+    .filter({ visible: true });
   await expect(searchInput).toBeVisible({ timeout: 30_000 });
   await searchInput.fill(label);
   const option = popup.getByText(new RegExp(`^${escapeRegex(label)}$`, "i")).first();

@@ -1,3 +1,4 @@
+import { workspaceAgentTabByTitle } from "../support/helpers/workspace-tabs";
 import type { Locator } from "@playwright/test";
 import { expect, test, type Page } from "../support/fixtures";
 import { createIdleAgent } from "../support/helpers/archive-tab";
@@ -29,7 +30,7 @@ async function openAgent(page: Page, agent: { id: string; workspaceId: string })
 }
 
 async function openAgentTabTooltip(page: Page, agentId: string, title: string): Promise<Locator> {
-  await page.getByRole("button", { name: normalizedTitle(title), exact: true }).hover();
+  await workspaceAgentTabByTitle(page, normalizedTitle(title)).hover();
   const tooltip = page.getByTestId(`workspace-tab-tooltip-agent_${agentId}`);
   await expect(tooltip).toBeVisible({ timeout: 10_000 });
   return tooltip;

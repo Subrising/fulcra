@@ -244,3 +244,10 @@ export async function sampleWorkspaceTabIds(
   }
   return snapshots;
 }
+
+export function workspaceAgentTabByTitle(page: Page, title: string): Locator {
+  return page
+    .getByTestId(/^workspace-tab-agent_/)
+    .and(page.getByRole("button", { name: title, exact: true }))
+    .filter({ visible: true });
+}

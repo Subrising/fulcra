@@ -52,8 +52,8 @@ test("P6 only successful bearer validation creates owner authentication evidence
       password,
     );
     expect(close).not.toHaveBeenCalled();
-    expect(pause).toHaveBeenCalledTimes(password ? 1 : 0);
-    expect(resume).toHaveBeenCalledTimes(password ? 1 : 0);
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(resume).toHaveBeenCalledTimes(1);
     expect(server.pendingPasswordChecks).toBe(0);
     const admission = attach.mock.calls[0]?.[4];
     expect(admission).toMatchObject({ principalId: "owner" });

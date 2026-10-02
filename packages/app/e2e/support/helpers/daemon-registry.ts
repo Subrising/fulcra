@@ -6,8 +6,13 @@ import type {
 export const TEST_HOST_LABEL = "localhost";
 
 export const TEST_PROVIDER_PREFERENCES = {
-  claude: { model: "haiku" },
-  codex: { model: "gpt-5.4-mini", thinkingByModel: { "gpt-5.4-mini": "low" } },
+  claude: { model: "haiku", modelChosenByUser: true },
+  codex: {
+    model: "gpt-5.4-mini",
+    modelChosenByUser: true,
+    thinkingByModel: { "gpt-5.4-mini": "low" },
+    thinkingChosenByModel: { "gpt-5.4-mini": true },
+  },
 } satisfies Record<string, ProviderPreferences>;
 
 export function buildDirectTcpConnection(endpoint: string): {
@@ -41,7 +46,7 @@ export function buildSeededHost(input: {
 
 export const TEST_MOCK_PROVIDER_PREFERENCES = {
   ...TEST_PROVIDER_PREFERENCES,
-  mock: { model: "ten-second-stream" },
+  mock: { model: "ten-second-stream", modelChosenByUser: true },
 } satisfies Record<string, ProviderPreferences>;
 
 export function buildCreateAgentPreferences() {

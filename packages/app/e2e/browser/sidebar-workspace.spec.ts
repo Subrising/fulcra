@@ -571,7 +571,9 @@ test.describe("Half-screen desktop layout", () => {
       await openWorkspaceFromSidebar(page, workspace.workspaceId);
 
       await openFilesPanel(page);
-      const explorerToggle = page.getByTestId("workspace-explorer-toggle").first();
+      const explorerToggle = page
+        .getByTestId("workspace-explorer-toggle")
+        .filter({ visible: true });
       await expect(
         page.getByTestId("explorer-sidebar-tab-files").filter({ visible: true }),
       ).toBeVisible();

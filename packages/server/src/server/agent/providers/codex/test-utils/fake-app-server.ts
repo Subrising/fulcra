@@ -20,6 +20,7 @@ interface FakeLegacyCommand {
   output: string;
 }
 interface FakeSilentCommand {
+  turnId?: string;
   threadId: string;
   callId: string;
   command: string;
@@ -464,14 +465,18 @@ export function createFakeCodexAppServer(
       });
     },
     completesSilentCommand(params) {
-      completeItem(params.threadId, {
-        type: "commandExecution",
-        id: params.callId,
-        status: "completed",
-        command: params.command,
-        cwd: params.cwd,
-        aggregatedOutput: null,
-        exitCode: 0,
+      writeNotification("item/completed", {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        item: {
+          type: "commandExecution",
+          id: params.callId,
+          status: "completed",
+          command: params.command,
+          cwd: params.cwd,
+          aggregatedOutput: null,
+          exitCode: 0,
+        },
       });
     },
     completesSilentLegacyCommand(params) {

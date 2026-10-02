@@ -299,7 +299,7 @@ function createVoiceAssistantWebSocketServer(params: {
     httpServer,
     createStub<pino.Logger>(createLogger()),
     "srv-test",
-    createStub<AgentManager>(agentManager),
+    createStub<AgentManager>({ ...agentManager, setNativeMessageReceipts: vi.fn() }),
     createStub<AgentStorage>({}),
     createStub<DownloadTokenStore>({}),
     "/tmp/paseo-browser-tools-websocket-test",

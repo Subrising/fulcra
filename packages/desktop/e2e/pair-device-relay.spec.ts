@@ -16,7 +16,6 @@ import {
   expectRelayConsent,
   openPairDeviceModal,
   openPairDeviceFromHome,
-  openRelaySecurityDocs,
   observePairingOfferRequests,
   prepareLocalPairingHost,
   reloadAndOpenPairDevice,
@@ -35,30 +34,21 @@ test.describe("local device relay pairing", () => {
   let relayEnableDaemon: IsolatedHostDaemon;
   let relayOverrideDaemon: IsolatedHostDaemon;
   let relayEnabledDaemon: IsolatedHostDaemon;
-  let invalidRelayDaemon: IsolatedHostDaemon;
 
   test.beforeAll(async () => {
-    [
-      relayOffDaemon,
-      relayEnableDaemon,
-      relayOverrideDaemon,
-      relayEnabledDaemon,
-      invalidRelayDaemon,
-    ] = await Promise.all([
-      startIsolatedHostDaemon("pair-device-relay-off", {
-        mutableRelay: { enabled: false },
-      }),
-      startIsolatedHostDaemon("pair-device-relay-enable", {
-        mutableRelay: { enabled: false },
-      }),
-      startIsolatedHostDaemon("pair-device-relay-override"),
-      startIsolatedHostDaemon("pair-device-relay-enabled", {
-        mutableRelay: { enabled: true },
-      }),
-      startIsolatedHostDaemon("pair-device-relay-invalid", {
-        mutableRelay: { enabled: false, endpoint: "invalid-endpoint" },
-      }),
-    ]);
+    [relayOffDaemon, relayEnableDaemon, relayOverrideDaemon, relayEnabledDaemon] =
+      await Promise.all([
+        startIsolatedHostDaemon("pair-device-relay-off", {
+          mutableRelay: { enabled: false },
+        }),
+        startIsolatedHostDaemon("pair-device-relay-enable", {
+          mutableRelay: { enabled: false },
+        }),
+        startIsolatedHostDaemon("pair-device-relay-override"),
+        startIsolatedHostDaemon("pair-device-relay-enabled", {
+          mutableRelay: { enabled: true },
+        }),
+      ]);
   });
 
   test.afterAll(async () => {
@@ -67,7 +57,6 @@ test.describe("local device relay pairing", () => {
       relayEnableDaemon.close(),
       relayOverrideDaemon.close(),
       relayEnabledDaemon.close(),
-      invalidRelayDaemon.close(),
     ]);
   });
 
@@ -80,10 +69,15 @@ test.describe("local device relay pairing", () => {
     await expectRelayConsent(page);
   });
 
-  test("opens relay security documentation through the desktop opener", async ({ page }) => {
+  test("relay consent keeps encryption details and explicit enable or decline choices", async ({
+    page,
+  }) => {
     await prepareLocalPairingHost(page, relayOffDaemon);
     await openPairDeviceModal(page);
-    await openRelaySecurityDocs(page);
+    await expectRelayConsent(page);
+    await expect(page.getByTestId("host-page-pair-device-card")).toContainText(
+      "end-to-end encrypted",
+    );
   });
 
   test("opens the same relay consent dialog from the home screen", async ({ page }) => {
@@ -141,12 +135,13 @@ test.describe("local device relay pairing", () => {
     await retryRelayAndExpectFailure(page);
   });
 
-  test("keeps consent actionable when relay transport startup fails", async ({ page }) => {
-    await prepareLocalPairingHost(page, invalidRelayDaemon);
-    await openPairDeviceModal(page);
-    await expectRelayConsent(page);
-    await enableRelayAndExpectFailure(page, "Invalid host:port");
-    await retryRelayAndExpectFailure(page, "Invalid host:port");
+  test("refuses a malformed relay endpoint before daemon readiness", async () => {
+    // Endpoint validation now happens at boot, even when relay starts disabled.
+    await expect(
+      startIsolatedHostDaemon("pair-device-relay-invalid", {
+        mutableRelay: { enabled: false, endpoint: "invalid-endpoint" },
+      }),
+    ).rejects.toThrow("Invalid host:port");
   });
 
   test("shows an offer immediately when relay is already enabled", async ({ page }) => {

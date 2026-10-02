@@ -1,9 +1,11 @@
+import { requireTrustedBundleHost } from "./trusted-platform.js";
 import { realpathSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 /** Derive solely from the packaged worker location, never a persisted plugin path. */
 export function packagedPluginsDirectory(moduleUrl: string, enabled: boolean): string | undefined {
   if (!enabled) return undefined;
+  requireTrustedBundleHost();
   const entry = fileURLToPath(moduleUrl);
   const marker = `${path.sep}Contents${path.sep}Resources${path.sep}`;
   const offset = entry.lastIndexOf(marker);

@@ -102,6 +102,39 @@ describe("buildProjects", () => {
     });
   });
 
+  test("a grouped project retains each host's own renamed display name", () => {
+    const primary = descriptor("prj_a", "shared", "/a/app");
+    primary.projectCustomName = "Primary-only name";
+    const secondary = descriptor("prj_b", "shared", "/b/app");
+    const result = buildProjects({
+      hosts: [
+        {
+          serverId: "host-a",
+          serverName: "Host A",
+          isOnline: true,
+          projects: [primary],
+          workspaces: [],
+        },
+        {
+          serverId: "host-b",
+          serverName: "Host B",
+          isOnline: true,
+          projects: [secondary],
+          workspaces: [],
+        },
+      ],
+    });
+    expect(result.projects).toHaveLength(1);
+    expect(result.projects[0]).toMatchObject({
+      projectName: "Primary-only name",
+      hosts: [
+        { serverId: "host-a", projectId: "prj_a", projectName: "Primary-only name" },
+        { serverId: "host-b", projectId: "prj_b", projectName: "acme/app" },
+      ],
+    });
+    expect(secondary.projectCustomName).toBeNull();
+  });
+
   test("keeps a new project's own root when it has not created a workspace", () => {
     const result = buildProjects({
       hosts: [

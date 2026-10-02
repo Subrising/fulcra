@@ -218,6 +218,8 @@ interface TestDeps {
 function buildAgentManagerSpies() {
   return {
     createAgent: vi.fn(),
+    captureFinishNotificationCheck: vi.fn(() => () => {}),
+    nativeReportOwnsFinish: vi.fn(() => false),
     waitForAgentEvent: vi.fn().mockResolvedValue({
       status: "idle",
       permission: null,

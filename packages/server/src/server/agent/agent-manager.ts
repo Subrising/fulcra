@@ -3121,7 +3121,13 @@ export class AgentManager {
       this.invokeReportRelaunchGuard(reportRelaunchBeforeClose);
       await this.closeReloadedSession(existing.session, agentId);
       await this.drainSessionEvents(agentId);
-      this.cancelRunningProviderSubagents(agentId);
+      if (rehydrateFromDisk) {
+        for (const event of this.providerSubagents.deleteParent(agentId)) {
+          this.dispatch({ type: "provider_subagent", event });
+        }
+      } else {
+        this.cancelRunningProviderSubagents(agentId);
+      }
       closedExisting = await this.prepareAgentForClosure(existing, "agent reloaded");
       await this.persistSnapshot(closedExisting);
       this.assertAcceptingAgentRegistrations();

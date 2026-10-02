@@ -1,3 +1,4 @@
+// Confined-image cases require POSIX descriptor proofs; provider-image-output.test.ts pairs them with real Win32 refusal.
 import { registerNativeEvidenceSink } from "../../native-evidence-origin.js";
 import { describe, expect, test, vi } from "vitest";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -1366,11 +1367,14 @@ describe("Codex app-server provider", () => {
     );
 
     try {
-      await session.connect();
+      const run = session.run("Merge the change.");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "silent-turn" });
       const nextTimelineItem = waitForNextTimelineItem(session);
 
       appServer.completesSilentCommand({
         threadId: "thread-1",
+        turnId: "silent-turn",
         callId: "silent-merge",
         command: "gh pr merge 2030 --squash",
         cwd: "/workspace/project",
@@ -1380,6 +1384,7 @@ describe("Codex app-server provider", () => {
       await expect(nextTimelineItem).resolves.toEqual({
         type: "timeline",
         provider: "codex",
+        turnId: "codex-turn-0",
         item: {
           type: "tool_call",
           callId: "silent-merge",
@@ -1394,6 +1399,8 @@ describe("Codex app-server provider", () => {
           },
         },
       });
+      appServer.completeTurn({ threadId: "thread-1" });
+      await run;
       appServer.assertNoErrors();
     } finally {
       await session.close();
@@ -2665,23 +2672,26 @@ describe("Codex app-server provider", () => {
     );
   });
 
-  test("maps image prompt blocks to Codex localImage input", async () => {
-    const input = await codexAppServerTurnInputFromPrompt(
-      [
-        { type: "text", text: "hello" },
-        { type: "image", mimeType: "image/png", data: ONE_BY_ONE_PNG_BASE64 },
-      ],
-      logger,
-    );
-    const localImage = input.find((item) => (item as { type?: string })?.type === "localImage") as
-      | { type: "localImage"; path?: string }
-      | undefined;
-    expect(localImage?.path).toBeTypeOf("string");
-    if (localImage?.path) {
-      expect(existsSync(localImage.path)).toBe(true);
-      rmSync(localImage.path, { force: true });
-    }
-  });
+  test.runIf(process.platform !== "win32")(
+    "maps image prompt blocks to Codex localImage input",
+    async () => {
+      const input = await codexAppServerTurnInputFromPrompt(
+        [
+          { type: "text", text: "hello" },
+          { type: "image", mimeType: "image/png", data: ONE_BY_ONE_PNG_BASE64 },
+        ],
+        logger,
+      );
+      const localImage = input.find(
+        (item) => (item as { type?: string })?.type === "localImage",
+      ) as { type: "localImage"; path?: string } | undefined;
+      expect(localImage?.path).toBeTypeOf("string");
+      if (localImage?.path) {
+        expect(existsSync(localImage.path)).toBe(true);
+        rmSync(localImage.path, { force: true });
+      }
+    },
+  );
 
   test("maps github_pr prompt attachments to Codex text input", async () => {
     const input = await codexAppServerTurnInputFromPrompt(
@@ -3228,53 +3238,56 @@ describe("Codex app-server provider", () => {
     });
   });
 
-  test("renders child MCP image results in the provider subagent timeline", () => {
-    const session = createSession();
-    const events: AgentStreamEvent[] = [];
-    session.subscribe((event) => events.push(event));
-    asInternals(session).handleNotification("item/completed", {
-      threadId: "test-thread",
-      item: {
-        type: "subAgentActivity",
-        id: "spawn-image-child",
-        kind: "started",
-        agentThreadId: "image-child-thread",
-        agentPath: "/root/image-child",
-      },
-    });
-
-    asInternals(session).handleNotification("item/completed", {
-      threadId: "image-child-thread",
-      item: {
-        id: "child-mcp-image",
-        type: "mcpToolCall",
-        status: "completed",
-        server: "paseo",
-        tool: "browser_screenshot",
-        arguments: {},
-        result: {
-          content: [{ type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" }],
+  test.runIf(process.platform !== "win32")(
+    "renders child MCP image results in the provider subagent timeline",
+    () => {
+      const session = createSession();
+      const events: AgentStreamEvent[] = [];
+      session.subscribe((event) => events.push(event));
+      asInternals(session).handleNotification("item/completed", {
+        threadId: "test-thread",
+        item: {
+          type: "subAgentActivity",
+          id: "spawn-image-child",
+          kind: "started",
+          agentThreadId: "image-child-thread",
+          agentPath: "/root/image-child",
         },
-      },
-    });
+      });
 
-    const childItems = events.flatMap((event) =>
-      event.type === "provider_subagent" &&
-      event.event.type === "timeline" &&
-      event.event.id === "image-child-thread"
-        ? [event.event.item]
-        : [],
-    );
-    expect(childItems).toHaveLength(2);
-    expect(childItems[0]).toMatchObject({ type: "tool_call", callId: "child-mcp-image" });
-    expect(childItems[1]).toMatchObject({ type: "assistant_message" });
-    if (childItems[1]?.type !== "assistant_message") {
-      throw new Error("Expected child image markdown");
-    }
-    const source = markdownImageSource(childItems[1].text);
-    expect(existsSync(source)).toBe(true);
-    rmSync(source, { force: true });
-  });
+      asInternals(session).handleNotification("item/completed", {
+        threadId: "image-child-thread",
+        item: {
+          id: "child-mcp-image",
+          type: "mcpToolCall",
+          status: "completed",
+          server: "paseo",
+          tool: "browser_screenshot",
+          arguments: {},
+          result: {
+            content: [{ type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" }],
+          },
+        },
+      });
+
+      const childItems = events.flatMap((event) =>
+        event.type === "provider_subagent" &&
+        event.event.type === "timeline" &&
+        event.event.id === "image-child-thread"
+          ? [event.event.item]
+          : [],
+      );
+      expect(childItems).toHaveLength(2);
+      expect(childItems[0]).toMatchObject({ type: "tool_call", callId: "child-mcp-image" });
+      expect(childItems[1]).toMatchObject({ type: "assistant_message" });
+      if (childItems[1]?.type !== "assistant_message") {
+        throw new Error("Expected child image markdown");
+      }
+      const source = markdownImageSource(childItems[1].text);
+      expect(existsSync(source)).toBe(true);
+      rmSync(source, { force: true });
+    },
+  );
 
   test("renders a child user message once across lifecycle notifications", () => {
     const session = createSession();
@@ -5829,158 +5842,164 @@ describe("Codex app-server provider", () => {
     },
   );
 
-  test("materializes imageGeneration base64 results before rendering markdown", () => {
-    const session = createSession();
-    const events: AgentStreamEvent[] = [];
-    session.subscribe((event) => events.push(event));
+  test.runIf(process.platform !== "win32")(
+    "materializes imageGeneration base64 results before rendering markdown",
+    () => {
+      const session = createSession();
+      const events: AgentStreamEvent[] = [];
+      session.subscribe((event) => events.push(event));
 
-    asInternals(session).handleNotification("item/completed", {
-      item: {
-        id: "image-generation-base64",
-        type: "imageGeneration",
-        status: "completed",
-        result: `data:image/png;base64,${ONE_BY_ONE_PNG_BASE64}`,
-      },
-    });
-
-    expect(events).toHaveLength(1);
-    const event = events[0];
-    expect(event).toMatchObject({
-      type: "timeline",
-      provider: "codex",
-      turnId: "test-turn",
-      item: { type: "assistant_message" },
-    });
-    if (event?.type !== "timeline" || event.item.type !== "assistant_message") {
-      throw new Error("Expected assistant timeline event");
-    }
-    expect(event.item.text).not.toContain("data:image");
-    expect(event.item.text).not.toContain(ONE_BY_ONE_PNG_BASE64);
-    const source = markdownImageSource(event.item.text);
-    expect(source).toMatch(/paseo-attachments(?:-[^\\/]+)?[\\/].+\.png$/);
-    expect(existsSync(source)).toBe(true);
-    rmSync(source, { force: true });
-  });
-
-  test("mcpToolCall image content emits a completed tool call plus assistant markdown image", async () => {
-    const appServer = createFakeCodexAppServer();
-    const session = new CodexAppServerAgentSession(
-      createConfig({ cwd: "/workspace/project" }),
-      null,
-      createTestLogger(),
-      async () => appServer.child,
-    );
-    const events: AgentStreamEvent[] = [];
-    const timelineEvents: Array<Extract<AgentStreamEvent, { type: "timeline" }>> = [];
-    const timelineItemsReceived = new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        unsubscribe();
-        reject(new Error("Timed out waiting for MCP image timeline events"));
-      }, 1000);
-      const unsubscribe = session.subscribe((event) => {
-        events.push(event);
-        if (event.type !== "timeline") {
-          return;
-        }
-        timelineEvents.push(event);
-        if (timelineEvents.length === 2) {
-          clearTimeout(timeout);
-          unsubscribe();
-          resolve();
-        }
+      asInternals(session).handleNotification("item/completed", {
+        item: {
+          id: "image-generation-base64",
+          type: "imageGeneration",
+          status: "completed",
+          result: `data:image/png;base64,${ONE_BY_ONE_PNG_BASE64}`,
+        },
       });
-    });
 
-    try {
-      const { turnId } = await session.startTurn("capture a browser screenshot");
-      appServer.child.stdout.write(
-        `${JSON.stringify({
-          method: "item/completed",
-          params: {
-            item: {
-              id: "mcp-browser-screenshot",
-              type: "mcpToolCall",
-              status: "completed",
-              server: "paseo",
-              tool: "browser_screenshot",
-              arguments: { browserId: "11111111-1111-4111-8111-111111111111" },
-              result: {
-                content: [
-                  { type: "text", text: "Captured browser screenshot (1x1)." },
-                  { type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" },
-                ],
-                structuredContent: {
-                  ok: true,
-                  result: {
-                    command: "screenshot",
-                    browserId: "11111111-1111-4111-8111-111111111111",
-                    mimeType: "image/png",
-                    width: 1,
-                    height: 1,
-                  },
-                },
-              },
-            },
-          },
-        })}\n`,
-      );
-
-      await timelineItemsReceived;
-
-      expect(timelineEvents).toEqual([
-        {
-          type: "timeline",
-          provider: "codex",
-          turnId,
-          item: {
-            type: "tool_call",
-            callId: "mcp-browser-screenshot",
-            name: "paseo.browser_screenshot",
-            status: "completed",
-            error: null,
-            detail: {
-              type: "unknown",
-              input: { browserId: "11111111-1111-4111-8111-111111111111" },
-              output: {
-                content: [
-                  { type: "text", text: "Captured browser screenshot (1x1)." },
-                  { type: "text", text: "[image]" },
-                ],
-                structuredContent: {
-                  ok: true,
-                  result: {
-                    command: "screenshot",
-                    browserId: "11111111-1111-4111-8111-111111111111",
-                    mimeType: "image/png",
-                    width: 1,
-                    height: 1,
-                  },
-                },
-              },
-            },
-          },
-        },
-        {
-          type: "timeline",
-          provider: "codex",
-          turnId,
-          item: expect.objectContaining({ type: "assistant_message" }),
-        },
-      ]);
-      const imageEvent = timelineEvents[1];
-      if (imageEvent.item.type !== "assistant_message") {
-        throw new Error("Expected assistant image timeline event");
+      expect(events).toHaveLength(1);
+      const event = events[0];
+      expect(event).toMatchObject({
+        type: "timeline",
+        provider: "codex",
+        turnId: "test-turn",
+        item: { type: "assistant_message" },
+      });
+      if (event?.type !== "timeline" || event.item.type !== "assistant_message") {
+        throw new Error("Expected assistant timeline event");
       }
-      expect(JSON.stringify(events)).not.toContain(ONE_BY_ONE_PNG_BASE64);
-      const source = markdownImageSource(imageEvent.item.text);
+      expect(event.item.text).not.toContain("data:image");
+      expect(event.item.text).not.toContain(ONE_BY_ONE_PNG_BASE64);
+      const source = markdownImageSource(event.item.text);
       expect(source).toMatch(/paseo-attachments(?:-[^\\/]+)?[\\/].+\.png$/);
       expect(existsSync(source)).toBe(true);
       rmSync(source, { force: true });
-      appServer.assertNoErrors();
-    } finally {
-      await session.close();
-    }
-  });
+    },
+  );
+
+  test.runIf(process.platform !== "win32")(
+    "mcpToolCall image content emits a completed tool call plus assistant markdown image",
+    async () => {
+      const appServer = createFakeCodexAppServer();
+      const session = new CodexAppServerAgentSession(
+        createConfig({ cwd: "/workspace/project" }),
+        null,
+        createTestLogger(),
+        async () => appServer.child,
+      );
+      const events: AgentStreamEvent[] = [];
+      const timelineEvents: Array<Extract<AgentStreamEvent, { type: "timeline" }>> = [];
+      const timelineItemsReceived = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          unsubscribe();
+          reject(new Error("Timed out waiting for MCP image timeline events"));
+        }, 1000);
+        const unsubscribe = session.subscribe((event) => {
+          events.push(event);
+          if (event.type !== "timeline") {
+            return;
+          }
+          timelineEvents.push(event);
+          if (timelineEvents.length === 2) {
+            clearTimeout(timeout);
+            unsubscribe();
+            resolve();
+          }
+        });
+      });
+
+      try {
+        const { turnId } = await session.startTurn("capture a browser screenshot");
+        appServer.child.stdout.write(
+          `${JSON.stringify({
+            method: "item/completed",
+            params: {
+              item: {
+                id: "mcp-browser-screenshot",
+                type: "mcpToolCall",
+                status: "completed",
+                server: "paseo",
+                tool: "browser_screenshot",
+                arguments: { browserId: "11111111-1111-4111-8111-111111111111" },
+                result: {
+                  content: [
+                    { type: "text", text: "Captured browser screenshot (1x1)." },
+                    { type: "image", data: ONE_BY_ONE_PNG_BASE64, mimeType: "image/png" },
+                  ],
+                  structuredContent: {
+                    ok: true,
+                    result: {
+                      command: "screenshot",
+                      browserId: "11111111-1111-4111-8111-111111111111",
+                      mimeType: "image/png",
+                      width: 1,
+                      height: 1,
+                    },
+                  },
+                },
+              },
+            },
+          })}\n`,
+        );
+
+        await timelineItemsReceived;
+
+        expect(timelineEvents).toEqual([
+          {
+            type: "timeline",
+            provider: "codex",
+            turnId,
+            item: {
+              type: "tool_call",
+              callId: "mcp-browser-screenshot",
+              name: "paseo.browser_screenshot",
+              status: "completed",
+              error: null,
+              detail: {
+                type: "unknown",
+                input: { browserId: "11111111-1111-4111-8111-111111111111" },
+                output: {
+                  content: [
+                    { type: "text", text: "Captured browser screenshot (1x1)." },
+                    { type: "text", text: "[image]" },
+                  ],
+                  structuredContent: {
+                    ok: true,
+                    result: {
+                      command: "screenshot",
+                      browserId: "11111111-1111-4111-8111-111111111111",
+                      mimeType: "image/png",
+                      width: 1,
+                      height: 1,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          {
+            type: "timeline",
+            provider: "codex",
+            turnId,
+            item: expect.objectContaining({ type: "assistant_message" }),
+          },
+        ]);
+        const imageEvent = timelineEvents[1];
+        if (imageEvent.item.type !== "assistant_message") {
+          throw new Error("Expected assistant image timeline event");
+        }
+        expect(JSON.stringify(events)).not.toContain(ONE_BY_ONE_PNG_BASE64);
+        const source = markdownImageSource(imageEvent.item.text);
+        expect(source).toMatch(/paseo-attachments(?:-[^\\/]+)?[\\/].+\.png$/);
+        expect(existsSync(source)).toBe(true);
+        rmSync(source, { force: true });
+        appServer.assertNoErrors();
+      } finally {
+        await session.close();
+      }
+    },
+  );
 
   test("ignores incomplete imageGeneration thread items without failing the turn", () => {
     const session = createSession();
@@ -6944,9 +6963,13 @@ describe("native queued provider preparation", () => {
   );
 });
 
-test.each(["accepted", "native-replace", "new-turn", "close"])(
+test.for(["accepted", "native-replace", "new-turn", "close"])(
   "native evidence captured transport %s fences held preparation before image materialization",
-  async (mutation) => {
+  async (mutation, context) => {
+    if (process.platform === "win32" && mutation === "accepted")
+      context.skip(
+        "Accepted confined images require POSIX; provider-image-output.test.ts asserts Win32 refusal",
+      );
     const server = createFakeCodexAppServer();
     const { session } = await startPublicSteeringSession(server);
     let entered!: () => void, release!: () => void;
@@ -7015,13 +7038,17 @@ test.each(["accepted", "native-replace", "new-turn", "close"])(
   },
 );
 
-test.each(
+test.for(
   [true, false].flatMap((linked) =>
     ["imageGeneration", "fileChange", "commandExecution"].map((type) => ({ linked, type })),
   ),
 )(
   "native completion terminal ordering %j survives same-buffer turn completion",
-  async ({ linked, type }) => {
+  async ({ linked, type }, context) => {
+    if (process.platform === "win32" && type === "imageGeneration")
+      context.skip(
+        "Win32 image confinement is unsupported; provider-image-output.test.ts asserts production refusal",
+      );
     const server = createFakeCodexAppServer();
     const { session } = await startPublicSteeringSession(server);
     let release!: () => void;

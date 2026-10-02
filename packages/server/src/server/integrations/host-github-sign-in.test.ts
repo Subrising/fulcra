@@ -127,57 +127,61 @@ describe("this Mac's GitHub sign-in", () => {
     expect(gh.calls).toHaveLength(4);
   });
 
-  it("runs a real gh without passing or keeping its token (stubbed executable)", async () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "fulcra-gh-stub-"));
-    try {
-      const argvLog = path.join(directory, "argv.log");
-      const envLog = path.join(directory, "env.log");
-      const ghPath = path.join(directory, "gh");
-      writeFileSync(
-        ghPath,
-        [
-          "#!/bin/sh",
-          `printf '%s\\n' "$*" >> '${argvLog}'`,
-          `printf 'prompt=%s token=%s\\n' "$GH_PROMPT_DISABLED" "\${GH_TOKEN:+set}" >> '${envLog}'`,
-          'case "$1 $2" in',
-          `  "auth status") echo '["github.com"]' ;;`,
-          `  "api user") echo '{"login":"dzgray","id":42}' ;;`,
-          "  *) exit 1 ;;",
-          "esac",
-        ].join("\n"),
-      );
-      chmodSync(ghPath, 0o755);
-      const logged: string[] = [];
-      const signIn = createHostGithubSignIn({
-        resolveGhPath: async () => ghPath,
-        log: (message, fields) => logged.push(JSON.stringify({ message, fields })),
-      });
-      const previous = process.env.GH_TOKEN;
-      process.env.GH_TOKEN = CANARY;
-      let result: Awaited<ReturnType<typeof signIn.read>>;
+  // This real-spawn fixture is a POSIX shell executable. Ordinary injected gh behavior stays cross-platform.
+  it.runIf(process.platform !== "win32")(
+    "runs a real gh without passing or keeping its token (stubbed executable)",
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), "fulcra-gh-stub-"));
       try {
-        result = await signIn.read();
+        const argvLog = path.join(directory, "argv.log");
+        const envLog = path.join(directory, "env.log");
+        const ghPath = path.join(directory, "gh");
+        writeFileSync(
+          ghPath,
+          [
+            "#!/bin/sh",
+            `printf '%s\\n' "$*" >> '${argvLog}'`,
+            `printf 'prompt=%s token=%s\\n' "$GH_PROMPT_DISABLED" "\${GH_TOKEN:+set}" >> '${envLog}'`,
+            'case "$1 $2" in',
+            `  "auth status") echo '["github.com"]' ;;`,
+            `  "api user") echo '{"login":"dzgray","id":42}' ;;`,
+            "  *) exit 1 ;;",
+            "esac",
+          ].join("\n"),
+        );
+        chmodSync(ghPath, 0o755);
+        const logged: string[] = [];
+        const signIn = createHostGithubSignIn({
+          resolveGhPath: async () => ghPath,
+          log: (message, fields) => logged.push(JSON.stringify({ message, fields })),
+        });
+        const previous = process.env.GH_TOKEN;
+        process.env.GH_TOKEN = CANARY;
+        let result: Awaited<ReturnType<typeof signIn.read>>;
+        try {
+          result = await signIn.read();
+        } finally {
+          if (previous === undefined) delete process.env.GH_TOKEN;
+          else process.env.GH_TOKEN = previous;
+        }
+        expect(result).toEqual({
+          status: "signed-in",
+          identities: [{ site: null, login: "dzgray", id: 42 }],
+        });
+        // gh keeps using its own login (an inherited GH_TOKEN stays gh's business), prompts are off,
+        // and nothing Fulcra keeps or logs contains a token.
+        expect(readFileSync(envLog, "utf8")).toContain("prompt=1");
+        const argv = readFileSync(argvLog, "utf8");
+        expect(argv).not.toContain(CANARY);
+        expect(argv).not.toContain("--show-token");
+        expect(JSON.stringify(result)).not.toContain(CANARY);
+        expect(logged.join("\n")).not.toContain(CANARY);
+        expect(logged.join("\n")).not.toContain("dzgray");
       } finally {
-        if (previous === undefined) delete process.env.GH_TOKEN;
-        else process.env.GH_TOKEN = previous;
+        rmSync(directory, { recursive: true, force: true });
       }
-      expect(result).toEqual({
-        status: "signed-in",
-        identities: [{ site: null, login: "dzgray", id: 42 }],
-      });
-      // gh keeps using its own login (an inherited GH_TOKEN stays gh's business), prompts are off,
-      // and nothing Fulcra keeps or logs contains a token.
-      expect(readFileSync(envLog, "utf8")).toContain("prompt=1");
-      const argv = readFileSync(argvLog, "utf8");
-      expect(argv).not.toContain(CANARY);
-      expect(argv).not.toContain("--show-token");
-      expect(JSON.stringify(result)).not.toContain(CANARY);
-      expect(logged.join("\n")).not.toContain(CANARY);
-      expect(logged.join("\n")).not.toContain("dzgray");
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });
 
 describe("host integrations wiring", () => {
@@ -211,3 +215,18 @@ describe("host integrations wiring", () => {
     }
   });
 });
+
+it.runIf(process.platform === "win32")(
+  "Windows rejects a POSIX gh stub without claiming an authenticated identity",
+  async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "fulcra-gh-windows-"));
+    try {
+      const executable = path.join(directory, "gh");
+      writeFileSync(executable, '#!/bin/sh\necho \'{"login":"forged","id":42}\'\n');
+      const signIn = createHostGithubSignIn({ resolveGhPath: async () => executable });
+      expect(await signIn.read()).toEqual({ status: "signed-out" });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

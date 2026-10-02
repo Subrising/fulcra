@@ -446,7 +446,11 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
   const setThinkingOptionFromUser = useCallback(
     (thinkingOptionId: string) => {
       dispatch({ type: "SET_THINKING_OPTION_FROM_USER", thinkingOptionId });
-      const { provider, model: modelId } = formState;
+      const provider = formState.provider;
+      // A draft can follow the default model without pinning it. Effort still belongs to the displayed model.
+      const modelId =
+        resolveEffectiveModel(availableModels, formState.model)?.id ||
+        resolveDefaultModelId(availableModels);
       if (provider && modelId) {
         void updateCurrentPreferences((current) =>
           mergeSelectedComposerPreferences({
@@ -460,7 +464,7 @@ export function useAgentFormState(options: UseAgentFormStateOptions): UseAgentFo
         );
       }
     },
-    [formState, updateCurrentPreferences],
+    [availableModels, formState, updateCurrentPreferences],
   );
 
   const refreshProviderModels = useCallback(

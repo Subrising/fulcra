@@ -1,3 +1,4 @@
+import { requireTrustedBundleHost } from "./trusted-platform.js";
 import { NativeQueuedMessageReceiptSchema } from "@getpaseo/protocol/native-intercom";
 import type { ControllerDistribution } from "./controller-distribution.js";
 import { admissionRequest, admissionCheck, admissionDiagnostic } from "./admission-outcome.js";
@@ -1079,6 +1080,7 @@ export async function loadTrustedPlugins(
   knownAgentIds: readonly string[] = [],
   management?: ManagementStartup,
 ): Promise<TrustedPlugins> {
+  if (directory) requireTrustedBundleHost();
   // U7: remote account actions are audited in this home, for the owner.
   const authority = new TrustedPlugins(management, {
     accountActions: new AccountActionsAudit(paseoHome),

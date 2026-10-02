@@ -3700,6 +3700,7 @@ describe("HostRuntimeStore", () => {
 
   it("probes a pairing link immediately and saves only after admission", async () => {
     const store = new HostRuntimeStore({
+      claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
         connectToDaemon: async ({ host }) => {
@@ -3937,6 +3938,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
           type: "relay",
           relayEndpoint: "remote:443",
           daemonPublicKeyB64: "pk_test_offer",
+          deviceId: "dev_testdevice000001",
         },
         { id: "direct:localhost:6799", type: "directTcp", endpoint: "localhost:6799" },
       ],
@@ -4025,6 +4027,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
   });
   it("imports a pairing link after a password retry in the add flow", async () => {
     const store = new HostRuntimeStore({
+      claimRelayDevice: async () => "dev_testdevice000001",
       storage: createMemoryHostRuntimeStorage(),
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -4040,7 +4043,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
         getClientId: async () => "cid_link_import",
       },
     });
-    const link = "relay://relay.example:443/srv_pair?key=AAAA&ssl=true";
+    const link = encodeOfferUrl(makeOffer({ serverId: "srv_pair" }));
     await expect(store.importConnectionLink(link, "hostRoot")).resolves.toEqual({
       status: "password_required",
     });
@@ -4054,6 +4057,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
   });
   it("imports a deep link without waiting for admission, then leaves a rejected saved host red", async () => {
     const store = new HostRuntimeStore({
+      claimRelayDevice: async () => "dev_testdevice000001",
       storage: createMemoryHostRuntimeStorage(),
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -4063,7 +4067,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
         getClientId: async () => "cid_deep_link",
       },
     });
-    const link = "relay://relay.example:443/srv_deep?key=AAAA&ssl=true";
+    const link = encodeOfferUrl(makeOffer({ serverId: "srv_deep" }));
     await expect(store.importConnectionLink(link, "openProject")).resolves.toEqual({
       status: "connected",
       serverId: "srv_deep",
