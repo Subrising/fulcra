@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { expect } from "@playwright/test";
+import { compilePlugin } from "../../server/dist/server/server/plugins/compiler.js";
 
 export function seedPluginLinks(paseoHome, workspaceId, url, remoteWorkspaceId) {
   const directory = path.join(paseoHome, "link-plugin");
@@ -28,7 +30,7 @@ function Links({ navigation }) {
     <Pressable accessibilityRole="button" onPress={() => navigation.openBrowser({ url: ${JSON.stringify(url)}, workspaceId: ${JSON.stringify(workspaceId)} })}><Text>Open workspace browser</Text></Pressable>
   </View>;
 }
-export default function(client) { client.addSurface("main", Links); client.addSidebarItem({ id: "links", title: "Plugin links QA", icon: "Link", surface: "main" }); return () => {}; }
+export default function(client) { globalThis.__pluginLinksEvaluated = true; client.addSurface("main", Links); client.addSidebarItem({ id: "links", title: "Plugin links QA", icon: "Link", surface: "main" }); return () => {}; }
 `,
   );
   const configPath = path.join(paseoHome, "config.json");
@@ -36,6 +38,58 @@ export default function(client) { client.addSurface("main", Links); client.addSi
   config.pluginsEnabled = true;
   config.plugins = { "link-check": { source: "directory", path: directory, enabled: true } };
   fs.writeFileSync(configPath, JSON.stringify(config));
+  return directory;
+}
+
+export async function stagePluginLinkPin(directory, appPath) {
+  // Build the known fixture locally, as distribution packaging does. Never derive a pin from host catalog bytes.
+  const { clientBundle } = await compilePlugin({
+    client: path.join(directory, "index.client.tsx"),
+    server: null,
+  });
+  if (!clientBundle) throw new Error("Plugin links fixture did not compile");
+  const root = path.join(appPath, "bundled-plugins");
+  const bundled = path.join(root, "link-check");
+  const rootExisted = fs.existsSync(root);
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(bundled); // Refuse to overwrite any existing app resource.
+  const remove = () => {
+    fs.rmSync(bundled, { recursive: true, force: true });
+    if (!rootExisted) {
+      try {
+        fs.rmdirSync(root);
+      } catch (error) {
+        if (error.code !== "ENOTEMPTY" && error.code !== "ENOENT") throw error;
+      }
+    }
+  };
+  try {
+    fs.copyFileSync(
+      path.join(directory, "paseo-plugin.json"),
+      path.join(bundled, "paseo-plugin.json"),
+    );
+    fs.writeFileSync(path.join(bundled, "runtime.client.js"), clientBundle);
+    fs.writeFileSync(
+      path.join(bundled, "runtime-manifest.json"),
+      JSON.stringify({
+        version: 1,
+        client: createHash("sha256").update(clientBundle).digest("hex"),
+      }),
+    );
+    return remove;
+  } catch (error) {
+    remove();
+    throw error;
+  }
+}
+
+export async function expectPluginLinksRefused(page) {
+  await page.reload();
+  await expect(page.getByRole("button", { name: /link-check\. Plugin not trusted/ })).toBeVisible({
+    timeout: 90_000,
+  });
+  await expect(page.getByRole("button", { name: "Plugin links QA", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => globalThis.__pluginLinksEvaluated ?? false)).toBe(false);
 }
 
 export async function runPluginLinksRegression({
