@@ -81,7 +81,7 @@ export class DirectoryBootstrapScenario {
     await expect(workspaceLink).toBeVisible();
     await openCommandCenter(this.page);
     const agentLink = this.page
-      .getByTestId(`sidebar-session-open-${getServerId()}-${agent.id}`)
+      .getByTestId(`command-center-agent-${getServerId()}:${agent.id}`)
       .filter({ visible: true });
     await expect(agentLink).toHaveCount(1);
     await expect(agentLink).toBeVisible();
@@ -116,7 +116,7 @@ export class DirectoryBootstrapScenario {
     await expect(workspaceLink).toBeVisible();
     await openCommandCenter(this.page);
     const agentLink = this.page
-      .getByTestId(`sidebar-session-open-${getServerId()}-${agent.id}`)
+      .getByTestId(`command-center-agent-${getServerId()}:${agent.id}`)
       .filter({ visible: true });
     await expect(agentLink).toHaveCount(1);
     await expect(agentLink).toBeVisible();

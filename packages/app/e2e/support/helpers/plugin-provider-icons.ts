@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Locator, TestInfo } from "@playwright/test";
 import { expect, test as base, type Page } from "../fixtures";
 import { gotoAppShell, openSettings } from "./app";
-import { openModelPicker } from "./agent-profiles";
+import { openModelPicker, searchAllModels } from "./agent-profiles";
 import { openAgentRoute } from "./mock-agent";
 import { connectNewWorkspaceDaemonClient, openGlobalNewWorkspaceComposer } from "./new-workspace";
 import { copyPluginExample } from "./plugin-fixture";
@@ -44,7 +44,7 @@ async function expectProviderIcon(surface: Locator, paths: string[]): Promise<vo
 
 async function selectPluginModel(page: Page): Promise<void> {
   await openModelPicker(page);
-  await page.getByText("Direct provider example", { exact: true }).click();
+  await searchAllModels(page, "Example 1");
   await page.getByText("Example 1", { exact: true }).click();
   await expect(page.getByRole("button", { name: MODEL_LABEL, exact: true })).toBeVisible();
 }

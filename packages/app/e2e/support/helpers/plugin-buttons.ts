@@ -274,6 +274,7 @@ export async function withButtonShowcase(
           await expect.poll(() => released.has(first)).toBe(true);
           await press(page, "Composer status");
           await expectDetails(page);
+          await expect(observation).not.toHaveText("");
           const second = (await observation.textContent())!;
           expect(second).not.toBe(first);
           await workspace.client.renameProject(workspace.projectId, "Observer control");
@@ -286,6 +287,7 @@ export async function withButtonShowcase(
           await page.keyboard.press("Escape");
           await press(page, "Header status");
           await expectDetails(page);
+          await expect(observation).not.toHaveText("");
           const recovered = (await observation.textContent())!;
           expect([first, second]).not.toContain(recovered);
           await showcase.setTitle("Healthy app after button failure");

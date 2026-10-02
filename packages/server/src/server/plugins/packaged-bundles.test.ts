@@ -67,7 +67,12 @@ test("trusted host entry refuses writable-by-others code before import", async (
     const entry = path.join(plugin, "index.host.js");
     await writeFile(entry, "export default () => {};", { mode: 0o666 });
     await chmod(entry, 0o666);
-    await expect(loadTrustedPlugins(bundles, path.join(root, "home"))).rejects.toThrow("ownership");
+    const admission = loadTrustedPlugins(bundles, path.join(root, "home"));
+    if (process.platform === "win32") {
+      await expect(admission).rejects.toMatchObject({ code: "TRUSTED_PLUGIN_HOST_UNSUPPORTED" });
+    } else {
+      await expect(admission).rejects.toThrow("ownership");
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

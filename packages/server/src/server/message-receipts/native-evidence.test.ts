@@ -664,7 +664,7 @@ test.runIf(process.platform === "win32")(
   async () => {
     const { directory } = await fixture();
     const artifacts = new NativeArtifactStore(path.join(directory, "artifacts"));
-    expect(() => artifacts.write("a".repeat(64), Buffer.from("fixture"), () => {})).toThrow(
+    expect(() => artifacts.write(randomUUID(), Buffer.from("fixture"), () => {})).toThrow(
       "Native artifact confinement unavailable",
     );
     expect(await readdir(directory)).toEqual([]);

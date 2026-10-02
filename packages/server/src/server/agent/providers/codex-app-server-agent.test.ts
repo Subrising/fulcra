@@ -6963,7 +6963,7 @@ describe("native queued provider preparation", () => {
   );
 });
 
-test.each(["accepted", "native-replace", "new-turn", "close"])(
+test.for(["accepted", "native-replace", "new-turn", "close"])(
   "native evidence captured transport %s fences held preparation before image materialization",
   async (mutation, context) => {
     if (process.platform === "win32" && mutation === "accepted")
@@ -7038,7 +7038,7 @@ test.each(["accepted", "native-replace", "new-turn", "close"])(
   },
 );
 
-test.each(
+test.for(
   [true, false].flatMap((linked) =>
     ["imageGeneration", "fileChange", "commandExecution"].map((type) => ({ linked, type })),
   ),
