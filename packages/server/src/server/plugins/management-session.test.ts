@@ -430,238 +430,277 @@ async function registryFixture(operationLimit = 10000) {
   };
 }
 
-test("report registry owner IPC: unknown legacy fails closed and explicit prime/adoption creates scoped parent", async () => {
-  const f = await registryFixture();
-  try {
-    expect(() => f.registry.requireParent(f.child, f.scope)).toThrow();
-    await expect(f.register()).rejects.toThrow();
-    f.authenticate("paired-device");
-    await expect(f.register()).rejects.toThrow();
-    f.authenticate();
-    const prime = await f.register();
-    const child = await f.adopt();
-    expect(f.registry.requireParent(f.child, f.scope)).toEqual({
-      sourceEpoch: child.epoch,
-      parent: f.prime,
-      parentEpoch: prime.epoch,
-    });
-    expect(f.dispatch).not.toHaveBeenCalled();
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("report registry owner IPC: equal ID body dedup survives restart, conflicts and implicit prime replacement refuse", async () => {
-  const f = await registryFixture();
-  try {
-    f.authenticate();
-    const input = {
-      messageId: randomUUID(),
-      identity: f.prime,
-      scopes: [f.scope],
-      expectedEpoch: null,
-    };
-    const receipt = await f.call("report-prime-register", input);
-    expect(await f.call("report-prime-register", input)).toEqual({ ...receipt, duplicate: true });
-    const restored = fixture("report-prime-register", input);
-    registerNativeReportRegistry(
-      restored.authority,
-      new NativeReportRegistry(f.file, (id) => f.identities.get(id) ?? null),
-    );
-    restored.authenticate("protected-local-ipc");
-    expect(ReportRegistrationReceiptSchema.parse(await restored.invoke())).toEqual({
-      ...receipt,
-      duplicate: true,
-    });
-    await expect(
-      f.call("report-prime-register", { ...input, scopes: [{ ...f.scope, taskId: randomUUID() }] }),
-    ).rejects.toThrow();
-    await expect(f.register()).rejects.toThrow("Management refused");
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("report registry owner IPC: forged identity, self-link, cycle, unknown parent and cross-task scope refuse", async () => {
-  const f = await registryFixture();
-  try {
-    f.authenticate();
-    await f.register();
-    await expect(f.adopt({ ...f.child, instanceId: randomUUID() })).rejects.toThrow();
-    await expect(f.adopt(f.child, f.child)).rejects.toThrow();
-    const unknown = { ...f.prime, agentId: randomUUID() };
-    await expect(f.adopt(f.child, unknown)).rejects.toThrow();
-    await expect(
-      f.call("report-parent-adopt", {
-        messageId: randomUUID(),
-        child: f.child,
-        parent: f.prime,
-        scopes: [{ ...f.scope, taskId: randomUUID() }],
-        expectedEpoch: null,
-      }),
-    ).rejects.toThrow("Management refused");
-    const child = await f.adopt();
-    await f.adopt(f.grandchild, f.child);
-    await expect(f.adopt(f.child, f.grandchild, child.epoch)).rejects.toThrow("Management refused");
-    await expect(f.adopt(f.prime, f.child)).rejects.toThrow();
-    expect(f.dispatch).not.toHaveBeenCalled();
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("report registry owner IPC: prime rotation retains child relationships, unlink fences descendants and native replacement refuses", async () => {
-  const f = await registryFixture();
-  try {
-    f.authenticate();
-    const prime = await f.register();
-    const child = await f.adopt();
-    await f.adopt(f.grandchild, f.child);
-    f.identities.set(f.prime.agentId, { ...f.prime, instanceId: randomUUID() });
-    expect(() => f.registry.requireParent(f.child, f.scope)).toThrow("identity replaced");
-    f.identities.set(f.prime.agentId, f.prime);
-    const revoke = { messageId: randomUUID(), identity: f.child, expectedEpoch: child.epoch };
-    expect(await f.call("report-registration-revoke", revoke)).toMatchObject({ current: false });
-    expect(await f.call("report-registration-revoke", revoke)).toMatchObject({
-      duplicate: true,
-      current: false,
-    });
-    expect(() => f.registry.requireParent(f.grandchild, f.scope)).toThrow();
-    await f.adopt();
-    const rotated = await f.register(prime.epoch);
-    expect(f.registry.requireParent(f.child, f.scope)).toMatchObject({
-      parent: f.prime,
-      parentEpoch: rotated.epoch,
-    });
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("report registry owner IPC: real owner revoke or identity replacement after awaited mkdir prevents file publication", async () => {
-  for (const replace of [false, true]) {
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: unknown legacy fails closed and explicit prime/adoption creates scoped parent",
+  async () => {
     const f = await registryFixture();
-    f.authenticate();
-    const original = fsPromises.mkdir.bind(fsPromises);
-    const spy = vi.spyOn(fsPromises, "mkdir").mockImplementation(async (...args) => {
-      const result = await original(...args);
-      if (replace) f.identities.set(f.prime.agentId, { ...f.prime, instanceId: randomUUID() });
-      else f.session.revokeManagementSource(f.source);
-      return result;
-    });
     try {
+      expect(() => f.registry.requireParent(f.child, f.scope)).toThrow();
       await expect(f.register()).rejects.toThrow();
-      await expect(fsPromises.access(f.file)).rejects.toThrow();
+      f.authenticate("paired-device");
+      await expect(f.register()).rejects.toThrow();
+      f.authenticate();
+      const prime = await f.register();
+      const child = await f.adopt();
+      expect(f.registry.requireParent(f.child, f.scope)).toEqual({
+        sourceEpoch: child.epoch,
+        parent: f.prime,
+        parentEpoch: prime.epoch,
+      });
       expect(f.dispatch).not.toHaveBeenCalled();
     } finally {
-      spy.mockRestore();
       await f.cleanup();
     }
-  }
-});
+  },
+);
 
-test("report registry owner IPC: unsafe/corrupt private store never publishes authority or auto repairs", async () => {
-  for (const kind of ["permissions", "orphan", "symlink"] as const) {
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: equal ID body dedup survives restart, conflicts and implicit prime replacement refuse",
+  async () => {
     const f = await registryFixture();
-    const state = {
-      version: 1,
-      prime: null,
-      links:
-        kind === "orphan"
-          ? [
-              {
-                identity: f.child,
-                scopes: [f.scope],
-                epoch: randomUUID(),
-                creator: "owner",
-                parent: f.prime,
-                parentEpoch: randomUUID(),
-              },
-            ]
-          : [],
-      operations: [],
-    };
-    const data = JSON.stringify(state);
-    if (kind === "symlink") {
-      const target = path.join(f.directory, "private-target.json");
-      await fsPromises.writeFile(target, data, { mode: 0o600 });
-      await fsPromises.symlink(target, f.file);
-    } else
-      await fsPromises.writeFile(f.file, data, { mode: kind === "permissions" ? 0o644 : 0o600 });
-    if (kind === "permissions") await fsPromises.chmod(f.file, 0o644);
     try {
       f.authenticate();
-      await expect(f.register()).rejects.toThrow();
-      await expect(f.register()).rejects.toThrow();
-      expect(() => f.registry.requireParent(f.child, f.scope)).toThrow();
-      expect(await fsPromises.readFile(f.file, "utf8")).toBe(data);
+      const input = {
+        messageId: randomUUID(),
+        identity: f.prime,
+        scopes: [f.scope],
+        expectedEpoch: null,
+      };
+      const receipt = await f.call("report-prime-register", input);
+      expect(await f.call("report-prime-register", input)).toEqual({ ...receipt, duplicate: true });
+      const restored = fixture("report-prime-register", input);
+      registerNativeReportRegistry(
+        restored.authority,
+        new NativeReportRegistry(f.file, (id) => f.identities.get(id) ?? null),
+      );
+      restored.authenticate("protected-local-ipc");
+      expect(ReportRegistrationReceiptSchema.parse(await restored.invoke())).toEqual({
+        ...receipt,
+        duplicate: true,
+      });
+      await expect(
+        f.call("report-prime-register", {
+          ...input,
+          scopes: [{ ...f.scope, taskId: randomUUID() }],
+        }),
+      ).rejects.toThrow();
+      await expect(f.register()).rejects.toThrow("Management refused");
     } finally {
       await f.cleanup();
     }
-  }
-});
+  },
+);
 
-test("report registry owner IPC: finite operation exhaustion fences authority and preserves IDs after restart", async () => {
-  const f = await registryFixture(1);
-  try {
-    f.authenticate();
-    const input = {
-      messageId: randomUUID(),
-      identity: f.prime,
-      scopes: [f.scope],
-      expectedEpoch: null,
-    };
-    const receipt = await f.call("report-prime-register", input);
-    expect(receipt).toMatchObject({ current: false, maintenanceRequired: true });
-    await expect(f.register(receipt.epoch)).rejects.toThrow();
-    expect(await f.call("report-prime-register", input)).toMatchObject({
-      duplicate: true,
-      current: false,
-      maintenanceRequired: true,
-    });
-    expect(() => f.registry.requireParent(f.child, f.scope)).toThrow("maintenance required");
-    const restored = fixture("report-prime-register", input);
-    registerNativeReportRegistry(
-      restored.authority,
-      new NativeReportRegistry(f.file, (id) => f.identities.get(id) ?? null, 1),
-    );
-    restored.authenticate();
-    expect(ReportRegistrationReceiptSchema.parse(await restored.invoke())).toMatchObject({
-      duplicate: true,
-      current: false,
-      maintenanceRequired: true,
-    });
-    expect(JSON.parse(await fsPromises.readFile(f.file, "utf8")).operations).toHaveLength(1);
-    expect(() => new NativeReportRegistry(f.file, () => null, 10001)).toThrow();
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("report registry owner IPC: pending durable epoch publication fences old parent admission", async () => {
-  const f = await registryFixture();
-  let observed = false;
-  try {
-    f.authenticate();
-    const prime = await f.register();
-    await f.adopt();
-    const original = fsPromises.mkdir.bind(fsPromises);
-    const spy = vi.spyOn(fsPromises, "mkdir").mockImplementation(async (...args) => {
-      observed = true;
-      expect(() => f.registry.requireParent(f.child, f.scope)).toThrow("registration unavailable");
-      return original(...args);
-    });
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: forged identity, self-link, cycle, unknown parent and cross-task scope refuse",
+  async () => {
+    const f = await registryFixture();
     try {
-      await f.register(prime.epoch);
+      f.authenticate();
+      await f.register();
+      await expect(f.adopt({ ...f.child, instanceId: randomUUID() })).rejects.toThrow();
+      await expect(f.adopt(f.child, f.child)).rejects.toThrow();
+      const unknown = { ...f.prime, agentId: randomUUID() };
+      await expect(f.adopt(f.child, unknown)).rejects.toThrow();
+      await expect(
+        f.call("report-parent-adopt", {
+          messageId: randomUUID(),
+          child: f.child,
+          parent: f.prime,
+          scopes: [{ ...f.scope, taskId: randomUUID() }],
+          expectedEpoch: null,
+        }),
+      ).rejects.toThrow("Management refused");
+      const child = await f.adopt();
+      await f.adopt(f.grandchild, f.child);
+      await expect(f.adopt(f.child, f.grandchild, child.epoch)).rejects.toThrow(
+        "Management refused",
+      );
+      await expect(f.adopt(f.prime, f.child)).rejects.toThrow();
+      expect(f.dispatch).not.toHaveBeenCalled();
     } finally {
-      spy.mockRestore();
+      await f.cleanup();
     }
-    expect(observed).toBe(true);
-    expect(f.registry.requireParent(f.child, f.scope)).toMatchObject({ parent: f.prime });
-  } finally {
-    await f.cleanup();
-  }
-});
+  },
+);
+
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: prime rotation retains child relationships, unlink fences descendants and native replacement refuses",
+  async () => {
+    const f = await registryFixture();
+    try {
+      f.authenticate();
+      const prime = await f.register();
+      const child = await f.adopt();
+      await f.adopt(f.grandchild, f.child);
+      f.identities.set(f.prime.agentId, { ...f.prime, instanceId: randomUUID() });
+      expect(() => f.registry.requireParent(f.child, f.scope)).toThrow("identity replaced");
+      f.identities.set(f.prime.agentId, f.prime);
+      const revoke = { messageId: randomUUID(), identity: f.child, expectedEpoch: child.epoch };
+      expect(await f.call("report-registration-revoke", revoke)).toMatchObject({ current: false });
+      expect(await f.call("report-registration-revoke", revoke)).toMatchObject({
+        duplicate: true,
+        current: false,
+      });
+      expect(() => f.registry.requireParent(f.grandchild, f.scope)).toThrow();
+      await f.adopt();
+      const rotated = await f.register(prime.epoch);
+      expect(f.registry.requireParent(f.child, f.scope)).toMatchObject({
+        parent: f.prime,
+        parentEpoch: rotated.epoch,
+      });
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: real owner revoke or identity replacement after awaited mkdir prevents file publication",
+  async () => {
+    for (const replace of [false, true]) {
+      const f = await registryFixture();
+      f.authenticate();
+      const original = fsPromises.mkdir.bind(fsPromises);
+      const spy = vi.spyOn(fsPromises, "mkdir").mockImplementation(async (...args) => {
+        const result = await original(...args);
+        if (replace) f.identities.set(f.prime.agentId, { ...f.prime, instanceId: randomUUID() });
+        else f.session.revokeManagementSource(f.source);
+        return result;
+      });
+      try {
+        await expect(f.register()).rejects.toThrow();
+        await expect(fsPromises.access(f.file)).rejects.toThrow();
+        expect(f.dispatch).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+        await f.cleanup();
+      }
+    }
+  },
+);
+
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: unsafe/corrupt private store never publishes authority or auto repairs",
+  async () => {
+    for (const kind of ["permissions", "orphan", "symlink"] as const) {
+      const f = await registryFixture();
+      const state = {
+        version: 1,
+        prime: null,
+        links:
+          kind === "orphan"
+            ? [
+                {
+                  identity: f.child,
+                  scopes: [f.scope],
+                  epoch: randomUUID(),
+                  creator: "owner",
+                  parent: f.prime,
+                  parentEpoch: randomUUID(),
+                },
+              ]
+            : [],
+        operations: [],
+      };
+      const data = JSON.stringify(state);
+      if (kind === "symlink") {
+        const target = path.join(f.directory, "private-target.json");
+        await fsPromises.writeFile(target, data, { mode: 0o600 });
+        await fsPromises.symlink(target, f.file);
+      } else
+        await fsPromises.writeFile(f.file, data, { mode: kind === "permissions" ? 0o644 : 0o600 });
+      if (kind === "permissions") await fsPromises.chmod(f.file, 0o644);
+      try {
+        f.authenticate();
+        await expect(f.register()).rejects.toThrow();
+        await expect(f.register()).rejects.toThrow();
+        expect(() => f.registry.requireParent(f.child, f.scope)).toThrow();
+        expect(await fsPromises.readFile(f.file, "utf8")).toBe(data);
+      } finally {
+        await f.cleanup();
+      }
+    }
+  },
+);
+
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: finite operation exhaustion fences authority and preserves IDs after restart",
+  async () => {
+    const f = await registryFixture(1);
+    try {
+      f.authenticate();
+      const input = {
+        messageId: randomUUID(),
+        identity: f.prime,
+        scopes: [f.scope],
+        expectedEpoch: null,
+      };
+      const receipt = await f.call("report-prime-register", input);
+      expect(receipt).toMatchObject({ current: false, maintenanceRequired: true });
+      await expect(f.register(receipt.epoch)).rejects.toThrow();
+      expect(await f.call("report-prime-register", input)).toMatchObject({
+        duplicate: true,
+        current: false,
+        maintenanceRequired: true,
+      });
+      expect(() => f.registry.requireParent(f.child, f.scope)).toThrow("maintenance required");
+      const restored = fixture("report-prime-register", input);
+      registerNativeReportRegistry(
+        restored.authority,
+        new NativeReportRegistry(f.file, (id) => f.identities.get(id) ?? null, 1),
+      );
+      restored.authenticate();
+      expect(ReportRegistrationReceiptSchema.parse(await restored.invoke())).toMatchObject({
+        duplicate: true,
+        current: false,
+        maintenanceRequired: true,
+      });
+      expect(JSON.parse(await fsPromises.readFile(f.file, "utf8")).operations).toHaveLength(1);
+      expect(() => new NativeReportRegistry(f.file, () => null, 10001)).toThrow();
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+// Native registry persistence requires POSIX durability; Win32 refusal is paired below.
+test.runIf(process.platform !== "win32")(
+  "report registry owner IPC: pending durable epoch publication fences old parent admission",
+  async () => {
+    const f = await registryFixture();
+    let observed = false;
+    try {
+      f.authenticate();
+      const prime = await f.register();
+      await f.adopt();
+      const original = fsPromises.mkdir.bind(fsPromises);
+      const spy = vi.spyOn(fsPromises, "mkdir").mockImplementation(async (...args) => {
+        observed = true;
+        expect(() => f.registry.requireParent(f.child, f.scope)).toThrow(
+          "registration unavailable",
+        );
+        return original(...args);
+      });
+      try {
+        await f.register(prime.epoch);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(observed).toBe(true);
+      expect(f.registry.requireParent(f.child, f.scope)).toMatchObject({ parent: f.prime });
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
 
 test("native parent adoption requires a fresh owner transport, not labels or plugin identity", async () => {
   for (const state of ["owner", "missing", "device", "plugin", "revoked", "permission"] as const) {
@@ -704,3 +743,19 @@ test("native parent adoption requires a fresh owner transport, not labels or plu
     });
   }
 });
+
+test.runIf(process.platform === "win32")(
+  "Windows owner IPC refuses durable report registration without dispatch or authority",
+  async () => {
+    const f = await registryFixture();
+    try {
+      f.authenticate();
+      await expect(f.register()).rejects.toThrow("Management refused");
+      expect(() => f.registry.requireParent(f.child, f.scope)).toThrow();
+      expect(f.dispatch).not.toHaveBeenCalled();
+      await expect(fsPromises.access(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await f.cleanup();
+    }
+  },
+);

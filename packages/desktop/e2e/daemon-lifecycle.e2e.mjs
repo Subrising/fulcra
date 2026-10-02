@@ -114,8 +114,11 @@ try {
     assert.equal(status.pid, captured.pid, `${reason} stopped an attached daemon`);
     process.kill(captured.pid, 0);
   }
-  const restarted = await command("restart_desktop_daemon");
-  assert.equal(restarted.pid, captured.pid);
+  await assert.rejects(
+    command("restart_desktop_daemon"),
+    /Foreign daemon requires authenticated owner adoption/,
+  );
+  process.kill(captured.pid, 0);
   await assert.rejects(
     command("stop_desktop_daemon", {
       reason: "manual_ipc",

@@ -108,12 +108,12 @@ export function useProviderUsage(
     },
     onSuccess: (payload) => queryClient.setQueryData(queryKey, payload),
   });
-  const previousUsage = useRef({ enabled: false, revision: runtimeRevision });
+  const previousUsageRevision = useRef(runtimeRevision);
   useEffect(() => {
-    const previous = previousUsage.current;
-    previousUsage.current = { enabled, revision: runtimeRevision };
+    const previousRevision = previousUsageRevision.current;
+    previousUsageRevision.current = runtimeRevision;
     // Opening already refetches through the query/refresh path. Only live attribution changes invalidate it.
-    if (!enabled || !previous.enabled || previous.revision === runtimeRevision) return;
+    if (!enabled || previousRevision === runtimeRevision) return;
     // Collapse bursts of agent upserts. Superseded replies are hidden immediately until this projection is read.
     const timer = setTimeout(() => {
       void queryClient.invalidateQueries({ queryKey, exact: true });

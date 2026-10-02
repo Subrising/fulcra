@@ -89,7 +89,8 @@ describe("isProviderImageMarkdown", () => {
   });
 });
 
-describe("materializeProviderImage", () => {
+// Descriptor confinement is unsupported on Windows; assert that refusal below.
+describe.runIf(process.platform !== "win32")("materializeProviderImage", () => {
   test("recreates the private temp directory if the cached directory is removed", () => {
     const first = materializeProviderImage({
       data: "YWJjMTIz",
@@ -113,3 +114,12 @@ describe("materializeProviderImage", () => {
     }
   });
 });
+
+test.runIf(process.platform === "win32")(
+  "Windows provider image materialization refuses rather than creating unconfined output",
+  () => {
+    expect(() => materializeProviderImage({ data: "YWJjMTIz", mimeType: "image/png" })).toThrow(
+      "Confined image materialization unavailable",
+    );
+  },
+);

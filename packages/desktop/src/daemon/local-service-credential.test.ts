@@ -12,7 +12,8 @@ import {
   type LocalServiceCredentialDeps,
 } from "./local-service-credential.js";
 
-// L39. Synthetic secrets only.
+// L39. Synthetic secrets only. Positive launchd-service ownership requires POSIX uid/file modes.
+const serviceTest = test.runIf(process.platform !== "win32");
 const SECRET = "synthetic-controller-secret with spaces, commas/slashes and ü";
 const HASH = hashDaemonPassword(SECRET);
 const URL = "ws://127.0.0.1:6791/ws";
@@ -40,9 +41,12 @@ function deps(patch: Partial<LocalServiceCredentialDeps> = {}): LocalServiceCred
   };
 }
 
-test("the Mac's own window gets owner access to this home's launchd-style service", async () => {
-  expect(await localServiceOwnerCredential(URL, deps())).toBe(SECRET);
-});
+serviceTest(
+  "the Mac's own window gets owner access to this home's launchd-style service",
+  async () => {
+    expect(await localServiceOwnerCredential(URL, deps())).toBe(SECRET);
+  },
+);
 
 test("never for a remote target, another port, another home or no running service", async () => {
   for (const url of [
@@ -101,65 +105,99 @@ test("never when the service changed during the checks", async () => {
   expect(await localServiceOwnerCredential(URL, deps({ readInstance }))).toBeUndefined();
 });
 
-test("the renderer never sees it: only the window's own main-frame socket gets the header, in the main process", async () => {
-  const frame = { url: "paseo://app/index.html" };
-  const sender = { id: 1, mainFrame: frame, isDestroyed: () => false } as unknown as WebContents;
-  const handler = ownedDaemonHeaders(new Set([sender]), (url) =>
-    localServiceOwnerCredential(url, deps()),
-  );
-  const base = {
-    url: URL,
-    webContents: sender,
-    webContentsId: 1,
-    frame,
-    resourceType: "webSocket",
-    requestHeaders: {},
-  } as unknown as OnBeforeSendHeadersListenerDetails;
-  const run = (patch: Partial<OnBeforeSendHeadersListenerDetails> = {}) =>
-    new Promise<BeforeSendResponse>((done) => handler({ ...base, ...patch }, done));
-  const granted = await run();
-  expect(granted.requestHeaders).toEqual({ Authorization: daemonAuthorizationHeader(SECRET) });
-  // The renderer's own request object is untouched; the header exists only in the network layer.
-  expect(base.requestHeaders).toEqual({});
-  const subframe = { url: "paseo://app/index.html" };
-  for (const patch of [
-    { frame: subframe },
-    { resourceType: "xhr" },
-    { frame: { url: "https://evil.invalid/" } },
-  ] as Partial<OnBeforeSendHeadersListenerDetails>[]) {
-    const response = await run(patch);
-    expect(JSON.stringify(response)).not.toContain(daemonAuthorizationHeader(SECRET).slice(7));
-  }
-});
+serviceTest(
+  "the renderer never sees it: only the window's own main-frame socket gets the header, in the main process",
+  async () => {
+    const frame = { url: "paseo://app/index.html" };
+    const sender = { id: 1, mainFrame: frame, isDestroyed: () => false } as unknown as WebContents;
+    const handler = ownedDaemonHeaders(new Set([sender]), (url) =>
+      localServiceOwnerCredential(url, deps()),
+    );
+    const base = {
+      url: URL,
+      webContents: sender,
+      webContentsId: 1,
+      frame,
+      resourceType: "webSocket",
+      requestHeaders: {},
+    } as unknown as OnBeforeSendHeadersListenerDetails;
+    const run = (patch: Partial<OnBeforeSendHeadersListenerDetails> = {}) =>
+      new Promise<BeforeSendResponse>((done) => handler({ ...base, ...patch }, done));
+    const granted = await run();
+    expect(granted.requestHeaders).toEqual({ Authorization: daemonAuthorizationHeader(SECRET) });
+    // The renderer's own request object is untouched; the header exists only in the network layer.
+    expect(base.requestHeaders).toEqual({});
+    const subframe = { url: "paseo://app/index.html" };
+    for (const patch of [
+      { frame: subframe },
+      { resourceType: "xhr" },
+      { frame: { url: "https://evil.invalid/" } },
+    ] as Partial<OnBeforeSendHeadersListenerDetails>[]) {
+      const response = await run(patch);
+      expect(JSON.stringify(response)).not.toContain(daemonAuthorizationHeader(SECRET).slice(7));
+    }
+  },
+);
 
-test("a verified password match is reused; a changed secret or password is checked again", async () => {
-  // A fresh hash (new salt), so no earlier test's result applies.
-  const hash = hashDaemonPassword(SECRET);
-  let checks = 0;
-  const counted = (patch: Partial<LocalServiceCredentialDeps> = {}) =>
-    deps({
-      configuredPasswordHash: () => hash,
-      matches: async (secret, candidateHash) => {
-        checks += 1;
-        return isBearerTokenValidAsync({ password: candidateHash, token: secret });
-      },
-      ...patch,
+serviceTest(
+  "a verified password match is reused; a changed secret or password is checked again",
+  async () => {
+    // A fresh hash (new salt), so no earlier test's result applies.
+    const hash = hashDaemonPassword(SECRET);
+    let checks = 0;
+    const counted = (patch: Partial<LocalServiceCredentialDeps> = {}) =>
+      deps({
+        configuredPasswordHash: () => hash,
+        matches: async (secret, candidateHash) => {
+          checks += 1;
+          return isBearerTokenValidAsync({ password: candidateHash, token: secret });
+        },
+        ...patch,
+      });
+    expect(await localServiceOwnerCredential(URL, counted())).toBe(SECRET);
+    const first = checks;
+    expect(first).toBeGreaterThan(0);
+    expect(await localServiceOwnerCredential(URL, counted())).toBe(SECRET);
+    expect(checks).toBe(first);
+    // A different file content is verified again (and refused).
+    await writeFile(path.join(home, CONTROLLER_SECRET_FILE), "another synthetic secret", {
+      mode: 0o600,
     });
-  expect(await localServiceOwnerCredential(URL, counted())).toBe(SECRET);
-  const first = checks;
-  expect(first).toBeGreaterThan(0);
-  expect(await localServiceOwnerCredential(URL, counted())).toBe(SECRET);
-  expect(checks).toBe(first);
-  // A different file content is verified again (and refused).
-  await writeFile(path.join(home, CONTROLLER_SECRET_FILE), "another synthetic secret", {
-    mode: 0o600,
-  });
-  expect(await localServiceOwnerCredential(URL, counted())).toBeUndefined();
-  expect(checks).toBe(first + 1);
-  // A different configured password is verified again.
-  const otherHash = hashDaemonPassword("another synthetic secret");
-  expect(
-    await localServiceOwnerCredential(URL, counted({ configuredPasswordHash: () => otherHash })),
-  ).toBe("another synthetic secret");
-  expect(checks).toBe(first + 2);
-});
+    expect(await localServiceOwnerCredential(URL, counted())).toBeUndefined();
+    expect(checks).toBe(first + 1);
+    // A different configured password is verified again.
+    const otherHash = hashDaemonPassword("another synthetic secret");
+    expect(
+      await localServiceOwnerCredential(URL, counted({ configuredPasswordHash: () => otherHash })),
+    ).toBe("another synthetic secret");
+    expect(checks).toBe(first + 2);
+  },
+);
+
+test.runIf(process.platform === "win32")(
+  "Windows cannot mint a launchd-service owner credential from synthesized uid/mode bits",
+  async () => {
+    const credential = await localServiceOwnerCredential(URL, deps());
+    expect(credential).toBeUndefined();
+    const frame = { url: "paseo://app/index.html" };
+    const sender = { id: 1, mainFrame: frame, isDestroyed: () => false } as unknown as WebContents;
+    const handler = ownedDaemonHeaders(new Set([sender]), (url) =>
+      localServiceOwnerCredential(url, deps()),
+    );
+    let response: BeforeSendResponse | undefined;
+    await handler(
+      {
+        url: URL,
+        webContents: sender,
+        webContentsId: 1,
+        frame,
+        resourceType: "webSocket",
+        requestHeaders: {},
+      } as OnBeforeSendHeadersListenerDetails,
+      (value) => {
+        response = value;
+      },
+    );
+    expect(response).toEqual({ requestHeaders: {} });
+  },
+);

@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("W1 row 9: daemon boot succession", () => {
-  it("names the boot each boot replaced, privately", () => {
+  it("names the boot each boot replaced", () => {
     const dir = home(),
       a = randomUUID(),
       b = randomUUID();
@@ -38,8 +38,17 @@ describe("W1 row 9: daemon boot succession", () => {
       v: 1,
       boot: b,
     });
-    expect(statSync(path.join(dir, DAEMON_BOOT_FILE)).mode & 0o077).toBe(0);
   });
+
+  // Boot succession is cross-platform; native authority separately requires durable admission.
+  it.runIf(process.platform !== "win32")(
+    "stores the boot marker with POSIX owner-only permissions",
+    () => {
+      const dir = home();
+      recordDaemonBoot(dir, randomUUID());
+      expect(statSync(path.join(dir, DAEMON_BOOT_FILE)).mode & 0o077).toBe(0);
+    },
+  );
 
   it("a malformed record yields no predecessor", () => {
     const dir = home();
