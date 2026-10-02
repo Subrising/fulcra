@@ -213,11 +213,15 @@ describe("daemon-manager commands", () => {
     };
     const lockPath = path.join(mocks.paseoHome, "paseo.pid");
     writeFileSync(lockPath, JSON.stringify(lock));
+<<<<<<< HEAD
     mocks.readInstance.mockResolvedValue(lock);
+=======
+>>>>>>> refs/tags/v0.10.2
     const handler = createDaemonCommandHandlers().desktop_local_credential;
     expect(await handler({ listen: "localhost:6799" })).toBe(token);
     expect(await handler({ listen: "remote:6799" })).toBeNull();
     writeFileSync(lockPath, JSON.stringify({ ...lock, desktopManaged: false }));
+<<<<<<< HEAD
     mocks.readInstance.mockResolvedValue({ ...lock, desktopManaged: false });
     expect(await handler({ listen: "localhost:6799" })).toBeNull();
     mocks.readInstance.mockResolvedValue(null);
@@ -836,5 +840,8 @@ describe("owned startup and Settings recovery", () => {
     ).rejects.toThrow();
     expect(mocks.settings.daemon.commandCentreEnabled).toBe(false);
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+=======
+    expect(await handler({ listen: "localhost:6799" })).toBeNull();
+>>>>>>> refs/tags/v0.10.2
   });
 });

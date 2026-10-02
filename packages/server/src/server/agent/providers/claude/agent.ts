@@ -429,9 +429,12 @@ interface ClaudeAgentClientOptions {
   queryFactory?: ClaudeQueryFactory;
   resolveBinary?: () => Promise<string>;
   resolveVersion?: (signal?: AbortSignal) => Promise<string>;
+<<<<<<< HEAD
   /** Asks Claude Code for the account's models. Tests inject one; the default spawns the real CLI. */
   modelProbe?: ClaudeModelProbe;
   now?: () => number;
+=======
+>>>>>>> refs/tags/v0.10.2
   rewindSdk?: ClaudeRewindSdk;
 }
 
@@ -1549,9 +1552,12 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly queryFactory?: ClaudeQueryFactory;
   private readonly resolveBinary: () => Promise<string>;
   private readonly resolveVersion: (signal?: AbortSignal) => Promise<string>;
+<<<<<<< HEAD
   private readonly modelProbe: ClaudeModelProbe;
   private readonly now: () => number;
   private versionForKey: { version: string | null; at: number } | null = null;
+=======
+>>>>>>> refs/tags/v0.10.2
   private readonly rewindSdk: ClaudeRewindSdk;
 
   constructor(options: ClaudeAgentClientOptions) {
@@ -1563,8 +1569,11 @@ export class ClaudeAgentClient implements AgentClient {
     this.resolveVersion =
       options.resolveVersion ??
       ((signal) => resolveClaudeCodeVersion(this.runtimeSettings, signal));
+<<<<<<< HEAD
     this.modelProbe = options.modelProbe ?? probeClaudeModels;
     this.now = options.now ?? Date.now;
+=======
+>>>>>>> refs/tags/v0.10.2
     this.rewindSdk = options.rewindSdk ?? realClaudeRewindSdk;
   }
 
@@ -1675,6 +1684,7 @@ export class ClaudeAgentClient implements AgentClient {
       this.logger.warn({ err: error }, "Failed to resolve Claude Code version for model catalog");
     }
     const env = this.buildProviderEnv();
+<<<<<<< HEAD
     const runtimeModels = await this.discoverRuntimeModels(context);
     const models = await runProviderRefreshActivity(context, "settings", () =>
       getClaudeModelsWithSettings(
@@ -1685,6 +1695,11 @@ export class ClaudeAgentClient implements AgentClient {
       ),
     );
     recordClaudeRuntimeModels(runtimeModels?.length ? models : null);
+=======
+    const models = await runProviderRefreshActivity(context, "settings", () =>
+      getClaudeModelsWithSettings(this.logger, claudeConfigDir(env), claudeCodeVersion),
+    );
+>>>>>>> refs/tags/v0.10.2
     const modeCatalog = claudeModeCatalog(env);
     return {
       models,

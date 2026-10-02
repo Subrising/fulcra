@@ -533,6 +533,7 @@ interface NotifySafelyOptions {
   permissionRequest?: AgentPermissionRequest;
 }
 
+<<<<<<< HEAD
 /**
  * FIX-8 W3: the message id prefix of the daemon's finish notice to a caller. The notice is admitted with source
  * "daemon" (it has no ambient human or agent context), and a trusted plugin (Fulcra's controller) can tell it from a
@@ -540,6 +541,8 @@ interface NotifySafelyOptions {
  * proves nothing; only the daemon source does.
  */
 export const FINISH_NOTIFICATION_MESSAGE_PREFIX = "paseo-notify:";
+=======
+>>>>>>> refs/tags/v0.10.2
 // A caller waits on a child through one armed notification. Arming again, such as a
 // follow-up prompt while the child still runs, replaces the earlier one so the child's
 // next finish reaches the caller once.
@@ -571,6 +574,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
   armedFinishNotifications.set(agentManager, armedByManager);
   const armedKey = JSON.stringify([childAgentId, callerAgentId]);
   armedByManager.get(armedKey)?.();
+<<<<<<< HEAD
   const cancel = () => {
     superseded = true;
     stop();
@@ -581,11 +585,17 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     armedByManager.delete(armedKey);
     return;
   }
+=======
+  armedByManager.set(armedKey, stop);
+>>>>>>> refs/tags/v0.10.2
 
   function stop(): void {
     if (stopped) return;
     stopped = true;
     unsubscribe?.();
+    if (armedByManager.get(armedKey) === stop) {
+      armedByManager.delete(armedKey);
+    }
   }
 
   async function notify(

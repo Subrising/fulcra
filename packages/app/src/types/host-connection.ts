@@ -186,6 +186,7 @@ function upsertHostConnectionById(
   return next;
 }
 
+<<<<<<< HEAD
 /**
  * Keeps the previous preferred connection while it still exists; otherwise the new connection.
  * An explicit preferConnection makes the new connection preferred.
@@ -216,10 +217,16 @@ function hasProfileChanged(input: {
   previous: HostProfile;
   pairedRelay: boolean;
   matchingCount: number;
+=======
+function hasProfileChanged(input: {
+  matchingCount: number;
+  previous: HostProfile;
+>>>>>>> refs/tags/v0.10.2
   serverId: string;
   password?: string;
   createdAt: string;
   label: string;
+<<<<<<< HEAD
   preferredConnectionId: HostProfile["preferredConnectionId"];
   lifecycle: HostLifecycle;
   connections: HostConnection[];
@@ -246,6 +253,26 @@ function hasProfileChanged(input: {
     !hostLifecycleEquals(previous.lifecycle, lifecycle) ||
     (password !== undefined && password !== previous.password) ||
     connectionsDiffer(previous.connections, connections)
+=======
+  preferredConnectionId: string;
+  lifecycle: HostLifecycle;
+  connections: HostConnection[];
+}): boolean {
+  const { previous, connections } = input;
+  return (
+    input.matchingCount > 1 ||
+    previous.serverId !== input.serverId ||
+    (input.password !== undefined && input.password !== previous.password) ||
+    input.createdAt !== previous.createdAt ||
+    input.label !== previous.label ||
+    input.preferredConnectionId !== previous.preferredConnectionId ||
+    !hostLifecycleEquals(previous.lifecycle, input.lifecycle) ||
+    connections.length !== previous.connections.length ||
+    connections.some((candidate, index) => {
+      const old = previous.connections[index];
+      return !old || !hostConnectionEquals(candidate, old);
+    })
+>>>>>>> refs/tags/v0.10.2
   );
 }
 
@@ -300,6 +327,7 @@ export function upsertHostConnectionInProfiles(input: {
   const prev = matchedProfiles.find((daemon) => daemon.serverId === serverId) ?? matchedProfiles[0];
   const pairedRelay = input.connection.type === "relay" && Boolean(input.connection.deviceId);
   const nextConnections = upsertHostConnectionById(
+<<<<<<< HEAD
     matchedProfiles
       .flatMap((daemon) => daemon.connections)
       .filter((connection) => !pairedRelay || connection.type !== "relay"),
@@ -313,14 +341,31 @@ export function upsertHostConnectionInProfiles(input: {
     input.connection.id,
     input.preferConnection,
   );
+=======
+    matchedProfiles.flatMap((daemon) => daemon.connections),
+    normalizedConnection,
+  );
+  const nextLifecycle = prev.lifecycle;
+  const nextLabel = prev.label === prev.serverId ? derivedLabel : prev.label;
+  const nextPreferredConnectionId =
+    prev.preferredConnectionId &&
+    nextConnections.some((connection) => connection.id === prev.preferredConnectionId)
+      ? prev.preferredConnectionId
+      : normalizedConnection.id;
+>>>>>>> refs/tags/v0.10.2
   const nextCreatedAt = matchedProfiles.reduce(
     (earliest, daemon) => (daemon.createdAt < earliest ? daemon.createdAt : earliest),
     prev.createdAt,
   );
   const changed = hasProfileChanged({
+<<<<<<< HEAD
     previous: prev,
     pairedRelay,
     matchingCount: matchingIndexes.length,
+=======
+    matchingCount: matchingIndexes.length,
+    previous: prev,
+>>>>>>> refs/tags/v0.10.2
     serverId,
     password,
     createdAt: nextCreatedAt,
@@ -336,7 +381,10 @@ export function upsertHostConnectionInProfiles(input: {
 
   const nextProfile: HostProfile = {
     ...prev,
+<<<<<<< HEAD
     ...(pairedRelay ? { pairingRequired: undefined } : {}),
+=======
+>>>>>>> refs/tags/v0.10.2
     ...(password ? { password } : {}),
     serverId,
     label: nextLabel,
@@ -479,7 +527,11 @@ type StoredHostConnection = z.infer<typeof StoredHostConnectionSchema>;
 function normalizeStoredConnection(connection: StoredHostConnection): HostConnection | null {
   if (connection.type === "directTcp") {
     try {
+<<<<<<< HEAD
       const endpoint = normalizeHostPort(connection.endpoint);
+=======
+      const endpoint = normalizeLoopbackToLocalhost(normalizeHostPort(connection.endpoint));
+>>>>>>> refs/tags/v0.10.2
       const parsed = DirectTcpHostConnectionSchema.parse({
         id: `direct:${endpoint}`,
         type: "directTcp",

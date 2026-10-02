@@ -3725,6 +3725,33 @@ describe("HostRuntimeStore", () => {
     store.syncHosts([]);
   });
 
+  it("probes a pairing link immediately and saves only after admission", async () => {
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        connectToDaemon: async ({ host }) => {
+          if (host.password !== "correct-password")
+            throw new DaemonAuthenticationError("password_required");
+          return {
+            client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+            serverId: host.serverId,
+            hostname: "paired host",
+          };
+        },
+        getClientId: async () => "cid_pairing",
+      },
+    });
+    const offerUrl = encodeOfferUrl(makeOffer());
+    await expect(store.probeAndUpsertConnectionFromOfferUrl(offerUrl)).rejects.toThrow(
+      "Password required",
+    );
+    expect(store.getHosts()).toHaveLength(0);
+    const result = await store.probeAndUpsertConnectionFromOfferUrl(offerUrl, "correct-password");
+    expect(result.serverId).toBe("srv_offer");
+    expect(store.getHosts()[0]?.password).toBe("correct-password");
+    store.syncHosts([]);
+  });
+
   it("preserves the existing host label when re-pairing an existing relay host", async () => {
     const store = new HostRuntimeStore({
       claimRelayDevice: async () => "dev_testdevice000001",

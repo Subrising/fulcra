@@ -88,7 +88,10 @@ import {
   extractHttpBearerToken,
   extractWsBearerProtocol,
   extractWsBearerToken,
+<<<<<<< HEAD
   selectDaemonProtocol,
+=======
+>>>>>>> refs/tags/v0.10.2
   isBearerTokenValidAsync,
   type DaemonAuthConfig,
 } from "./auth.js";
@@ -1009,6 +1012,7 @@ export class VoiceAssistantWebSocketServer {
     request: IncomingMessage,
     password: string | undefined,
   ): Promise<void> {
+<<<<<<< HEAD
     // WebSocket clients send hello as soon as the upgrade opens. Pause the TCP
     // reader while bcrypt yields, then resume only after session listeners exist.
     ws.pause();
@@ -1041,6 +1045,24 @@ export class VoiceAssistantWebSocketServer {
           const reason = token === null ? "Password required" : "Incorrect password";
           this.logger.warn(
             { ...requestMetadata, hasToken: token !== null },
+=======
+    // Header validation is asynchronous. Buffer frames until the socket has a
+    // pending hello handler so an eager client cannot lose its first message.
+    ws.pause();
+    try {
+      // COMPAT(headerAuth): added in v0.9.1, remove after 2027-03-24.
+      const protocol = extractWsBearerProtocol(request.headers["sec-websocket-protocol"]);
+      const token =
+        extractHttpBearerToken(request.headers.authorization) ?? extractWsBearerToken(protocol);
+      const hasHeaderCredential = token !== null;
+      if (password && hasHeaderCredential) {
+        const requestMetadata = extractSocketRequestMetadata(request);
+        const isAuthorized = await isBearerTokenValidAsync({ password, token });
+        if (!isAuthorized) {
+          const reason = "Incorrect password";
+          this.logger.warn(
+            { ...requestMetadata, hasToken: true },
+>>>>>>> refs/tags/v0.10.2
             "Rejected WebSocket connection with invalid daemon password",
           );
           ws.close(WS_CLOSE_DAEMON_AUTH_FAILED, reason);
@@ -1048,6 +1070,7 @@ export class VoiceAssistantWebSocketServer {
         }
       }
 
+<<<<<<< HEAD
       const admission =
         hasHeaderCredential || !password
           ? {
@@ -1064,6 +1087,15 @@ export class VoiceAssistantWebSocketServer {
             }
           : null;
       await this.attachSocket(ws, request, undefined, false, admission);
+=======
+      await this.attachSocket(
+        ws,
+        request,
+        undefined,
+        false,
+        hasHeaderCredential ? OWNER_SESSION_ADMISSION : null,
+      );
+>>>>>>> refs/tags/v0.10.2
     } finally {
       ws.resume();
     }
@@ -1113,7 +1145,11 @@ export class VoiceAssistantWebSocketServer {
   public async attachExternalSocket(
     ws: WebSocketLike,
     metadata?: ExternalSocketMetadata,
+<<<<<<< HEAD
     admission: SessionAdmission | undefined = metadata?.admission,
+=======
+    admission: SessionAdmission | null = null,
+>>>>>>> refs/tags/v0.10.2
     initialHello?: WSHelloMessage,
   ): Promise<void> {
     if (metadata?.transport === "relay") {
@@ -1884,6 +1920,7 @@ export class VoiceAssistantWebSocketServer {
   ): Promise<boolean> {
     if (pending.admission) return true;
     try {
+<<<<<<< HEAD
       const password = message.auth?.kind === "password" ? message.auth.password : null;
       if ((password?.length ?? 0) > 1024 || this.pendingPasswordChecks >= 4) {
         this.clearPendingConnection(ws);
@@ -1902,6 +1939,14 @@ export class VoiceAssistantWebSocketServer {
       } finally {
         this.pendingPasswordChecks--;
       }
+=======
+      const resolved = await resolveSessionAdmission({
+        credential: message.auth,
+        passwordHash: this.passwordHash,
+        localCredential: this.credentialSource?.localCredential?.() ?? null,
+        transport: pending.identity.transport === "relay" ? "relay" : "direct",
+      });
+>>>>>>> refs/tags/v0.10.2
       if (this.pendingConnections.get(ws) !== pending) return false;
       if ("rejection" in resolved) {
         this.clearPendingConnection(ws);

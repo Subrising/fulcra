@@ -49,8 +49,11 @@
   "dependencies": {
     "@getpaseo/protocol": "0.10.2",
     "@getpaseo/relay": "0.10.2",
+<<<<<<< HEAD
     "base64-js": "^1.5.1",
     "tweetnacl": "^1.0.3",
+=======
+>>>>>>> refs/tags/v0.10.2
     "zod": "^4.4.3"
   },
   "devDependencies": {

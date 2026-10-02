@@ -527,9 +527,15 @@ export async function resolveExistingRunWorkspace(
 
 // Workspace policy for `paseo run`. Precedence:
 //   1. --workspace <id>            -> run in that existing workspace
+<<<<<<< HEAD
 //   2. --cwd / --new-workspace     -> explicitly select a directory/workspace source
 //   3. caller agent                -> daemon resolves the caller's workspace
 //   4. $PASEO_WORKSPACE_ID         -> exported by workspace terminals
+=======
+//   2. caller agent                -> daemon resolves the caller's workspace
+//   3. $PASEO_WORKSPACE_ID         -> exported by workspace terminals
+//   4. --new-workspace <kind>      -> mint a new workspace explicitly
+>>>>>>> refs/tags/v0.10.2
 //   5. bare run                    -> mint a new local-backed workspace for cwd
 async function resolveRunWorkspace(
   client: ConnectedDaemonClient,
@@ -544,8 +550,12 @@ async function resolveRunWorkspace(
     return resolveExistingRunWorkspace(client, explicit);
   }
 
+<<<<<<< HEAD
   const explicitDirectory = options.cwd !== undefined;
   if (!newWorkspace && !explicitDirectory && callerAgentId) {
+=======
+  if (!newWorkspace && callerAgentId) {
+>>>>>>> refs/tags/v0.10.2
     return { cwd };
   }
 

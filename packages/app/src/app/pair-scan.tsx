@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { hostKeyFingerprint } from "@getpaseo/client/relay-v3";
 import {
   describeBundleResults,
@@ -6,19 +7,27 @@ import {
   parsePairingBundle,
 } from "@/relay/pairing-bundle";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+=======
+import { useCallback, useEffect, useMemo, useState } from "react";
+>>>>>>> refs/tags/v0.10.2
 import { useTranslation } from "react-i18next";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter, type Href } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import type { BarcodeScanningResult, BarcodeSettings } from "expo-camera";
+<<<<<<< HEAD
 import { useHostMutations } from "@/runtime/host-runtime";
 import { decodeOfferFragmentPayload } from "@/utils/daemon-endpoints";
 import { parseConnectionOffer } from "@getpaseo/protocol/connection-offer";
+=======
+import { getHostRuntimeStore } from "@/runtime/host-runtime";
+>>>>>>> refs/tags/v0.10.2
 import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
 import { isWeb } from "@/constants/platform";
 import { BackHeader } from "@/components/headers/back-header";
+import { PairLinkModal } from "@/components/pair-link-modal";
 
 const styles = StyleSheet.create((theme) => ({
   container: {
@@ -120,7 +129,12 @@ function extractOfferUrlFromScan(result: BarcodeScanningResult): string | null {
   const raw = typeof result.data === "string" ? result.data.trim() : "";
   if (!raw) return null;
 
+<<<<<<< HEAD
   if (raw.includes("#offer=") || isPairingBundle(raw)) return raw;
+=======
+  if (raw.includes("#offer=") || raw.includes("#connect=") || raw.startsWith("relay://"))
+    return raw;
+>>>>>>> refs/tags/v0.10.2
 
   return null;
 }
@@ -135,12 +149,16 @@ export default function PairScanScreen() {
     repairServerId?: string;
   }>();
   const source = typeof params.source === "string" ? params.source : "settings";
+<<<<<<< HEAD
   const { upsertConnectionFromOfferUrl: upsertDaemonFromOfferUrl, upsertConnectionFromOffer } =
     useHostMutations();
+=======
+>>>>>>> refs/tags/v0.10.2
 
   const [permission, requestPermission] = useCameraPermissions();
   const [isPairing, setIsPairing] = useState(false);
-  const lastScannedRef = useRef<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [passwordOfferUrl, setPasswordOfferUrl] = useState<string | null>(null);
 
   const navigateToPairedHost = useCallback(
     (serverId: string) => {
@@ -168,11 +186,12 @@ export default function PairScanScreen() {
   }, [permission, requestPermission]);
 
   const handleScan = useCallback(
-    async (result: BarcodeScanningResult) => {
+    (result: BarcodeScanningResult) => {
       if (isPairing) return;
       const offerUrl = extractOfferUrlFromScan(result);
       if (!offerUrl) return;
 
+<<<<<<< HEAD
       if (lastScannedRef.current === offerUrl) return;
       lastScannedRef.current = offerUrl;
 
@@ -283,9 +302,31 @@ export default function PairScanScreen() {
       upsertConnectionFromOffer,
       upsertDaemonFromOfferUrl,
     ],
+=======
+      const store = getHostRuntimeStore();
+      if (passwordOfferUrl) return;
+      setIsPairing(true);
+      setScanError(null);
+      void store
+        .importConnectionLink(offerUrl, source === "onboarding" ? "hostRoot" : "hostSettings")
+        .then((outcome) => {
+          if (outcome.status === "connected") navigateToPairedHost(outcome.serverId);
+          else setPasswordOfferUrl(offerUrl);
+          return outcome;
+        })
+        .catch((error) => setScanError(error instanceof Error ? error.message : String(error)))
+        .finally(() => setIsPairing(false));
+    },
+    [isPairing, navigateToPairedHost, passwordOfferUrl, source],
+>>>>>>> refs/tags/v0.10.2
   );
 
   const handleRouterBack = useCallback(() => router.back(), [router]);
+  const closePasswordModal = useCallback(() => setPasswordOfferUrl(null), []);
+  const savePasswordPairing = useCallback(
+    ({ serverId }: { serverId: string }) => navigateToPairedHost(serverId),
+    [navigateToPairedHost],
+  );
   const handleRequestPermission = useCallback(() => {
     void requestPermission();
   }, [requestPermission]);
@@ -347,10 +388,18 @@ export default function PairScanScreen() {
                 <View style={[styles.corner, styles.cornerBR]} />
               </View>
               {isPairing ? <Text style={helperTextStyle}>{t("pairing.scan.pairing")}</Text> : null}
+              {scanError ? <Text style={helperTextStyle}>{scanError}</Text> : null}
             </View>
           </View>
         )}
       </View>
+      <PairLinkModal
+        visible={passwordOfferUrl !== null}
+        initialUrl={passwordOfferUrl ?? undefined}
+        initialPasswordRequired
+        onClose={closePasswordModal}
+        onSaved={savePasswordPairing}
+      />
     </View>
   );
 }
