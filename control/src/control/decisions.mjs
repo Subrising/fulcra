@@ -732,7 +732,6 @@ export class Decisions {
         if (!(e instanceof ProofRefused)) throw e;
         throw Error(
           `Your device's confirmation did not check out: ${e.message}. Nothing was recorded; confirm again on your device`,
-          { cause: e },
         );
       }
       actor = "human";

@@ -120,6 +120,9 @@
         "oxc/no-accumulating-spread": "off",
         // Hand-rolled promise wrappers, shutdown flags mutated from closures, terminal-control
         // sanitizers and test doubles trip these as false positives.
+        // Several catch blocks throw a sanitized message on purpose; attaching the raw error as
+        // `cause` would carry credentials and notification text into logs.
+        "preserve-caught-error": "off",
         "promise/always-return": "off",
         "promise/no-multiple-resolved": "off",
         "promise/no-callback-in-promise": "off",

@@ -58,7 +58,7 @@ export function runCredential(action, tracker, site, exec = execFileSync) {
       return true;
     } catch (error) {
       if (error?.status === 44) return false;
-      throw new Error("Keychain command failed", { cause: error });
+      throw new Error("Keychain command failed");
     }
   };
   const found = quiet(args);
