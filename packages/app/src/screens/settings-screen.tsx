@@ -891,6 +891,7 @@ function HostPicker({
       showActiveConnection
       searchable={false}
       title={t("settings.hostPicker.switchHost")}
+      desktopPlacement="top-start"
       desktopMinWidth={240}
       addHostTestID="settings-add-host"
       hostOptionTestID={hostOptionTestID}
