@@ -43,14 +43,14 @@ That's it. `process.env` now has the keys and values you defined in your `.env` 
 Import with [ES6](#how-do-i-use-dotenv-with-import):
 
 ```javascript
-import 'dotenv/config'
+import "dotenv/config";
 ```
 
 ES6 import if you need to set config options:
 
 ```javascript
-import dotenv from 'dotenv'
-dotenv.config({ path: '/custom/path/to/.env' })
+import dotenv from "dotenv";
+dotenv.config({ path: "/custom/path/to/.env" });
 ```
 
 </details>
@@ -123,10 +123,10 @@ Comments begin where a `#` exists, so if your value contains a `#` please wrap i
 The engine which parses the contents of your file containing environment variables is available to use. It accepts a String or Buffer and will return an Object with the parsed keys and values.
 
 ```javascript
-const dotenv = require('dotenv')
-const buf = Buffer.from('BASIC=basic')
-const config = dotenv.parse(buf) // will return an object
-console.log(typeof config, config) // object { BASIC : 'basic' }
+const dotenv = require("dotenv");
+const buf = Buffer.from("BASIC=basic");
+const config = dotenv.parse(buf); // will return an object
+console.log(typeof config, config); // object { BASIC : 'basic' }
 ```
 
 </details>
@@ -170,10 +170,12 @@ Reference and expand variables already on your machine for use in your .env file
 USERNAME="username"
 DATABASE_URL="postgres://${USERNAME}@localhost/my_database"
 ```
+
 ```js
 // index.js
-console.log('DATABASE_URL', process.env.DATABASE_URL)
+console.log("DATABASE_URL", process.env.DATABASE_URL);
 ```
+
 ```sh
 $ dotenvx run --debug -- node index.js
 [dotenvx@0.14.1] injecting env (2) from .env
@@ -191,10 +193,12 @@ Add the output of a command to one of your variables in your .env file.
 # .env
 DATABASE_URL="postgres://$(whoami)@localhost/my_database"
 ```
+
 ```js
 // index.js
-console.log('DATABASE_URL', process.env.DATABASE_URL)
+console.log("DATABASE_URL", process.env.DATABASE_URL);
 ```
+
 ```sh
 $ dotenvx run --debug -- node index.js
 [dotenvx@0.14.1] injecting env (1) from .env
@@ -295,22 +299,22 @@ This still subscribes to the twelve-factor app rules by generating a decryption 
 
 See [examples](https://github.com/dotenv-org/examples) of using dotenv with various frameworks, languages, and configurations.
 
-* [nodejs](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nodejs)
-* [nodejs (debug on)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nodejs-debug)
-* [nodejs (override on)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nodejs-override)
-* [nodejs (processEnv override)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-custom-target)
-* [esm](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-esm)
-* [esm (preload)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-esm-preload)
-* [typescript](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-typescript)
-* [typescript parse](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-typescript-parse)
-* [typescript config](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-typescript-config)
-* [webpack](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-webpack)
-* [webpack (plugin)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-webpack2)
-* [react](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-react)
-* [react (typescript)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-react-typescript)
-* [express](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-express)
-* [nestjs](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nestjs)
-* [fastify](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-fastify)
+- [nodejs](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nodejs)
+- [nodejs (debug on)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nodejs-debug)
+- [nodejs (override on)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nodejs-override)
+- [nodejs (processEnv override)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-custom-target)
+- [esm](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-esm)
+- [esm (preload)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-esm-preload)
+- [typescript](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-typescript)
+- [typescript parse](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-typescript-parse)
+- [typescript config](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-typescript-config)
+- [webpack](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-webpack)
+- [webpack (plugin)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-webpack2)
+- [react](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-react)
+- [react (typescript)](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-react-typescript)
+- [express](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-express)
+- [nestjs](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-nestjs)
+- [fastify](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-fastify)
 
 </details>
 
@@ -386,8 +390,8 @@ Simply..
 
 ```javascript
 // index.mjs (ESM)
-import 'dotenv/config' // see https://github.com/motdotla/dotenv#how-do-i-use-dotenv-with-import
-import express from 'express'
+import "dotenv/config"; // see https://github.com/motdotla/dotenv#how-do-i-use-dotenv-with-import
+import express from "express";
 ```
 
 A little background..
@@ -399,24 +403,27 @@ A little background..
 What does this mean in plain language? It means you would think the following would work but it won't.
 
 `errorReporter.mjs`:
+
 ```js
 class Client {
-  constructor (apiKey) {
-    console.log('apiKey', apiKey)
+  constructor(apiKey) {
+    console.log("apiKey", apiKey);
 
-    this.apiKey = apiKey
+    this.apiKey = apiKey;
   }
 }
 
-export default new Client(process.env.API_KEY)
+export default new Client(process.env.API_KEY);
 ```
+
 `index.mjs`:
+
 ```js
 // Note: this is INCORRECT and will not work
-import * as dotenv from 'dotenv'
-dotenv.config()
+import * as dotenv from "dotenv";
+dotenv.config();
 
-import errorReporter from './errorReporter.mjs' // process.env.API_KEY will be blank!
+import errorReporter from "./errorReporter.mjs"; // process.env.API_KEY will be blank!
 ```
 
 `process.env.API_KEY` will be blank.
@@ -424,9 +431,9 @@ import errorReporter from './errorReporter.mjs' // process.env.API_KEY will be b
 Instead, `index.mjs` should be written as..
 
 ```js
-import 'dotenv/config'
+import "dotenv/config";
 
-import errorReporter from './errorReporter.mjs'
+import errorReporter from "./errorReporter.mjs";
 ```
 
 Does that make sense? It's a bit unintuitive, but it is how importing of ES6 modules work. Here is a [working example of this pitfall](https://github.com/dotenv-org/examples/tree/master/usage/dotenv-es6-import-pitfall).
@@ -442,10 +449,10 @@ There are two alternatives to this approach:
 Yes! `dotenv.config()` returns an object representing the parsed `.env` file. This gives you everything you need to continue setting values on `process.env`. For example:
 
 ```js
-const dotenv = require('dotenv')
-const variableExpansion = require('dotenv-expand')
-const myEnv = dotenv.config()
-variableExpansion(myEnv)
+const dotenv = require("dotenv");
+const variableExpansion = require("dotenv-expand");
+const myEnv = dotenv.config();
+variableExpansion(myEnv);
 ```
 
 </details>
@@ -479,7 +486,7 @@ Use [dotenvx](https://github.com/dotenvx/dotenvx) to unlock syncing encrypted .e
 </details>
 <details><summary>What if I accidentally commit my `.env` file to code?</summary><br/>
 
-Remove it, [remove git history](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository) and then install the [git pre-commit hook](https://github.com/dotenvx/dotenvx#pre-commit) to prevent this from ever happening again. 
+Remove it, [remove git history](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository) and then install the [git pre-commit hook](https://github.com/dotenvx/dotenvx#pre-commit) to prevent this from ever happening again.
 
 ```
 npm i -g @dotenvx/dotenvx
@@ -494,7 +501,7 @@ By default, we will never modify any environment variables that have already bee
 If instead, you want to override `process.env` use the `override` option.
 
 ```javascript
-require('dotenv').config({ override: true })
+require("dotenv").config({ override: true });
 ```
 
 </details>
@@ -528,7 +535,7 @@ Most likely your `.env` file is not in the correct place. [See this stack overfl
 Turn on debug mode and try again..
 
 ```js
-require('dotenv').config({ debug: true })
+require("dotenv").config({ debug: true });
 ```
 
 You will receive a helpful error outputted to your console.
@@ -545,28 +552,28 @@ npm install node-polyfill-webpack-plugin
 Configure your `webpack.config.js` to something like the following.
 
 ```js
-require('dotenv').config()
+require("dotenv").config();
 
-const path = require('path');
-const webpack = require('webpack')
+const path = require("path");
+const webpack = require("webpack");
 
-const NodePolyfillPlugin = require('node-polyfill-webpack-plugin')
+const NodePolyfillPlugin = require("node-polyfill-webpack-plugin");
 
 module.exports = {
-  mode: 'development',
-  entry: './src/index.ts',
+  mode: "development",
+  entry: "./src/index.ts",
   output: {
-    filename: 'bundle.js',
-    path: path.resolve(__dirname, 'dist'),
+    filename: "bundle.js",
+    path: path.resolve(__dirname, "dist"),
   },
   plugins: [
     new NodePolyfillPlugin(),
     new webpack.DefinePlugin({
-      'process.env': {
-        HELLO: JSON.stringify(process.env.HELLO)
-      }
+      "process.env": {
+        HELLO: JSON.stringify(process.env.HELLO),
+      },
     }),
-  ]
+  ],
 };
 ```
 
@@ -580,9 +587,9 @@ Alternatively, just use [dotenv-webpack](https://github.com/mrsteele/dotenv-webp
 
 Dotenv exposes four functions:
 
-* `config`
-* `parse`
-* `populate`
+- `config`
+- `parse`
+- `populate`
 
 ### Config
 
@@ -591,13 +598,13 @@ Dotenv exposes four functions:
 and return an Object with a `parsed` key containing the loaded content or an `error` key if it failed.
 
 ```js
-const result = dotenv.config()
+const result = dotenv.config();
 
 if (result.error) {
-  throw result.error
+  throw result.error;
 }
 
-console.log(result.parsed)
+console.log(result.parsed);
 ```
 
 You can additionally, pass options to `config`.
@@ -611,15 +618,15 @@ Default: `path.resolve(process.cwd(), '.env')`
 Specify a custom path if your file containing environment variables is located elsewhere.
 
 ```js
-require('dotenv').config({ path: '/custom/path/to/.env' })
+require("dotenv").config({ path: "/custom/path/to/.env" });
 ```
 
 By default, `config` will look for a file called .env in the current working directory.
 
-Pass in multiple files as an array, and they will be parsed in order and combined with `process.env` (or `option.processEnv`, if set). The first value set for a variable will win, unless the `options.override` flag is set, in which case the last value set will win.  If a value already exists in `process.env` and the `options.override` flag is NOT set, no changes will be made to that value. 
+Pass in multiple files as an array, and they will be parsed in order and combined with `process.env` (or `option.processEnv`, if set). The first value set for a variable will win, unless the `options.override` flag is set, in which case the last value set will win. If a value already exists in `process.env` and the `options.override` flag is NOT set, no changes will be made to that value.
 
-```js  
-require('dotenv').config({ path: ['.host.example', '.env'] })
+```js
+require("dotenv").config({ path: [".host.example", ".env"] });
 ```
 
 ##### quiet
@@ -630,8 +637,8 @@ Suppress runtime logging message.
 
 ```js
 // index.js
-require('dotenv').config({ quiet: false }) // change to true to suppress
-console.log(`Hello ${process.env.HELLO}`)
+require("dotenv").config({ quiet: false }); // change to true to suppress
+console.log(`Hello ${process.env.HELLO}`);
 ```
 
 ```ini
@@ -652,7 +659,7 @@ Default: `utf8`
 Specify the encoding of your file containing environment variables.
 
 ```js
-require('dotenv').config({ encoding: 'latin1' })
+require("dotenv").config({ encoding: "latin1" });
 ```
 
 ##### debug
@@ -662,17 +669,17 @@ Default: `false`
 Turn on logging to help debug why certain keys or values are not being set as you expect.
 
 ```js
-require('dotenv').config({ debug: process.env.DEBUG })
+require("dotenv").config({ debug: process.env.DEBUG });
 ```
 
 ##### override
 
 Default: `false`
 
-Override any environment variables that have already been set on your machine with values from your .env file(s). If multiple files have been provided in `option.path` the override will also be used as each file is combined with the next. Without `override` being set, the first value wins. With `override` set the last value wins. 
+Override any environment variables that have already been set on your machine with values from your .env file(s). If multiple files have been provided in `option.path` the override will also be used as each file is combined with the next. Without `override` being set, the first value wins. With `override` set the last value wins.
 
 ```js
-require('dotenv').config({ override: true })
+require("dotenv").config({ override: true });
 ```
 
 ##### processEnv
@@ -682,11 +689,11 @@ Default: `process.env`
 Specify an object to write your environment variables to. Defaults to `process.env` environment variables.
 
 ```js
-const myObject = {}
-require('dotenv').config({ processEnv: myObject })
+const myObject = {};
+require("dotenv").config({ processEnv: myObject });
 
-console.log(myObject) // values from .env
-console.log(process.env) // this was not changed or written to
+console.log(myObject); // values from .env
+console.log(process.env); // this was not changed or written to
 ```
 
 ### Parse
@@ -696,10 +703,10 @@ variables is available to use. It accepts a String or Buffer and will return
 an Object with the parsed keys and values.
 
 ```js
-const dotenv = require('dotenv')
-const buf = Buffer.from('BASIC=basic')
-const config = dotenv.parse(buf) // will return an object
-console.log(typeof config, config) // object { BASIC : 'basic' }
+const dotenv = require("dotenv");
+const buf = Buffer.from("BASIC=basic");
+const config = dotenv.parse(buf); // will return an object
+console.log(typeof config, config); // object { BASIC : 'basic' }
 ```
 
 #### Options
@@ -711,10 +718,10 @@ Default: `false`
 Turn on logging to help debug why certain keys or values are not being set as you expect.
 
 ```js
-const dotenv = require('dotenv')
-const buf = Buffer.from('hello world')
-const opt = { debug: true }
-const config = dotenv.parse(buf, opt)
+const dotenv = require("dotenv");
+const buf = Buffer.from("hello world");
+const opt = { debug: true };
+const config = dotenv.parse(buf, opt);
 // expect a debug message because the buffer is not in KEY=VAL form
 ```
 
@@ -725,24 +732,24 @@ The engine which populates the contents of your .env file to `process.env` is av
 For example, customizing the source:
 
 ```js
-const dotenv = require('dotenv')
-const parsed = { HELLO: 'world' }
+const dotenv = require("dotenv");
+const parsed = { HELLO: "world" };
 
-dotenv.populate(process.env, parsed)
+dotenv.populate(process.env, parsed);
 
-console.log(process.env.HELLO) // world
+console.log(process.env.HELLO); // world
 ```
 
 For example, customizing the source AND target:
 
 ```js
-const dotenv = require('dotenv')
-const parsed = { HELLO: 'universe' }
-const target = { HELLO: 'world' } // empty object
+const dotenv = require("dotenv");
+const parsed = { HELLO: "universe" };
+const target = { HELLO: "world" }; // empty object
 
-dotenv.populate(target, parsed, { override: true, debug: true })
+dotenv.populate(target, parsed, { override: true, debug: true });
 
-console.log(target) // { HELLO: 'universe' }
+console.log(target); // { HELLO: 'universe' }
 ```
 
 #### options

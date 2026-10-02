@@ -24,20 +24,20 @@ side by side. If that is what you want, this is more structure than you need.
 **A seat** is a named position in a project — `prime` (accountable across projects) and
 `project-orchestrator` (accountable for one project). A seat is a role, not a person or a process.
 
-**A session** is a running agent. A seat is *bound* to a session. That binding goes stale when the
+**A session** is a running agent. A seat is _bound_ to a session. That binding goes stale when the
 session restarts or is replaced, and the system says so (`sessionGenerationChanged`) rather than
 pretending the old authority still holds.
 
 **Ownership** records which project a session belongs to. Four states, and the difference matters:
 
-| state | meaning |
-| --- | --- |
+| state      | meaning                                                               |
+| ---------- | --------------------------------------------------------------------- |
 | `recorded` | created through a project orchestrator, with a seat. Fully traceable. |
-| `declared` | created with a project, but no seat has claimed it yet. |
-| `adopted` | a seat claimed a declared session afterwards (`roles-adopt`). |
-| `unknown` | no ownership was recorded when the session was created. |
+| `declared` | created with a project, but no seat has claimed it yet.               |
+| `adopted`  | a seat claimed a declared session afterwards (`roles-adopt`).         |
+| `unknown`  | no ownership was recorded when the session was created.               |
 
-**`unknown` is permanent.** Ownership is keyed on the *creation request*, so if nothing was recorded
+**`unknown` is permanent.** Ownership is keyed on the _creation request_, so if nothing was recorded
 at creation there is nothing to adopt later — adoption upgrades a `declared` session, it cannot
 invent ownership from nothing. A session created outside the control plane stays outside it. This is
 the only irreversible thing in the model, so create sessions through a project orchestrator.
@@ -104,7 +104,7 @@ there is no queue. Wait for idle and send again. You cannot correct a brief mid-
 
 **"New work will not start."** A spent allowance. Nothing else will tell you.
 
-**"My message was refused and nobody answered."** A refusal that is still unread needs a *person* to
+**"My message was refused and nobody answered."** A refusal that is still unread needs a _person_ to
 read it. Retrying creates a second message; it does not deliver the first.
 
 **"This session has no project."** If it reports `unknown` there is no fix. Create the next one

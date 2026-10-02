@@ -17,12 +17,12 @@ that and applies to everything that does not ask. The product defaults apply whe
 none of those does. With no `roles` configured, or no role on the request, the
 answer is exactly what it was before roles existed.
 
-| | claude | codex |
-|---|---|---|
-| product default model | `claude` — follow the host | `codex/gpt-6-astra` |
-| product default mode | `auto` | `auto-review` |
-| product default thinking | `medium` | `high` |
-| product default ask pin | none | not applicable |
+|                          | claude                     | codex               |
+| ------------------------ | -------------------------- | ------------------- |
+| product default model    | `claude` — follow the host | `codex/gpt-6-astra` |
+| product default mode     | `auto`                     | `auto-review`       |
+| product default thinking | `medium`                   | `high`              |
+| product default ask pin  | none                       | not applicable      |
 
 **A bare family means "use whatever the host advertises as its default".** It is
 not a missing value. The controller asks the installed provider for its model
@@ -101,10 +101,10 @@ before every write. Do not start from it.
 `modes` accepts only modes the provider actually has, and only those this
 controller will select:
 
-| provider | selectable |
-|---|---|
-| claude | `plan`, `default`, `acceptEdits`, `auto` |
-| codex | `auto`, `auto-review` |
+| provider | selectable                               |
+| -------- | ---------------------------------------- |
+| claude   | `plan`, `default`, `acceptEdits`, `auto` |
+| codex    | `auto`, `auto-review`                    |
 
 Anything else is refused by name, with the selectable list in the message — a
 typo such as `autoo` is rejected rather than passed through to session creation.
@@ -132,10 +132,14 @@ and implementation sessions come up differently without every caller asking:
 {
   "defaults": {
     "roles": {
-      "planning":       { "claude": { "model": "claude/claude-opus-5-5",   "thinkingOptionId": "high" } },
-      "orchestration":  { "claude": { "model": "claude/claude-opus-5-5",   "thinkingOptionId": "medium" } },
-      "implementation": { "provider": "claude",
-                          "claude": { "model": "claude/claude-sonnet-5-5", "thinkingOptionId": "high" } }
+      "planning": { "claude": { "model": "claude/claude-opus-5-5", "thinkingOptionId": "high" } },
+      "orchestration": {
+        "claude": { "model": "claude/claude-opus-5-5", "thinkingOptionId": "medium" }
+      },
+      "implementation": {
+        "provider": "claude",
+        "claude": { "model": "claude/claude-sonnet-5-5", "thinkingOptionId": "high" }
+      }
     }
   }
 }
@@ -157,12 +161,12 @@ and implementation sessions come up differently without every caller asking:
 **Where the role comes from.** Only creation paths that know the purpose pass
 one:
 
-| Path | Role |
-|---|---|
-| `manager_create_worker` | always `implementation` |
-| `role_start_session`, and a seat accepting a session request | `implementation` unless the lead asks for `planning` |
-| operator `create`, the Command Centre create form, the conversation skill | the `role` the caller gives, if any |
-| Book (MacBook) sessions | resolved on the controller with the same rules, then carried |
+| Path                                                                      | Role                                                         |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `manager_create_worker`                                                   | always `implementation`                                      |
+| `role_start_session`, and a seat accepting a session request              | `implementation` unless the lead asks for `planning`         |
+| operator `create`, the Command Centre create form, the conversation skill | the `role` the caller gives, if any                          |
+| Book (MacBook) sessions                                                   | resolved on the controller with the same rules, then carried |
 
 Orchestrators and project leads are usually **seated after they are created**,
 and a live session's model is never changed. So create a lead with
@@ -253,9 +257,9 @@ Auto today without this file's involvement.
 
 What differs is the transport case above, and the difference is worth knowing:
 
-| | UI-created | controller-created |
-|---|---|---|
-| normal transport | `auto`, from the adapter | `auto`, from this file's product default |
+|                  | UI-created                                                                                 | controller-created                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| normal transport | `auto`, from the adapter                                                                   | `auto`, from this file's product default                                                      |
 | Bedrock / Vertex | adapter **removes** `auto` from the catalog and falls back to `default` — degrades quietly | selection still asks for `auto` and **fails at creation** unless a supported mode is set here |
 
 So on those transports this file is not an optional preference, it is the fix —

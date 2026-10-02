@@ -11,13 +11,24 @@
 // operator close path, and returns how many it closed so a fixture cannot silently close nothing and go on
 // believing it did.
 export function closeSeatingDefaults(control) {
-  const open = control.channels.status().channels.filter(c => c.state === 'open' && c.conferredBy === 'seating');
-  for (const c of open) control.channels.close({ channelId: c.channelId, note: 'Fixture closes the seating default to exercise operator approval' });
+  const open = control.channels
+    .status()
+    .channels.filter((c) => c.state === "open" && c.conferredBy === "seating");
+  for (const c of open)
+    control.channels.close({
+      channelId: c.channelId,
+      note: "Fixture closes the seating default to exercise operator approval",
+    });
   return open.length;
 }
 // The other half: a seat that seating has already funded is not the "holds no allowance" precondition some
 // tests need. This spends nothing and moves no revision -- it writes the allowance an operator would write.
 export function clearSeatingAllowance(control, seat, expectedRevision) {
-  return control.roleSessions.setAllowance({ role: 'project-orchestrator', seat, expectedRevision, maxSessions: 0,
-    note: 'Fixture clears the seating default to exercise the unfunded-seat refusal' });
+  return control.roleSessions.setAllowance({
+    role: "project-orchestrator",
+    seat,
+    expectedRevision,
+    maxSessions: 0,
+    note: "Fixture clears the seating default to exercise the unfunded-seat refusal",
+  });
 }

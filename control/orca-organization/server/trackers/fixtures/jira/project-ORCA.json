@@ -1,1 +1,6 @@
-{ "id": "10001", "key": "ORCA", "name": "Orca", "self": "https://evil.example/rest/api/3/project/10001" }
+{
+  "id": "10001",
+  "key": "ORCA",
+  "name": "Orca",
+  "self": "https://evil.example/rest/api/3/project/10001"
+}

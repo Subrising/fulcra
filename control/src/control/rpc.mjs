@@ -536,14 +536,12 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
       // DESIGN-R R1. Operator-gated like handback: a session must never be able to resume itself or another one.
       case "recovery-status":
         if (a != null) throw Error("Recovery status takes no input");
-        return control.recovery
-          .status()
-          .then((v) => ({
-            ...v,
-            usageLimits: control.usageLimits?.status() ?? null,
-            wakes: control.wakes?.status() ?? null,
-            providerRecovery: control.providerRecovery?.status() ?? null,
-          }));
+        return control.recovery.status().then((v) => ({
+          ...v,
+          usageLimits: control.usageLimits?.status() ?? null,
+          wakes: control.wakes?.status() ?? null,
+          providerRecovery: control.providerRecovery?.status() ?? null,
+        }));
       // H7 items 1-2: owned-session wakes and the idle-seat heartbeat (wakes.mjs). Operator only.
       case "wakes-status":
         if (a != null) throw Error("Wake status takes no input");

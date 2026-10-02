@@ -96,6 +96,10 @@ export function permissionFacts(agent: {
   }
 }
 
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
 export function runtimeFacts(agent: {
   lifecycle?: string;
   session?: unknown;
@@ -120,10 +124,7 @@ export function runtimeFacts(agent: {
   try {
     const nativeSessionId = agent.runtimeInfo?.sessionId ?? agent.persistence?.sessionId ?? null;
     const model = agent.runtimeInfo?.model ?? agent.config?.model ?? null;
-    if (
-      (nativeSessionId !== null && typeof nativeSessionId !== "string") ||
-      (model !== null && typeof model !== "string")
-    )
+    if (!isNullableString(nativeSessionId) || !isNullableString(model))
       return { status: "unavailable" };
     return deepFreeze({
       status: "known",

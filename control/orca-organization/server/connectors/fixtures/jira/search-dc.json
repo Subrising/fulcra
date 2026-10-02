@@ -14,10 +14,7 @@
             "key": "indeterminate"
           }
         },
-        "labels": [
-          "bug",
-          "web"
-        ],
+        "labels": ["bug", "web"],
         "updated": "2026-09-24T12:30:00.000+0000",
         "project": {
           "id": "10001",
@@ -59,9 +56,7 @@
             "key": "done"
           }
         },
-        "labels": [
-          "crash"
-        ],
+        "labels": ["crash"],
         "updated": "2026-09-10T16:45:00.000+0000",
         "project": {
           "id": "10001",

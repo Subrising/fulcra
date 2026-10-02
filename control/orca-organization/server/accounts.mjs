@@ -112,7 +112,7 @@ export async function withStoreLock(root, fn) {
           continue;
         }
       } catch {}
-      if (i > 200) throw Error("The account store is busy");
+      if (i > 200) throw Error("The account store is busy", { cause: e });
       await new Promise((r) => setTimeout(r, 25));
     }
   }
@@ -564,16 +564,20 @@ export function publicView(s, now = Date.now()) {
         choose(s, p, now) ? null : earliestReset(s, p, now),
       ]),
     ),
-    rotations: s.rotations.slice(-20).map((r) => ({
-      at: r.at,
-      session: r.session,
-      provider: r.provider,
-      from: r.fromName,
-      to: r.toName,
-      resetAt: r.resetAt,
-      earliestReset: r.earliestReset,
-      ...(r.reason === "manual" ? { reason: "manual" } : {}),
-    })),
+    rotations: s.rotations.slice(-20).map((r) =>
+      Object.assign(
+        {
+          at: r.at,
+          session: r.session,
+          provider: r.provider,
+          from: r.fromName,
+          to: r.toName,
+          resetAt: r.resetAt,
+          earliestReset: r.earliestReset,
+        },
+        r.reason === `manual` ? { reason: `manual` } : {},
+      ),
+    ),
     defaultAccounts: { ...s.defaults },
   };
 }

@@ -38,7 +38,7 @@ type Paseo =
 // `takeOver`: the seam that continues a running session on another account with its history (W2). Absent, a switch
 // takes effect at the session's next start.
 // `host`: this Mac's name, for the plain refusal a device without account management sees (U7 accounts.manage).
-type Deps = {
+interface Deps {
   root: () => string;
   configRoles: () => unknown;
   configModes?: () => unknown;
@@ -47,8 +47,11 @@ type Deps = {
   now?: () => number;
   takeOver?: TakeOver | null;
   host?: () => string;
-};
-type Reply = { ok: boolean; message: string | null };
+}
+interface Reply {
+  ok: boolean;
+  message: string | null;
+}
 type Audit = Parameters<typeof recordAccountAction>[0];
 const ok = (message: string | null = null) => ({ ok: true, message });
 const refused = (message: string) => ({ ok: false, message: message.slice(0, 300) });

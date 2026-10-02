@@ -1,5 +1,5 @@
-import { delegationFence } from './native-fence.mjs';
-import { assertColumns } from './schema.mjs';
+import { delegationFence } from "./native-fence.mjs";
+import { assertColumns } from "./schema.mjs";
 // Stage 1 of DESIGN.md: re-establish a delegated SEAT across a verified daemon restart, without
 // relaxing any existing fence.
 //
@@ -32,20 +32,25 @@ import { assertColumns } from './schema.mjs';
 //   'decline' -- this path does not apply, or cannot decide yet. Change nothing. This costs nothing:
 //                a boot-stale delegated session is already unusable, and the first dispatch against it
 //                still takes it over at controller.mjs:206.
-export const REESTABLISH = 'reestablish', REVOKE = 'revoke', DECLINE = 'decline';
+export const REESTABLISH = "reestablish",
+  REVOKE = "revoke",
+  DECLINE = "decline";
 // Who asked. The operator is a human authoriser (Stage 1); the sweep is the machine trigger (Stage 2) and
 // may act only on complete durable evidence. See R9b below.
-export const OPERATOR = 'operator', SWEEP = 'sweep';
-const decline = reason => ({ allow: false, disposition: DECLINE, reason, grantedAt: null });
-const revoke = reason => ({ allow: false, disposition: REVOKE, reason, grantedAt: null });
+export const OPERATOR = "operator",
+  SWEEP = "sweep";
+const decline = (reason) => ({ allow: false, disposition: DECLINE, reason, grantedAt: null });
+const revoke = (reason) => ({ allow: false, disposition: REVOKE, reason, grantedAt: null });
 
 // R3. Same preconditions handback requires of a session before it will delegate one (controller.mjs).
 // Archived is a human act and is treated as one; busy/pending is merely "ask again", matching send(),
 // which throws 'Recipient is busy' without taking anything over.
 export function sessionQuiescent(current) {
-  if (current.archivedAt) return revoke('The native session was archived; explicit human reopening is required');
-  if (!['idle', 'closed'].includes(current.status)) return decline('The session is busy; re-establishment needs an idle session');
-  if ((current.pending ?? 0) > 0) return decline('The session is waiting on a permission decision');
+  if (current.archivedAt)
+    return revoke("The native session was archived; explicit human reopening is required");
+  if (!["idle", "closed"].includes(current.status))
+    return decline("The session is busy; re-establishment needs an idle session");
+  if ((current.pending ?? 0) > 0) return decline("The session is waiting on a permission decision");
   return null;
 }
 
@@ -53,11 +58,19 @@ export function sessionQuiescent(current) {
 // guard refuses here for the same reason it refuses delegated dispatch everywhere else.
 export function humanInputFence(current) {
   let grantedAt;
-  try { grantedAt = delegationFence(current); }
-  catch (e) { return { ok: false, grantedAt: null, reason: e.message }; }
+  try {
+    grantedAt = delegationFence(current);
+  } catch (e) {
+    return { ok: false, grantedAt: null, reason: e.message };
+  }
   // Strictly 1: the counter is per-boot and this boot is the new one, so anything above zero is human
   // input that arrived AFTER the restart -- which is a revocation, not a seat to rescue.
-  if (grantedAt !== 1) return { ok: false, grantedAt: null, reason: 'Human input has already reached this session since the daemon restarted' };
+  if (grantedAt !== 1)
+    return {
+      ok: false,
+      grantedAt: null,
+      reason: "Human input has already reached this session since the daemon restarted",
+    };
   return { ok: true, grantedAt, reason: null };
 }
 
@@ -70,7 +83,10 @@ export function humanInputFence(current) {
 // want from a fence. Both conjuncts are required: they come from different sources (the timeline's
 // newest user_message vs. the agent snapshot), so each covers the other.
 export function promptIdentityUnchanged(row, current) {
-  return current.lastPromptId === row.expected && (current.lastUserAt ?? null) === (row.expectedAt ?? null);
+  return (
+    current.lastPromptId === row.expected &&
+    (current.lastUserAt ?? null) === (row.expectedAt ?? null)
+  );
 }
 
 // Two observations of the same session must describe the same state, or we cannot say what we acted on.
@@ -83,8 +99,14 @@ export function promptIdentityUnchanged(row, current) {
 // its second observation too, so after C2 this path checks the same observation the manual one does,
 // plus the first.
 export function observationStable(a, b) {
-  return a.boot === b.boot && a.lastPromptId === b.lastPromptId && (a.lastUserAt ?? null) === (b.lastUserAt ?? null)
-    && (a.archivedAt ?? null) === (b.archivedAt ?? null) && a.humanAt === b.humanAt && a.saturated === b.saturated;
+  return (
+    a.boot === b.boot &&
+    a.lastPromptId === b.lastPromptId &&
+    (a.lastUserAt ?? null) === (b.lastUserAt ?? null) &&
+    (a.archivedAt ?? null) === (b.archivedAt ?? null) &&
+    a.humanAt === b.humanAt &&
+    a.saturated === b.saturated
+  );
 }
 
 /**
@@ -95,14 +117,21 @@ export function observationStable(a, b) {
 export function reestablishable(row, current, facts) {
   // R1 first, and it is the whole takeover fence: a recorded takeover is mode 'human', and nothing in
   // this module ever writes mode. A human revocation the controller observed is therefore terminal.
-  if (!row || row.mode !== 'delegated') return decline('Only a delegated session can be re-established; a recorded takeover is final');
+  if (!row || row.mode !== "delegated")
+    return decline("Only a delegated session can be re-established; a recorded takeover is final");
   // R2. Re-establishment exists for a boot change and must never run without one.
-  if (!row.boot) return decline('This session records no daemon boot, so there is nothing to re-establish');
-  if (typeof current.boot !== 'string' || !current.boot) return decline('The current daemon boot could not be established');
-  if (current.boot === row.boot) return decline('The daemon has not restarted since this session was delegated');
+  if (!row.boot)
+    return decline("This session records no daemon boot, so there is nothing to re-establish");
+  if (typeof current.boot !== "string" || !current.boot)
+    return decline("The current daemon boot could not be established");
+  if (current.boot === row.boot)
+    return decline("The daemon has not restarted since this session was delegated");
   // R7. Scope: this path is for seats. Anything else keeps today's behaviour untouched.
   // H7 item 4: and for a seat's team (seat-sweep.mjs ownedBySeat), which the same evidence covers equally.
-  if (!facts.seated && !facts.owned) return decline('This session holds no role binding and belongs to no seat’s team; re-establishment is for seats and their teams');
+  if (!facts.seated && !facts.owned)
+    return decline(
+      "This session holds no role binding and belongs to no seat’s team; re-establishment is for seats and their teams",
+    );
   // R8 (C3, review F3). Because this path never bumps the generation, it never passes through
   // reissueRole -- and reissueRole refuses a session whose routing cannot carry a role capability
   // (bindings.mjs). Without this check a seat whose route went Book-shaped across the boot would KEEP a
@@ -110,22 +139,36 @@ export function reestablishable(row, current, facts) {
   // not grant. Refusing here is what makes the prime's "strictly weaker than takeover+handback" true
   // rather than approximately true. It declines rather than revoking: unroutable dispatch is not
   // evidence of human input, and the manual path remains available and is the correct answer.
-  if (!facts.dispatchSupported) return decline('This session cannot currently carry a role capability, so its seat must be repaired by takeover and handback rather than re-established');
+  if (!facts.dispatchSupported)
+    return decline(
+      "This session cannot currently carry a role capability, so its seat must be repaired by takeover and handback rather than re-established",
+    );
   const quiescent = sessionQuiescent(current);
   if (quiescent) return quiescent;
   const fence = humanInputFence(current);
   if (!fence.ok) return revoke(fence.reason);
   // R9a (Stage 2). The durable log records a human input after the grant: that is a revocation, under
   // either trigger. For the operator path this is strictly stricter than Stage 1 (decision D4).
-  if (facts.humanLog?.state === 'dirty') return revoke(facts.humanLog.reason ?? 'A human input reached this session after the seat was granted');
-  if (!promptIdentityUnchanged(row, current)) return revoke('The session’s last prompt is not the one this controller recorded; explicit handback is required');
+  if (facts.humanLog?.state === "dirty")
+    return revoke(
+      facts.humanLog.reason ?? "A human input reached this session after the seat was granted",
+    );
+  if (!promptIdentityUnchanged(row, current))
+    return revoke(
+      "The session’s last prompt is not the one this controller recorded; explicit handback is required",
+    );
   // R9b. Only complete evidence may stand in for a human. Anything but the operator trigger requires a
   // clean log -- strict by default, so a caller that forgets the trigger gets the sweep's rule. The
   // operator path keeps Stage 1 exactly: a human authorises when the evidence is incomplete.
-  if (facts.trigger !== OPERATOR && facts.humanLog?.state !== 'clean') return decline('The durable human-input record cannot vouch for this seat: ' + (facts.humanLog?.reason ?? 'no record was read'));
+  if (facts.trigger !== OPERATOR && facts.humanLog?.state !== "clean")
+    return decline(
+      "The durable human-input record cannot vouch for this seat: " +
+        (facts.humanLog?.reason ?? "no record was read"),
+    );
   // R6. The same re-derivation send() does before every dispatch (controller.mjs). A lapsed authority is
   // not a changed session, so it declines rather than revoking; the stale boot still fences dispatch.
-  if (facts.authorityKey !== row.authority) return decline('Task authority changed since this session was delegated');
+  if (facts.authorityKey !== row.authority)
+    return decline("Task authority changed since this session was delegated");
   return { allow: true, disposition: REESTABLISH, reason: null, grantedAt: fence.grantedAt };
 }
 
@@ -134,15 +177,25 @@ export function reestablishable(row, current, facts) {
 // it hoping to win the narrow race between the observation and the write. With it, each boot buys
 // exactly one attempt and losing the race costs them the seat.
 export function ensureReestablishmentJournal(db) {
-  db.exec('CREATE TABLE IF NOT EXISTS boot_reestablishments(id TEXT PRIMARY KEY,session TEXT NOT NULL,previousBoot TEXT NOT NULL,boot TEXT NOT NULL,generation INTEGER NOT NULL,outcome TEXT NOT NULL,reason TEXT NOT NULL,at TEXT NOT NULL);');
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS boot_reestablishments(id TEXT PRIMARY KEY,session TEXT NOT NULL,previousBoot TEXT NOT NULL,boot TEXT NOT NULL,generation INTEGER NOT NULL,outcome TEXT NOT NULL,reason TEXT NOT NULL,at TEXT NOT NULL);",
+  );
   // Asserted BEFORE the index, so a table of the wrong shape reports the migration refusal this module
   // owns rather than a bare SQLite 'no such column' from the index it cannot build.
-  assertColumns(db, 'boot_reestablishments', 'id,session,previousBoot,boot,generation,outcome,reason,at');
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS boot_reestablishments_once ON boot_reestablishments(session,boot);');
+  assertColumns(
+    db,
+    "boot_reestablishments",
+    "id,session,previousBoot,boot,generation,outcome,reason,at",
+  );
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS boot_reestablishments_once ON boot_reestablishments(session,boot);",
+  );
   // Stage 2's attempts live in their own table, one per (session, boot), so a sweep that declines for want
   // of evidence does not spend the operator's Stage 1 attempt, and an older controller -- whose
   // assertColumns is exact-match -- still opens this journal on rollback.
-  db.exec('CREATE TABLE IF NOT EXISTS seat_sweeps(id TEXT PRIMARY KEY,session TEXT NOT NULL,previousBoot TEXT NOT NULL,boot TEXT NOT NULL,generation INTEGER NOT NULL,outcome TEXT NOT NULL,reason TEXT NOT NULL,at TEXT NOT NULL);');
-  assertColumns(db, 'seat_sweeps', 'id,session,previousBoot,boot,generation,outcome,reason,at');
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS seat_sweeps_once ON seat_sweeps(session,boot);');
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS seat_sweeps(id TEXT PRIMARY KEY,session TEXT NOT NULL,previousBoot TEXT NOT NULL,boot TEXT NOT NULL,generation INTEGER NOT NULL,outcome TEXT NOT NULL,reason TEXT NOT NULL,at TEXT NOT NULL);",
+  );
+  assertColumns(db, "seat_sweeps", "id,session,previousBoot,boot,generation,outcome,reason,at");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS seat_sweeps_once ON seat_sweeps(session,boot);");
 }

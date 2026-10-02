@@ -13,7 +13,15 @@ export class ReadDeadlineExceeded extends Error {}
 export function withDeadline<T>(work: () => T | Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new ReadDeadlineExceeded(`${label} did not finish within ${Math.round(ms / 1000)} s; the controller or daemon is slow to answer. Refresh to try again.`)), ms);
+    timer = setTimeout(
+      () =>
+        reject(
+          new ReadDeadlineExceeded(
+            `${label} did not finish within ${Math.round(ms / 1000)} s; the controller or daemon is slow to answer. Refresh to try again.`,
+          ),
+        ),
+      ms,
+    );
     // Never the reason a process stays alive; the host keeps running anyway.
     (timer as { unref?: () => void }).unref?.();
   });

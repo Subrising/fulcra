@@ -8,7 +8,7 @@ records what was built, what was proved, and what was not.
 Nothing here touched the live controller tree, the host, launchd or any installed app.
 
 > **Filename.** The prime asked for `IMPLEMENTATION.md`. That name is already a tracked document in this
-> repo — the *Fulcra implementation contract*, which carries the repair-ownership and Radius
+> repo — the _Fulcra implementation contract_, which carries the repair-ownership and Radius
 > NO LAUNCH/NO TEARDOWN holds. I overwrote it, caught it before pushing, and restored it byte-for-byte
 > from `193d1611`; this report lives beside it under a name that collides with nothing. If the prime
 > wants the original filename, the contract needs somewhere to go first.
@@ -17,13 +17,13 @@ Nothing here touched the live controller tree, the host, launchd or any installe
 
 ## 0. The review conditions
 
-| # | Prime's decision | What was done |
-|---|---|---|
-| **C1** | FIX the `channels-list` undercount; no state may fall through | `buckets()` derives counts from the **observed** states, names all eight (`pending`, `delivered`, `failed`, `expired`, `reserved`, `refused`, `uncertain`, `queued`), and adds `other` + `total` taken from the rows. Symmetric `inbound` / `outbound`. §1 |
-| **C2** | FIX by batching `assertSenderAuthority` once per originator per pass, like `inspect`; no count bound | Done, keyed per originator. No `MAX_DEFERRALS` added. §1 |
-| **C3** | ACCEPT `failed` for a channel whose approval expired; remove the unreachable clamp and document the rule | Clamp deleted (`deadline()` now takes one argument), rule documented here and in `docs/project-roles.md`, and its dead unit test replaced by a behavioural one. §1 |
-| **C4** | FIX: both `ALTER`s in one transaction, with a test that a half-applied migration cannot occur | `applyMigration()` wraps them in `BEGIN`/`COMMIT`/`ROLLBACK`; two tests. §1 |
-| **C5** | FIX the suite numbers using the README's globs; document F4's fields and `expired` in `docs/project-roles.md` | §3 and `docs/project-roles.md`. |
+| #      | Prime's decision                                                                                              | What was done                                                                                                                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **C1** | FIX the `channels-list` undercount; no state may fall through                                                 | `buckets()` derives counts from the **observed** states, names all eight (`pending`, `delivered`, `failed`, `expired`, `reserved`, `refused`, `uncertain`, `queued`), and adds `other` + `total` taken from the rows. Symmetric `inbound` / `outbound`. §1 |
+| **C2** | FIX by batching `assertSenderAuthority` once per originator per pass, like `inspect`; no count bound          | Done, keyed per originator. No `MAX_DEFERRALS` added. §1                                                                                                                                                                                                   |
+| **C3** | ACCEPT `failed` for a channel whose approval expired; remove the unreachable clamp and document the rule      | Clamp deleted (`deadline()` now takes one argument), rule documented here and in `docs/project-roles.md`, and its dead unit test replaced by a behavioural one. §1                                                                                         |
+| **C4** | FIX: both `ALTER`s in one transaction, with a test that a half-applied migration cannot occur                 | `applyMigration()` wraps them in `BEGIN`/`COMMIT`/`ROLLBACK`; two tests. §1                                                                                                                                                                                |
+| **C5** | FIX the suite numbers using the README's globs; document F4's fields and `expired` in `docs/project-roles.md` | §3 and `docs/project-roles.md`.                                                                                                                                                                                                                            |
 
 Everything the reviewer found was real. Nothing here reopened the design.
 
@@ -33,15 +33,15 @@ Everything the reviewer found was real. Nothing here reopened the design.
 
 Eight files across both rounds.
 
-| File | Change |
-|---|---|
-| `docs/project-roles.md` | **C3, C5.** What `channels-list` counts, the `expired`/`failed` rule, `deferredAt`/`deferrals`, F3 resend |
-| `src/control/authority.mjs` | **F1.** New `RecipientBusy` error class, exported beside `SourceChanged` |
-| `src/control/controller.mjs` | **F1.** `send()` throws `RecipientBusy` for a busy recipient. Wording unchanged |
-| `src/control/role-sessions.mjs` | **F1.** The second pump asks the type instead of matching the refusal text |
-| `src/control/role-channels.mjs` | **F1–F4.** All four, plus the schema migration |
-| `src/control/role-channel-admission.test.mjs` | 26 new tests; one fixture `INSERT` widened; per-task authority counter |
-| `src/control/role-channels.test.mjs` | Duplicate-identity assertion narrowed to F3's actual rule |
+| File                                          | Change                                                                                                    |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `docs/project-roles.md`                       | **C3, C5.** What `channels-list` counts, the `expired`/`failed` rule, `deferredAt`/`deferrals`, F3 resend |
+| `src/control/authority.mjs`                   | **F1.** New `RecipientBusy` error class, exported beside `SourceChanged`                                  |
+| `src/control/controller.mjs`                  | **F1.** `send()` throws `RecipientBusy` for a busy recipient. Wording unchanged                           |
+| `src/control/role-sessions.mjs`               | **F1.** The second pump asks the type instead of matching the refusal text                                |
+| `src/control/role-channels.mjs`               | **F1–F4.** All four, plus the schema migration                                                            |
+| `src/control/role-channel-admission.test.mjs` | 26 new tests; one fixture `INSERT` widened; per-task authority counter                                    |
+| `src/control/role-channels.test.mjs`          | Duplicate-identity assertion narrowed to F3's actual rule                                                 |
 
 ### C1 — a message can no longer be counted in nothing
 
@@ -93,7 +93,7 @@ transaction and rolls back on any failure.
 ### F1 — deferral is a type, not a sentence
 
 `RecipientBusy` (`authority.mjs`) is the counterpart to the existing `SourceChanged`: a definite
-*timing* fact, where `SourceChanged` is a definite *authority* fact. The rule now reads in code the way
+_timing_ fact, where `SourceChanged` is a definite _authority_ fact. The rule now reads in code the way
 it reads in the proposal — `SourceChanged` → fail, `RecipientBusy` → defer, anything else → bounded retry.
 
 Both copies of `/Recipient is busy or waiting for permission/` are gone (`role-channels.mjs:6`,
@@ -116,7 +116,7 @@ Both copies of `/Recipient is busy or waiting for permission/` are gone (`role-c
 
 A resend of the same `messageId` on the same channel, from the same sender, with the same text and
 `inReplyTo`, now returns that row's current state with `resend: true` instead of throwing. It spends no
-allowance and writes no row. Any mismatch — different text, or the *counterpart* seat using the identity
+allowance and writes no row. Any mismatch — different text, or the _counterpart_ seat using the identity
 — is still `Message identity already used`.
 
 Answered before `assertUsable`, for the reason `thread()` already gives: an invalidated channel hides no
@@ -124,12 +124,12 @@ history from either seat, and a sender is most likely to ask precisely when some
 
 ### F4 — the queue is visible without pulling a thread
 
-`channels-list` now returns, per channel: `awaiting` (pending *to* this seat), and `inbound` / `outbound`
+`channels-list` now returns, per channel: `awaiting` (pending _to_ this seat), and `inbound` / `outbound`
 state counts in both directions (see C1 for their final shape). `channels-thread` and `channels-status`
 carry `deferredAt` / `deferrals`, so held-back text is legible as held-back.
 
-This is the whole of "prime pull" from the proposal: the prime could already *read* a pending message via
-`channels-thread`; it could not *discover* one. No second delivery path was added.
+This is the whole of "prime pull" from the proposal: the prime could already _read_ a pending message via
+`channels-thread`; it could not _discover_ one. No second delivery path was added.
 
 ### The migration
 
@@ -150,7 +150,7 @@ a busy prime actually takes**, and a test I wrote to pin the fix failed and show
 
 `control.busy` is the in-flight **operation** lock (`controller.mjs:18`, `exclusive()`), not "this model
 is mid-turn". A prime that is simply working is therefore discovered by `control.send`'s own status check
-(`controller.mjs:209`) and refuses from inside the pump's `try` — *after* the attempt was already spent on
+(`controller.mjs:209`) and refuses from inside the pump's `try` — _after_ the attempt was already spent on
 the line before dispatch. So the real pre-existing behaviour was the opposite of what the proposal
 described: a busy prime burned all 20 attempts (~10 minutes at the watchdog interval) and its report was
 then recorded **`failed`**, with boilerplate blaming the receiving seat for what was only the sender
@@ -158,7 +158,7 @@ arriving early. The report was lost quickly and the stated reason was wrong.
 
 Fixed by giving the attempt back on a typed busy refusal — a refusal that admitted nothing did not reach
 the recipient — so both busy paths are now uniform: no attempt, one deferral, bounded by the deadline.
-Pinned by *a prime that is merely working does not exhaust the attempt budget*, which runs 25 passes
+Pinned by _a prime that is merely working does not exhaust the attempt budget_, which runs 25 passes
 against a working prime and asserts `attempts === 0`, `state === 'pending'`, then delivery on the first
 idle pass.
 
@@ -173,9 +173,9 @@ Run per file, as instructed:
 
 ### Channel suites — the ones this work changes
 
-| Suite | Base `d956718f` | `e313b448` | Now |
-|---|---|---|---|
-| `role-channel-admission.test.mjs` + `role-channels.test.mjs` | **28 / 28 pass** | 42 / 42 | **54 / 54 pass** |
+| Suite                                                        | Base `d956718f`  | `e313b448` | Now              |
+| ------------------------------------------------------------ | ---------------- | ---------- | ---------------- |
+| `role-channel-admission.test.mjs` + `role-channels.test.mjs` | **28 / 28 pass** | 42 / 42    | **54 / 54 pass** |
 
 26 new tests over the two rounds. This round adds 12: 6 for C1 (each of `uncertain`, `refused`, `queued`,
 `reserved` counted; an unnamed state surfaced in `other`; the two directions kept apart), 3 for C2 (batched
@@ -189,8 +189,8 @@ see C3.
 `README.md:27` documents `src/control/*.test.mjs src/*.test.mjs`. The previous round measured only
 `src/control/*.test.mjs`, which is the C5 correction. Both measured in a **real git worktree**, 6 runs each:
 
-| | Base `d956718f` | Now |
-|---|---|---|
+|                                                                                      | Base `d956718f`                  | Now                              |
+| ------------------------------------------------------------------------------------ | -------------------------------- | -------------------------------- |
 | `node --experimental-test-module-mocks --test src/control/*.test.mjs src/*.test.mjs` | 435 tests, **431 pass / 4 fail** | 461 tests, **457 pass / 4 fail** |
 
 Delta **+26 tests, +26 passing, no change in failures**. The base figure matches the reviewer's exactly.
@@ -198,7 +198,7 @@ Delta **+26 tests, +26 passing, no change in failures**. The base figure matches
 The 4 failures are the same four at base and at head, and none is caused by this work:
 
 - `src/control/mcp-refresh-fence.test.mjs` (file-level) — needs `ORCA_MCP_TEST_NATIVE=<a pristine server
-  dist>`. **I do not have one inside my cwd and did not go looking outside it. Unrun in a meaningful
+dist>`. **I do not have one inside my cwd and did not go looking outside it. Unrun in a meaningful
   sense, before and after.**
 - `src/control/native-memory-route.test.mjs` (2) — `installation-settings.mjs:23` asserts the repo lives
   under `$HOME/tasks`; this worktree is under `/path/to/volume/...`. Environmental.
@@ -206,7 +206,7 @@ The 4 failures are the same four at base and at head, and none is caused by this
   identical at base, exactly as the reviewer found.
 
 **A fifth failure appears intermittently, and it is pre-existing.** `src/memory.test.mjs:15`
-(*saved-claude: real scoped protocol, exact reads, privacy and bounded framing*) fails only under
+(_saved-claude: real scoped protocol, exact reads, privacy and bounded framing_) fails only under
 whole-suite parallel load — never when run alone (8/8 clean at base and at head). Measured: **2 of 13**
 whole-suite runs at head, **6 of 12** at base. It is load-dependent, it is more frequent on the untouched
 base than on this branch, and nothing this change touches is reachable from it. Reported rather than
@@ -224,7 +224,7 @@ Neither was weakened.
 1. `role-channel-admission.test.mjs:~267` — the "undeclared path" test plants a row with a positional
    15-value `INSERT`; the table now has 17 columns, so the insert itself failed. Widened to `,NULL,0`.
    This is exactly the breakage `schema.mjs`'s header comment predicts for positional inserts.
-2. `role-channels.test.mjs:~159` — asserted that resending an identity *with identical text* throws.
+2. `role-channels.test.mjs:~159` — asserted that resending an identity _with identical text_ throws.
    That is the behaviour F3 was approved to change. Narrowed to assert the real rule: identical resend
    returns `state` + `resend: true`, **differing** text still throws. The test's existing
    `assert.equal(f.sends(), 2)` is what proves the resend spent nothing.
@@ -236,48 +236,48 @@ Neither was weakened.
 Each safety-relevant change was broken and the right test confirmed failing, then reverted. Files were
 restored from byte-for-byte backups and re-diffed clean afterwards.
 
-| # | Mutation | Result |
-|---|---|---|
-| M1 | `controller.mjs` throws plain `Error`, not `RecipientBusy` | **killed** — 17 failures. The type is load-bearing across both pumps |
-| M2 | Pump defers on *any* error (`if (true)`) | **killed** — *an impostor carrying the busy wording is failed* |
-| M3 | Deadline check deleted from `deliverPending` | **killed** — *a message deferred past its deadline expires* |
-| M4 | Clamp dropped: TTL only, channel expiry ignored | **killed** — *the deferral deadline is clamped to the channel* |
-| M5 | Attempt not given back on a busy refusal | **killed** — 2 tests, incl. *a prime that is merely working…* |
-| M6 | Resend match ignores the text (replay accepted) | **killed** — 2 tests, incl. the pre-existing approval-bounds test |
-| M7 | Resend match ignores the **sender** | **SURVIVED → test added → killed** (below) |
-| M8 | Expiry refunds the channel allowance | **killed** — *…and expiry is not failure* |
-| M9 | Migration fires on any shape, not only the known prior one | **killed** — 42 failures |
-| M10 | `awaiting` counts `delivered` instead of `pending` | **killed** — *both seats can see a deferred message* |
+| #   | Mutation                                                   | Result                                                               |
+| --- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| M1  | `controller.mjs` throws plain `Error`, not `RecipientBusy` | **killed** — 17 failures. The type is load-bearing across both pumps |
+| M2  | Pump defers on _any_ error (`if (true)`)                   | **killed** — _an impostor carrying the busy wording is failed_       |
+| M3  | Deadline check deleted from `deliverPending`               | **killed** — _a message deferred past its deadline expires_          |
+| M4  | Clamp dropped: TTL only, channel expiry ignored            | **killed** — _the deferral deadline is clamped to the channel_       |
+| M5  | Attempt not given back on a busy refusal                   | **killed** — 2 tests, incl. _a prime that is merely working…_        |
+| M6  | Resend match ignores the text (replay accepted)            | **killed** — 2 tests, incl. the pre-existing approval-bounds test    |
+| M7  | Resend match ignores the **sender**                        | **SURVIVED → test added → killed** (below)                           |
+| M8  | Expiry refunds the channel allowance                       | **killed** — _…and expiry is not failure_                            |
+| M9  | Migration fires on any shape, not only the known prior one | **killed** — 42 failures                                             |
+| M10 | `awaiting` counts `delivered` instead of `pending`         | **killed** — _both seats can see a deferred message_                 |
 
 ### This round — C1, C2, C3, C4
 
 Same method: exact-anchor replacement with the anchor count asserted, run, then restore from a
 byte-for-byte backup and re-diff clean.
 
-| # | Mutation | Result |
-|---|---|---|
-| N1 | C1: restore the silent drop — four buckets, unknown states discarded | **killed** — all 5 C1 tests |
-| N2 | C1: `total` summed from the named buckets instead of taken from the rows | **killed** — all 5 C1 tests |
-| N3 | C2: unbatch `assertSenderAuthority` (per message again) | **killed** — *…once per pass, not once per message* |
-| N4 | C2 **safety**: cache the verdict but never act on it | **killed** — 4 tests, incl. *…failed rather than delivered when the sender task authority changed* |
-| N5 | C4: two auto-committing `ALTER`s again | **killed** — 3 tests |
-| N6 | C3: stop classifying an unusable channel as `failed` | **killed** — *a message still waiting when its channel expires is failed, not expired* |
-| N7 | C2: cache key never hits (equivalent to unbatching) | **killed** — *…once per pass* |
-| N8 | C2 **safety**: one shared cache key, so the first originator vouches for every other | **SURVIVED → test added → killed** (below) |
+| #   | Mutation                                                                             | Result                                                                                             |
+| --- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| N1  | C1: restore the silent drop — four buckets, unknown states discarded                 | **killed** — all 5 C1 tests                                                                        |
+| N2  | C1: `total` summed from the named buckets instead of taken from the rows             | **killed** — all 5 C1 tests                                                                        |
+| N3  | C2: unbatch `assertSenderAuthority` (per message again)                              | **killed** — _…once per pass, not once per message_                                                |
+| N4  | C2 **safety**: cache the verdict but never act on it                                 | **killed** — 4 tests, incl. _…failed rather than delivered when the sender task authority changed_ |
+| N5  | C4: two auto-committing `ALTER`s again                                               | **killed** — 3 tests                                                                               |
+| N6  | C3: stop classifying an unusable channel as `failed`                                 | **killed** — _a message still waiting when its channel expires is failed, not expired_             |
+| N7  | C2: cache key never hits (equivalent to unbatching)                                  | **killed** — _…once per pass_                                                                      |
+| N8  | C2 **safety**: one shared cache key, so the first originator vouches for every other | **SURVIVED → test added → killed** (below)                                                         |
 
-**N8 is this round's M7.** My first cross-originator mutation was killed only by a *counting* assertion,
+**N8 is this round's M7.** My first cross-originator mutation was killed only by a _counting_ assertion,
 which told me the test measured the wrong thing: it counted `control.authority` calls, and in this fixture
-both seats are sender *and* recipient, so `control.send`'s own recipient lookup was polluting the number.
+both seats are sender _and_ recipient, so `control.send`'s own recipient lookup was polluting the number.
 I rewrote the test to spy on `assertSenderAuthority` directly — the pump's own call, which is the only one
-C2 asked me to batch — and added *each originator is asked about separately; one seat never vouches for
-the other*. N8 and N3 both fail against the corrected test. A cache keyed too broadly is the one new risk
+C2 asked me to batch — and added _each originator is asked about separately; one seat never vouches for
+the other_. N8 and N3 both fail against the corrected test. A cache keyed too broadly is the one new risk
 C2 introduces, and it now has a test that can see it.
 
 **M7 is the previous round's one worth reading.** Dropping `prior.fromSession === sender.id` from the F3 match left no
-test failing. Nothing *leaks* — both seats can already read every message on their channel via
+test failing. Nothing _leaks_ — both seats can already read every message on their channel via
 `channels-thread` — but the counterpart seat's own genuine message would have been silently swallowed and
-it would have been handed the other seat's state as if it were its own outcome. Closed by *the
-counterpart seat cannot resend the other seat's identity*, which now fails under that mutation.
+it would have been handed the other seat's state as if it were its own outcome. Closed by _the
+counterpart seat cannot resend the other seat's identity_, which now fails under that mutation.
 
 ---
 
@@ -320,6 +320,6 @@ outside this worktree was read or written.
 3. **Expiring a past-deadline message even when the seat is idle on that pass** is deliberate — stale text
    arriving looking current is the harm — but it is a behaviour a reader could reasonably question.
 4. **The reviewer's F-2 residue.** Batching removes the pump's redundant sender lookup, but `control.send`
-   still performs one *recipient* authority lookup per message per pass, including for a message it is
+   still performs one _recipient_ authority lookup per message per pass, including for a message it is
    about to defer. Halving, not eliminating, the off-box cost of a stuck message. Reducing it further
    means changing `controller.send`, which neither the approval nor C2 asked for, so I did not.

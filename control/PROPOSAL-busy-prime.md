@@ -12,10 +12,10 @@ unless the sender retries by hand." **For the busy case that is no longer true o
 `RoleChannels.send` already catches the busy refusal and durably queues:
 
 - `src/control/role-channels.mjs:6` — `const BUSY = /Recipient is busy or waiting for permission/`
-- `src/control/role-channels.mjs:188-196` — a busy refusal is *not* a failure: the row is set to
+- `src/control/role-channels.mjs:188-196` — a busy refusal is _not_ a failure: the row is set to
   `state='pending'`, `pump()` is scheduled, and the sender is told
-  *"the receiving seat was busy, so this message is recorded and will be delivered ... when it next
-  goes idle. No further allowance is spent and nothing is replayed."*
+  _"the receiving seat was busy, so this message is recorded and will be delivered ... when it next
+  goes idle. No further allowance is spent and nothing is replayed."_
 - `src/control/role-channels.mjs:235-281` — `deliverPending()` re-offers pending rows through
   `control.send` with the full admission path.
 - `src/control/role-channels.mjs:202` — `interested()` marks the recipient seat interesting to the
@@ -30,7 +30,7 @@ prime — here is what to change." I verified the existing behaviour by running 
 ## 1. Recommendation
 
 **Keep queue-and-deliver-when-idle as the sole delivery mechanism. Do NOT add a second, pull-based
-delivery path. Add a bounded pull *visibility* surface on top of the existing queue, plus four
+delivery path. Add a bounded pull _visibility_ surface on top of the existing queue, plus four
 corrections to the queue itself.**
 
 Why not a real pull path: every delivery today goes through `control.send`, which re-derives the
@@ -43,7 +43,7 @@ the fence bypass the whole channel design exists to prevent
 authority re-derivation right; `role-sessions.mjs:287` already duplicates the busy regex and that
 single duplication is a defect (§2, F1).
 
-What pull *should* mean here: the prime can already read a pending message's text via
+What pull _should_ mean here: the prime can already read a pending message's text via
 `channels-thread` (`role-channels.mjs:116-123` selects all rows regardless of state, and
 `thread()`'s own comment says a pending or refused message stays legible to both seats). What it
 cannot do is **discover** that something is waiting — `list()` counts unread only for
@@ -52,12 +52,12 @@ fix F4.
 
 ### The four corrections
 
-| # | Change | Why |
-|---|---|---|
-| F1 | Replace the `BUSY` regex with a typed `RecipientBusy` error exported from `authority.mjs` alongside `SourceChanged` | String-matching a refusal is fragile and is duplicated at two sites |
-| F2 | Give a deferred message its own deadline and a distinct terminal state `expired` | The busy path consumes no attempts budget today; nothing bounds it but channel expiry |
-| F3 | Make a resend of the same `messageId` idempotent instead of an error | A sender that loses the RPC response cannot learn what happened |
-| F4 | Surface pending counts in `channels-list`, both inbound and outbound | Neither the prime nor the sender can see the queue without reading each thread |
+| #   | Change                                                                                                              | Why                                                                                   |
+| --- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| F1  | Replace the `BUSY` regex with a typed `RecipientBusy` error exported from `authority.mjs` alongside `SourceChanged` | String-matching a refusal is fragile and is duplicated at two sites                   |
+| F2  | Give a deferred message its own deadline and a distinct terminal state `expired`                                    | The busy path consumes no attempts budget today; nothing bounds it but channel expiry |
+| F3  | Make a resend of the same `messageId` idempotent instead of an error                                                | A sender that loses the RPC response cannot learn what happened                       |
+| F4  | Surface pending counts in `channels-list`, both inbound and outbound                                                | Neither the prime nor the sender can see the queue without reading each thread        |
 
 ---
 
@@ -76,7 +76,7 @@ fix F4.
   (`role-channels.mjs:166-177`), so a crash between spend and insert cannot lose the message or
   double-spend the allowance.
 - On daemon start, `src/control/server.mjs:68,73` sets `eventsReady = true` then `await
-  refreshEvents()`, and `refreshEvents` (`server.mjs:41`) calls `control.channels.pump()`. A
+refreshEvents()`, and `refreshEvents` (`server.mjs:41`) calls `control.channels.pump()`. A
   30-second watchdog (`server.mjs:74`) re-runs it. So pending rows are re-offered at boot without
   any sender action.
 - `stop()` (`server.mjs:70`) awaits `control.channels.pumping` before closing the store, so a pass
@@ -95,16 +95,16 @@ I recommend extending this mechanism rather than designing a queue.
 
 **Today (VERIFIED):**
 
-| Bound | Value | Where |
-|---|---|---|
-| Open channels | 64 | `role-channels.mjs:67` |
-| Open channels per seat pair | 1 | `role-channels.mjs:68` |
-| Messages per channel | 1–64, operator-chosen | `role-channels.mjs:50` |
-| Total message rows, all states | 1000 | `role-channels.mjs:168` |
-| Channel lifetime | ≤ 30 days | `MAX_DAYS`, `role-channels.mjs:5,55` |
-| Delivery attempts | 20 | `MAX_ATTEMPTS`, `role-channels.mjs:7,244` |
-| Rows examined per pump pass | 32 | `role-channels.mjs:239` |
-| Message size | 16 KiB | `role-channels.mjs:148` |
+| Bound                          | Value                 | Where                                     |
+| ------------------------------ | --------------------- | ----------------------------------------- |
+| Open channels                  | 64                    | `role-channels.mjs:67`                    |
+| Open channels per seat pair    | 1                     | `role-channels.mjs:68`                    |
+| Messages per channel           | 1–64, operator-chosen | `role-channels.mjs:50`                    |
+| Total message rows, all states | 1000                  | `role-channels.mjs:168`                   |
+| Channel lifetime               | ≤ 30 days             | `MAX_DAYS`, `role-channels.mjs:5,55`      |
+| Delivery attempts              | 20                    | `MAX_ATTEMPTS`, `role-channels.mjs:7,244` |
+| Rows examined per pump pass    | 32                    | `role-channels.mjs:239`                   |
+| Message size                   | 16 KiB                | `role-channels.mjs:148`                   |
 
 A pending message is therefore **never unbounded**: it must first spend channel allowance, which is
 a finite operator-chosen budget. The maximum pending depth toward one prime is the sum of
@@ -116,7 +116,7 @@ which wastes an operator-granted budget.
 **The two real gaps (VERIFIED):**
 
 1. **`MAX_ATTEMPTS` does not bound the busy case.** `role-channels.mjs:271` reads
-   `if (this.control.busy.has(recipient.id)) continue;` and the attempts increment is the *next*
+   `if (this.control.busy.has(recipient.id)) continue;` and the attempts increment is the _next_
    line, 272. A recipient that is busy on every pass consumes no attempts, forever. The only thing
    that eventually stops it is `assertUsable(record, false)` at line 242 noticing the channel
    expired — i.e. **up to 30 days.** A status report is worthless 30 days late, and it will be
@@ -143,7 +143,7 @@ if (this.control.busy.has(recipient.id)) {
 ```
 
 `expire()` writes a **new terminal state `expired`**, distinct from `failed`. That distinction
-matters: `failed` today means something about the *approval* changed (`role-channels.mjs:243,247`)
+matters: `failed` today means something about the _approval_ changed (`role-channels.mjs:243,247`)
 or the sender lost authority — an operator reading `channels-status` should not have to guess
 whether a row means "your prime was busy too long" or "your seat was taken over."
 
@@ -154,8 +154,8 @@ by events and should be re-sent with fresh content rather than delivered stale. 
 **prime decision** — see open questions.
 
 Interaction with the existing allowance: an `expired` message **keeps its spent allowance**. This is
-deliberate and consistent with the comment already at `role-channels.mjs:165-166` — *"A refused send
-still spends its allowance rather than risking a replayed identity."* Refunding would let a sender
+deliberate and consistent with the comment already at `role-channels.mjs:165-166` — _"A refused send
+still spends its allowance rather than risking a replayed identity."_ Refunding would let a sender
 loop cheaply against a busy prime.
 
 ### Ordering and dedup
@@ -170,7 +170,7 @@ recipient and the same originator, so every per-message gate in the loop (lines 
 unchanged, originator inspectable, originator still seated, sender authority, recipient busy)
 evaluates identically for all of them. If the head is skipped, the rest are skipped with it.
 
-Order is **not** guaranteed *across* channels or originators, and should not be: one sender's
+Order is **not** guaranteed _across_ channels or originators, and should not be: one sender's
 unreachable authority lookup (line 268, `bump` then `continue`) must not block an unrelated prime's
 report. I would document this as an explicit non-guarantee rather than change it.
 
@@ -190,7 +190,7 @@ if (this.store.delivery(a.messageId) || SELECT messageId FROM role_channel_messa
 the controller's own delivery journal, so a replay can never produce a second delivery. That is
 correct and I would not weaken it.
 
-**The defect (F3):** this is *rejection*, not *idempotence*. `Controller.send` handles the same
+**The defect (F3):** this is _rejection_, not _idempotence_. `Controller.send` handles the same
 situation better — at `controller.mjs:194-196` it compares the existing delivery's session, kind and
 text and **returns the existing row** when they match, only throwing `'Delivery identity conflict'`
 when they genuinely differ. `channels.send` should do the same: if the incoming `messageId` names a
@@ -208,7 +208,7 @@ if (!recipient || recipient.mode !== 'delegated')
   throw Error('The receiving seat is under human control; a delegated send would be refused');
 ```
 
-A busy prime is a prime that *will* be able to receive. A non-delegated prime is a seat a human has
+A busy prime is a prime that _will_ be able to receive. A non-delegated prime is a seat a human has
 taken back. Queueing that message means: text accepted now, on the authority of a delegation that
 does not exist, held until a human hands the seat back, then injected into the session the human
 just reclaimed — without the human ever seeing that a queue was accumulating against them. That is
@@ -219,7 +219,7 @@ The principle I propose the prime adopt:
 
 > **Defer only what a clock will resolve. Refuse anything a decision must resolve.**
 
-A busy seat resolves with time and nothing else. A non-delegated seat resolves only when a *person*
+A busy seat resolves with time and nothing else. A non-delegated seat resolves only when a _person_
 decides to delegate it again — that decision must be able to see the message, not be pre-committed
 to receiving it.
 
@@ -229,14 +229,14 @@ to receiving it.
 (`side()`, `role-channels.mjs:92-97`), (b) passes `assertUsable` — open, unexpired, allowance
 remaining, both seat revisions and session ids unchanged (lines 30-39), and (c) passes
 `assertSenderAuthority` — its task authority key still matches (lines 225-234). Enqueue costs
-allowance. A seated model can *request* a channel but never approve one (lines 282-305). So the
+allowance. A seated model can _request_ a channel but never approve one (lines 282-305). So the
 queue is not a new ingress: **nothing can enqueue that could not already send.**
 
 **Does delayed delivery bypass a check immediate delivery would have applied? VERIFIED: no — the
 opposite.** `deliverPending` re-derives strictly more at t₁ than `send` did at t₀:
 
 - channel still usable (line 242)
-- recipient still delegated *and at the same generation* (line 247)
+- recipient still delegated _and at the same generation_ (line 247)
 - originator inspectable via `control.inspect` — added specifically because a native takeover of a
   send-only seat was otherwise invisible (lines 259-268)
 - `assertOriginator` — still delegated, still seated, capability generation unchanged (lines 216-221)
@@ -253,15 +253,15 @@ write). So the text is attributable, not anonymous. `CHANNEL_NOTE` and `RECEIPT_
 (`role-channels.mjs:8-9`) already state to both parties that a channel confers no authority and a
 read receipt is consumption, not agreement.
 
-**The one thing that genuinely changes with delay, and my proposed mitigation.** The *text* is fixed
-at t₀; the *context it lands in* is whatever the prime is doing at t₁. Text written as a status
+**The one thing that genuinely changes with delay, and my proposed mitigation.** The _text_ is fixed
+at t₀; the _context it lands in_ is whatever the prime is doing at t₁. Text written as a status
 report on a task the prime has since abandoned is still injected as current. Two mitigations, both
 cheap:
 
 1. F2's TTL bounds how stale text can be.
 2. **The delivered text should carry its own age.** Delivery already passes a `channel` binding; it
-   should also carry `deferredAt` so the prime's view can render *"queued 4h ago while you were
-   busy"* rather than presenting hours-old text as fresh. I would treat this as part of F4 rather
+   should also carry `deferredAt` so the prime's view can render _"queued 4h ago while you were
+   busy"_ rather than presenting hours-old text as fresh. I would treat this as part of F4 rather
    than as a separate change.
 
 I am **not** proposing any content inspection, sanitisation or filtering of queued text. The text is
@@ -270,16 +270,16 @@ component with no clear rule to enforce.
 
 ### Sender feedback — queued vs delivered vs refused
 
-**Today (VERIFIED), the sender learns the *immediate* outcome and nothing after it.**
+**Today (VERIFIED), the sender learns the _immediate_ outcome and nothing after it.**
 
 - `send()` returns `state: 'delivered'` (line 186) or `state: 'pending'` with an explicit note
   (lines 194-196), or throws for a refusal.
 - `channels-thread` (lines 111-124) shows every message with `state`, `attempts`, `failure` and any
-  read receipt — so the truth *is* reachable.
+  read receipt — so the truth _is_ reachable.
 - `channels-list` (lines 102-108) is the cheap per-session summary, and it counts **only**
   `state='delivered' AND readAt IS NULL` (line 104).
 
-So the sender must poll a full thread to learn whether its report ever landed, and the *prime* has
+So the sender must poll a full thread to learn whether its report ever landed, and the _prime_ has
 no cheap signal at all that something is waiting — the exact discovery gap that makes option 2 look
 necessary.
 
@@ -296,12 +296,12 @@ the new state.
 
 The resulting three-way answer for a sender is:
 
-| Sender sees | Meaning |
-|---|---|
-| `state: 'delivered'` from `send`, or `outbound.delivered` | landed; watch for a read receipt |
-| `state: 'pending'` from `send`, or `outbound.pending` | accepted, allowance spent, will deliver when the prime goes idle |
-| a thrown error from `send` | refused now and forever under this identity; the reason is the message |
-| `state: 'expired'` in `outbound` | accepted but never deliverable in its useful life; re-send fresh content under a new `messageId` |
+| Sender sees                                               | Meaning                                                                                          |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `state: 'delivered'` from `send`, or `outbound.delivered` | landed; watch for a read receipt                                                                 |
+| `state: 'pending'` from `send`, or `outbound.pending`     | accepted, allowance spent, will deliver when the prime goes idle                                 |
+| a thrown error from `send`                                | refused now and forever under this identity; the reason is the message                           |
+| `state: 'expired'` in `outbound`                          | accepted but never deliverable in its useful life; re-send fresh content under a new `messageId` |
 
 ---
 
@@ -309,39 +309,39 @@ The resulting three-way answer for a sender is:
 
 **Queueable (a clock resolves it):**
 
-| Reason | Where | Status |
-|---|---|---|
+| Reason                                        | Where                | Status                                                                               |
+| --------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------ |
 | `Recipient is busy or waiting for permission` | `controller.mjs:207` | already queued (`role-channels.mjs:191`); F1 makes the detection typed, F2 bounds it |
 
 **Proposed for the prime's decision — one candidate, not adopted by default:**
 
-| Reason | Where | Argument |
-|---|---|---|
-| `Uncertain or queued delivery requires explicit reconciliation` | `controller.mjs:199` | It is transient in the sense that reconciliation clears it. But it clears because *someone reconciles*, which is a decision, not a clock. **By my own rule in §2 this should stay a refusal**, and I recommend that; I raise it only because it is the one reason that reads as timing at a glance and I do not want a future reader to "discover" it and queue it without argument. |
+| Reason                                                          | Where                | Argument                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Uncertain or queued delivery requires explicit reconciliation` | `controller.mjs:199` | It is transient in the sense that reconciliation clears it. But it clears because _someone reconciles_, which is a decision, not a clock. **By my own rule in §2 this should stay a refusal**, and I recommend that; I raise it only because it is the one reason that reads as timing at a glance and I do not want a future reader to "discover" it and queue it without argument. |
 
 **Hard refusals — must stay refusals:**
 
-| Reason | Where | Why |
-|---|---|---|
-| `The receiving seat is under human control` | `role-channels.mjs:153` | authority, not timing — §2 |
-| Seat unreachable (`reach.reason`) | `role-channels.mjs:154-155` | a capability fact about the seat |
-| `Unknown channel` / `Channel is closed` / `Channel approval has expired` / `Channel message allowance reached` / either seat changed | `role-channels.mjs:31-37` (`SourceChanged`) | every one is a definite fact about the operator's approval |
-| `Archived session cannot receive delegated input` | `controller.mjs:203` | requires explicit human reopening; also triggers takeover |
-| `Human activity or changed identity revoked delegation` | `controller.mjs:204` | a human touched the seat; triggers takeover |
-| `Task authority changed since handback` | `controller.mjs:188` | the ground the send stood on moved |
-| `Orca native admission refused` | `controller.mjs:~232` | triggers takeover; queueing would retry against a refusing native guard |
-| `Originating seat ...` (released / no longer delegated / capability changed / authority changed) | `role-channels.mjs:218-233` | already correctly terminal via `SourceChanged` at line 270 |
-| `Message identity already used` (differing content) | `role-channels.mjs:167` | replay; F3 narrows this to *differing* content only |
-| `inReplyTo must name a message delivered to this seat` | `role-channels.mjs:159` | malformed request |
-| Invalid input / size / identity | `role-channels.mjs:145-148` | malformed request |
+| Reason                                                                                                                               | Where                                       | Why                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- | ----------------------------------------------------------------------- |
+| `The receiving seat is under human control`                                                                                          | `role-channels.mjs:153`                     | authority, not timing — §2                                              |
+| Seat unreachable (`reach.reason`)                                                                                                    | `role-channels.mjs:154-155`                 | a capability fact about the seat                                        |
+| `Unknown channel` / `Channel is closed` / `Channel approval has expired` / `Channel message allowance reached` / either seat changed | `role-channels.mjs:31-37` (`SourceChanged`) | every one is a definite fact about the operator's approval              |
+| `Archived session cannot receive delegated input`                                                                                    | `controller.mjs:203`                        | requires explicit human reopening; also triggers takeover               |
+| `Human activity or changed identity revoked delegation`                                                                              | `controller.mjs:204`                        | a human touched the seat; triggers takeover                             |
+| `Task authority changed since handback`                                                                                              | `controller.mjs:188`                        | the ground the send stood on moved                                      |
+| `Orca native admission refused`                                                                                                      | `controller.mjs:~232`                       | triggers takeover; queueing would retry against a refusing native guard |
+| `Originating seat ...` (released / no longer delegated / capability changed / authority changed)                                     | `role-channels.mjs:218-233`                 | already correctly terminal via `SourceChanged` at line 270              |
+| `Message identity already used` (differing content)                                                                                  | `role-channels.mjs:167`                     | replay; F3 narrows this to _differing_ content only                     |
+| `inReplyTo must name a message delivered to this seat`                                                                               | `role-channels.mjs:159`                     | malformed request                                                       |
+| Invalid input / size / identity                                                                                                      | `role-channels.mjs:145-148`                 | malformed request                                                       |
 
-The existing `SourceChanged` class is already exactly this distinction — *"a recorded, definite fact
-about the approval"* versus *"a read that simply did not work"* (`role-channels.mjs:27-29`), and
+The existing `SourceChanged` class is already exactly this distinction — _"a recorded, definite fact
+about the approval"_ versus _"a read that simply did not work"_ (`role-channels.mjs:27-29`), and
 `deliverPending:270` already routes `SourceChanged` to `fail` and everything else to bounded retry.
 **F1 completes the same idea on the deferral side**: a typed `RecipientBusy` thrown by
 `controller.mjs:207`, caught by `instanceof` at `role-channels.mjs:191` and `role-sessions.mjs:287`,
-deleting both copies of the regex. The rule then reads cleanly in code: *`SourceChanged` → fail;
-`RecipientBusy` → defer; anything else → bounded retry.*
+deleting both copies of the regex. The rule then reads cleanly in code: _`SourceChanged` → fail;
+`RecipientBusy` → defer; anything else → bounded retry._
 
 ---
 
@@ -350,21 +350,21 @@ deleting both copies of the regex. The rule then reads cleanly in code: *`Source
 **(a) A general-purpose durable message queue for all seat-to-seat traffic.** Rejected. It would
 duplicate `role_channel_messages`, and every consumer (`status`, `thread`, `situation.mjs`,
 `role-state.mjs`, `quota-runtime.mjs:46-47`, `change-impact.mjs:18`) would need a second source of
-truth. The allowance *is* the depth bound and it lives on the channel; a separate queue would have
+truth. The allowance _is_ the depth bound and it lives on the channel; a separate queue would have
 to either re-derive or ignore it.
 
 **(b) Deliver the queue by injecting text into the prime's session on a timer, outside
 `control.send`.** Rejected, and this is the one that must never be built. It is the only design here
 that would genuinely bypass the boot-identity, human-activity, archived, generation, task-authority
 and quota checks in `controller.mjs:181-235`. `role-channels.mjs:200-201` already names this
-commitment — *"every retry goes back through control.send with its full admission path. Nothing here
-bypasses a fence or invents a protocol."*
+commitment — _"every retry goes back through control.send with its full admission path. Nothing here
+bypasses a fence or invents a protocol."_
 
 **(c) Queue the non-delegated case too, releasing on re-delegation.** Rejected — §2. It converts an
 authority boundary into a delay and hides accumulation from the human holding the seat.
 
 **(d) A pure-pull design: drop the pump, let the prime fetch when idle.** Rejected. It makes
-delivery contingent on the prime *choosing* to look, which is precisely the failure the brief is
+delivery contingent on the prime _choosing_ to look, which is precisely the failure the brief is
 about — a busy prime is by definition one that is not looking. It also strands the `interested()`
 wake mechanism (`role-channels.mjs:202`, `server.mjs:43`) that already exists and works.
 
@@ -375,14 +375,14 @@ loop against a busy prime at zero cost.
 
 ## 5. Control-code locations this would touch
 
-| Fix | Files |
-|---|---|
-| F1 typed deferral | `src/control/authority.mjs` (new export beside `SourceChanged`), `src/control/controller.mjs:207`, `src/control/role-channels.mjs:6,191,279`, `src/control/role-sessions.mjs:287` |
+| Fix                             | Files                                                                                                                                                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1 typed deferral               | `src/control/authority.mjs` (new export beside `SourceChanged`), `src/control/controller.mjs:207`, `src/control/role-channels.mjs:6,191,279`, `src/control/role-sessions.mjs:287`                     |
 | F2 bounded deferral + `expired` | `src/control/role-channels.mjs:16,19` (schema + `assertColumns`), `:176` (insert), `:239-281` (pump), `:87` (`status` projection), `src/control/role-state.mjs:50-52`, `src/control/situation.mjs:80` |
-| F3 idempotent resend | `src/control/role-channels.mjs:167`, mirroring `src/control/controller.mjs:194-196` |
-| F4 visibility | `src/control/role-channels.mjs:102-108` (`list`), `:119-121` (thread projection, add `deferredAt`), `src/control/inbox.mjs` (tool description if the shape changes) |
-| Tests | `src/control/role-channel-admission.test.mjs`, `src/control/role-channels.test.mjs` |
-| Change impact | `src/control/change-impact.mjs:18` already lists `role-channels.mjs` |
+| F3 idempotent resend            | `src/control/role-channels.mjs:167`, mirroring `src/control/controller.mjs:194-196`                                                                                                                   |
+| F4 visibility                   | `src/control/role-channels.mjs:102-108` (`list`), `:119-121` (thread projection, add `deferredAt`), `src/control/inbox.mjs` (tool description if the shape changes)                                   |
+| Tests                           | `src/control/role-channel-admission.test.mjs`, `src/control/role-channels.test.mjs`                                                                                                                   |
+| Change impact                   | `src/control/change-impact.mjs:18` already lists `role-channels.mjs`                                                                                                                                  |
 
 **Schema note.** `assertColumns` (`role-channels.mjs:18-20`) asserts an exact column list, so F2 is a
 migration, not a silent `CREATE TABLE IF NOT EXISTS` change — an existing control DB will refuse to
@@ -396,15 +396,15 @@ The existing fixtures already do most of the work. `role-channel-admission.test.
 helper (`:171`) that drives a message into the pending state through a busy recipient, and the
 fixture drives `status`/`pending` per session (`:40`). New tests:
 
-1. **F1** — a busy refusal whose *message text* has been changed still defers (proves the regex is
+1. **F1** — a busy refusal whose _message text_ has been changed still defers (proves the regex is
    gone); a non-busy refusal with "busy" in its text does **not** defer.
 2. **F2 deferral bound** — a recipient busy on every pass reaches `MAX_DEFERRALS` and lands in
-   `expired`, not `pending` and not `failed`; the channel allowance is *not* refunded.
+   `expired`, not `pending` and not `failed`; the channel allowance is _not_ refunded.
 3. **F2 TTL** — a message whose `deferredAt` exceeds `DEFER_TTL` expires on the next pass even with
    deferrals to spare; and a `DEFER_TTL` longer than the channel's remaining life is clamped, so no
    message outlives its approval.
-4. **F2 regression** — the existing `MAX_ATTEMPTS` path (`:221` *"unknown failures are bounded"*)
-   still bounds unknown failures, and a busy skip still costs no *attempt*.
+4. **F2 regression** — the existing `MAX_ATTEMPTS` path (`:221` _"unknown failures are bounded"_)
+   still bounds unknown failures, and a busy skip still costs no _attempt_.
 5. **F3** — resending an identical `(messageId, channel, sender, text)` returns the current state and
    spends **no** additional allowance; changing any one of those still throws
    `'Message identity already used'`.
@@ -441,7 +441,7 @@ job or app. No other command was run.
 
 **INFERRED, not verified:**
 
-- That no *other* caller depends on the exact string `'Message identity already used'` or on
+- That no _other_ caller depends on the exact string `'Message identity already used'` or on
   `send()` throwing (rather than returning) for a duplicate. F3 changes an error into a return; I
   grepped `src/control` for channel call sites (`rpc.mjs:19-23,61-75`, `inbox.mjs`,
   `quota-runtime.mjs:46-47`, `situation.mjs`, `role-state.mjs`) but did not audit
@@ -463,7 +463,7 @@ job or app. No other command was run.
 1. **`DEFER_TTL` value.** I propose 6 hours, clamped to the channel's remaining life. This is a
    product judgement about when a status report stops being worth delivering, and it is yours. A
    longer value favours eventual delivery; a shorter one favours freshness and forces a re-send.
-2. **`MAX_DEFERRALS`.** Do you want a count bound *as well as* a TTL, or is the TTL sufficient? A
+2. **`MAX_DEFERRALS`.** Do you want a count bound _as well as_ a TTL, or is the TTL sufficient? A
    count bound behaves differently under a restart storm (many passes, little wall-clock).
 3. **Should `expired` notify the sender actively, or only appear in `outbound` on the next poll?**
    Active notification means the controller originates a message, which is a larger change than
@@ -481,5 +481,5 @@ job or app. No other command was run.
 
 ---
 
-*Design only. No production code changed, nothing pushed to any live surface, no host, controller,
-launchd job or app touched. Repair owners, provider settings and Radius holds untouched.*
+_Design only. No production code changed, nothing pushed to any live surface, no host, controller,
+launchd job or app touched. Repair owners, provider settings and Radius holds untouched._

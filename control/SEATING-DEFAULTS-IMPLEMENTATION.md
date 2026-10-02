@@ -99,7 +99,7 @@ performed no boot comparison of any kind. Two measured failures:
 - across a daemon restart, the `already: true` branch skipped `handback` — the only thing in that path that
   inspects — and minted a fresh, working role capability against a session delegated at a boot that no
   longer existed, leaving the stale boot recorded;
-- worse, it laundered away a human takeover that happened *before* a restart, because `humanAt` is per-boot
+- worse, it laundered away a human takeover that happened _before_ a restart, because `humanAt` is per-boot
   and `handback` never compares against the stored `row.boot`.
 
 It was a second restart route. Re-establishing a seat across a restart is the boot-reestablishment gate's
@@ -149,28 +149,28 @@ Run per file, as instructed:
 
 ### New
 
-| File | Result |
-|---|---|
-| `seating-defaults.test.mjs` | **16/16** |
-| `permission-revocation.test.mjs` (the reproduction) | **3/3** |
+| File                                                | Result    |
+| --------------------------------------------------- | --------- |
+| `seating-defaults.test.mjs`                         | **16/16** |
+| `permission-revocation.test.mjs` (the reproduction) | **3/3**   |
 
 ### Existing files I changed and re-ran
 
-| File | Result |
-|---|---|
-| `bindings.test.mjs` | 8/8 |
-| `role-ownership.test.mjs` | 11/11 |
-| `role-channels.test.mjs` | 5/5 |
-| `role-channel-admission.test.mjs` | 23/23 |
-| `role-tools.test.mjs` | 4/4 |
-| `role-lane.test.mjs` | 6/6 |
-| `role-remote.test.mjs` | 5/5 |
-| `role-revocation.test.mjs` | 6/6 |
-| `role-mcp-transport.test.mjs` | 2/2 |
-| `quota-runtime.test.mjs` | 48/48 |
-| `permissions.test.mjs` | 29/29 |
-| `control.test.mjs` | 23/23 |
-| `manager.test.mjs` | 22/22 |
+| File                               | Result                                         |
+| ---------------------------------- | ---------------------------------------------- |
+| `bindings.test.mjs`                | 8/8                                            |
+| `role-ownership.test.mjs`          | 11/11                                          |
+| `role-channels.test.mjs`           | 5/5                                            |
+| `role-channel-admission.test.mjs`  | 23/23                                          |
+| `role-tools.test.mjs`              | 4/4                                            |
+| `role-lane.test.mjs`               | 6/6                                            |
+| `role-remote.test.mjs`             | 5/5                                            |
+| `role-revocation.test.mjs`         | 6/6                                            |
+| `role-mcp-transport.test.mjs`      | 2/2                                            |
+| `quota-runtime.test.mjs`           | 48/48                                          |
+| `permissions.test.mjs`             | 29/29                                          |
+| `control.test.mjs`                 | 23/23                                          |
+| `manager.test.mjs`                 | 22/22                                          |
 | `takeover-control-prompt.test.mjs` | 15/15 (unmodified — the fence regression gate) |
 
 ### Whole control directory
@@ -191,11 +191,11 @@ Two kinds:
    themselves, and one open channel per seat pair is a rule the default obeys like any approval. They call
    `closeSeatingDefaults(control)` (`role-defaults-fixture.mjs`) and go on testing operator approval.
 2. **Substantive** (2 tests in `role-ownership.test.mjs`): their premise was the behaviour §1 inverts.
-   - *"a seat assigned without an allowance is a visible state"* → rewritten as
-     *"seating confers a bounded default the operator can withdraw, raise, and is alone able to choose"*.
+   - _"a seat assigned without an allowance is a visible state"_ → rewritten as
+     _"seating confers a bounded default the operator can withdraw, raise, and is alone able to choose"_.
      It still asserts the refusal, the visibility and the operator-only raise; it now also asserts the seat
      cannot fund itself.
-   - *"replacing the leader ends its allowance"* → now asserts the successor inherits **neither** the
+   - _"replacing the leader ends its allowance"_ → now asserts the successor inherits **neither** the
      operator's decision **nor** its unspent remainder, gets its own fresh default at its own revision, and
      that the replaced holder's capability is dead.
 
@@ -204,22 +204,22 @@ Two kinds:
 Twelve mutations of safety-relevant code, each reverted after measuring. **All twelve are now caught** —
 but three survived on the first pass and the tests were strengthened because of it:
 
-| # | Mutation | Caught |
-|---|---|---|
-| M1 | lifetime conferral cap removed | ✓ |
-| M2 | `reaffirm` also confers a fresh default | ✓ |
-| M3 | ambiguous prime (2 primes) accepted for a default channel | ✓ |
-| M4 | channel budget 8 → 64 | ✓ *(survived first)* |
-| M4b | default sessions 2 → 8 | ✓ *(added)* |
-| M4c | channel expiry 7 → 30 days | ✓ *(added)* |
-| M5 | `closeBySeat` side-ownership check removed | ✓ |
-| M6 | brief exactly-once guard removed | ✓ *(survived first)* |
-| M7 | brief size bound removed | ✓ |
-| M8 | `restore` ignores the expected revision | ✓ |
-| M9 | brief seat-revision pin removed | ✓ *(survived first)* |
-| M10 | `jobDirectory` skips the seat-holder check | ✓ |
-| M11 | `jobDirectory` allows an already-spent identity | ✓ |
-| M12 | `handback` `untouched` flag dropped | ✓ *(survived first)* |
+| #   | Mutation                                                  | Caught               |
+| --- | --------------------------------------------------------- | -------------------- |
+| M1  | lifetime conferral cap removed                            | ✓                    |
+| M2  | `reaffirm` also confers a fresh default                   | ✓                    |
+| M3  | ambiguous prime (2 primes) accepted for a default channel | ✓                    |
+| M4  | channel budget 8 → 64                                     | ✓ _(survived first)_ |
+| M4b | default sessions 2 → 8                                    | ✓ _(added)_          |
+| M4c | channel expiry 7 → 30 days                                | ✓ _(added)_          |
+| M5  | `closeBySeat` side-ownership check removed                | ✓                    |
+| M6  | brief exactly-once guard removed                          | ✓ _(survived first)_ |
+| M7  | brief size bound removed                                  | ✓                    |
+| M8  | `restore` ignores the expected revision                   | ✓                    |
+| M9  | brief seat-revision pin removed                           | ✓ _(survived first)_ |
+| M10 | `jobDirectory` skips the seat-holder check                | ✓                    |
+| M11 | `jobDirectory` allows an already-spent identity           | ✓                    |
+| M12 | `handback` `untouched` flag dropped                       | ✓ _(survived first)_ |
 
 The three first-pass survivors are the useful part of this exercise:
 

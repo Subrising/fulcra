@@ -10,7 +10,6 @@ A durable `remote_resume_members` record accompanies each prepared Book route. L
 
 ## Original Codex delivery record
 
-
 Source base: `e46e37ab99161e87c9b676216ade65f89f04b482`, reconstructed native `source-cache` under the AIN99 task directory. No iCloud placeholder source was used. This slice supports one operator-controlled NEW Book Codex session through ordinary Fulcra conversation `create(host:macbook)`, `delegate`, `send`, `observe`, `result`, `wait`, and `takeover`. It creates no teams and rejects Book parent/supervisor, automated permission, leadership and group-resumption grants. Discovery does not enroll the three existing Book sessions.
 
 ## Authority and linearization
@@ -48,15 +47,15 @@ The additional legacy `orca-command/src/*.test.mjs` sweep has five pre-existing 
 The worked examples below use placeholders rather than real values, so this file
 names no host, login or secret location. Substitute your own:
 
-| Placeholder | What it is |
-| --- | --- |
-| `BOOK_SSH_TARGET` | the `user@host` the Mini controller reaches the Book receiver on |
-| `MINI_TRANSPORT_KEYFILE` | path on Mini to the private transport key file |
-| `BOOK_WORK_ROOT` | the Book-side owned-work directory for this control bundle |
-| `BOOK_PASEO_INSTALL` | the Book-side Paseo installation |
-| `BOOK_NODE` | the Book's node binary |
-| `MINI_CONVERSATION_CLIENT` | path on Mini to the conversation client entry |
-| `CONTROLLER_UUID`, `TASK_UUID` | the controller identity and the task being used |
+| Placeholder                    | What it is                                                       |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `BOOK_SSH_TARGET`              | the `user@host` the Mini controller reaches the Book receiver on |
+| `MINI_TRANSPORT_KEYFILE`       | path on Mini to the private transport key file                   |
+| `BOOK_WORK_ROOT`               | the Book-side owned-work directory for this control bundle       |
+| `BOOK_PASEO_INSTALL`           | the Book-side Paseo installation                                 |
+| `BOOK_NODE`                    | the Book's node binary                                           |
+| `MINI_CONVERSATION_CLIENT`     | path on Mini to the conversation client entry                    |
+| `CONTROLLER_UUID`, `TASK_UUID` | the controller identity and the task being used                  |
 
 The transport verifies the profile against its own expected target before
 connecting, so a wrong substitution refuses rather than reaching an unintended
@@ -64,12 +63,12 @@ host.
 
 Read-only Book source provenance, 2026-09-14, under `BOOK_PASEO_INSTALL/node_modules/@getpaseo/server/dist/server/server/`:
 
-| Module | SHA-256 before |
-|---|---|
-| session.js | <SHA256> |
-| agent/lifecycle-command.js | <SHA256> |
-| agent/agent-manager.js | <SHA256> |
-| agent/agent-prompt.js | <SHA256> |
+| Module                     | SHA-256 before |
+| -------------------------- | -------------- |
+| session.js                 | <SHA256>       |
+| agent/lifecycle-command.js | <SHA256>       |
+| agent/agent-manager.js     | <SHA256>       |
+| agent/agent-prompt.js      | <SHA256>       |
 
 ## Root installation only — not executed by this implementation session
 
@@ -80,7 +79,13 @@ Prerequisites: independent review/ADW disposition (including the actual over-400
    Book receiver input profile (absolute paths, mode 0600; replace `CONTROLLER_UUID`):
 
 ```json
-{"controller":"CONTROLLER_UUID","runtimeSource":"BOOK_PASEO_INSTALL/source","journal":"BOOK_WORK_ROOT/state/receiver.sqlite","tasks":"BOOK_WORK_ROOT/tasks","keyFile":"BOOK_WORK_ROOT/state/transport.secret"}
+{
+  "controller": "CONTROLLER_UUID",
+  "runtimeSource": "BOOK_PASEO_INSTALL/source",
+  "journal": "BOOK_WORK_ROOT/state/receiver.sqlite",
+  "tasks": "BOOK_WORK_ROOT/tasks",
+  "keyFile": "BOOK_WORK_ROOT/state/transport.secret"
+}
 ```
 
 2. On Book, root stages from the reviewed copy. Staging reads/verifies the existing dependency tree and produces before/after native bytes, immutable receiver bundle, guard release digest, runtime before/after profiles and manifest. It does not edit the provider or run a model:
@@ -98,10 +103,20 @@ BOOK_NODE BOOK_WORK_ROOT/source/src/book/stage.mjs apply BOOK_WORK_ROOT/staged a
 4. Root integrates this commit with the reviewed/current Mini source (including the installed input-sequence controller), publishes its ordinary immutable controller/conversation bundles through the existing deployment owner, and pins them in the existing owned launcher. Include all `src/book` production modules and `src/control/host-native.mjs` in the controller bundle. The conversation bundle must include the updated client, hosts and skill; no Gateway edit. Add only `ORCA_BOOK_TRANSPORT_PROFILE` to the owned controller environment, pointing to a private Mini profile:
 
 ```json
-{"controller":"CONTROLLER_UUID","host":"macbook","sshTarget":"BOOK_SSH_TARGET","keyFile":"MINI_TRANSPORT_KEYFILE","command":["BOOK_NODE","BOOK_WORK_ROOT/staged/bundle/src/book/receiver-cli.mjs","BOOK_WORK_ROOT/staged/receiver-profile.json"]}
+{
+  "controller": "CONTROLLER_UUID",
+  "host": "macbook",
+  "sshTarget": "BOOK_SSH_TARGET",
+  "keyFile": "MINI_TRANSPORT_KEYFILE",
+  "command": [
+    "BOOK_NODE",
+    "BOOK_WORK_ROOT/staged/bundle/src/book/receiver-cli.mjs",
+    "BOOK_WORK_ROOT/staged/receiver-profile.json"
+  ]
+}
 ```
 
-   Mini startup creates only `host_routes` in its CURRENT journal; Book receiver creates its subordinate tables on first request. Existing tables/rows are untouched. Verify Mini can still observe retained local human sessions and hosts keeps the old Book three observation-only. Missing transport configuration fails remote operations without local fallback.
+Mini startup creates only `host_routes` in its CURRENT journal; Book receiver creates its subordinate tables on first request. Existing tables/rows are untouched. Verify Mini can still observe retained local human sessions and hosts keeps the old Book three observation-only. Missing transport configuration fails remote operations without local fallback.
 
 5. Use an authorized isolated Paperclip canary task with available instruction allowance and no concurrent assignments. This executable path creates exactly one NEW Book session, deduplicates creation, delegates, sends one artifact instruction, waits/reads the exact result, obtains acknowledged takeover, and verifies stale send refusal with no second charge. No live canary was run here:
 
@@ -109,7 +124,7 @@ BOOK_NODE BOOK_WORK_ROOT/source/src/book/stage.mjs apply BOOK_WORK_ROOT/staged a
 ORCA_CONVERSATION_CLIENT=MINI_CONVERSATION_CLIENT /opt/homebrew/opt/node@24/bin/node src/book/acceptance.mjs --live TASK_UUID
 ```
 
-   Root independently reads `acceptance.txt` over read-only Book SSH at the returned exact cwd and compares the returned marker. Confirm saved-session/ownership inventory, same central/native binding after Mini restart, and no duplicate canary on receipt inspection. Test an owned native-human-entry sequence change and stale refusal on this canary only. For outage validation, use an isolated transport failure at the controller transport layer: takeover must show `revoking/complete:false`, refuse automation, then reconcile to acknowledged human on restoration. Do not damage production SSH/keys or alter unrelated sessions to simulate an outage.
+Root independently reads `acceptance.txt` over read-only Book SSH at the returned exact cwd and compares the returned marker. Confirm saved-session/ownership inventory, same central/native binding after Mini restart, and no duplicate canary on receipt inspection. Test an owned native-human-entry sequence change and stale refusal on this canary only. For outage validation, use an isolated transport failure at the controller transport layer: takeover must show `revoking/complete:false`, refuse automation, then reconcile to acknowledged human on restoration. Do not damage production SSH/keys or alter unrelated sessions to simulate an outage.
 
 ## Rollback and handoff
 

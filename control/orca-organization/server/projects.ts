@@ -4,8 +4,16 @@ import { portable, localIssues, localProjects } from "./portable";
 import { COMPANY } from "./tasks";
 
 const project = projectSummary.extend({ companyId: z.literal(COMPANY) });
-const issue = z.object({ id: z.string().uuid(), companyId: z.literal(COMPANY), projectId: z.string().uuid().nullable() });
-const localTask = z.object({ id: z.string().uuid(), companyId: z.literal(COMPANY), projectId: z.string().uuid().nullable().optional() });
+const issue = z.object({
+  id: z.string().uuid(),
+  companyId: z.literal(COMPANY),
+  projectId: z.string().uuid().nullable(),
+});
+const localTask = z.object({
+  id: z.string().uuid(),
+  companyId: z.literal(COMPANY),
+  projectId: z.string().uuid().nullable().optional(),
+});
 
 /**
  * A local installation may record a project catalog beside its tasks. Membership is emitted only
@@ -14,39 +22,67 @@ const localTask = z.object({ id: z.string().uuid(), companyId: z.literal(COMPANY
  * `src/control/projects.mjs` — the two must agree or a role seat would be verified against a
  * membership the UI does not show.
  */
-export function localProjectDirectory(read: () => unknown[], readProjectRows: (() => unknown[]) | null = null): ProjectDirectory {
+export function localProjectDirectory(
+  read: () => unknown[],
+  readProjectRows: (() => unknown[]) | null = null,
+): ProjectDirectory {
   const observedAt = new Date().toISOString();
   try {
     const rows = read();
-    if (!Array.isArray(rows) || rows.length > 1000) throw new Error("Local task coverage exceeds bound");
+    if (!Array.isArray(rows) || rows.length > 1000)
+      throw new Error("Local task coverage exceeds bound");
     let partial = false;
     const known = new Map<string, z.infer<typeof project>>();
     if (readProjectRows) {
       const projectRows = readProjectRows();
-      if (!Array.isArray(projectRows) || projectRows.length > 64) throw new Error("Local project coverage exceeds bound");
+      if (!Array.isArray(projectRows) || projectRows.length > 64)
+        throw new Error("Local project coverage exceeds bound");
       const seen = new Set<string>();
       for (const raw of projectRows) {
         const parsed = project.safeParse(raw);
         // A foreign or malformed row is dropped and the read says so; it never becomes a project.
-        if (!parsed.success) { partial = true; continue; }
-        if (seen.has(parsed.data.id)) { partial = true; known.delete(parsed.data.id); continue; }
+        if (!parsed.success) {
+          partial = true;
+          continue;
+        }
+        if (seen.has(parsed.data.id)) {
+          partial = true;
+          known.delete(parsed.data.id);
+          continue;
+        }
         seen.add(parsed.data.id);
         known.set(parsed.data.id, parsed.data);
       }
     }
-    const tasks = new Map<string, string | null>(), dropped = new Set<string>();
+    const tasks = new Map<string, string | null>(),
+      dropped = new Set<string>();
     for (const raw of rows) {
       const parsed = localTask.safeParse(raw);
-      if (!parsed.success) { partial = true; continue; }
+      if (!parsed.success) {
+        partial = true;
+        continue;
+      }
       const { id, projectId } = parsed.data;
-      if (tasks.has(id) || dropped.has(id)) { partial = true; dropped.add(id); tasks.delete(id); continue; }
+      if (tasks.has(id) || dropped.has(id)) {
+        partial = true;
+        dropped.add(id);
+        tasks.delete(id);
+        continue;
+      }
       // Confirmed membership, or an explicit unknown. A named project the catalog cannot confirm
       // is never presented as membership — it is the same class of claim as a capped page.
       if (projectId != null && known.has(projectId)) tasks.set(id, projectId);
-      else { if (projectId != null) partial = true; tasks.set(id, null); }
+      else {
+        if (projectId != null) partial = true;
+        tasks.set(id, null);
+      }
     }
     const projects = [...known.values()].map(({ companyId: _company, ...summary }) => summary);
-    return projectDirectory.parse({ observedAt, available: true, partial, projects,
+    return projectDirectory.parse({
+      observedAt,
+      available: true,
+      partial,
+      projects,
       membership: [...tasks].map(([taskId, projectId]) => ({ taskId, projectId })),
       note: projects.length
         ? partial
@@ -57,59 +93,114 @@ export function localProjectDirectory(read: () => unknown[], readProjectRows: ((
           : "This installation records tasks only; project grouping is not supported here. No project membership is claimed for local work. Recorded work remains available.",
     });
   } catch {
-    return projectDirectory.parse({ observedAt, available: false, partial: true, projects: [], membership: [], note: "Local task catalog unavailable or beyond its read limits. Recorded work remains available; project membership is unknown." });
+    return projectDirectory.parse({
+      observedAt,
+      available: false,
+      partial: true,
+      projects: [],
+      membership: [],
+      note: "Local task catalog unavailable or beyond its read limits. Recorded work remains available; project membership is unknown.",
+    });
   }
 }
 
-export async function readProjectList(resource: "projects" | "issues", fetcher = fetch, timeout = 4000): Promise<unknown[]> {
-  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), timeout);
+export async function readProjectList(
+  resource: "projects" | "issues",
+  fetcher = fetch,
+  timeout = 4000,
+): Promise<unknown[]> {
+  const abort = new AbortController(),
+    timer = setTimeout(() => abort.abort(), timeout);
   try {
-    const response = await fetcher(`${portable.authority.issueApi}/api/companies/${COMPANY}/${resource}`, { signal: abort.signal, redirect: "error" });
+    const response = await fetcher(
+      `${portable.authority.issueApi}/api/companies/${COMPANY}/${resource}`,
+      { signal: abort.signal, redirect: "error" },
+    );
     if (!response.ok || !response.body) throw new Error("Project source unavailable");
-    const reader = response.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
+    const reader = response.body.getReader(),
+      chunks: Uint8Array[] = [];
+    let size = 0;
     try {
       for (;;) {
-        const { value, done } = await reader.read(); if (done) break;
-        size += value.length; if (size > 1048576) throw new Error("Project source exceeds bound"); chunks.push(value);
+        const { value, done } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > 1048576) throw new Error("Project source exceeds bound");
+        chunks.push(value);
       }
-    } finally { await reader.cancel().catch(() => undefined); }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
     const rows: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (!Array.isArray(rows) || rows.length > (resource === "projects" ? 64 : 1000)) throw new Error("Project coverage exceeds bound");
+    if (!Array.isArray(rows) || rows.length > (resource === "projects" ? 64 : 1000))
+      throw new Error("Project coverage exceeds bound");
     return rows;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export async function readProjects(read = readProjectList, local = portable.authority.issueApi === null ? localIssues : null, localProjectRows = portable.authority.issueApi === null ? localProjects : null) {
+export async function readProjects(
+  read = readProjectList,
+  local = portable.authority.issueApi === null ? localIssues : null,
+  localProjectRows = portable.authority.issueApi === null ? localProjects : null,
+) {
   if (local) return localProjectDirectory(local, localProjectRows);
   const observedAt = new Date().toISOString();
   try {
     const [rawProjects, rawIssues] = await Promise.all([read("projects"), read("issues")]);
-    if (rawProjects.length > 64 || rawIssues.length > 1000) throw new Error("Project coverage exceeds bound");
+    if (rawProjects.length > 64 || rawIssues.length > 1000)
+      throw new Error("Project coverage exceeds bound");
     let partial = false;
     function unique<T extends { id: string }>(rows: unknown[], schema: z.ZodType<T>) {
-      const found = new Map<string, T>(), seen = new Set<string>();
+      const found = new Map<string, T>(),
+        seen = new Set<string>();
       for (const raw of rows) {
         const id = raw && typeof raw === "object" && "id" in raw ? raw.id : null;
         if (typeof id === "string") {
-          if (seen.has(id)) { found.delete(id); partial = true; continue; }
+          if (seen.has(id)) {
+            found.delete(id);
+            partial = true;
+            continue;
+          }
           seen.add(id);
         }
         const parsed = schema.safeParse(raw);
-        if (!parsed.success) { partial = true; continue; }
+        if (!parsed.success) {
+          partial = true;
+          continue;
+        }
         found.set(parsed.data.id, parsed.data);
       }
       return found;
     }
-    const projects = unique(rawProjects, project), issues = unique(rawIssues, issue);
-    const membership = [...issues.values()].flatMap(row => {
-      if (row.projectId && !projects.has(row.projectId)) { partial = true; return []; }
+    const projects = unique(rawProjects, project),
+      issues = unique(rawIssues, issue);
+    const membership = [...issues.values()].flatMap((row) => {
+      if (row.projectId && !projects.has(row.projectId)) {
+        partial = true;
+        return [];
+      }
       return [{ taskId: row.id, projectId: row.projectId }];
     });
-    return projectDirectory.parse({ observedAt, available: true, partial,
-      projects: [...projects.values()].map(({ companyId: _company, ...summary }) => summary), membership,
-      note: partial ? "Some project records or task memberships could not be verified. Missing links are unknown; recorded work remains available." : "Registered projects and explicit task membership. Recorded Fulcra leaders come from the session controller; project grouping grants no control.",
+    return projectDirectory.parse({
+      observedAt,
+      available: true,
+      partial,
+      projects: [...projects.values()].map(({ companyId: _company, ...summary }) => summary),
+      membership,
+      note: partial
+        ? "Some project records or task memberships could not be verified. Missing links are unknown; recorded work remains available."
+        : "Registered projects and explicit task membership. Recorded Fulcra leaders come from the session controller; project grouping grants no control.",
     });
   } catch {
-    return projectDirectory.parse({ observedAt, available: false, partial: true, projects: [], membership: [], note: "Project directory unavailable or beyond its read limits. Recorded work remains available; project membership is unknown." });
+    return projectDirectory.parse({
+      observedAt,
+      available: false,
+      partial: true,
+      projects: [],
+      membership: [],
+      note: "Project directory unavailable or beyond its read limits. Recorded work remains available; project membership is unknown.",
+    });
   }
 }

@@ -9,18 +9,87 @@
     "visual_preset": "classic"
   },
   "components": [
-    { "id": "environment", "type": "external", "label": "Environment", "sublabel": "external parameter · supplied at deploy", "tag": "resource id (deploy-time, not created here)", "pos": [40, 40], "size": [210, 62] },
-    { "id": "app", "type": "backend", "label": "defproof-app", "sublabel": "Applications.Core/applications", "pos": [40, 210], "size": [210, 62] },
-    { "id": "demo", "type": "backend", "label": "demo", "sublabel": "Applications.Core/containers · port 3000", "pos": [320, 210], "size": [210, 62] },
-    { "id": "image", "type": "external", "label": "demo image", "sublabel": "ghcr.io/radius-project/samples/demo · digest-pinned", "tag": "pinned: sha256:0ae879…43ca", "pos": [600, 210], "size": [260, 62] }
+    {
+      "id": "environment",
+      "type": "external",
+      "label": "Environment",
+      "sublabel": "external parameter · supplied at deploy",
+      "tag": "resource id (deploy-time, not created here)",
+      "pos": [40, 40],
+      "size": [210, 62]
+    },
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "defproof-app",
+      "sublabel": "Applications.Core/applications",
+      "pos": [40, 210],
+      "size": [210, 62]
+    },
+    {
+      "id": "demo",
+      "type": "backend",
+      "label": "demo",
+      "sublabel": "Applications.Core/containers · port 3000",
+      "pos": [320, 210],
+      "size": [210, 62]
+    },
+    {
+      "id": "image",
+      "type": "external",
+      "label": "demo image",
+      "sublabel": "ghcr.io/radius-project/samples/demo · digest-pinned",
+      "tag": "pinned: sha256:0ae879…43ca",
+      "pos": [600, 210],
+      "size": [260, 62]
+    }
   ],
   "connections": [
-    { "id": "container-to-application", "from": "demo", "to": "app", "label": "application = reference('app').id", "variant": "emphasis", "labelDy": 72 },
-    { "id": "application-to-environment", "from": "app", "to": "environment", "label": "environment = parameters('environment')", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
-    { "id": "container-to-image", "from": "demo", "to": "image", "label": "container.image", "variant": "dashed", "labelDy": 72 }
+    {
+      "id": "container-to-application",
+      "from": "demo",
+      "to": "app",
+      "label": "application = reference('app').id",
+      "variant": "emphasis",
+      "labelDy": 72
+    },
+    {
+      "id": "application-to-environment",
+      "from": "app",
+      "to": "environment",
+      "label": "environment = parameters('environment')",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "container-to-image",
+      "from": "demo",
+      "to": "image",
+      "label": "container.image",
+      "variant": "dashed",
+      "labelDy": 72
+    }
   ],
   "cards": [
-    { "dot": "emerald", "title": "Source (reviewed, unchanged)", "items": ["app.bicep SHA256 6ee1e4c3", "app.json SHA256 32cf77d0", "image digest sha256:0ae87935398b92627ab73bbe2bdf43d777419076804ba1a6e346f5cb06de43ca", "manually mapped — not compiled/extracted by Archify"] },
-    { "dot": "cyan", "title": "Bindings & limits (as authored)", "items": ["application = reference('app').id — deploy-time ref, not an observed resource", "environment = parameters('environment') — external; not declared/provisioned here or observed live", "no region / database / owner / traffic edge; no runtime acceptance"] }
+    {
+      "dot": "emerald",
+      "title": "Source (reviewed, unchanged)",
+      "items": [
+        "app.bicep SHA256 6ee1e4c3",
+        "app.json SHA256 32cf77d0",
+        "image digest sha256:0ae87935398b92627ab73bbe2bdf43d777419076804ba1a6e346f5cb06de43ca",
+        "manually mapped — not compiled/extracted by Archify"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Bindings & limits (as authored)",
+      "items": [
+        "application = reference('app').id — deploy-time ref, not an observed resource",
+        "environment = parameters('environment') — external; not declared/provisioned here or observed live",
+        "no region / database / owner / traffic edge; no runtime acceptance"
+      ]
+    }
   ]
 }

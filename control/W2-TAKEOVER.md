@@ -6,7 +6,9 @@ The implementation now exports `takeOverSession` from
 
 ```js
 const result = await takeOverSession(sessionId, accountId, {
-  control, root, generation,
+  control,
+  root,
+  generation,
 });
 ```
 

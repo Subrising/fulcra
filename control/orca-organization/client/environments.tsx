@@ -43,14 +43,14 @@ const STATE: Record<string, string> = {
   "rolled-back": "A check failed, so the previous version was put back",
   cancelled: "Cancelled; nothing ran",
 };
-const ACTIVE = [
+const ACTIVE = new Set([
   "proposed",
   "awaiting-approval",
   "approved",
   "running",
   "verifying",
   "rolling-back",
-];
+]);
 function messageId() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = Math.floor(Math.random() * 16);
@@ -112,9 +112,7 @@ export function EnvironmentsSurface({
     queryFn: () => read({ projectId: projectId! }),
     retry: false,
     refetchInterval: (q) =>
-      (q.state.data?.promotions ?? []).some((p) => ACTIVE.includes(p.promotion.state))
-        ? 4000
-        : 30000,
+      (q.state.data?.promotions ?? []).some((p) => ACTIVE.has(p.promotion.state)) ? 4000 : 30000,
     refetchIntervalInBackground: false,
   });
   const d = query.data,
@@ -123,7 +121,7 @@ export function EnvironmentsSurface({
   const focus =
     envs.find((e) => e.id === selected) ?? active.find((e) => e.key === "next") ?? active[0];
   const promotions = d?.promotions ?? [],
-    ongoing = promotions.find((p) => ACTIVE.includes(p.promotion.state)) ?? promotions[0];
+    ongoing = promotions.find((p) => ACTIVE.has(p.promotion.state)) ?? promotions[0];
   // "Promote to next": the version on an environment moves one step along the path.
   const pairs = active.slice(0, -1).map((from, i) => ({ from, to: active[i + 1] }));
   const idFor = (key: string) => {
@@ -321,9 +319,7 @@ export function EnvironmentsSurface({
                 disabled={
                   busy ||
                   !from.current ||
-                  promotions.some(
-                    (p) => p.promotion.to === to.id && ACTIVE.includes(p.promotion.state),
-                  )
+                  promotions.some((p) => p.promotion.to === to.id && ACTIVE.has(p.promotion.state))
                 }
                 onPress={() => void promote(from, to)}
               />

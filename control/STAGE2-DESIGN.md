@@ -51,12 +51,12 @@ decline.**
 
 **How completeness is now established, in layers.**
 
-| Layer | Covers | Mechanism |
-|---|---|---|
-| **Receipts** (guard and reader) | **Every boot that loads *any* Fulcra guard, old or new** | The old and new guards both write `admission/loaded-<pid>.json` naming their BOOT. Each new-guard boot records in its header `receipts`, the receipt boot ids present **before** it writes its own. For each hop, log `L` → successor `S`, the reader requires two things. First, `L.boot ∈ S.receipts`: L's receipt survived. Second, `S.receipts ⊆ L.receipts ∪ {L.boot}`: no receipt-bearing boot ran between them. A pid reuse that overwrites a receipt still shows up, because the overwriter's own boot appears in the set. A receipt directory that can't be read in full records `null`, which counts as unavailable. |
-| **Release switches** | R-2 rollback, re-activation, re-patching after a Paseo update | `deploy-admission.mjs --apply/--rollback` and the permission overlay's `move()`, both directions, delete every `armed-*` marker and fsync the directory while the daemon is stopped (`disarmHumanChain` / `disarm_human_chain`). Portable staging creates `admission/` fresh, so there are no markers to delete. |
-| **launchd launcher** | Any launchd start of a release that isn't the verified Stage 2 one: pristine modules after an update, the old guard, a missing `active.json` | For the `paseo` role, when the profile names `orcaHumanLog.home`, the launcher checks `active.json` before `exec`. The guard file must hash as recorded **and** contain the log, and every pinned module and file must hash as recorded. If any check fails, it disarms. If disarming fails, the start is refused, like every other failed check there. |
-| **Controller witness** | A daemon started by hand, or by Paseo's own supervisor, while the controller runs | If exactly one listener is up and `verifyActivation` fails, or several listeners are up, the controller disarms. It checks at startup and on every 30 s tick, whatever the sweep mode. A daemon that is simply down (no listener) is not treated as evidence. |
+| Layer                           | Covers                                                                                                                                       | Mechanism                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Receipts** (guard and reader) | **Every boot that loads _any_ Fulcra guard, old or new**                                                                                     | The old and new guards both write `admission/loaded-<pid>.json` naming their BOOT. Each new-guard boot records in its header `receipts`, the receipt boot ids present **before** it writes its own. For each hop, log `L` → successor `S`, the reader requires two things. First, `L.boot ∈ S.receipts`: L's receipt survived. Second, `S.receipts ⊆ L.receipts ∪ {L.boot}`: no receipt-bearing boot ran between them. A pid reuse that overwrites a receipt still shows up, because the overwriter's own boot appears in the set. A receipt directory that can't be read in full records `null`, which counts as unavailable. |
+| **Release switches**            | R-2 rollback, re-activation, re-patching after a Paseo update                                                                                | `deploy-admission.mjs --apply/--rollback` and the permission overlay's `move()`, both directions, delete every `armed-*` marker and fsync the directory while the daemon is stopped (`disarmHumanChain` / `disarm_human_chain`). Portable staging creates `admission/` fresh, so there are no markers to delete.                                                                                                                                                                                                                                                                                                               |
+| **launchd launcher**            | Any launchd start of a release that isn't the verified Stage 2 one: pristine modules after an update, the old guard, a missing `active.json` | For the `paseo` role, when the profile names `orcaHumanLog.home`, the launcher checks `active.json` before `exec`. The guard file must hash as recorded **and** contain the log, and every pinned module and file must hash as recorded. If any check fails, it disarms. If disarming fails, the start is refused, like every other failed check there.                                                                                                                                                                                                                                                                        |
+| **Controller witness**          | A daemon started by hand, or by Paseo's own supervisor, while the controller runs                                                            | If exactly one listener is up and `verifyActivation` fails, or several listeners are up, the controller disarms. It checks at startup and on every 30 s tick, whatever the sweep mode. A daemon that is simply down (no listener) is not treated as evidence.                                                                                                                                                                                                                                                                                                                                                                  |
 
 **Disposition.** Every chain the sweep can't prove complete returns **`unavailable` → decline**. That never revokes and
 never re-seats, and the operator path stays open. That is what the prime specified.
@@ -77,14 +77,14 @@ additionally be confined, for example to restarts the controller witnessed conti
 
 **Other findings:**
 
-| Finding | Fix |
-|---|---|
-| F2 | A same-length-edit test pins the digest compare. |
-| F3 | The startup pass is bounded by a 60 s deadline, after which `listen` proceeds and the pass completes under `exclusive()`, as a tick pass would. |
-| F6 | Short writes are detected and disarm. |
-| F7 | The predecessor log must be a regular file of at most 64 MiB, checked with `lstat` before it's read. The fd is deliberately **not** closed on disarm: after an `EBADF` its number may belong to another file in the daemon. |
-| F4, F5 | Unchanged, and documented in the implementation report. |
-| F8 | An equivalent mutant; unchanged. |
+| Finding | Fix                                                                                                                                                                                                                         |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F2      | A same-length-edit test pins the digest compare.                                                                                                                                                                            |
+| F3      | The startup pass is bounded by a 60 s deadline, after which `listen` proceeds and the pass completes under `exclusive()`, as a tick pass would.                                                                             |
+| F6      | Short writes are detected and disarm.                                                                                                                                                                                       |
+| F7      | The predecessor log must be a regular file of at most 64 MiB, checked with `lstat` before it's read. The fd is deliberately **not** closed on disarm: after an `EBADF` its number may belong to another file in the daemon. |
+| F4, F5  | Unchanged, and documented in the implementation report.                                                                                                                                                                     |
+| F8      | An equivalent mutant; unchanged.                                                                                                                                                                                            |
 
 ---
 
@@ -97,12 +97,12 @@ it, and re-establishment exists to relax that fence.
 
 §7 replaces the missing evidence rather than asking a human to vouch for it:
 
-| Human action in the previous boot, after the grant | Durable trace in Stage 1 | Durable trace in Stage 2 |
-|---|---|---|
-| A. operator `takeover` | journal `mode='human'` → R1 | unchanged → R1 |
-| B. typed, and the controller observed it | `mode='human'` → R1 | unchanged → R1 |
-| C. typed, and the controller didn't observe it | timeline `lastPromptId` / `lastUserAt` → R5 | R5 **and** a log line for the agent with `n ≥ grantedAt` → **R9** |
-| **D. interrupt / cancel / close / archive / human permission answer** | **none** | **a log line for the agent with `n ≥ grantedAt` → R9** |
+| Human action in the previous boot, after the grant                    | Durable trace in Stage 1                    | Durable trace in Stage 2                                          |
+| --------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------- |
+| A. operator `takeover`                                                | journal `mode='human'` → R1                 | unchanged → R1                                                    |
+| B. typed, and the controller observed it                              | `mode='human'` → R1                         | unchanged → R1                                                    |
+| C. typed, and the controller didn't observe it                        | timeline `lastPromptId` / `lastUserAt` → R5 | R5 **and** a log line for the agent with `n ≥ grantedAt` → **R9** |
+| **D. interrupt / cancel / close / archive / human permission answer** | **none**                                    | **a log line for the agent with `n ≥ grantedAt` → R9**            |
 
 **Why D is covered, precisely:** every one of those actions reaches the guard's human branch **synchronously, as the
 first statement of the patched method**, before the method does anything. The patch points are in
@@ -195,7 +195,7 @@ pass through that boot declines. Section 3.4 row 2 shows why this closes the dis
 
 On failure the guard doesn't set `saturated`. §7 of `DESIGN.md` sketched `saturated = true` on failure, and I'm
 deliberately dropping that. `saturated` shuts down **all delegated work for the rest of the boot**, but the in-boot
-`humanAt` fence is unaffected by a log failure. Only the *next* boot's evidence is lost, and disarming already makes
+`humanAt` fence is unaffected by a log failure. Only the _next_ boot's evidence is lost, and disarming already makes
 that evidence count as missing. Saturating would cost availability and buy no security. This is decision D6.
 
 ### 2.4 Per-input behaviour (`guard`, human branch)
@@ -203,39 +203,53 @@ that evidence count as missing. Saturating would cost availability and buy no se
 ```js
 if (agent) {
   const next = (humanInput.get(agent.id) ?? 0) + 1;
-  const counted = !((humanInput.size >= 10000 && !humanInput.has(agent.id)) || next >= Number.MAX_SAFE_INTEGER);
-  recordHuman(agent.id, counted ? next : null);   // durable BEFORE return, i.e. before the input takes effect; never throws
-  if (counted) humanInput.set(agent.id, next); else saturated = true;
+  const counted = !(
+    (humanInput.size >= 10000 && !humanInput.has(agent.id)) ||
+    next >= Number.MAX_SAFE_INTEGER
+  );
+  recordHuman(agent.id, counted ? next : null); // durable BEFORE return, i.e. before the input takes effect; never throws
+  if (counted) humanInput.set(agent.id, next);
+  else saturated = true;
 }
 return;
 ```
 
 ```js
 function recordHuman(id, n) {
-  if (humanLog === null) return;                       // undeployed, or already disarmed
-  try { fs.writeSync(humanLog, JSON.stringify({ a: id, n }) + '\n'); fs.fsyncSync(humanLog);
-        if (++humanLines > 100000) disarm(); }
-  catch { disarm(); }                                  // never refuse, never throw
+  if (humanLog === null) return; // undeployed, or already disarmed
+  try {
+    fs.writeSync(humanLog, JSON.stringify({ a: id, n }) + "\n");
+    fs.fsyncSync(humanLog);
+    if (++humanLines > 100000) disarm();
+  } catch {
+    disarm();
+  } // never refuse, never throw
 }
-function disarm() { humanLog = null; try { fs.unlinkSync(ARMED); fsyncDir(); } catch {} }
+function disarm() {
+  humanLog = null;
+  try {
+    fs.unlinkSync(ARMED);
+    fsyncDir();
+  } catch {}
+}
 ```
 
 - **Written before the input takes effect.** `recordHuman` returns only after `fsync`, and `guard` returns only after
   `recordHuman`.
 - **Fail-closed for the evidence.** Any exception disarms the boot, so the next sweep declines every seat that depends
   on it.
-- **Never fail-closed for the human.** The input still proceeds. This keeps the existing invariant that *"human input
-  cannot be refused by this guard"*. It does weaken one half of it (decision D5): human input now **can be delayed by
+- **Never fail-closed for the human.** The input still proceeds. This keeps the existing invariant that _"human input
+  cannot be refused by this guard"_. It does weaken one half of it (decision D5): human input now **can be delayed by
   one `fsync`**. It had no filesystem dependency before. Human inputs arrive at human rates, so a healthy disk makes
   this negligible. A hung disk would stall the input, and Paseo's own persistence would stall with it.
 
 ### 2.5 Durability across a crash
 
-| Event | Result |
-|---|---|
-| Daemon killed (`SIGKILL`, OOM, uncaught error) after `fsync` returned | The line is in the file. The kernel keeps it after process death. |
-| Killed during `writeSync` / `fsync` | The input never took effect. A partial trailing line may remain. The reader treats any malformed line as *unavailable*, never as clean. |
-| Kernel panic or power loss | `fsync` without `F_FULLFSYNC` can leave a fsync'd line in the drive's cache. Node doesn't expose `F_FULLFSYNC`. **So the seal in §2.6 is required:** a boot that didn't end through the process's exit path doesn't count as complete. |
+| Event                                                                 | Result                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Daemon killed (`SIGKILL`, OOM, uncaught error) after `fsync` returned | The line is in the file. The kernel keeps it after process death.                                                                                                                                                                      |
+| Killed during `writeSync` / `fsync`                                   | The input never took effect. A partial trailing line may remain. The reader treats any malformed line as _unavailable_, never as clean.                                                                                                |
+| Kernel panic or power loss                                            | `fsync` without `F_FULLFSYNC` can leave a fsync'd line in the drive's cache. Node doesn't expose `F_FULLFSYNC`. **So the seal in §2.6 is required:** a boot that didn't end through the process's exit path doesn't count as complete. |
 
 ### 2.6 The seal (recommended; decision D3)
 
@@ -253,14 +267,14 @@ At import the guard registers `process.once('exit', code => { if (humanLog !== n
 
 ### 2.7 Tamper-evidence
 
-| Attack on the log | Detected by |
-|---|---|
-| Edit, truncate or extend the previous log **after** the new boot started | `prevBytes` / `prevSha256` in the new header no longer match. The sweep declines. |
-| Replay an older copy of a log, e.g. from a Time Machine restore | The anchor fails as above. If the header itself was replayed, `header.boot` doesn't match the filename or the chain. |
-| Delete a log | The chain can't be walked. The sweep declines. |
-| Delete an armed marker | The next boot records `prev: null`. The sweep declines. |
+| Attack on the log                                                                            | Detected by                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Edit, truncate or extend the previous log **after** the new boot started                     | `prevBytes` / `prevSha256` in the new header no longer match. The sweep declines.                                                                                                                                                                                                      |
+| Replay an older copy of a log, e.g. from a Time Machine restore                              | The anchor fails as above. If the header itself was replayed, `header.boot` doesn't match the filename or the chain.                                                                                                                                                                   |
+| Delete a log                                                                                 | The chain can't be walked. The sweep declines.                                                                                                                                                                                                                                         |
+| Delete an armed marker                                                                       | The next boot records `prev: null`. The sweep declines.                                                                                                                                                                                                                                |
 | **Forge** an armed marker, or edit a log **during downtime** before the next boot anchors it | **Not detected.** It needs this uid, and a same-uid actor can already write `mode='delegated'` into the journal directly. This is the stated non-goal (`DESIGN.md` §3.5.1). A per-line hash chain was considered and rejected, because anyone who can write the file can recompute it. |
-| A non-uid actor | Can't read or write `0700`/`0600` files. The controller-side reader also *requires* uid ownership, `0700`/`0600` modes and regular files (`lstat`, so no symlinks). |
+| A non-uid actor                                                                              | Can't read or write `0700`/`0600` files. The controller-side reader also _requires_ uid ownership, `0700`/`0600` modes and regular files (`lstat`, so no symlinks).                                                                                                                    |
 
 ### 2.8 When the log is unavailable
 
@@ -337,10 +351,11 @@ same `exclusive(id)`, the same double observation, the same conditional two-colu
   UNIQUE(session, boot)
   ```
 
-  The operator path keeps using `boot_reestablishments`. They're separate so that a sweep *decline*, for example on
+  The operator path keeps using `boot_reestablishments`. They're separate so that a sweep _decline_, for example on
   the first boot after deploy with no evidence yet, doesn't use up the operator's Stage 1 attempt. A new table rather
   than a new column also keeps rollback clean: `assertColumns` is exact-match (`schema.mjs:9`), so adding a column
   to `boot_reestablishments` would make the older controller refuse to start.
+
 - **Claim point.** As in Stage 1, the claim comes after the first successful `native.inspect` and the authority
   re-derivation, and before the gate. The effects:
   - A transient inspect failure or authority-source outage costs a retry on the next tick, not the boot's attempt.
@@ -359,14 +374,14 @@ boot-stale and fenced, and the operator path is available.
 
 The sweep is **not automatic** in these cases. They are exactly the cases where the log can't vouch for the history:
 
-| # | Situation | Why the log can't vouch | Sweep |
-|---|---|---|---|
-| 1 | First restart after §7 is deployed | The predecessor ran the old guard and left no log or marker, so `prev` is `null` | decline |
-| 2 | A boot whose log creation failed at import (disk full, `EACCES`) | It disarmed its predecessor (step 5) but couldn't arm itself, so the next boot records `prev: null` | decline |
-| 3 | A boot whose append failed mid-life, or which hit the 100k-line cap | It disarmed itself | decline |
-| 4 | A boot that ended without a seal (crash, `SIGKILL`, panic, power loss) | Durability of the tail isn't proven (§2.5, §2.6) | decline |
-| 5 | Anomalies: several armed markers, a malformed line, an anchor mismatch, wrong mode or owner, more than 8 hops, a cycle | Tampering, replay or a fault | decline |
-| 6 | Inputs the guard never sees: provider CLI used directly on the session transcript, and Paseo operations that aren't hooked (e.g. set model or mode) | Not counted by **today's in-boot fence either** | not covered, and not claimed |
+| #   | Situation                                                                                                                                           | Why the log can't vouch                                                                             | Sweep                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------- |
+| 1   | First restart after §7 is deployed                                                                                                                  | The predecessor ran the old guard and left no log or marker, so `prev` is `null`                    | decline                      |
+| 2   | A boot whose log creation failed at import (disk full, `EACCES`)                                                                                    | It disarmed its predecessor (step 5) but couldn't arm itself, so the next boot records `prev: null` | decline                      |
+| 3   | A boot whose append failed mid-life, or which hit the 100k-line cap                                                                                 | It disarmed itself                                                                                  | decline                      |
+| 4   | A boot that ended without a seal (crash, `SIGKILL`, panic, power loss)                                                                              | Durability of the tail isn't proven (§2.5, §2.6)                                                    | decline                      |
+| 5   | Anomalies: several armed markers, a malformed line, an anchor mismatch, wrong mode or owner, more than 8 hops, a cycle                              | Tampering, replay or a fault                                                                        | decline                      |
+| 6   | Inputs the guard never sees: provider CLI used directly on the session transcript, and Paseo operations that aren't hooked (e.g. set model or mode) | Not counted by **today's in-boot fence either**                                                     | not covered, and not claimed |
 
 Row 6 is the one place the sweep is automatic and still blind. It is not a Stage 2 weakening: the same action within
 a single boot is equally invisible to `humanAt`, and the fence has never counted it. The brief's rule — no automation
@@ -395,7 +410,7 @@ Let `H` be a human input to seat `S`, whose row has `boot = b₀` and `grantedAt
 
 **4.2 H during downtime.** No daemon means no guard, no patched method and no agent turn: nothing in Paseo can accept
 input. What the human sees is a failed send, and a failed send is not an input. If the app queues it and replays it
-after the boot, it passes through the *current* guard and falls under 4.3 or 4.4. The provider-CLI bypass is §3.4
+after the boot, it passes through the _current_ guard and falls under 4.3 or 4.4. The provider-CLI bypass is §3.4
 row 6, the same as within a boot today. ∎
 
 **4.3 H in the gap between the gate and the write, or during the sweep.** H lands in the current boot, so
@@ -405,7 +420,7 @@ row 6, the same as within a boot today. ∎
 - Between the two observations, `observationStable` fails and the sweep revokes. That's M14 / N1.
 - After the second observation and before the `UPDATE`, the row is written with `grantedAt = 1`. Native admission then
   needs `humanAt + 1 = 2` and refuses, and the next `inspect` sees `1 ≥ 1` and takes over (`DESIGN.md` §3.3 case 5,
-  M6). H is also durably in the *current* boot's log, so if the daemon restarts before the controller observes it,
+  M6). H is also durably in the _current_ boot's log, so if the daemon restarts before the controller observes it,
   4.1 applies at the next boot. ∎
 
 **4.4 H after a successful re-establishment.** The row has the shape a fresh `handback` produces
@@ -416,7 +431,7 @@ boot. ∎
 returns, so **R1** applies. If the daemon died before the commit, the takeover didn't happen. The operator's client saw
 an error and must retry, and the retry revokes. ∎
 
-The Stage 1 claim was *"equivalent to today's fence except for inputs that leave no durable trace"*. With §7 it becomes
+The Stage 1 claim was _"equivalent to today's fence except for inputs that leave no durable trace"_. With §7 it becomes
 **"equivalent to today's fence, full stop, for every input today's fence counts. Wherever durability can't be proven,
 the sweep declines."**
 
@@ -424,20 +439,20 @@ the sweep declines."**
 
 ## 5. Stage-2-specific attacks
 
-| Attack | Outcome | Mechanism |
-|---|---|---|
-| **Restart the daemon at will: an automatic re-seat per boot?** | Holds | A restart is a trigger, never an authorisation (`DESIGN.md` §3.1). Each restart buys at most one sweep attempt per seat (the `seat_sweeps` unique index). That attempt succeeds only if R1–R9 all show the seat untouched, which is exactly when it *should* be live. The attacker gets back the status quo and nothing more. The re-establishment writes two columns and grants nothing (`DESIGN.md` §5). Restarting mid-dispatch fails R5 and revokes, which is an availability loss, the same as today. A `SIGKILL` restart leaves no seal, so the sweep declines. |
-| **Suppress or delay the log write** | Holds | Disk full: the append fails and the boot disarms (by deletion). If creation fails at import, the predecessor is disarmed anyway (step 5). A permission error has the same effect, and changing the `0700` dir's permissions needs this uid. Killing the process mid-write means the input never took effect, and there's no seal, so the sweep declines. Delaying the write through a hung disk delays the *input* too, because the write happens before it. Residual: a failed append **and** a failed unlink in the same boot. That's two independent faults, and `unlink` fails essentially only with `EACCES`/`EROFS`/`EIO` (§10 I-3). |
-| **Replay, truncate or edit the log between boots** | Holds except for a same-uid actor during downtime | Anchors (§2.7). |
-| **A human input while the sweep runs** | Holds | §4.3. |
-| **A seat revoked by a human just before the boot** | Holds | §4.1 and §4.5. |
-| **The sweep racing a manual `reestablish`** | Holds | The startup sweep runs before `listen`, so no RPC can arrive. The watchdog sweep shares `exclusive(id)`, and the loser throws `'Session operation already in flight'` without claiming. The conditional `UPDATE` (`generation`, `mode`, `boot`, `expected`, `expectedAt`) makes a double write a zero-row no-op, which is treated as a refusal. After a sweep succeeds, the operator path declines ("not restarted"). After a sweep revokes, R1 declines. |
-| **The sweep racing `bindings-restore`** | N/A | The route was **removed** by prime decision (`bindings.mjs:223-231`, B-REVIEW F1). The C1′ tripwire (§8) keeps it removed. |
-| **A holder session that no longer exists** | Holds | `native.inspect` throws `'Session unavailable'` before the claim, so nothing is written and the session is never revived (`DESIGN.md` §3.5.4). |
-| **A holder session that was replaced** | Holds | If the binding now names another session, the old one has no assigned binding and falls outside the query (R7 anyway). The new holder was delegated at its own boot and is re-established on its own evidence. |
-| **Clock manipulation** | Holds | Nothing reads a clock. The logs have no timestamps. Order comes from `prev` pointers and anchors, never from `mtime`. `at` columns are informational. R5 compares for equality only. |
-| **Starting a second guard-loaded process while the old daemon lives** (it imports, then fails `EADDRINUSE`) | Holds, fail-closed | The newcomer disarms the live daemon's marker and anchors its log. The old daemon's later appends break that anchor, so every future chain through it is `unavailable` and declines. |
-| **The sweep choosing the operator's lenient trigger** | Holds | The trigger is a literal at exactly two call sites, pinned by the C1′ tripwire and mutation S9. |
+| Attack                                                                                                      | Outcome                                           | Mechanism                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Restart the daemon at will: an automatic re-seat per boot?**                                              | Holds                                             | A restart is a trigger, never an authorisation (`DESIGN.md` §3.1). Each restart buys at most one sweep attempt per seat (the `seat_sweeps` unique index). That attempt succeeds only if R1–R9 all show the seat untouched, which is exactly when it _should_ be live. The attacker gets back the status quo and nothing more. The re-establishment writes two columns and grants nothing (`DESIGN.md` §5). Restarting mid-dispatch fails R5 and revokes, which is an availability loss, the same as today. A `SIGKILL` restart leaves no seal, so the sweep declines.                                                                      |
+| **Suppress or delay the log write**                                                                         | Holds                                             | Disk full: the append fails and the boot disarms (by deletion). If creation fails at import, the predecessor is disarmed anyway (step 5). A permission error has the same effect, and changing the `0700` dir's permissions needs this uid. Killing the process mid-write means the input never took effect, and there's no seal, so the sweep declines. Delaying the write through a hung disk delays the _input_ too, because the write happens before it. Residual: a failed append **and** a failed unlink in the same boot. That's two independent faults, and `unlink` fails essentially only with `EACCES`/`EROFS`/`EIO` (§10 I-3). |
+| **Replay, truncate or edit the log between boots**                                                          | Holds except for a same-uid actor during downtime | Anchors (§2.7).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **A human input while the sweep runs**                                                                      | Holds                                             | §4.3.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **A seat revoked by a human just before the boot**                                                          | Holds                                             | §4.1 and §4.5.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **The sweep racing a manual `reestablish`**                                                                 | Holds                                             | The startup sweep runs before `listen`, so no RPC can arrive. The watchdog sweep shares `exclusive(id)`, and the loser throws `'Session operation already in flight'` without claiming. The conditional `UPDATE` (`generation`, `mode`, `boot`, `expected`, `expectedAt`) makes a double write a zero-row no-op, which is treated as a refusal. After a sweep succeeds, the operator path declines ("not restarted"). After a sweep revokes, R1 declines.                                                                                                                                                                                  |
+| **The sweep racing `bindings-restore`**                                                                     | N/A                                               | The route was **removed** by prime decision (`bindings.mjs:223-231`, B-REVIEW F1). The C1′ tripwire (§8) keeps it removed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **A holder session that no longer exists**                                                                  | Holds                                             | `native.inspect` throws `'Session unavailable'` before the claim, so nothing is written and the session is never revived (`DESIGN.md` §3.5.4).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **A holder session that was replaced**                                                                      | Holds                                             | If the binding now names another session, the old one has no assigned binding and falls outside the query (R7 anyway). The new holder was delegated at its own boot and is re-established on its own evidence.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Clock manipulation**                                                                                      | Holds                                             | Nothing reads a clock. The logs have no timestamps. Order comes from `prev` pointers and anchors, never from `mtime`. `at` columns are informational. R5 compares for equality only.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Starting a second guard-loaded process while the old daemon lives** (it imports, then fails `EADDRINUSE`) | Holds, fail-closed                                | The newcomer disarms the live daemon's marker and anchors its log. The old daemon's later appends break that anchor, so every future chain through it is `unavailable` and declines.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **The sweep choosing the operator's lenient trigger**                                                       | Holds                                             | The trigger is a literal at exactly two call sites, pinned by the C1′ tripwire and mutation S9.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ---
 
@@ -446,13 +461,13 @@ the sweep declines."**
 C5 is the prime's live test: Stage 1 `reestablish` of a seat delegated before a host restart. These outcomes
 **invalidate this design** and must stop activation:
 
-| # | C5 outcome | What it falsifies | Consequence |
-|---|---|---|---|
-| **I1** | `native.inspect` after the restart reports `boot === row.boot` | Per-process random `BOOT`; the whole trigger | Stop. The premise of `DESIGN.md` §1 is wrong. |
-| **I2** | An **untouched** seat is revoked with *"Human input has already reached this session since the daemon restarted"* (`humanAt > 0` right after the boot) | §2.1: the daemon itself drives the guard's human branch at startup or restore | Stop. The log would record machine events as human input. That is safe (everything revokes) but it proves the "human input" classification is wrong, possibly in both directions. Measure what calls it before continuing. |
-| **I3** | The untouched seat fails R5: `lastPromptId` or `lastUserAt` differ from the journal, or `'Native timeline is incomplete'` | The timeline or `lastUserMessageAt` doesn't persist across a restart (`DESIGN.md` §9, the top inference) | Stage 2 would revoke every seat, so it's useless. If a seat with a human message during the prior boot is instead **re-established**, R5 is broken and R9 becomes the only line for typed input. Stop and re-review. |
-| **I4** | Status after the restart isn't `idle`/`closed`, or `pending > 0`, on an idle seat | The quiescence premise (R3) | The sweep declines everything. It's safe but inoperative, so fix it before activating. |
-| **I5** | The barrier label doesn't carry the verified boot | `native.inspect`'s binding to `verifyActivation` | Stop. |
+| #      | C5 outcome                                                                                                                                             | What it falsifies                                                                                        | Consequence                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **I1** | `native.inspect` after the restart reports `boot === row.boot`                                                                                         | Per-process random `BOOT`; the whole trigger                                                             | Stop. The premise of `DESIGN.md` §1 is wrong.                                                                                                                                                                              |
+| **I2** | An **untouched** seat is revoked with _"Human input has already reached this session since the daemon restarted"_ (`humanAt > 0` right after the boot) | §2.1: the daemon itself drives the guard's human branch at startup or restore                            | Stop. The log would record machine events as human input. That is safe (everything revokes) but it proves the "human input" classification is wrong, possibly in both directions. Measure what calls it before continuing. |
+| **I3** | The untouched seat fails R5: `lastPromptId` or `lastUserAt` differ from the journal, or `'Native timeline is incomplete'`                              | The timeline or `lastUserMessageAt` doesn't persist across a restart (`DESIGN.md` §9, the top inference) | Stage 2 would revoke every seat, so it's useless. If a seat with a human message during the prior boot is instead **re-established**, R5 is broken and R9 becomes the only line for typed input. Stop and re-review.       |
+| **I4** | Status after the restart isn't `idle`/`closed`, or `pending > 0`, on an idle seat                                                                      | The quiescence premise (R3)                                                                              | The sweep declines everything. It's safe but inoperative, so fix it before activating.                                                                                                                                     |
+| **I5** | The barrier label doesn't carry the verified boot                                                                                                      | `native.inspect`'s binding to `verifyActivation`                                                         | Stop.                                                                                                                                                                                                                      |
 
 These outcomes **don't invalidate** the design but change the plan:
 
@@ -475,11 +490,11 @@ C5 **can't** test four things the design also assumes. Each has its own measurem
 controller to `bbc624cf9` while the new guard is loaded makes the controller refuse everything.** So the sweep needs
 an off switch that doesn't involve the guard, which is why the mode file exists.
 
-| Level | Action (prime, through the launchd job path) | Daemon restart? | Effect |
-|---|---|---|---|
-| **R-0 instant** | Write `off` to `$HOME/seat-sweep.mode`, which is read on every sweep | No | No further sweeps. Seats already re-established stay re-established (below). Stage 1, including R9a, still works. |
-| **R-1 revert re-pins** | For each `SELECT session FROM seat_sweeps WHERE outcome='reestablished' AND boot=<current>`, operator `takeover` | No | Those seats become `mode='human'`, the same end state today's restart produces on first touch. |
-| **R-2 full** | Stop the daemon, then `deploy-admission.mjs --rollback` or re-apply the `bbc624cf9` guard, then deploy the controller at `bbc624cf9`, then start | **Yes** | The old guard ignores `admission/human/`. The old controller ignores `seat_sweeps` (a separate table, so `assertColumns` is unaffected). The restart mints a new boot, so **every seat is boot-stale again**, which is today's behaviour exactly. |
+| Level                  | Action (prime, through the launchd job path)                                                                                                     | Daemon restart? | Effect                                                                                                                                                                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R-0 instant**        | Write `off` to `$HOME/seat-sweep.mode`, which is read on every sweep                                                                             | No              | No further sweeps. Seats already re-established stay re-established (below). Stage 1, including R9a, still works.                                                                                                                                 |
+| **R-1 revert re-pins** | For each `SELECT session FROM seat_sweeps WHERE outcome='reestablished' AND boot=<current>`, operator `takeover`                                 | No              | Those seats become `mode='human'`, the same end state today's restart produces on first touch.                                                                                                                                                    |
+| **R-2 full**           | Stop the daemon, then `deploy-admission.mjs --rollback` or re-apply the `bbc624cf9` guard, then deploy the controller at `bbc624cf9`, then start | **Yes**         | The old guard ignores `admission/human/`. The old controller ignores `seat_sweeps` (a separate table, so `assertColumns` is unaffected). The restart mints a new boot, so **every seat is boot-stale again**, which is today's behaviour exactly. |
 
 **Over-grant analysis.** The sweep writes only `boot` and `grantedAt`, and only when every check passes. It never
 changes `mode` or `generation`, never mints a token or credential, and writes no role table or `transfers` row. So:
@@ -539,7 +554,7 @@ release exists to close it. C1′ pins the new shape instead:
 2. Deploy this release with the mode file absent, which means `off`. Stage 1 runs with R9a.
 3. The next graceful restart in **`report`** mode, where the sweep records verdicts and writes nothing. Check:
    - the previous log exists, is sealed and is anchored;
-   - a deliberate interrupt on a *non-seat* test session appears in the log;
+   - a deliberate interrupt on a _non-seat_ test session appears in the log;
    - the verdicts match expectation.
 4. `on`.
 5. A daemon-only restart to observe D1.
@@ -551,37 +566,37 @@ release exists to close it. C1′ pins the new shape instead:
 
 **Now implementable:**
 
-| # | Mutation | Test that must go red |
-|---|---|---|
+| #       | Mutation                                                | Test that must go red                                         |
+| ------- | ------------------------------------------------------- | ------------------------------------------------------------- |
 | **M20** | Ignore a recorded post-grant human input for this agent | An interrupt-only input before the boot must revoke after it. |
-| **M21** | Treat a missing or unreadable previous log as clean | The sweep must decline. |
+| **M21** | Treat a missing or unreadable previous log as clean     | The sweep must decline.                                       |
 
 **New for Stage 2:**
 
-| # | Mutation | Test that must go red |
-|---|---|---|
-| S1 | Write the log line after `guard` returns (deferred or async), or after the counter write | The line is on disk synchronously at `guard()` return. |
-| S2 | Don't disarm on a write or fsync failure | After an injected failure `armed-<BOOT>` is absent, and the next boot's `prev` is `null`. |
-| S3 | Throw or refuse the human input on log failure | `guard()` returns normally under an injected failure. Human input is never refused. |
-| S4 | Import-time disarm of the predecessor is skipped when own-log creation fails | With a forced `EEXIST` on its own log, the predecessor marker is gone and the next boot declines. |
-| S5 | Drop the `prevBytes` / `prevSha256` anchor check | An append to the previous log after the successor started must decline. |
-| S6 | `n ≥ grantedAt` becomes `n > grantedAt` | An input with `n === grantedAt` is dirty. |
-| S7 | Ignore `n === null` (saturated) lines | A saturated input for the agent is dirty. |
-| S8 | Ignore lines in intermediate boots | An input in b₁ for a seat granted in b₀, swept at b₂, is dirty. |
-| S9 | The sweep passes `trigger: 'operator'` | The sweep with no evidence must decline, and the C1′ tripwire goes red. |
-| S10 | Accept a chain without walking `prev`, e.g. trusting the newest log | A skipped boot must decline. |
-| S11 | Accept a malformed or partial trailing line | Decline. |
-| S12 | Accept several armed markers, or a header whose `boot` isn't the filename | Decline. |
-| S13 | Drop the seal requirement | An unsealed previous log must decline. |
-| S14 | R9a declines instead of revoking | A dirty log must leave `mode === 'human'`. |
-| S15 | `dirty` is masked by an earlier `unavailable` return | A chain with both must revoke, not decline. |
-| S16 | Drop `UNIQUE(session, boot)` on `seat_sweeps` | A second sweep at the same boot must be a no-op. |
-| S17 | The sweep claims in `boot_reestablishments` | After a sweep decline, the operator Stage 1 attempt must still be available. |
-| S18 | Move the startup sweep after `server.listen`, or add a third caller | C1′ tripwire. |
-| S19 | The mode file is absent or invalid and treated as `on` | Absent or invalid must be `off`. |
-| S20 | `report` mode writes `sessions` or calls `takeover` | `report` changes no `sessions` row. |
-| S21 | Relax the reader's ownership, mode or regular-file checks | A symlinked or `0644` log must decline. |
-| S22 | Remove the hop bound or cycle check | A cyclic `prev` chain must terminate and decline. |
+| #   | Mutation                                                                                 | Test that must go red                                                                             |
+| --- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| S1  | Write the log line after `guard` returns (deferred or async), or after the counter write | The line is on disk synchronously at `guard()` return.                                            |
+| S2  | Don't disarm on a write or fsync failure                                                 | After an injected failure `armed-<BOOT>` is absent, and the next boot's `prev` is `null`.         |
+| S3  | Throw or refuse the human input on log failure                                           | `guard()` returns normally under an injected failure. Human input is never refused.               |
+| S4  | Import-time disarm of the predecessor is skipped when own-log creation fails             | With a forced `EEXIST` on its own log, the predecessor marker is gone and the next boot declines. |
+| S5  | Drop the `prevBytes` / `prevSha256` anchor check                                         | An append to the previous log after the successor started must decline.                           |
+| S6  | `n ≥ grantedAt` becomes `n > grantedAt`                                                  | An input with `n === grantedAt` is dirty.                                                         |
+| S7  | Ignore `n === null` (saturated) lines                                                    | A saturated input for the agent is dirty.                                                         |
+| S8  | Ignore lines in intermediate boots                                                       | An input in b₁ for a seat granted in b₀, swept at b₂, is dirty.                                   |
+| S9  | The sweep passes `trigger: 'operator'`                                                   | The sweep with no evidence must decline, and the C1′ tripwire goes red.                           |
+| S10 | Accept a chain without walking `prev`, e.g. trusting the newest log                      | A skipped boot must decline.                                                                      |
+| S11 | Accept a malformed or partial trailing line                                              | Decline.                                                                                          |
+| S12 | Accept several armed markers, or a header whose `boot` isn't the filename                | Decline.                                                                                          |
+| S13 | Drop the seal requirement                                                                | An unsealed previous log must decline.                                                            |
+| S14 | R9a declines instead of revoking                                                         | A dirty log must leave `mode === 'human'`.                                                        |
+| S15 | `dirty` is masked by an earlier `unavailable` return                                     | A chain with both must revoke, not decline.                                                       |
+| S16 | Drop `UNIQUE(session, boot)` on `seat_sweeps`                                            | A second sweep at the same boot must be a no-op.                                                  |
+| S17 | The sweep claims in `boot_reestablishments`                                              | After a sweep decline, the operator Stage 1 attempt must still be available.                      |
+| S18 | Move the startup sweep after `server.listen`, or add a third caller                      | C1′ tripwire.                                                                                     |
+| S19 | The mode file is absent or invalid and treated as `on`                                   | Absent or invalid must be `off`.                                                                  |
+| S20 | `report` mode writes `sessions` or calls `takeover`                                      | `report` changes no `sessions` row.                                                               |
+| S21 | Relax the reader's ownership, mode or regular-file checks                                | A symlinked or `0644` log must decline.                                                           |
+| S22 | Remove the hop bound or cycle check                                                      | A cyclic `prev` chain must terminate and decline.                                                 |
 
 The five mutations that map onto attacker behaviour rather than coding slips are S1, S2, S5, S13 and M20, together
 with M2–M6 from `DESIGN.md`. **If any of them survives, the review should stop.**
@@ -590,14 +605,14 @@ with M2–M6 from `DESIGN.md`. **If any of them survives, the review should stop
 
 ## 9. Decisions for the prime
 
-| # | Decision | My recommendation |
-|---|---|---|
-| **D1** | Also sweep on the watchdog tick, not only at controller startup | **Yes.** Without it, daemon-only restarts may never sweep. It is proven safe under both lock orders. The only cost is availability. |
-| **D2** | The kill switch is a controller-home mode file, `off` / `report` / `on`, default `off`, read on every sweep | **Yes.** It is the only rollback that doesn't need a guard redeploy, because the controller and the guard are version-locked. |
-| **D3** | Require the `exit` seal on every log the sweep relies on | **Yes, for first activation.** It closes the power-loss and `SIGKILL` residual instead of accepting it. It costs automation after crashes, where the operator still has Stage 1. It can be relaxed later with evidence. |
-| **D4** | A `dirty` log also revokes under the **operator** trigger, and `unavailable` doesn't block the operator | **Yes.** Stage 1 becomes strictly stricter and is otherwise unchanged. |
-| **D5** | Human input gains a synchronous `fsync` dependency. It can be delayed by one fsync and is never refused. | **Accept.** It is the price of "written before effect". The invariant "cannot be refused" still holds exactly. |
-| **D6** | Drop `DESIGN.md` §7's "`saturated = true` on log failure" and disarm instead | **Yes.** Saturation shuts down every delegated seat for the boot and buys nothing, because disarming already makes the next boot decline. |
+| #                           | Decision                                                                                                                                                                           | My recommendation                                                                                                                                                                                                                                                                                                |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **D1**                      | Also sweep on the watchdog tick, not only at controller startup                                                                                                                    | **Yes.** Without it, daemon-only restarts may never sweep. It is proven safe under both lock orders. The only cost is availability.                                                                                                                                                                              |
+| **D2**                      | The kill switch is a controller-home mode file, `off` / `report` / `on`, default `off`, read on every sweep                                                                        | **Yes.** It is the only rollback that doesn't need a guard redeploy, because the controller and the guard are version-locked.                                                                                                                                                                                    |
+| **D3**                      | Require the `exit` seal on every log the sweep relies on                                                                                                                           | **Yes, for first activation.** It closes the power-loss and `SIGKILL` residual instead of accepting it. It costs automation after crashes, where the operator still has Stage 1. It can be relaxed later with evidence.                                                                                          |
+| **D4**                      | A `dirty` log also revokes under the **operator** trigger, and `unavailable` doesn't block the operator                                                                            | **Yes.** Stage 1 becomes strictly stricter and is otherwise unchanged.                                                                                                                                                                                                                                           |
+| **D5**                      | Human input gains a synchronous `fsync` dependency. It can be delayed by one fsync and is never refused.                                                                           | **Accept.** It is the price of "written before effect". The invariant "cannot be refused" still holds exactly.                                                                                                                                                                                                   |
+| **D6**                      | Drop `DESIGN.md` §7's "`saturated = true` on log failure" and disarm instead                                                                                                       | **Yes.** Saturation shuts down every delegated seat for the boot and buys nothing, because disarming already makes the next boot decline.                                                                                                                                                                        |
 | **D7** (added after review) | Accept the residual in §0a (a daemon with no Fulcra code, started by hand, unwatched, then a return to Stage 2 with no deploy step), or also require continuous controller witness | **Accept, with the witness.** Every supported start path now breaks the chain. What remains needs a manual pristine start while the controller is down. A stronger rule would have to rely on polling, which can only reduce the chance and never prove anything, or on Paseo-side state I can't read from here. |
 
 ---
