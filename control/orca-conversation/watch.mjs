@@ -39,7 +39,6 @@ export const emit = async (sessionKey, text, execute = exec) => {
           stdoutTail: tail(error?.stdout),
           stderrTail: tail(error?.stderr),
         }),
-      { cause: error },
     );
   }
 };
@@ -138,7 +137,6 @@ export async function watchReceipt({ input, run, directory, notify = emit }) {
     save({ state: "needs-reconciliation", error: String(error.message).slice(0, 2000) });
     throw Error(
       `Orca watch needs reconciliation: ${file}. No automatic wake or input retry. ${error.message}`,
-      { cause: error },
     );
   }
 }

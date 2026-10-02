@@ -15,7 +15,6 @@ export function acquireProcessLock(home, { epoch } = {}) {
     if (e.code === "EEXIST")
       throw Error(
         "Controller process.lock exists; host supervisor must verify the prior child has exited",
-        { cause: e },
       );
     throw e;
   }

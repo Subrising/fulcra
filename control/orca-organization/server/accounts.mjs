@@ -112,7 +112,7 @@ export async function withStoreLock(root, fn) {
           continue;
         }
       } catch {}
-      if (i > 200) throw Error("The account store is busy", { cause: e });
+      if (i > 200) throw Error("The account store is busy");
       await new Promise((r) => setTimeout(r, 25));
     }
   }

@@ -83,7 +83,7 @@ export function createReceiverGuard(file, release) {
           ).run(intent.id);
       });
     } catch (e) {
-      throw Error("Orca native admission refused: " + e.message, { cause: e });
+      throw Error("Orca native admission refused: " + e.message);
     } finally {
       db?.close();
     }
