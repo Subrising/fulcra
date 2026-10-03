@@ -38,7 +38,7 @@ leaf.
 saved selection hydration. With no remembered workspace, it opens Fulcra work home
 through the existing plugin surface runtime. This preserves an original Book
 conversation after restart even when only Mini hosts the work overview. The
-controller providing home must have `orca-organization`; unavailable controllers
+controller providing home must have `orca-organization-next`; unavailable controllers
 retain the surface's normal loading/error state. Explicit conversation routes
 keep their saved host and session identity.
 
@@ -186,7 +186,7 @@ The pure policy tests should still enforce the boundary split:
 - host index with the same saved workspace returns
   `/h/[serverId]/workspace/[workspaceId]`;
 - host index with no restorable workspace returns Fulcra home
-  (`/h/[serverId]/plugin/orca-organization/sidebar/organization`) when that host contributes
+  (`/h/[serverId]/plugin/orca-organization-next/sidebar/organization`) when that host contributes
   the surface, and `/open-project` when it does not. Fulcra home lives in a plugin, and the
   catalog arrives after connect, so the index waits rather than redirecting while a connected
   host that supports plugins is still answering. Offline, unsupported and failed lookups

@@ -14,7 +14,7 @@ import {
   buildOpenProjectRoute,
 } from "@/utils/host-routes";
 
-export const ORCA_ORGANIZATION_PLUGIN_ID = "orca-organization";
+export const ORCA_ORGANIZATION_PLUGIN_ID = "orca-organization-next";
 export const ORCA_ORGANIZATION_SIDEBAR_ID = "organization";
 
 export type OrcaHomeAvailability = "unknown" | "present" | "absent";

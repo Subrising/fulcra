@@ -73,7 +73,7 @@ it("waits for saved selection hydration instead of losing the original conversat
 it("opens Orca home when no conversation is remembered", () => {
   renderToString(<HostIndexRoute />);
   expect(state.redirect.mock.calls[0]?.[0]).toEqual({
-    href: "/h/book/plugin/orca-organization/sidebar/organization",
+    href: "/h/book/plugin/orca-organization-next/sidebar/organization",
   });
 });
 
@@ -105,7 +105,7 @@ it("opens Orca home once the delayed catalog arrives", () => {
   state.catalogSettled = true;
   renderToString(<HostIndexRoute />);
   expect(state.redirect.mock.calls[0]?.[0]).toEqual({
-    href: "/h/book/plugin/orca-organization/sidebar/organization",
+    href: "/h/book/plugin/orca-organization-next/sidebar/organization",
   });
 });
 
