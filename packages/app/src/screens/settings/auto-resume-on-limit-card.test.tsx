@@ -4,6 +4,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const f = vi.hoisted(() => ({
   connected: true,
+  client: { getLastServerInfoMessage: vi.fn() },
+  currentClient: null as { getLastServerInfoMessage: ReturnType<typeof vi.fn> } | null,
+  policy: "standalone" as "standalone" | "unknown" | "owner-controls-required",
+  currentPolicy: "standalone" as "standalone" | "unknown" | "owner-controls-required",
   features: {} as Record<string, unknown>,
   currentFeatures: {} as Record<string, unknown>,
   infoPresent: true,
@@ -49,9 +53,11 @@ vi.mock("@/hooks/use-daemon-config", () => ({
 }));
 vi.mock("@/runtime/host-runtime", () => ({
   useHostRuntimeIsConnected: () => f.connected,
+  useHostRuntimeClient: () => f.client,
   getHostRuntimeStore: () => ({
     getSnapshot: () => ({
-      client: { getLastServerInfoMessage: () => ({ features: f.currentFeatures }) },
+      client: f.currentClient,
+      connectionStatus: f.connected ? "online" : "offline",
     }),
   }),
 }));
@@ -63,10 +69,17 @@ vi.mock("@/stores/session-store", () => ({
   ) =>
     select({ sessions: { host: { serverInfo: f.infoPresent ? { features: f.features } : null } } }),
 }));
+vi.mock("@/plugins/registry", () => ({
+  useHostInputPolicy: () => f.policy,
+  pluginRegistry: { getHostInputPolicy: () => f.currentPolicy },
+}));
 import { AutoResumeOnLimitCard } from "./auto-resume-on-limit-card";
 afterEach(cleanup);
 beforeEach(() => {
   f.connected = true;
+  f.currentClient = f.client;
+  f.client.getLastServerInfoMessage.mockImplementation(() => ({ features: f.currentFeatures }));
+  f.policy = "standalone"; f.currentPolicy = "standalone";
   f.infoPresent = true;
   f.features = {};
   f.currentFeatures = {};
@@ -143,5 +156,39 @@ it("qualifies eligible standalone continuation and preserves owner controls with
       "Sessions that stop mid-task on a usage limit continue on their own once it resets",
     ),
   ).toBeNull();
+  expect(f.patch).not.toHaveBeenCalled();
+});
+
+it("a supporting host with input observers exposes owner guidance and no global toggle", () => {
+  f.features = { autoResumeOnLimit: true }; f.currentFeatures = f.features;
+  f.policy = "owner-controls-required"; f.currentPolicy = f.policy;
+  render(<AutoResumeOnLimitCard serverId="host" />);
+  expect(screen.getByText("Resuming sessions on this host requires their prime or owner’s controls. The standalone setting does not enable automatic continuation for these sessions.").textContent).toContain("does not enable automatic continuation");
+  expect(screen.queryByRole("switch")).toBeNull(); expect(f.patch).not.toHaveBeenCalled();
+});
+it("unknown or failed catalog policy cannot advertise an enabled preference", () => {
+  f.features = { autoResumeOnLimit: true }; f.currentFeatures = f.features;
+  f.policy = "unknown"; f.currentPolicy = f.policy;
+  render(<AutoResumeOnLimitCard serverId="host" />);
+  expect(screen.getByText(/resume policy has not been confirmed/).textContent).toContain("controls are unavailable");
+  expect(screen.queryByRole("switch")).toBeNull(); expect(f.patch).not.toHaveBeenCalled();
+});
+it("reconnect stays unavailable until fresh observer-free catalog metadata arrives", () => {
+  f.features = { autoResumeOnLimit: true }; f.currentFeatures = f.features;
+  const view = render(<AutoResumeOnLimitCard serverId="host" />);
+  f.connected = false; f.policy = "unknown"; f.currentPolicy = f.policy;
+  view.rerender(<AutoResumeOnLimitCard serverId="host" />); expect(view.container.textContent).toBe("");
+  f.connected = true; view.rerender(<AutoResumeOnLimitCard serverId="host" />);
+  expect(screen.queryByRole("switch")).toBeNull();
+  f.policy = "standalone"; f.currentPolicy = f.policy; view.rerender(<AutoResumeOnLimitCard serverId="host" />);
+  expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true");
+});
+it("a retained standalone toggle refuses changed current policy or replacement clients", () => {
+  f.features = { autoResumeOnLimit: true }; f.currentFeatures = f.features;
+  render(<AutoResumeOnLimitCard serverId="host" />);
+  const toggle = f.retainedToggle!;
+  f.currentPolicy = "owner-controls-required"; toggle(false);
+  f.currentPolicy = "unknown"; toggle(false);
+  f.currentPolicy = "standalone"; f.currentClient = { getLastServerInfoMessage: vi.fn(() => ({ features: f.currentFeatures })) }; toggle(false);
   expect(f.patch).not.toHaveBeenCalled();
 });
