@@ -10,6 +10,13 @@ import type { InstalledPlugin, UntrustedPlugin } from "./types";
 import { PluginReconnectState } from "./reconnect-state";
 import { IntercomSettingsSection } from "@/screens/settings/intercom-section";
 
+type TrustedCatalogPlugins = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>["trustedPlugins"];
+export type HostInputPolicy = "unknown" | "owner-controls-required" | "standalone";
+function catalogInputPolicy(trustedPlugins: TrustedCatalogPlugins): HostInputPolicy {
+  if (trustedPlugins === undefined) return "unknown";
+  return trustedPlugins.some((plugin) => plugin.hooks.includes("input")) ? "owner-controls-required" : "standalone";
+}
+
 type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>["plugins"][number];
 
 export class PluginRegistry {
@@ -25,6 +32,8 @@ export class PluginRegistry {
   // unsupported, or asked and failed. Routing needs "we do not know yet" to be distinct from
   // "there is nothing", and it must not stay unknown forever on a host that will never reply.
   private readonly catalogSettled = new Set<string>();
+  // Metadata is about a particular live catalog, not an evaluated UI bundle or a host label.
+  private readonly hostInputPolicies = new Map<string, { client: DaemonClient; trustedPlugins: TrustedCatalogPlugins }>();
 
   constructor(
     private readonly dependencies: {
@@ -51,6 +60,17 @@ export class PluginRegistry {
     this.publish();
   }
 
+  getHostInputPolicy(serverId: string, client: DaemonClient | null): HostInputPolicy {
+    const current = this.hostInputPolicies.get(serverId);
+    return client && current?.client === client ? catalogInputPolicy(current.trustedPlugins) : "unknown";
+  }
+
+  clearHostInputPolicy(serverId: string, client: DaemonClient): void {
+    if (this.hostInputPolicies.get(serverId)?.client !== client) return;
+    this.hostInputPolicies.delete(serverId);
+    this.publish();
+  }
+
   getEvaluationError(serverId: string, pluginId: string): string | undefined {
     return this.evaluationErrors.get(`${serverId}/${pluginId}`);
   }
@@ -61,8 +81,13 @@ export class PluginRegistry {
     options: {
       replacePluginId?: string;
       client: DaemonClient;
+      trustedPlugins?: TrustedCatalogPlugins;
     },
   ): boolean {
+    this.hostInputPolicies.set(serverId, {
+      client: options.client,
+      trustedPlugins: options.trustedPlugins,
+    });
     const previous = this.byHost.get(serverId) ?? [];
     const previousUntrusted = new Map(this.untrusted);
     for (const [key, item] of this.untrusted)
@@ -243,6 +268,7 @@ export class PluginRegistry {
   }
 
   private teardownHost(serverId: string): void {
+    const removedPolicy = this.hostInputPolicies.delete(serverId);
     let removedUntrusted = false;
     for (const [key, item] of this.untrusted)
       if (item.serverId === serverId) {
@@ -252,7 +278,7 @@ export class PluginRegistry {
       }
     const installed = this.byHost.get(serverId);
     if (!installed) {
-      if (removedUntrusted) this.publish();
+      if (removedUntrusted || removedPolicy) this.publish();
       return;
     }
     for (const plugin of installed) this.dispose(plugin);
@@ -337,5 +363,13 @@ export function useUntrustedPlugins(): UntrustedPlugin[] {
     pluginRegistry.subscribe,
     pluginRegistry.getUntrustedSnapshot,
     pluginRegistry.getUntrustedSnapshot,
+  );
+}
+
+export function useHostInputPolicy(serverId: string, client: DaemonClient | null): HostInputPolicy {
+  return useSyncExternalStore(
+    pluginRegistry.subscribe,
+    () => pluginRegistry.getHostInputPolicy(serverId, client),
+    () => pluginRegistry.getHostInputPolicy(serverId, client),
   );
 }

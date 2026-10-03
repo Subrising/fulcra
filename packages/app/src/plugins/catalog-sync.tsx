@@ -36,8 +36,12 @@ export function PluginCatalogSync({
       pluginRegistry.removeHost(serverId);
       return;
     }
+    const releaseConnection = client.subscribeConnectionStatus((state) => {
+      if (state.status !== "connected") pluginRegistry.clearHostInputPolicy(serverId, client);
+    });
     const refresh = (replacePluginId?: string) => {
       const epoch = ++generation;
+      pluginRegistry.clearHostInputPolicy(serverId, client);
       reading?.abort();
       refreshQueue = refreshQueue.then(async () => {
         if (cancelled || epoch !== generation) return;
@@ -62,7 +66,7 @@ export function PluginCatalogSync({
           if (cancelled || abort.signal.aborted || epoch !== generation) return;
           const plugins = await preparePluginCatalog(catalog.plugins);
           if (!cancelled && !abort.signal.aborted && epoch === generation) {
-            pluginRegistry.installCatalog(serverId, plugins, { replacePluginId, client });
+            pluginRegistry.installCatalog(serverId, plugins, { replacePluginId, client, trustedPlugins: catalog.trustedPlugins });
           }
         } catch {
           if (!cancelled && epoch === generation) {
@@ -103,6 +107,8 @@ export function PluginCatalogSync({
     return () => {
       cancelled = true;
       generation++;
+      pluginRegistry.clearHostInputPolicy(serverId, client);
+      releaseConnection();
       reading?.abort();
       void observation
         .release()
