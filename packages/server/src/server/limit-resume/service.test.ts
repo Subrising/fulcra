@@ -70,8 +70,9 @@ describe("LimitResumeService", () => {
         markers.set(id, at);
         await onMarker?.(id, at);
       },
-      sendResume: async (agentId, prompt, stillWanted) => {
+      sendResume: async (agentId, prompt, stillWanted, consume) => {
         if (!stillWanted()) return;
+        consume();
         sent.push({ agentId, prompt, at: Date.now() });
       },
       onError: (e) => {
@@ -79,7 +80,12 @@ describe("LimitResumeService", () => {
       },
       random: () => 0,
     });
-  const idle = (): LimitResumeAgent => ({ labels: {}, archived: false, busy: false });
+  const idle = (): LimitResumeAgent => ({
+    labels: {},
+    archived: false,
+    busy: false,
+    unscopedResumeAllowed: true,
+  });
   const resetIn = (ms: number) => `usage limit reached|${Math.floor((Date.now() + ms) / 1000)}`;
   const queued = () =>
     (JSON.parse(readFileSync(limitResumeFilePath(home), "utf8")) as { entries: unknown[] }).entries;
@@ -335,6 +341,22 @@ describe("LimitResumeService", () => {
     await svc.onAgentEvent(failed("a", resetIn(60_000), "later"));
     expect(svc.pendingResumeAt("a")).toBeNull();
     expect(markers.size).toBe(0);
+  });
+
+  it("persisted scoped/unknown ownership never gains unscoped fallback after restart", async () => {
+    agents.set("a", { ...idle(), unscopedResumeAllowed: false });
+    const first = make();
+    first.start();
+    await first.onAgentEvent(failed("a", resetIn(60_000)));
+    expect(markers.get("a")).toBeTruthy();
+    first.stop();
+    agents.set("a", idle());
+    const second = make();
+    second.start();
+    await vi.advanceTimersByTimeAsync(60_000 + HANDOFF_MS + 1_000);
+    expect(sent).toEqual([]);
+    expect(markers.get("a")).toBeNull();
+    second.stop();
   });
 
   it("staggers many sessions that reset at the same moment", async () => {

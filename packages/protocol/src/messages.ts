@@ -4087,6 +4087,8 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
         nativeQueuedMessages: z.boolean().optional(),
+        // Absent on older hosts means the usage-limit resume setting is unsupported.
+        autoResumeOnLimit: z.boolean().optional(),
         pluginCatalogPaging: z.boolean().optional(),
         gitAiDrafts: z.boolean().optional(),
         nativeOwnerReportInbox: z.boolean().optional(),

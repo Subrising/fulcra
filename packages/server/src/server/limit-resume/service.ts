@@ -52,6 +52,8 @@ interface QueueEntry {
   epoch: number;
   /** "reset" when the provider named a reset time, "backoff" when the wait is our own estimate. */
   source: "reset" | "backoff";
+  /** Captured at the stop: a later removal of the ownership observer never grants fallback. */
+  unscoped?: boolean;
 }
 
 interface RecentResume {
@@ -71,6 +73,7 @@ export interface LimitResumeAgent {
   archived: boolean;
   /** A turn is already running or starting. */
   busy: boolean;
+  unscopedResumeAllowed: boolean;
 }
 
 export interface LimitResumeDeps {
@@ -82,10 +85,16 @@ export interface LimitResumeDeps {
   /** Writes (or, with null, clears) the label the app shows as "Paused: usage limit, resumes at HH:MM". */
   setMarker: (agentId: string, resumeAtIso: string | null) => Promise<void>;
   /**
-   * Starts the resume turn. `stillWanted` must be called immediately before the turn is admitted, after any
-   * awaiting the implementation needs (loading the session), and the turn must not start when it returns false.
+   * Starts the resume turn with repeatable refusal-only `stillWanted` checks after all preparation awaits.
+   * `consume` is called once at the actual synchronous provider handoff, never an earlier manager gate.
+   * Neither callback grants input authority. A stopped service must retain an unconsumed entry.
    */
-  sendResume: (agentId: string, prompt: string, stillWanted: () => boolean) => Promise<void>;
+  sendResume: (
+    agentId: string,
+    prompt: string,
+    stillWanted: () => boolean,
+    consume: () => void,
+  ) => Promise<void>;
   onError: (error: unknown) => void;
   now?: () => number;
   random?: () => number;
@@ -250,6 +259,7 @@ export class LimitResumeService {
       attempt,
       epoch,
       source: stop.resetAt === null ? "backoff" : "reset",
+      unscoped: agent.unscopedResumeAllowed === true,
     };
     this.queue.entries.push(entry);
     this.save();
@@ -316,7 +326,8 @@ export class LimitResumeService {
     const unchanged = () =>
       !this.stopped && this.epochOf(entry.agentId) === entry.epoch && this.deps.isEnabled();
     if (this.stopped) return;
-    if (!unchanged() || this.now() - entry.resumeAt > STALE_AFTER_MS) {
+    // Legacy/unknown entries and a previously observed scoped owner never gain unscoped authority.
+    if (entry.unscoped !== true || !unchanged() || this.now() - entry.resumeAt > STALE_AFTER_MS) {
       await this.cancel(entry.agentId);
       return;
     }
@@ -335,13 +346,18 @@ export class LimitResumeService {
     // Keep the durable entry while session loading awaits. Shutdown during that wait must leave
     // it for the next boot. Consume synchronously in the final send gate, immediately before admission.
     let consumed = false;
+    const stillWanted = () =>
+      unchanged() &&
+      (consumed ||
+        this.queue.entries.some((e) => e.agentId === entry.agentId && e.limitId === entry.limitId));
     await this.deps
-      .sendResume(entry.agentId, RESUME_PROMPT, () => {
-        if (!unchanged()) return false;
+      .sendResume(entry.agentId, RESUME_PROMPT, stillWanted, () => {
+        if (!stillWanted()) throw new Error("Limit resume no longer wanted");
+        if (consumed) return;
         const mine = this.queue.entries.find(
           (e) => e.agentId === entry.agentId && e.limitId === entry.limitId,
         );
-        if (!mine) return false;
+        if (!mine) throw new Error("Limit resume entry unavailable");
         this.queue.entries = this.queue.entries.filter((e) => e !== mine);
         this.queue.recent[entry.agentId] = {
           resumedAt: this.now(),
@@ -350,7 +366,6 @@ export class LimitResumeService {
         };
         this.save();
         consumed = true;
-        return true;
       })
       .catch(this.deps.onError);
     if (consumed) {

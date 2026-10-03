@@ -4134,6 +4134,29 @@ export class AgentManager {
     await this.unarchiveSnapshot(matched.id);
   }
 
+  /** Host-generated status only. No wire route, caller-selected label or input authority. */
+  async updateLimitResumeMarker(agentId: string, resumeAtIso: string | null): Promise<void> {
+    if (resumeAtIso !== null && !Number.isFinite(Date.parse(resumeAtIso)))
+      throw new Error("Invalid limit resume status time");
+    await this.runLifecycleMutation(agentId, () =>
+      this.writeLabels(agentId, { "fulcra.limit-resume-at": resumeAtIso ?? "" }).then(
+        () => undefined,
+      ),
+    );
+  }
+
+  /** No ownership classifier exists for trusted input authorities: unknown ownership refuses fallback. */
+  canRunUnscopedLimitResume(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.internal || agent.owner || !["codex", "claude"].includes(agent.provider))
+      return false;
+    try {
+      return !this.trustedPlugins.catalog().some((plugin) => plugin.hooks.includes("input"));
+    } catch {
+      return false;
+    }
+  }
+
   async updateAgentMetadata(
     agentId: string,
     updates: {

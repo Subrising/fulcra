@@ -1,0 +1,377 @@
+import { mkdtemp, readFile, rm, realpath, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { expect, test, vi } from "vitest";
+import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
+import { AgentManager } from "../agent/agent-manager.js";
+import { sendPromptToAgent } from "../agent/agent-prompt.js";
+import { AgentStorage } from "../agent/agent-storage.js";
+import { CodexAppServerAgentSession } from "../agent/providers/codex-app-server-agent.js";
+import { createFakeCodexAppServer } from "../agent/providers/codex/test-utils/fake-app-server.js";
+import { createTestAgentClient } from "../test-utils/fake-agent-client.js";
+import { createTestLogger } from "../../test-utils/test-logger.js";
+import { DaemonConfigStore } from "../daemon-config-store.js";
+import { TrustedPlugins } from "../plugins/trusted.js";
+import { startLimitResume } from "./start.js";
+import {
+  LIMIT_RESUME_AT_LABEL,
+  LIMIT_RESUME_OPT_OUT_LABEL,
+  limitResumeFilePath,
+} from "./service.js";
+import { ControlStore } from "../../../../../control/src/control/store.mjs";
+import {
+  createTrustedContribution,
+  OWN_ID,
+  payloadDigest,
+  sendPayload,
+} from "../../../../../control/src/control/trusted-contribution.mjs";
+import { randomUUID } from "node:crypto";
+
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((yes) => (resolve = yes));
+  return { promise, resolve };
+}
+async function fixture() {
+  const home = await realpath(await mkdtemp(path.join(tmpdir(), "limit-native-fence-")));
+  const logger = createTestLogger();
+  const storage = new AgentStorage(path.join(home, "agents"), logger);
+  await storage.initialize();
+  const host = new TrustedPlugins();
+  host.initializeKnownAgents([]);
+  let ordinal = 0;
+  const server = createFakeCodexAppServer({
+    "thread/start": () => ({
+      thread: { id: "limit-thread" },
+      modelProvider: "openai",
+      model: "gpt-6.1-sol",
+    }),
+    "thread/loaded/list": () => ({ data: ["limit-thread"] }),
+    "turn/start": () => ({ turn: { id: `limit-turn-${++ordinal}` } }),
+    "account/rateLimits/read": () => ({
+      accountId: "fixture-account",
+      ordinaryUsageAllowed: true,
+      rateLimits: {},
+    }),
+  });
+  let session!: CodexAppServerAgentSession;
+  const client = createTestAgentClient("codex");
+  client.createSession = async (config) => {
+    session = new CodexAppServerAgentSession(config, null, logger, async () => server.child);
+    await session.connect();
+    return session;
+  };
+  const manager = new AgentManager({
+    registry: storage,
+    logger,
+    trustedPlugins: host,
+    clients: { codex: client },
+  });
+  const agent = await manager.createAgent(
+    {
+      provider: "codex",
+      cwd: home,
+      modeId: "full-access",
+      model: "gpt-6.1-sol",
+      thinkingOptionId: "high",
+    },
+    undefined,
+    {},
+  );
+  const config = new DaemonConfigStore(
+    home,
+    MutableDaemonConfigSchema.parse({ mcp: { injectIntoAgents: false }, autoResumeOnLimit: true }),
+    logger,
+  );
+  return {
+    home,
+    logger,
+    storage,
+    host,
+    server,
+    manager,
+    agent,
+    session,
+    config,
+    start: () =>
+      startLimitResume({
+        paseoHome: home,
+        agentManager: manager,
+        agentStorage: storage,
+        daemonConfigStore: config,
+        logger,
+      }),
+    cleanup: async () => {
+      await host.shutdownClosure(() => manager.closeAgent(agent.id));
+      await manager.flush();
+      host.close();
+      await rm(home, { recursive: true, force: true });
+    },
+  };
+}
+async function queueActualLimit(f: Awaited<ReturnType<typeof fixture>>) {
+  const marked = deferred();
+  const off = f.manager.subscribe(
+    (event) => {
+      if (
+        event.type === "agent_state" &&
+        event.agent.id === f.agent.id &&
+        event.agent.labels[LIMIT_RESUME_AT_LABEL]
+      )
+        marked.resolve();
+    },
+    { replayState: false },
+  );
+  const run = f.manager.runAgent(f.agent.id, "limited task");
+  const failed = expect(run).rejects.toThrow("usage limit reached");
+  await f.server.waitForTurnStart();
+  f.server.completeTurn({
+    threadId: "limit-thread",
+    status: "failed",
+    error: { message: "usage limit reached" },
+  });
+  await failed;
+  await marked.promise;
+  off();
+}
+async function makeDue(home: string) {
+  const file = limitResumeFilePath(home);
+  const data = JSON.parse(await readFile(file, "utf8"));
+  expect(data.entries).toHaveLength(1);
+  data.entries[0].resumeAt = Date.now() - 1;
+  await writeFile(file, JSON.stringify(data));
+}
+
+test.each(["disable", "opt-out", "stop"])(
+  "real native provider preparation observes %s without consuming/sending",
+  async (kind) => {
+    const f = await fixture();
+    let service = f.start();
+    const entered = deferred(),
+      release = deferred(),
+      refused = deferred();
+    let off = () => {};
+    try {
+      await queueActualLimit(f);
+      service.stop();
+      await makeDue(f.home);
+      const original = Reflect.get(f.session, "buildTurnStartParams").bind(f.session);
+      const spy = vi
+        .spyOn(f.session as never, "buildTurnStartParams" as never)
+        .mockImplementation(async (...args: unknown[]) => {
+          entered.resolve();
+          await release.promise;
+          return original(...args);
+        });
+      off = f.manager.subscribe(
+        (event) => {
+          if (
+            event.type === "agent_stream" &&
+            event.agentId === f.agent.id &&
+            event.event.type === "turn_failed"
+          )
+            refused.resolve();
+        },
+        { replayState: false },
+      );
+      service = f.start();
+      await entered.promise;
+      expect(JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries).toHaveLength(
+        1,
+      );
+      if (kind === "disable") f.config.patch({ autoResumeOnLimit: false });
+      if (kind === "opt-out")
+        await f.manager.setLabels(f.agent.id, { [LIMIT_RESUME_OPT_OUT_LABEL]: "off" });
+      if (kind === "stop") service.stop();
+      release.resolve();
+      await refused.promise;
+      expect(f.server.requests().filter((request) => request.method === "turn/start")).toHaveLength(
+        1,
+      );
+      if (kind === "stop")
+        expect(
+          JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries,
+        ).toHaveLength(1);
+      spy.mockRestore();
+    } finally {
+      release.resolve();
+      off();
+      service.stop();
+      await f.cleanup();
+    }
+  },
+  15_000,
+);
+
+test("native continuation checks can repeat, consumes once at actual write and survives restart without replay", async () => {
+  const f = await fixture();
+  let service = f.start();
+  try {
+    await queueActualLimit(f);
+    service.stop();
+    await makeDue(f.home);
+    const accepted = deferred();
+    const original = Reflect.get(f.session, "buildTurnStartParams").bind(f.session);
+    const entered = deferred(),
+      release = deferred();
+    const spy = vi
+      .spyOn(f.session as never, "buildTurnStartParams" as never)
+      .mockImplementation(async (...args: unknown[]) => {
+        entered.resolve();
+        await release.promise;
+        return original(...args);
+      });
+    const off = f.manager.subscribe(
+      (event) => {
+        if (
+          event.type === "agent_stream" &&
+          event.agentId === f.agent.id &&
+          event.event.type === "turn_started"
+        )
+          accepted.resolve();
+      },
+      { replayState: false },
+    );
+    service = f.start();
+    await entered.promise;
+    expect(JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries).toHaveLength(1);
+    release.resolve();
+    await accepted.promise;
+    off();
+    expect(f.server.requests().filter((request) => request.method === "turn/start")).toHaveLength(
+      2,
+    );
+    expect(JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries).toEqual([]);
+    f.server.completeTurn({ threadId: "limit-thread" });
+    await f.manager.waitForAgentEvent(f.agent.id);
+    spy.mockRestore();
+    service.stop();
+    service = f.start();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(f.server.requests().filter((request) => request.method === "turn/start")).toHaveLength(
+      2,
+    );
+  } finally {
+    service.stop();
+    await f.cleanup();
+  }
+}, 15_000);
+
+test("actual controller journal survives status marker; human takeover without a turn refuses fallback", async () => {
+  const f = await fixture();
+  const store = new ControlStore(path.join(f.home, "journal.sqlite"));
+  let issueProvenance!: Parameters<
+    Parameters<TrustedPlugins["registerV11"]>[2]
+  >[0]["issueProvenance"];
+  f.host.registerV11(OWN_ID, true, (server) => {
+    issueProvenance = server.issueProvenance;
+    createTrustedContribution({ home: f.home })(server);
+  });
+  store.created(f.agent.id, randomUUID(), f.home);
+  store.db
+    .prepare("UPDATE sessions SET mode='delegated',boot=?,grantedAt=1 WHERE id=?")
+    .run(f.host.boot, f.agent.id);
+  const message = randomUUID(),
+    attempt = randomUUID(),
+    prompt = "limited task";
+  const result = {
+    generation: store.get(f.agent.id).generation,
+    nativeAttemptId: attempt,
+    expectedLastUserAt: null,
+  };
+  store.db
+    .prepare("INSERT INTO deliveries VALUES (?,?,'send',?,'intent',?)")
+    .run(
+      message,
+      f.agent.id,
+      JSON.stringify({ sessionId: f.agent.id, messageId: message, text: prompt }),
+      JSON.stringify(result),
+    );
+  const observe = () => ({
+    nativeMode: f.manager.getAgent(f.agent.id)?.currentModeId,
+    nativeSession: f.manager.getAgent(f.agent.id)?.persistence?.sessionId,
+    session: store.db
+      .prepare("SELECT mode,generation,token,expected FROM sessions WHERE id=?")
+      .get(f.agent.id),
+    delivery: store.db.prepare("SELECT state,result FROM deliveries WHERE id=?").get(message),
+  });
+  const markerSeen = deferred();
+  const writeMarker = f.manager.updateLimitResumeMarker.bind(f.manager);
+  let before: unknown, after: unknown;
+  const spy = vi.spyOn(f.manager, "updateLimitResumeMarker").mockImplementation(async (id, at) => {
+    if (at !== null) before = observe();
+    await writeMarker(id, at);
+    if (at !== null) {
+      after = observe();
+      markerSeen.resolve();
+    }
+  });
+  let service = f.start();
+  try {
+    const token = issueProvenance({
+      agentId: f.agent.id,
+      kind: "prompt",
+      messageId: "orca-control:" + message,
+      attemptId: attempt,
+      payloadDigest: payloadDigest(
+        f.agent.id,
+        "prompt",
+        "orca-control:" + message,
+        sendPayload(prompt),
+      ),
+    });
+    await f.host.rpc(token, () =>
+      sendPromptToAgent({
+        agentManager: f.manager,
+        agentStorage: f.storage,
+        agentId: f.agent.id,
+        logger: f.logger,
+        prompt,
+        messageId: "orca-control:" + message,
+        clearPendingPermissions: true,
+        activeTurnBehavior: "interrupt",
+      }),
+    );
+    await f.server.waitForTurnStart();
+    f.server.completeTurn({
+      threadId: "limit-thread",
+      status: "failed",
+      error: { message: "usage limit reached" },
+    });
+    await markerSeen.promise;
+    expect(after).toEqual(before);
+    expect(store.get(f.agent.id).mode).toBe("delegated");
+    service.stop();
+    await f.host.rpc(undefined, () =>
+      f.manager.updateAgentMetadata(f.agent.id, { title: "Human takeover" }),
+    );
+    expect(store.get(f.agent.id).mode).toBe("human");
+    const takenOver = observe();
+    await makeDue(f.home);
+    const cleared = deferred();
+    const off = f.manager.subscribe(
+      (event) => {
+        if (
+          event.type === "agent_state" &&
+          event.agent.id === f.agent.id &&
+          event.agent.labels[LIMIT_RESUME_AT_LABEL] === ""
+        )
+          cleared.resolve();
+      },
+      { replayState: false },
+    );
+    service = f.start();
+    await cleared.promise;
+    off();
+    expect(f.server.requests().filter((request) => request.method === "turn/start")).toHaveLength(
+      1,
+    );
+    expect(observe()).toEqual(takenOver);
+    expect(f.manager.getAgent(f.agent.id)?.persistence?.sessionId).toBe("limit-thread");
+  } finally {
+    spy.mockRestore();
+    service.stop();
+    await f.cleanup();
+    store.close();
+  }
+}, 15_000);
