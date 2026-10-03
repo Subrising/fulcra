@@ -59,12 +59,15 @@ export async function getClaudeModelsWithSettings(
   configDir: string,
   claudeCodeVersion?: string,
   runtimeModels?: readonly ClaudeRuntimeModel[] | null,
+  signal?: AbortSignal,
 ): Promise<AgentModelDefinition[]> {
+  signal?.throwIfAborted();
   const manifestModels = getClaudeModels(claudeCodeVersion);
   const baseModels = runtimeModels?.length
     ? mergeClaudeRuntimeCatalog({ runtimeModels, manifestModels })
     : manifestModels;
-  const settingsModels = await readClaudeSettingsModels(logger, configDir);
+  const settingsModels = await readClaudeSettingsModels(logger, configDir, signal);
+  signal?.throwIfAborted();
   if (settingsModels.length === 0) {
     return baseModels;
   }
@@ -89,14 +92,18 @@ export async function getClaudeModelsWithSettings(
 async function readClaudeSettingsModels(
   logger: Logger,
   configDir: string,
+  signal?: AbortSignal,
 ): Promise<AgentModelDefinition[]> {
   const settingsPath = path.join(configDir, "settings.json");
 
   let parsed: unknown;
   try {
-    const rawSettings = await fs.readFile(settingsPath, "utf8");
+    signal?.throwIfAborted();
+    const rawSettings = await fs.readFile(settingsPath, { encoding: "utf8", signal });
+    signal?.throwIfAborted();
     parsed = JSON.parse(rawSettings);
   } catch (error) {
+    signal?.throwIfAborted();
     logger.debug({ err: error, settingsPath }, "Failed to read Claude settings models");
     return [];
   }

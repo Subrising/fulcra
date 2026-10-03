@@ -4,6 +4,8 @@ interface RunProviderRefreshOptions<T> {
   label: string;
   timeoutMs: number;
   operation: (context: ProviderRefreshContext) => Promise<T>;
+  /** A bounded caller must retain this flight until the underlying operation cleans up. */
+  onPendingCleanup?: (cleanup: Promise<void>) => void;
 }
 
 export function runProviderRefreshActivity<T>(
@@ -59,17 +61,29 @@ export async function runProviderRefreshWithDeadline<T>(
     },
   };
 
+  // Observe late rejection even when a bounded caller has already returned its timeout.
+  const operation = Promise.resolve().then(() => options.operation(context));
+  const cleanup = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  let rejectTimeout: (error: Error) => void = () => {};
+  const deadline = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
   const timer = setTimeout(() => {
     const pending = Array.from(activityCounts.keys());
     const suffix = pending.length > 0 ? `; pending: ${pending.join(", ")}` : "";
     timeoutError = new Error(
       `Timed out refreshing ${options.label} after ${options.timeoutMs}ms${suffix}`,
     );
+    options.onPendingCleanup?.(cleanup);
     controller.abort(timeoutError);
+    if (options.onPendingCleanup) rejectTimeout(timeoutError);
   }, options.timeoutMs);
 
   try {
-    const result = await options.operation(context);
+    const result = await Promise.race([operation, deadline]);
     if (timeoutError) throw timeoutError;
     return result;
   } catch (error) {
