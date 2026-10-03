@@ -94,7 +94,13 @@ export interface LimitResumeDeps {
 export interface LimitResumeEvent {
   type: string;
   agentId?: string;
-  event?: { type?: string; error?: unknown; code?: unknown; diagnostic?: unknown; turnId?: unknown };
+  event?: {
+    type?: string;
+    error?: unknown;
+    code?: unknown;
+    diagnostic?: unknown;
+    turnId?: unknown;
+  };
 }
 
 export function limitResumeFilePath(paseoHome: string): string {
@@ -319,7 +325,12 @@ export class LimitResumeService {
     if (!unchanged() || this.now() - entry.resumeAt > STALE_AFTER_MS) return void (await clear());
     const agent = await this.deps.getAgent(entry.agentId);
     await clear();
-    if (!agent || agent.archived || agent.busy || agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") {
+    if (
+      !agent ||
+      agent.archived ||
+      agent.busy ||
+      agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off"
+    ) {
       return;
     }
     // The last gate sits inside sendResume, after it has loaded the session and right before the turn starts.

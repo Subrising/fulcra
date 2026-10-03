@@ -11,8 +11,13 @@ describe("classifyEndingAssistantMessage", () => {
         NOW,
       )?.provider,
     ).toBe("claude");
-    expect(classifyEndingAssistantMessage("Claude AI usage limit reached|1791030000", NOW)).not.toBeNull();
-    expect(classifyEndingAssistantMessage("Usage limit reached. Try again at Oct 4, 2026 5:42 PM.", NOW)?.provider).toBe("codex");
+    expect(
+      classifyEndingAssistantMessage("Claude AI usage limit reached|1791030000", NOW),
+    ).not.toBeNull();
+    expect(
+      classifyEndingAssistantMessage("Usage limit reached. Try again at Oct 4, 2026 5:42 PM.", NOW)
+        ?.provider,
+    ).toBe("codex");
   });
 
   it("rejects prose, multi-line messages, user-style text and empties", () => {
@@ -31,7 +36,9 @@ describe("classifyEndingAssistantMessage", () => {
 describe("classifyFailedTurn", () => {
   it("matches limit wording and ignores other failures", () => {
     expect(classifyFailedTurn("429 Too Many Requests", NOW)).not.toBeNull();
-    expect(classifyFailedTurn("You've hit your session limit · resets 3pm (Europe/London)", NOW)).not.toBeNull();
+    expect(
+      classifyFailedTurn("You've hit your session limit · resets 3pm (Europe/London)", NOW),
+    ).not.toBeNull();
     expect(classifyFailedTurn("ENOENT: no such file", NOW)).toBeNull();
   });
 });
