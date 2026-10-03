@@ -8,11 +8,15 @@ const f = vi.hoisted(() => ({
   open: vi.fn(),
   push: vi.fn(),
   host: "mini" as string | null,
+  registryReady: true,
+  registeredHost: true,
 }));
 vi.mock("expo-router", () => ({ router: { push: f.push } }));
-vi.mock("./host-navigation", () => ({
-  usePluginHostNavigation: () => ({ openAgentOnHost: f.open }),
-}));
+vi.mock("./host-navigation-model", () => ({ createPluginHostNavigation: () => ({}) }));
+vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: f.open }));
+vi.mock("@/stores/navigation-active-workspace-store", () => ({ navigateToWorkspace: vi.fn() }));
+vi.mock("@/constants/platform", () => ({ getIsElectron: () => false }));
+vi.mock("@/desktop/browser/store", () => ({ createWorkspaceBrowser: vi.fn() }));
 vi.mock("@/stores/session-store", () => ({
   useSessionStore: (
     select: (state: { sessions: Record<string, { agents: Map<string, object> }> }) => string | null,
@@ -31,7 +35,13 @@ vi.mock("@/stores/session-store", () => ({
     }),
 }));
 vi.mock("./registry", () => ({ useInstalledPlugin: () => null }));
-vi.mock("@/runtime/host-runtime", () => ({ useHostRuntimeClient: () => null }));
+vi.mock("@/runtime/host-runtime", () => ({
+  useHostRuntimeClient: () => null,
+  getHostRuntimeStore: () => ({
+    getHostRegistryStatus: () => f.registryReady ? "ready" : "loading",
+    getHosts: () => f.registeredHost && f.host ? [{ serverId: f.host }] : [],
+  }),
+}));
 vi.mock("./runtime-boundary", () => ({ PluginRuntimeBoundary: () => null }));
 vi.mock("./command-centre-connection", () => ({
   COMMAND_CENTRE_PLUGIN_ID: "orca-organization-next",
@@ -70,6 +80,8 @@ beforeEach(() => {
   f.push.mockClear();
   f.read.mockReset();
   f.host = "mini";
+  f.registryReady = true;
+  f.registeredHost = true;
 });
 afterEach(() => {
   cleanup();
@@ -158,3 +170,17 @@ it("opens a Book prime on its original host instead of the controller", async ()
   fireEvent.click(await screen.findByRole("button", { name: "Open Research prime conversation" }));
   expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: "remote" });
 });
+
+for (const refusal of ["missing-host", "registry-not-ready"] as const) {
+  it(`retains the cached Book prime identity and opens Leadership when ${refusal}`, async () => {
+    f.host = "book";
+    f.registeredHost = refusal !== "missing-host";
+    f.registryReady = refusal !== "registry-not-ready";
+    f.read.mockResolvedValue({ available: true, primes: [{ seat: "research", state: "assigned", sessionPresent: true, sessionId: "remote", dispatch: { supported: true } }] });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Open Research prime conversation" }));
+    expect(f.open).not.toHaveBeenCalled();
+    expect(f.push).toHaveBeenCalledWith("/h/mini/plugin/orca-organization-next/surface/leadership");
+    expect(f.push).toHaveBeenCalledTimes(1);
+  });
+}
