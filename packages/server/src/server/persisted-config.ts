@@ -259,6 +259,7 @@ export const PersistedConfigSchema = z
           .strict()
           .optional(),
         autoArchiveAfterMerge: z.boolean().optional(),
+        notificationMode: z.enum(["all", "primes", "off"]).optional(),
         enableTerminalAgentHooks: z.boolean().optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),

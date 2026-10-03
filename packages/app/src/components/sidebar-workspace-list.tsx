@@ -1,3 +1,4 @@
+import { WorkspaceOrganizationSidebar } from "@/plugins/workspace-organization-sidebar";
 import { SidebarSessions } from "./sidebar/sidebar-sessions";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
@@ -48,7 +49,7 @@ import {
   type ToggleSidebarWorkspacePin,
 } from "@/hooks/use-sidebar-workspace-pin";
 import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
-import { useHostFeatureMap } from "@/runtime/host-features";
+import { useHostFeature, useHostFeatureMap } from "@/runtime/host-features";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useProjectIcons } from "@/projects/icons";
 import {
@@ -1885,7 +1886,56 @@ function areProjectBlockSelectionsEqual(
 
 const MemoProjectBlock = memo(ProjectBlock, areProjectBlockPropsEqual);
 
-export function SidebarWorkspaceList({
+export function SidebarWorkspaceList(props: SidebarWorkspaceListProps) {
+  const fallback = useMemo(() => <NativeExecutionSidebar {...props} />, [props]);
+  if (props.groupMode !== "project" || props.hasActiveProjectFilter) return fallback;
+  return (
+    <WorkspaceOrganizationSidebar
+      projects={props.projects}
+      entries={props.workspaceEntriesByKey}
+      header={props.listHeaderComponent}
+      footer={props.listFooterComponent}
+      beforeNavigate={props.onWorkspacePress}
+      fallback={fallback}
+    />
+  );
+}
+
+const organizationNoDrag = () => {};
+/** Reuse the native row's read/archive/pin/menu controls inside organizational grouping. */
+export function OrganizationExecutionRow({
+  workspace,
+  beforeNavigate,
+}: {
+  workspace: SidebarWorkspaceEntry;
+  beforeNavigate?: () => void;
+}) {
+  const route = parseHostWorkspaceRouteFromPathname(usePathname());
+  const selected =
+    route?.serverId === workspace.serverId && route.workspaceId === workspace.workspaceId;
+  const canPin = useHostFeature(workspace.serverId, "workspacePinning");
+  const togglePin = useSidebarWorkspacePinController();
+  const open = useCallback(() => {
+    beforeNavigate?.();
+    navigateToWorkspace({ serverId: workspace.serverId, workspaceId: workspace.workspaceId });
+  }, [beforeNavigate, workspace.serverId, workspace.workspaceId]);
+  return (
+    <WorkspaceRowWithMenu
+      workspace={workspace}
+      selected={selected}
+      shortcutNumber={null}
+      showShortcutBadge={false}
+      onPress={open}
+      drag={organizationNoDrag}
+      isDragging={false}
+      canCopyBranchName={!!workspace.currentBranch}
+      canPin={canPin}
+      onToggleWorkspacePin={togglePin}
+    />
+  );
+}
+
+function NativeExecutionSidebar({
   workspaceGroups,
   projectIconTargets,
   pinnedGroups,

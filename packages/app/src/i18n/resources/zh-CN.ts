@@ -166,6 +166,8 @@ export const zhCN: TranslationResources = {
     },
     attachments: {
       addImage: "添加图片",
+      choosePhoto: "选择照片",
+      takePhoto: "拍摄照片",
       pasteImage: "粘贴图片",
       addFile: "Upload file",
       addIssueOrPr: "添加 issue 或 PR",
@@ -1743,6 +1745,8 @@ export const zhCN: TranslationResources = {
     permissionMessage: "请允许访问照片图库以附加图片。",
     errorTitle: "错误",
     failedToSelect: "选择图片失败",
+    cameraPermissionMessage: "请允许访问相机以拍摄照片。",
+    failedToTakePhoto: "无法拍摄照片",
     dialogTitle: "附加图片",
     dialogFilterName: "图片",
   },
@@ -1839,6 +1843,16 @@ export const zhCN: TranslationResources = {
     hostPassword: {
       title: "{{host}} 的密码",
       label: "主机密码",
+    },
+    hostConfirmation: {
+      title: "连接到此主机？",
+      description: "此主机将能在此应用中运行代码，并访问你其他已连接的主机。仅在你认识它时才连接。",
+      descriptionChanged:
+        "此链接会改变你连接此主机的方式。该主机将能在此应用中运行代码，并访问你其他已连接的主机。仅在你认识它时才连接。",
+      hostLabel: "主机",
+      fingerprintLabel: "密钥指纹",
+      relayLabel: "中继",
+      connect: "连接",
     },
     connectionMethods: {
       title: "添加连接",

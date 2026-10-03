@@ -1,3 +1,4 @@
+import { contributeWorkspaceOrganization } from "./server/organization/index";
 import { radiusScratchSimulateRpc, radiusScratchPruneSimulateRpc } from "./shared/radius-scratch";
 import {
   withManagementInvocation,
@@ -844,6 +845,7 @@ export default function contribute(
     }
     return readers.get(key)!();
   });
+  const stopWorkspaceOrganization = contributeWorkspaceOrganization(handle);
   // Non-UI startup signal. A caller using a method this plugin does not register never reaches
   // any handler here, so that mismatch is invisible from inside this tree - printing the exact
   // registered names is the only way it becomes checkable against a caller's literal.
@@ -851,6 +853,7 @@ export default function contribute(
     `[orca-organization] registered ${registered.length} RPC methods: ${registered.join(", ")}`,
   );
   return () => {
+    stopWorkspaceOrganization();
     stopPush();
     recovery();
     if (typeof stopRoleDefaults === "function") stopRoleDefaults();

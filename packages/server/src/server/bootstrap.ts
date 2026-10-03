@@ -1,3 +1,4 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { checkNativeReportOriginPublication } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
@@ -412,6 +413,8 @@ export type DaemonLifecycleIntent =
 export interface PaseoDaemonConfig {
   /** Immutable distribution input from the embedding host, never config.json. */
   bundledPluginsDirectory?: string;
+  /** FULCRA(trusted-bundle): immutable embedding-host identity; ordinary config and labels cannot set it. */
+  bundledControllerPluginId?: string;
   listen: string;
   paseoHome: string;
   daemonVersion?: string;
@@ -429,6 +432,7 @@ export interface PaseoDaemonConfig {
     maxProcessConcurrency: number;
   };
   autoArchiveAfterMerge?: boolean;
+  notificationMode?: "all" | "primes" | "off";
   enableTerminalAgentHooks?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
@@ -610,6 +614,12 @@ function initialRelayConfig(config: PaseoDaemonConfig): MutableDaemonConfig["rel
   };
 }
 
+function initialNotificationMode(
+  config: PaseoDaemonConfig,
+): MutableDaemonConfig["notificationMode"] {
+  return config.notificationMode ?? "primes";
+}
+
 function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDaemonConfig {
   const providers = config.providerOverrides ?? {};
 
@@ -633,6 +643,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
       providers: config.metadataGeneration?.providers ?? [],
     },
     autoArchiveAfterMerge: config.autoArchiveAfterMerge ?? false,
+    notificationMode: initialNotificationMode(config),
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
     autoResumeOnLimit: config.autoResumeOnLimit ?? true,
     appendSystemPrompt: config.appendSystemPrompt ?? "",
@@ -714,6 +725,7 @@ export async function createPaseoDaemon(
     config.bundledPluginsDirectory,
     config.paseoHome,
     {
+      controllerPluginId: config.bundledControllerPluginId,
       // Lifecycle status and authenticated Retry remain available while the child is down.
       // ControllerChannel/supervisor still refuse operational dispatch until ready.
       enabled: () => controllerDistribution(trustedPlugins) !== undefined,
@@ -1934,8 +1946,8 @@ export async function createPaseoDaemon(
             await pluginRuntime.start();
             if (distribution && config.bundledPluginsDirectory) {
               await pluginRuntime.enableBundledPlugin(
-                "orca-organization-next",
-                path.join(config.bundledPluginsDirectory, "orca-organization-next"),
+                trustedPlugins.controllerPluginId,
+                path.join(config.bundledPluginsDirectory, trustedPlugins.controllerPluginId),
               );
               distribution.start({
                 intercomRateSettingsFile: path.join(
@@ -1957,7 +1969,8 @@ export async function createPaseoDaemon(
                       if (!service) throw Error("Controller service not attached");
                       return service.then((value) => value.dispatch(frame));
                     },
-                    revoke: () => trustedPlugins.revokeProvenance("orca-organization-next"),
+                    revoke: () =>
+                      trustedPlugins.revokeProvenance(trustedPlugins.controllerPluginId),
                     closeTransport: () => {
                       void service?.then(
                         (value) => value.close(),
@@ -1966,6 +1979,7 @@ export async function createPaseoDaemon(
                     },
                   });
                   service = createControllerService(wsServer!, {
+                    pluginId: trustedPlugins.controllerPluginId,
                     epoch: channel.epoch,
                     emit,
                     revoke: () => channel.close(),

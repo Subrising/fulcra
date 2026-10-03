@@ -48,6 +48,7 @@ function createStore(paseoHome: string, enableTerminalAgentHooks: boolean): Daem
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks,
       appendSystemPrompt: "",
     },

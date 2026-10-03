@@ -51,3 +51,9 @@ export function configuredRoleProvider(
   configRoles: unknown,
   role: string,
 ): "claude" | "codex" | null;
+
+export function initializeRoleDefaults(
+  root: string,
+  configRoles?: unknown,
+  configModes?: unknown,
+): RoleTable;

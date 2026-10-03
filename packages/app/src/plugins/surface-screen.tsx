@@ -1,3 +1,5 @@
+import { createOrganizationNavigation } from "./organization-navigation";
+import type { IntakeDraft } from "../../../../control/orca-organization/shared/intake-draft";
 import { router, useLocalSearchParams } from "expo-router";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import type { PluginTheme } from "@getpaseo/plugin";
@@ -64,6 +66,7 @@ function SurfaceRenderer({
   layout,
   host,
   theme,
+  organizationDraft,
 }: {
   Surface: ComponentType<PluginSurfaceProps>;
   client: DaemonClient;
@@ -71,8 +74,10 @@ function SurfaceRenderer({
   layout: PluginSurfaceProps["layout"];
   host: PluginSurfaceProps["host"];
   theme: PluginTheme;
+  organizationDraft?: IntakeDraft;
 }) {
   const navigation = usePluginHostNavigation(host.id);
+  const organizationNavigation = useMemo(() => createOrganizationNavigation(host.id), [host.id]);
   const radiusScratchOwner = useRadiusScratchOwner(host.id, client, plugin);
   // L46: over the relay Command Centre cannot be read; say so instead of mounting a surface that would fail.
   const relayOnly = useNeedsDirectConnection(host.id, plugin.id);
@@ -84,13 +89,13 @@ function SurfaceRenderer({
         host={host}
         layout={layout}
         navigation={navigation}
-        {...{ radiusScratchOwner }}
+        {...{ radiusScratchOwner, organizationDraft, organizationNavigation }}
       />
     </PluginRuntimeBoundary>
   );
 }
 
-const ThemedSurfaceRenderer = withUnistyles(SurfaceRenderer);
+export const ThemedSurfaceRenderer = withUnistyles(SurfaceRenderer);
 
 function resolvePlatform(): PluginSurfaceProps["layout"]["platform"] {
   if (Platform.OS === "ios") return "ios";

@@ -26,6 +26,7 @@ interface SupportedMutableConfigPatch {
   removeProviders?: string[];
   metadataGeneration?: MutableDaemonConfig["metadataGeneration"];
   autoArchiveAfterMerge?: boolean;
+  notificationMode?: MutableDaemonConfig["notificationMode"];
   enableTerminalAgentHooks?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
@@ -182,6 +183,7 @@ const RELOADABLE_PATHS = [
   "daemon.git.maxProcessesPerSecond",
   "daemon.git.maxProcessConcurrency",
   "daemon.autoArchiveAfterMerge",
+  "daemon.notificationMode",
   "daemon.enableTerminalAgentHooks",
   "daemon.autoResumeOnLimit",
   "daemon.appendSystemPrompt",
@@ -206,6 +208,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.git.maxProcessesPerSecond", "git.maxProcessesPerSecond"],
   ["daemon.git.maxProcessConcurrency", "git.maxProcessConcurrency"],
   ["daemon.autoArchiveAfterMerge", "autoArchiveAfterMerge"],
+  ["daemon.notificationMode", "notificationMode"],
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.autoResumeOnLimit", "autoResumeOnLimit"],
   ["daemon.appendSystemPrompt", "appendSystemPrompt"],
@@ -274,6 +277,7 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.autoResumeOnLimit !== undefined
       ? { autoResumeOnLimit: patch.autoResumeOnLimit }
       : {}),
+    ...(patch.notificationMode !== undefined ? { notificationMode: patch.notificationMode } : {}),
     ...(patch.enableTerminalAgentHooks !== undefined
       ? { enableTerminalAgentHooks: patch.enableTerminalAgentHooks }
       : {}),
@@ -722,6 +726,9 @@ function mergeMutableDaemonPatch(
   }
   if (patch.autoResumeOnLimit !== undefined) {
     next.autoResumeOnLimit = patch.autoResumeOnLimit;
+  }
+  if (patch.notificationMode !== undefined) {
+    next.notificationMode = patch.notificationMode;
   }
   if (patch.enableTerminalAgentHooks !== undefined) {
     next.enableTerminalAgentHooks = patch.enableTerminalAgentHooks;

@@ -1,3 +1,4 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { requireTrustedBundleHost } from "./trusted-platform.js";
 import { NativeQueuedMessageReceiptSchema } from "@getpaseo/protocol/native-intercom";
 import type { ControllerDistribution } from "./controller-distribution.js";
@@ -317,8 +318,12 @@ export class TrustedPlugins {
   private failed = false;
 
   readonly management: ManagementAuthority;
+  /** FULCRA(trusted-bundle): routing identity only; physical bundle and hook checks remain mandatory. */
+  get controllerPluginId(): string {
+    return this.management.controllerPluginId;
+  }
   requiresPackagedRuntime(id: string): boolean {
-    return id === "orca-organization-next" && distributions.has(this);
+    return id === this.controllerPluginId && distributions.has(this);
   }
   claimsBundle(id: string): boolean {
     return this.plugins.has(id) || this.v11.has(id);
@@ -1155,7 +1160,7 @@ function registerDistributionContribution(
   bundleDirectory: string,
 ) {
   if (module.hostContract === "1.1") {
-    if (id === "orca-organization-next" && typeof module.createDistribution === "function") {
+    if (id === authority.controllerPluginId && typeof module.createDistribution === "function") {
       const distribution: ControllerDistribution = module.createDistribution({
         home: path.join(home, "command-centre"),
         bundleDirectory,

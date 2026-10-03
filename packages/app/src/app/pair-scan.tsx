@@ -1,11 +1,10 @@
-import { hostKeyFingerprint } from "@getpaseo/client/relay-v3";
 import {
   describeBundleResults,
   isPairingBundle,
   pairEveryOffer,
   parsePairingBundle,
 } from "@/relay/pairing-bundle";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, Pressable, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter, type Href } from "expo-router";
@@ -13,11 +12,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import type { BarcodeScanningResult, BarcodeSettings } from "expo-camera";
-import { useHostMutations } from "@/runtime/host-runtime";
+import { getHostRuntimeStore, useHostMutations } from "@/runtime/host-runtime";
 import { decodeOfferFragmentPayload } from "@/utils/daemon-endpoints";
 import { parseConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
 import { isWeb } from "@/constants/platform";
+import { openPairScan } from "@/hosts/pair-scan-model";
+import { PairLinkModal } from "@/components/pair-link-modal";
+import { Button } from "@/components/ui/button";
 import { BackHeader } from "@/components/headers/back-header";
 
 const styles = StyleSheet.create((theme) => ({
@@ -116,15 +118,6 @@ const styles = StyleSheet.create((theme) => ({
   },
 }));
 
-function extractOfferUrlFromScan(result: BarcodeScanningResult): string | null {
-  const raw = typeof result.data === "string" ? result.data.trim() : "";
-  if (!raw) return null;
-
-  if (raw.includes("#offer=") || isPairingBundle(raw)) return raw;
-
-  return null;
-}
-
 export default function PairScanScreen() {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
@@ -135,12 +128,9 @@ export default function PairScanScreen() {
     repairServerId?: string;
   }>();
   const source = typeof params.source === "string" ? params.source : "settings";
-  const { upsertConnectionFromOfferUrl: upsertDaemonFromOfferUrl, upsertConnectionFromOffer } =
-    useHostMutations();
+  const { upsertConnectionFromOffer } = useHostMutations();
 
   const [permission, requestPermission] = useCameraPermissions();
-  const [isPairing, setIsPairing] = useState(false);
-  const lastScannedRef = useRef<string | null>(null);
 
   const navigateToPairedHost = useCallback(
     (serverId: string) => {
@@ -152,6 +142,39 @@ export default function PairScanScreen() {
     },
     [router, source],
   );
+
+  const [scan] = useState(() =>
+    openPairScan({
+      importConnectionLink: async (link) => {
+        if (isPairingBundle(link) && !params.repairServerId) {
+          const results = await pairEveryOffer(parsePairingBundle(link), (offer) =>
+            upsertConnectionFromOffer(offer),
+          );
+          const first = results.find((result) => result.ok);
+          if (!first) throw new Error(describeBundleResults(results));
+          if (results.some((result) => !result.ok))
+            Alert.alert(t("pairing.scan.errorTitle"), describeBundleResults(results));
+          return { status: "connected", serverId: first.serverId };
+        }
+        const marker = link.indexOf("#offer=");
+        if (marker < 0) throw new Error("Update Fulcra to pair");
+        const offer = parseConnectionOffer(
+          decodeOfferFragmentPayload(link.slice(marker + 7).trim()),
+        );
+        if (params.repairServerId && offer.serverId !== params.repairServerId)
+          throw new Error(
+            "This code is for a different host. Get a new code from the host you are pairing again.",
+          );
+        return getHostRuntimeStore().importConnectionLink(
+          link,
+          source === "onboarding" ? "hostRoot" : "hostSettings",
+        );
+      },
+      onConnected: navigateToPairedHost,
+    }),
+  );
+  const scanState = useSyncExternalStore(scan.subscribe, scan.getState, scan.getState);
+  useEffect(() => () => scan.close(), [scan]);
 
   const closeToSource = useCallback(() => {
     try {
@@ -168,124 +191,15 @@ export default function PairScanScreen() {
   }, [permission, requestPermission]);
 
   const handleScan = useCallback(
-    async (result: BarcodeScanningResult) => {
-      if (isPairing) return;
-      const offerUrl = extractOfferUrlFromScan(result);
-      if (!offerUrl) return;
-
-      if (lastScannedRef.current === offerUrl) return;
-      lastScannedRef.current = offerUrl;
-
-      // Pair once, see every Mac: one code carrying an offer for each Mac. Show every host's fingerprint, then
-      // pair with each; one Mac failing never stops the others.
-      if (isPairingBundle(offerUrl) && !params.repairServerId) {
-        try {
-          setIsPairing(true);
-          const offers = parsePairingBundle(offerUrl);
-          const lines = offers.map(
-            (offer) =>
-              `${offer.hostLabel || t("pairing.device.unnamedHost")}: ${hostKeyFingerprint(offer.daemonPublicKeyB64)}`,
-          );
-          Alert.alert(
-            `Pair with ${offers.length} ${offers.length === 1 ? "Mac" : "Macs"}`,
-            `${lines.join("\n")}\n\n${t("pairing.device.verifyIdentity")}`,
-            [
-              {
-                text: t("pairing.link.actions.cancel"),
-                style: "cancel",
-                onPress: () => {
-                  lastScannedRef.current = null;
-                  setIsPairing(false);
-                },
-              },
-              {
-                text: t("pairing.link.actions.pair"),
-                onPress: () => {
-                  void pairEveryOffer(offers, (offer) => upsertConnectionFromOffer(offer))
-                    .then((results) => {
-                      if (results.some((r) => !r.ok))
-                        Alert.alert(t("pairing.scan.errorTitle"), describeBundleResults(results));
-                      const first = results.find((r) => r.ok);
-                      if (first) navigateToPairedHost(first.serverId);
-                      else lastScannedRef.current = null;
-                      return;
-                    })
-                    .finally(() => setIsPairing(false));
-                },
-              },
-            ],
-            { cancelable: false },
-          );
-        } catch (error) {
-          lastScannedRef.current = null;
-          Alert.alert(
-            t("pairing.scan.errorTitle"),
-            error instanceof Error ? error.message : t("pairing.scan.unableToPair"),
-          );
-          setIsPairing(false);
-        }
-        return;
-      }
-      try {
-        setIsPairing(true);
-        const idx = offerUrl.indexOf("#offer=");
-        const encoded = offerUrl.slice(idx + "#offer=".length).trim();
-        const offerPayload = decodeOfferFragmentPayload(encoded);
-        const offer = parseConnectionOffer(offerPayload);
-        if (params.repairServerId && offer.serverId !== params.repairServerId) {
-          throw new Error(
-            "This code is for a different host. Get a new code from the host you are pairing again.",
-          );
-        }
-
-        Alert.alert(
-          offer.hostLabel || t("pairing.device.unnamedHost"),
-          `${t("pairing.device.fingerprint", { value: hostKeyFingerprint(offer.daemonPublicKeyB64) })}\n\n${t("pairing.device.verifyIdentity")}`,
-          [
-            {
-              text: t("pairing.link.actions.cancel"),
-              style: "cancel",
-              onPress: () => {
-                lastScannedRef.current = null;
-                setIsPairing(false);
-              },
-            },
-            {
-              text: t("pairing.link.actions.pair"),
-              onPress: () => {
-                void upsertDaemonFromOfferUrl(offerUrl, offer.hostLabel)
-                  .then((profile) => navigateToPairedHost(profile.serverId))
-                  .catch((error) => {
-                    lastScannedRef.current = null;
-                    Alert.alert(
-                      t("pairing.scan.errorTitle"),
-                      error instanceof Error ? error.message : t("pairing.scan.unableToPair"),
-                    );
-                  })
-                  .finally(() => setIsPairing(false));
-              },
-            },
-          ],
-          { cancelable: false },
-        );
-      } catch (error) {
-        lastScannedRef.current = null;
-        const message = error instanceof Error ? error.message : t("pairing.scan.unableToPair");
-        Alert.alert(t("pairing.scan.errorTitle"), message);
-        setIsPairing(false);
-      }
-    },
-    [
-      isPairing,
-      navigateToPairedHost,
-      params.repairServerId,
-      t,
-      upsertConnectionFromOffer,
-      upsertDaemonFromOfferUrl,
-    ],
+    (result: BarcodeScanningResult) =>
+      scan.scan(typeof result.data === "string" ? result.data : ""),
+    [scan],
   );
-
   const handleRouterBack = useCallback(() => router.back(), [router]);
+  const savePasswordPairing = useCallback(
+    ({ serverId }: { serverId: string }) => navigateToPairedHost(serverId),
+    [navigateToPairedHost],
+  );
   const handleRequestPermission = useCallback(() => {
     void requestPermission();
   }, [requestPermission]);
@@ -346,11 +260,29 @@ export default function PairScanScreen() {
                 <View style={[styles.corner, styles.cornerBL]} />
                 <View style={[styles.corner, styles.cornerBR]} />
               </View>
-              {isPairing ? <Text style={helperTextStyle}>{t("pairing.scan.pairing")}</Text> : null}
+              {scanState.status === "pairing" ? (
+                <Text style={helperTextStyle}>{t("pairing.scan.pairing")}</Text>
+              ) : null}
+              {scanState.status === "stopped" && scanState.error ? (
+                <Text style={helperTextStyle}>{scanState.error}</Text>
+              ) : null}
+              {scanState.status === "stopped" ? (
+                <Button onPress={scan.scanAgain} testID="pair-scan-again">
+                  {t("pairing.connectionMethods.scanQr.title")}
+                </Button>
+              ) : null}
             </View>
           </View>
         )}
       </View>
+      <PairLinkModal
+        visible={scanState.status === "passwordRequired"}
+        passwordRequired={
+          scanState.status === "passwordRequired" ? scanState.passwordRequired : undefined
+        }
+        onClose={scan.closePassword}
+        onSaved={savePasswordPairing}
+      />
     </View>
   );
 }

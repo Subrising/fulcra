@@ -35,6 +35,7 @@ function createStore(
     providers: {},
     metadataGeneration: { providers: [] },
     autoArchiveAfterMerge: false,
+    notificationMode: "primes",
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
     appendSystemPrompt: "",

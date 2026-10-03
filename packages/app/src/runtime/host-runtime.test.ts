@@ -424,6 +424,17 @@ const TWO_DIRECT: HostConnection[] = [
   { id: "direct:wan:6767", type: "directTcp", endpoint: "wan:6767" },
 ];
 
+function humanConfirmedStore(
+  ...args: ConstructorParameters<typeof HostRuntimeStore>
+): HostRuntimeStore {
+  const store = new HostRuntimeStore(...args);
+  store.subscribeHostConfirmation(() => {
+    const request = store.getPendingHostConfirmation();
+    if (request) store.answerHostConfirmation(request.id, true);
+  });
+  return store;
+}
+
 function makeOffer(input?: Partial<ConnectionOffer>): ConnectionOffer {
   return {
     v: 3,
@@ -572,7 +583,7 @@ function createMemoryReplicaRowStore(): ReplicaRowStore {
 }
 
 function createAppearanceStore(storage: HostRuntimeStorage): HostRuntimeStore {
-  return new HostRuntimeStore({
+  return humanConfirmedStore({
     claimRelayDevice: async () => "dev_testdevice000001",
     storage,
     deps: {
@@ -1684,7 +1695,7 @@ describe("HostRuntimeStore", () => {
       const clientB = new FakeDaemonClient();
       clientA.setConnectionState({ status: "connected" });
       clientB.setConnectionState({ status: "connected" });
-      const store = new HostRuntimeStore({
+      const store = humanConfirmedStore({
         claimRelayDevice: async () => "dev_testdevice000001",
         storage: createMemoryHostRuntimeStorage(),
         deps: {
@@ -1765,7 +1776,7 @@ describe("HostRuntimeStore", () => {
       "@paseo:daemon-registry": JSON.stringify([host]),
       "@paseo:e2e": "1",
     });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage,
       deps: makeDeps({}, []),
@@ -1792,7 +1803,7 @@ describe("HostRuntimeStore", () => {
       "@paseo:daemon-registry": JSON.stringify([host]),
       "@paseo:e2e": "1",
     });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage,
       deps: makeDeps({}, []),
@@ -1824,7 +1835,7 @@ describe("HostRuntimeStore", () => {
     await storage.setItem("@paseo:e2e", "1");
     const session = useSessionStore.getState();
 
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage,
       replicaRowStore,
@@ -1858,7 +1869,7 @@ describe("HostRuntimeStore", () => {
   it("marks the host registry loaded after boot reads storage", async () => {
     const previousOverride = process.env.EXPO_PUBLIC_LOCAL_DAEMON;
     process.env.EXPO_PUBLIC_LOCAL_DAEMON = "not-an-endpoint";
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => {
@@ -2056,7 +2067,7 @@ describe("HostRuntimeStore", () => {
     });
     const fakeClient = new FakeDaemonClient();
     fakeClient.setConnectionState({ status: "connected" });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2099,7 +2110,7 @@ describe("HostRuntimeStore", () => {
     });
     const fakeClient = new FakeDaemonClient();
     fakeClient.setConnectionState({ status: "connected" });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2172,7 +2183,7 @@ describe("HostRuntimeStore", () => {
     });
     const fakeClient = new FakeDaemonClient();
     fakeClient.setConnectionState({ status: "connected" });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2239,7 +2250,7 @@ describe("HostRuntimeStore", () => {
       }),
       pageTwo.promise,
     );
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2369,7 +2380,7 @@ describe("HostRuntimeStore", () => {
         hasMore: false,
       }),
     );
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2454,7 +2465,7 @@ describe("HostRuntimeStore", () => {
       }),
       pageTwo,
     );
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2554,7 +2565,7 @@ describe("HostRuntimeStore", () => {
       title: "snapshot",
     });
     fakeClient.fetchAgentsResponses.push(makeFetchAgentsPayload({ entries: [snapshotEntry] }));
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2604,7 +2615,7 @@ describe("HostRuntimeStore", () => {
     const fakeClient = new FakeDaemonClient();
     fakeClient.setConnectionState({ status: "connected" });
     fakeClient.fetchAgentsResponses.push(makeFetchAgentsPayload({ entries: [] }));
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2673,7 +2684,7 @@ describe("HostRuntimeStore", () => {
     const fakeClient = new FakeDaemonClient();
     fakeClient.setConnectionState({ status: "connected" });
     fakeClient.fetchAgentsResponses.push(makeFetchAgentsPayload({ entries: [] }));
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2734,7 +2745,7 @@ describe("HostRuntimeStore", () => {
       updatedAt: "2026-07-12T10:00:00.000Z",
     });
     fakeClient.fetchAgentsResponses.push(makeFetchAgentsPayload({ entries: [existingEntry] }));
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2807,7 +2818,7 @@ describe("HostRuntimeStore", () => {
       }),
       pageTwo.promise,
     );
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2893,7 +2904,7 @@ describe("HostRuntimeStore", () => {
     const fakeClient = new FakeDaemonClient();
     const send = new Deferred<void>();
     fakeClient.sendAgentMessageResponses.push(send.promise);
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -2959,7 +2970,7 @@ describe("HostRuntimeStore", () => {
     const host = makeHost({ serverId: "srv_failed_queue_drain" });
     const fakeClient = new FakeDaemonClient();
     fakeClient.sendAgentMessageFailures.push(new Error("connection lost"));
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -3006,7 +3017,7 @@ describe("HostRuntimeStore", () => {
     const fakeClient = new FakeDaemonClient();
     const send = new Deferred<void>();
     fakeClient.sendAgentMessageResponses.push(send.promise);
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -3042,7 +3053,7 @@ describe("HostRuntimeStore", () => {
   it("uses legacy GitHub attachments when draining a queue for an old daemon", async () => {
     const host = makeHost({ serverId: "srv_legacy_queue_attachment" });
     const fakeClient = new FakeDaemonClient();
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -3139,7 +3150,7 @@ describe("HostRuntimeStore", () => {
       }),
       pageTwo.promise,
     );
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -3234,7 +3245,7 @@ describe("HostRuntimeStore", () => {
     });
     const fakeClient = new FakeDaemonClient();
     fakeClient.setConnectionState({ status: "connected" });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -3315,7 +3326,7 @@ describe("HostRuntimeStore", () => {
         subscriptionId: "app:srv_archived_rehydrate",
       }),
     );
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => fakeClient as unknown as DaemonClient,
@@ -3388,7 +3399,7 @@ describe("HostRuntimeStore", () => {
         },
       ],
     });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => {
@@ -3421,7 +3432,7 @@ describe("HostRuntimeStore", () => {
   });
 
   it("renameHost updates label in memory", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3455,7 +3466,7 @@ describe("HostRuntimeStore", () => {
 
   it("preserves a manual host rename when desktop status re-advertises the daemon hostname", async () => {
     const advertisedHostname = "macbook-pro.local";
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3490,7 +3501,7 @@ describe("HostRuntimeStore", () => {
   });
 
   it("upsertDirectConnection stores SSL on the connection and password on the host", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3533,7 +3544,7 @@ describe("HostRuntimeStore", () => {
     };
     const probeClient = makeConnectedProbeClient(5);
     const seenProbeHosts: string[] = [];
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3573,7 +3584,7 @@ describe("HostRuntimeStore", () => {
       type: "directTcp",
       endpoint: "lan:6767",
     };
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3607,7 +3618,7 @@ describe("HostRuntimeStore", () => {
   });
 
   it("uses the advertised hostname when adding a relay host from a pairing offer", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage: createMemoryHostRuntimeStorage(),
       deps: {
@@ -3630,7 +3641,7 @@ describe("HostRuntimeStore", () => {
   });
 
   it("stores relay TLS from a pairing offer", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage: createMemoryHostRuntimeStorage(),
       deps: {
@@ -3670,7 +3681,7 @@ describe("HostRuntimeStore", () => {
   });
 
   it("refuses old pairing URLs with an update instruction", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage: createMemoryHostRuntimeStorage(),
       deps: {
@@ -3699,7 +3710,7 @@ describe("HostRuntimeStore", () => {
   });
 
   it("probes a pairing link immediately and saves only after admission", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3727,7 +3738,7 @@ describe("HostRuntimeStore", () => {
   });
 
   it("preserves the existing host label when re-pairing an existing relay host", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3809,7 +3820,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
     const desktopStartPending = new Promise<void>((resolve) => {
       finishDesktopStart = resolve;
     });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       storage,
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3851,7 +3862,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
     const storage = createMemoryHostRuntimeStorage();
     await storage.setItem("@paseo:daemon-registry", JSON.stringify([host]));
     const credentialRequests: string[] = [];
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       storage,
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3889,7 +3900,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
       password: "old-password",
       connections: [{ id: "direct:lan:6767", type: "directTcp", endpoint: "lan:6767" }],
     });
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       storage: createMemoryHostRuntimeStorage(),
       deps: {
         createClient: () => client as unknown as DaemonClient,
@@ -3944,7 +3955,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
       ],
     });
     const probeAttempts: string[] = [];
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       storage: createMemoryHostRuntimeStorage(),
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -3995,7 +4006,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
 
   it("keeps five rejected hosts red with independent password errors", async () => {
     let probeAttempts = 0;
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       storage: createMemoryHostRuntimeStorage(),
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -4026,7 +4037,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
     store.syncHosts([]);
   });
   it("imports a pairing link after a password retry in the add flow", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage: createMemoryHostRuntimeStorage(),
       deps: {
@@ -4056,7 +4067,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
     store.syncHosts([]);
   });
   it("imports a deep link without waiting for admission, then leaves a rejected saved host red", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       storage: createMemoryHostRuntimeStorage(),
       deps: {
@@ -4082,7 +4093,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
     store.syncHosts([]);
   });
   it("saves and reconnects a rejected saved host after changing its password", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       storage: createMemoryHostRuntimeStorage(),
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -4116,7 +4127,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
 
   it("attempts the explicit initial connection hint before default localhost bootstrap", async () => {
     const seenProbes: { endpoint: string; useTls?: boolean }[] = [];
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -4158,7 +4169,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
   it("does not infer window.location.host when no explicit hint is present", async () => {
     const seenProbes: { endpoint: string; useTls?: boolean }[] = [];
     const firstProbe = createDeferred<void>();
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -4188,7 +4199,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
 
 describe("relay host identity pin", () => {
   it("refuses a changed key for a known server before overwriting its connection", async () => {
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       claimRelayDevice: async () => "dev_testdevice000001",
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -4349,7 +4360,7 @@ describe("REPAIR registry load", () => {
     await storage.removeItem("fulcra:relay-device-identity:v3");
     const deps = makeDeps({}, []);
     const probe = vi.spyOn(deps, "connectToDaemon");
-    const store = new HostRuntimeStore({
+    const store = humanConfirmedStore({
       storage,
       deps,
       replicaRowStore: createMemoryReplicaRowStore(),
@@ -4405,7 +4416,7 @@ it("IR-3 changing the desktop preferred endpoint replaces the active client imme
 });
 
 it("IR-3 preserves explicit desktop passwords but removes obsolete generated credentials", async () => {
-  const store = new HostRuntimeStore({
+  const store = humanConfirmedStore({
     deps: {
       createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
       connectToDaemon: async ({ host }) => ({
@@ -4444,5 +4455,130 @@ it("IR-3 preserves explicit desktop passwords but removes obsolete generated cre
     ).not.toHaveProperty("password");
   } finally {
     store.syncHosts([]);
+  }
+});
+
+interface ConfirmationProbe {
+  phase: "admission" | "registered-runtime";
+  serverId: string;
+  deviceId: string | undefined;
+  claimCount: number;
+  savedHostCount: number;
+  previousClientClosed: boolean;
+  client: FakeDaemonClient;
+}
+
+function confirmationFixture() {
+  let claims = 0;
+  const probes: ConfirmationProbe[] = [];
+  const memory = createMemoryHostRuntimeStorage();
+  let registryWrites = 0;
+  const storage: HostRuntimeStorage = {
+    ...memory,
+    async setItem(key, value) {
+      if (key === "@paseo:daemon-registry") registryWrites++;
+      await memory.setItem(key, value);
+    },
+  };
+  const store = new HostRuntimeStore({
+    claimRelayDevice: async () => {
+      claims++;
+      return "dev_testdevice000001";
+    },
+    storage,
+    deps: {
+      createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+      connectToDaemon: async ({ host, connection }) => {
+        if (connection.type !== "relay") throw new Error("Expected fixture relay connection");
+        const savedHosts = store.getHosts();
+        const previous = probes.at(-1)?.client;
+        const client = makeConnectedProbeClient(5);
+        probes.push({
+          // Admission receives the temporary unsaved profile. HostRuntimeController
+          // subsequently receives the exact registered profile from syncHosts.
+          phase: savedHosts.includes(host) ? "registered-runtime" : "admission",
+          serverId: host.serverId,
+          deviceId: connection.deviceId,
+          claimCount: claims,
+          savedHostCount: savedHosts.length,
+          previousClientClosed: previous?.getConnectionState().status === "disconnected",
+          client,
+        });
+        return {
+          client: client as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: "confirmed fixture host",
+        };
+      },
+      getClientId: async () => "cid_confirmation_fixture",
+    },
+  });
+  return { store, storage, claims: () => claims, probes, registryWrites: () => registryWrites };
+}
+
+it("stable host confirmation cancels before any device claim, probe or host persistence", async () => {
+  const f = confirmationFixture();
+  const pending = f.store.importConnectionLink(encodeOfferUrl(makeOffer()), "openProject");
+  await vi.waitFor(() => expect(f.store.getPendingHostConfirmation()).not.toBeNull());
+  const request = f.store.getPendingHostConfirmation()!;
+  f.store.answerHostConfirmation(request.id + 1, true);
+  expect(f.claims()).toBe(0);
+  f.store.answerHostConfirmation(request.id, false);
+  await expect(pending).resolves.toEqual({ status: "cancelled" });
+  expect(f.claims()).toBe(0);
+  expect(f.probes).toHaveLength(0);
+  expect(f.store.getHosts()).toEqual([]);
+  expect(f.registryWrites()).toBe(0);
+});
+
+it("stable host confirmation admits exactly one V3 device proof and keeps the full host pin", async () => {
+  const f = confirmationFixture(),
+    offer = makeOffer();
+  try {
+    const pending = f.store.beginLinkPairing().submit(encodeOfferUrl(offer));
+    await vi.waitFor(() => expect(f.store.getPendingHostConfirmation()).not.toBeNull());
+    const request = f.store.getPendingHostConfirmation()!;
+    f.store.answerHostConfirmation(request.id, true);
+    const outcome = await pending;
+    expect(outcome.status).toBe("connected");
+    expect(f.claims()).toBe(1);
+    await waitForHostOnline(f.store, offer.serverId);
+    expect(f.probes.map(({ client: _client, ...read }) => read)).toEqual([
+      {
+        phase: "admission",
+        serverId: offer.serverId,
+        deviceId: "dev_testdevice000001",
+        claimCount: 1,
+        savedHostCount: 0,
+        previousClientClosed: false,
+      },
+      {
+        phase: "registered-runtime",
+        serverId: offer.serverId,
+        deviceId: "dev_testdevice000001",
+        claimCount: 1,
+        savedHostCount: 1,
+        previousClientClosed: true,
+      },
+    ]);
+    expect(f.probes[0]!.client.getConnectionState().status).toBe("disconnected");
+    expect(f.store.getSnapshot(offer.serverId)?.client).toBe(f.probes[1]!.client);
+    expect(f.registryWrites()).toBe(1);
+    expect(f.store.getHosts()[0]?.connections[0]).toMatchObject({
+      daemonPublicKeyB64: offer.daemonPublicKeyB64,
+      deviceId: "dev_testdevice000001",
+    });
+    const saved = await f.storage.getItem("@paseo:daemon-registry");
+    const different = makeOffer({ daemonPublicKeyB64: Buffer.alloc(32, 2).toString("base64") });
+    await expect(f.store.beginLinkPairing().submit(encodeOfferUrl(different))).rejects.toThrow(
+      "identity changed",
+    );
+    expect(f.store.getPendingHostConfirmation()).toBeNull();
+    expect(f.claims()).toBe(1);
+    expect(f.probes).toHaveLength(2);
+    expect(f.registryWrites()).toBe(1);
+    expect(await f.storage.getItem("@paseo:daemon-registry")).toBe(saved);
+  } finally {
+    f.store.syncHosts([]);
   }
 });

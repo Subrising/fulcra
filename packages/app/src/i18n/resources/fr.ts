@@ -170,6 +170,8 @@ export const fr: TranslationResources = {
     },
     attachments: {
       addImage: "Ajouter une image",
+      choosePhoto: "Choisir une photo",
+      takePhoto: "Prendre une photo",
       pasteImage: "Coller une image",
       addFile: "Upload file",
       addIssueOrPr: "Ajouter un problème ouPR",
@@ -1825,6 +1827,8 @@ export const fr: TranslationResources = {
     permissionMessage: "Veuillez autoriser l'accès à votre photothèque pour joindre des images.",
     errorTitle: "Erreur",
     failedToSelect: "Échec de la sélection de l'image",
+    cameraPermissionMessage: "Veuillez autoriser l’accès à la caméra pour prendre des photos.",
+    failedToTakePhoto: "Impossible de prendre la photo",
     dialogTitle: "Joindre des images",
     dialogFilterName: "Images",
   },
@@ -1921,6 +1925,17 @@ export const fr: TranslationResources = {
     hostPassword: {
       title: "Mot de passe pour {{host}}",
       label: "Mot de passe de l’hôte",
+    },
+    hostConfirmation: {
+      title: "Se connecter à cet hôte ?",
+      description:
+        "Cet hôte pourra exécuter du code dans cette application et accéder à vos autres hôtes connectés. Connectez-vous uniquement si vous le reconnaissez.",
+      descriptionChanged:
+        "Ce lien modifie la façon dont vous vous connectez à cet hôte. L'hôte pourra exécuter du code dans cette application et accéder à vos autres hôtes connectés. Connectez-vous uniquement si vous le reconnaissez.",
+      hostLabel: "Hôte",
+      fingerprintLabel: "Empreinte de la clé",
+      relayLabel: "Relais",
+      connect: "Se connecter",
     },
     connectionMethods: {
       title: "Ajouter une connexion",

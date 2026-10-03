@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { configuredControllerPluginId } from "@getpaseo/protocol/bundled-controller";
 import { readPagedPluginCatalog } from "./plugin-catalog-paging.js";
 import {
   PluginCatalogPageRequestSchema,
@@ -6856,10 +6858,11 @@ export class DaemonClient {
   /** One explicit owner scratch attempt. A confirmation selects purpose; only the host authenticates it. */
   async simulateRadiusScratch(
     input: RadiusScratchInput | (RadiusScratchInput & { confirmDestructive: true }),
-    options: { signal: AbortSignal; checkOriginalLifetime: () => void },
+    options: { signal: AbortSignal; checkOriginalLifetime: () => void; pluginId?: string },
   ): Promise<RadiusScratchOutput> {
     const host = this.lastServerInfoMessage;
     const { signal, checkOriginalLifetime } = options;
+    const pluginId = configuredControllerPluginId(options.pluginId);
     const check = () => {
       checkOriginalLifetime();
       if (
@@ -6887,7 +6890,7 @@ export class DaemonClient {
       message: {
         type: "plugin.rpc.invoke.request",
         requestId,
-        pluginId: "orca-organization-next",
+        pluginId,
         method: destructive
           ? "organization.radius.scratch.prune-simulate"
           : "organization.radius.scratch.simulate",

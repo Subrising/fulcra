@@ -168,6 +168,8 @@ export const es: TranslationResources = {
     },
     attachments: {
       addImage: "Agregar imagen",
+      choosePhoto: "Elegir foto",
+      takePhoto: "Tomar foto",
       pasteImage: "Pegar imagen",
       addFile: "Upload file",
       addIssueOrPr: "Agregar problema oPR",
@@ -1818,6 +1820,8 @@ export const es: TranslationResources = {
     permissionMessage: "Permita el acceso a su biblioteca de fotos para adjuntar imágenes.",
     errorTitle: "Error",
     failedToSelect: "No se pudo seleccionar la imagen",
+    cameraPermissionMessage: "Permite el acceso a la cámara para tomar fotos.",
+    failedToTakePhoto: "No se pudo tomar la foto",
     dialogTitle: "Adjuntar imágenes",
     dialogFilterName: "Imágenes",
   },
@@ -1914,6 +1918,17 @@ export const es: TranslationResources = {
     hostPassword: {
       title: "Contraseña de {{host}}",
       label: "Contraseña del host",
+    },
+    hostConfirmation: {
+      title: "¿Conectar con este host?",
+      description:
+        "Este host podrá ejecutar código en esta app y acceder a tus otros hosts conectados. Conéctate solo si lo reconoces.",
+      descriptionChanged:
+        "Este enlace cambia cómo te conectas a este host. El host podrá ejecutar código en esta app y acceder a tus otros hosts conectados. Conéctate solo si lo reconoces.",
+      hostLabel: "Host",
+      fingerprintLabel: "Huella de la clave",
+      relayLabel: "Relay",
+      connect: "Conectar",
     },
     connectionMethods: {
       title: "Agregar conexión",

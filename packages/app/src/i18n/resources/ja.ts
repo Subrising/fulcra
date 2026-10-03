@@ -168,6 +168,8 @@ export const ja: TranslationResources = {
     },
     attachments: {
       addImage: "画像を追加",
+      choosePhoto: "写真を選択",
+      takePhoto: "写真を撮影",
       pasteImage: "画像を貼り付け",
       addFile: "ファイルをアップロード",
       addIssueOrPr: "イシューまたはPRを追加",
@@ -1791,6 +1793,8 @@ export const ja: TranslationResources = {
     permissionMessage: "画像を添付するにはフォトライブラリへのアクセスを許可してください。",
     errorTitle: "エラー",
     failedToSelect: "画像の選択に失敗しました",
+    cameraPermissionMessage: "写真を撮影するにはカメラへのアクセスを許可してください。",
+    failedToTakePhoto: "写真の撮影に失敗しました",
     dialogTitle: "画像を添付",
     dialogFilterName: "画像",
   },
@@ -1887,6 +1891,17 @@ export const ja: TranslationResources = {
     hostPassword: {
       title: "{{host}} のパスワード",
       label: "ホストのパスワード",
+    },
+    hostConfirmation: {
+      title: "このホストに接続しますか？",
+      description:
+        "このホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      descriptionChanged:
+        "このリンクはこのホストへの接続方法を変更します。ホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      hostLabel: "ホスト",
+      fingerprintLabel: "鍵のフィンガープリント",
+      relayLabel: "リレー",
+      connect: "接続",
     },
     connectionMethods: {
       title: "接続を追加",

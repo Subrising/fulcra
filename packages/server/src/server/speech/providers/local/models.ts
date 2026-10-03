@@ -1,4 +1,5 @@
 import { ensureSherpaOnnxModels, getSherpaOnnxModelDir } from "./sherpa/model-downloader.js";
+import { ensureSileroVadModel } from "./sherpa/silero-vad-provider.js";
 import {
   DEFAULT_LOCAL_STT_MODEL,
   DEFAULT_LOCAL_TTS_MODEL,
@@ -36,6 +37,7 @@ export async function ensureLocalSpeechModels(options: {
   logger: import("pino").Logger;
   signal?: AbortSignal;
 }): Promise<Record<LocalSpeechModelId, string>> {
+  await ensureSileroVadModel(options.modelsDir, options.logger);
   return ensureSherpaOnnxModels({
     modelsDir: options.modelsDir,
     modelIds: options.modelIds,

@@ -31,7 +31,7 @@ vi.mock("@/stores/navigation-active-workspace-store", () => ({
 }));
 vi.mock("@/stores/session-store-hooks", () => ({ useWorkspace: () => (f.exists ? {} : null) }));
 vi.mock("@/stores/draft-keys", () => ({ generateDraftId: () => `draft-${++f.serial}` }));
-import { SidebarNewChatRow } from "./sidebar-new-chat-row";
+import { SidebarNewChatHereRow as SidebarNewChatRow } from "./sidebar-new-chat-row";
 afterEach(cleanup);
 beforeEach(() => {
   f.active = null;

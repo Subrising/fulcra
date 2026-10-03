@@ -238,3 +238,73 @@ it("clears policy synchronously on a connection drop even before a reconnect ren
   view.unmount();
   expect(releaseConnection).toHaveBeenCalledOnce();
 });
+
+it.each([false, true])(
+  "fences a held preparation synchronously through drop (same-client reconnect: %s)",
+  async (reconnect) => {
+    state.connected = true;
+    state.supported = true;
+    state.paging = true;
+    let connectionChanged!: (status: { status: string }) => void;
+    let snapshot!: () => void;
+    let completePreparation!: (entries: unknown[]) => void;
+    let signal: AbortSignal | undefined;
+    let policy: "unknown" | "standalone" = "unknown";
+    state.registry.clearHostInputPolicy.mockImplementation(() => {
+      policy = "unknown";
+    });
+    state.registry.installCatalog.mockImplementation(() => {
+      policy = "standalone";
+    });
+    state.prepare.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          completePreparation = resolve;
+        }),
+    );
+    const client = {
+      subscribeConnectionStatus: (listener: typeof connectionChanged) => {
+        connectionChanged = listener;
+        return () => {};
+      },
+      getPagedPluginCatalog: vi.fn(async (options: { signal: AbortSignal }) => {
+        signal = options.signal;
+        return { plugins: [], trustedPlugins: [] };
+      }),
+      observeEvents: () => ({
+        subscribe: (handlers: { snapshot: () => void }) => {
+          snapshot = handlers.snapshot;
+          snapshot();
+        },
+        release: async () => {},
+      }),
+    } as unknown as DaemonClient;
+    try {
+      await act(async () => {
+        render(React.createElement(PluginCatalogSync, { serverId: "same-host", client }));
+      });
+      expect(state.prepare).toHaveBeenCalledOnce();
+      act(() => connectionChanged({ status: "disconnected" }));
+      expect(signal?.aborted).toBe(true);
+      if (reconnect) act(() => connectionChanged({ status: "connected" }));
+      // No rerender or effect cleanup occurred. The production listener owns invalidation.
+      await act(async () => completePreparation([]));
+      expect(state.registry.installCatalog).not.toHaveBeenCalled();
+      expect(policy).toBe("unknown");
+      expect(client.getPagedPluginCatalog).toHaveBeenCalledOnce();
+      if (reconnect) {
+        await act(async () => snapshot());
+        expect(client.getPagedPluginCatalog).toHaveBeenCalledTimes(2);
+        expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("same-host", [], {
+          client,
+          replacePluginId: undefined,
+          trustedPlugins: [],
+        });
+        expect(policy).toBe("standalone");
+      }
+    } finally {
+      state.registry.clearHostInputPolicy.mockReset();
+      state.registry.installCatalog.mockReset();
+    }
+  },
+);

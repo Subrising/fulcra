@@ -167,6 +167,8 @@ export const ko: TranslationResources = {
     },
     attachments: {
       addImage: "이미지 추가",
+      choosePhoto: "사진 선택",
+      takePhoto: "사진 촬영",
       pasteImage: "이미지 붙여넣기",
       addFile: "파일 업로드",
       addIssueOrPr: "이슈 또는 PR 추가",
@@ -1778,6 +1780,8 @@ export const ko: TranslationResources = {
     permissionMessage: "이미지를 첨부하려면 사진 라이브러리 접근을 허용해 주세요.",
     errorTitle: "오류",
     failedToSelect: "이미지를 선택하지 못했습니다",
+    cameraPermissionMessage: "사진을 촬영하려면 카메라 접근을 허용해 주세요.",
+    failedToTakePhoto: "사진을 촬영하지 못했습니다",
     dialogTitle: "이미지 첨부",
     dialogFilterName: "이미지",
   },
@@ -1874,6 +1878,17 @@ export const ko: TranslationResources = {
     hostPassword: {
       title: "{{host}}의 비밀번호",
       label: "호스트 비밀번호",
+    },
+    hostConfirmation: {
+      title: "이 호스트에 연결할까요?",
+      description:
+        "이 호스트는 이 앱에서 코드를 실행하고 연결된 다른 호스트에 접근할 수 있게 됩니다. 알고 있는 호스트인 경우에만 연결하세요.",
+      descriptionChanged:
+        "이 링크는 이 호스트에 연결하는 방식을 변경합니다. 호스트는 이 앱에서 코드를 실행하고 연결된 다른 호스트에 접근할 수 있게 됩니다. 알고 있는 호스트인 경우에만 연결하세요.",
+      hostLabel: "호스트",
+      fingerprintLabel: "키 지문",
+      relayLabel: "릴레이",
+      connect: "연결",
     },
     connectionMethods: {
       title: "연결 추가",

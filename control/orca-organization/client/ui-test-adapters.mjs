@@ -129,3 +129,54 @@ export const Keyboard = {
     document.activeElement?.blur?.();
   },
 };
+
+// Owned native-catalog ports for the existing component harness. No daemon or provider is contacted.
+let nativeHosts = [],
+  nativeClients = new Map();
+export function setNativeHostCatalog(hosts = [], clients = new Map()) {
+  nativeHosts = hosts;
+  nativeClients = clients;
+}
+export const useHosts = () => nativeHosts;
+export function getPaseoClient(serverId) {
+  const client = nativeClients.get(serverId);
+  if (!client) throw new Error(`Fixture host is unavailable: ${serverId}`);
+  return client;
+}
+export function SettingsInput({
+  label,
+  initialValue = "",
+  onChangeText,
+  placeholder,
+  disabled,
+  ref,
+}) {
+  const [text, setText] = React.useState(initialValue);
+  React.useImperativeHandle(
+    ref,
+    () => ({ focus() {}, blur() {}, getText: () => text, replaceText: setText }),
+    [text],
+  );
+  return React.createElement(
+    "label",
+    null,
+    label,
+    React.createElement("input", {
+      "aria-label": label,
+      value: text,
+      placeholder,
+      disabled,
+      onChange: (event) => {
+        setText(event.target.value);
+        onChangeText(event.target.value);
+      },
+    }),
+  );
+}
+
+export function SettingsSection({ title, children }) {
+  return React.createElement("section", null, React.createElement("h3", null, title), children);
+}
+export function SettingsGroup({ title, children }) {
+  return React.createElement("section", null, React.createElement("h2", null, title), children);
+}
