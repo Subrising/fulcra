@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 import sys
@@ -11,7 +12,7 @@ from types import SimpleNamespace
 
 from upgrade_existing_mac import (Busy, FileState, Lifecycle, NativeSession, NativeStatus,
                                   Plan, ProcessIdentity, Selector, StopIncomplete,
-                                  TopologyUnavailable, Upgrade, UpgradeRefused, identity,
+                                  TopologyUnavailable, NativeUpgradeApiUnavailable, Upgrade, UpgradeRefused, identity,
                                   read_state, seal_bundle, mac_process_probe, rename_fresh)
 from upgrade_space import GIB, METADATA_BUDGET, SpaceRefused, bundle_footprint
 
@@ -60,6 +61,51 @@ class FixtureLifecycle(Lifecycle):
         self.generation += 1
         self.process = ProcessIdentity(1234 + self.generation, f"fixture lifetime {self.generation}",
                                        self.executable, identity(self.executable))
+
+
+class FixtureProcessLifecycle(FixtureLifecycle):
+    """Real disposable native process; stdin quit is its supported graceful stop.
+
+    This proves kernel lifetime/stop integration, never daemon admission fencing.
+    The fixture's in-memory hold prevents its own test caller from adding work;
+    it is not a claim about Mini/Book's native input APIs.
+    """
+    def __init__(self, home, executable):
+        super().__init__(home, executable)
+        self.child = None
+        self._spawn()
+
+    def _spawn(self):
+        script = 'import sys; print("ready", flush=True); sys.stdin.readline()'
+        self.child = subprocess.Popen([str(self.executable), "-u", "-c", script],
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True)
+        if self.child.stdout.readline() != "ready\n":
+            raise AssertionError("Fixture process failed to become ready")
+        self.process = mac_process_probe(self.child.pid)
+
+    def probe(self, pid):
+        return mac_process_probe(pid)
+
+    def graceful_stop(self, expected, *, timeout, log_budget):
+        assert self.held and tuple(expected) == (mac_process_probe(self.child.pid),)
+        self.events.append("graceful-stop")
+        try:
+            self.child.communicate("quit\n", timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError("Fixture graceful stop timed out") from error
+        assert self.child.returncode == 0
+        self.process = None
+
+    def start(self, app, *, log_budget):
+        assert self.held
+        self.events.append("start-only")
+        self._spawn()
+
+    def close(self):
+        if self.child is not None and self.child.poll() is None:
+            self.child.communicate("quit\n", timeout=5)
+        self.process = None
 
 
 class UpgradeExistingMacTests(unittest.TestCase):
@@ -350,6 +396,41 @@ class UpgradeExistingMacTests(unittest.TestCase):
         # normal focused tests require only Python's stdlib.
         self.assertEqual(seal_bundle(self.source),
                          "5f6fe3a09ade5826b881d7d65f29b25756e45d21b81d746baa31f23d7a899ec2")
+
+    def test_missing_supported_backend_seams_have_specific_typed_refusals(self):
+        lifecycle = Lifecycle()
+        with self.assertRaises(NativeUpgradeApiUnavailable) as observation:
+            lifecycle.observe()
+        self.assertEqual(observation.exception.code, "NATIVE_UPGRADE_API_UNAVAILABLE")
+        self.assertIn("internal agents", observation.exception.missing[0])
+        with self.assertRaises(NativeUpgradeApiUnavailable) as fence:
+            with lifecycle.hold_intake():
+                self.fail("Unsupported native fence must not admit cutover")
+        self.assertIn("provider-turn admission lease", fence.exception.missing[0])
+        self.assertIn("new-daemon intake", fence.exception.missing[1])
+        with self.assertRaises(NativeUpgradeApiUnavailable) as stop:
+            lifecycle.graceful_stop((), timeout=30, log_budget=0)
+        self.assertIn("internal supervisor/worker force-kill deadlines", stop.exception.missing[2])
+
+    def test_real_fixture_process_graceful_cutover_and_rollback(self):
+        if sys.platform != "darwin":
+            with self.assertRaises(TopologyUnavailable):
+                mac_process_probe(os.getpid())
+            return
+        service = FixtureProcessLifecycle(self.home, Path("/usr/bin/python3"))
+        try:
+            prior_process = service.process
+            upgrade = self.make(lifecycle=service, process_probe=service.probe)
+            upgrade.prepare().cutover()
+            self.assertIsNone(mac_process_probe(prior_process.pid))
+            replacement_process = service.process
+            self.assertNotEqual(replacement_process, prior_process)
+            upgrade.rollback()
+            self.assertIsNone(mac_process_probe(replacement_process.pid))
+            self.assertEqual((self.installed / "Contents/Resources/app.asar").read_bytes(), b"prior app")
+            self.assertEqual(service.events, ["graceful-stop", "start-only", "graceful-stop", "start-only"])
+        finally:
+            service.close()
 
     def test_atomic_rename_refuses_even_an_occupied_empty_directory(self):
         self.plan.rollback.mkdir()
