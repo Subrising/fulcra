@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HANDOFF_MS,
+  INTERRUPTED_SETTLE_MS,
+  MAX_JITTER_MS,
   LimitResumeService,
   MAX_CHAIN,
   RESUME_PROMPT,
@@ -33,6 +35,8 @@ const started = (agentId: string): LimitResumeEvent => ({
 describe("LimitResumeService", () => {
   let home: string;
   let enabled: boolean;
+  let enabledInterrupted: boolean;
+  let prompts: string[];
   let agents: Map<string, LimitResumeAgent>;
   let lastMessage: Map<string, string | null>;
   let sent: Array<{ agentId: string; prompt: string; at: number }>;
@@ -45,6 +49,8 @@ describe("LimitResumeService", () => {
     vi.setSystemTime(T0);
     home = mkdtempSync(path.join(os.tmpdir(), "limit-resume-"));
     enabled = true;
+    enabledInterrupted = true;
+    prompts = [];
     agents = new Map();
     lastMessage = new Map();
     sent = [];
@@ -60,7 +66,7 @@ describe("LimitResumeService", () => {
   const make = () =>
     new LimitResumeService({
       paseoHome: home,
-      isEnabled: () => enabled,
+      isEnabled: (kind) => (kind === "interrupted" ? enabledInterrupted : enabled),
       getAgent: async (id) => {
         if (getAgentDelay) await getAgentDelay;
         return agents.get(id) ?? null;
@@ -73,12 +79,14 @@ describe("LimitResumeService", () => {
       sendResume: async (agentId, prompt, stillWanted) => {
         if (!stillWanted()) return;
         sent.push({ agentId, prompt, at: Date.now() });
+        prompts.push(prompt);
       },
       onError: (e) => {
         throw e;
       },
       random: () => 0,
     });
+  const agentIdOf = (entry: { agentId: string }) => entry.agentId;
   const idle = (): LimitResumeAgent => ({ labels: {}, archived: false, busy: false });
   const resetIn = (ms: number) => `usage limit reached|${Math.floor((Date.now() + ms) / 1000)}`;
   const queued = () =>
@@ -308,5 +316,88 @@ describe("LimitResumeService", () => {
     for (let i = 1; i < sent.length; i += 1) {
       expect(sent[i].at - sent[i - 1].at).toBeGreaterThanOrEqual(STAGGER_MS);
     }
+  });
+
+  describe("interrupted sessions (daemon stopped mid-task)", () => {
+    it("resumes each interrupted session once, after the settle delay, with its own prompt", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.enqueueInterrupted(["a"], "boot-1");
+      expect(markers.get("a")).toBe(new Date(T0 + INTERRUPTED_SETTLE_MS).toISOString());
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS - 1_000);
+      expect(sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(prompts).toEqual([
+        "The daemon restarted while you were working; continue where you left off.",
+      ]);
+      // The same boot delivered again (a retry of the startup step) never queues a second resume.
+      await svc.enqueueInterrupted(["a"], "boot-1");
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("has its own toggle, and the limit toggle does not affect it", async () => {
+      agents.set("a", idle());
+      enabledInterrupted = false;
+      const svc = make();
+      svc.start();
+      await svc.enqueueInterrupted(["a"], "boot-1");
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toEqual([]);
+
+      enabledInterrupted = true;
+      enabled = false;
+      await svc.enqueueInterrupted(["a"], "boot-2");
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toHaveLength(1);
+
+      // Turned off after queueing: dropped at fire time.
+      agents.set("b", idle());
+      await svc.enqueueInterrupted(["b"], "boot-3");
+      enabledInterrupted = false;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("skips opted-out, archived, busy and unknown sessions, and anything the user already resumed", async () => {
+      agents.set("opt", { ...idle(), labels: { "fulcra.limit-resume": "off" } });
+      agents.set("gone", { ...idle(), archived: true });
+      agents.set("busy", { ...idle(), busy: true });
+      agents.set("user", idle());
+      const svc = make();
+      svc.start();
+      await svc.enqueueInterrupted(["opt", "gone", "busy", "missing", "user"], "boot-1");
+      await svc.onAgentEvent(started("user"));
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(sent).toEqual([]);
+    });
+
+    it("survives a second restart before it fires, and staggers a crowd", async () => {
+      const ids = ["s0", "s1", "s2", "s3", "s4"];
+      for (const id of ids) agents.set(id, idle());
+      const first = make();
+      first.start();
+      await first.enqueueInterrupted(ids, "boot-1");
+      first.stop();
+      const second = make();
+      second.start();
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS + MAX_JITTER_MS + 10 * STAGGER_MS);
+      expect(new Set(sent.map(agentIdOf))).toEqual(new Set(ids));
+      for (let i = 1; i < sent.length; i += 1) {
+        expect(sent[i].at - sent[i - 1].at).toBeGreaterThanOrEqual(STAGGER_MS);
+      }
+    });
+
+    it("stops after MAX_CHAIN interruptions of the same session (no crash loop)", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      for (let i = 0; i < MAX_CHAIN + 2; i += 1) {
+        await svc.enqueueInterrupted(["a"], `boot-${i}`);
+        await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS + MAX_JITTER_MS + 1_000);
+      }
+      expect(sent).toHaveLength(MAX_CHAIN);
+    });
   });
 });

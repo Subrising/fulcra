@@ -23,6 +23,7 @@ async function createStore() {
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
+    autoResumeInterrupted: true,
     appendSystemPrompt: "",
   });
   return { config, root, store: createSkillSelectionStore(config) };

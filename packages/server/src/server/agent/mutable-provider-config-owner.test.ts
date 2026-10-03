@@ -84,6 +84,7 @@ function mutableConfig(persisted: PersistedConfig): MutableDaemonConfig {
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
+    autoResumeInterrupted: true,
     appendSystemPrompt: "",
     cors: { allowedOrigins: persisted.daemon?.cors?.allowedOrigins ?? [] },
     trustedProxies: ["loopback"],

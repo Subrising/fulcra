@@ -7,6 +7,7 @@ import {
   LIMIT_RESUME_AT_LABEL,
   LIMIT_RESUME_OPT_OUT_LABEL,
   LimitResumeService,
+  RESUME_REASON_LABEL,
 } from "./service.js";
 
 /** Starts auto-resume for this host: listens to agent events, keeps the durable queue, resumes at reset. */
@@ -20,7 +21,10 @@ export function startLimitResume(input: {
   const { agentManager, agentStorage, logger } = input;
   const service = new LimitResumeService({
     paseoHome: input.paseoHome,
-    isEnabled: () => input.daemonConfigStore.get().autoResumeOnLimit !== false,
+    isEnabled: (kind) =>
+      kind === "interrupted"
+        ? input.daemonConfigStore.get().autoResumeInterrupted !== false
+        : input.daemonConfigStore.get().autoResumeOnLimit !== false,
     getAgent: async (agentId) => {
       const live = agentManager.getAgent(agentId);
       if (live) {
@@ -36,9 +40,12 @@ export function startLimitResume(input: {
     },
     getLastAssistantMessage: (agentId) => agentManager.getLastAssistantMessage(agentId),
     // An empty value clears the marker; labels cannot be deleted through the metadata path.
-    setMarker: async (agentId, resumeAtIso) => {
+    setMarker: async (agentId, resumeAtIso, kind) => {
       await agentManager.updateAgentMetadata(agentId, {
-        labels: { [LIMIT_RESUME_AT_LABEL]: resumeAtIso ?? "" },
+        labels: {
+          [LIMIT_RESUME_AT_LABEL]: resumeAtIso ?? "",
+          ...(kind ? { [RESUME_REASON_LABEL]: kind } : {}),
+        },
       });
     },
     sendResume: async (agentId, prompt, stillWanted) => {

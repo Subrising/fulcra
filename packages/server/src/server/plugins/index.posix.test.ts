@@ -37,6 +37,7 @@ function createStore(
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
+    autoResumeInterrupted: true,
     appendSystemPrompt: "",
     pluginsEnabled: true,
     plugins,

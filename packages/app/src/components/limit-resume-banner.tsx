@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import {
+  INTERRUPTED_RESUME_PROMPT,
   LIMIT_RESUME_AT_LABEL,
   LIMIT_RESUME_OPT_OUT_LABEL,
   LIMIT_RESUME_PROMPT,
+  RESUME_REASON_LABEL,
   pendingLimitResumeAt,
 } from "@getpaseo/protocol/limit-resume";
 import { Button } from "@/components/ui/button";
@@ -14,9 +16,10 @@ import { useSessionStore } from "@/stores/session-store";
 import type { Theme } from "@/styles/theme";
 import { toErrorMessage } from "@/utils/error-messages";
 
-export function formatLimitResumeStatus(resumeAtMs: number): string {
+export function formatLimitResumeStatus(resumeAtMs: number, reason?: string): string {
   const time = new Date(resumeAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `Paused: usage limit, resumes at ${time}`;
+  const why = reason === "interrupted" ? "interrupted by a restart" : "usage limit";
+  return `Paused: ${why}, resumes at ${time}`;
 }
 
 /** Shown above the composer while the host has a resume queued for this session. */
@@ -25,6 +28,9 @@ export function LimitResumeBanner({ serverId, agentId }: { serverId: string; age
   const labelAt = useSessionStore(
     (state) =>
       state.sessions[serverId]?.agents?.get(agentId)?.labels?.[LIMIT_RESUME_AT_LABEL] ?? "",
+  );
+  const reason = useSessionStore(
+    (state) => state.sessions[serverId]?.agents?.get(agentId)?.labels?.[RESUME_REASON_LABEL] ?? "",
   );
   const [error, setError] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -41,11 +47,14 @@ export function LimitResumeBanner({ serverId, agentId }: { serverId: string; age
     if (!client) return;
     setError(null);
     try {
-      await client.sendAgentMessage(agentId, LIMIT_RESUME_PROMPT);
+      await client.sendAgentMessage(
+        agentId,
+        reason === "interrupted" ? INTERRUPTED_RESUME_PROMPT : LIMIT_RESUME_PROMPT,
+      );
     } catch (e) {
       setError(toErrorMessage(e));
     }
-  }, [client, agentId]);
+  }, [client, agentId, reason]);
 
   const handleOptOut = useCallback(async () => {
     if (!client) return;
@@ -64,7 +73,7 @@ export function LimitResumeBanner({ serverId, agentId }: { serverId: string; age
   return (
     <View style={styles.container} testID="limit-resume-banner">
       <View style={styles.content}>
-        <Text style={styles.text}>{formatLimitResumeStatus(resumeAt)}</Text>
+        <Text style={styles.text}>{formatLimitResumeStatus(resumeAt, reason)}</Text>
         <View style={styles.actions}>
           <Button size="sm" variant="secondary" onPress={handleResumeNow} testID="limit-resume-now">
             Resume now

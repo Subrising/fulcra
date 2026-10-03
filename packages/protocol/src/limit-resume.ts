@@ -6,6 +6,10 @@
 export const LIMIT_RESUME_AT_LABEL = "fulcra.limit-resume-at";
 export const LIMIT_RESUME_OPT_OUT_LABEL = "fulcra.limit-resume";
 export const LIMIT_RESUME_PROMPT = "Usage limit has reset; continue where you left off.";
+export const INTERRUPTED_RESUME_PROMPT =
+  "The daemon restarted while you were working; continue where you left off.";
+/** Why a resume is queued: "limit" (usage limit reset) or "interrupted" (the daemon stopped mid-task). */
+export const RESUME_REASON_LABEL = "fulcra.resume-reason";
 
 // A queued resume this far past its time did not happen (the host was down or dropped it); stop showing it.
 const STALE_AFTER_MS = 15 * 60 * 1000;
