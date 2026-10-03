@@ -9,6 +9,7 @@ import {
 } from "./agent/provider-launch-config.js";
 import type { AgentProviderRuntimeSettingsMap } from "./agent/provider-launch-config.js";
 import { ensurePrivateFile, writePrivateFileAtomicSync } from "./private-files.js";
+import { readLimitResumeSetting, writeLimitResumeSetting } from "./limit-resume-settings.js";
 import { AgentProfileSchema, AgentSkillSelectionSchema } from "@getpaseo/protocol/agent-profile";
 import { PluginIdSchema, PluginSourceSchema } from "@getpaseo/protocol/plugin-config";
 import { TerminalProfileSchema } from "@getpaseo/protocol/terminal-profile";
@@ -259,6 +260,7 @@ export const PersistedConfigSchema = z
           .optional(),
         autoArchiveAfterMerge: z.boolean().optional(),
         enableTerminalAgentHooks: z.boolean().optional(),
+        // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),
         terminalProfiles: z.array(TerminalProfileSchema).optional(),
@@ -454,6 +456,20 @@ export function loadPersistedConfig(paseoHome: string, logger?: LoggerLike): Per
   }
 
   const config = parseConfigFile(configPath, raw);
+  const legacy = config.daemon?.autoResumeOnLimit;
+  let preference = readLimitResumeSetting(paseoHome);
+  if (legacy !== undefined) {
+    // A sidecar is newer than this legacy main-file key. Never overwrite that preference.
+    if (preference === undefined) {
+      writeLimitResumeSetting(paseoHome, legacy);
+      preference = legacy;
+    }
+    const original = parseConfigText(raw) as Record<string, unknown>;
+    const daemon = { ...(original.daemon as Record<string, unknown>) };
+    delete daemon.autoResumeOnLimit;
+    writePrivateFileAtomicSync(configPath, `${JSON.stringify({ ...original, daemon }, null, 2)}\n`);
+  }
+  if (preference !== undefined) config.daemon = { ...config.daemon, autoResumeOnLimit: preference };
   log?.info(`Loaded from ${configPath}`);
   return config;
 }
@@ -472,7 +488,10 @@ export function readPersistedConfig(
       return options.defaultsIfMissing ? structuredClone(DEFAULT_PERSISTED_CONFIG) : {};
     throw error;
   }
-  return parseConfigFile(configPath, raw);
+  const config = parseConfigFile(configPath, raw);
+  const preference = readLimitResumeSetting(paseoHome);
+  if (preference !== undefined) config.daemon = { ...config.daemon, autoResumeOnLimit: preference };
+  return config;
 }
 
 function parseConfigFile(configPath: string, raw: string): PersistedConfig {
@@ -559,6 +578,17 @@ export function editPersistedConfig(
   }
   if ("unset" in edit) delete object[key];
   else object[key] = edit.value;
+  const explicitResume =
+    field === "daemon.autoResumeOnLimit" ||
+    (field === "daemon" &&
+      "value" in edit &&
+      edit.value &&
+      typeof edit.value === "object" &&
+      Object.hasOwn(edit.value, "autoResumeOnLimit"));
+  if (explicitResume) {
+    PersistedConfigSchema.parse(config);
+    writeLimitResumeSetting(paseoHome, config.daemon?.autoResumeOnLimit ?? true);
+  }
   savePersistedConfig(paseoHome, config);
   return config;
 }
@@ -580,7 +610,15 @@ export function savePersistedConfig(
   }
 
   try {
-    writePrivateFileAtomicSync(configPath, JSON.stringify(result.data, null, 2) + "\n");
+    const main = result.data;
+    const legacy = main.daemon?.autoResumeOnLimit;
+    if (legacy !== undefined) {
+      // Generic saves may carry a stale virtual preference; only explicit setting writes replace it.
+      if (readLimitResumeSetting(paseoHome) === undefined)
+        writeLimitResumeSetting(paseoHome, legacy);
+      delete main.daemon!.autoResumeOnLimit;
+    }
+    writePrivateFileAtomicSync(configPath, JSON.stringify(main, null, 2) + "\n");
     log?.info(`Saved to ${configPath}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

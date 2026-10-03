@@ -1,3 +1,4 @@
+import { readLimitResumeSetting, writeLimitResumeSetting } from "./limit-resume-settings.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
 import {
   loadPersistedConfig,
@@ -347,6 +348,9 @@ export class DaemonConfigStore {
     this.reloadSource = options.reloadSource;
     this.startupPersisted = options.startupPersisted ?? loadPersistedConfig(paseoHome, this.logger);
     this.lastKnownPersisted = this.startupPersisted;
+    const savedResume = readLimitResumeSetting(paseoHome);
+    if (savedResume !== undefined)
+      this.current = { ...this.current, autoResumeOnLimit: savedResume };
   }
 
   public setRelayEndpoint(endpoint: string | null, useTls: boolean): void {
@@ -411,7 +415,10 @@ export class DaemonConfigStore {
 
     const configChanged = !isEqualValue(this.current, next);
 
-    if (!configChanged && removedProviders.length === 0) {
+    const preferenceChanged =
+      configPatch.autoResumeOnLimit !== undefined &&
+      readLimitResumeSetting(this.paseoHome) !== configPatch.autoResumeOnLimit;
+    if (!configChanged && !preferenceChanged && removedProviders.length === 0) {
       return this.current;
     }
 
@@ -428,7 +435,16 @@ export class DaemonConfigStore {
       this.applyReplacement(next, { removedProviders });
       this.lastKnownPersisted = knownNext;
     } catch (error) {
-      savePersistedConfig(this.paseoHome, persistedBeforePatch, this.logger);
+      if (configPatch.autoResumeOnLimit !== undefined)
+        writeLimitResumeSetting(
+          this.paseoHome,
+          persistedBeforePatch.daemon?.autoResumeOnLimit ?? this.current.autoResumeOnLimit,
+        );
+      if (
+        Object.keys(configPatch).some((key) => key !== "autoResumeOnLimit") ||
+        removedProviders.length > 0
+      )
+        savePersistedConfig(this.paseoHome, persistedBeforePatch, this.logger);
       throw error;
     }
 
@@ -446,6 +462,8 @@ export class DaemonConfigStore {
     // restart. The global switch is independently reloadable.
     const desired = MutableDaemonConfigSchema.parse({
       ...resolved.mutable,
+      autoResumeOnLimit:
+        readLimitResumeSetting(this.paseoHome) ?? resolved.mutable.autoResumeOnLimit,
       plugins: this.current.plugins,
     });
     const changedSinceLastApply = diffPaths(this.lastKnownPersisted, persisted);
@@ -604,7 +622,20 @@ export class DaemonConfigStore {
       });
     const nextPersisted = merge(persisted);
     const knownNext = merge(this.lastKnownPersisted);
-    savePersistedConfig(this.paseoHome, nextPersisted, this.logger);
+    const writesMain =
+      Object.keys(patch).some((key) => key !== "autoResumeOnLimit") || removeProviders.length > 0;
+    if (patch.autoResumeOnLimit !== undefined)
+      writeLimitResumeSetting(this.paseoHome, patch.autoResumeOnLimit);
+    try {
+      if (writesMain) savePersistedConfig(this.paseoHome, nextPersisted, this.logger);
+    } catch (error) {
+      if (patch.autoResumeOnLimit !== undefined)
+        writeLimitResumeSetting(
+          this.paseoHome,
+          persisted.daemon?.autoResumeOnLimit ?? this.current.autoResumeOnLimit,
+        );
+      throw error;
+    }
     return { previous: persisted, knownNext };
   }
 }
