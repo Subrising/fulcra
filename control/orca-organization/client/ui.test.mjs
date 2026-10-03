@@ -32,6 +32,7 @@ import {
   setHostPanAvailable,
 } from "./ui-test-adapters.mjs";
 import { forgetAll } from "./last-good";
+import { fleetHostsRpc } from "../shared/fleet";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://component.test",
 });
@@ -331,6 +332,11 @@ test("client entry registers its actual surface and return commands and cleans u
   assert.equal(removed.length, 5);
 });
 function base(name, input, { inactive = false, sessions = [] } = {}) {
+  if (name === "organization.fleet-hosts")
+    return Promise.resolve(fleetHostsRpc.output.parse({
+      local: "mini",
+      hosts: [{ name: "mini", serverId: null }, { name: "macbook", serverId: null }],
+    }));
   if (name === "organization.project-briefing")
     return Promise.resolve({
       observedAt: time(),
@@ -972,7 +978,8 @@ test("failed decision refresh marks retained evidence stale and hides saved text
 
 function setFleetHandler(fn) {
   setHandler(async (name, input) => {
-    const result = await (name === "organization.outcome" ? base(name, input) : fn(name, input));
+    // The configured host directory is a separate RPC, not an activity-history reply.
+    const result = await (["organization.outcome", "organization.fleet-hosts"].includes(name) ? base(name, input) : fn(name, input));
     if (name !== "organization.fleet") return result;
     return {
       ...result,
@@ -1039,7 +1046,7 @@ test("fleet defaults to both hosts, filters Book and opens receipt evidence with
   fireEvent.click(screen.getByRole("button", { name: "Sessions", exact: true }));
   await screen.findByText(/Your work, at a glance/);
   await screen.findByRole("button", { name: "Inspect Mini author" });
-  fireEvent.click(screen.getByRole("button", { name: "macbook", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Macbook", exact: true }));
   assert.equal(screen.queryByRole("button", { name: "Inspect Mini author" }), null);
   fireEvent.click(await screen.findByRole("button", { name: "Inspect Book author" }));
   evidence();
@@ -1051,7 +1058,10 @@ test("fleet defaults to both hosts, filters Book and opens receipt evidence with
     calls.every((c) =>
       [
         "organization.recovery",
+        "organization.inbox",
+        "organization.integrations",
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -1359,6 +1369,7 @@ test("scrollable graph reuses history reset, keeps evidence reachable and suppor
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -1652,7 +1663,7 @@ test("graph selection preserves requested navigation through delayed history and
     null,
   );
   fireEvent.click(screen.getByRole("button", { name: "Back to work list" }));
-  fireEvent.click(screen.getByRole("button", { name: "macbook" }));
+  fireEvent.click(screen.getByRole("button", { name: "Macbook" }));
   await waitFor(() =>
     assert.equal(screen.getByRole("button", { name: "Open work graph" }).disabled, false),
   );
@@ -1682,6 +1693,7 @@ test("graph selection preserves requested navigation through delayed history and
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -1908,6 +1920,7 @@ test("original conversation action uses exact Book target in list and graph with
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -2132,6 +2145,7 @@ test("compact work design keeps one primary action and historical recovery outsi
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -2244,6 +2258,7 @@ for (const platform of ["web"])
       calls.every((c) =>
         [
           "organization.fleet",
+        "organization.fleet-hosts",
           "organization.activity-history",
           "organization.outcome",
           "organization.projects",
@@ -2436,6 +2451,7 @@ for (const available of [true, false])
       calls.every((c) =>
         [
           "organization.fleet",
+        "organization.fleet-hosts",
           "organization.activity-history",
           "organization.outcome",
           "organization.projects",
@@ -2552,6 +2568,7 @@ test("work list and selected session show queued work separately from native idl
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -3505,7 +3522,7 @@ test("unnamed sessions stay selectable by original identity and expose IDs only 
     updatedAt: time(),
     error: null,
   }));
-  setHandler((name, input) =>
+  setFleetHandler((name, input) =>
     Promise.resolve(
       name === "organization.fleet"
         ? {
@@ -3619,7 +3636,7 @@ test("work overview bounds brief reads and reveals additional retained tasks on 
     updatedAt: time(),
     error: null,
   }));
-  setHandler((name) =>
+  setFleetHandler((name) =>
     Promise.resolve(
       name === "organization.fleet"
         ? {

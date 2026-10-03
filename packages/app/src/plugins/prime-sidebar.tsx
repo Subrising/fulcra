@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import React, { useCallback } from "react";
 import { useFetchQuery } from "@/data/query";
 import { Crown, RefreshCw } from "lucide-react-native";
 import { router } from "expo-router";
