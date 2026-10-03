@@ -435,6 +435,10 @@ class FakeAgentSession implements AgentSession {
     return { sessionId: this.id, finalText: resultText, timeline, usage };
   }
 
+  limitResumeAccountBinding(): string {
+    return "fixture-account";
+  }
+
   async startTurn(
     prompt: AgentPromptInput,
     options?: AgentRunOptions,

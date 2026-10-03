@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -61,6 +61,7 @@ describe("LimitResumeService", () => {
     new LimitResumeService({
       paseoHome: home,
       isEnabled: () => enabled,
+      captureBinding: (id) => agents.get(id)?.binding ?? null,
       getAgent: async (id) => {
         if (getAgentDelay) await getAgentDelay;
         return agents.get(id) ?? null;
@@ -85,6 +86,7 @@ describe("LimitResumeService", () => {
     archived: false,
     busy: false,
     unscopedResumeAllowed: true,
+    binding: `v1:${"a".repeat(64)}`,
   });
   const resetIn = (ms: number) => `usage limit reached|${Math.floor((Date.now() + ms) / 1000)}`;
   const queued = () =>
@@ -343,20 +345,52 @@ describe("LimitResumeService", () => {
     expect(markers.size).toBe(0);
   });
 
-  it("persisted scoped/unknown ownership never gains unscoped fallback after restart", async () => {
+  it("ineligible stops do not promise a future auto-resume", async () => {
     agents.set("a", { ...idle(), unscopedResumeAllowed: false });
+    const svc = make();
+    svc.start();
+    await svc.onAgentEvent(failed("a", resetIn(60_000)));
+    expect(svc.pendingResumeAt("a")).toBeNull();
+    expect(markers.get("a")).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(60_000 + HANDOFF_MS + 1_000);
+    expect(sent).toEqual([]);
+    svc.stop();
+  });
+
+  it("legacy false/unknown binding never gains fallback or leaves a future promise on restart", async () => {
+    agents.set("a", idle());
     const first = make();
     first.start();
     await first.onAgentEvent(failed("a", resetIn(60_000)));
-    expect(markers.get("a")).toBeTruthy();
     first.stop();
-    agents.set("a", idle());
+    const file = limitResumeFilePath(home);
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    data.entries[0].unscoped = false;
+    delete data.entries[0].binding;
+    writeFileSync(file, JSON.stringify(data));
     const second = make();
     second.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.pendingResumeAt("a")).toBeNull();
+    expect(markers.get("a")).toBeNull();
     await vi.advanceTimersByTimeAsync(60_000 + HANDOFF_MS + 1_000);
     expect(sent).toEqual([]);
-    expect(markers.get("a")).toBeNull();
     second.stop();
+  });
+
+  it("captures original binding before async admission, never upgrades to a later model observation", async () => {
+    agents.set("a", idle());
+    const svc = make();
+    svc.start();
+    let release = () => {};
+    getAgentDelay = new Promise<void>((yes) => (release = yes));
+    const admission = svc.onAgentEvent(failed("a", resetIn(60_000)));
+    agents.set("a", { ...idle(), binding: `v1:${"b".repeat(64)}` });
+    release();
+    await admission;
+    expect(svc.pendingResumeAt("a")).toBeNull();
+    expect(markers.get("a")).toBeUndefined();
+    svc.stop();
   });
 
   it("staggers many sessions that reset at the same moment", async () => {

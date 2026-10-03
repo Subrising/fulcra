@@ -729,6 +729,8 @@ export interface AgentSession {
   getQuota?(): Promise<AgentQuotaSnapshot>;
   /** Non-secret account label captured by this runtime at launch, never read from a mutable assignment. */
   usageSourceLabel?(): string | null;
+  /** Cached non-secret account identity only; no credential read, transport request or authorization. */
+  limitResumeAccountBinding?(): string | null;
   /** Fulcra account pool: the credential this session was launched with and its account label (daemon-internal). */
   usageCredential?(): {
     credential: AccountCredential;

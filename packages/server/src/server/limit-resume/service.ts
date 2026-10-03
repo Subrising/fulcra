@@ -54,6 +54,8 @@ interface QueueEntry {
   source: "reset" | "backoff";
   /** Captured at the stop: a later removal of the ownership observer never grants fallback. */
   unscoped?: boolean;
+  /** Original stop fingerprint only; never replaced with a later observation. */
+  binding?: string;
 }
 
 interface RecentResume {
@@ -74,12 +76,14 @@ export interface LimitResumeAgent {
   /** A turn is already running or starting. */
   busy: boolean;
   unscopedResumeAllowed: boolean;
+  binding: string | null;
 }
 
 export interface LimitResumeDeps {
   paseoHome: string;
   isEnabled: () => boolean;
-  getAgent: (agentId: string) => Promise<LimitResumeAgent | null>;
+  getAgent: (agentId: string, forResume?: boolean) => Promise<LimitResumeAgent | null>;
+  captureBinding: (agentId: string) => string | null;
   /** The final assistant message of the session's last turn (the Claude CLI reports its limit this way). */
   getLastAssistantMessage: (agentId: string) => Promise<string | null>;
   /** Writes (or, with null, clears) the label the app shows as "Paused: usage limit, resumes at HH:MM". */
@@ -94,6 +98,7 @@ export interface LimitResumeDeps {
     prompt: string,
     stillWanted: () => boolean,
     consume: () => void,
+    originalBinding: string,
   ) => Promise<void>;
   onError: (error: unknown) => void;
   now?: () => number;
@@ -140,6 +145,14 @@ function loadQueue(file: string): QueueFile {
   }
 }
 
+function validBinding(value: unknown): value is string {
+  return typeof value === "string" && /^v1:[a-f0-9]{64}$/.test(value);
+}
+
+function eligibleBinding(agent: LimitResumeAgent, binding: string | null): boolean {
+  return agent.unscopedResumeAllowed && validBinding(binding) && agent.binding === binding;
+}
+
 export class LimitResumeService {
   private readonly file: string;
   private readonly now: () => number;
@@ -161,6 +174,17 @@ export class LimitResumeService {
 
   start(): void {
     this.queue = loadQueue(this.file);
+    const refused = this.queue.entries.filter(
+      (entry) => entry.unscoped !== true || !validBinding(entry.binding),
+    );
+    this.queue.entries = this.queue.entries.filter(
+      (entry) => entry.unscoped === true && validBinding(entry.binding),
+    );
+    if (refused.length) {
+      this.save();
+      for (const entry of refused)
+        void this.deps.setMarker(entry.agentId, null).catch(this.deps.onError);
+    }
     for (const entry of this.queue.entries) this.epochs.set(entry.agentId, entry.epoch);
     this.arm();
   }
@@ -208,6 +232,7 @@ export class LimitResumeService {
     }
     if (kind !== "turn_failed" && kind !== "turn_completed") return;
 
+    const binding = this.deps.captureBinding(agentId);
     const epoch = this.epochOf(agentId);
     const turnId = typeof input.event.turnId === "string" ? input.event.turnId : null;
     const now = this.now();
@@ -225,7 +250,7 @@ export class LimitResumeService {
       );
     }
     if (!stop) return;
-    await this.locked(() => this.admit(agentId, stop, epoch, turnId ?? `epoch-${epoch}`));
+    await this.locked(() => this.admit(agentId, stop, epoch, turnId ?? `epoch-${epoch}`, binding));
   }
 
   private async admit(
@@ -233,6 +258,7 @@ export class LimitResumeService {
     stop: LimitStop,
     epoch: number,
     stopKey: string,
+    binding: string | null,
   ): Promise<void> {
     if (this.stopped || !this.deps.isEnabled()) return;
     const limitId = `${agentId}:${stopKey}`;
@@ -245,6 +271,10 @@ export class LimitResumeService {
     if (!agent || agent.archived || agent.busy) return;
     if (agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return;
 
+    if (!eligibleBinding(agent, binding)) {
+      await this.clearStaleMarker(agentId, agent);
+      return;
+    }
     const now = this.now();
     const recent = this.queue.recent[agentId];
     const attempt = recent && now - recent.resumedAt < CHAIN_WINDOW_MS ? recent.attempt + 1 : 0;
@@ -259,7 +289,8 @@ export class LimitResumeService {
       attempt,
       epoch,
       source: stop.resetAt === null ? "backoff" : "reset",
-      unscoped: agent.unscopedResumeAllowed === true,
+      unscoped: true,
+      binding: binding!,
     };
     this.queue.entries.push(entry);
     this.save();
@@ -267,6 +298,11 @@ export class LimitResumeService {
       .setMarker(agentId, new Date(entry.resumeAt).toISOString())
       .catch(this.deps.onError);
     this.arm();
+  }
+
+  private async clearStaleMarker(agentId: string, agent: LimitResumeAgent): Promise<void> {
+    if (agent.labels[LIMIT_RESUME_AT_LABEL])
+      await this.deps.setMarker(agentId, null).catch(this.deps.onError);
   }
 
   /** Drops a pending resume (the person resumed, opted out, or something else started a turn). */
@@ -327,16 +363,22 @@ export class LimitResumeService {
       !this.stopped && this.epochOf(entry.agentId) === entry.epoch && this.deps.isEnabled();
     if (this.stopped) return;
     // Legacy/unknown entries and a previously observed scoped owner never gain unscoped authority.
-    if (entry.unscoped !== true || !unchanged() || this.now() - entry.resumeAt > STALE_AFTER_MS) {
+    if (
+      entry.unscoped !== true ||
+      !validBinding(entry.binding) ||
+      !unchanged() ||
+      this.now() - entry.resumeAt > STALE_AFTER_MS
+    ) {
       await this.cancel(entry.agentId);
       return;
     }
-    const agent = await this.deps.getAgent(entry.agentId);
+    const agent = await this.deps.getAgent(entry.agentId, true);
     if (this.stopped) return;
     if (
       !agent ||
       agent.archived ||
       agent.busy ||
+      agent.binding !== entry.binding ||
       agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off"
     ) {
       await this.cancel(entry.agentId);
@@ -351,22 +393,28 @@ export class LimitResumeService {
       (consumed ||
         this.queue.entries.some((e) => e.agentId === entry.agentId && e.limitId === entry.limitId));
     await this.deps
-      .sendResume(entry.agentId, RESUME_PROMPT, stillWanted, () => {
-        if (!stillWanted()) throw new Error("Limit resume no longer wanted");
-        if (consumed) return;
-        const mine = this.queue.entries.find(
-          (e) => e.agentId === entry.agentId && e.limitId === entry.limitId,
-        );
-        if (!mine) throw new Error("Limit resume entry unavailable");
-        this.queue.entries = this.queue.entries.filter((e) => e !== mine);
-        this.queue.recent[entry.agentId] = {
-          resumedAt: this.now(),
-          attempt: entry.attempt,
-          limitId: entry.limitId,
-        };
-        this.save();
-        consumed = true;
-      })
+      .sendResume(
+        entry.agentId,
+        RESUME_PROMPT,
+        stillWanted,
+        () => {
+          if (!stillWanted()) throw new Error("Limit resume no longer wanted");
+          if (consumed) return;
+          const mine = this.queue.entries.find(
+            (e) => e.agentId === entry.agentId && e.limitId === entry.limitId,
+          );
+          if (!mine) throw new Error("Limit resume entry unavailable");
+          this.queue.entries = this.queue.entries.filter((e) => e !== mine);
+          this.queue.recent[entry.agentId] = {
+            resumedAt: this.now(),
+            attempt: entry.attempt,
+            limitId: entry.limitId,
+          };
+          this.save();
+          consumed = true;
+        },
+        entry.binding!,
+      )
       .catch(this.deps.onError);
     if (consumed) {
       await this.deps.setMarker(entry.agentId, null).catch(this.deps.onError);

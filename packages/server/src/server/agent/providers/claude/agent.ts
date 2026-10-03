@@ -2285,6 +2285,11 @@ class ClaudeAgentSession implements AgentSession {
     return this.launchEnv?.FULCRA_ACCOUNT_NAME ?? null;
   }
 
+  limitResumeAccountBinding(): string | null {
+    const id = this.launchEnv?.FULCRA_ACCOUNT_ID;
+    return id ? `pool:${id}` : null;
+  }
+
   usageCredential(): {
     credential: AccountCredential;
     label: string | null;

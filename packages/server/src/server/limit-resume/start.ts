@@ -19,17 +19,21 @@ export function startLimitResume(input: {
   const service = new LimitResumeService({
     paseoHome: input.paseoHome,
     isEnabled: () => input.daemonConfigStore.get().autoResumeOnLimit !== false,
-    getAgent: async (agentId) => {
+    captureBinding: (agentId) => agentManager.getLimitResumeBinding(agentId),
+    getAgent: async (agentId, forResume) => {
       // Failed starts publish turn_failed while their pending run is still tracked. Observe
       // the settled state, otherwise a genuine limit stop is mistaken for a busy session.
       await agentManager.waitForFailedRunSettlement(agentId);
-      const live = agentManager.getAgent(agentId);
+      let live = agentManager.getAgent(agentId);
+      if (!live && forResume)
+        live = await ensureUnarchivedAgentLoaded(agentId, { agentManager, agentStorage, logger });
       if (live) {
         return {
           labels: live.labels,
           archived: false,
           busy: agentManager.hasInFlightRun(agentId),
           unscopedResumeAllowed: agentManager.canRunUnscopedLimitResume(agentId),
+          binding: agentManager.getLimitResumeBinding(agentId),
         };
       }
       const record = await agentStorage.get(agentId);
@@ -39,6 +43,7 @@ export function startLimitResume(input: {
         archived: Boolean(record.archivedAt),
         busy: false,
         unscopedResumeAllowed: false,
+        binding: null,
       };
     },
     getLastAssistantMessage: (agentId) => agentManager.getLastAssistantMessage(agentId),
@@ -46,7 +51,7 @@ export function startLimitResume(input: {
     setMarker: async (agentId, resumeAtIso) => {
       await agentManager.updateLimitResumeMarker(agentId, resumeAtIso);
     },
-    sendResume: async (agentId, prompt, stillWanted, consume) => {
+    sendResume: async (agentId, prompt, stillWanted, consume, originalBinding) => {
       await ensureUnarchivedAgentLoaded(agentId, { agentManager, agentStorage, logger });
       const live = agentManager.getAgent(agentId);
       if (!live || agentManager.hasInFlightRun(agentId)) return;
@@ -59,7 +64,8 @@ export function startLimitResume(input: {
           current.instanceId !== live.instanceId ||
           current.archivedAt ||
           current.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off" ||
-          !agentManager.canRunUnscopedLimitResume(agentId)
+          !agentManager.canRunUnscopedLimitResume(agentId) ||
+          agentManager.getLimitResumeBinding(agentId) !== originalBinding
         )
           throw new Error("Unscoped limit resume refused");
       };

@@ -3482,6 +3482,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private quotaModelProvider: string | null = null;
   /** Account from the last fresh quota read; undefined until one succeeds. */
   private lastQuotaAccountScope: string | null | undefined = undefined;
+  private resumeAccountUncertain = false;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
@@ -4906,6 +4907,14 @@ export class CodexAppServerAgentSession implements AgentSession {
     return this.accountUsageLabel;
   }
 
+  limitResumeAccountBinding(): string | null {
+    if (this.resumeAccountUncertain) return null;
+    const id = this.launchEnv?.FULCRA_ACCOUNT_ID;
+    return id
+      ? JSON.stringify(["pool", id, this.lastQuotaAccountScope ?? null])
+      : (this.lastQuotaAccountScope ?? null);
+  }
+
   async getQuota() {
     const quota = await readCodexQuota((): CodexQuotaBinding | null => {
       if (
@@ -4926,6 +4935,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       };
     });
     this.lastQuotaAccountScope = quota.accountScope;
+    this.resumeAccountUncertain = false;
     return quota;
   }
 
@@ -5765,6 +5775,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     if (method === "account/updated") {
+      this.resumeAccountUncertain = true;
       this.quotaRevision++;
       this.accountNotificationEpoch++;
       return;
