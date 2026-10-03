@@ -40,24 +40,68 @@ async function fixture() {
   const host = new TrustedPlugins();
   host.initializeKnownAgents([]);
   let ordinal = 0;
-  const server = createFakeCodexAppServer({
-    "thread/start": () => ({
-      thread: { id: "limit-thread" },
-      modelProvider: "openai",
-      model: "gpt-6.1-sol",
-    }),
-    "thread/loaded/list": () => ({ data: ["limit-thread"] }),
-    "turn/start": () => ({ turn: { id: `limit-turn-${++ordinal}` } }),
-    "account/rateLimits/read": () => ({
-      accountId: "fixture-account",
-      ordinaryUsageAllowed: true,
-      rateLimits: {},
-    }),
-  });
+  const servers: ReturnType<typeof createFakeCodexAppServer>[] = [];
+  const makeServer = () => {
+    const value = createFakeCodexAppServer({
+      "thread/start": () => ({
+        thread: { id: "limit-thread" },
+        modelProvider: "openai",
+        model: "gpt-6.1-sol",
+      }),
+      "thread/resume": (params) => ({
+        thread: { id: "limit-thread" },
+        modelProvider: "openai",
+        model: (params as { model?: string }).model ?? "gpt-6.1-sol",
+      }),
+      "thread/loaded/list": () => ({ data: ["limit-thread"] }),
+      "turn/start": () => ({ turn: { id: `limit-turn-${++ordinal}` } }),
+      "account/rateLimits/read": () => ({
+        accountId: "fixture-account",
+        ordinaryUsageAllowed: true,
+        rateLimits: {},
+      }),
+    });
+    servers.push(value);
+    return value;
+  };
+  let server = makeServer();
   let session!: CodexAppServerAgentSession;
+  const accountEnv = { FULCRA_ACCOUNT_ID: "fixture-account-A" };
   const client = createTestAgentClient("codex");
   client.createSession = async (config) => {
-    session = new CodexAppServerAgentSession(config, null, logger, async () => server.child);
+    session = new CodexAppServerAgentSession(
+      config,
+      null,
+      logger,
+      async () => server.child,
+      {},
+      false,
+      false,
+      false,
+      undefined,
+      "interactive",
+      null,
+      accountEnv,
+    );
+    await session.connect();
+    return session;
+  };
+  client.resumeSession = async (handle, overrides) => {
+    server = makeServer();
+    session = new CodexAppServerAgentSession(
+      { provider: "codex", cwd: home, ...overrides },
+      handle,
+      logger,
+      async () => server.child,
+      {},
+      false,
+      false,
+      false,
+      undefined,
+      "interactive",
+      null,
+      accountEnv,
+    );
     await session.connect();
     return session;
   };
@@ -88,10 +132,19 @@ async function fixture() {
     logger,
     storage,
     host,
-    server,
+    get server() {
+      return server;
+    },
+    turnStarts: () =>
+      servers
+        .flatMap((item) => item.requests())
+        .filter((request) => request.method === "turn/start"),
     manager,
     agent,
-    session,
+    get session() {
+      return session;
+    },
+    accountEnv,
     config,
     start: () =>
       startLimitResume({
@@ -299,12 +352,10 @@ test("actual controller journal survives status marker; human takeover without a
   const writeMarker = f.manager.updateLimitResumeMarker.bind(f.manager);
   let before: unknown, after: unknown;
   const spy = vi.spyOn(f.manager, "updateLimitResumeMarker").mockImplementation(async (id, at) => {
-    if (at !== null) before = observe();
+    before = observe();
     await writeMarker(id, at);
-    if (at !== null) {
-      after = observe();
-      markerSeen.resolve();
-    }
+    after = observe();
+    markerSeen.resolve();
   });
   let service = f.start();
   try {
@@ -338,6 +389,15 @@ test("actual controller journal survives status marker; human takeover without a
       status: "failed",
       error: { message: "usage limit reached" },
     });
+    await f.manager.waitForAgentEvent(f.agent.id);
+    await service.onAgentEvent({
+      type: "agent_stream",
+      agentId: f.agent.id,
+      event: { type: "turn_failed", error: "usage limit reached" },
+    });
+    expect(service.pendingResumeAt(f.agent.id)).toBeNull();
+    expect(f.manager.getAgent(f.agent.id)?.labels[LIMIT_RESUME_AT_LABEL]).toBeFalsy();
+    await f.manager.updateLimitResumeMarker(f.agent.id, null);
     await markerSeen.promise;
     expect(after).toEqual(before);
     expect(store.get(f.agent.id).mode).toBe("delegated");
@@ -347,22 +407,13 @@ test("actual controller journal survives status marker; human takeover without a
     );
     expect(store.get(f.agent.id).mode).toBe("human");
     const takenOver = observe();
-    await makeDue(f.home);
-    const cleared = deferred();
-    const off = f.manager.subscribe(
-      (event) => {
-        if (
-          event.type === "agent_state" &&
-          event.agent.id === f.agent.id &&
-          event.agent.labels[LIMIT_RESUME_AT_LABEL] === ""
-        )
-          cleared.resolve();
-      },
-      { replayState: false },
-    );
     service = f.start();
-    await cleared.promise;
-    off();
+    await service.onAgentEvent({
+      type: "agent_stream",
+      agentId: f.agent.id,
+      event: { type: "turn_failed", error: "usage limit reached" },
+    });
+    expect(service.pendingResumeAt(f.agent.id)).toBeNull();
     expect(f.server.requests().filter((request) => request.method === "turn/start")).toHaveLength(
       1,
     );
@@ -375,3 +426,152 @@ test("actual controller journal survives status marker; human takeover without a
     store.close();
   }
 }, 15_000);
+
+test.each([false, true])(
+  "original model A stop refuses model B without a turn, service/agent restart=%s",
+  async (restart) => {
+    const f = await fixture();
+    let service = f.start();
+    try {
+      await queueActualLimit(f);
+      service.stop();
+      const original = JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries[0]
+        .binding;
+      await f.manager.setAgentModel(f.agent.id, "fixture-model-B");
+      expect(f.manager.getLimitResumeBinding(f.agent.id)).not.toBe(original);
+      if (restart) await f.host.shutdownClosure(() => f.manager.closeAgent(f.agent.id));
+      await makeDue(f.home);
+      const cleared = deferred();
+      const off = f.manager.subscribe(
+        (event) => {
+          if (
+            event.type === "agent_state" &&
+            event.agent.id === f.agent.id &&
+            event.agent.labels[LIMIT_RESUME_AT_LABEL] === ""
+          )
+            cleared.resolve();
+        },
+        { replayState: false },
+      );
+      service = f.start();
+      await cleared.promise;
+      off();
+      expect(f.turnStarts()).toHaveLength(1);
+      expect(service.pendingResumeAt(f.agent.id)).toBeNull();
+    } finally {
+      service.stop();
+      await f.cleanup();
+    }
+  },
+  15_000,
+);
+
+test.each(["thinking", "mode", "intent", "account", "account-unknown", "account-notification"])(
+  "original stop refuses observable %s change before due",
+  async (kind) => {
+    const f = await fixture();
+    let service = f.start();
+    try {
+      await queueActualLimit(f);
+      service.stop();
+      if (kind === "thinking") await f.manager.setAgentThinkingOption(f.agent.id, "low");
+      if (kind === "mode") await f.manager.setAgentMode(f.agent.id, "read-only");
+      if (kind === "intent") f.manager.setAppendSystemPrompt("different instructions");
+      if (kind === "account") f.accountEnv.FULCRA_ACCOUNT_ID = "fixture-account-B";
+      if (kind === "account-unknown") f.accountEnv.FULCRA_ACCOUNT_ID = "";
+      if (kind === "account-notification") {
+        f.server.child.stdout.write(
+          JSON.stringify({ method: "account/updated", params: {} }) + "\n",
+        );
+        await Promise.resolve();
+        expect(f.session.limitResumeAccountBinding()).toBeNull();
+      }
+      await makeDue(f.home);
+      const cleared = deferred();
+      const off = f.manager.subscribe(
+        (event) => {
+          if (
+            event.type === "agent_state" &&
+            event.agent.id === f.agent.id &&
+            event.agent.labels[LIMIT_RESUME_AT_LABEL] === ""
+          )
+            cleared.resolve();
+        },
+        { replayState: false },
+      );
+      service = f.start();
+      await cleared.promise;
+      off();
+      expect(f.turnStarts()).toHaveLength(1);
+    } finally {
+      service.stop();
+      await f.cleanup();
+    }
+  },
+  15_000,
+);
+
+test("unchanged original stop binding survives provider rehydrate and consumes once", async () => {
+  const f = await fixture();
+  let service = f.start();
+  try {
+    await queueActualLimit(f);
+    service.stop();
+    const captured = JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries[0]
+      .binding;
+    await f.host.shutdownClosure(() => f.manager.closeAgent(f.agent.id));
+    await makeDue(f.home);
+    const accepted = deferred();
+    const off = f.manager.subscribe(
+      (event) => {
+        if (
+          event.type === "agent_stream" &&
+          event.agentId === f.agent.id &&
+          event.event.type === "turn_started"
+        )
+          accepted.resolve();
+      },
+      { replayState: false },
+    );
+    service = f.start();
+    await accepted.promise;
+    off();
+    expect(f.turnStarts()).toHaveLength(2);
+    const queue = JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8"));
+    expect(queue.entries).toEqual([]);
+    expect(captured).toMatch(/^v1:[a-f0-9]{64}$/);
+    f.server.completeTurn({ threadId: "limit-thread" });
+    await f.manager.waitForAgentEvent(f.agent.id);
+    service.stop();
+    service = f.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(f.turnStarts()).toHaveLength(2);
+  } finally {
+    service.stop();
+    await f.cleanup();
+  }
+}, 15_000);
+
+test("native-owned ineligible stop has no advertised automatic schedule", async () => {
+  const f = await fixture();
+  const service = f.start();
+  try {
+    // Host-native owner metadata, not a label or a fabricated controller capability.
+    Reflect.get(f.manager, "agents").get(f.agent.id).owner = {
+      kind: "daemon",
+      daemonId: "fixture-owner",
+      executionId: "fixture-execution",
+    };
+    await service.onAgentEvent({
+      type: "agent_stream",
+      agentId: f.agent.id,
+      event: { type: "turn_failed", error: "usage limit reached" },
+    });
+    expect(service.pendingResumeAt(f.agent.id)).toBeNull();
+    expect(f.manager.getAgent(f.agent.id)?.labels[LIMIT_RESUME_AT_LABEL]).toBeFalsy();
+    expect(f.turnStarts()).toHaveLength(0);
+  } finally {
+    service.stop();
+    await f.cleanup();
+  }
+});

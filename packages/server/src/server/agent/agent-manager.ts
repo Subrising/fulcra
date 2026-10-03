@@ -1,3 +1,4 @@
+import { fingerprintLimitResumeBinding } from "../limit-resume/binding.js";
 import { registerOwnerArtifactContent } from "../owner-report-read.js";
 import {
   NativeArtifactProduceInputSchema,
@@ -4143,6 +4144,35 @@ export class AgentManager {
         () => undefined,
       ),
     );
+  }
+
+  /** Synchronous stop fingerprint. Unknown/credential-bearing configuration is refusal, not authority. */
+  getLimitResumeBinding(agentId: string): string | null {
+    const agent = this.agents.get(agentId);
+    if (
+      !agent?.session ||
+      !agent.config.model ||
+      !agent.config.modeId ||
+      this.lifecycleMutationTails.has(agentId) ||
+      agent.pendingReplacement
+    )
+      return null;
+    try {
+      const account = agent.session.limitResumeAccountBinding?.();
+      if (typeof account !== "string" || !account) return null;
+      const sessionId = agent.persistence?.sessionId ?? agent.session.id;
+      if (!sessionId) return null;
+      return fingerprintLimitResumeBinding(agent.config, {
+        provider: agent.provider,
+        cwd: agent.cwd,
+        sessionId,
+        account,
+        appendSystemPrompt: this.appendSystemPrompt,
+        lastUserMessageAt: agent.lastUserMessageAt?.toISOString() ?? null,
+      });
+    } catch {
+      return null;
+    }
   }
 
   /** No ownership classifier exists for trusted input authorities: unknown ownership refuses fallback. */
