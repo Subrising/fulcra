@@ -2051,6 +2051,7 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    limitResume.stop();
     await distribution?.stop();
     hostIntegrations.dispose();
     localCredential = null;
@@ -2083,7 +2084,6 @@ export async function createPaseoDaemon(
     terminalManager.killAll();
     await speechService.stop();
     automationService?.stop();
-    limitResume.stop();
     setHostAutomations(null);
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);

@@ -19,7 +19,7 @@ import { backoffMs } from "./parse-reset.js";
 // this entry is gone. Both sides check "no newer turn" before sending, so a session is resumed once.
 //
 // Guards:
-// - One resume per limit event, keyed by the stopped turn. The entry is removed (and the file rewritten) before the
+// - One resume per limit event, keyed by the stopped turn. The entry is removed (and the file rewritten) in the final send gate before the
 //   prompt is sent, so a crash or a failed send can never repeat it, and a duplicate delivery of the same stop is
 //   ignored. A resumed session that hits the limit again is a new event with a longer backoff, and a session gives
 //   up after MAX_CHAIN consecutive limit events.
@@ -142,6 +142,7 @@ export class LimitResumeService {
   private nextSlotAt = 0;
   private ticking = false;
   private stopped = false;
+  private unsubscribe: (() => void) | null = null;
 
   constructor(private readonly deps: LimitResumeDeps) {
     this.file = limitResumeFilePath(deps.paseoHome);
@@ -157,8 +158,16 @@ export class LimitResumeService {
 
   stop(): void {
     this.stopped = true;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  /** Release the daemon event listener together with the timer on shutdown. */
+  onStop(unsubscribe: () => void): void {
+    if (this.stopped) unsubscribe();
+    else this.unsubscribe = unsubscribe;
   }
 
   /** What the app reads: the pending resume time for a session, or null. */
@@ -178,6 +187,7 @@ export class LimitResumeService {
   }
 
   async onAgentEvent(input: LimitResumeEvent): Promise<void> {
+    if (this.stopped) return;
     if (input.type !== "agent_stream" || !input.agentId || !input.event) return;
     const agentId = input.agentId;
     const kind = input.event.type;
@@ -215,13 +225,13 @@ export class LimitResumeService {
     epoch: number,
     stopKey: string,
   ): Promise<void> {
-    if (!this.deps.isEnabled()) return;
+    if (this.stopped || !this.deps.isEnabled()) return;
     const limitId = `${agentId}:${stopKey}`;
     if (this.queue.entries.some((e) => e.agentId === agentId)) return;
     if (this.queue.recent[agentId]?.limitId === limitId) return;
     const agent = await this.deps.getAgent(agentId);
     // Re-validate after the await: a newer turn, a second delivery or a toggle flip may have overtaken us.
-    if (this.epochOf(agentId) !== epoch || !this.deps.isEnabled()) return;
+    if (this.stopped || this.epochOf(agentId) !== epoch || !this.deps.isEnabled()) return;
     if (this.queue.entries.some((e) => e.agentId === agentId)) return;
     if (!agent || agent.archived || agent.busy) return;
     if (agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return;
@@ -303,39 +313,51 @@ export class LimitResumeService {
   }
 
   private async fire(entry: QueueEntry): Promise<void> {
-    // Consume by stop identity, first and durably: at most one resume per limit event, whatever happens next.
-    const consumed = await this.locked(async () => {
-      const mine = this.queue.entries.find(
-        (e) => e.agentId === entry.agentId && e.limitId === entry.limitId,
-      );
-      if (!mine) return false;
-      this.queue.entries = this.queue.entries.filter((e) => e !== mine);
-      this.queue.recent[entry.agentId] = {
-        resumedAt: this.now(),
-        attempt: entry.attempt,
-        limitId: entry.limitId,
-      };
-      this.save();
-      return true;
-    });
-    if (!consumed) return;
-
-    const clear = () => this.deps.setMarker(entry.agentId, null).catch(this.deps.onError);
-    const unchanged = () => this.epochOf(entry.agentId) === entry.epoch && this.deps.isEnabled();
-    if (!unchanged() || this.now() - entry.resumeAt > STALE_AFTER_MS) return void (await clear());
+    const unchanged = () =>
+      !this.stopped && this.epochOf(entry.agentId) === entry.epoch && this.deps.isEnabled();
+    if (this.stopped) return;
+    if (!unchanged() || this.now() - entry.resumeAt > STALE_AFTER_MS) {
+      await this.cancel(entry.agentId);
+      return;
+    }
     const agent = await this.deps.getAgent(entry.agentId);
-    await clear();
+    if (this.stopped) return;
     if (
       !agent ||
       agent.archived ||
       agent.busy ||
       agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off"
     ) {
+      await this.cancel(entry.agentId);
       return;
     }
-    // The last gate sits inside sendResume, after it has loaded the session and right before the turn starts.
+
+    // Keep the durable entry while session loading awaits. Shutdown during that wait must leave
+    // it for the next boot. Consume synchronously in the final send gate, immediately before admission.
+    let consumed = false;
     await this.deps
-      .sendResume(entry.agentId, RESUME_PROMPT, () => unchanged())
+      .sendResume(entry.agentId, RESUME_PROMPT, () => {
+        if (!unchanged()) return false;
+        const mine = this.queue.entries.find(
+          (e) => e.agentId === entry.agentId && e.limitId === entry.limitId,
+        );
+        if (!mine) return false;
+        this.queue.entries = this.queue.entries.filter((e) => e !== mine);
+        this.queue.recent[entry.agentId] = {
+          resumedAt: this.now(),
+          attempt: entry.attempt,
+          limitId: entry.limitId,
+        };
+        this.save();
+        consumed = true;
+        return true;
+      })
       .catch(this.deps.onError);
+    if (consumed) {
+      await this.deps.setMarker(entry.agentId, null).catch(this.deps.onError);
+    } else if (!this.stopped) {
+      // A final loading/admission guard refused. Do not spin an already-due timer.
+      await this.cancel(entry.agentId);
+    }
   }
 }

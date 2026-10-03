@@ -73,6 +73,11 @@ export interface AgentTimelineStore {
     agentId: string,
     options?: AgentTimelineFetchOptions,
   ): Promise<AgentTimelineFetchResult>;
+  /** Read an existing journal without creating an empty one for provider-only legacy history. */
+  fetchExistingCommitted?(
+    agentId: string,
+    options?: AgentTimelineFetchOptions,
+  ): Promise<AgentTimelineFetchResult | null>;
   getLatestCommittedSeq(agentId: string): Promise<number>;
   getCommittedRows(agentId: string): Promise<AgentTimelineRow[]>;
   getLastItem(agentId: string): Promise<AgentTimelineItem | null>;

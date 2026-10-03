@@ -9016,17 +9016,30 @@ export class Session {
   }
 
   /**
-   * A live or archived agent is loaded as before. An agent that no longer exists is served from
-   * its retained history, labelled with the provider recorded when it was deleted.
+   * Journal-backed stored agents are read without restoring a provider. Legacy provider-only
+   * history still loads on demand. Deleted agents are served from their retained history.
    */
   private async resolveTimelineFetch(
     msg: Extract<SessionInboundMessage, { type: "fetch_agent_timeline_request" }>,
     options: AgentTimelineFetchOptions,
   ) {
-    if (
-      this.agentManager.getAgent(msg.agentId) === null &&
-      !(await this.agentStorage.get(msg.agentId))
-    ) {
+    const stored =
+      this.agentManager.getAgent(msg.agentId) === null
+        ? await this.agentStorage.get(msg.agentId)
+        : null;
+    if (stored) {
+      const timeline = await this.agentManager.fetchStoredTimeline(msg.agentId, {
+        ...options,
+        ...(msg.turnId ? { turnId: msg.turnId } : {}),
+      });
+      if (timeline)
+        return {
+          timeline,
+          provider: stored.provider,
+          agent: this.buildStoredAgentPayload(stored),
+          retained: false,
+        };
+    } else if (this.agentManager.getAgent(msg.agentId) === null) {
       const retained = await this.agentManager.fetchRetainedTimeline(msg.agentId, {
         ...options,
         ...(msg.turnId ? { turnId: msg.turnId } : {}),

@@ -2040,6 +2040,12 @@ export class AgentManager {
     );
   }
 
+  /** A failed startup emits its terminal event before its pending foreground run settles. */
+  async waitForFailedRunSettlement(agentId: string): Promise<void> {
+    const pending = this.runs.getPendingRun(agentId);
+    if (pending?.start.status === "failed") await pending.settledPromise;
+  }
+
   subscribe(callback: AgentSubscriber, options?: SubscribeOptions): () => void {
     const targetAgentId =
       options?.agentId == null ? null : validateAgentId(options.agentId, "subscribe");
@@ -5456,6 +5462,23 @@ export class AgentManager {
     const turn = snapshot ? findTimelineTurn(snapshot.index, turnId) : null;
     if (!turn) throw new Error(`Turn ${turnId} not found`);
     return this.timelineStore.fetch(agentId, { ...options, turn });
+  }
+
+  /** Read unloaded journal-backed history without restoring a provider runtime. */
+  async fetchStoredTimeline(
+    agentId: string,
+    options: AgentTimelineFetchOptions & { turnId?: string },
+  ): Promise<AgentTimelineFetchResult | null> {
+    const store = this.durableTimelineStore;
+    if (this.agents.has(agentId) || !store?.fetchExistingCommitted) return null;
+    const { turnId, ...fetchOptions } = options;
+    const page = await store.fetchExistingCommitted(agentId, fetchOptions);
+    if (!page || this.agents.has(agentId)) return null;
+    if (!turnId) return page;
+    const snapshot = await store.getTimelineIndex?.(agentId);
+    const turn = snapshot ? findTimelineTurn(snapshot.index, turnId) : null;
+    if (!turn) throw new Error(`Turn ${turnId} not found`);
+    return store.fetchExistingCommitted(agentId, { ...fetchOptions, turn });
   }
 
   /**

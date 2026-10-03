@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import { ensureAgentLoaded } from "../agent/agent-loading.js";
+import { ensureUnarchivedAgentLoaded } from "../agent/agent-loading.js";
 import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import type { DaemonConfigStore } from "../daemon-config-store.js";
@@ -22,6 +22,9 @@ export function startLimitResume(input: {
     paseoHome: input.paseoHome,
     isEnabled: () => input.daemonConfigStore.get().autoResumeOnLimit !== false,
     getAgent: async (agentId) => {
+      // Failed starts publish turn_failed while their pending run is still tracked. Observe
+      // the settled state, otherwise a genuine limit stop is mistaken for a busy session.
+      await agentManager.waitForFailedRunSettlement(agentId);
       const live = agentManager.getAgent(agentId);
       if (live) {
         return {
@@ -43,15 +46,15 @@ export function startLimitResume(input: {
     },
     sendResume: async (agentId, prompt, stillWanted) => {
       // After a restart the session may not be loaded; load it like a client message would.
-      await ensureAgentLoaded(agentId, { agentManager, agentStorage, logger });
+      await ensureUnarchivedAgentLoaded(agentId, { agentManager, agentStorage, logger });
       // Last gate, with no await between it and the turn starting: the toggle, a newer turn, an opt-out set while
       // the session loaded, or a run that began meanwhile all stop the resume here.
       const live = agentManager.getAgent(agentId);
       if (
-        !stillWanted() ||
         !live ||
         live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off" ||
-        agentManager.hasInFlightRun(agentId)
+        agentManager.hasInFlightRun(agentId) ||
+        !stillWanted()
       ) {
         return;
       }
@@ -63,12 +66,14 @@ export function startLimitResume(input: {
     onError: (error) => logger.warn({ err: error }, "Auto-resume step failed"),
   });
   service.start();
-  agentManager.subscribe(
-    (event) =>
-      void service
-        .onAgentEvent(event)
-        .catch((e) => logger.warn({ err: e }, "Auto-resume event failed")),
-    { replayState: false },
+  service.onStop(
+    agentManager.subscribe(
+      (event) =>
+        void service
+          .onAgentEvent(event)
+          .catch((e) => logger.warn({ err: e }, "Auto-resume event failed")),
+      { replayState: false },
+    ),
   );
   return service;
 }
