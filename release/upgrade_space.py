@@ -88,11 +88,12 @@ def check_space(bundle, *, release, install_stage, installed, rollback,
 
     stage: two full candidate copies (immutable release + installer temp), and
     another full copy for a failed clone/ditto temp retained for inspection.
+    installer: immutable release exists; charge the remaining installer copy.
     cutover: those copies already exist; only bounded seal/metadata writes remain.
     Existing installed/rollback bytes are measured but not double charged: the
     cutover must rename the old app on the same filesystem, never duplicate it.
     """
-    if phase not in ("receive", "stage", "cutover"):
+    if phase not in ("receive", "stage", "installer", "cutover"):
         raise SpaceRefused("Unknown upgrade phase")
     # A receive check uses the exact footprint measured on the build host before
     # copying any candidate bytes. Stage/cutover always measure local bytes anew.
@@ -120,6 +121,9 @@ def check_space(bundle, *, release, install_stage, installed, rollback,
             raise SpaceRefused("Stage destinations must be absent")
         if phase == "receive" and os.path.lexists(incoming):
             raise SpaceRefused("Incoming destination must be absent")
+    elif phase == "installer":
+        if not Path(release).is_dir() or os.path.lexists(install_stage):
+            raise SpaceRefused("Installer copy requires immutable release and absent temporary app")
     elif not Path(install_stage).is_dir() or not Path(release).is_dir():
         raise SpaceRefused("Cutover requires both staged copies")
 
@@ -140,6 +144,9 @@ def check_space(bundle, *, release, install_stage, installed, rollback,
         charge("release", new.copy_bound * 2, SYSTEM_RESERVE,
                "Immutable app plus a retained full failed-copy fallback; no APFS clone credit")
         charge("install_stage", new.copy_bound, SYSTEM_RESERVE, "Independent installer temporary app")
+    elif phase == "installer":
+        charge("release", 0, SYSTEM_RESERVE, "Immutable release already occupies disk")
+        charge("install_stage", new.copy_bound, SYSTEM_RESERVE, "Remaining independent installer temporary app")
     else:
         charge("release", 0, SYSTEM_RESERVE, "Immutable release already occupies disk")
         charge("install_stage", 0, SYSTEM_RESERVE, "Installer temporary app already occupies disk")
@@ -178,7 +185,7 @@ def main():
     for key in ("release", "install-stage", "installed", "rollback", "metadata"):
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--incoming")
-    parser.add_argument("--phase", choices=("receive", "stage", "cutover"), default="stage")
+    parser.add_argument("--phase", choices=("receive", "stage", "installer", "cutover"), default="stage")
     parser.add_argument("--measured-footprint", action="store_true",
                         help="Receive only: bundle argument is build-host footprint JSON")
     args = vars(parser.parse_args())
