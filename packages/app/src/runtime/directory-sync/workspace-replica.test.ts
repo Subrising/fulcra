@@ -230,3 +230,41 @@ it("does not restore a targeted cached workspace while its archive is pending", 
     store.clearSession(serverId);
   }
 });
+
+it("pin hydration retains opaque host identities and a buffered unpin wins its older snapshot", () => {
+  const store = useSessionStore.getState();
+  const serverIds = ["pin-mini", "pin-book"];
+  for (const serverId of serverIds) store.initializeSession(serverId, null as unknown as DaemonClient);
+  try {
+    const mini = new WorkspaceDirectoryReplica(serverIds[0]);
+    const book = new WorkspaceDirectoryReplica(serverIds[1]);
+    const cached = normalizeWorkspaceDescriptor({ ...workspace("same-id"), pinnedAt: "2026-10-01T00:00:00.000Z" });
+    mini.commitCached({ workspaces: new Map([[cached.id, cached]]), projects: new Map() });
+    book.commitCached({ workspaces: new Map([[cached.id, cached]]), projects: new Map() });
+    mini.commitSnapshot({ workspaces: new Map([[cached.id, cached]]), projects: new Map() }, [
+      { kind: "upsert", workspace: { ...workspace("same-id"), pinnedAt: null } },
+    ]);
+    expect(useSessionStore.getState().sessions[serverIds[0]]?.workspaces.get("same-id")?.pinnedAt).toBeNull();
+    expect(useSessionStore.getState().sessions[serverIds[1]]?.workspaces.get("same-id")?.pinnedAt).toBe(cached.pinnedAt);
+    mini.commitCached({ workspaces: new Map([[cached.id, cached]]), projects: new Map() });
+    expect(useSessionStore.getState().sessions[serverIds[0]]?.workspaces.get("same-id")?.pinnedAt).toBeNull();
+    book.commitSnapshot({ workspaces: new Map([[cached.id, cached]]), projects: new Map() }, []);
+    expect(useSessionStore.getState().sessions[serverIds[1]]?.workspaces.get("same-id")).toMatchObject({ id: "same-id", pinnedAt: cached.pinnedAt, projectId: "project" });
+  } finally { for (const serverId of serverIds) store.clearSession(serverId); }
+});
+it("pin deltas publish new store maps without mutating the prior sidebar snapshot", () => {
+  const serverId = "pin-subscription";
+  const store = useSessionStore.getState(); store.initializeSession(serverId, null as unknown as DaemonClient);
+  try {
+    const replica = new WorkspaceDirectoryReplica(serverId);
+    replica.commitSnapshot({ workspaces: new Map([["same-id", normalizeWorkspaceDescriptor({ ...workspace("same-id"), pinnedAt: null })]]), projects: new Map() }, []);
+    const previous = useSessionStore.getState().sessions[serverId]!.workspaces;
+    let notifications = 0;
+    const unsubscribe = useSessionStore.subscribe((state, before) => { if (state.sessions[serverId]?.workspaces !== before.sessions[serverId]?.workspaces) notifications++; });
+    try {
+      replica.applyDelta({ kind: "upsert", workspace: { ...workspace("same-id"), pinnedAt: "2026-10-03T00:00:00.000Z" } });
+      expect(notifications).toBe(1); expect(previous.get("same-id")?.pinnedAt).toBeNull();
+      expect(useSessionStore.getState().sessions[serverId]!.workspaces.get("same-id")?.pinnedAt).toBe("2026-10-03T00:00:00.000Z");
+    } finally { unsubscribe(); }
+  } finally { store.clearSession(serverId); }
+});
