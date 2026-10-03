@@ -42,7 +42,7 @@ const plugins = [
         (args) => ({ path: uiRequire.resolve(args.path), external: true }),
       );
       build.onResolve(
-        { filter: /^(react-native|@getpaseo\/plugin\/client(?:\/react-native)?)$/ },
+        { filter: /^(react-native|@getpaseo\/plugin\/client(?:\/(?:react-native|ui))?)$/ },
         () => ({ path: adapter }),
       );
     },

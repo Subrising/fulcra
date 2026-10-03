@@ -1,3 +1,9 @@
+import { IntakeSurface } from "./organization/intake";
+import { OrganizationStore } from "../server/organization/store.mjs";
+import { projectReferenceKey } from "../shared/workspace-organization.mjs";
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { ManagementPanel } from "./management";
 import { WorkBrief } from "./work-brief";
 import { ConversationUpdates } from "./conversation-updates";
@@ -26,6 +32,7 @@ import { TaskControls, UsagePanel } from "./tasks";
 import {
   calls,
   setHandler,
+  setNativeHostCatalog,
   panResponders,
   layoutHandlers,
   nativePans,
@@ -88,6 +95,7 @@ const chooseTask = async (identifier = "AIN-73") =>
   );
 async function disposeFixture() {
   setHostPanAvailable(true);
+  setNativeHostCatalog();
   cleanup();
   const owned = clients.splice(0);
   const retainedObservers = owned.flatMap((client) =>
@@ -334,7 +342,7 @@ test("client entry registers its actual surface and return commands and cleans u
     },
     addSidebarItem: (item) => {
       registrations.push(item);
-      return () => removed.push("sidebar");
+      return () => removed.push(`sidebar:${item.id}`);
     },
     addCommandCenterItem: (command) => {
       commands.push(command);
@@ -343,11 +351,33 @@ test("client entry registers its actual surface and return commands and cleans u
     openSurface() {},
   });
   assert.equal(registrations[0][1], HomeSurface);
-  assert.equal(registrations[1][0], "leadership");
-  assert.equal(registrations[2].surface, "organization");
+  assert.deepEqual(
+    registrations.filter(Array.isArray).map(([id]) => id),
+    ["organization", "workspaces", "intake", "leadership"],
+  );
+  assert.deepEqual(
+    registrations
+      .filter((entry) => !Array.isArray(entry))
+      .map((entry) => [entry.id, entry.surface]),
+    [
+      ["workspaces", "workspaces"],
+      ["organization", "organization"],
+    ],
+  );
   assert.equal(commands.length, 2);
   cleanup();
-  assert.equal(removed.length, 5);
+  assert.deepEqual(
+    removed.sort(),
+    [
+      "organization",
+      "workspaces",
+      "intake",
+      "leadership",
+      "sidebar:workspaces",
+      "sidebar:organization",
+      ...commands.map((command) => command.id),
+    ].sort(),
+  );
 });
 function base(name, input, { inactive = false, sessions = [] } = {}) {
   if (name === "organization.fleet-hosts")
@@ -5055,5 +5085,203 @@ test("controller retry remains reachable before any task can be loaded", async (
   assert.deepEqual(selected, []);
   assert(
     calls.some((c) => c.name === "organization.manage" && c.input.action === "retry-controller"),
+  );
+});
+
+function intakeFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-intake-ui-")),
+    store = new OrganizationStore(path.join(root, "state.sqlite"));
+  t.after(() => {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const host = "srv_example_book",
+    company = "srv_example_mini",
+    ship = { serverId: host, projectId: "prj_ship", name: "Ship It" },
+    demo = { serverId: host, projectId: "prj_demo", name: "Demo Day" };
+  const update = (command) =>
+    store.mutate({ requestId: randomUUID(), expectedRevision: store.read().revision, command });
+  update({ action: "create-workspace", name: "AI Game Dev", prime: null });
+  const workspaceId = store.read().workspaces[0].id;
+  for (const project of [ship, demo]) update({ action: "add-project", workspaceId, project });
+  const created = [],
+    opened = [];
+  const contexts = [ship, demo].map((project) => ({
+    id: `wks_${project.projectId}`,
+    projectId: project.projectId,
+    name: "main",
+    status: "idle",
+    workspaceDirectory: `/fixture/${project.projectId}`,
+    projectRootPath: `/fixture/${project.projectId}`,
+  }));
+  const api = {
+    projects: {
+      list: async () => ({
+        projects: [ship, demo].map((project) => ({
+          projectId: project.projectId,
+          projectDisplayName: project.name,
+        })),
+      }),
+      create: () => assert.fail("No project allocation"),
+    },
+    workspaces: {
+      list: async () => ({ entries: contexts, pageInfo: { hasMore: false } }),
+      create: () => assert.fail("No workspace allocation"),
+      ref: (id) => ({
+        refresh: async () => contexts.find((context) => context.id === id),
+        agents: {
+          create: async (options) => {
+            created.push({ workspaceId: id, options });
+            return { id: options.agentId };
+          },
+        },
+      }),
+    },
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    providers: {
+      snapshot: async () => ({
+        entries: [
+          {
+            enabled: true,
+            status: "ready",
+            models: [
+              {
+                id: "gpt-6.1-sol",
+                provider: "codex",
+                label: "GPT-6.1 Sol",
+                thinkingOptions: [{ id: "high", label: "High" }],
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  };
+  setNativeHostCatalog(
+    [{ serverId: host, label: "Book", status: "online" }],
+    new Map([[host, api]]),
+  );
+  setHandler((name, input) => {
+    if (name === "organization.workspace.get_directory.request") return store.read();
+    if (name === "organization.workspace.update.request") return store.mutate(input);
+    if (name === "organization.session-defaults") return { roles: {}, modes: {} };
+    throw Error(`Unexpected intake RPC ${name}`);
+  });
+  const intakeId = randomUUID();
+  const props = {
+    theme,
+    host: { id: company, label: "Mini" },
+    layout: { compact: false, platform: "web" },
+    organizationDraft: {
+      id: intakeId,
+      text: "Improve Ship It onboarding",
+      setText() {},
+      bindSource() {},
+    },
+    navigation: {
+      openAgentOnHost: (input) => {
+        opened.push(input);
+        return "requested";
+      },
+    },
+    organizationNavigation: { canReuseContext: () => true },
+  };
+  return { store, update, workspaceId, ship, demo, created, opened, props, intakeId, host };
+}
+test("company intake visibly owns a named request and starts one chat in its existing Book context", async (t) => {
+  const f = intakeFixture(t);
+  mount(h(IntakeSurface, f.props));
+  await screen.findByText(/Responsible intake: you/);
+  const start = await screen.findByRole("button", { name: "Start chat in Ship It" });
+  await waitFor(() => assert.equal(start.disabled, false));
+  fireEvent.click(start);
+  await waitFor(() => assert.equal(f.store.read().intakes[0].conversations[0].state, "created"));
+  await waitFor(() => assert.equal(screen.queryByText("Updating this retained request…"), null));
+  await screen.findByRole("button", { name: "Open original conversation (same history)" });
+  assert.equal(f.created[0].workspaceId, "wks_prj_ship");
+  assert.equal(f.created[0].options.labels["fulcra.intake"], f.intakeId);
+  assert.equal(f.created[0].options.config.provider, "codex/gpt-6.1-sol");
+  assert.equal(f.created[0].options.config.thinkingOptionId, "high");
+  assert.deepEqual(f.opened, [{ serverId: f.host, agentId: f.created[0].options.agentId }]);
+  assert.equal(f.store.read().intakes.length, 1);
+});
+test("correcting the visible project destination preserves the original conversation without replay", async (t) => {
+  const f = intakeFixture(t),
+    agentId = randomUUID(),
+    deliveryId = randomUUID();
+  f.update({
+    action: "begin-intake",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    text: f.props.organizationDraft.text,
+    projectKey: null,
+  });
+  f.update({
+    action: "route",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    projectKey: projectReferenceKey(f.ship),
+    context: { serverId: f.host, projectId: f.ship.projectId, workspaceId: "wks_prj_ship" },
+  });
+  f.update({
+    action: "reserve-chat",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    deliveryId,
+    agentId,
+  });
+  f.update({
+    action: "chat-result",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    deliveryId,
+    state: "created",
+    taskId: null,
+  });
+  mount(h(IntakeSurface, f.props));
+  await screen.findByText(/Destination: Ship It/);
+  fireEvent.click(screen.getByRole("button", { name: "Change destination project" }));
+  fireEvent.click(screen.getByRole("button", { name: "Demo Day" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Save corrected destination for future requests" }),
+  );
+  await screen.findByText(/destination correction is saved/);
+  assert.equal(f.created.length, 0);
+  assert.equal(f.store.read().intakes[0].conversations[0].agentId, agentId);
+  assert.equal(f.store.read().intakes[0].projectKey, projectReferenceKey(f.demo));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Open original conversation (same history)" }),
+  );
+  assert.deepEqual(f.opened, [{ serverId: f.host, agentId }]);
+});
+
+test("empty workspace intake retains ownership without spending a prime turn or allocating technical placement", async (t) => {
+  const f = intakeFixture(t);
+  f.update({
+    action: "create-workspace",
+    name: "Empty planning workspace",
+    prime: { serverId: "srv_example_mini", agentId: S, seat: "delivery", label: "Delivery prime" },
+  });
+  const workspaceId = f.store.read().workspaces[1].id;
+  mount(
+    h(IntakeSurface, {
+      ...f.props,
+      organizationDraft: { ...f.props.organizationDraft, workspaceId },
+    }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Retain this request" }));
+  await screen.findByText(
+    "Your request is retained. Add an existing project in Workspaces before asking the prime to route it.",
+  );
+  assert.equal(f.store.read().intakes[0].id, f.intakeId);
+  assert.equal(f.store.read().intakes[0].prime.agentId, S);
+  assert.equal(f.created.length, 0);
+  assert.equal(
+    calls.filter((call) =>
+      ["organization.workspace.receiver.request", "organization.operator-invoke"].includes(
+        call.name,
+      ),
+    ).length,
+    0,
   );
 });

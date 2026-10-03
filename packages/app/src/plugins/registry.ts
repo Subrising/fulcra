@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { LEGACY_CONTROLLER_PLUGIN_ID } from "@getpaseo/protocol/bundled-controller";
 import { isPluginBundleTrusted, PLUGIN_TRUST_EXPLANATION } from "./bundle-trust";
 import { useMemo, useSyncExternalStore } from "react";
 import { QueryClient } from "@tanstack/react-query";
@@ -120,8 +122,8 @@ export class PluginRegistry {
           ? sidebarItems
           : [
               {
-                id: entry.id === "orca-organization-next" ? "organization" : "untrusted",
-                title: entry.id === "orca-organization-next" ? "Command Centre" : entry.id,
+                id: entry.id === LEGACY_CONTROLLER_PLUGIN_ID ? "organization" : "untrusted",
+                title: entry.id === LEGACY_CONTROLLER_PLUGIN_ID ? "Command Centre" : entry.id,
                 icon: "ShieldAlert",
                 surface: "untrusted",
               },
@@ -200,7 +202,7 @@ export class PluginRegistry {
         Object.assign(installation, evaluated);
         // App-owned screen uses this already verified host/plugin RPC boundary; it grants no owner rights.
         if (
-          entry.id === "orca-organization-next" &&
+          entry.id === LEGACY_CONTROLLER_PLUGIN_ID &&
           !installation.settingsScreens.some((screen) => screen.id === "intercom")
         ) {
           installation.settingsScreens = [

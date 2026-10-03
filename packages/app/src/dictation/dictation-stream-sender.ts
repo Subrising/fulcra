@@ -50,6 +50,7 @@ interface DictationFinishResult {
  */
 export class DictationStreamSender {
   private client: DictationStreamClient | null = null;
+  private paused = false;
   private readonly format: string;
   private readonly createDictationId: () => string;
 
@@ -95,6 +96,11 @@ export class DictationStreamSender {
     });
   }
 
+  // Local recognition keeps the exact audio buffer without consuming host CPU.
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
   getDictationId(): string | null {
     return this.dictationId;
   }
@@ -133,6 +139,7 @@ export class DictationStreamSender {
 
   enqueueSegment(base64Pcm: string): void {
     this.segments.push(base64Pcm);
+    if (this.paused) return;
 
     const client = this.client;
     if (!client?.isConnected) {
@@ -152,6 +159,7 @@ export class DictationStreamSender {
   }
 
   flush(): number {
+    if (this.paused) return 0;
     const client = this.client;
     const dictationId = this.dictationId;
     if (!client?.isConnected || !dictationId || !this.streamReady) {

@@ -1,6 +1,7 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
+import { useAgentNotifyControls } from "@/screens/workspace/use-agent-notify-controls";
 import {
   memo,
   useCallback,
@@ -138,6 +139,7 @@ import {
 } from "@/screens/workspace/workspace-desktop-tabs-row";
 import {
   buildWorkspaceTabMenuEntries,
+  type AgentNotifyControls,
   type WorkspaceTabMenuLabels,
 } from "@/screens/workspace/workspace-tab-menu";
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
@@ -431,6 +433,7 @@ interface MobileWorkspaceTabSwitcherProps {
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
@@ -538,6 +541,7 @@ function MobileWorkspaceTabOption({
   onCopyTerminalId,
   onCopyFilePath,
   onReloadAgent,
+  notifications,
   onRenameTab,
   onCloseTab,
   onCloseTabsAbove,
@@ -557,6 +561,7 @@ function MobileWorkspaceTabOption({
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTab: (tabId: string) => Promise<void> | void;
   onCloseTabsAbove: (tabId: string) => Promise<void> | void;
@@ -594,6 +599,7 @@ function MobileWorkspaceTabOption({
     onCopyTerminalId,
     onCopyFilePath,
     onReloadAgent,
+    notifications,
     onRenameTab,
     onCloseTab,
     onCloseTabsBefore: onCloseTabsAbove,
@@ -667,6 +673,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
   onCopyTerminalId,
   onCopyFilePath,
   onReloadAgent,
+  notifications,
   onRenameTab,
   onCloseTab,
   onCloseTabsAbove,
@@ -724,6 +731,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
           onCopyTerminalId={onCopyTerminalId}
           onCopyFilePath={onCopyFilePath}
           onReloadAgent={onReloadAgent}
+          notifications={notifications}
           onRenameTab={onRenameTab}
           onCloseTab={onCloseTab}
           onCloseTabsAbove={onCloseTabsAbove}
@@ -743,6 +751,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
       onCopyTerminalId,
       onCopyFilePath,
       onReloadAgent,
+      notifications,
       onRenameTab,
       onCloseTab,
       onCloseTabsAbove,
@@ -2780,6 +2789,12 @@ function WorkspaceScreenContent({
     [normalizedServerId, toast, t],
   );
 
+  const agentNotifyControls = useAgentNotifyControls({
+    client,
+    serverId: normalizedServerId,
+    toast,
+  });
+
   const handleReloadAgent = useCallback(
     async (agentId: string) => {
       if (!client || !isConnected) {
@@ -4015,6 +4030,7 @@ function WorkspaceScreenContent({
         onCopyTerminalId={handleCopyTerminalId}
         onCopyFilePath={handleCopyFilePath}
         onReloadAgent={handleReloadAgent}
+        notifications={agentNotifyControls}
         onRenameTab={handleRenameTab}
         onCloseTabsToLeft={handleCloseTabsToLeftInPane}
         onCloseTabsToRight={handleCloseTabsToRightInPane}
@@ -4051,6 +4067,7 @@ function WorkspaceScreenContent({
     handleCopyTerminalId,
     handleCopyFilePath,
     handleReloadAgent,
+    agentNotifyControls,
     handleRenameTab,
     handleCloseTabsToLeftInPane,
     handleCloseTabsToRightInPane,
@@ -4094,6 +4111,7 @@ function WorkspaceScreenContent({
           onCopyTerminalId={handleCopyTerminalId}
           onCopyFilePath={handleCopyFilePath}
           onReloadAgent={handleReloadAgent}
+          notifications={agentNotifyControls}
           onRenameTab={handleRenameTab}
           onCloseTab={handleCloseTabById}
           onCloseTabsAbove={handleCloseTabsToLeft}
@@ -4118,6 +4136,7 @@ function WorkspaceScreenContent({
             onCopyTerminalId={handleCopyTerminalId}
             onCopyFilePath={handleCopyFilePath}
             onReloadAgent={handleReloadAgent}
+            notifications={agentNotifyControls}
             onRenameTab={handleRenameTab}
             onCloseTabsToLeft={handleCloseTabsToLeft}
             onCloseTabsToRight={handleCloseTabsToRight}

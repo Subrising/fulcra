@@ -1,3 +1,4 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { GitAiDraftResponseSchema } from "@getpaseo/protocol/git-ai-draft";
 import { createGitAiDraftHelp } from "./session/checkout/git-ai-draft-help.js";
 import { createToollessGitDraftGeneration } from "./session/checkout/git-ai-draft-generation.js";
@@ -2933,7 +2934,7 @@ export class Session {
         throw new Error("Original content delivery authority changed");
     };
     const management = this.agentManager.trustedPlugins.management.open(
-      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      this.pluginRuntime.managementTarget?.(this.agentManager.trustedPlugins.controllerPluginId),
       () => {
         try {
           guard();
@@ -2997,7 +2998,7 @@ export class Session {
     const signal = this.delivery.requestSignal;
     const captured = this.managementSources.get(source);
     const management = this.agentManager.trustedPlugins.management.open(
-      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      this.pluginRuntime.managementTarget?.(this.agentManager.trustedPlugins.controllerPluginId),
       () => {
         const live = this.managementSources.get(source);
         return live && live === captured && !this.isCleanedUp
@@ -3127,7 +3128,7 @@ export class Session {
   ): Promise<void> {
     if (!this.pluginRuntime) throw new Error("Plugin service is unavailable");
     if (
-      msg.pluginId === "orca-organization-next" &&
+      msg.pluginId === this.agentManager.trustedPlugins.controllerPluginId &&
       [
         "organization.radius.scratch.simulate",
         "organization.radius.scratch.prune-simulate",

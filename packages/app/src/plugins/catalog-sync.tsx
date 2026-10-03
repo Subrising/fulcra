@@ -21,6 +21,7 @@ export function PluginCatalogSync({
     let cancelled = false;
     let refreshQueue = Promise.resolve();
     let generation = 0;
+    let connectionAvailable = connected;
     let reading: AbortController | undefined;
     if (!connected) {
       pluginRegistry.suspendHost(serverId);
@@ -37,14 +38,20 @@ export function PluginCatalogSync({
       return;
     }
     const releaseConnection = client.subscribeConnectionStatus((state) => {
-      if (state.status !== "connected") pluginRegistry.clearHostInputPolicy(serverId, client);
+      connectionAvailable = state.status === "connected";
+      if (!connectionAvailable) {
+        // Invalidate preparation before React observes the drop, including a same-client reconnect.
+        generation++;
+        reading?.abort();
+        pluginRegistry.clearHostInputPolicy(serverId, client);
+      }
     });
     const refresh = (replacePluginId?: string) => {
       const epoch = ++generation;
       pluginRegistry.clearHostInputPolicy(serverId, client);
       reading?.abort();
       refreshQueue = refreshQueue.then(async () => {
-        if (cancelled || epoch !== generation) return;
+        if (cancelled || !connectionAvailable || epoch !== generation) return;
         const abort = new AbortController();
         reading = abort;
         try {

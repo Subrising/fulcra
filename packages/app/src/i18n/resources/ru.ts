@@ -168,6 +168,8 @@ export const ru: TranslationResources = {
     },
     attachments: {
       addImage: "Добавить изображение",
+      choosePhoto: "Выбрать фото",
+      takePhoto: "Сделать фото",
       pasteImage: "Вставить изображение",
       addFile: "Загрузить файл",
       addIssueOrPr: "Добавить проблему или PR",
@@ -1798,6 +1800,8 @@ export const ru: TranslationResources = {
     permissionMessage: "Разрешите доступ к медиатеке, чтобы прикреплять изображения.",
     errorTitle: "Ошибка",
     failedToSelect: "Не удалось выбрать изображение",
+    cameraPermissionMessage: "Разрешите доступ к камере, чтобы делать фотографии.",
+    failedToTakePhoto: "Не удалось сделать фото",
     dialogTitle: "Прикрепить изображения",
     dialogFilterName: "Изображения",
   },
@@ -1894,6 +1898,17 @@ export const ru: TranslationResources = {
     hostPassword: {
       title: "Пароль для {{host}}",
       label: "Пароль хоста",
+    },
+    hostConfirmation: {
+      title: "Подключиться к этому хосту?",
+      description:
+        "Этот хост сможет выполнять код в приложении и обращаться к другим вашим подключённым хостам. Подключайтесь, только если узнаёте его.",
+      descriptionChanged:
+        "Эта ссылка меняет способ подключения к этому хосту. Хост сможет выполнять код в приложении и обращаться к другим вашим подключённым хостам. Подключайтесь, только если узнаёте его.",
+      hostLabel: "Хост",
+      fingerprintLabel: "Отпечаток ключа",
+      relayLabel: "Реле",
+      connect: "Подключить",
     },
     connectionMethods: {
       title: "Добавить подключение",

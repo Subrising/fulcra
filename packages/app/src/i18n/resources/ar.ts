@@ -167,6 +167,8 @@ export const ar: TranslationResources = {
     },
     attachments: {
       addImage: "أضف صورة",
+      choosePhoto: "اختيار صورة",
+      takePhoto: "التقاط صورة",
       pasteImage: "لصق صورة",
       addFile: "Upload file",
       addIssueOrPr: "أضف مشكلة أو PR",
@@ -1766,6 +1768,8 @@ export const ar: TranslationResources = {
     permissionMessage: "يرجى السماح بالوصول إلى مكتبة الصور الخاصة بك لإرفاق الصور.",
     errorTitle: "خطأ",
     failedToSelect: "فشل في تحديد الصورة",
+    cameraPermissionMessage: "يرجى السماح بالوصول إلى الكاميرا لالتقاط الصور.",
+    failedToTakePhoto: "تعذر التقاط الصورة",
     dialogTitle: "إرفاق الصور",
     dialogFilterName: "الصور",
   },
@@ -1862,6 +1866,17 @@ export const ar: TranslationResources = {
     hostPassword: {
       title: "كلمة المرور لـ {{host}}",
       label: "كلمة مرور المضيف",
+    },
+    hostConfirmation: {
+      title: "الاتصال بهذا المضيف؟",
+      description:
+        "سيتمكن هذا المضيف من تشغيل تعليمات برمجية في هذا التطبيق والوصول إلى مضيفيك الآخرين المتصلين. اتصل فقط إذا كنت تعرفه.",
+      descriptionChanged:
+        "يغيّر هذا الرابط طريقة اتصالك بهذا المضيف. سيتمكن المضيف من تشغيل تعليمات برمجية في هذا التطبيق والوصول إلى مضيفيك الآخرين المتصلين. اتصل فقط إذا كنت تعرفه.",
+      hostLabel: "المضيف",
+      fingerprintLabel: "بصمة المفتاح",
+      relayLabel: "المُرحّل",
+      connect: "اتصال",
     },
     connectionMethods: {
       title: "إضافة اتصال",

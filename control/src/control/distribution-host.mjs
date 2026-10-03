@@ -10,6 +10,7 @@ import { createTrustedContribution } from "./trusted-contribution.mjs";
 import { createChildSupervisor } from "./child-supervisor.mjs";
 import { captureOwnedFiles, recoverOwnedFiles } from "./owned-child-files.mjs";
 import { parseControllerCommand, READ_METHODS } from "./command-parser.mjs";
+import { initializeRoleDefaults } from "../../orca-organization/server/role-defaults-store.mjs";
 import { firstRun } from "../config.mjs";
 import { recordBootStart, sealBoot } from "./boot-chain.mjs";
 export const hostContract = "1.1";
@@ -17,7 +18,8 @@ export default function setup() {
   throw Error("Distribution startup context required");
 }
 export function createDistribution({ home, bundleDirectory }) {
-  firstRun({ ORCA_HOME: home });
+  const config = firstRun({ ORCA_HOME: home });
+  initializeRoleDefaults(home, config.defaults?.roles, config.defaults?.modes);
   let supervisor, mint, authority, intercomRateSettingsFile;
   const epochs = new WeakMap(),
     owners = new WeakMap(),

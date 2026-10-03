@@ -1,6 +1,6 @@
 import { bundledTarget } from "./test-utils/management.js";
 import { expect, test, vi } from "vitest";
-import { ManagementAuthority } from "./management.js";
+import { ManagementAuthority, type ManagementStartup } from "./management.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "../authorization/index.js";
 import { createManagementContext } from "./plugin-management-context.js";
 
@@ -557,4 +557,44 @@ test("native handoff fact observer: only consumed successful matching transfer a
   await open().invoke("wrong", handoffCommand);
   expect(fact).toHaveBeenCalledTimes(1);
   expect(f.generic).not.toHaveBeenCalled();
+});
+
+test("configured bundled identity routes only its original current target and keeps permission/epoch refusal", async () => {
+  const id = "qualified-controller";
+  const dispatch = vi.fn(async () => null);
+  const config = {
+    controllerPluginId: id,
+    enabled: (target: { pluginId: string }) => target.pluginId === id,
+    validate: (value: Parameters<ManagementStartup["validate"]>[0]) => value,
+  };
+  const authority = new ManagementAuthority(config);
+  config.controllerPluginId = "different-label";
+  expect(authority.controllerPluginId).toBe(id);
+  expect(() => authority.register("orca-organization-next", dispatch)).toThrow(
+    "Invalid management bridge",
+  );
+  authority.register(id, dispatch);
+  let current = true;
+  let permissions: readonly DaemonPermission[] = OWNER_PERMISSIONS;
+  const target = {
+    pluginId: id,
+    bundleDirectory: "/fixture/selected-bundle",
+    isCurrent: () => current,
+  };
+  const reader = () => ({
+    id: "owner",
+    authentication: "daemon-password" as const,
+    deviceId: null,
+    permissions: [...permissions],
+  });
+  expect(authority.open({ ...target, pluginId: "different-label" }, reader)).toBeUndefined();
+  const operation = authority.open(target, reader)!;
+  await operation.invoke("initial", command);
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  permissions = [];
+  await expect(operation.invoke("permission-revoked", command)).rejects.toThrow();
+  permissions = OWNER_PERMISSIONS;
+  current = false;
+  expect(authority.open(target, reader)).toBeUndefined();
+  expect(dispatch).toHaveBeenCalledTimes(1);
 });

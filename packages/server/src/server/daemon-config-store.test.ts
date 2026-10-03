@@ -12,6 +12,10 @@ function autoResumeOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
   return { autoResumeOnLimit: daemon.autoResumeOnLimit ?? true };
 }
 
+function notificationModeOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
+  return { notificationMode: daemon.notificationMode ?? ("primes" as const) };
+}
+
 function reloadableConfig(
   persisted: PersistedConfig,
   options: { relayEnabledFallback?: boolean } = {},
@@ -29,6 +33,7 @@ function reloadableConfig(
     providers: (agents.providers ?? {}) as MutableDaemonConfig["providers"],
     metadataGeneration: { providers: agents.metadataGeneration?.providers ?? [] },
     autoArchiveAfterMerge: daemon.autoArchiveAfterMerge ?? false,
+    ...notificationModeOf(daemon),
     enableTerminalAgentHooks: daemon.enableTerminalAgentHooks ?? false,
     ...autoResumeOf(daemon),
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
@@ -113,6 +118,7 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
       autoResumeOnLimit: true,
       appendSystemPrompt: "",
@@ -136,6 +142,7 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
       autoResumeOnLimit: true,
       appendSystemPrompt: "",
@@ -183,6 +190,7 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
       autoResumeOnLimit: true,
       appendSystemPrompt: "",
@@ -208,6 +216,7 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
       autoResumeOnLimit: true,
       appendSystemPrompt: "",
@@ -235,6 +244,7 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
       autoResumeOnLimit: true,
       appendSystemPrompt: "",
@@ -270,6 +280,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -303,6 +314,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -335,6 +347,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -392,6 +405,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -427,6 +441,7 @@ describe("DaemonConfigStore", () => {
       providers: { claude: { enabled: false } },
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
       autoResumeOnLimit: true,
       appendSystemPrompt: "",
@@ -496,6 +511,7 @@ describe("DaemonConfigStore", () => {
         },
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -545,6 +561,7 @@ describe("DaemonConfigStore", () => {
         providers: { gemini: {} },
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -608,6 +625,7 @@ describe("DaemonConfigStore", () => {
           ],
         },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -660,6 +678,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -687,6 +706,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -714,6 +734,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         appendSystemPrompt: "",
       },
       undefined,
@@ -737,6 +758,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -780,6 +802,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -806,6 +829,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -831,6 +855,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -884,6 +909,7 @@ describe("DaemonConfigStore", () => {
         browserTools: { enabled: false },
         providers: {},
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -909,6 +935,7 @@ describe("DaemonConfigStore", () => {
         browserTools: { enabled: false },
         providers: {},
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
         autoResumeOnLimit: true,
         appendSystemPrompt: "",
@@ -984,6 +1011,75 @@ describe("DaemonConfigStore reload", () => {
   function writeConfig(paseoHome: string, config: unknown): void {
     writeFileSync(path.join(paseoHome, "config.json"), `${JSON.stringify(config, null, 2)}\n`);
   }
+
+  test("combined notification and auto-resume edits retain independent persisted preferences", () => {
+    const { paseoHome, store } = createReloadableStore();
+
+    store.patch({ notificationMode: "off", autoResumeOnLimit: false });
+    expect(store.get().notificationMode).toBe("off");
+    expect(store.get().autoResumeOnLimit).toBe(false);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("off");
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(false);
+
+    store.patch({ notificationMode: "all" });
+    expect(store.get().notificationMode).toBe("all");
+    expect(store.get().autoResumeOnLimit).toBe(false);
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(false);
+
+    store.patch({ autoResumeOnLimit: true });
+    expect(store.get().notificationMode).toBe("all");
+    expect(store.get().autoResumeOnLimit).toBe(true);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("all");
+    expect(store.reload().appliedPaths).toEqual([]);
+  });
+
+  test("a failed notification transition rolls back both combined settings", () => {
+    const { paseoHome, store } = createReloadableStore();
+    const transitions: unknown[] = [];
+    store.onFieldChange("notificationMode", (next) => {
+      transitions.push(next);
+      if (next === "off") throw new Error("Notification transition refused");
+    });
+
+    expect(() => store.patch({ notificationMode: "off", autoResumeOnLimit: false })).toThrow(
+      "Notification transition refused",
+    );
+    expect(transitions).toEqual(["off", "primes"]);
+    expect(store.get().notificationMode).toBe("primes");
+    expect(store.get().autoResumeOnLimit).toBe(true);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBeUndefined();
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(true);
+  });
+
+  test("a failed live notification rollback remains an aggregate failure", () => {
+    const { paseoHome, store } = createReloadableStore();
+    const applyError = new Error("Notification transition refused");
+    const rollbackError = new Error("Notification owner could not restore");
+    let ownerMode: MutableDaemonConfig["notificationMode"] = "primes";
+    store.onFieldChange("notificationMode", (next) => {
+      if (next === "off") {
+        ownerMode = next;
+        throw applyError;
+      }
+      throw rollbackError;
+    });
+    let failure: unknown;
+    try {
+      store.patch({ notificationMode: "off", autoResumeOnLimit: false });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      message: "Daemon config apply failed and one or more live owners could not roll back",
+      cause: applyError,
+      rollbackErrors: [rollbackError],
+    });
+    expect(ownerMode).toBe("off");
+    expect(store.get().notificationMode).toBe("primes");
+    expect(store.get().autoResumeOnLimit).toBe(true);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBeUndefined();
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(true);
+  });
 
   test("applies mutable edits and reports startup-only edits", () => {
     const { paseoHome, store, persisted } = createReloadableStore();

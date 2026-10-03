@@ -42,6 +42,7 @@ At the start of non-trivial work, list `docs/` and skim anything relevant to the
 | [docs/custom-providers.md](docs/custom-providers.md)                 | Custom provider config: Z.AI, Alibaba/Qwen, ACP agents, profiles, custom binaries                                              |
 | [docs/command-centre-packaging.md](docs/command-centre-packaging.md) | Command Centre packaging design, authentication decision and unsigned first-open steps                                         |
 | [docs/plugins.md](docs/plugins.md)                                   | Local plugin manifest, directory source config, RPCs, native surfaces, and attachment sources                                  |
+| [docs/thin-fork-core-patches.md](docs/thin-fork-core-patches.md)     | Owned core patch boundaries, stable inbound source and separate beta qualification                                             |
 | [docs/integrations-auth.md](docs/integrations-auth.md)               | Shared credential store: tracker/forge sign-in methods, provider findings, OS keychains, callback validation                   |
 | [docs/service-proxy.md](docs/service-proxy.md)                       | Service proxy: exposing workspace scripts at public URLs, DNS setup, reverse proxy config                                      |
 | [docs/development.md](docs/development.md)                           | Dev server, build sync gotchas, CLI reference, agent state, Playwright MCP                                                     |

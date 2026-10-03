@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { configuredControllerPluginId } from "@getpaseo/protocol/bundled-controller";
 import { randomUUID } from "node:crypto";
 import { SessionInboundMessageSchema } from "@getpaseo/protocol/messages";
 import type { JsonObject, JsonValue } from "@getpaseo/protocol/trusted-input";
@@ -15,10 +17,14 @@ function rejectUnknownFields(input: JsonValue, parsed: unknown): void {
 }
 
 /** A private plugin-bound service session; never an operator authentication source. */
-export async function createControllerRpcProxy(host: PluginPaseoSessionHost): Promise<{
+export async function createControllerRpcProxy(
+  host: PluginPaseoSessionHost,
+  controllerPluginId?: string,
+): Promise<{
   rpc(frame: JsonObject): Promise<JsonValue>;
   close(): void;
 }> {
+  const pluginId = configuredControllerPluginId(controllerPluginId);
   let live = true;
   const pending = new Map<
     string,
@@ -75,7 +81,7 @@ export async function createControllerRpcProxy(host: PluginPaseoSessionHost): Pr
     pending.clear();
     socket.peerClosed();
   }
-  const attachment = await host.attachPluginSocket("orca-organization-next", socket);
+  const attachment = await host.attachPluginSocket(pluginId, socket);
   void attachment.closed.then(close, close);
   socket.receive(
     JSON.stringify({

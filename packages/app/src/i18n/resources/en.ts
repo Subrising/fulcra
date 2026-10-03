@@ -163,6 +163,8 @@ export const en = {
     },
     attachments: {
       addImage: "Add image",
+      choosePhoto: "Choose photo",
+      takePhoto: "Take photo",
       pasteImage: "Paste image",
       addFile: "Upload file",
       addIssueOrPr: "Add issue or PR",
@@ -1795,6 +1797,8 @@ export const en = {
     permissionMessage: "Please allow access to your photo library to attach images.",
     errorTitle: "Error",
     failedToSelect: "Failed to select image",
+    cameraPermissionMessage: "Please allow camera access to take photos.",
+    failedToTakePhoto: "Failed to take photo",
     dialogTitle: "Attach images",
     dialogFilterName: "Images",
   },
@@ -1891,6 +1895,17 @@ export const en = {
     hostPassword: {
       title: "Password for {{host}}",
       label: "Host password",
+    },
+    hostConfirmation: {
+      title: "Connect to this host?",
+      description:
+        "This host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      descriptionChanged:
+        "This link changes how you connect to this host. The host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      hostLabel: "Host",
+      fingerprintLabel: "Key fingerprint",
+      relayLabel: "Relay",
+      connect: "Connect",
     },
     connectionMethods: {
       title: "Add connection",

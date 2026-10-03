@@ -1,3 +1,5 @@
+import { WorkspacesSurface } from "./client/organization/workspaces";
+import { IntakeSurface } from "./client/organization/intake";
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { OrganizationSurface } from "./client/organization";
 import { registerReturnCommands } from "./client/navigation";
@@ -11,6 +13,14 @@ function LeadershipSurface(props: PluginSurfaceProps) {
 }
 export default function contribute(client: PluginClientContext) {
   const surface = client.addSurface("organization", OrganizationSurface);
+  const workspaces = client.addSurface("workspaces", WorkspacesSurface);
+  const intake = client.addSurface("intake", IntakeSurface);
+  const workspaceSidebar = client.addSidebarItem({
+    id: "workspaces",
+    title: "Workspaces",
+    icon: "FolderKanban",
+    surface: "workspaces",
+  });
   const leadership = client.addSurface("leadership", LeadershipSurface);
   const sidebar = client.addSidebarItem({
     id: "organization",
@@ -60,5 +70,8 @@ export default function contribute(client: PluginClientContext) {
     sidebar();
     surface();
     leadership();
+    workspaceSidebar();
+    intake();
+    workspaces();
   };
 }

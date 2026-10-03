@@ -2,7 +2,7 @@
 # Read-only V5 snapshot checker; the only write is a new, private report file.
 set -eu
 exec python3 - "$@" <<'PY'
-import argparse, datetime, hashlib, json, os, pathlib, plistlib, re, stat, subprocess, sys
+import argparse, ctypes, datetime, hashlib, http.client, json, os, pathlib, plistlib, re, signal, stat, subprocess, sys
 
 p = argparse.ArgumentParser(description='V5 snapshot checker (Python 3 + Node required). Never run as root.')
 p.add_argument('--app', required=True)
@@ -14,7 +14,7 @@ p.add_argument('--baseline', help='Pre-install report produced with --capture-ba
 p.add_argument('--capture-baseline', action='store_true')
 p.add_argument('--daemon-pid', type=int)
 p.add_argument('--controller-pid', type=int)
-p.add_argument('--daemon-entry', help='V4-provided executable or entry file relative to app bundle')
+p.add_argument('--daemon-entry', help='V4-provided actual daemon executable relative to app bundle (proc_pidpath, not ps title)')
 p.add_argument('--controller-entry', help='V4-provided controller entry relative to app bundle')
 p.add_argument('--scanner', help='Matching control checkout tools/v5-exact-audit.mjs (Node required)')
 p.add_argument('--scan-reviews', help='Exact reviewed-match JSON for this artifact; required while enabled')
@@ -53,6 +53,102 @@ def launch_inventory(home):
     labels = sorted(line.split()[-1] for line in command(['/bin/launchctl', 'list']).splitlines()[1:] if line.strip())
     return {'files': inventory, 'labels': labels}
 
+def executable_path(pid):
+    # macOS libproc: titles and flattened argv are not executable identity.
+    lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    lib.proc_pidpath.restype = ctypes.c_int
+    buf = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+    size = lib.proc_pidpath(pid, buf, len(buf))
+    require(0 < size < len(buf), 'daemon executable observation unavailable')
+    return os.fsdecode(buf.value)
+
+def selected_home_from_procargs(raw):
+    # KERN_PROCARGS2: argc, executable path, padding, argc NUL-delimited argv,
+    # environment, double NUL. Retitling leaves empty argv slots; do not discard
+    # them before consuming argc, as ps does when displaying a process title.
+    require(len(raw) >= 5, 'daemon process arguments unavailable')
+    argc = int.from_bytes(raw[:4], sys.byteorder, signed=True)
+    require(0 < argc <= 65536, 'daemon argument count invalid')
+    offset = raw.find(b'\0', 4)
+    require(offset > 4, 'daemon executable argument missing')
+    offset += 1
+    while offset < len(raw) and raw[offset] == 0: offset += 1
+    for _ in range(argc):
+        end = raw.find(b'\0', offset)
+        require(end >= offset, 'daemon argument boundary unavailable')
+        offset = end + 1
+    while offset < len(raw) and raw[offset] == 0: offset += 1
+    end = raw.find(b'\0\0', offset)
+    require(end >= offset, 'daemon environment boundary unavailable')
+    values = [token[len(b'PASEO_HOME='):] for token in raw[offset:end].split(b'\0')
+              if token.startswith(b'PASEO_HOME=')]
+    require(len(values) == 1 and bool(values[0]), 'daemon PASEO_HOME missing or ambiguous')
+    return os.fsdecode(values[0])
+
+def process_paseo_home(pid):
+    # Observe only the already UID-checked PID. Retain only PASEO_HOME, never raw
+    # arguments/environment or any credentials, in the observation or report.
+    lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+    lib.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint,
+                          ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t),
+                          ctypes.c_void_p, ctypes.c_size_t]
+    lib.sysctl.restype = ctypes.c_int
+    argmax_mib = (ctypes.c_int * 2)(1, 8)  # CTL_KERN, KERN_ARGMAX
+    argmax = ctypes.c_int()
+    argmax_size = ctypes.c_size_t(ctypes.sizeof(argmax))
+    require(lib.sysctl(argmax_mib, 2, ctypes.byref(argmax), ctypes.byref(argmax_size), None, 0) == 0
+            and 0 < argmax.value <= 2 * 1024 * 1024, 'daemon argument buffer size unavailable')
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+    buf = ctypes.create_string_buffer(argmax.value)
+    size = ctypes.c_size_t(len(buf))
+    require(lib.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) == 0
+            and 0 < size.value <= len(buf), 'daemon environment observation unavailable')
+    return selected_home_from_procargs(buf.raw[:size.value])
+
+def listener_ports(raw):
+    lines = raw.splitlines()
+    require(all(s.startswith('n') or re.fullmatch(r'p[0-9]+', s) for s in lines),
+            'daemon listener observation malformed')
+    pids = [int(s[1:]) for s in lines if s.startswith('p')]
+    require(pids == [a.daemon_pid] or (a.fixture and not pids), 'daemon listener PID missing or ambiguous')
+    names = [s[1:] for s in lines if s.startswith('n')]
+    require(bool(names), 'daemon listeners unavailable')
+    ports = set()
+    for name in names:
+        match = re.fullmatch(r'(127\.0\.0\.1|\[::1\]):([0-9]+)', name)
+        require(match is not None, 'daemon listener must use a loopback literal')
+        port = int(match.group(2))
+        require(1024 <= port <= 65535 and port not in (6767, 6791), 'unsafe daemon listener port')
+        ports.add(port)
+        if port != a.port:
+            require(match.group(1) == '127.0.0.1', 'bridge must use IPv4 loopback')
+    require(a.port in ports and len(ports - {a.port}) <= 1,
+            'expected selected port and at most one OpenCode bridge listener')
+    return ports - {a.port}
+
+def bridge_refusal(port):
+    # OpenCodeBridge.start binds 127.0.0.1:0; route refuses every unauthenticated
+    # request with exactly this response. Never send credentials, use proxies,
+    # follow redirects or probe a port not already observed on the owned daemon.
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=3)
+    def timeout(signum, frame):
+        raise ValueError('bridge refusal observation timed out')
+    old_handler = signal.signal(signal.SIGALRM, timeout)
+    signal.setitimer(signal.ITIMER_REAL, 3)
+    try:
+        connection.request('GET', '/_internal/opencode/tools', headers={'Accept': 'application/json'})
+        response = connection.getresponse()
+        body = response.read(1025)
+        require(len(body) <= 1024, 'bridge refusal response too large')
+        require(response.status == 401 and json.loads(body) == {'error': 'Unauthorized'},
+                'additional listener is not the expected refusing OpenCode bridge')
+        return {'port': port, 'status': response.status, 'body': {'error': 'Unauthorized'}}
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
+        connection.close()
+
 def observe():
     if a.fixture:
         return json.loads(pathlib.Path(a.fixture).read_text())
@@ -69,15 +165,31 @@ def observe():
                                              [int(parts[0]),int(parts[1]),int(parts[2]),parts[3]])))
     selected = [x for x in data['processes'] if x['pid'] == a.daemon_pid]
     require(len(selected) == 1 and selected[0]['uid'] == os.getuid(), 'daemon PID is not owned by test user')
-    data['daemon_environment'] = command(['/bin/ps', 'eww', '-p', str(a.daemon_pid), '-o', 'command='])
+    # Recheck UID/parent/start time and executable after observations to refuse a
+    # vanished or replaced PID. This is still a snapshot, not an epoch handshake.
+    anchor = command(['/bin/ps', '-p', str(a.daemon_pid), '-o', 'uid=,ppid=,lstart='])
+    require(anchor.split()[:2] == [str(os.getuid()), str(selected[0]['ppid'])], 'daemon identity changed')
+    data['daemon_executable'] = executable_path(a.daemon_pid)
+    require(data['daemon_executable'] == entry(a.daemon_entry)
+            and os.access(data['daemon_executable'], os.X_OK), 'daemon owner/executable mismatch')
+    data['daemon_paseo_home'] = process_paseo_home(a.daemon_pid)
     data['open_files'] = command(['/usr/sbin/lsof', '-nP', '-u', str(os.getuid()), '-Fpn'])
     data['listeners'] = command(['/usr/sbin/lsof', '-nP', '-a', '-p', str(a.daemon_pid),
                                  '-iTCP', '-sTCP:LISTEN', '-Fn'], allow_empty=True)
+    extra = listener_ports(data['listeners'])
+    if extra: data['opencode_bridge'] = bridge_refusal(next(iter(extra)))
+    require(command(['/bin/ps', '-p', str(a.daemon_pid), '-o', 'uid=,ppid=,lstart=']) == anchor
+            and executable_path(a.daemon_pid) == data['daemon_executable'], 'daemon identity changed during observations')
     return data
 
 app = pathlib.Path(a.app).absolute()
 home_state = pathlib.Path(a.paseo_home).absolute()
 protected = pathlib.Path(a.protected_home).absolute()
+def entry(relative):
+    require(bool(relative) and not pathlib.Path(relative).is_absolute(), 'V4 relative entry required')
+    target = (app / relative).resolve()
+    require(app.resolve() in target.parents and target.is_file(), 'entry missing or escapes bundle')
+    return str(target)
 obs = {}
 def observations():
     global obs
@@ -131,23 +243,32 @@ else:
         matches = [x for x in obs['processes'] if x['pid'] == pid]
         require(len(matches) == 1, 'PID missing or ambiguous')
         return matches[0]
-    def entry(relative):
-        require(bool(relative) and not pathlib.Path(relative).is_absolute(), 'V4 relative entry required')
-        target = (app / relative).resolve()
-        require(app.resolve() in target.parents and target.is_file(), 'entry missing or escapes bundle')
-        return str(target)
     def names_entry(command_line, marker):
         # ps flattens argv: require boundaries, but retain the runbook's identity limitation.
         return re.search(r'(?:^|[\s\"\'])' + re.escape(marker) + r'(?=$|[\s\"\'])', command_line) is not None
     def daemon():
         proc = process(a.daemon_pid)
-        require(proc['uid'] == obs['uid'] and names_entry(proc['command'], entry(a.daemon_entry)), 'daemon owner/entry mismatch')
-        env = obs['daemon_environment']
-        match = re.search(r'(?:^|\s)PASEO_HOME=(.*?)(?=\s[A-Za-z_][A-Za-z0-9_]*=|$)', env)
-        require(match is not None and match.group(1) == str(home_state), 'daemon PASEO_HOME not verified')
-        listeners = [s[1:] for s in obs['listeners'].splitlines() if s.startswith('n')]
-        require(bool(listeners) and all(s in ['127.0.0.1:'+str(a.port), '[::1]:'+str(a.port)] for s in listeners),
-                'daemon must listen only on the selected loopback port')
+        marker = entry(a.daemon_entry)
+        require(proc['uid'] == obs['uid'], 'daemon owner/entry mismatch')
+        if 'daemon_executable' in obs:
+            require(obs['daemon_executable'] == marker and os.access(marker, os.X_OK), 'daemon executable mismatch')
+        else:
+            # Backward-compatible OFFLINE fixtures only. A generic title never
+            # meets this legacy entry predicate; live mode always uses libproc.
+            require(a.fixture and names_entry(proc['command'], marker), 'daemon owner/entry mismatch')
+        if 'daemon_paseo_home' in obs:
+            require(obs['daemon_paseo_home'] == str(home_state), 'daemon PASEO_HOME not verified')
+        else:
+            env = obs.get('daemon_environment', '')
+            matches = re.findall(r'(?:^|\s)PASEO_HOME=(.*?)(?=\s[A-Za-z_][A-Za-z0-9_]*=|$)', env)
+            require(a.fixture and matches == [str(home_state)], 'daemon PASEO_HOME not verified')
+        extra = listener_ports(obs['listeners'])
+        if extra:
+            bridge = obs.get('opencode_bridge', {})
+            require(bridge == {'port': next(iter(extra)), 'status': 401, 'body': {'error': 'Unauthorized'}},
+                    'additional listener is not the expected refusing OpenCode bridge')
+        else:
+            require('opencode_bridge' not in obs, 'bridge observation without a listener')
         return 'test-owned bundled daemon; expected environment and loopback listener'
     check('daemon', daemon)
     def state():

@@ -617,6 +617,7 @@ export function resolveConfigFromPersisted(
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
+    notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
@@ -669,6 +670,7 @@ function resolvePersistedPassThroughSettings(paseoHome: string, persisted: Persi
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
     autoResumeOnLimit:
       readLimitResumeSetting(paseoHome) ?? persisted.daemon?.autoResumeOnLimit ?? true,
+    notificationMode: persisted.daemon?.notificationMode ?? ("primes" as const),
     skillSelection: persisted.agents?.skills?.selection,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     oauthClientIds: persisted.integrations?.oauthClientIds ?? {},

@@ -82,6 +82,7 @@ function mutableConfig(persisted: PersistedConfig): MutableDaemonConfig {
     providers: CONTROLLED_PROVIDERS,
     metadataGeneration: { providers: [] },
     autoArchiveAfterMerge: false,
+    notificationMode: "primes",
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
     appendSystemPrompt: "",

@@ -38,6 +38,7 @@ import {
   GitPullRequest,
   Image as ImageIcon,
   ClipboardPaste,
+  Camera,
   Paperclip,
 } from "lucide-react-native";
 import * as Clipboard from "expo-clipboard";
@@ -1475,7 +1476,7 @@ function ComposerContentImpl({
     [blurOnSubmit, clearDraft, replaceUserInput, resetSuppression, setSelectedAttachments],
   );
 
-  const { pickImages } = useImageAttachmentPicker();
+  const { pickImages, takePhoto } = useImageAttachmentPicker();
   const { pickFiles } = useFilePicker();
   const agentIdRef = useRef(agentId);
   const sendAgentMessageRef = useRef<
@@ -1753,6 +1754,15 @@ function ComposerContentImpl({
     if (newImages.length === 0) return;
     addImages(newImages);
   }, [addImages, pickImages]);
+
+  const handleTakePhoto = useCallback(async () => {
+    const newImages = await pickAndPersistImages({
+      pickImages: takePhoto,
+      persister: composerImageAttachmentPersister,
+    });
+    if (newImages.length === 0) return;
+    addImages(newImages);
+  }, [addImages, takePhoto]);
 
   const handlePasteImage = useCallback(async () => {
     try {
@@ -2162,7 +2172,7 @@ function ComposerContentImpl({
     const items: AttachmentMenuItem[] = [
       {
         id: "image",
-        label: t("composer.attachments.addImage"),
+        label: t(isNative ? "composer.attachments.choosePhoto" : "composer.attachments.addImage"),
         icon: <ThemedImageIcon size={ICON_SIZE.md} uniProps={iconForegroundMutedMapping} />,
         onSelect: () => {
           void handlePickImage();
@@ -2170,6 +2180,14 @@ function ComposerContentImpl({
       },
     ];
     if (isNative) {
+      items.push({
+        id: "take-photo",
+        label: t("composer.attachments.takePhoto"),
+        icon: <ThemedCamera size={ICON_SIZE.md} uniProps={iconForegroundMutedMapping} />,
+        onSelect: () => {
+          void handleTakePhoto();
+        },
+      });
       items.push({
         id: "paste-image",
         label: t("composer.attachments.pasteImage"),
@@ -2204,6 +2222,7 @@ function ComposerContentImpl({
   }, [
     forgePresentation,
     handlePasteImage,
+    handleTakePhoto,
     handlePickFile,
     handlePickImage,
     pluginAttachments.menuItems,
@@ -2664,6 +2683,7 @@ const ThemedCircleDot = withUnistyles(CircleDot);
 const ThemedAudioLines = withUnistyles(AudioLines);
 const ThemedPaperclip = withUnistyles(Paperclip);
 const ThemedImageIcon = withUnistyles(ImageIcon);
+const ThemedCamera = withUnistyles(Camera);
 const ThemedClipboardPaste = withUnistyles(ClipboardPaste);
 const ThemedFileText = withUnistyles(FileText);
 const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });

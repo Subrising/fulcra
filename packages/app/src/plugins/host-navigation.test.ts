@@ -150,3 +150,54 @@ describe("architecture change navigation", () => {
     ).toThrow("Workspace is unavailable on the requested host.");
   });
 });
+
+import {
+  createIntakeNavigation,
+  globalIntakeRoute,
+  newIntakeId,
+} from "./organization-navigation-model";
+describe("organization intake navigation", () => {
+  it("reopens the same intake on its original company and keeps new requests distinct without creating placement", () => {
+    const destinations: string[] = [],
+      selected: string[] = [];
+    let next = 0;
+    const online = new Set(["book"]);
+    const navigation = createIntakeNavigation("company", {
+      push: (path) => destinations.push(path),
+      newId: () => `new-${++next}`,
+      chooseCompany: (id) => selected.push(id),
+      projectRoute: (host, project) => `/project/${host}/${project}`,
+      connection: (host) => ({ online: online.has(host), workspaceMultiplicity: host === "book" }),
+    });
+    navigation.openIntake("same-request", "AI Game Dev");
+    navigation.openIntake("same-request", "AI Game Dev");
+    navigation.newIntake();
+    navigation.newIntake();
+    expect(destinations).toEqual([
+      "/intake?thread=same-request&controller=company&workspace=AI%20Game%20Dev",
+      "/intake?thread=same-request&controller=company&workspace=AI%20Game%20Dev",
+      "/intake?thread=new-1&controller=company",
+      "/intake?thread=new-2&controller=company",
+    ]);
+    navigation.setDefaultCompanySource();
+    expect(selected).toEqual(["company"]);
+    expect(navigation.canReuseContext("book")).toBe(true);
+    online.clear();
+    expect(navigation.canReuseContext("book")).toBe(false);
+    online.add("old-host");
+    expect(navigation.canReuseContext("old-host")).toBe(false);
+    navigation.openProject("book", "unchanged-project");
+    navigation.createProject();
+    expect(destinations.slice(-2)).toEqual(["/project/book/unchanged-project", "/open-project"]);
+  });
+});
+
+it("global New chat uses a persistent UUID without requiring a host/project/workspace route", () => {
+  const first = globalIntakeRoute(),
+    second = globalIntakeRoute();
+  expect(first).toMatch(
+    /^\/intake\?thread=[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i,
+  );
+  expect(second).not.toEqual(first);
+  expect(newIntakeId()).toMatch(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i);
+});
