@@ -25,6 +25,10 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
   ),
 }));
 vi.mock("./prime-sidebar", () => ({ PrimeSidebar: () => null }));
+// This row tests routing and trust presentation; host/runtime behavior is covered by prime-sidebar.test.
+vi.mock("./command-centre-connection", () => ({
+  COMMAND_CENTRE_PLUGIN_ID: "orca-organization-next",
+}));
 import { PluginSidebarItemRow } from "./sidebar-items";
 import { groupPluginSidebarContributions } from "./sidebar-groups";
 afterEach(cleanup);
