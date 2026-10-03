@@ -2460,7 +2460,7 @@ describe("provider-owned catalogue identity", () => {
     }
   });
 
-  test("a refresh supersedes an older in-flight result for the same provider key", async () => {
+  test("a force refresh joins in-flight discovery for the same provider key", async () => {
     let release!: () => void;
     let started!: () => void;
     const pending = new Promise<void>((finish) => {
@@ -2502,15 +2502,20 @@ describe("provider-owned catalogue identity", () => {
         wait: true,
       });
       await began;
-      await manager.refreshSnapshotForCwd({ cwd: resolveSnapshotCwd("/b"), providers: ["codex"] });
+      const refresh = manager.refreshSnapshotForCwd({
+        cwd: resolveSnapshotCwd("/b"),
+        providers: ["codex"],
+      });
+      await Promise.resolve();
+      expect(calls).toBe(1);
       release();
-      await first;
+      await Promise.all([first, refresh]);
       for (const cwd of [resolveSnapshotCwd("/a"), resolveSnapshotCwd("/b")]) {
         expect(
           (await manager.getProvider({ provider: "codex", cwd, wait: true })).models?.[0]?.id,
-        ).toBe("model-2");
+        ).toBe("model-1");
       }
-      expect(calls).toBe(2);
+      expect(calls).toBe(1);
     } finally {
       release();
       await manager.shutdown();
@@ -2847,7 +2852,7 @@ test.each(["configuration", "shutdown", "destroy"])(
   },
 );
 
-test("settings invalidation discards pending discovery even when the provider returns the same key", async () => {
+test("settings refresh joins pending discovery when the provider returns the same key", async () => {
   let release!: () => void;
   let started!: () => void;
   const pending = new Promise<void>((finish) => {
@@ -2888,9 +2893,11 @@ test("settings invalidation discards pending discovery even when the provider re
       wait: true,
     });
     await began;
-    await manager.refreshSettingsSnapshot({ providers: ["codex"] });
+    const refresh = manager.refreshSettingsSnapshot({ providers: ["codex"] });
+    await Promise.resolve();
+    expect(calls).toBe(1);
     release();
-    await old;
+    await Promise.all([old, refresh]);
     expect(
       (
         await manager.getProvider({
@@ -2899,8 +2906,8 @@ test("settings invalidation discards pending discovery even when the provider re
           wait: true,
         })
       ).models?.[0]?.id,
-    ).toBe("model-2");
-    expect(calls).toBe(2);
+    ).toBe("model-1");
+    expect(calls).toBe(1);
   } finally {
     release();
     await manager.shutdown();

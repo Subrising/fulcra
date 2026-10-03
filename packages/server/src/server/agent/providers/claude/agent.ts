@@ -1658,6 +1658,7 @@ export class ClaudeAgentClient implements AgentClient {
         }),
       );
     } catch (error) {
+      context?.signal.throwIfAborted();
       this.logger.warn(
         { err: error },
         "Claude model discovery failed; using the built-in model list",
@@ -1678,6 +1679,7 @@ export class ClaudeAgentClient implements AgentClient {
       );
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to resolve Claude Code version for model catalog");
+      context?.signal.throwIfAborted();
     }
     const env = this.buildProviderEnv();
     const runtimeModels = await this.discoverRuntimeModels(context);
@@ -1687,6 +1689,7 @@ export class ClaudeAgentClient implements AgentClient {
         claudeConfigDir(env),
         claudeCodeVersion,
         runtimeModels,
+        context?.signal,
       ),
     );
     recordClaudeRuntimeModels(runtimeModels?.length ? models : null);
