@@ -283,11 +283,20 @@ it.each(["reconnect", "remove", "uninstall", "reload", "changed", "expired"])(
 );
 
 describe("current host catalog input policy", () => {
-  const observed = [{ id: "orca-organization-next", contract: "1.1" as const, hooks: ["input", "mcp"] }];
+  const observed = [
+    { id: "orca-organization-next", contract: "1.1" as const, hooks: ["input", "mcp"] },
+  ];
   it("keeps actual Mini and Book hook reports separate even for the same displayed host name", () => {
-    const hosts = [{ serverId: "host-a", label: "Shared host name" }, { serverId: "host-b", label: "Shared host name" }];
+    const hosts = [
+      { serverId: "host-a", label: "Shared host name" },
+      { serverId: "host-b", label: "Shared host name" },
+    ];
     const clients = [{} as DaemonClient, {} as DaemonClient];
-    for (let index = 0; index < hosts.length; index++) registry.installCatalog(hosts[index].serverId, [], { client: clients[index], trustedPlugins: observed });
+    for (let index = 0; index < hosts.length; index++)
+      registry.installCatalog(hosts[index].serverId, [], {
+        client: clients[index],
+        trustedPlugins: observed,
+      });
     expect(registry.getHostInputPolicy("host-a", clients[0])).toBe("owner-controls-required");
     expect(registry.getHostInputPolicy("host-b", clients[1])).toBe("owner-controls-required");
     registry.installCatalog("host-a", [], { client: clients[0], trustedPlugins: [] });
@@ -299,7 +308,8 @@ describe("current host catalog input policy", () => {
     expect(registry.getHostInputPolicy("host-a", daemonClient)).toBe("unknown");
     registry.installCatalog("host-a", [], { client: daemonClient, trustedPlugins: [] });
     expect(registry.getHostInputPolicy("host-a", daemonClient)).toBe("standalone");
-    registry.suspendHost("host-a"); registry.markCatalogSettled("host-a");
+    registry.suspendHost("host-a");
+    registry.markCatalogSettled("host-a");
     expect(registry.getHostInputPolicy("host-a", daemonClient)).toBe("unknown");
   });
   it("replacement clients need fresh policy and an old cleanup cannot erase it", () => {
@@ -315,8 +325,14 @@ describe("current host catalog input policy", () => {
   });
   it("publishes policy invalidation for an empty client bundle catalog", () => {
     registry.installCatalog("host-a", [], { client: daemonClient, trustedPlugins: [] });
-    let changes = 0; const unsubscribe = registry.subscribe(() => changes++);
-    try { registry.suspendHost("host-a"); expect(changes).toBe(1); expect(registry.getHostInputPolicy("host-a", daemonClient)).toBe("unknown"); }
-    finally { unsubscribe(); }
+    let changes = 0;
+    const unsubscribe = registry.subscribe(() => changes++);
+    try {
+      registry.suspendHost("host-a");
+      expect(changes).toBe(1);
+      expect(registry.getHostInputPolicy("host-a", daemonClient)).toBe("unknown");
+    } finally {
+      unsubscribe();
+    }
   });
 });

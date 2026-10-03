@@ -10,11 +10,15 @@ import type { InstalledPlugin, UntrustedPlugin } from "./types";
 import { PluginReconnectState } from "./reconnect-state";
 import { IntercomSettingsSection } from "@/screens/settings/intercom-section";
 
-type TrustedCatalogPlugins = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>["trustedPlugins"];
+type TrustedCatalogPlugins = Awaited<
+  ReturnType<DaemonClient["getPluginCatalog"]>
+>["trustedPlugins"];
 export type HostInputPolicy = "unknown" | "owner-controls-required" | "standalone";
 function catalogInputPolicy(trustedPlugins: TrustedCatalogPlugins): HostInputPolicy {
   if (trustedPlugins === undefined) return "unknown";
-  return trustedPlugins.some((plugin) => plugin.hooks.includes("input")) ? "owner-controls-required" : "standalone";
+  return trustedPlugins.some((plugin) => plugin.hooks.includes("input"))
+    ? "owner-controls-required"
+    : "standalone";
 }
 
 type CatalogPlugin = Awaited<ReturnType<DaemonClient["getPluginCatalog"]>>["plugins"][number];
@@ -33,7 +37,10 @@ export class PluginRegistry {
   // "there is nothing", and it must not stay unknown forever on a host that will never reply.
   private readonly catalogSettled = new Set<string>();
   // Metadata is about a particular live catalog, not an evaluated UI bundle or a host label.
-  private readonly hostInputPolicies = new Map<string, { client: DaemonClient; trustedPlugins: TrustedCatalogPlugins }>();
+  private readonly hostInputPolicies = new Map<
+    string,
+    { client: DaemonClient; trustedPlugins: TrustedCatalogPlugins }
+  >();
 
   constructor(
     private readonly dependencies: {
@@ -62,7 +69,9 @@ export class PluginRegistry {
 
   getHostInputPolicy(serverId: string, client: DaemonClient | null): HostInputPolicy {
     const current = this.hostInputPolicies.get(serverId);
-    return client && current?.client === client ? catalogInputPolicy(current.trustedPlugins) : "unknown";
+    return client && current?.client === client
+      ? catalogInputPolicy(current.trustedPlugins)
+      : "unknown";
   }
 
   clearHostInputPolicy(serverId: string, client: DaemonClient): void {
