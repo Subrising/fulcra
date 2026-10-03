@@ -42,8 +42,8 @@ export function useSidebarWorkspacePinController(): ToggleSidebarWorkspacePin {
       const current = mapKey ? workspaces?.get(mapKey) : undefined;
       if (!current) throw new Error("Workspace is no longer available on this host");
       const result = await client.setWorkspacePinned(current.id, current.pinnedAt == null);
-      // The acknowledgement precedes the subscription update on the host. Keep the shared
-      // pending guard until a bounded authoritative directory refresh closes that gap.
+      // The acknowledgement can arrive before directory hydration reaches the sidebar. Keep
+      // the shared pending guard through an authoritative refresh when those states differ.
       // Never project an older acknowledgement over a newer peer's workspace descriptor.
       if (runtime.getClient(workspace.serverId) !== client) return;
       const latest = useSessionStore.getState().sessions[workspace.serverId]?.workspaces.get(mapKey!);
