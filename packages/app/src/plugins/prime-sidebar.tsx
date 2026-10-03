@@ -127,8 +127,12 @@ function PrimeRow({
   const label = `${primeName(seat.seat)}${suffix}`;
   const open = useCallback(() => {
     if (!canOpen) return leadership();
+    const result = navigation.openAgentOnHost?.({
+      serverId: agentServerId!,
+      agentId: seat.sessionId!,
+    });
+    if (result !== "requested") return leadership();
     onBeforeNavigate?.();
-    navigation.openAgentOnHost?.({ serverId: agentServerId!, agentId: seat.sessionId! });
   }, [agentServerId, canOpen, leadership, navigation, onBeforeNavigate, seat.sessionId]);
   return (
     <SidebarHeaderRow
