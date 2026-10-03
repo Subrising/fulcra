@@ -10,6 +10,7 @@ import type {
   AccountUsageReading,
 } from "../../../../services/quota-fetcher/account-usage-types.js";
 import { mergeRateLimitEvent } from "../../../../services/quota-fetcher/providers/claude-account-usage.js";
+import { createPassiveClaudeUsageObserver } from "./passive-usage-observer.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { promises } from "node:fs";
@@ -2207,6 +2208,7 @@ class ClaudeAgentSession implements AgentSession {
   private cancelCurrentTurn: (() => void) | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
   private accountUsageObservation: AccountUsageReading | null = null;
+  private readonly passiveUsageObserver: ReturnType<typeof createPassiveClaudeUsageObserver>;
   private lastOptionsModel: string | null = null;
   private lastRuntimeModel: string | null = null;
   private compacting = false;
@@ -2229,6 +2231,7 @@ class ClaudeAgentSession implements AgentSession {
     this.config = config;
     assertClaudeThinkingOptionSupported(config.model, config.thinkingOptionId);
     this.launchEnv = options.launchEnv;
+    this.passiveUsageObserver = createPassiveClaudeUsageObserver(options.launchEnv);
     this.agentId = options.agentId;
     this.defaults = options.defaults;
     this.runtimeSettings = options.runtimeSettings;
@@ -2315,7 +2318,10 @@ class ClaudeAgentSession implements AgentSession {
       message.rate_limit_info,
       Date.now(),
     );
-    if (merged) this.accountUsageObservation = merged;
+    if (merged) {
+      this.accountUsageObservation = merged;
+      this.passiveUsageObserver?.publish(merged, message.rate_limit_info.rateLimitType);
+    }
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
