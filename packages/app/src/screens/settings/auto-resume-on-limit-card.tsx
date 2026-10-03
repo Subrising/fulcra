@@ -2,7 +2,11 @@ import React, { useCallback } from "react";
 import { Alert, Text, View } from "react-native";
 import { Switch } from "@/components/ui/switch";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
-import { getHostRuntimeStore, useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
+import {
+  getHostRuntimeStore,
+  useHostRuntimeClient,
+  useHostRuntimeIsConnected,
+} from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
 import { settingsStyles } from "@/styles/settings";
 import { pluginRegistry, useHostInputPolicy } from "@/plugins/registry";
@@ -27,9 +31,15 @@ export function AutoResumeOnLimitCard({ serverId }: { serverId: string }) {
   const handleValueChange = useCallback(
     (next: boolean) => {
       const current = getHostRuntimeStore().getSnapshot(serverId);
-      if (!client || !current || current.client !== client || current.connectionStatus !== "online" ||
+      if (
+        !client ||
+        !current ||
+        current.client !== client ||
+        current.connectionStatus !== "online" ||
         !supportsAutoResumeOnLimit(current.client.getLastServerInfoMessage()?.features) ||
-        pluginRegistry.getHostInputPolicy(serverId, client) !== "standalone") return;
+        pluginRegistry.getHostInputPolicy(serverId, client) !== "standalone"
+      )
+        return;
       void patchConfig({ autoResumeOnLimit: next }).catch((error) => {
         console.error("[HostPage] Failed to update auto-resume", error);
         Alert.alert(
@@ -45,9 +55,11 @@ export function AutoResumeOnLimitCard({ serverId }: { serverId: string }) {
     let message = "Update this host to configure automatic resume after usage limits reset.";
     if (supported === null) message = "Checking this host's automatic-resume support…";
     else if (supported && policy === "owner-controls-required") {
-      message = "Resuming sessions on this host requires their prime or owner’s controls. The standalone setting does not enable automatic continuation for these sessions.";
+      message =
+        "Resuming sessions on this host requires their prime or owner’s controls. The standalone setting does not enable automatic continuation for these sessions.";
     } else if (supported && policy === "unknown") {
-      message = "This host’s resume policy has not been confirmed. Automatic resume controls are unavailable until the host reconnects and its policy is checked.";
+      message =
+        "This host’s resume policy has not been confirmed. Automatic resume controls are unavailable until the host reconnects and its policy is checked.";
     } else if (supported) message = "Reading this host's automatic-resume setting…";
     return (
       <View style={settingsStyles.card} testID="host-page-auto-resume-on-limit-unavailable">

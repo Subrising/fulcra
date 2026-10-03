@@ -66,7 +66,11 @@ export function PluginCatalogSync({
           if (cancelled || abort.signal.aborted || epoch !== generation) return;
           const plugins = await preparePluginCatalog(catalog.plugins);
           if (!cancelled && !abort.signal.aborted && epoch === generation) {
-            pluginRegistry.installCatalog(serverId, plugins, { replacePluginId, client, trustedPlugins: catalog.trustedPlugins });
+            pluginRegistry.installCatalog(serverId, plugins, {
+              replacePluginId,
+              client,
+              trustedPlugins: catalog.trustedPlugins,
+            });
           }
         } catch {
           if (!cancelled && epoch === generation) {

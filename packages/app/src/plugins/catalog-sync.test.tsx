@@ -190,30 +190,51 @@ it("paging refusal suspends prior surfaces and never falls back to the legacy bu
 });
 
 it("retains actual trusted input-hook metadata without another catalog read or bundle evaluation", async () => {
-  state.connected = true; state.supported = true;
-  const trustedPlugins = [{ id: "orca-organization-next", contract: "1.1", hooks: ["input", "mcp"] }];
+  state.connected = true;
+  state.supported = true;
+  const trustedPlugins = [
+    { id: "orca-organization-next", contract: "1.1", hooks: ["input", "mcp"] },
+  ];
   const client = {
     subscribeConnectionStatus: () => () => {},
     getPluginCatalog: vi.fn(async () => ({ plugins: [], trustedPlugins })),
-    observeEvents: () => ({ subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(), release: async () => {} }),
+    observeEvents: () => ({
+      subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+      release: async () => {},
+    }),
   } as unknown as DaemonClient;
-  await act(async () => { render(React.createElement(PluginCatalogSync, { serverId: "srv_-gsApGw5dJdC", client })); });
+  await act(async () => {
+    render(React.createElement(PluginCatalogSync, { serverId: "srv_-gsApGw5dJdC", client }));
+  });
   expect(client.getPluginCatalog).toHaveBeenCalledOnce();
   expect(state.prepare).toHaveBeenCalledExactlyOnceWith([]);
-  expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("srv_-gsApGw5dJdC", [], { client, replacePluginId: undefined, trustedPlugins });
+  expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("srv_-gsApGw5dJdC", [], {
+    client,
+    replacePluginId: undefined,
+    trustedPlugins,
+  });
 });
 it("clears policy synchronously on a connection drop even before a reconnect render", async () => {
-  state.connected = true; state.supported = true;
+  state.connected = true;
+  state.supported = true;
   let connectionChanged!: (status: { status: string }) => void;
   const releaseConnection = vi.fn();
   const client = {
-    subscribeConnectionStatus: (listener: typeof connectionChanged) => { connectionChanged = listener; return releaseConnection; },
+    subscribeConnectionStatus: (listener: typeof connectionChanged) => {
+      connectionChanged = listener;
+      return releaseConnection;
+    },
     getPluginCatalog: vi.fn(async () => ({ plugins: [], trustedPlugins: [] })),
-    observeEvents: () => ({ subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(), release: async () => {} }),
+    observeEvents: () => ({
+      subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+      release: async () => {},
+    }),
   } as unknown as DaemonClient;
   const view = render(React.createElement(PluginCatalogSync, { serverId: "same-host", client }));
-  await act(async () => {}); state.registry.clearHostInputPolicy.mockClear();
+  await act(async () => {});
+  state.registry.clearHostInputPolicy.mockClear();
   act(() => connectionChanged({ status: "disconnected" }));
   expect(state.registry.clearHostInputPolicy).toHaveBeenCalledExactlyOnceWith("same-host", client);
-  view.unmount(); expect(releaseConnection).toHaveBeenCalledOnce();
+  view.unmount();
+  expect(releaseConnection).toHaveBeenCalledOnce();
 });
