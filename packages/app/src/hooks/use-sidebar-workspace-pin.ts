@@ -25,11 +25,7 @@ export function useSidebarWorkspacePinController(): ToggleSidebarWorkspacePin {
   const { t } = useTranslation();
   const toast = useToast();
   const mutation = useMutation({
-    mutationFn: async ({
-      workspace,
-    }: {
-      workspace: PinnableWorkspace;
-    }) => {
+    mutationFn: async ({ workspace }: { workspace: PinnableWorkspace }) => {
       const runtime = getHostRuntimeStore();
       const client = runtime.getClient(workspace.serverId);
       if (!client || runtime.getSnapshot(workspace.serverId)?.connectionStatus !== "online") {
@@ -38,7 +34,10 @@ export function useSidebarWorkspacePinController(): ToggleSidebarWorkspacePin {
       // A menu or keyboard handler can retain a row from before a remote pin update.
       // Resolve the current host-qualified descriptor at submission, not that row's timestamp.
       const workspaces = useSessionStore.getState().sessions[workspace.serverId]?.workspaces;
-      const mapKey = resolveWorkspaceMapKeyByIdentity({ workspaces, workspaceId: workspace.workspaceId });
+      const mapKey = resolveWorkspaceMapKeyByIdentity({
+        workspaces,
+        workspaceId: workspace.workspaceId,
+      });
       const current = mapKey ? workspaces?.get(mapKey) : undefined;
       if (!current) throw new Error("Workspace is no longer available on this host");
       const result = await client.setWorkspacePinned(current.id, current.pinnedAt == null);
@@ -46,7 +45,9 @@ export function useSidebarWorkspacePinController(): ToggleSidebarWorkspacePin {
       // the shared pending guard through an authoritative refresh when those states differ.
       // Never project an older acknowledgement over a newer peer's workspace descriptor.
       if (runtime.getClient(workspace.serverId) !== client) return;
-      const latest = useSessionStore.getState().sessions[workspace.serverId]?.workspaces.get(mapKey!);
+      const latest = useSessionStore
+        .getState()
+        .sessions[workspace.serverId]?.workspaces.get(mapKey!);
       if (latest && latest.pinnedAt !== result.pinnedAt) {
         try {
           await runtime.refreshWorkspaceDirectory({ serverId: workspace.serverId });
