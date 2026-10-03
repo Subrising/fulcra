@@ -13,6 +13,8 @@ supervisor/daemon/app tree. No process kill or instruction replay port exists.
 Preparation is not installed acceptance. Crash recovery is intentionally unavailable:
 retained old bytes and bounded selector backups require explicit operator recovery.
 """
+from __future__ import annotations
+
 import ctypes
 import errno
 import hashlib
@@ -35,6 +37,14 @@ class UpgradeRefused(RuntimeError):
 
 class TopologyUnavailable(UpgradeRefused):
     code = "TOPOLOGY_UNAVAILABLE"
+
+
+class NativeUpgradeApiUnavailable(TopologyUnavailable):
+    code = "NATIVE_UPGRADE_API_UNAVAILABLE"
+
+    def __init__(self, *missing):
+        self.missing = tuple(missing)
+        super().__init__("Native upgrade backend seam required: " + "; ".join(missing))
 
 
 class Busy(UpgradeRefused):
@@ -185,12 +195,21 @@ class NativeStatus:
 class Lifecycle:
     """Trusted host port; unavailable until a host implementation proves topology.
 
-    observe() must query actual native turn/permission state including operators;
-    complete means the entire session and lifecycle process inventories are known.
+    observe() must query actual native turn/permission state including operators
+    and internal helper agents. active_turn must also cover pending foreground
+    starts/runs/replacements and autonomous provider-child work: a display status
+    of idle alone is insufficient. complete means the entire session and lifecycle
+    process inventories are known. CLI ls -ag and inspect are NOT this observation:
+    listAgents hides internal agents and their CLI projections omit activeTurn.
     hold_intake() must exclude all new work until exit, including after restart;
-    acquiring/releasing the lease itself must produce no persistent writes/logs.
+    acquiring/releasing the lease currently permits no persistent writes/logs.
+    A future durable backend hold also needs explicit home-filesystem budget and
+    guarded acquisition/release support; a Python lock cannot provide boot fencing.
     graceful_stop() uses supported selected launcher/CLI operations, bounded by
-    the supplied timeout, with no kill fallback. start() starts only a verified
+    the supplied timeout, with no kill fallback. Current native supervisor/worker
+    shutdown has independent forced 10s deadlines: CLI --force=false and a longer
+    --timeout do not disable them and cannot implement this port safely.
+    start() starts only a verified
     selected app/launcher, never sends a session instruction. Implementations must
     pin executable/launcher bytes and validate structured argv (never shell text),
     preserve settings, and bound their aggregate metadata/log output to log_budget.
@@ -198,17 +217,25 @@ class Lifecycle:
     """
     @contextmanager
     def hold_intake(self):
-        raise TopologyUnavailable("Native intake fence is not proven for this topology")
+        raise NativeUpgradeApiUnavailable(
+            "atomic all-session reject-busy native input/provider-turn admission lease",
+            "lease handoff blocking new-daemon intake through verified restart")
         yield
 
     def observe(self):
-        raise TopologyUnavailable("Complete native status unavailable")
+        raise NativeUpgradeApiUnavailable(
+            "complete native snapshot including internal agents and pending provider starts",
+            "daemon-boot-bound app/supervisor/worker process inventory")
 
     def graceful_stop(self, expected, *, timeout, log_budget):
-        raise TopologyUnavailable("Supported graceful lifecycle stop unavailable")
+        raise NativeUpgradeApiUnavailable(
+            "captured-instance graceful stop under the same native admission lease",
+            "selected launchd or desktop owner suppression and complete-tree exit verification",
+            "shutdown capability without internal supervisor/worker force-kill deadlines")
 
     def start(self, app, *, log_budget):
-        raise TopologyUnavailable("Selected verified launcher unavailable")
+        raise NativeUpgradeApiUnavailable(
+            "pinned selected host launcher with admission disabled until lease release")
 
 
 def _native_rename(source, target, *, exchange=False):
