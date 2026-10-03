@@ -71,6 +71,25 @@ describe("buildAgentAttentionNotificationPayload", () => {
     });
   });
 
+  it("keeps a question's text, redacted, since it is the assistant's own prose", () => {
+    const payload = buildAgentAttentionNotificationPayload({
+      reason: "permission",
+      serverId: "s",
+      workspaceId: "w",
+      agentId: "a",
+      permissionRequest: {
+        id: "q",
+        provider: "claude",
+        name: "AskUserQuestion",
+        kind: "question",
+        title: "Which library should we use?",
+        description: "Set API_KEY=FAKE-REVIEW-SENTINEL first?",
+      },
+    });
+    expect(payload.body).toContain("Which library should we use?");
+    expect(payload.body).not.toContain("FAKE-REVIEW-SENTINEL");
+  });
+
   it("never puts a secret in the body or title, on any text path", () => {
     const sentinel = "FAKE-REVIEW-SENTINEL";
     const base = { serverId: "s", workspaceId: "w", agentId: "a" } as const;

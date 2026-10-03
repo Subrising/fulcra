@@ -117,13 +117,20 @@ const buildNotificationPreview = (text: string | null | undefined): string | nul
   return truncateNotificationText(normalized, NOTIFICATION_PREVIEW_LIMIT);
 };
 
-// A permission's title, description and input are built from the raw command and can hold secrets, so the push
-// carries only the tool name: a bounded summary, never the command.
+// A tool permission's title, description and input are built from the raw command and can hold secrets, so the push
+// carries only the tool name: a bounded summary, never the command. A question is the assistant's own prose for the
+// person (shown, redacted like any assistant text), so it keeps its text.
 const buildPermissionDetails = (
   request: NotificationPermissionRequest | null | undefined,
 ): string | null => {
   if (!request) {
     return null;
+  }
+  if (request.kind === "question") {
+    const details = [request.title?.trim(), request.description?.trim()].filter(
+      (part, index, all): part is string => Boolean(part) && all.indexOf(part) === index,
+    );
+    if (details.length > 0) return details.join(" - ");
   }
   const name = request.name?.trim();
   return name ? `Wants to use ${name}` : `Needs your approval (${request.kind})`;
