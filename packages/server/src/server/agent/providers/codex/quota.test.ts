@@ -128,7 +128,7 @@ describe("attached Codex quota", () => {
     f.finish();
     await expect(read).rejects.toMatchObject({
       code: "invalid_reply",
-      message: "Codex session quota invalid_reply",
+      message: expect.not.stringContaining("invalid_reply"),
     });
   });
 
@@ -149,13 +149,24 @@ describe("attached Codex quota", () => {
     },
   );
 
+  test("a stale read reports the account it observed so callers can detect a switch", async () => {
+    const f = fixture({ accountId: "private-account", rateLimits: {} });
+    const read = f.read();
+    f.change({ ...f.initial, revision: 1 });
+    f.finish();
+    await expect(read).rejects.toMatchObject({
+      code: "session_changed",
+      staleAccountScope: expect.stringMatching(/^codex:[a-f0-9]{64}$/),
+    });
+  });
+
   test("sanitizes native failures and does not retry", async () => {
     const f = fixture();
     const read = f.read();
     f.fail(new Error("private-account unauthorized"));
     await expect(read).rejects.toMatchObject({
       code: "read_failed",
-      message: "Codex session quota read_failed",
+      message: "Couldn't verify the Codex account: the usage check failed. Try again.",
     });
     expect(f.requests).toHaveLength(1);
   });
