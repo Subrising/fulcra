@@ -32,16 +32,33 @@ export interface CodexQuotaBinding {
   revision: number;
 }
 
+type CodexQuotaErrorCode =
+  | "unavailable"
+  | "session_changed"
+  | "account_changed"
+  | "read_failed"
+  | "invalid_reply"
+  | "admission_refused";
+
+// Messages reach users ("Failed to create agent: ..."); callers branch on `code`.
+const CODEX_QUOTA_ERROR_MESSAGES: Record<CodexQuotaErrorCode, string> = {
+  unavailable: "Couldn't verify the Codex account: the session isn't ready. Try again.",
+  session_changed:
+    "The Codex session kept changing while its account was checked, so the turn wasn't sent. Try again.",
+  account_changed:
+    "The Codex account changed while the turn was starting, so the turn wasn't sent. Check the signed-in account and try again.",
+  read_failed: "Couldn't verify the Codex account: the usage check failed. Try again.",
+  invalid_reply: "Couldn't verify the Codex account: Codex returned an unreadable usage reply.",
+  admission_refused: "The Codex turn wasn't admitted, so it wasn't sent.",
+};
+
 export class CodexQuotaError extends Error {
   constructor(
-    readonly code:
-      | "unavailable"
-      | "session_changed"
-      | "read_failed"
-      | "invalid_reply"
-      | "admission_refused",
+    readonly code: CodexQuotaErrorCode,
+    /** Account observed by a read that went stale; set only on `session_changed`. */
+    readonly staleAccountScope?: string | null,
   ) {
-    super(`Codex session quota ${code}`);
+    super(CODEX_QUOTA_ERROR_MESSAGES[code]);
     this.name = "CodexQuotaError";
   }
 }
@@ -70,13 +87,14 @@ export async function readCodexQuota(
     after?.model === before.model &&
     after?.serviceTier === before.serviceTier &&
     after?.revision === before.revision;
-  if (!unchanged) throw new CodexQuotaError("session_changed");
   const parsed = ResponseSchema.safeParse(raw);
+  if (!unchanged) {
+    const staleScope = parsed.success ? hashAccountScope(parsed.data.accountId) : undefined;
+    throw new CodexQuotaError("session_changed", staleScope);
+  }
   if (!parsed.success) throw new CodexQuotaError("invalid_reply");
   const response = parsed.data;
-  const accountScope = response.accountId
-    ? `codex:${createHash("sha256").update(response.accountId).digest("hex")}`
-    : null;
+  const accountScope = hashAccountScope(response.accountId);
   // The native response binds ordinary permission to the active account. It does not
   // grant model-specific capacity or authorize credits, reserve usage or a model switch.
   const ordinaryUsageAllowed = accountScope ? (response.ordinaryUsageAllowed ?? null) : null;
@@ -100,6 +118,10 @@ export async function readCodexQuota(
       rateLimitReachedType: limit.rateLimitReachedType ?? null,
     })),
   };
+}
+
+function hashAccountScope(accountId: string | null | undefined): string | null {
+  return accountId ? `codex:${createHash("sha256").update(accountId).digest("hex")}` : null;
 }
 
 interface CodexTurnAdmission {

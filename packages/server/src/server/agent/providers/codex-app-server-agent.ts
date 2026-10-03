@@ -84,6 +84,7 @@ import { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
 import { composeSystemPromptParts } from "../system-prompt.js";
@@ -218,6 +219,10 @@ export class CodexMissingRolloutError extends Error {
 }
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;
+// Turn admission re-reads quota when account notifications or a transient read failure
+// race the check. Each read is bounded by its own timeout, so the total wait is bounded.
+const CODEX_ADMISSION_MAX_QUOTA_READS = 3;
+const CODEX_ADMISSION_RETRY_DELAY_MS = 150;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const CODEX_PROVIDER = "codex" as const;
 // Codex treats most app-server client names as the model-request originator.
@@ -3475,6 +3480,8 @@ export class CodexAppServerAgentSession implements AgentSession {
   private quotaRevision = 0;
   private accountNotificationEpoch = 0n;
   private quotaModelProvider: string | null = null;
+  /** Account from the last fresh quota read; undefined until one succeeds. */
+  private lastQuotaAccountScope: string | null | undefined = undefined;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
@@ -4500,7 +4507,6 @@ export class CodexAppServerAgentSession implements AgentSession {
   ): Promise<{ turnId: string }> {
     const queued = options?.[NATIVE_QUEUED_FINAL];
     assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
-    const originalAccountEpoch = this.accountNotificationEpoch;
     const admission = options?.[CODEX_TURN_ADMISSION];
     this.assertNativeForegroundStartAvailable(queued);
     let resolveStart!: () => void;
@@ -4537,6 +4543,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       const preparedClient = this.client;
       const preparedThread = this.currentThreadId;
       let preparedRevision = this.quotaRevision;
+      // Captured after connect and thread setup: Codex announces the account while
+      // starting, and that notification must not refuse the turn being prepared.
+      let preparedAccountEpoch = this.accountNotificationEpoch;
       const preparedModelProvider = this.quotaModelProvider;
       const preparationIntent = () =>
         JSON.stringify({
@@ -4567,6 +4576,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (admission !== undefined) {
         if (typeof preparedThread !== "string" || !preparedThread)
           throw new CodexQuotaError("session_changed");
+        // Permanent changes: the turn would be bound to a different session or intent.
         const validateCurrent = () => {
           validateQueuedPreparation();
           if (
@@ -4575,7 +4585,6 @@ export class CodexAppServerAgentSession implements AgentSession {
             this.client !== preparedClient ||
             this.currentThreadId !== preparedThread ||
             this.quotaModelProvider !== preparedModelProvider ||
-            this.accountNotificationEpoch !== originalAccountEpoch ||
             preparationIntent() !== originalPreparationIntent
           )
             throw new CodexQuotaError("session_changed");
@@ -4593,76 +4602,97 @@ export class CodexAppServerAgentSession implements AgentSession {
             admission.validate();
           }
         };
+        // Churn: revision and account notifications that a fresh read can absorb.
+        const churned = () =>
+          this.quotaRevision !== preparedRevision ||
+          this.accountNotificationEpoch !== preparedAccountEpoch;
         const validatePrepared = () => {
           validateCurrent();
-          if (this.quotaRevision !== preparedRevision) throw new CodexQuotaError("session_changed");
+          if (churned()) throw new CodexQuotaError("session_changed");
         };
-        let reprepared = false;
+        let accountNotified = false;
         const reprepare = async () => {
-          // Only a host-observed revision change before policy evaluation may
-          // refresh local text parameters. Never re-enter thread or transport setup.
+          // Only host-observed churn before policy evaluation may refresh local text
+          // parameters. Never re-enter thread or transport setup.
           validateCurrent();
-          if (
-            reprepared ||
-            typeof admission === "function" ||
-            typeof prompt !== "string" ||
-            slashCommand ||
-            this.quotaRevision !== preparedRevision + 1
-          )
+          if (typeof prompt !== "string" || slashCommand)
             throw new CodexQuotaError("session_changed");
-          reprepared = true;
+          if (this.accountNotificationEpoch !== preparedAccountEpoch) accountNotified = true;
           preparedRevision = this.quotaRevision;
+          preparedAccountEpoch = this.accountNotificationEpoch;
           const refreshed = await this.buildTurnStartParams(effectivePrompt, options);
           validatePrepared();
           if (JSON.stringify(refreshed.params) !== originalParameters)
             throw new CodexQuotaError("session_changed");
           turnStart = refreshed;
         };
+        // The account this session had before any notification seen during this start.
+        let knownAccountScope = this.lastQuotaAccountScope;
+        let reads = 0;
         const readPreparedQuota = async () => {
-          if (this.quotaRevision !== preparedRevision) await reprepare();
-          validatePrepared();
-          const turn = capturedCodexTurn(admission, preparedThread, turnStart.params);
-          let staleQuotaRead = false;
-          const read = async () => {
+          for (;;) {
+            if (churned()) await reprepare();
+            validatePrepared();
+            const turn = capturedCodexTurn(admission, preparedThread, turnStart.params);
+            let staleQuotaRead = false;
+            const read = async () => {
+              // Transient read failures retry here, before the failure callback runs.
+              for (;;) {
+                reads++;
+                try {
+                  return await this.getQuota();
+                } catch (error) {
+                  if (!(error instanceof CodexQuotaError)) throw error;
+                  if (error.code === "session_changed") {
+                    staleQuotaRead = true;
+                    if (knownAccountScope === undefined)
+                      knownAccountScope = error.staleAccountScope;
+                    throw error;
+                  }
+                  if (error.code !== "read_failed" || reads >= CODEX_ADMISSION_MAX_QUOTA_READS)
+                    throw error;
+                }
+                await delay(CODEX_ADMISSION_RETRY_DELAY_MS * reads);
+                validateCurrent();
+                if (churned()) {
+                  staleQuotaRead = true;
+                  throw new CodexQuotaError("session_changed");
+                }
+              }
+            };
             try {
-              return await this.getQuota();
+              const quota = await readCodexTurnQuota({
+                read,
+                validate: validatePrepared,
+                admission,
+                turn,
+              });
+              if (
+                accountNotified &&
+                knownAccountScope !== undefined &&
+                quota.accountScope !== knownAccountScope
+              )
+                throw new CodexQuotaError("account_changed");
+              return { quota, turn };
             } catch (error) {
-              staleQuotaRead = error instanceof CodexQuotaError && error.code === "session_changed";
-              throw error;
+              if (
+                !staleQuotaRead ||
+                !(error instanceof CodexQuotaError) ||
+                error.code !== "session_changed" ||
+                reads >= CODEX_ADMISSION_MAX_QUOTA_READS
+              )
+                throw error;
             }
-          };
-          try {
-            const quota = await readCodexTurnQuota({
-              read,
-              validate: validatePrepared,
-              admission,
-              turn,
-            });
-            return { quota, turn };
-          } catch (error) {
-            if (
-              !staleQuotaRead ||
-              !(error instanceof CodexQuotaError) ||
-              error.code !== "session_changed"
-            )
-              throw error;
-            await reprepare();
-            const quota = await readCodexTurnQuota({
-              read: () => this.getQuota(),
-              validate: validatePrepared,
-              admission,
-              turn,
-            });
-            return { quota, turn };
+            await delay(CODEX_ADMISSION_RETRY_DELAY_MS * reads);
           }
         };
         const { quota, turn } = await readPreparedQuota();
         validatePrepared();
         assertCodexTurnAdmission({ check: admission, turn, quota, parameters: turnStart.params });
-        // Policy mutation/refusal is outside the sole reprepare catch.
+        // Policy runs once, outside the retry loop: any change after it refuses.
         validatePrepared();
       }
-      if (this.accountNotificationEpoch !== originalAccountEpoch)
+      if (this.accountNotificationEpoch !== preparedAccountEpoch)
         throw new CodexQuotaError("session_changed");
       if (pendingStart.cancelRequested) {
         throw new Error("Codex turn start was interrupted before reaching Codex");
@@ -4675,7 +4705,7 @@ export class CodexAppServerAgentSession implements AgentSession {
           preparedClient,
           preparedThread,
           preparedRevision,
-          originalAccountEpoch,
+          preparedAccountEpoch,
           pendingStart,
           turnStart.params,
         );
@@ -4876,8 +4906,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     return this.accountUsageLabel;
   }
 
-  getQuota() {
-    return readCodexQuota((): CodexQuotaBinding | null => {
+  async getQuota() {
+    const quota = await readCodexQuota((): CodexQuotaBinding | null => {
       if (
         this.closed ||
         this.connectionState !== "connected" ||
@@ -4895,6 +4925,8 @@ export class CodexAppServerAgentSession implements AgentSession {
         revision: this.quotaRevision,
       };
     });
+    this.lastQuotaAccountScope = quota.accountScope;
+    return quota;
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
