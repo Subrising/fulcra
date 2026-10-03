@@ -38,8 +38,8 @@ vi.mock("./registry", () => ({ useInstalledPlugin: () => null }));
 vi.mock("@/runtime/host-runtime", () => ({
   useHostRuntimeClient: () => null,
   getHostRuntimeStore: () => ({
-    getHostRegistryStatus: () => f.registryReady ? "ready" : "loading",
-    getHosts: () => f.registeredHost && f.host ? [{ serverId: f.host }] : [],
+    getHostRegistryStatus: () => (f.registryReady ? "ready" : "loading"),
+    getHosts: () => (f.registeredHost && f.host ? [{ serverId: f.host }] : []),
   }),
 }));
 vi.mock("./runtime-boundary", () => ({ PluginRuntimeBoundary: () => null }));
@@ -176,9 +176,22 @@ for (const refusal of ["missing-host", "registry-not-ready"] as const) {
     f.host = "book";
     f.registeredHost = refusal !== "missing-host";
     f.registryReady = refusal !== "registry-not-ready";
-    f.read.mockResolvedValue({ available: true, primes: [{ seat: "research", state: "assigned", sessionPresent: true, sessionId: "remote", dispatch: { supported: true } }] });
+    f.read.mockResolvedValue({
+      available: true,
+      primes: [
+        {
+          seat: "research",
+          state: "assigned",
+          sessionPresent: true,
+          sessionId: "remote",
+          dispatch: { supported: true },
+        },
+      ],
+    });
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Open Research prime conversation" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Research prime conversation" }),
+    );
     expect(f.open).not.toHaveBeenCalled();
     expect(f.push).toHaveBeenCalledWith("/h/mini/plugin/orca-organization-next/surface/leadership");
     expect(f.push).toHaveBeenCalledTimes(1);
