@@ -10,10 +10,6 @@ const tooling = process.argv[2];
 if (!tooling || !path.isAbsolute(tooling))
   throw Error("Supply absolute external UI tooling directory");
 const testFile = process.argv[3] ?? "ui.test.mjs";
-// Bound each named shard by the same timeout as the complete suite. Callers
-// account for every discovered case; filtering never changes the default run.
-const testNamePattern = process.argv[4];
-if (process.argv.length > 5) throw Error("Unexpected UI verification arguments");
 if (
   ![
     "accounts.ui.test.mjs",
@@ -81,10 +77,7 @@ await build({
   outfile: output,
   plugins,
 });
-execFileSync(process.execPath, [
-  "--test", "--test-reporter=tap",
-  ...(testNamePattern === undefined ? [] : [`--test-name-pattern=${testNamePattern}`]), output,
-], {
+execFileSync(process.execPath, ["--test", "--test-reporter=tap", output], {
   cwd: root,
   stdio: "inherit",
   timeout: 30000,
