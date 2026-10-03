@@ -107,7 +107,9 @@ const buildNotificationPreview = (text: string | null | undefined): string | nul
     return null;
   }
 
-  const normalized = redactNotificationSecrets(normalizeNotificationText(stripMarkdownToText(text)));
+  const normalized = redactNotificationSecrets(
+    normalizeNotificationText(stripMarkdownToText(text)),
+  );
   if (!normalized) {
     return null;
   }
