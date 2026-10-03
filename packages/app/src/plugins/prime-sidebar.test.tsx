@@ -14,7 +14,9 @@ vi.mock("./host-navigation", () => ({
   usePluginHostNavigation: () => ({ openAgentOnHost: f.open }),
 }));
 vi.mock("@/stores/session-store", () => ({
-  useSessionStore: (select: (state: { sessions: Record<string, { agents: Map<string, object> }> }) => string | null) =>
+  useSessionStore: (
+    select: (state: { sessions: Record<string, { agents: Map<string, object> }> }) => string | null,
+  ) =>
     select({
       sessions: f.host
         ? {
