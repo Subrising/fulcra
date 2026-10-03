@@ -9,6 +9,8 @@ import {
   CopyX,
   Ellipsis,
   Pencil,
+  Bell,
+  BellOff,
   RotateCw,
   X,
 } from "lucide-react-native";
@@ -25,6 +27,8 @@ import type { Theme } from "@/styles/theme";
 const ThemedEllipsis = withUnistyles(Ellipsis);
 const ThemedCopy = withUnistyles(Copy);
 const ThemedRotateCw = withUnistyles(RotateCw);
+const ThemedBell = withUnistyles(Bell);
+const ThemedBellOff = withUnistyles(BellOff);
 const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
 const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
@@ -49,6 +53,10 @@ function MobileTabDropdownMenuItem({
     switch (entry.icon) {
       case "copy":
         return <ThemedCopy size={16} uniProps={mutedColorMapping} />;
+      case "bell":
+        return <ThemedBell size={16} uniProps={mutedColorMapping} />;
+      case "bell-off":
+        return <ThemedBellOff size={16} uniProps={mutedColorMapping} />;
       case "rotate-cw":
         return <ThemedRotateCw size={16} uniProps={mutedColorMapping} />;
       case "arrow-left-to-line":

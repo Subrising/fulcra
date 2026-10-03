@@ -82,6 +82,8 @@ import {
   buildAgentAttentionNotificationPayload,
   findLatestPermissionRequest,
 } from "@getpaseo/protocol/agent-attention-notification";
+import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
+import { shouldNotifyForSession } from "@getpaseo/protocol/notification-policy";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import {
@@ -3180,7 +3182,20 @@ export class VoiceAssistantWebSocketServer {
       workspaceId: agent.workspaceId,
       agentId: params.agentId,
       assistantMessage,
+      agentTitle: agent.config.title,
       permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
+    });
+
+    // Notification policy: workers stay quiet unless the host or the session opts in. Attention
+    // events still flow to clients (unread state); only the push and the in-app alert are gated.
+    const workspace = await this.workspaceRegistry.get(agent.workspaceId);
+    const notifyAllowed = shouldNotifyForSession({
+      mode: this.daemonConfigStore.get().notificationMode,
+      labels: agent.labels,
+      pinned: workspace?.pinnedAt != null,
+      hasChildren: this.agentManager
+        .listAgents()
+        .some((candidate) => candidate.labels[PARENT_AGENT_ID_LABEL] === params.agentId),
     });
 
     const plan = computeNotificationPlan({
@@ -3190,7 +3205,7 @@ export class VoiceAssistantWebSocketServer {
       nowMs,
     });
 
-    if (plan.shouldPush) {
+    if (plan.shouldPush && notifyAllowed) {
       void this.pushNotificationSender.send(notification).catch((err) => {
         this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
       });
@@ -3198,6 +3213,7 @@ export class VoiceAssistantWebSocketServer {
 
     for (const { ws } of clientEntries) {
       const shouldNotify =
+        notifyAllowed &&
         plan.inAppRecipientIndex !== null &&
         notificationEntries[plan.inAppRecipientIndex]?.ws === ws;
       const timestamp = new Date().toISOString();

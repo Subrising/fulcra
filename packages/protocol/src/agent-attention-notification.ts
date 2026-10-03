@@ -22,6 +22,7 @@ interface BuildAgentAttentionNotificationPayloadInput {
   workspaceId: string;
   agentId: string;
   assistantMessage?: string | null;
+  agentTitle?: string | null;
   permissionRequest?: NotificationPermissionRequest | null;
 }
 
@@ -81,12 +82,34 @@ const stripMarkdownToText = (markdown: string): string => {
   return text;
 };
 
+// A push leaves the machine through Apple/Google/Expo, so no text path may carry a credential. Redaction runs on the
+// whole text before truncation, so a cut can never leave the front of a secret behind.
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /\b[A-Za-z_][A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|apikey|auth|credential|cookie|private[_-]?key)[A-Za-z0-9_.-]*\s*[=:]\s*\S+/gi,
+  /\b[A-Z][A-Z0-9_]{2,}=\S+/g,
+  /--?(?:token|password|passwd|secret|api-?key|auth|key)(?:[= ]\S+)/gi,
+  /\b(?:authorization|bearer|basic)\b[:\s]+\S+(?:\s+\S+)?/gi,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@\S+/gi,
+  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g,
+  /\b(?:gh[opsur]_|github_pat_|xox[abpr]-|AKIA|AIza)[A-Za-z0-9_-]{8,}/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g,
+  /\b[A-Za-z0-9+/_=-]{32,}/g,
+];
+
+export function redactNotificationSecrets(text: string): string {
+  let out = text;
+  for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, "[redacted]");
+  return out;
+}
+
 const buildNotificationPreview = (text: string | null | undefined): string | null => {
   if (!text) {
     return null;
   }
 
-  const normalized = normalizeNotificationText(stripMarkdownToText(text));
+  const normalized = redactNotificationSecrets(
+    normalizeNotificationText(stripMarkdownToText(text)),
+  );
   if (!normalized) {
     return null;
   }
@@ -94,46 +117,23 @@ const buildNotificationPreview = (text: string | null | undefined): string | nul
   return truncateNotificationText(normalized, NOTIFICATION_PREVIEW_LIMIT);
 };
 
-const safeStringify = (value: unknown): string | null => {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return null;
-  }
-};
-
+// A tool permission's title, description and input are built from the raw command and can hold secrets, so the push
+// carries only the tool name: a bounded summary, never the command. A question is the assistant's own prose for the
+// person (shown, redacted like any assistant text), so it keeps its text.
 const buildPermissionDetails = (
   request: NotificationPermissionRequest | null | undefined,
 ): string | null => {
   if (!request) {
     return null;
   }
-
-  const title = request.title?.trim();
-  const description = request.description?.trim();
-  const details: string[] = [];
-
-  if (title) {
-    details.push(title);
+  if (request.kind === "question") {
+    const details = [request.title?.trim(), request.description?.trim()].filter(
+      (part, index, all): part is string => Boolean(part) && all.indexOf(part) === index,
+    );
+    if (details.length > 0) return details.join(" - ");
   }
-  if (description && description !== title) {
-    details.push(description);
-  }
-  if (details.length > 0) {
-    return details.join(" - ");
-  }
-
-  const inputPreview = request.input ? safeStringify(request.input) : null;
-  if (inputPreview) {
-    return inputPreview;
-  }
-
-  const metadataPreview = request.metadata ? safeStringify(request.metadata) : null;
-  if (metadataPreview) {
-    return metadataPreview;
-  }
-
-  return request.name?.trim() || request.kind;
+  const name = request.name?.trim();
+  return name ? `Wants to use ${name}` : `Needs your approval (${request.kind})`;
 };
 
 export function findLatestAssistantMessageFromTimeline(
@@ -196,7 +196,10 @@ function resolveAgentAttentionFallbackBody(reason: AgentAttentionReason): string
 export function buildAgentAttentionNotificationPayload(
   input: BuildAgentAttentionNotificationPayloadInput,
 ): AgentAttentionNotificationPayload {
-  const title = resolveAgentAttentionTitle(input.reason);
+  const sessionTitle = buildNotificationPreview(input.agentTitle);
+  const title = sessionTitle
+    ? truncateNotificationText(sessionTitle, 80)
+    : resolveAgentAttentionTitle(input.reason);
   const preview = resolveAgentAttentionPreview(input);
   const body = preview ?? resolveAgentAttentionFallbackBody(input.reason);
 

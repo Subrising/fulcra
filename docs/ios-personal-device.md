@@ -1,6 +1,6 @@
 # Install on your own iPhone with a Personal Team
 
-Use a Mac with full Xcode, CocoaPods, Node.js and your own free Apple Account. This is personal development signing, not TestFlight or App Store distribution. **Both store routes are planned; no Fulcra store link is provided.** The personal-device profile omits remote push entitlement/background notification configuration.
+Use a Mac with full Xcode, CocoaPods, Node.js and your own free Apple Account. This is personal development signing, not TestFlight or App Store distribution. **Both store routes are planned; no Fulcra store link is provided.** The personal-device profile omits remote push entitlement/background notification configuration. Without a push token the phone is notified only while the app holds its host connection; notifications while the app is closed need a paid Apple team and a build without this profile.
 
 ## What was actually tested
 
