@@ -11,6 +11,13 @@ import { Events } from "./events.mjs";
 import { completionFor } from "./completion.mjs";
 import { PROGRAMME, COMPANY } from "./authority.mjs";
 import { AUTOMATION_LIMIT } from "./journal-capacity.mjs";
+import { rpc } from "./rpc.mjs";
+import net from "node:net";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { firstRun } from "../config.mjs";
+import { socketLocation, prepareSocketLocation } from "./socket-location.mjs";
+import { bindable } from "./fixture-socket.mjs";
 async function fixture(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-events-"))),
     file = path.join(dir, "journal.sqlite");
@@ -122,6 +129,141 @@ async function fixture(t) {
     completions,
   };
 }
+test("default inbox stops replaying consumed previews and scoped RPC preserves opt-in history", async (t) => {
+  const f = await fixture(t),
+    id = await f.assign();
+  f.finish(id);
+  await f.control.events.reconcile(f.w);
+  const dispatch = rpc(f.control, "test-operator");
+  const read = (input) =>
+    dispatch({ method: "events-inbox", input: { sessionId: f.s, ...input }, capability: f.ig });
+  const before = await read({});
+  assert.equal(before.events.length, 1);
+  assert.equal(before.unconsumed, 1);
+  const event = before.events[0];
+  f.control.events.acknowledge(
+    { sessionId: f.s, eventId: event.id, note: "Read actual output; verify next" },
+    f.ig,
+  );
+  const after = await read({});
+  assert.deepEqual(after.events, []);
+  assert.equal(after.total, 1);
+  assert.equal(after.unconsumed, 0);
+  const history = await read({ includeConsumed: true });
+  assert.deepEqual(history.events[0], { ...event, consumed: "Read actual output; verify next" });
+  assert.equal(f.store.db.prepare("SELECT count(*) n FROM event_inbox").get().n, 1);
+  assert.equal(f.sends.filter((x) => x.id === f.s).length, 0, "reads never wake a model");
+  await assert.rejects(read({ includeConsumed: "true" }), /Invalid inbox input/);
+  await assert.rejects(read({ other: true }), /Invalid inbox input/);
+  await assert.rejects(
+    dispatch({
+      method: "events-inbox",
+      input: { sessionId: f.w, includeConsumed: true },
+      capability: f.ig,
+    }),
+    /authorization/,
+  );
+  f.control.takeover(f.s, "Human takes the supervisor");
+  await assert.rejects(read({ includeConsumed: true }), /authorization/);
+});
+test("unread inbox retains exact pending bodies and the twenty-row bound with actionable count", async (t) => {
+  const f = await fixture(t),
+    link = f.control.events.links()[0];
+  for (let n = 0; n < 22; n++)
+    f.control.events.add(link, "permission", ["pending", n], {
+      requestId: String(n),
+      request: { name: "Write", input: { file_path: "owned-output" } },
+    });
+  const page = f.control.events.inbox(f.s, f.ig);
+  assert.equal(page.events.length, 20);
+  assert.equal(page.total, 22);
+  assert.equal(page.unconsumed, 22);
+  assert.deepEqual(page.events[0].payload, {
+    requestId: "21",
+    request: { name: "Write", input: { file_path: "owned-output" } },
+  });
+  for (const e of page.events)
+    f.control.events.acknowledge(
+      { sessionId: f.s, eventId: e.id, note: "Read permission evidence" },
+      f.ig,
+    );
+  const remainder = f.control.events.inbox(f.s, f.ig);
+  assert.equal(remainder.events.length, 2);
+  assert.equal(remainder.total, 22);
+  assert.equal(remainder.unconsumed, 2);
+  assert.equal(f.control.events.inbox(f.s, f.ig, true).events.length, 20);
+});
+test("actual supervisor MCP transport reads unread events, acknowledges and explicitly retrieves consumed history", async (t) => {
+  const f = await fixture(t),
+    id = await f.assign();
+  f.finish(id);
+  await f.control.events.reconcile(f.w);
+  const home = path.join(path.dirname(f.file), "mcp-home");
+  firstRun({ ORCA_HOME: home });
+  const grantDirectory = path.join(home, "grants", "inbox");
+  fs.mkdirSync(grantDirectory, { recursive: true, mode: 0o700 });
+  const grant = path.join(grantDirectory, f.s + ".json");
+  fs.writeFileSync(grant, JSON.stringify({ sessionId: f.s, capability: f.ig }), { mode: 0o600 });
+  const location = socketLocation(home);
+  prepareSocketLocation(home);
+  const dispatch = rpc(f.control, "test-operator");
+  const server = net.createServer((connection) => {
+    let bytes = "";
+    connection.setEncoding("utf8");
+    connection.on("data", async (chunk) => {
+      bytes += chunk;
+      if (!bytes.endsWith("\n")) return;
+      try {
+        connection.end(JSON.stringify({ result: await dispatch(JSON.parse(bytes)) }) + "\n");
+      } catch (error) {
+        connection.end(JSON.stringify({ error: error.message }) + "\n");
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(bindable(location.socket), resolve));
+  fs.chmodSync(location.socket, 0o600);
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [new URL("./inbox.mjs", import.meta.url).pathname],
+    env: { PATH: process.env.PATH, ORCA_HOME: home, ORCA_INBOX_FILE: grant },
+  });
+  const client = new Client({ name: "inbox-payload-acceptance", version: "1" });
+  const read = async (args) => {
+    const response = await client.callTool({ name: "supervisor_inbox", arguments: args });
+    assert.equal(response.isError ?? false, false);
+    return JSON.parse(response.content[0].text);
+  };
+  try {
+    await client.connect(transport);
+    const before = await read({});
+    assert.equal(before.events[0].payload.outputPreview, "Actual synthetic output");
+    const acknowledged = await client.callTool({
+      name: "supervisor_acknowledge",
+      arguments: { eventId: before.events[0].id, note: "Read result; verify output next" },
+    });
+    assert.deepEqual(JSON.parse(acknowledged.content[0].text), { consumed: true, accepted: false });
+    assert.deepEqual((await read({})).events, []);
+    const history = await read({ includeConsumed: true });
+    assert.equal(history.events[0].id, before.events[0].id);
+    assert.deepEqual(history.events[0].payload, before.events[0].payload);
+    assert.equal(
+      (await client.callTool({ name: "supervisor_inbox", arguments: { includeConsumed: "true" } }))
+        .isError,
+      true,
+    );
+    f.control.takeover(f.s, "Human takes over the supervisor");
+    assert.equal(
+      (await client.callTool({ name: "supervisor_inbox", arguments: { includeConsumed: true } }))
+        .isError,
+      true,
+    );
+  } finally {
+    await client.close();
+    await transport.close();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(location.directory, { recursive: true, force: true });
+  }
+});
 test("cold idle never creates completion; missed entire turn reconciles by durable delivery after reopen", async (t) => {
   const f = await fixture(t);
   await f.control.events.reconcile(f.w);
