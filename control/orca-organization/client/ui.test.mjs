@@ -91,7 +91,10 @@ async function disposeFixture() {
   cleanup();
   const owned = clients.splice(0);
   const retainedObservers = owned.flatMap((client) =>
-    client.getQueryCache().getAll().filter((query) => query.getObserversCount() > 0)
+    client
+      .getQueryCache()
+      .getAll()
+      .filter((query) => query.getObserversCount() > 0)
       .map((query) => query.queryKey),
   );
   // Pending fake RPCs need cancellation as well as cache removal. Settle each client's
@@ -348,10 +351,15 @@ test("client entry registers its actual surface and return commands and cleans u
 });
 function base(name, input, { inactive = false, sessions = [] } = {}) {
   if (name === "organization.fleet-hosts")
-    return Promise.resolve(fleetHostsRpc.output.parse({
-      local: "mini",
-      hosts: [{ name: "mini", serverId: null }, { name: "macbook", serverId: null }],
-    }));
+    return Promise.resolve(
+      fleetHostsRpc.output.parse({
+        local: "mini",
+        hosts: [
+          { name: "mini", serverId: null },
+          { name: "macbook", serverId: null },
+        ],
+      }),
+    );
   if (name === "organization.project-briefing")
     return Promise.resolve({
       observedAt: time(),
@@ -994,7 +1002,9 @@ test("failed decision refresh marks retained evidence stale and hides saved text
 function setFleetHandler(fn) {
   setHandler(async (name, input) => {
     // The configured host directory is a separate RPC, not an activity-history reply.
-    const result = await (["organization.outcome", "organization.fleet-hosts"].includes(name) ? base(name, input) : fn(name, input));
+    const result = await (["organization.outcome", "organization.fleet-hosts"].includes(name)
+      ? base(name, input)
+      : fn(name, input));
     if (name !== "organization.fleet") return result;
     return {
       ...result,
@@ -2273,7 +2283,7 @@ for (const platform of ["web"])
       calls.every((c) =>
         [
           "organization.fleet",
-        "organization.fleet-hosts",
+          "organization.fleet-hosts",
           "organization.activity-history",
           "organization.outcome",
           "organization.projects",
@@ -2466,7 +2476,7 @@ for (const available of [true, false])
       calls.every((c) =>
         [
           "organization.fleet",
-        "organization.fleet-hosts",
+          "organization.fleet-hosts",
           "organization.activity-history",
           "organization.outcome",
           "organization.projects",
