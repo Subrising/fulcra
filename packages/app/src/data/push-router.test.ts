@@ -44,6 +44,7 @@ const daemonConfig: MutableDaemonConfig = {
   autoArchiveAfterMerge: false,
   enableTerminalAgentHooks: false,
   autoResumeOnLimit: true,
+  autoResumeInterrupted: true,
   appendSystemPrompt: "",
 };
 

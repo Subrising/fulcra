@@ -40,6 +40,7 @@ async function host(version = "0.8.0", pluginPath?: string) {
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
+    autoResumeInterrupted: true,
     appendSystemPrompt: "",
     pluginsEnabled: true,
     plugins: pluginPath

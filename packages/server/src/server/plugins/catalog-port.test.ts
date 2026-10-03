@@ -16,6 +16,7 @@ function service(runtime: RuntimePort): PluginService {
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
       autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
       pluginsEnabled: true,
       plugins: {},

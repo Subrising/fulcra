@@ -316,6 +316,7 @@ function makeConfig(providers: MutableDaemonConfig["providers"] = {}): MutableDa
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
+    autoResumeInterrupted: true,
     appendSystemPrompt: "",
   };
 }

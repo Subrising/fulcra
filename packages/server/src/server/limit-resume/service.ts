@@ -1,14 +1,21 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  INTERRUPTED_RESUME_PROMPT,
   LIMIT_RESUME_AT_LABEL,
   LIMIT_RESUME_OPT_OUT_LABEL,
   LIMIT_RESUME_PROMPT,
+  RESUME_REASON_LABEL,
 } from "@getpaseo/protocol/limit-resume";
 import { ensurePrivateDirectory, writePrivateFileAtomicSync } from "../private-files.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn, type LimitStop } from "./detect.js";
 import { backoffMs } from "./parse-reset.js";
 
+// Interrupted sessions use the same queue. At boot the daemon marks every stored mid-task session (running or
+// initializing, never idle, finished, archived or internal) idle with an interruption marker; the boot's id is the
+// stop identity, so a session is queued once per interruption. They resume after a short settle delay, staggered
+// like limit resumes, under their own toggle and the same per-session opt-out.
+//
 // Auto-resume after a usage limit. A turn that ends on a usage or rate limit (a failed turn, or the Claude CLI's
 // own limit line as the final assistant message) was cut off mid-task; this queues one resume at the reset time and
 // sends a short "continue" prompt then. Sessions that finish normally never produce such a stop.
@@ -31,10 +38,14 @@ import { backoffMs } from "./parse-reset.js";
 //   before the prompt is admitted.
 
 export const RESUME_PROMPT = LIMIT_RESUME_PROMPT;
-export { LIMIT_RESUME_AT_LABEL, LIMIT_RESUME_OPT_OUT_LABEL };
+export { LIMIT_RESUME_AT_LABEL, LIMIT_RESUME_OPT_OUT_LABEL, RESUME_REASON_LABEL };
+
+export type ResumeKind = "limit" | "interrupted";
 
 export const STAGGER_MS = 3_000;
 export const MAX_JITTER_MS = 60_000;
+/** After a daemon restart: lets providers, relay and the account pool come back before sessions are woken. */
+export const INTERRUPTED_SETTLE_MS = 45_000;
 /** Leaves the controller's own 30..120 s resume window to go first. */
 export const HANDOFF_MS = 150_000;
 export const MAX_CHAIN = 4;
@@ -45,6 +56,7 @@ interface QueueEntry {
   agentId: string;
   /** Stable identity of the stop: the stopped turn's id when the provider gave one. */
   limitId: string;
+  kind: ResumeKind;
   detectedAt: number;
   resumeAt: number;
   attempt: number;
@@ -75,12 +87,13 @@ export interface LimitResumeAgent {
 
 export interface LimitResumeDeps {
   paseoHome: string;
-  isEnabled: () => boolean;
+  /** The host toggle for this kind of resume. */
+  isEnabled: (kind: ResumeKind) => boolean;
   getAgent: (agentId: string) => Promise<LimitResumeAgent | null>;
   /** The final assistant message of the session's last turn (the Claude CLI reports its limit this way). */
   getLastAssistantMessage: (agentId: string) => Promise<string | null>;
   /** Writes (or, with null, clears) the label the app shows as "Paused: usage limit, resumes at HH:MM". */
-  setMarker: (agentId: string, resumeAtIso: string | null) => Promise<void>;
+  setMarker: (agentId: string, resumeAtIso: string | null, kind?: ResumeKind) => Promise<void>;
   /**
    * Starts the resume turn. `stillWanted` must be called immediately before the turn is admitted, after any
    * awaiting the implementation needs (loading the session), and the turn must not start when it returns false.
@@ -125,6 +138,8 @@ function loadQueue(file: string): QueueFile {
         Number.isFinite(e.epoch),
     );
     const recent = parsed.recent && typeof parsed.recent === "object" ? parsed.recent : {};
+    // Files from before interrupted resumes existed hold only limit entries.
+    for (const entry of entries) entry.kind ??= "limit";
     return { v: 1, entries, recent };
   } catch {
     return emptyQueue();
@@ -215,13 +230,13 @@ export class LimitResumeService {
     epoch: number,
     stopKey: string,
   ): Promise<void> {
-    if (!this.deps.isEnabled()) return;
+    if (!this.deps.isEnabled("limit")) return;
     const limitId = `${agentId}:${stopKey}`;
     if (this.queue.entries.some((e) => e.agentId === agentId)) return;
     if (this.queue.recent[agentId]?.limitId === limitId) return;
     const agent = await this.deps.getAgent(agentId);
     // Re-validate after the await: a newer turn, a second delivery or a toggle flip may have overtaken us.
-    if (this.epochOf(agentId) !== epoch || !this.deps.isEnabled()) return;
+    if (this.epochOf(agentId) !== epoch || !this.deps.isEnabled("limit")) return;
     if (this.queue.entries.some((e) => e.agentId === agentId)) return;
     if (!agent || agent.archived || agent.busy) return;
     if (agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return;
@@ -235,6 +250,7 @@ export class LimitResumeService {
     const entry: QueueEntry = {
       agentId,
       limitId,
+      kind: "limit",
       detectedAt: now,
       resumeAt: base + HANDOFF_MS + Math.floor(this.random() * MAX_JITTER_MS),
       attempt,
@@ -244,7 +260,52 @@ export class LimitResumeService {
     this.queue.entries.push(entry);
     this.save();
     await this.deps
-      .setMarker(agentId, new Date(entry.resumeAt).toISOString())
+      .setMarker(agentId, new Date(entry.resumeAt).toISOString(), "limit")
+      .catch(this.deps.onError);
+    this.arm();
+  }
+
+  /**
+   * Queues the sessions the daemon found mid-task when it started. `bootId` is the boot that marked them, so a
+   * session is queued once per interruption; a session that keeps getting interrupted stops after MAX_CHAIN.
+   */
+  enqueueInterrupted(agentIds: readonly string[], bootId: string): Promise<void> {
+    return this.locked(async () => {
+      for (const agentId of agentIds) {
+        await this.admitInterrupted(agentId, `interrupted:${bootId}`);
+      }
+    });
+  }
+
+  private async admitInterrupted(agentId: string, limitId: string): Promise<void> {
+    if (!this.deps.isEnabled("interrupted")) return;
+    if (this.queue.entries.some((e) => e.agentId === agentId)) return;
+    if (this.queue.recent[agentId]?.limitId === limitId) return;
+    const epoch = this.epochOf(agentId);
+    const agent = await this.deps.getAgent(agentId);
+    if (this.epochOf(agentId) !== epoch || !this.deps.isEnabled("interrupted")) return;
+    if (!agent || agent.archived || agent.busy) return;
+    if (agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return;
+
+    const now = this.now();
+    const recent = this.queue.recent[agentId];
+    const attempt = recent && now - recent.resumedAt < CHAIN_WINDOW_MS ? recent.attempt + 1 : 0;
+    if (attempt >= MAX_CHAIN) return;
+
+    const entry: QueueEntry = {
+      agentId,
+      limitId,
+      kind: "interrupted",
+      detectedAt: now,
+      resumeAt: now + INTERRUPTED_SETTLE_MS + Math.floor(this.random() * MAX_JITTER_MS),
+      attempt,
+      epoch,
+      source: "backoff",
+    };
+    this.queue.entries.push(entry);
+    this.save();
+    await this.deps
+      .setMarker(agentId, new Date(entry.resumeAt).toISOString(), "interrupted")
       .catch(this.deps.onError);
     this.arm();
   }
@@ -321,7 +382,8 @@ export class LimitResumeService {
     if (!consumed) return;
 
     const clear = () => this.deps.setMarker(entry.agentId, null).catch(this.deps.onError);
-    const unchanged = () => this.epochOf(entry.agentId) === entry.epoch && this.deps.isEnabled();
+    const unchanged = () =>
+      this.epochOf(entry.agentId) === entry.epoch && this.deps.isEnabled(entry.kind);
     if (!unchanged() || this.now() - entry.resumeAt > STALE_AFTER_MS) return void (await clear());
     const agent = await this.deps.getAgent(entry.agentId);
     await clear();
@@ -335,7 +397,11 @@ export class LimitResumeService {
     }
     // The last gate sits inside sendResume, after it has loaded the session and right before the turn starts.
     await this.deps
-      .sendResume(entry.agentId, RESUME_PROMPT, () => unchanged())
+      .sendResume(
+        entry.agentId,
+        entry.kind === "interrupted" ? INTERRUPTED_RESUME_PROMPT : RESUME_PROMPT,
+        () => unchanged(),
+      )
       .catch(this.deps.onError);
   }
 }

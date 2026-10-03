@@ -25,7 +25,11 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
 import { LimitResumeBanner, formatLimitResumeStatus } from "@/components/limit-resume-banner";
-import { LIMIT_RESUME_AT_LABEL, pendingLimitResumeAt } from "@getpaseo/protocol/limit-resume";
+import {
+  LIMIT_RESUME_AT_LABEL,
+  RESUME_REASON_LABEL,
+  pendingLimitResumeAt,
+} from "@getpaseo/protocol/limit-resume";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { useRetainedPanelActive } from "@/components/retained-panel";
@@ -350,6 +354,10 @@ function limitResumeLabelOf(agent: { labels?: Record<string, string> } | null): 
   return agent?.labels?.[LIMIT_RESUME_AT_LABEL] ?? "";
 }
 
+function resumeReasonOf(agent: { labels?: Record<string, string> } | null): string {
+  return agent?.labels?.[RESUME_REASON_LABEL] ?? "";
+}
+
 function useAgentPanelDescriptor(
   target: { kind: "agent"; agentId: string },
   context: { serverId: string },
@@ -369,6 +377,7 @@ function useAgentPanelDescriptor(
         attentionReason: agent?.attentionReason ?? null,
         isTurnActive: selectAgentTurnPresentation(session, target.agentId).isActive,
         limitResumeAt: limitResumeLabelOf(agent),
+        resumeReason: resumeReasonOf(agent),
       };
     }),
   );
@@ -386,7 +395,7 @@ function useAgentPanelDescriptor(
     subtitle:
       limitResumeAtMs === null
         ? `${formatProviderLabel(provider)} agent${accountText}`
-        : formatLimitResumeStatus(limitResumeAtMs),
+        : formatLimitResumeStatus(limitResumeAtMs, descriptorState.resumeReason),
     tooltip: `${label ?? `${formatProviderLabel(provider)} agent`}${accountText}`,
     titleState: label ? "ready" : "loading",
     icon,

@@ -17,6 +17,7 @@ function makeConfig(browserToolsEnabled = false): MutableDaemonConfig {
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     autoResumeOnLimit: true,
+    autoResumeInterrupted: true,
     appendSystemPrompt: "",
   };
 }
