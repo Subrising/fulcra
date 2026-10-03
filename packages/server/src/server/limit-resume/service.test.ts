@@ -186,15 +186,18 @@ describe("LimitResumeService", () => {
       expect(sent).toEqual([]);
     });
 
-    it("does not send when the toggle is turned off while the marker is being cleared", async () => {
+    it("does not send when the toggle is turned off while agent lookup awaits", async () => {
       agents.set("a", idle());
       const svc = make();
       svc.start();
       await svc.onAgentEvent(failed("a", resetIn(60_000)));
-      onMarker = (_id, at) => {
-        if (at === null) enabled = false;
-      };
-      await vi.advanceTimersByTimeAsync(60_000 + HANDOFF_MS + 1_000);
+      let release = () => {};
+      getAgentDelay = new Promise<void>((resolve) => (release = resolve));
+      vi.advanceTimersByTime(60_000 + HANDOFF_MS);
+      await Promise.resolve();
+      enabled = false;
+      release();
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(sent).toEqual([]);
     });
 
@@ -292,6 +295,46 @@ describe("LimitResumeService", () => {
     expect(second.pendingResumeAt("a")).toBe(T0 + 3_600_000 + HANDOFF_MS);
     await vi.advanceTimersByTimeAsync(3_600_000 + HANDOFF_MS + 1_000);
     expect(sent.map((s) => s.agentId)).toEqual(["a"]);
+  });
+
+  it("does not send an in-flight resume after shutdown", async () => {
+    agents.set("a", idle());
+    const svc = make();
+    svc.start();
+    await svc.onAgentEvent(failed("a", resetIn(60_000)));
+    let release = () => {};
+    getAgentDelay = new Promise<void>((resolve) => (release = resolve));
+    // Begin the timer callback without waiting for its deliberately blocked agent lookup.
+    vi.advanceTimersByTime(60_000 + HANDOFF_MS);
+    await Promise.resolve();
+    await Promise.resolve();
+    svc.stop();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toEqual([]);
+    expect(queued()).toHaveLength(1);
+    getAgentDelay = null;
+    const restarted = make();
+    restarted.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+    restarted.stop();
+  });
+
+  it("does not admit a stop after shutdown, including a pending lookup", async () => {
+    agents.set("a", idle());
+    const svc = make();
+    svc.start();
+    let release = () => {};
+    getAgentDelay = new Promise<void>((resolve) => (release = resolve));
+    const pending = svc.onAgentEvent(failed("a", resetIn(60_000)));
+    await Promise.resolve();
+    svc.stop();
+    release();
+    await pending;
+    await svc.onAgentEvent(failed("a", resetIn(60_000), "later"));
+    expect(svc.pendingResumeAt("a")).toBeNull();
+    expect(markers.size).toBe(0);
   });
 
   it("staggers many sessions that reset at the same moment", async () => {

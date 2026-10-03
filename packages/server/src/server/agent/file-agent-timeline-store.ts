@@ -720,6 +720,14 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   fetchCommitted(id: string, options?: AgentTimelineFetchOptions) {
     return this.serialize(id, async () => (await this.readable(id)).memory.fetch(id, options));
   }
+  fetchExistingCommitted(id: string, options?: AgentTimelineFetchOptions) {
+    return this.serialize(id, async () => {
+      await this.reconcileRetention(id);
+      if (await this.pendingDelete(id)) throw new Error(PENDING_DELETE_MESSAGE);
+      if (!(await this.hasJournal(id))) return null;
+      return (await this.readable(id)).memory.fetch(id, options);
+    });
+  }
   getLatestCommittedSeq(id: string) {
     return this.serialize(id, async () => (await this.readable(id)).memory.getNextSeq(id) - 1);
   }
