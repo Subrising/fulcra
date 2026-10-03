@@ -312,8 +312,18 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
     if (request.method === "manager-inspect") return control.manager.inspect(a, request.capability);
     if (request.method === "manager-assign") return control.manager.assign(a, request.capability);
     if (request.method === "events-inbox") {
-      if (!a || Object.keys(a).join() !== "sessionId") throw Error("Invalid inbox input");
-      return control.events.inbox(a.sessionId, request.capability);
+      if (
+        !a ||
+        !Object.hasOwn(a, "sessionId") ||
+        Object.keys(a).some((k) => !["sessionId", "includeConsumed"].includes(k)) ||
+        (Object.hasOwn(a, "includeConsumed") && typeof a.includeConsumed !== "boolean")
+      )
+        throw Error("Invalid inbox input");
+      return control.events.inbox(
+        a.sessionId,
+        request.capability,
+        Object.hasOwn(a, "includeConsumed") ? a.includeConsumed : false,
+      );
     }
     if (request.method === "bindings-self") {
       if (!a || Object.keys(a).join() !== "sessionId") throw Error("Invalid role read");
