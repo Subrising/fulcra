@@ -66,6 +66,20 @@ class UpgradeSpaceTests(unittest.TestCase):
         self.assertTrue(self.old.exists())
         self.assertFalse(self.layout["rollback"].exists())
 
+    def test_capacity_is_rechecked_between_release_and_installer_copy(self):
+        first = guarded_write(self.new, self.layout,
+                              lambda: shutil.copytree(self.new, self.layout["release"]),
+                              statvfs=self.capacity(20 * GIB))
+        with self.assertRaises(SpaceRefused):
+            guarded_write(self.new, self.layout,
+                          lambda: shutil.copytree(self.new, self.layout["install_stage"]),
+                          phase="installer", expected_devices=first["devices"], statvfs=self.capacity(1))
+        self.assertFalse(self.layout["install_stage"].exists())
+        result = guarded_write(self.new, self.layout,
+                               lambda: shutil.copytree(self.new, self.layout["install_stage"]),
+                               phase="installer", expected_devices=first["devices"], statvfs=self.capacity(20 * GIB))
+        self.assertTrue(result["ok"])
+
     def test_sparse_source_is_charged_by_logical_size_and_full_fallback_copies(self):
         with (self.new / "Contents/sparse").open("wb") as out:
             out.truncate(32 * 2**20)
