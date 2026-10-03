@@ -1,6 +1,9 @@
 export const CLIENT_CAPS = {
+<<<<<<< HEAD
   // Closed permission enums shipped before this capability. Gate new permission output.
   commandCentrePermission: "command_centre_permission",
+=======
+>>>>>>> refs/tags/v0.10.3
   helloRejection: "hello_rejection",
   // COMPAT(ownedSubscriptions): added in v0.8.0, remove legacy ownership after 2027-03-09.
   ownedSubscriptions: "owned_subscriptions",

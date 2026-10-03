@@ -1904,6 +1904,20 @@ export const ptBR: TranslationResources = {
       title: "Senha de {{host}}",
       label: "Senha do host",
     },
+<<<<<<< HEAD
+=======
+    hostConfirmation: {
+      title: "Conectar a este host?",
+      description:
+        "Este host poderá executar código neste app e acessar seus outros hosts conectados. Conecte apenas se você o reconhecer.",
+      descriptionChanged:
+        "Este link muda como você se conecta a este host. O host poderá executar código neste app e acessar seus outros hosts conectados. Conecte apenas se você o reconhecer.",
+      hostLabel: "Host",
+      fingerprintLabel: "Impressão da chave",
+      relayLabel: "Relay",
+      connect: "Conectar",
+    },
+>>>>>>> refs/tags/v0.10.3
     connectionMethods: {
       title: "Adicionar conexão",
       direct: {

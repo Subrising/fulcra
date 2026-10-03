@@ -1,6 +1,10 @@
 {
   "name": "@getpaseo/app",
+<<<<<<< HEAD
   "version": "0.10.2",
+=======
+  "version": "0.10.3",
+>>>>>>> refs/tags/v0.10.3
   "private": true,
   "main": "index.ts",
   "scripts": {

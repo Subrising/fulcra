@@ -33,6 +33,7 @@ describe("@tintinweb/pi-subagents adapter", () => {
     ).toEqual(["running", "running", "completed"]);
     expect(events.filter((event) => event.event.type === "timeline").length).toBeGreaterThan(0);
   });
+<<<<<<< HEAD
   test("completes every background child in a grouped notification", async () => {
     const events = await verifySubagentFixture(
       readSubagentFixture(new URL("./fixtures/background-group.json", import.meta.url)),
@@ -47,6 +48,8 @@ describe("@tintinweb/pi-subagents adapter", () => {
       call_277179: "completed",
     });
   });
+=======
+>>>>>>> refs/tags/v0.10.3
   test("declines foreign Agent results", () => {
     expect(
       createPiExtensionHost().mapToolCall({

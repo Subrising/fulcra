@@ -52,6 +52,104 @@ interface ProviderDiagnostic {
   diagnostic: string;
 }
 
+<<<<<<< HEAD
+=======
+const EXPECTED_CLAUDE_MODELS = [
+  {
+    id: "claude-opus-5-5",
+    model: "Opus 5.5",
+    descriptionFragment: "Latest release",
+  },
+  {
+    id: "claude-opus-5",
+    model: "Opus 5",
+    descriptionFragment: "Previous release",
+  },
+  {
+    id: "claude-fable-5-1",
+    model: "Fable 5.1",
+    descriptionFragment: "Most powerful",
+  },
+  {
+    id: "claude-fable-5",
+    model: "Fable 5",
+    descriptionFragment: "Previous release",
+  },
+  {
+    id: "claude-opus-4-8[1m]",
+    model: "Opus 4.8 1M",
+    descriptionFragment: "1M context window",
+  },
+  {
+    id: "claude-opus-4-8",
+    model: "Opus 4.8",
+    descriptionFragment: "Previous release",
+  },
+  {
+    id: "claude-sonnet-5-5",
+    model: "Sonnet 5.5",
+    descriptionFragment: "Best for everyday tasks",
+  },
+  {
+    id: "claude-sonnet-5",
+    model: "Sonnet 5",
+    descriptionFragment: "Previous release",
+  },
+  {
+    id: "claude-opus-4-7[1m]",
+    model: "Opus 4.7 1M",
+    descriptionFragment: "1M context window",
+  },
+  {
+    id: "claude-opus-4-7",
+    model: "Opus 4.7",
+    descriptionFragment: "Previous release",
+  },
+  {
+    id: "claude-opus-4-6[1m]",
+    model: "Opus 4.6 1M",
+    descriptionFragment: "1M context window",
+  },
+  {
+    id: "claude-sonnet-4-6[1m]",
+    model: "Sonnet 4.6 1M",
+    descriptionFragment: "1M context window",
+  },
+  {
+    id: "claude-sonnet-4-6",
+    model: "Sonnet 4.6",
+    descriptionFragment: "Best for everyday tasks",
+  },
+  {
+    id: "claude-opus-4-6",
+    model: "Opus 4.6",
+    descriptionFragment: "Most capable",
+  },
+  {
+    id: "claude-haiku-4-5",
+    model: "Haiku 4.5",
+    descriptionFragment: "Fastest",
+  },
+] as const;
+
+const EXPECTED_CLAUDE_CONTEXT_MODELS = [
+  {
+    id: "claude-sonnet-5[1m]",
+    model: "Sonnet 5 1M",
+    descriptionFragment: "1M context window",
+  },
+] as const;
+
+const EXPECTED_CLAUDE_CATALOG_MODELS = [
+  ...new Map(
+    [...EXPECTED_CLAUDE_MODELS, ...EXPECTED_CLAUDE_CONTEXT_MODELS].map((model) => [
+      model.id,
+      model,
+    ]),
+  ).values(),
+];
+
+>>>>>>> refs/tags/v0.10.3
 let claudeModelIdsFromJson: string[] = [];
 let claudeModelsFromJson: ProviderModel[] = [];
 

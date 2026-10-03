@@ -274,6 +274,13 @@ function normalizePassword(value: string | undefined): string | null {
   return value.length > 0 ? value : null;
 }
 
+<<<<<<< HEAD
+=======
+function compatibleBearerPassword(password: string | null): string | null {
+  return password && /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(password) ? password : null;
+}
+
+>>>>>>> refs/tags/v0.10.3
 type HelloAuth =
   | { kind: "password"; password: string }
   | { kind: "localCredential"; token: string }
@@ -311,14 +318,24 @@ function chooseConnectionAuth(
   if (localCredential) helloAuth = { kind: "localCredential", token: localCredential };
   else if (password) helloAuth = { kind: "password", password };
   const headers: Record<string, string> = {};
+<<<<<<< HEAD
   const compatibleBearer = localCredential ? null : password;
   // COMPAT(headerAuth): added in v0.9.1, remove after 2027-03-24.
   if (compatibleBearer) headers.Authorization = daemonAuthorizationHeader(compatibleBearer);
+=======
+  const compatibleBearer = localCredential ? null : compatibleBearerPassword(password);
+  // COMPAT(headerAuth): added in v0.9.1, remove after 2027-03-24.
+  if (compatibleBearer) headers.Authorization = `Bearer ${compatibleBearer}`;
+>>>>>>> refs/tags/v0.10.3
   else if (!localCredential && config.authHeader) headers.Authorization = config.authHeader;
   return {
     helloAuth,
     headers,
+<<<<<<< HEAD
     ...(compatibleBearer ? { protocols: daemonAuthProtocols(compatibleBearer) } : {}),
+=======
+    ...(compatibleBearer ? { protocols: [`paseo.bearer.${compatibleBearer}`] } : {}),
+>>>>>>> refs/tags/v0.10.3
   };
 }
 
@@ -1425,7 +1442,10 @@ export class DaemonClient {
   private connectResolve: (() => void) | null = null;
   private connectReject: ((error: Error) => void) | null = null;
   private lastErrorValue: string | null = null;
+<<<<<<< HEAD
   private pairingRequiredValue: PairingRequiredReason | null = null;
+=======
+>>>>>>> refs/tags/v0.10.3
   private authFailureReasonValue: DaemonAuthFailureReason | null = null;
   private connectionState: ConnectionState = { status: "idle" };
   private readonly terminalStreams = new TerminalStreamRouter();
@@ -1524,6 +1544,7 @@ export class DaemonClient {
     return this.connectPromise;
   }
 
+<<<<<<< HEAD
   /** The transport for one attempt: relay E2EE over the base factory for relay URLs, else the base factory. */
   private resolveAttemptTransportFactory() {
     const baseTransportFactory =
@@ -1551,6 +1572,8 @@ export class DaemonClient {
     return transportFactory;
   }
 
+=======
+>>>>>>> refs/tags/v0.10.3
   private async attemptConnect(): Promise<void> {
     if (this.connectionState.status === "disposed") {
       this.rejectConnect(new Error("Daemon client is disposed"));
@@ -1579,9 +1602,33 @@ export class DaemonClient {
       // Reconnect can overlap with browser close/error delivery ordering.
       // Always dispose previous transport before constructing the next one.
       this.disposeTransport();
+<<<<<<< HEAD
       const isRelayTransport = isRelayClientWebSocketUrl(this.config.url);
       this.assertEncryptedRelayAuth(selected.helloAuth, isRelayTransport);
       const transportFactory = this.resolveAttemptTransportFactory();
+=======
+      const baseTransportFactory =
+        this.config.transportFactory ??
+        createWebSocketTransportFactory(this.config.webSocketFactory ?? defaultWebSocketFactory);
+      const isRelayTransport = isRelayClientWebSocketUrl(this.config.url);
+      const shouldUseRelayE2ee = this.config.e2ee?.enabled === true && isRelayTransport;
+      this.assertEncryptedRelayAuth(selected.helloAuth, isRelayTransport);
+
+      let transportFactory = isRelayTransport
+        ? createRelayTransportFactory(baseTransportFactory)
+        : baseTransportFactory;
+      if (shouldUseRelayE2ee) {
+        const daemonPublicKeyB64 = this.config.e2ee?.daemonPublicKeyB64;
+        if (!daemonPublicKeyB64) {
+          throw new Error("daemonPublicKeyB64 is required for relay E2EE");
+        }
+        transportFactory = createRelayE2eeTransportFactory({
+          baseFactory: transportFactory,
+          daemonPublicKeyB64,
+          logger: this.logger,
+        });
+      }
+>>>>>>> refs/tags/v0.10.3
       const transportUrl = this.resolveTransportUrlForAttempt();
       const transport = transportFactory({
         url: transportUrl,
@@ -1630,6 +1677,7 @@ export class DaemonClient {
             this.pendingGenericTransportErrorTimeout = null;
           }
           this.authFailureReasonValue ??= authFailureFromLegacyClose(event);
+<<<<<<< HEAD
           let reason = this.authFailureReasonValue
             ? new DaemonAuthenticationError(this.authFailureReasonValue).message
             : describeTransportClose(event);
@@ -1647,6 +1695,11 @@ export class DaemonClient {
           if (event && typeof event === "object" && Reflect.get(event, "code") === 4401) {
             this.shouldReconnect = false; // Explicit Retry may try again after repairing credentials.
           }
+=======
+          const reason = this.authFailureReasonValue
+            ? new DaemonAuthenticationError(this.authFailureReasonValue).message
+            : describeTransportClose(event);
+>>>>>>> refs/tags/v0.10.3
           if (reason) {
             this.lastErrorValue = reason;
           }
@@ -1844,6 +1897,10 @@ export class DaemonClient {
 
   get lastError(): string | null {
     return this.lastErrorValue === null ? null : this.safeText(this.lastErrorValue);
+  }
+
+  get authFailureReason(): DaemonAuthFailureReason | null {
+    return this.authFailureReasonValue;
   }
 
   get authFailureReason(): DaemonAuthFailureReason | null {
@@ -7841,11 +7898,19 @@ export class DaemonClient {
     }
     this.emitDisconnectedStateForReconnect(reason, input);
     if (!this.shouldReconnect || this.config.reconnect?.enabled === false) {
+<<<<<<< HEAD
       let error: Error = new Error(reason ?? "Transport disconnected before connect");
       if (this.authFailureReasonValue)
         error = new DaemonAuthenticationError(this.authFailureReasonValue);
       if (this.pairingRequiredValue) error = new PairingRequiredError(this.pairingRequiredValue);
       this.rejectConnect(error);
+=======
+      this.rejectConnect(
+        this.authFailureReasonValue
+          ? new DaemonAuthenticationError(this.authFailureReasonValue)
+          : new Error(reason ?? "Transport disconnected before connect"),
+      );
+>>>>>>> refs/tags/v0.10.3
       return;
     }
 

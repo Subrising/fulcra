@@ -2466,11 +2466,15 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       config,
       resolvedAgentId,
+<<<<<<< HEAD
       {
         env: options?.env,
         resolveDefaultMode: !options.fromStoredRecord,
         resolveDefaultThinking: !options.fromStoredRecord,
       },
+=======
+      { env: options?.env },
+>>>>>>> refs/tags/v0.10.3
     );
     this.requireEnabledProvider(storedConfig.provider);
     const client = await this.requireAvailableClient({
@@ -5779,17 +5783,42 @@ export class AgentManager {
         options,
       });
 
+<<<<<<< HEAD
       managed.archivedAt = (await this.registry?.get(resolvedAgentId))?.archivedAt ?? null;
       // Read history before publishing the agent: a provider failure must leave the
       // session unregistered so the registration catch closes it.
       const startupHistory = await this.collectStartupHistory(managed);
+=======
+      // Read history before publishing the agent: a provider failure must leave the
+      // session unregistered so the registration catch closes it.
+      const startupHistory: AgentStreamEvent[] = [];
+      if (session.initialTimeline?.length && !managed.historyPrimed) {
+        for await (const event of session.streamHistory()) {
+          startupHistory.push(limitAgentStreamEventContent(event));
+        }
+      }
+>>>>>>> refs/tags/v0.10.3
 
       this.assertAcceptingAgentRegistrations();
       this.agents.set(resolvedAgentId, managed);
       registered = true;
       // Initialize previousStatus to track transitions
       this.previousStatuses.set(resolvedAgentId, managed.lifecycle);
+<<<<<<< HEAD
       await this.recordStartupTimeline(managed, startupHistory);
+=======
+      if (session.initialTimeline?.length) {
+        if (!managed.historyPrimed) {
+          // Legacy/imported chats need their existing history before startup rows.
+          await this.primeTimelineFromLegacyProviderHistory(managed, false, startupHistory);
+        } else {
+          for (const entry of session.initialTimeline) {
+            this.recordTimeline(managed.id, entry.item, { timestamp: entry.timestamp });
+          }
+        }
+        this.refreshSessionPersistence(managed);
+      }
+>>>>>>> refs/tags/v0.10.3
       await this.refreshRuntimeInfo(managed, { emit: false });
       this.assertAgentRegistrationActive(managed);
       await this.persistSnapshot(managed, {
@@ -6529,17 +6558,21 @@ export class AgentManager {
     // The replay is the timeline, so drop the rows a previous hydration committed.
     // Keeping them would leave getTimelineRows reading one copy per hydration.
     await this.deleteCommittedTimeline(agent.id);
+<<<<<<< HEAD
     this.timelineStore.delete(agent.id);
     this.timelineStore.initialize(
       agent.id,
       await this.loadCommittedTimelineSeed(agent.id, new Date()),
     );
+=======
+>>>>>>> refs/tags/v0.10.3
 
     const timelineEvents: Array<{
       event: Extract<AgentStreamEvent, { type: "timeline" }>;
       row: AgentTimelineRow;
     }> = [];
     const providerSubagentEvents: AgentManagerEvent[] = [];
+<<<<<<< HEAD
     for (const event of this.providerSubagents.deleteParent(agent.id)) {
       const managerEvent: AgentManagerEvent = { type: "provider_subagent", event };
       this.publishHistorySubagentEvent(managerEvent, broadcast, providerSubagentEvents);
@@ -6551,6 +6584,19 @@ export class AgentManager {
     }
     for (const event of historyEvents) {
       const row = await this.recordTimeline(
+=======
+    for (const event of historySubagentEvents) {
+      const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
+      const managerEvent: AgentManagerEvent = { type: "provider_subagent", event: update };
+      if (deferredBroadcast) {
+        providerSubagentEvents.push(managerEvent);
+      } else if (broadcast) {
+        this.dispatch(managerEvent);
+      }
+    }
+    for (const event of historyEvents) {
+      const row = this.recordTimeline(
+>>>>>>> refs/tags/v0.10.3
         agent.id,
         event.item,
         event.timestamp ? { timestamp: event.timestamp } : undefined,
@@ -7819,18 +7865,25 @@ export class AgentManager {
   private async prepareSessionConfig(
     config: AgentSessionConfig,
     agentId: string,
+<<<<<<< HEAD
     options: {
       env?: Record<string, string>;
       purpose?: AgentResumePurpose;
       resolveDefaultMode?: boolean;
       resolveDefaultThinking?: boolean;
     } = {},
+=======
+    options: { env?: Record<string, string>; purpose?: AgentResumePurpose } = {},
+>>>>>>> refs/tags/v0.10.3
   ): Promise<PreparedSessionConfig> {
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
       env: options.env,
       purpose: options.purpose,
+<<<<<<< HEAD
       resolveDefaultMode: options.resolveDefaultMode,
       resolveDefaultThinking: options.resolveDefaultThinking,
+=======
+>>>>>>> refs/tags/v0.10.3
     });
     const paseoToolPolicy = this.paseoToolsEnabled
       ? this.resolvePaseoToolPolicy(storedConfig.provider)

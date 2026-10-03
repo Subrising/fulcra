@@ -12537,6 +12537,7 @@ test("concurrent native restores run once before resuming the same agent", async
   }
 });
 
+<<<<<<< HEAD
 // Orca R3b (DESIGN-R R-M21, R-M22). A loaded agent reporting running with nothing behind it.
 interface InternalAgents {
   agents: Map<
@@ -12664,6 +12665,8 @@ test("indexes a live agent against its cwd and retains its timeline when it is d
   }
 });
 
+=======
+>>>>>>> refs/tags/v0.10.3
 test("commits startup notices once on create and after restored history", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-startup-notice-"));
   const notice: AgentTimelineItem = { type: "notification", level: "info", message: "Runtime v2" };
@@ -12748,6 +12751,7 @@ test("commits startup notices once on create and after restored history", async 
   }
 });
 
+<<<<<<< HEAD
 test("trusted admission fences every direct manager entry before side effects", async () => {
   const { TrustedPlugins } = await import("../plugins/trusted.js");
   const trustedPlugins = new TrustedPlugins();
@@ -13343,6 +13347,8 @@ test("FIX-8 Z: a permission the trusted plugin does not allow is surfaced as bef
   expect(run.pending).toBe(1);
   expect(run.seen).toContain("permission_requested");
 });
+=======
+>>>>>>> refs/tags/v0.10.3
 test("failed startup history closes the session without registering an agent", async () => {
   let closed = false;
   class FailingHistorySession extends TestAgentSession {
@@ -13384,6 +13390,7 @@ test("failed startup history closes the session without registering an agent", a
     for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
   }
 });
+<<<<<<< HEAD
 
 async function nativeQueueFixture(holdFirst = false) {
   const { MessageReceipts } = await import("../message-receipts/index.js");
@@ -14265,3 +14272,5 @@ test("pooled usage enumeration excludes unqualified runtimes before reading cred
   expect(read).toHaveBeenCalledTimes(2);
   expect(deniedRead).not.toHaveBeenCalled();
 });
+=======
+>>>>>>> refs/tags/v0.10.3

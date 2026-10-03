@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { parseConnectionOffer, type ConnectionOffer } from "./connection-offer.js";
+=======
+import type { ConnectionOfferV2 } from "./connection-offer.js";
+>>>>>>> refs/tags/v0.10.3
 
 export interface HostPortParts {
   host: string;
@@ -15,7 +19,11 @@ export interface ParsedConnectionUri extends ConnectionUriParts {
 }
 
 export interface ParsedRelayConnectionUri {
+<<<<<<< HEAD
   offer: ConnectionOffer;
+=======
+  offer: ConnectionOfferV2;
+>>>>>>> refs/tags/v0.10.3
   password?: string;
 }
 
@@ -43,6 +51,7 @@ export function parseRelayConnectionUri(input: string): ParsedRelayConnectionUri
   const endpoint = normalizeHostPort(url.host);
   const password = url.searchParams.get("password") || undefined;
   return {
+<<<<<<< HEAD
     offer: parseConnectionOffer({
       v: Number(url.searchParams.get("v")),
       serverId,
@@ -57,11 +66,20 @@ export function parseRelayConnectionUri(input: string): ParsedRelayConnectionUri
         ? { hostLabel: url.searchParams.get("hostLabel") }
         : {}),
     }),
+=======
+    offer: {
+      v: 2,
+      serverId,
+      daemonPublicKeyB64: key,
+      relay: { endpoint, useTls: url.searchParams.get("ssl") === "true" },
+    },
+>>>>>>> refs/tags/v0.10.3
     ...(password ? { password } : {}),
   };
 }
 
 export function serializeRelayConnectionUri(parts: ParsedRelayConnectionUri): string {
+<<<<<<< HEAD
   const offer = parseConnectionOffer(parts.offer);
   const url = new URL(`relay://${offer.relay.endpoint}/${encodeURIComponent(offer.serverId)}`);
   url.searchParams.set("v", String(offer.v));
@@ -71,6 +89,13 @@ export function serializeRelayConnectionUri(parts: ParsedRelayConnectionUri): st
   url.searchParams.set("pairingExpiresAt", offer.pairing.expiresAt);
   if (offer.hostLabel !== undefined) url.searchParams.set("hostLabel", offer.hostLabel);
   if (offer.relay.useTls) url.searchParams.set("ssl", "true");
+=======
+  const url = new URL(
+    `relay://${parts.offer.relay.endpoint}/${encodeURIComponent(parts.offer.serverId)}`,
+  );
+  url.searchParams.set("key", parts.offer.daemonPublicKeyB64);
+  if (parts.offer.relay.useTls) url.searchParams.set("ssl", "true");
+>>>>>>> refs/tags/v0.10.3
   if (parts.password) url.searchParams.set("password", parts.password);
   return url.toString();
 }

@@ -1,8 +1,13 @@
+<<<<<<< HEAD
 import { createDesktopCredentialTransport } from "@/desktop/daemon/command-centre-transport";
 import { getDeviceIdentity } from "@/relay/device-identity";
 import {
   DaemonAuthenticationError,
   PairingRequiredError,
+=======
+import {
+  DaemonAuthenticationError,
+>>>>>>> refs/tags/v0.10.3
   DaemonClient,
   getDaemonAuthFailureReason,
   type DaemonAuthFailureReason,
@@ -24,9 +29,12 @@ import type { DesktopDaemonTransportTarget } from "@/desktop/daemon/desktop-daem
 
 export interface DaemonProbeClient {
   readonly lastError: string | null;
+<<<<<<< HEAD
   readonly pairingRequired?:
     | import("@getpaseo/client/internal/daemon-client").PairingRequiredReason
     | null;
+=======
+>>>>>>> refs/tags/v0.10.3
   readonly authFailureReason?: DaemonAuthFailureReason | null;
   connect(): Promise<void>;
   close(): Promise<void>;
@@ -281,11 +289,15 @@ export function connectAndProbe(
             ? new DaemonAuthenticationError(authFailureReason).message
             : pickBestReason(reason, lastError);
           void client.close().catch(() => undefined);
+<<<<<<< HEAD
           reject(
             client.pairingRequired
               ? new PairingRequiredError(client.pairingRequired)
               : new DaemonConnectionTestError(message, { reason, lastError, authFailureReason }),
           );
+=======
+          reject(new DaemonConnectionTestError(message, { reason, lastError, authFailureReason }));
+>>>>>>> refs/tags/v0.10.3
         });
     },
   );

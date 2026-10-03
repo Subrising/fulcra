@@ -9,7 +9,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import equal from "fast-deep-equal/es6";
 import {
   DaemonClient,
+<<<<<<< HEAD
   PairingRequiredError,
+=======
+>>>>>>> refs/tags/v0.10.3
   DaemonAuthenticationError,
   type DaemonClientConfig,
   type ConnectionState,
@@ -21,6 +24,7 @@ import {
   normalizeStoredHostProfile,
   upsertHostConnectionInProfiles,
   registryHasConnection,
+  relayConnectionFromOffer,
   StoredHostRegistrySchema,
   type HostConnection,
   type HostProfile,
@@ -36,7 +40,12 @@ import {
   shouldUseTlsForDefaultHostedRelay,
 } from "@/utils/daemon-endpoints";
 import { resolveAppVersion } from "@/utils/app-version";
+<<<<<<< HEAD
 import { parseConnectionOffer, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
+=======
+import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
+import { HostConfirmations, type HostConfirmationRequest } from "./host-confirmation";
+>>>>>>> refs/tags/v0.10.3
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { isWeb } from "@/constants/platform";
 import { connectToDaemon, getConnectionAuthFailureReason } from "@/utils/test-daemon-connection";
@@ -96,6 +105,27 @@ import { createAppWebSocketFactory } from "./websocket-factory";
 export type HostRuntimeConnectionStatus = "idle" | "connecting" | "online" | "offline" | "error";
 export type PairingNavigationTarget = "openProject" | "hostRoot" | "hostSettings";
 export type HostRegistryStatus = "loading" | "ready";
+
+/** One pairing flow started with `HostRuntimeStore.beginLinkPairing`. */
+export interface LinkPairing {
+  /** Probes the linked host and saves it. Connection and password errors throw. */
+  submit(link: string, password?: string): Promise<LinkPairingResult>;
+}
+
+export type LinkPairingResult =
+  | { status: "connected"; profile: HostProfile; serverId: string; hostname: string | null }
+  | { status: "cancelled" };
+
+/** A pairing link the user confirmed whose host then asked for a password. */
+export interface PasswordRequiredPairing {
+  link: string;
+  pairing: LinkPairing;
+}
+
+export type ConnectionLinkImport =
+  | { status: "connected"; serverId: string }
+  | ({ status: "password_required" } & PasswordRequiredPairing)
+  | { status: "cancelled" };
 
 export type ActiveConnection =
   | { type: "directTcp"; endpoint: string; display: string }
@@ -1157,12 +1187,15 @@ export class HostRuntimeController {
             });
             publishProbeState();
           } catch (error) {
+<<<<<<< HEAD
             if (
               this.isCurrentProbeRequest(requestVersion) &&
               error instanceof PairingRequiredError
             ) {
               this.requirePairing(error.pairingRequired);
             }
+=======
+>>>>>>> refs/tags/v0.10.3
             if (this.isCurrentProbeRequest(requestVersion)) {
               const authFailure = getConnectionAuthFailureReason(error);
               if (authFailure) {
@@ -1405,12 +1438,15 @@ export class HostRuntimeController {
 
     const failConnection = async (error: unknown) => {
       if (!this.isCurrentSwitchRequest(requestVersion) || this.activeClient !== client) return;
+<<<<<<< HEAD
       if (client.pairingRequired || error instanceof PairingRequiredError) {
         this.requirePairing(
           client.pairingRequired ?? (error as PairingRequiredError).pairingRequired,
         );
         return;
       }
+=======
+>>>>>>> refs/tags/v0.10.3
       const authFailure = getConnectionAuthFailureReason(error);
       if (authFailure) this.authRejectedConnectionIds.add(connection.id);
       this.unsubscribeClientStatus?.();
@@ -1453,10 +1489,13 @@ export class HostRuntimeController {
         this.deps.mountClientHandlers?.({ client, host: this.host, connection }) ?? null;
       this.unsubscribeClientStatus = client.subscribeConnectionStatus((state) => {
         if (!this.isCurrentSwitchRequest(requestVersion) || this.activeClient !== client) return;
+<<<<<<< HEAD
         if (client.pairingRequired) {
           this.requirePairing(client.pairingRequired);
           return;
         }
+=======
+>>>>>>> refs/tags/v0.10.3
         if (client.authFailureReason) {
           void failConnection(new DaemonAuthenticationError(client.authFailureReason));
           return;
@@ -1527,6 +1566,16 @@ function readConfiguredLocalDaemonOverride(): string | null {
   return value && value.length > 0 ? value : null;
 }
 
+<<<<<<< HEAD
+=======
+function isSameLinkedConnection(left: ConnectionOffer, right: ConnectionOffer): boolean {
+  return (
+    left.serverId === right.serverId &&
+    equal(relayConnectionFromOffer(left), relayConnectionFromOffer(right))
+  );
+}
+
+>>>>>>> refs/tags/v0.10.3
 function parseOfferConnectionUrl(input: string): { offer: ConnectionOffer; password?: string } {
   if (input.trim().startsWith("relay://") || input.includes("#connect=")) {
     return parseRelayConnectionUri(input);
@@ -1537,7 +1586,11 @@ function parseOfferConnectionUrl(input: string): { offer: ConnectionOffer; passw
   const encoded = input.slice(idx + marker.length).trim();
   if (!encoded) throw new Error("Offer payload is empty");
   const payload = decodeOfferFragmentPayload(encoded);
+<<<<<<< HEAD
   return { offer: parseConnectionOffer(payload) };
+=======
+  return { offer: ConnectionOfferSchema.parse(payload) };
+>>>>>>> refs/tags/v0.10.3
 }
 
 export function hasConfiguredLocalDaemonOverride(): boolean {
@@ -1588,6 +1641,8 @@ export class HostRuntimeStore {
   private timelineReplicaByServer = new Map<string, TimelineReplica>();
   private configuredOverrideBootstrapInFlight: Promise<void> | null = null;
   private bootPromise: Promise<void> | null = null;
+  private registryLoad: Promise<void> | null = null;
+  private readonly hostConfirmations = new HostConfirmations();
   private storage: HostRuntimeStorage;
   private replicaCache: ReplicaCache;
   private readonly claimRelayDevice: typeof pairRelayDevice;
@@ -1641,8 +1696,7 @@ export class HostRuntimeStore {
 
   private async runBoot(): Promise<void> {
     const override = readConfiguredLocalDaemonOverride();
-    await this.loadFromStorage();
-    this.markHostRegistryLoaded();
+    await this.loadRegistry();
 
     let isE2E: string | null = null;
     try {
@@ -1673,6 +1727,13 @@ export class HostRuntimeStore {
     } else {
       await this.bootstrapDefaultLocalhost();
     }
+  }
+
+  private loadRegistry(): Promise<void> {
+    if (!this.registryLoad) {
+      this.registryLoad = this.loadFromStorage().then(() => this.markHostRegistryLoaded());
+    }
+    return this.registryLoad;
   }
 
   private async loadFromStorage(): Promise<void> {
@@ -2015,6 +2076,7 @@ export class HostRuntimeStore {
     });
   }
 
+<<<<<<< HEAD
   private async assertRelayHostPin(serverId: string, key: string): Promise<void> {
     const stored = await readValidatedJson(
       this.storage,
@@ -2031,6 +2093,9 @@ export class HostRuntimeStore {
   }
 
   async upsertRelayConnection(input: {
+=======
+  private async upsertRelayConnection(input: {
+>>>>>>> refs/tags/v0.10.3
     serverId: string;
     relayEndpoint: string;
     useTls?: boolean;
@@ -2078,11 +2143,77 @@ export class HostRuntimeStore {
     return profile;
   }
 
+<<<<<<< HEAD
   async upsertConnectionFromOffer(
+=======
+  // A pairing link (a URL, a QR code, or a pasted link) asks the user to
+  // confirm when it adds a new host or changes a saved host's key, relay, or
+  // TLS setting. The answer needs the saved hosts, so it waits for them to load.
+  private async confirmLink(offer: ConnectionOffer): Promise<boolean> {
+    await this.loadRegistry();
+    return this.hostConfirmations.confirmLink(offer, this.hosts);
+  }
+
+  getPendingHostConfirmation(): HostConfirmationRequest | null {
+    return this.hostConfirmations.getPending();
+  }
+
+  subscribeHostConfirmation(listener: () => void): () => void {
+    return this.hostConfirmations.subscribe(listener);
+  }
+
+  answerHostConfirmation(requestId: number, approved: boolean): void {
+    this.hostConfirmations.answer(requestId, approved);
+  }
+
+  /**
+   * Starts one pairing flow, such as one open pairing modal. Once the user
+   * confirms a link, submitting the same link again in this flow (the
+   * password retry) does not ask again. A new flow asks again.
+   */
+  beginLinkPairing(): LinkPairing {
+    let approvedOffer: ConnectionOffer | null = null;
+    return {
+      submit: async (link, password) => {
+        const { offer, password: linkPassword } = parseOfferConnectionUrl(link);
+        if (!approvedOffer || !isSameLinkedConnection(approvedOffer, offer)) {
+          if (!(await this.confirmLink(offer))) return { status: "cancelled" };
+          approvedOffer = offer;
+        }
+        const result = await this.probeAndUpsertOffer(offer, password ?? linkPassword);
+        return { status: "connected", ...result };
+      },
+    };
+  }
+
+  async importConnectionLink(
+    url: string,
+    target: PairingNavigationTarget,
+  ): Promise<ConnectionLinkImport> {
+    if (target === "openProject") {
+      const { offer, password } = parseOfferConnectionUrl(url);
+      if (!(await this.confirmLink(offer))) return { status: "cancelled" };
+      const profile = await this.upsertConnectionFromOffer(offer, undefined, password);
+      return { status: "connected", serverId: profile.serverId };
+    }
+    const pairing = this.beginLinkPairing();
+    try {
+      const result = await pairing.submit(url);
+      if (result.status === "cancelled") return result;
+      return { status: "connected", serverId: result.serverId };
+    } catch (error) {
+      if (!getConnectionAuthFailureReason(error)) throw error;
+      return { status: "password_required", link: url, pairing };
+    }
+  }
+
+  private async upsertConnectionFromOffer(
+>>>>>>> refs/tags/v0.10.3
     offer: ConnectionOffer,
     label?: string,
     password?: string,
   ): Promise<HostProfile> {
+<<<<<<< HEAD
     offer = parseConnectionOffer(offer);
     await this.assertRelayHostPin(offer.serverId, offer.daemonPublicKeyB64);
     const deviceId = await this.claimRelayDevice(offer, this.storage);
@@ -2093,10 +2224,20 @@ export class HostRuntimeStore {
       daemonPublicKeyB64: offer.daemonPublicKeyB64,
       deviceId,
       label: label ?? offer.hostLabel ?? "Unnamed host",
+=======
+    const connection = relayConnectionFromOffer(offer);
+    return this.upsertRelayConnection({
+      serverId: offer.serverId,
+      relayEndpoint: connection.relayEndpoint,
+      useTls: connection.useTls,
+      daemonPublicKeyB64: connection.daemonPublicKeyB64,
+      label,
+>>>>>>> refs/tags/v0.10.3
       password,
     });
   }
 
+<<<<<<< HEAD
   async upsertConnectionFromOfferUrl(
     offerUrlOrFragment: string,
     label?: string,
@@ -2125,6 +2266,16 @@ export class HostRuntimeStore {
     const probeHost: HostProfile = {
       serverId: offer.serverId,
       ...(credential ? { password: credential } : {}),
+=======
+  private async probeAndUpsertOffer(
+    offer: ConnectionOffer,
+    password: string | undefined,
+  ): Promise<{ profile: HostProfile; serverId: string; hostname: string | null }> {
+    const connection = relayConnectionFromOffer(offer);
+    const probeHost: HostProfile = {
+      serverId: offer.serverId,
+      ...(password ? { password } : {}),
+>>>>>>> refs/tags/v0.10.3
       label: offer.serverId,
       appearance: defaultHostAppearance(),
       lifecycle: {},
@@ -2135,6 +2286,7 @@ export class HostRuntimeStore {
     };
     const { client, hostname } = await this.deps.connectToDaemon({ host: probeHost, connection });
     await client.close().catch(() => undefined);
+<<<<<<< HEAD
     const profile = await this.upsertConnectionFromOffer(offer, hostname ?? undefined, credential);
     return { profile, serverId: offer.serverId, hostname };
   }
@@ -2154,6 +2306,10 @@ export class HostRuntimeStore {
       if (!getConnectionAuthFailureReason(error)) throw error;
       return { status: "password_required" };
     }
+=======
+    const profile = await this.upsertConnectionFromOffer(offer, hostname ?? undefined, password);
+    return { profile, serverId: offer.serverId, hostname };
+>>>>>>> refs/tags/v0.10.3
   }
 
   async upsertConnectionFromListen(input: {
@@ -2317,7 +2473,10 @@ export class HostRuntimeStore {
     serverId: string;
     label?: string;
     password?: string;
+<<<<<<< HEAD
     clearPassword?: boolean;
+=======
+>>>>>>> refs/tags/v0.10.3
     connection: HostConnection;
     existingClient?: DaemonClient;
     preferConnection?: boolean;
@@ -2334,7 +2493,10 @@ export class HostRuntimeStore {
       serverId: input.serverId,
       label: input.label,
       connection: input.connection,
+<<<<<<< HEAD
       preferConnection: input.preferConnection,
+=======
+>>>>>>> refs/tags/v0.10.3
       password: input.password,
       now,
     });
@@ -2965,6 +3127,29 @@ export function useHostRegistryLoaded(): boolean {
   );
 }
 
+export function useHostConfirmation(): {
+  pending: HostConfirmationRequest | null;
+  answer: (approved: boolean) => void;
+} {
+  const store = getHostRuntimeStore();
+  const pending = useSyncExternalStore(
+    (onStoreChange) => store.subscribeHostConfirmation(onStoreChange),
+    () => store.getPendingHostConfirmation(),
+    () => store.getPendingHostConfirmation(),
+  );
+  // The answer is bound to the request this render shows, so a tap never
+  // answers a request that replaced it.
+  return useMemo(
+    () => ({
+      pending,
+      answer: (approved: boolean) => {
+        if (pending) store.answerHostConfirmation(pending.id, approved);
+      },
+    }),
+    [pending, store],
+  );
+}
+
 export interface HostMutations {
   upsertDirectConnection: (input: {
     serverId: string;
@@ -2985,6 +3170,7 @@ export interface HostMutations {
     daemonPort?: number;
     label?: string;
   }) => Promise<{ profile: HostProfile; serverId: string; hostname: string | null }>;
+<<<<<<< HEAD
   upsertRelayConnection: (input: {
     serverId: string;
     relayEndpoint: string;
@@ -3003,6 +3189,9 @@ export interface HostMutations {
     offerUrlOrFragment: string,
     password?: string,
   ) => Promise<{ profile: HostProfile; serverId: string; hostname: string | null }>;
+=======
+  beginLinkPairing: () => LinkPairing;
+>>>>>>> refs/tags/v0.10.3
   renameHost: (serverId: string, label: string) => Promise<void>;
   setHostColor: (serverId: string, color: HostColor) => Promise<void>;
   setHostBadgeDisplay: (serverId: string, badgeDisplay: HostBadgeDisplay) => Promise<void>;
@@ -3018,12 +3207,16 @@ export function useHostMutations(): HostMutations {
       upsertDirectConnection: (input) => store.upsertDirectConnection(input),
       probeAndUpsertDirectConnection: (input) => store.probeAndUpsertDirectConnection(input),
       probeAndUpsertRemoteSshConnection: (input) => store.probeAndUpsertRemoteSshConnection(input),
+<<<<<<< HEAD
       upsertRelayConnection: (input) => store.upsertRelayConnection(input),
       upsertConnectionFromOffer: (offer, label) => store.upsertConnectionFromOffer(offer, label),
       upsertConnectionFromOfferUrl: (url, label, password) =>
         store.upsertConnectionFromOfferUrl(url, label, password),
       probeAndUpsertConnectionFromOfferUrl: (url, password) =>
         store.probeAndUpsertConnectionFromOfferUrl(url, password),
+=======
+      beginLinkPairing: () => store.beginLinkPairing(),
+>>>>>>> refs/tags/v0.10.3
       renameHost: (serverId, label) => store.renameHost(serverId, label),
       setHostColor: (serverId, color) => store.setHostColor(serverId, color),
       setHostBadgeDisplay: (serverId, badgeDisplay) =>

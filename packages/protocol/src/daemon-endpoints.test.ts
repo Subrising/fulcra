@@ -215,6 +215,7 @@ describe("shouldUseTlsForDefaultHostedRelay", () => {
 });
 
 describe("relay connection URI", () => {
+<<<<<<< HEAD
   test("refuses legacy relay URI rather than upgrading missing pairing authority", () => {
     expect(() =>
       parseRelayConnectionUri("relay://relay.paseo.sh:443/srv_test?key=legacy&ssl=true"),
@@ -266,6 +267,14 @@ describe("relay connection URI", () => {
           expiresAt: "2099-01-01T00:00:00.000Z",
         },
         hostLabel: "Test host",
+=======
+  test("round-trips the offer and password through a direct URI and connect wrapper", () => {
+    const parts = {
+      offer: {
+        v: 2 as const,
+        serverId: "srv_test",
+        daemonPublicKeyB64: "abc+/=",
+>>>>>>> refs/tags/v0.10.3
         relay: { endpoint: "relay.paseo.sh:443", useTls: true },
       },
       password: "two words",
