@@ -1,6 +1,7 @@
 import { checkNativeReportOriginPublication } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
+import { startLimitResume } from "./limit-resume/start.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
@@ -429,6 +430,8 @@ export interface PaseoDaemonConfig {
   };
   autoArchiveAfterMerge?: boolean;
   enableTerminalAgentHooks?: boolean;
+  autoResumeOnLimit?: boolean;
+  autoResumeInterrupted?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
@@ -608,6 +611,16 @@ function initialRelayConfig(config: PaseoDaemonConfig): MutableDaemonConfig["rel
   };
 }
 
+function autoResumeSettings(config: {
+  autoResumeOnLimit?: boolean;
+  autoResumeInterrupted?: boolean;
+}) {
+  return {
+    autoResumeOnLimit: config.autoResumeOnLimit ?? true,
+    autoResumeInterrupted: config.autoResumeInterrupted ?? true,
+  };
+}
+
 function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDaemonConfig {
   const providers = config.providerOverrides ?? {};
 
@@ -632,6 +645,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     },
     autoArchiveAfterMerge: config.autoArchiveAfterMerge ?? false,
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
+    ...autoResumeSettings(config),
     appendSystemPrompt: config.appendSystemPrompt ?? "",
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
@@ -1498,6 +1512,14 @@ export async function createPaseoDaemon(
     subscribe: (listener) => agentManager.subscribe(listener),
     onError: (error) => logger.warn({ err: error }, "Insights recorder could not start"),
   });
+  // Resumes sessions that stopped on a usage limit once it resets (durable queue; Settings toggle).
+  const limitResume = startLimitResume({
+    paseoHome: config.paseoHome,
+    agentManager,
+    agentStorage,
+    daemonConfigStore,
+    logger,
+  });
   // Automations ("when X, do Y") drive the Schedule service above; see automations/automation-service.ts.
   const automationService = await startHostAutomations({
     paseoHome: config.paseoHome,
@@ -1518,10 +1540,15 @@ export async function createPaseoDaemon(
   );
   // Orca R3a. Nothing runs a stored `running` turn after a restart, so it is normalised to idle with a durable
   // interruption marker before any client reads it. No agent is loaded, resumed or prompted here.
+  const interruptionBootId = randomUUID();
   const interrupted = await agentStorage.normalizeInterruptedTurns(
-    { detectedAt: new Date().toISOString(), bootId: randomUUID() },
+    { detectedAt: new Date().toISOString(), bootId: interruptionBootId },
     (agentId) => agentManager.getAgent(agentId) !== null,
   );
+  // Those were mid-task when the daemon stopped; queue them for one staggered resume (own toggle, durable).
+  void limitResume
+    .enqueueInterrupted(interrupted, interruptionBootId)
+    .catch((err) => logger.warn({ err }, "Could not queue interrupted sessions for auto-resume"));
   if (interrupted.length > 0) {
     logger.info(
       { agentIds: interrupted },
@@ -2072,6 +2099,7 @@ export async function createPaseoDaemon(
     terminalManager.killAll();
     await speechService.stop();
     automationService?.stop();
+    limitResume.stop();
     setHostAutomations(null);
     await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);

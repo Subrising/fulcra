@@ -24,6 +24,12 @@ import { shallow, useShallow } from "zustand/shallow";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
+import { LimitResumeBanner, formatLimitResumeStatus } from "@/components/limit-resume-banner";
+import {
+  LIMIT_RESUME_AT_LABEL,
+  RESUME_REASON_LABEL,
+  pendingLimitResumeAt,
+} from "@getpaseo/protocol/limit-resume";
 import { ComposerDock } from "@/composer/dock";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { useRetainedPanelActive } from "@/components/retained-panel";
@@ -344,6 +350,14 @@ function storeFetchedAgentDetail(input: {
   return hydrated;
 }
 
+function limitResumeLabelOf(agent: { labels?: Record<string, string> } | null): string {
+  return agent?.labels?.[LIMIT_RESUME_AT_LABEL] ?? "";
+}
+
+function resumeReasonOf(agent: { labels?: Record<string, string> } | null): string {
+  return agent?.labels?.[RESUME_REASON_LABEL] ?? "";
+}
+
 function useAgentPanelDescriptor(
   target: { kind: "agent"; agentId: string },
   context: { serverId: string },
@@ -362,6 +376,8 @@ function useAgentPanelDescriptor(
         requiresAttention: agent?.requiresAttention ?? false,
         attentionReason: agent?.attentionReason ?? null,
         isTurnActive: selectAgentTurnPresentation(session, target.agentId).isActive,
+        limitResumeAt: limitResumeLabelOf(agent),
+        resumeReason: resumeReasonOf(agent),
       };
     }),
   );
@@ -369,10 +385,17 @@ function useAgentPanelDescriptor(
   const label = resolveWorkspaceAgentTabLabel(descriptorState.title);
   const icon = getProviderIcon(provider, context.serverId);
   const accountText = sessionAccountDescription(provider, descriptorState.accountName);
+  const limitResumeAtMs = pendingLimitResumeAt(
+    { [LIMIT_RESUME_AT_LABEL]: descriptorState.limitResumeAt },
+    Date.now(),
+  );
 
   return {
     label: label ?? "",
-    subtitle: `${formatProviderLabel(provider)} agent${accountText}`,
+    subtitle:
+      limitResumeAtMs === null
+        ? `${formatProviderLabel(provider)} agent${accountText}`
+        : formatLimitResumeStatus(limitResumeAtMs, descriptorState.resumeReason),
     tooltip: `${label ?? `${formatProviderLabel(provider)} agent`}${accountText}`,
     titleState: label ? "ready" : "loading",
     icon,
@@ -1671,6 +1694,7 @@ function ActiveAgentComposer({
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
+      <LimitResumeBanner serverId={serverId} agentId={agentId} />
       <Composer
         agentId={agentId}
         serverId={serverId}

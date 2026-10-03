@@ -15,6 +15,8 @@ function service(runtime: RuntimePort): PluginService {
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
       pluginsEnabled: true,
       plugins: {},

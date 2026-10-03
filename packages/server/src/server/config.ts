@@ -617,6 +617,8 @@ export function resolveConfigFromPersisted(
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
+    autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
+    autoResumeInterrupted: persistedSettings.autoResumeInterrupted,
     appendSystemPrompt,
     terminalProfiles,
     agentProfiles,
@@ -665,6 +667,8 @@ export function resolveConfigFromPersisted(
 function resolvePersistedPassThroughSettings(persisted: PersistedConfig) {
   return {
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    autoResumeOnLimit: persisted.daemon?.autoResumeOnLimit ?? true,
+    autoResumeInterrupted: persisted.daemon?.autoResumeInterrupted ?? true,
     skillSelection: persisted.agents?.skills?.selection,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     oauthClientIds: persisted.integrations?.oauthClientIds ?? {},

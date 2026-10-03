@@ -22,6 +22,8 @@ async function createStore() {
     metadataGeneration: { providers: [] },
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
+    autoResumeOnLimit: true,
+    autoResumeInterrupted: true,
     appendSystemPrompt: "",
   });
   return { config, root, store: createSkillSelectionStore(config) };

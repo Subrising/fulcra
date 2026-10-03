@@ -8,6 +8,13 @@ import { loadPersistedConfig } from "./persisted-config.js";
 import type { PersistedConfig } from "./persisted-config.js";
 import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
 
+function autoResumeOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
+  return {
+    autoResumeOnLimit: daemon.autoResumeOnLimit ?? true,
+    autoResumeInterrupted: daemon.autoResumeInterrupted ?? true,
+  };
+}
+
 function reloadableConfig(
   persisted: PersistedConfig,
   options: { relayEnabledFallback?: boolean } = {},
@@ -26,6 +33,7 @@ function reloadableConfig(
     metadataGeneration: { providers: agents.metadataGeneration?.providers ?? [] },
     autoArchiveAfterMerge: daemon.autoArchiveAfterMerge ?? false,
     enableTerminalAgentHooks: daemon.enableTerminalAgentHooks ?? false,
+    ...autoResumeOf(daemon),
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
     terminalProfiles: daemon.terminalProfiles,
     agentProfiles: daemon.agentProfiles,
@@ -109,6 +117,8 @@ describe("DaemonConfigStore", () => {
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
     });
     const changes: unknown[] = [];
@@ -131,6 +141,8 @@ describe("DaemonConfigStore", () => {
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
     });
 
@@ -177,6 +189,8 @@ describe("DaemonConfigStore", () => {
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
       agentProfiles: [
         { id: "a", name: "Keep", provider: "claude" },
@@ -201,6 +215,8 @@ describe("DaemonConfigStore", () => {
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
     });
     store.onFieldChange("relay.enabled", (enabled) => {
@@ -227,6 +243,8 @@ describe("DaemonConfigStore", () => {
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
     });
     let browserToolsEnabled = false;
@@ -261,6 +279,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -293,6 +313,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -324,6 +346,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -380,6 +404,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -414,6 +440,8 @@ describe("DaemonConfigStore", () => {
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
+      autoResumeInterrupted: true,
       appendSystemPrompt: "",
     });
 
@@ -482,6 +510,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -530,6 +560,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -592,6 +624,8 @@ describe("DaemonConfigStore", () => {
         },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -643,6 +677,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -669,6 +705,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -718,6 +756,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -760,6 +800,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -785,6 +827,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -809,6 +853,8 @@ describe("DaemonConfigStore", () => {
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -861,6 +907,8 @@ describe("DaemonConfigStore", () => {
         providers: {},
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
         metadataGeneration: { providers: [{ provider: "claude", model: "haiku" }] },
       },
@@ -885,6 +933,8 @@ describe("DaemonConfigStore", () => {
         providers: {},
         autoArchiveAfterMerge: false,
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        autoResumeInterrupted: true,
         appendSystemPrompt: "",
         metadataGeneration: { providers: [] },
       },

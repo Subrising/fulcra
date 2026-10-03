@@ -322,6 +322,8 @@ export function HostWorkspacesPage({ serverId }: { serverId: string }) {
       {isConnected ? (
         <SettingsSection title={t("settings.hostSections.workspaces")}>
           <AutoArchiveMergedWorkspacesCard serverId={serverId} />
+          <AutoResumeOnLimitCard serverId={serverId} />
+          <AutoResumeInterruptedCard serverId={serverId} />
         </SettingsSection>
       ) : (
         <View style={[settingsStyles.card, styles.emptyCard]}>
@@ -945,6 +947,84 @@ function AutoArchiveMergedWorkspacesCard({ serverId }: { serverId: string }) {
           onValueChange={handleValueChange}
           accessibilityLabel="Archive merged PR workspaces"
           testID="host-page-auto-archive-merged-workspaces-switch"
+        />
+      </View>
+    </View>
+  );
+}
+
+function AutoResumeOnLimitCard({ serverId }: { serverId: string }) {
+  const isConnected = useHostRuntimeIsConnected(serverId);
+  const { config, patchConfig } = useDaemonConfig(serverId);
+
+  const handleValueChange = useCallback(
+    (next: boolean) => {
+      void patchConfig({ autoResumeOnLimit: next }).catch((error) => {
+        console.error("[HostPage] Failed to update auto-resume", error);
+        Alert.alert(
+          "Unable to update auto-resume",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    },
+    [patchConfig],
+  );
+
+  if (!isConnected) return null;
+
+  return (
+    <View style={settingsStyles.card} testID="host-page-auto-resume-on-limit-card">
+      <View style={settingsStyles.row}>
+        <View style={settingsStyles.rowContent}>
+          <Text style={settingsStyles.rowTitle}>Auto-resume sessions after usage limits reset</Text>
+          <Text style={settingsStyles.rowHint}>
+            Sessions that stop mid-task on a usage limit continue on their own once it resets
+          </Text>
+        </View>
+        <Switch
+          value={config?.autoResumeOnLimit !== false}
+          onValueChange={handleValueChange}
+          accessibilityLabel="Auto-resume sessions after usage limits reset"
+          testID="host-page-auto-resume-on-limit-switch"
+        />
+      </View>
+    </View>
+  );
+}
+
+function AutoResumeInterruptedCard({ serverId }: { serverId: string }) {
+  const isConnected = useHostRuntimeIsConnected(serverId);
+  const { config, patchConfig } = useDaemonConfig(serverId);
+
+  const handleValueChange = useCallback(
+    (next: boolean) => {
+      void patchConfig({ autoResumeInterrupted: next }).catch((error) => {
+        console.error("[HostPage] Failed to update auto-resume of interrupted sessions", error);
+        Alert.alert(
+          "Unable to update auto-resume",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    },
+    [patchConfig],
+  );
+
+  if (!isConnected) return null;
+
+  return (
+    <View style={settingsStyles.card} testID="host-page-auto-resume-interrupted-card">
+      <View style={settingsStyles.row}>
+        <View style={settingsStyles.rowContent}>
+          <Text style={settingsStyles.rowTitle}>Auto-resume interrupted sessions</Text>
+          <Text style={settingsStyles.rowHint}>
+            Sessions that were mid-task when the daemon stopped continue once it is back
+          </Text>
+        </View>
+        <Switch
+          value={config?.autoResumeInterrupted !== false}
+          onValueChange={handleValueChange}
+          accessibilityLabel="Auto-resume interrupted sessions"
+          testID="host-page-auto-resume-interrupted-switch"
         />
       </View>
     </View>
