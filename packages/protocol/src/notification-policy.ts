@@ -1,4 +1,3 @@
-
 /** Host-wide choice of which sessions may notify: every session, only primes and leads, or none. */
 export const NOTIFICATION_MODES = ["all", "primes", "off"] as const;
 export type NotificationMode = (typeof NOTIFICATION_MODES)[number];
@@ -47,4 +46,3 @@ export function shouldNotifyForSession(input: {
   if (input.mode === "all") return true;
   return input.pinned === true || isPrimeOrLead(input);
 }
-

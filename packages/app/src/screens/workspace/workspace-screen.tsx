@@ -1,8 +1,7 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
-import { PARENT_AGENT_ID_LABEL, getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
-import { NOTIFY_LABEL, shouldNotifyForSession } from "@getpaseo/protocol/notification-policy";
-import { useDaemonConfig } from "@/hooks/use-daemon-config";
+import { getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
+import { useAgentNotifyControls } from "@/screens/workspace/use-agent-notify-controls";
 import {
   memo,
   useCallback,
@@ -140,7 +139,6 @@ import {
 } from "@/screens/workspace/workspace-desktop-tabs-row";
 import {
   buildWorkspaceTabMenuEntries,
-  type AgentNotifyControls,
   type WorkspaceTabMenuLabels,
 } from "@/screens/workspace/workspace-tab-menu";
 import { useDesktopBrowserNewTabRequests } from "@/desktop/browser/new-tab-requests";
@@ -2790,34 +2788,11 @@ function WorkspaceScreenContent({
     [normalizedServerId, toast, t],
   );
 
-  const { config: hostConfig } = useDaemonConfig(normalizedServerId);
-  const notificationMode = hostConfig?.notificationMode ?? "primes";
-  const agentNotifyControls = useMemo<AgentNotifyControls>(
-    () => ({
-      available: notificationMode !== "off",
-      isEnabled: (agentId) => {
-        const agents = useSessionStore.getState().sessions[normalizedServerId]?.agents;
-        const agent = agents?.get(agentId);
-        if (!agents || !agent) return false;
-        return shouldNotifyForSession({
-          mode: notificationMode,
-          labels: agent.labels,
-          hasChildren: [...agents.values()].some(
-            (candidate) => candidate.labels[PARENT_AGENT_ID_LABEL] === agentId,
-          ),
-        });
-      },
-      onToggle: async (agentId, next) => {
-        if (!client) return;
-        try {
-          await client.updateAgent(agentId, { labels: { [NOTIFY_LABEL]: next ? "on" : "off" } });
-        } catch (error) {
-          toast.error(error instanceof Error ? error.message : String(error));
-        }
-      },
-    }),
-    [client, normalizedServerId, notificationMode, toast],
-  );
+  const agentNotifyControls = useAgentNotifyControls({
+    client,
+    serverId: normalizedServerId,
+    toast,
+  });
 
   const handleReloadAgent = useCallback(
     async (agentId: string) => {
@@ -4091,6 +4066,7 @@ function WorkspaceScreenContent({
     handleCopyTerminalId,
     handleCopyFilePath,
     handleReloadAgent,
+    agentNotifyControls,
     handleRenameTab,
     handleCloseTabsToLeftInPane,
     handleCloseTabsToRightInPane,
@@ -4134,7 +4110,7 @@ function WorkspaceScreenContent({
           onCopyTerminalId={handleCopyTerminalId}
           onCopyFilePath={handleCopyFilePath}
           onReloadAgent={handleReloadAgent}
-        notifications={agentNotifyControls}
+          notifications={agentNotifyControls}
           onRenameTab={handleRenameTab}
           onCloseTab={handleCloseTabById}
           onCloseTabsAbove={handleCloseTabsToLeft}
@@ -4159,7 +4135,7 @@ function WorkspaceScreenContent({
             onCopyTerminalId={handleCopyTerminalId}
             onCopyFilePath={handleCopyFilePath}
             onReloadAgent={handleReloadAgent}
-        notifications={agentNotifyControls}
+            notifications={agentNotifyControls}
             onRenameTab={handleRenameTab}
             onCloseTabsToLeft={handleCloseTabsToLeft}
             onCloseTabsToRight={handleCloseTabsToRight}

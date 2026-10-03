@@ -354,7 +354,11 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
   });
 
   it("pushes for a worker that has children and honours the per-session off toggle", async () => {
-    const base = { config: { title: "Lead" }, workspaceId: WORKSPACE_ID, pendingPermissions: new Map() };
+    const base = {
+      config: { title: "Lead" },
+      workspaceId: WORKSPACE_ID,
+      pendingPermissions: new Map(),
+    };
     const parent = createServer(
       {
         getAgent: vi.fn(() => ({ ...base, labels: { "fulcra.role": "implementation" } })),
@@ -363,7 +367,12 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
       "primes",
     );
     const muted = createServer(
-      { getAgent: vi.fn(() => ({ ...base, labels: { "fulcra.role": "orchestration", "fulcra.notify": "off" } })) },
+      {
+        getAgent: vi.fn(() => ({
+          ...base,
+          labels: { "fulcra.role": "orchestration", "fulcra.notify": "off" },
+        })),
+      },
       "primes",
     );
 
