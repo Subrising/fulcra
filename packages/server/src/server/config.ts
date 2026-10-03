@@ -1,3 +1,4 @@
+import { readLimitResumeSetting } from "./limit-resume-settings.js";
 import { configurationEnvironment } from "./config-environment.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -601,7 +602,7 @@ export function resolveConfigFromPersisted(
   );
 
   const overrideControlledPaths = resolveOverrideControlledPaths(env, cli, speech.providers);
-  const persistedSettings = resolvePersistedPassThroughSettings(persisted);
+  const persistedSettings = resolvePersistedPassThroughSettings(paseoHome, persisted);
 
   return {
     listen,
@@ -663,10 +664,11 @@ export function resolveConfigFromPersisted(
 }
 
 /** Settings read straight from the persisted file, with their defaults. */
-function resolvePersistedPassThroughSettings(persisted: PersistedConfig) {
+function resolvePersistedPassThroughSettings(paseoHome: string, persisted: PersistedConfig) {
   return {
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
-    autoResumeOnLimit: persisted.daemon?.autoResumeOnLimit ?? true,
+    autoResumeOnLimit:
+      readLimitResumeSetting(paseoHome) ?? persisted.daemon?.autoResumeOnLimit ?? true,
     skillSelection: persisted.agents?.skills?.selection,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     oauthClientIds: persisted.integrations?.oauthClientIds ?? {},
