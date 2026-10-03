@@ -69,9 +69,22 @@ const styles = StyleSheet.create((theme) => ({
 }));
 
 /** Retained pin rows do not prove that this host's current sessions are connected. */
-export function PinnedHostConnectionNotice({ workspaces }: { workspaces: readonly { serverId: string }[] }) {
-  const serverIds = useMemo(() => [...new Set(workspaces.map((workspace) => workspace.serverId))], [workspaces]);
-  return <>{serverIds.map((serverId) => <PinnedHostConnectionItem key={serverId} serverId={serverId} />)}</>;
+export function PinnedHostConnectionNotice({
+  workspaces,
+}: {
+  workspaces: readonly { serverId: string }[];
+}) {
+  const serverIds = useMemo(
+    () => [...new Set(workspaces.map((workspace) => workspace.serverId))],
+    [workspaces],
+  );
+  return (
+    <>
+      {serverIds.map((serverId) => (
+        <PinnedHostConnectionItem key={serverId} serverId={serverId} />
+      ))}
+    </>
+  );
 }
 function PinnedHostConnectionItem({ serverId }: { serverId: string }) {
   const hosts = useHosts();
@@ -82,15 +95,32 @@ function PinnedHostConnectionItem({ serverId }: { serverId: string }) {
   if (snapshot?.connectionStatus === "online") return null;
   const pairAgain = host?.pairingRequired ?? snapshot?.pairingRequired;
   const name = host ? hostDisplayName(host) : t("sidebar.host.noHost");
-  return <View style={connectionStyles.notice} testID={`pinned-host-unavailable-${serverId}`}>
-    <Text style={connectionStyles.title}>{`${name} · Cached pins`}</Text>
-    <Text style={connectionStyles.detail}>{pairAgain ? "Pair again to refresh this host’s pins and sessions." : "This host is disconnected. Current sessions and running status are unavailable."}</Text>
-    <Text style={connectionStyles.detail}>{`Host identity: ${serverId}`}</Text>
-    <Button variant="secondary" size="sm" onPress={openSettings} testID={`pinned-host-settings-${serverId}`}>Review host connection</Button>
-  </View>;
+  return (
+    <View style={connectionStyles.notice} testID={`pinned-host-unavailable-${serverId}`}>
+      <Text style={connectionStyles.title}>{`${name} · Cached pins`}</Text>
+      <Text style={connectionStyles.detail}>
+        {pairAgain
+          ? "Pair again to refresh this host’s pins and sessions."
+          : "This host is disconnected. Current sessions and running status are unavailable."}
+      </Text>
+      <Text style={connectionStyles.detail}>{`Host identity: ${serverId}`}</Text>
+      <Button
+        variant="secondary"
+        size="sm"
+        onPress={openSettings}
+        testID={`pinned-host-settings-${serverId}`}
+      >
+        Review host connection
+      </Button>
+    </View>
+  );
 }
 const connectionStyles = StyleSheet.create((theme) => ({
-  notice: { marginHorizontal: theme.spacing[2], marginBottom: theme.spacing[2], gap: theme.spacing[1] },
+  notice: {
+    marginHorizontal: theme.spacing[2],
+    marginBottom: theme.spacing[2],
+    gap: theme.spacing[1],
+  },
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
-  detail: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
+  detail: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
 }));
