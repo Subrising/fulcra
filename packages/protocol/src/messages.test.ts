@@ -709,3 +709,25 @@ describe("account usage session count compatibility", () => {
       expect(AccountUsageRowSchema.safeParse({ ...row, sessionCount }).success).toBe(false);
   });
 });
+
+test("usage-limit resume support is an explicit optional host feature", () => {
+  const oldHost = parseServerInfoStatusPayload({
+    status: "server_info",
+    serverId: "old-host",
+    features: {},
+  });
+  expect(oldHost?.features?.autoResumeOnLimit).toBeUndefined();
+  const newHost = parseServerInfoStatusPayload({
+    status: "server_info",
+    serverId: "new-host",
+    features: { autoResumeOnLimit: true },
+  });
+  expect(newHost?.features?.autoResumeOnLimit).toBe(true);
+  expect(
+    parseServerInfoStatusPayload({
+      status: "server_info",
+      serverId: "host",
+      features: { autoResumeOnLimit: false },
+    })?.features?.autoResumeOnLimit,
+  ).toBe(false);
+});

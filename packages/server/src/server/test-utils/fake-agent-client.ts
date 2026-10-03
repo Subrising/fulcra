@@ -1,3 +1,5 @@
+import { FINAL_INPUT_CHECK } from "../agent/agent-sdk-types.js";
+import { commitFinalInputCheck, recordFinalInputHandoff } from "../agent/final-input-check.js";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
@@ -433,14 +435,19 @@ class FakeAgentSession implements AgentSession {
     return { sessionId: this.id, finalText: resultText, timeline, usage };
   }
 
-  async startTurn(prompt: AgentPromptInput): Promise<{ turnId: string }> {
+  async startTurn(
+    prompt: AgentPromptInput,
+    options?: AgentRunOptions,
+  ): Promise<{ turnId: string }> {
     if (this.activeForegroundTurnId) {
       throw new Error("A foreground turn is already active");
     }
 
+    commitFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
     const turnId = `fake-turn-${this.nextTurnOrdinal++}`;
     this.activeForegroundTurnId = turnId;
     this.onStartTurn?.(prompt);
+    recordFinalInputHandoff(options?.[FINAL_INPUT_CHECK]);
 
     void this.emitTurnEvents(prompt);
 

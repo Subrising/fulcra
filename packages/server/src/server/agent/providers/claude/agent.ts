@@ -1,4 +1,8 @@
-import { assertFinalInputCheck, recordFinalInputHandoff } from "../../final-input-check.js";
+import {
+  assertFinalInputCheck,
+  commitFinalInputCheck,
+  recordFinalInputHandoff,
+} from "../../final-input-check.js";
 import { FINAL_INPUT_CHECK } from "../../agent-sdk-types.js";
 import type { ChildProcess } from "node:child_process";
 import type {
@@ -2517,7 +2521,7 @@ class ClaudeAgentSession implements AgentSession {
       } else {
         if (finishCheck)
           this.assertFinishClaudePrepared({ cancelIssued, nativeId, preparedQuery, preparedInput });
-        assertFinalInputCheck(finishCheck);
+        commitFinalInputCheck(finishCheck);
         preparedInput.push(sdkMessage);
         recordFinalInputHandoff(finishCheck);
       }
@@ -2584,7 +2588,7 @@ class ClaudeAgentSession implements AgentSession {
       this.permissionClearingSteerUuids.add(uuid);
     }
     try {
-      assertFinalInputCheck(finalCheck);
+      commitFinalInputCheck(finalCheck);
       input.push(message);
       recordFinalInputHandoff(finalCheck);
       if (clearPendingPermissions) {
