@@ -3,7 +3,11 @@ import { ensureAgentLoaded } from "../agent/agent-loading.js";
 import type { AgentManager } from "../agent/agent-manager.js";
 import type { AgentStorage } from "../agent/agent-storage.js";
 import type { DaemonConfigStore } from "../daemon-config-store.js";
-import { LIMIT_RESUME_AT_LABEL, LIMIT_RESUME_OPT_OUT_LABEL, LimitResumeService } from "./service.js";
+import {
+  LIMIT_RESUME_AT_LABEL,
+  LIMIT_RESUME_OPT_OUT_LABEL,
+  LimitResumeService,
+} from "./service.js";
 
 /** Starts auto-resume for this host: listens to agent events, keeps the durable queue, resumes at reset. */
 export function startLimitResume(input: {

@@ -118,7 +118,10 @@ describe("LimitResumeService", () => {
       agents.set("a", idle());
       const svc = make();
       svc.start();
-      lastMessage.set("a", "You've hit your weekly limit · resets Oct 6 at 8am (Australia/Brisbane)");
+      lastMessage.set(
+        "a",
+        "You've hit your weekly limit · resets Oct 6 at 8am (Australia/Brisbane)",
+      );
       await svc.onAgentEvent(completed("a"));
       expect(svc.pendingResumeAt("a")).toBe(Date.parse("2026-10-05T22:00:00Z") + HANDOFF_MS);
     });
