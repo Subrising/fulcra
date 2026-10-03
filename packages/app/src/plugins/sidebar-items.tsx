@@ -8,6 +8,8 @@ import {
   rememberPluginContributionHost,
 } from "./contribution-host";
 import { type PluginSidebarGroup, type PluginSidebarTarget } from "./sidebar-groups";
+import { PrimeSidebar } from "./prime-sidebar";
+import { COMMAND_CENTRE_PLUGIN_ID } from "./command-centre-connection";
 
 function selectTarget(
   group: PluginSidebarGroup,
@@ -47,18 +49,25 @@ export function PluginSidebarItemRow({
     router.push(route);
   }, [group.key, onBeforeNavigate, route, target.plugin.serverId]);
   return (
-    <SidebarHeaderRow
-      icon={resolvePluginIcon(target.untrusted ? "ShieldAlert" : group.icon)}
-      label={target.untrusted ? `${group.title} · Not trusted` : group.title}
-      accessibilityLabel={
-        target.untrusted
-          ? `${group.title}. Plugin not trusted on this Mac. Open for update instructions.`
-          : group.title
-      }
-      onPress={navigate}
-      isActive={isActive}
-      testID={`plugin-sidebar-${group.pluginId}-${group.contributionId}`}
-      variant="compact"
-    />
+    <>
+      <SidebarHeaderRow
+        icon={resolvePluginIcon(target.untrusted ? "ShieldAlert" : group.icon)}
+        label={target.untrusted ? `${group.title} · Not trusted` : group.title}
+        accessibilityLabel={
+          target.untrusted
+            ? `${group.title}. Plugin not trusted on this Mac. Open for update instructions.`
+            : group.title
+        }
+        onPress={navigate}
+        isActive={isActive}
+        testID={`plugin-sidebar-${group.pluginId}-${group.contributionId}`}
+        variant="compact"
+      />
+      {!target.untrusted &&
+        group.pluginId === COMMAND_CENTRE_PLUGIN_ID &&
+        group.contributionId === "organization" && (
+          <PrimeSidebar serverId={target.plugin.serverId} onBeforeNavigate={onBeforeNavigate} />
+        )}
+    </>
   );
 }

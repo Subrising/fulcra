@@ -324,10 +324,11 @@ test("client entry registers its actual surface and return commands and cleans u
     openSurface() {},
   });
   assert.equal(registrations[0][1], HomeSurface);
-  assert.equal(registrations[1].surface, "organization");
+  assert.equal(registrations[1][0], "leadership");
+  assert.equal(registrations[2].surface, "organization");
   assert.equal(commands.length, 2);
   cleanup();
-  assert.equal(removed.length, 4);
+  assert.equal(removed.length, 5);
 });
 function base(name, input, { inactive = false, sessions = [] } = {}) {
   if (name === "organization.project-briefing")
@@ -4899,6 +4900,35 @@ test("Changes is visible and older hosts get plain navigation instructions", asy
     screen.getByTestId("changes-navigation-unavailable").textContent,
     /Architecture map/,
   );
+});
+
+test("a broken session view leaves tabs usable and retry is scoped to that view", async () => {
+  setFleetHandler((name, input) =>
+    name === "organization.fleet"
+      ? Promise.resolve({
+          observedAt: time(),
+          total: 1,
+          partial: false,
+          nodes: [null],
+          tasks: [],
+          edges: [],
+          note: "Broken observation",
+        })
+      : base(name, input),
+  );
+  mount(
+    h(HomeSurface, {
+      theme,
+      layout: { compact: false, platform: "web" },
+      host: { id: "broken-tab" },
+    }),
+  );
+  fireEvent.click(await screen.findByTestId("organization-tab-sessions"));
+  await screen.findByRole("button", { name: "Retry this view" });
+  assert(screen.getByTestId("organization-tab-today"));
+  fireEvent.click(screen.getByTestId("organization-tab-changes"));
+  assert(screen.getByTestId("changes-entry"));
+  assert.equal(screen.queryByRole("button", { name: "Retry this view" }), null);
 });
 
 test("Sessions sends paging and search to the server and replaces the displayed page", async () => {

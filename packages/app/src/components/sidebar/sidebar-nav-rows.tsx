@@ -16,6 +16,7 @@ import {
 import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
+import { SidebarNewChatRow } from "./sidebar-new-chat-row";
 import { useWorkspace } from "@/stores/session-store-hooks";
 import {
   buildNewWorkspaceRoute,
@@ -47,6 +48,7 @@ export function SidebarNavRows({ style, onBeforeNavigate }: SidebarNavRowsProps)
 
   return (
     <View style={style}>
+      <SidebarNewChatRow onBeforeNavigate={onBeforeNavigate} />
       {visibleItems.map((item) => {
         if (item.kind === "plugin") {
           return (

@@ -24,6 +24,7 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
     </button>
   ),
 }));
+vi.mock("./prime-sidebar", () => ({ PrimeSidebar: () => null }));
 import { PluginSidebarItemRow } from "./sidebar-items";
 import { groupPluginSidebarContributions } from "./sidebar-groups";
 afterEach(cleanup);

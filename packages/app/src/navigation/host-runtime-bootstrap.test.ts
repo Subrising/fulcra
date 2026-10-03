@@ -376,7 +376,7 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelectionStatus: "missing",
         orcaHome: "present",
       }),
-    ).toEqual("/h/server-saved/plugin/orca-organization/sidebar/organization");
+    ).toEqual("/h/server-saved/plugin/orca-organization-next/sidebar/organization");
   });
 
   it("opens Orca home when the remembered workspace belongs to another host", () => {
@@ -387,7 +387,7 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelectionStatus: "exists",
         orcaHome: "present",
       }),
-    ).toEqual("/h/server-saved/plugin/orca-organization/sidebar/organization");
+    ).toEqual("/h/server-saved/plugin/orca-organization-next/sidebar/organization");
   });
 
   it("opens Orca home when no workspace is remembered", () => {
@@ -398,7 +398,7 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelectionStatus: "unknown",
         orcaHome: "present",
       }),
-    ).toEqual("/h/server-saved/plugin/orca-organization/sidebar/organization");
+    ).toEqual("/h/server-saved/plugin/orca-organization-next/sidebar/organization");
   });
 
   // Orca home is a plugin surface. A host without that plugin renders "This plugin surface is
