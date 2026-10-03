@@ -23,14 +23,16 @@ vi.mock("@/components/ui/switch", () => ({
   Switch: ({
     value,
     onValueChange,
+    accessibilityLabel,
   }: {
     value: boolean;
     onValueChange: (value: boolean) => void;
+    accessibilityLabel: string;
   }) => {
     f.retainedToggle = onValueChange;
     const handleClick = React.useCallback(() => onValueChange(!value), [onValueChange, value]);
     return (
-      <button type="button" role="switch" aria-checked={value} onClick={handleClick}>
+      <button type="button" role="switch" aria-label={accessibilityLabel} aria-checked={value} onClick={handleClick}>
         Auto-resume
       </button>
     );
@@ -109,4 +111,14 @@ it("unanswered capability and disconnected hosts do not advertise enabled behavi
   f.connected = false;
   view.rerender(<AutoResumeOnLimitCard serverId="host" />);
   expect(view.container.textContent).toBe("");
+});
+
+it("qualifies eligible standalone continuation and preserves owner controls without granting authority", () => {
+  f.features = { autoResumeOnLimit: true }; f.currentFeatures = f.features;
+  render(<AutoResumeOnLimitCard serverId="host" />);
+  expect(screen.getByText("Auto-resume eligible sessions after usage limits reset").textContent).toBe("Auto-resume eligible sessions after usage limits reset");
+  expect(screen.getByText("Eligible standalone sessions may resume after a usage limit resets if their setup is unchanged. Sessions managed by a prime or another owner use that owner’s controls. Turning this on does not grant permission to continue.").textContent).toBe("Eligible standalone sessions may resume after a usage limit resets if their setup is unchanged. Sessions managed by a prime or another owner use that owner’s controls. Turning this on does not grant permission to continue.");
+  expect(screen.getByRole("switch", { name: "Auto-resume eligible sessions after usage limits reset" }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.queryByText("Sessions that stop mid-task on a usage limit continue on their own once it resets")).toBeNull();
+  expect(f.patch).not.toHaveBeenCalled();
 });
