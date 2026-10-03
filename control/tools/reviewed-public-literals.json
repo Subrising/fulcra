@@ -4123,5 +4123,193 @@
       "excerpt": "can be thought of as the inverse of the\n   Nil UUID defined in Section 5.9.\n\n   FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF\n\n                         Figure 14: Max UUID Format\n\n   A Max UUID value can b"
     },
     "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 17,
+    "offset": 16855,
+    "pattern": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "context": "8]|128,s)for(let e=0;e<16;++e)s[y+e]=l[e];return(0,n.default)(l)};try{f.name=e}catch{}return f.DNS='6ba7b810-9dad-11d1-80b4-00c04fd430c8',f.URL='6ba7b811-9dad-11d1-80b4-00c04fd430c8',f}},11,[12]);\n__d(function(g,r,_i,a,m,e,d){\"use strict\";O",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      "excerpt": "======+====================================+=========+==========+\n   |DNS      |6ba7b810-9dad-11d1-80b4-00c04fd430c8|[RFC9499]|[RFC4122],|\n   |         |                                    |      "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 17,
+    "offset": 16900,
+    "pattern": "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "context": "urn(0,n.default)(l)};try{f.name=e}catch{}return f.DNS='6ba7b810-9dad-11d1-80b4-00c04fd430c8',f.URL='6ba7b811-9dad-11d1-80b4-00c04fd430c8',f}},11,[12]);\n__d(function(g,r,_i,a,m,e,d){\"use strict\";Object.defineProperty(e,'__esModule',{value:!0",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+      "excerpt": "------+------------------------------------+---------+----------+\n   |URL      |6ba7b811-9dad-11d1-80b4-00c04fd430c8|[RFC1738]|[RFC4122],|\n   |         |                                    |      "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 19,
+    "offset": 17639,
+    "pattern": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "context": "erty(e,\"Uuidv5Namespace\",{enumerable:!0,get:function(){return b}});let b=(function(b){return b.dns=\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\",b.url=\"6ba7b811-9dad-11d1-80b4-00c04fd430c8\",b.oid=\"6ba7b812-9dad-11d1-80b4-00c04fd430c8\",b.x500=\"6ba7",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      "excerpt": "======+====================================+=========+==========+\n   |DNS      |6ba7b810-9dad-11d1-80b4-00c04fd430c8|[RFC9499]|[RFC4122],|\n   |         |                                    |      "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 19,
+    "offset": 17684,
+    "pattern": "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "context": "unction(){return b}});let b=(function(b){return b.dns=\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\",b.url=\"6ba7b811-9dad-11d1-80b4-00c04fd430c8\",b.oid=\"6ba7b812-9dad-11d1-80b4-00c04fd430c8\",b.x500=\"6ba7b814-9dad-11d1-80b4-00c04fd430c8\",b})({})},13",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+      "excerpt": "------+------------------------------------+---------+----------+\n   |URL      |6ba7b811-9dad-11d1-80b4-00c04fd430c8|[RFC1738]|[RFC4122],|\n   |         |                                    |      "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 19,
+    "offset": 17729,
+    "pattern": "6ba7b812-9dad-11d1-80b4-00c04fd430c8",
+    "context": "rn b.dns=\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\",b.url=\"6ba7b811-9dad-11d1-80b4-00c04fd430c8\",b.oid=\"6ba7b812-9dad-11d1-80b4-00c04fd430c8\",b.x500=\"6ba7b814-9dad-11d1-80b4-00c04fd430c8\",b})({})},13,[]);\n__d(function(g,r,i,a,m,e,d){\"use strict",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "6ba7b812-9dad-11d1-80b4-00c04fd430c8",
+      "excerpt": "------+------------------------------------+---------+----------+\n   |OID      |6ba7b812-9dad-11d1-80b4-00c04fd430c8|[X660]   |[RFC4122],|\n   |         |                                    |      "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 19,
+    "offset": 17775,
+    "pattern": "6ba7b814-9dad-11d1-80b4-00c04fd430c8",
+    "context": "\",b.url=\"6ba7b811-9dad-11d1-80b4-00c04fd430c8\",b.oid=\"6ba7b812-9dad-11d1-80b4-00c04fd430c8\",b.x500=\"6ba7b814-9dad-11d1-80b4-00c04fd430c8\",b})({})},13,[]);\n__d(function(g,r,i,a,m,e,d){\"use strict\";r(d[0]),r(d[1]),r(d[2]),r(d[3])},14,[15,16,1",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "6ba7b814-9dad-11d1-80b4-00c04fd430c8",
+      "excerpt": "------+------------------------------------+---------+----------+\n   |X500     |6ba7b814-9dad-11d1-80b4-00c04fd430c8|[X500]   |[RFC4122],|\n   |         |                                    |      "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 14524,
+    "offset": 6993480,
+    "pattern": "00000000-0000-0000-0000-000000000000",
+    "context": "12})$`):/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/,l=A(4),$=A(6),j=A(7),P=/^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "00000000-0000-0000-0000-000000000000",
+      "excerpt": "special form of UUID that is specified to have all\n   128 bits set to zero.\n\n   00000000-0000-0000-0000-000000000000\n\n                         Figure 13: Nil UUID Format\n\n   A Nil UUID value can b"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 14524,
+    "offset": 6993517,
+    "pattern": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    "context": "{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/,l=A(4),$=A(6),j=A(7),P=/^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "excerpt": "can be thought of as the inverse of the\n   Nil UUID defined in Section 5.9.\n\n   FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF\n\n                         Figure 14: Max UUID Format\n\n   A Max UUID value can b"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 15171,
+    "offset": 8773718,
+    "pattern": "00000000-0000-0000-0000-000000000000",
+    "context": " RegExp(\"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"),o=(new Set([\"initializing\",\"idle\",\"running\",\"error\",\"closed\"])",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "00000000-0000-0000-0000-000000000000",
+      "excerpt": "special form of UUID that is specified to have all\n   128 bits set to zero.\n\n   00000000-0000-0000-0000-000000000000\n\n                         Figure 13: Nil UUID Format\n\n   A Nil UUID value can b"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 15171,
+    "offset": 8773755,
+    "pattern": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    "context": "{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$\"),o=(new Set([\"initializing\",\"idle\",\"running\",\"error\",\"closed\"]),new Set([\"refreshed\",\"unchanged\",\"re",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+      "sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+      "literal": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "excerpt": "can be thought of as the inverse of the\n   Nil UUID defined in Section 5.9.\n\n   FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF\n\n                         Figure 14: Max UUID Format\n\n   A Max UUID value can b"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
+  },
+  {
+    "file": "Contents/Resources/app-dist/_expo/static/js/web/index-5b507e0812ac86ac7af727b1f2b410a9.js",
+    "sha256": "39a75d59fb4afb29873a2cfb0dc190e8b9eff23c0382707efad23a649167a5a9",
+    "line": 15494,
+    "offset": 14058714,
+    "pattern": "/users/",
+    "context": "sistant\",version:\"0.20.1\",iconId:\"qwen-code\",installLink:\"https://qwenlm.github.io/qwen-code-docs/en/users/overview\",command:[\"npx\",\"-y\",\"@qwen-code/qwen-code@0.20.1\",\"--acp\",\"--experimental-skills\"]},{id:\"sigit\",title:\"siGit Code\",descript",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-documentation-url",
+      "url": "https://qwenlm.github.io/qwen-code-docs/en/users/overview",
+      "finalUrl": "https://qwenlm.github.io/qwen-code-docs/en/users/overview/",
+      "sha256": "4cc20b06485ad36efde2e82572beeddd7cafbbbbde94f7f58394a3f92118c17f",
+      "status": 200,
+      "literal": "https://qwenlm.github.io/qwen-code-docs/en/users/overview"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance."
   }
 ]
