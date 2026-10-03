@@ -10,7 +10,7 @@ import { PortfolioSurface } from "./portfolio";
 import { PrimeSurface } from "./prime";
 import { WorkGraph } from "./work-graph";
 import { RecoveryBanner } from "./recovery";
-import test, { afterEach } from "node:test";
+import test, { after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import React from "react";
@@ -86,11 +86,26 @@ const chooseTask = async (identifier = "AIN-73") =>
   fireEvent.click(
     await screen.findByRole("radio", { name: `Select ${identifier}: Task ${identifier}` }),
   );
-afterEach(() => {
+async function disposeFixture() {
   setHostPanAvailable(true);
   cleanup();
-  for (const client of clients.splice(0)) client.clear();
+  const owned = clients.splice(0);
+  const retainedObservers = owned.flatMap((client) =>
+    client.getQueryCache().getAll().filter((query) => query.getObserversCount() > 0)
+      .map((query) => query.queryKey),
+  );
+  // Pending fake RPCs need cancellation as well as cache removal. Settle each client's
+  // cancellation callbacks before another test installs its handler or fake clock.
+  await Promise.all(owned.map((client) => client.cancelQueries()));
+  for (const client of owned) client.clear();
   forgetAll();
+  assert.deepEqual(retainedObservers, [], "Fixture query observers survived unmount");
+}
+afterEach(disposeFixture);
+after(async () => {
+  await disposeFixture();
+  // Close only this suite's window, including any timers created through its DOM APIs.
+  dom.window.close();
 });
 test("project briefing shows incoming reasons, named dependencies and original native task actions without hashes", async () => {
   const opened = [],
