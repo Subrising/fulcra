@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import React, { useCallback } from "react";
 import { router } from "expo-router";
 import { SquarePen } from "lucide-react-native";
 import { SidebarHeaderRow } from "./sidebar-header-row";
