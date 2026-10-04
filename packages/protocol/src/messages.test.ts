@@ -731,3 +731,16 @@ test("usage-limit resume support is an explicit optional host feature", () => {
     })?.features?.autoResumeOnLimit,
   ).toBe(false);
 });
+
+test("notification policy is one explicit optional host/session feature", () => {
+  for (const features of [{}, { notificationPolicy: false }, { notificationPolicy: true }]) {
+    const host = parseServerInfoStatusPayload({
+      status: "server_info",
+      serverId: "fixture",
+      features,
+    });
+    expect(host?.features?.notificationPolicy).toBe(
+      "notificationPolicy" in features ? features.notificationPolicy : undefined,
+    );
+  }
+});

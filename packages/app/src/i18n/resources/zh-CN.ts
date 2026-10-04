@@ -1801,6 +1801,7 @@ export const zhCN: TranslationResources = {
     modelCountPlural: "{{count}} 个模型",
     retry: "重试",
     retrying: "正在重试...",
+    savedModels: "正在显示之前加载的 {{provider}} 模型。",
     noMatches: "没有匹配的模型",
     noMatchesForQuery: "没有与“{{query}}”匹配的模型",
     searchAllPlaceholder: "搜索所有模型...",

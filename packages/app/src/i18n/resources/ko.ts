@@ -1836,6 +1836,7 @@ export const ko: TranslationResources = {
     modelCountPlural: "모델 {{count}}개",
     retry: "다시 시도",
     retrying: "다시 시도 중...",
+    savedModels: "이전에 불러온 {{provider}} 모델을 표시합니다.",
     noMatches: "검색과 일치하는 모델이 없습니다",
     noMatchesForQuery: '"{{query}}"과(와) 일치하는 모델이 없습니다',
     searchAllPlaceholder: "모든 모델 검색...",

@@ -13,7 +13,7 @@ import {
 import { Field } from "@/components/ui/form-field";
 import { identityForeground } from "@/styles/identity-colors";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
-import { AgentProfileGlyph } from "../internal/agent-profile-glyph";
+import { AgentProfileGlyph } from "../presentation";
 import {
   AGENT_PROFILE_COLORS,
   AGENT_PROFILE_ICON_KEYS,

@@ -1,3 +1,4 @@
+import { readNotificationSetting, writeNotificationSetting } from "./notification-settings.js";
 import { readLimitResumeSetting, writeLimitResumeSetting } from "./limit-resume-settings.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
 import {
@@ -352,6 +353,9 @@ export class DaemonConfigStore {
     this.reloadSource = options.reloadSource;
     this.startupPersisted = options.startupPersisted ?? loadPersistedConfig(paseoHome, this.logger);
     this.lastKnownPersisted = this.startupPersisted;
+    const savedNotification = readNotificationSetting(paseoHome);
+    if (savedNotification !== undefined)
+      this.current = { ...this.current, notificationMode: savedNotification };
     const savedResume = readLimitResumeSetting(paseoHome);
     if (savedResume !== undefined)
       this.current = { ...this.current, autoResumeOnLimit: savedResume };
@@ -419,9 +423,7 @@ export class DaemonConfigStore {
 
     const configChanged = !isEqualValue(this.current, next);
 
-    const preferenceChanged =
-      configPatch.autoResumeOnLimit !== undefined &&
-      readLimitResumeSetting(this.paseoHome) !== configPatch.autoResumeOnLimit;
+    const preferenceChanged = this.preferenceChanged(configPatch);
     if (!configChanged && !preferenceChanged && removedProviders.length === 0) {
       return this.current;
     }
@@ -439,13 +441,11 @@ export class DaemonConfigStore {
       this.applyReplacement(next, { removedProviders });
       this.lastKnownPersisted = knownNext;
     } catch (error) {
-      if (configPatch.autoResumeOnLimit !== undefined)
-        writeLimitResumeSetting(
-          this.paseoHome,
-          persistedBeforePatch.daemon?.autoResumeOnLimit ?? this.current.autoResumeOnLimit,
-        );
+      this.restorePreferences(configPatch, persistedBeforePatch);
       if (
-        Object.keys(configPatch).some((key) => key !== "autoResumeOnLimit") ||
+        Object.keys(configPatch).some(
+          (key) => key !== "autoResumeOnLimit" && key !== "notificationMode",
+        ) ||
         removedProviders.length > 0
       )
         savePersistedConfig(this.paseoHome, persistedBeforePatch, this.logger);
@@ -468,6 +468,8 @@ export class DaemonConfigStore {
       ...resolved.mutable,
       autoResumeOnLimit:
         readLimitResumeSetting(this.paseoHome) ?? resolved.mutable.autoResumeOnLimit,
+      notificationMode:
+        readNotificationSetting(this.paseoHome) ?? resolved.mutable.notificationMode,
       plugins: this.current.plugins,
     });
     const changedSinceLastApply = diffPaths(this.lastKnownPersisted, persisted);
@@ -612,6 +614,40 @@ export class DaemonConfigStore {
     };
   }
 
+  private preferenceChanged(patch: SupportedMutableConfigPatch): boolean {
+    return (
+      (patch.autoResumeOnLimit !== undefined &&
+        readLimitResumeSetting(this.paseoHome) !== patch.autoResumeOnLimit) ||
+      (patch.notificationMode !== undefined &&
+        readNotificationSetting(this.paseoHome) !== patch.notificationMode)
+    );
+  }
+
+  private restorePreferences(patch: SupportedMutableConfigPatch, previous: PersistedConfig): void {
+    const failures: unknown[] = [];
+    if (patch.notificationMode !== undefined) {
+      try {
+        writeNotificationSetting(
+          this.paseoHome,
+          previous.daemon?.notificationMode ?? this.current.notificationMode,
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (patch.autoResumeOnLimit !== undefined) {
+      try {
+        writeLimitResumeSetting(
+          this.paseoHome,
+          previous.daemon?.autoResumeOnLimit ?? this.current.autoResumeOnLimit,
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, "Daemon preference rollback failed");
+  }
+
   private persistConfig(
     patch: Omit<SupportedMutableConfigPatch, "removeProviders">,
     removeProviders: readonly string[],
@@ -627,17 +663,16 @@ export class DaemonConfigStore {
     const nextPersisted = merge(persisted);
     const knownNext = merge(this.lastKnownPersisted);
     const writesMain =
-      Object.keys(patch).some((key) => key !== "autoResumeOnLimit") || removeProviders.length > 0;
-    if (patch.autoResumeOnLimit !== undefined)
-      writeLimitResumeSetting(this.paseoHome, patch.autoResumeOnLimit);
+      Object.keys(patch).some((key) => key !== "autoResumeOnLimit" && key !== "notificationMode") ||
+      removeProviders.length > 0;
     try {
+      if (patch.notificationMode !== undefined)
+        writeNotificationSetting(this.paseoHome, patch.notificationMode);
+      if (patch.autoResumeOnLimit !== undefined)
+        writeLimitResumeSetting(this.paseoHome, patch.autoResumeOnLimit);
       if (writesMain) savePersistedConfig(this.paseoHome, nextPersisted, this.logger);
     } catch (error) {
-      if (patch.autoResumeOnLimit !== undefined)
-        writeLimitResumeSetting(
-          this.paseoHome,
-          persisted.daemon?.autoResumeOnLimit ?? this.current.autoResumeOnLimit,
-        );
+      this.restorePreferences(patch, persisted);
       throw error;
     }
     return { previous: persisted, knownNext };

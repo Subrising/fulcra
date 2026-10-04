@@ -1883,6 +1883,7 @@ export const fr: TranslationResources = {
     modelCountPlural: "{{count}} modèles",
     retry: "Réessayer",
     retrying: "Nouvelle tentative...",
+    savedModels: "Affichage des modèles {{provider}} chargés précédemment.",
     noMatches: "Aucun modèle ne correspond à votre recherche",
     noMatchesForQuery: "Aucun modèle ne correspond à « {{query}} »",
     searchAllPlaceholder: "Rechercher dans tous les modèles...",

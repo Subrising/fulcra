@@ -1849,6 +1849,7 @@ export const ja: TranslationResources = {
     modelCountPlural: "{{count}}つのモデル",
     retry: "再試行",
     retrying: "再試行中...",
+    savedModels: "以前に読み込んだ{{provider}}のモデルを表示しています。",
     noMatches: "検索に一致するモデルがありません",
     noMatchesForQuery: "「{{query}}」に一致するモデルがありません",
     searchAllPlaceholder: "すべてのモデルを検索...",

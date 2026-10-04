@@ -7,6 +7,8 @@ import { buildDeterministicWorkspaceTabId } from "@/workspace-tabs/identity";
 export interface AgentNotifyControls {
   /** False when the host-wide setting is Off, so a per-session choice cannot take effect. */
   available: boolean;
+  /** Explains unsupported/unknown policy without claiming effective On/Off. */
+  unavailableReason?: string;
   isEnabled: (agentId: string) => boolean;
   onToggle: (agentId: string, next: boolean) => Promise<void> | void;
 }
@@ -231,13 +233,13 @@ export function buildWorkspaceTabMenuEntries(
       },
     });
     if (notifications) {
-      const enabled = notifications.isEnabled(agentId);
+      const enabled = !notifications.unavailableReason && notifications.isEnabled(agentId);
       entries.push({
         kind: "item",
         key: "notify-me",
         label: "Notify me",
-        icon: enabled ? "bell" : "bell-off",
-        hint: enabled ? "On" : "Off",
+        icon: notifications.unavailableReason || enabled ? "bell" : "bell-off",
+        hint: notifications.unavailableReason ?? (enabled ? "On" : "Off"),
         disabled: !notifications.available,
         testID: `${menuTestIDBase}-notify-me`,
         onSelect: () => {

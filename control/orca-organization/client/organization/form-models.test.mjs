@@ -56,3 +56,71 @@ test("workspace form pending actions prevent duplicate execution and expose fail
   assert.equal(model.getState().notice, "Refresh this company");
   model.close();
 });
+
+const codexModes = [
+  { id: "auto-review", label: "Auto review" },
+  { id: "full-access", label: "Full access" },
+];
+const claudeModes = [
+  { id: "default", label: "Ask" },
+  { id: "acceptEdits", label: "Accept edits" },
+];
+test("cross-provider changes clear derived permission modes and resolve only supported provider choices", () => {
+  const model = openIntakeForm({ id: "request", text: "Plan", setText() {} });
+  model.applyDefaults("codex/gpt-6.1-sol", "high", "auto-review");
+  model.setModel("claude/opus", "Claude");
+  assert.equal(model.getState().modeId, "");
+  model.applyProviderModes({ provider: "codex", modes: codexModes, configuredMode: "auto-review" });
+  assert.equal(model.getState().modeId, "");
+  model.applyProviderModes({
+    provider: "claude",
+    modes: claudeModes,
+    configuredMode: "acceptEdits",
+    defaultMode: "default",
+  });
+  assert.equal(model.getState().modeId, "acceptEdits");
+  model.setModel("codex/gpt-6.1-sol");
+  assert.equal(model.getState().modeId, "");
+  model.applyProviderModes({
+    provider: "codex",
+    modes: codexModes,
+    configuredMode: "acceptEdits",
+    defaultMode: "auto-review",
+  });
+  assert.equal(model.getState().modeId, "auto-review");
+  model.close();
+});
+test("explicit compatible mode survives model edits and late defaults, pending choices cannot restore an old provider mode", () => {
+  const model = openIntakeForm({ id: "request", text: "Plan", setText() {} });
+  model.setModel("claude/opus");
+  model.setMode("default");
+  model.applyDefaults("codex/gpt-6.1-sol", "high", "auto-review");
+  model.applyProviderModes({ provider: "claude", modes: null, configuredMode: "acceptEdits" });
+  assert.equal(model.getState().modeId, "default");
+  model.applyProviderModes({
+    provider: "claude",
+    modes: claudeModes,
+    configuredMode: "acceptEdits",
+  });
+  assert.equal(model.getState().modeId, "default");
+  model.setModel("claude/sonnet");
+  model.applyProviderModes({
+    provider: "claude",
+    modes: claudeModes,
+    configuredMode: "acceptEdits",
+  });
+  assert.equal(model.getState().modeId, "default");
+  model.setModel("codex/gpt-6.1-sol");
+  model.applyProviderModes({ provider: "codex", modes: codexModes, defaultMode: "auto-review" });
+  assert.equal(model.getState().modeId, "auto-review");
+  model.close();
+});
+
+test("permission mode edits also fence late model/provider defaults", () => {
+  const model = openIntakeForm({ id: "request", text: "Plan", setText() {} });
+  model.setMode("full-access");
+  model.applyDefaults("claude/opus", "medium", "acceptEdits");
+  assert.equal(model.getState().model, "codex/gpt-6.1-sol");
+  assert.equal(model.getState().modeId, "full-access");
+  model.close();
+});

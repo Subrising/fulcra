@@ -94,6 +94,7 @@ export function IntakeSurface(props: Props) {
   const thinkingKnown =
     !state.thinking ||
     !!offeredModel?.thinkingOptions?.some((entry) => entry.id === state.thinking);
+  const modeKnown = !state.modeId || creation.modes.some((entry) => entry.id === state.modeId);
   const reusable = !!context && !!props.organizationNavigation?.canReuseContext(context.serverId);
   const responsible = saved?.prime ?? workspace?.prime;
   const c = props.theme.colors;
@@ -149,7 +150,7 @@ export function IntakeSurface(props: Props) {
       );
       return;
     }
-    if (!online || !offeredModel || !thinkingKnown || !reusable)
+    if (!online || !offeredModel || !thinkingKnown || !modeKnown || !reusable)
       throw new Error(
         "The destination host/model is not confirmed. Your request is retained; no conversation was created.",
       );
@@ -402,7 +403,17 @@ export function IntakeSurface(props: Props) {
                         onPress={() => model.setThinking(entry.id)}
                       />
                     ))}
-                  {online && !offeredModel && (
+                  {state.advanced &&
+                    creation.modes.map((entry) => (
+                      <WorkButton
+                        key={entry.id}
+                        theme={props.theme}
+                        label={`Permission mode: ${entry.label}`}
+                        selected={state.modeId === entry.id}
+                        onPress={() => model.setMode(entry.id)}
+                      />
+                    ))}
+                  {online && (!offeredModel || state.advanced) && (
                     <WorkButton
                       theme={props.theme}
                       label="Read this host’s offered models"
@@ -435,7 +446,7 @@ export function IntakeSurface(props: Props) {
                   (!state.text.trim() && !saved) ||
                   !context ||
                   (!saved?.conversations.length &&
-                    (!online || !offeredModel || !thinkingKnown || !reusable))
+                    (!online || !offeredModel || !thinkingKnown || !modeKnown || !reusable))
                 }
                 onPress={() => void model.run(start)}
               />

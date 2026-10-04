@@ -29,8 +29,13 @@ function buildModelRowKey(provider: string, modelId: string): string {
   return `${provider}:${modelId}`;
 }
 
+export interface ProviderModelSelectionWarning {
+  message: string;
+  fetchedAt?: string;
+}
+
 export type ProviderModelSelection =
-  | { kind: "models"; rows: ProviderSelectionModelRow[] }
+  | { kind: "models"; rows: ProviderSelectionModelRow[]; warning?: ProviderModelSelectionWarning }
   | { kind: "loading" }
   // The host reported the provider's CLI as not available (not installed) — distinct from a CLI that
   // is installed and failed, which stays an error.
@@ -107,6 +112,21 @@ function buildEntryModelSelection(
   entry: ProviderSnapshotEntry,
   label: string,
 ): ProviderModelSelection {
+  const failed = entry.status === "error" || (entry.status === "unavailable" && !!entry.error);
+  if (failed) {
+    const message = entry.error ?? i18n.t("providerSelection.unknownError");
+    const rows = buildModelRows(
+      entry.provider,
+      label,
+      filterSelectableModels(entry.models ?? []) ?? [],
+    );
+    if (rows.length > 0) {
+      const warning: ProviderModelSelectionWarning = { message };
+      if (entry.fetchedAt !== undefined) warning.fetchedAt = entry.fetchedAt;
+      return { kind: "models", rows, warning };
+    }
+    return { kind: "error", message };
+  }
   if ((entry.models?.length ?? 0) > 0) {
     return buildModelSelection(entry.provider, label, entry.models ?? null);
   }
