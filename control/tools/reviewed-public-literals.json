@@ -4635,5 +4635,344 @@
       "excerpt": "can be thought of as the inverse of the\n   Nil UUID defined in Section 5.9.\n\n   FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF\n\n                         Figure 14: Max UUID Format\n\n   A Max UUID value can b"
     },
     "justification": "Actual compiled UUID validation alternation, not a stored session/account value; exact new artifact hash/site/context plus primary public source. Candidate review required."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 936096,
+    "offset": 153643122,
+    "pattern": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    "context": "\u0001\u001cPe\ufffd\u0002\ufffd\ufffd\u000f\u0000\u0000\u0000internal/buffer\u0000\u0004L\u0001$PgR%\ufffd\ufffd\u0016\u0000\u0000\u0000internal/util/debuglog\u0000\u0000\u0004P\u0001\u0014Pc\ufffd\ufffd\ufffd\u0012\u0007\u0000\u0000\u0000inspect\u0000\u00010Pj\ufffdN\ufffdt$\u0000\u0000\u0000258EAFA5-E914-47DA-95CA-C5AB0DC85B11\u0001 \u0007}\u000f`\u0014\u0000\u0000\u0000\u0001X\u0007i\u0002a\u0006\u0000\u0004\u0000\u0003\u0000\u0000\u0000XH`^\u0002\u0000\u0000\u0007Q\u0010G`^\u0002\u0000\u0000\u0007M\u0010F`~\u0002\u0000\u0000\u0007U\u0010\u0007\ufffd\u000e`\ufffd\u0001\u0000\u0000\u0001\f\u0007\ufffd\u000fa\ufffd%\u0000\u0000\ufffdN\u0000\u0000\ufffd\u0000@\ufffd\u0000@\u0007\ufffd\u0002[\u0001p\ufffda\b\u0000\b\u0000\u0003\u0000\u0000\u0000X\u0007\ufffd\u000fa\ufffd\u0000\u0000",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc6455.txt",
+      "sha256": "765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b",
+      "literal": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      "excerpt": "e value \"dGhlIHNhbXBsZSBub25jZQ==\", the server\n   would concatenate the string \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\"\n   to form the string \"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-\n   C5A"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 947654,
+    "offset": 155909543,
+    "pattern": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    "context": "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\r\n\r\n\u0000258EAFA5-E914-47DA-95CA-C5AB0DC85B11\u0000\u0001~Ux\ufffd\ufffd}{s\ufffdF\ufffd\ufffdWAp7B\ufffdE\ufffd3\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd%\ufffd\ufffd\ufffd9Id\ufffd\ufffd\ufffd\u0011\u06cak\ufffd\ufffdf\ufffdB\u0003\ufffd(4\ufffd\ufffdY}\ufffd\ufffdW\ufffd\ufffd*4\ufffd\ufffdly\ufffd1\u0011c\ufffd\u0001\ufffd3+3+\u001f\ufffd\ufffd\ufffd\ufffd}\u07a8\ufffd\ufffd\u000e\ufffd\ufffd\ufffd\ufffd*\ufffd\ufffdn\u000e\ufffd=\ufffd\ufffd`r\ufffd*",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc6455.txt",
+      "sha256": "765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b",
+      "literal": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      "excerpt": "e value \"dGhlIHNhbXBsZSBub25jZQ==\", the server\n   would concatenate the string \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\"\n   to form the string \"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-\n   C5A"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 993715,
+    "offset": 164360093,
+    "pattern": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    "context": "\u0005 b]\u0002\u0007\ufffd\f\u0007\ufffd\t\u0005 \u0002g\u0004\u0005 \ufffdt\u0003\u0005 \u0012i\u0003\u0005 \ufffd[\u0004\u0005 \u0002\ufffd\u0004\u0005 \ufffdm\u0005 \ufffd\ufffd\u0006\u0005 \ufffd\u0007\u0005 \"|\u0003\u0005 \ufffd9\u0004\u0005 \ufffd\ufffd\b\u0005 \u0095\u0003\u0005 2\ufffd\t\u0005 \ufffd;\u0004\u0005 \ufffd\ufffd\u0006\u0005 bi\u0004\u00010Pj\ufffd\ufffd\f\ufffd$\u0000\u0000\u0000258EAFA5-E914-47DA-95CA-C5AB0DC85B11\u0001 \u0007}\u000f`\u0014\u0000\u0000\u0000\u0001X\u0007i\u0002a\u0006\u0000\u0004\u0000\u0003\u0000\u0000\u0000XH`^\u0002\u0000\u0000\u0007Q\u0010G`^\u0002\u0000\u0000\u0007M\u0010F`~\u0002\u0000\u0000\u0007U\u0010\u0007\ufffd\u000e`\ufffd\u0001\u0000\u0000\u0001\f\u0007\ufffd\u000fa\ufffd%\u0000\u0000\ufffdN\u0000\u0000\ufffd\u0000@\ufffd\u0000@\u0007\ufffd\u0002[\u0001p\ufffda\b\u0000\b\u0000\u0003\u0000\u0000\u0000X\u0007\ufffd\u000fa\ufffd\u0000\u0000",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc6455.txt",
+      "sha256": "765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b",
+      "literal": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      "excerpt": "e value \"dGhlIHNhbXBsZSBub25jZQ==\", the server\n   would concatenate the string \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\"\n   to form the string \"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-\n   C5A"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1006008,
+    "offset": 165981136,
+    "pattern": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    "context": "server_no_context_takeover\u0000client_no_context_takeover\u0000server_max_window_bits\u0000client_max_window_bits\u0000258EAFA5-E914-47DA-95CA-C5AB0DC85B11\u0000\u0000\u0000\ufffd\ufffd\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffdBROTLI\u0000ZSTD\u0000\ufffd\u0000\ufffd",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc6455.txt",
+      "sha256": "765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b",
+      "literal": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      "excerpt": "e value \"dGhlIHNhbXBsZSBub25jZQ==\", the server\n   would concatenate the string \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\"\n   to form the string \"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-\n   C5A"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1054289,
+    "offset": 175988549,
+    "pattern": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    "context": "commonJS({\n  \"lib/web/websocket/constants.js\"(exports2, module2) {\n    \"use strict\";\n    var uid = \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\";\n    var staticPropertyDescriptors = {\n      enumerable: true,\n      writable: false,\n      configurab",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc6455.txt",
+      "sha256": "765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b",
+      "literal": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      "excerpt": "e value \"dGhlIHNhbXBsZSBub25jZQ==\", the server\n   would concatenate the string \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\"\n   to form the string \"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-\n   C5A"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1097745,
+    "offset": 177236565,
+    "pattern": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+    "context": "t Protocol RFC\n// https://tools.ietf.org/html/rfc6455#section-1.3\nconst WEBSOCKET_HANDSHAKE_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';\n\nfunction unpackError({ code, message }) {\n  const err = new ERR_DEBUGGER_ERROR(`${message}`);\n  err.",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://www.rfc-editor.org/rfc/rfc6455.txt",
+      "sha256": "765775326aee0ecca9b04bde3fd1f52932d498e33e34e428bd61b8a24da0fa3b",
+      "literal": "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      "excerpt": "e value \"dGhlIHNhbXBsZSBub25jZQ==\", the server\n   would concatenate the string \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\"\n   to form the string \"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-\n   C5A"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1016801,
+    "offset": 168090097,
+    "pattern": "0000fde2-0000-1000-8000-00805f9b34fb",
+    "context": "IDO 0100\u0000derive EC key \u0000X-caBLE-Client-Payload\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000fido.cable\u0000X-caBLE-Signal-Connection\u00000000fde2-0000-1000-8000-00805f9b34fb\u00000000fff9-0000-1000-8000-00805f9b34fb\u0000FIDO\u0000\u0000\u0001\u0002\u0003\u0004\u0005\u0006\n\u000b\u0011\u0012\u0014\u0015\u0016\u0017\u0018\u0019!\"#$%&'()*+,-./0123456789:;<=>?@\u007f\ufffd\ufffd\ufffd\ufffd\ufffd\u0000\u0000\ufffd\ufffd\ufffd\ufffd",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/db3c44c2fea3874e0d5aeb77fb89dec99ca5e19f/device/fido/cable/fido_ble_uuids.cc",
+      "sha256": "d4ce4698a057328c545583dea564aad1f0ce5aa26f6c1b19e4a51e3cf7cf3b32",
+      "commit": "db3c44c2fea3874e0d5aeb77fb89dec99ca5e19f",
+      "literal": "0000fde2-0000-1000-8000-00805f9b34fb",
+      "excerpt": "   \"f1d0fff4-deaa-ecee-b42f-c9ba7ed623bb\";\n\nconst char kGoogleCableUUID128[] = \"0000fde2-0000-1000-8000-00805f9b34fb\";\nconst char kGoogleCableUUID16[] = \"fde2\";\nconst uint8_t kGoogleCableUUID[16] "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1016801,
+    "offset": 168090134,
+    "pattern": "0000fff9-0000-1000-8000-00805f9b34fb",
+    "context": "t-Payload\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000fido.cable\u0000X-caBLE-Signal-Connection\u00000000fde2-0000-1000-8000-00805f9b34fb\u00000000fff9-0000-1000-8000-00805f9b34fb\u0000FIDO\u0000\u0000\u0001\u0002\u0003\u0004\u0005\u0006\n\u000b\u0011\u0012\u0014\u0015\u0016\u0017\u0018\u0019!\"#$%&'()*+,-./0123456789:;<=>?@\u007f\ufffd\ufffd\ufffd\ufffd\ufffd\u0000\u0000\ufffd\ufffd\ufffd\ufffd\u0004\u0000\u0000\u0000\u0002\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\n\u0003\u000b\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0003clouda",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/db3c44c2fea3874e0d5aeb77fb89dec99ca5e19f/device/fido/cable/fido_ble_uuids.cc",
+      "sha256": "d4ce4698a057328c545583dea564aad1f0ce5aa26f6c1b19e4a51e3cf7cf3b32",
+      "commit": "db3c44c2fea3874e0d5aeb77fb89dec99ca5e19f",
+      "literal": "0000fff9-0000-1000-8000-00805f9b34fb",
+      "excerpt": "0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb,\n};\n\nconst char kFIDOCableUUID128[] = \"0000fff9-0000-1000-8000-00805f9b34fb\";\nconst uint8_t kFIDOCableUUID[16] = {\n    0x00, 0x00, 0xff, 0xf9, 0x00, 0x00, "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237022,
+    "offset": 182841397,
+    "pattern": "3ea8778f-7742-4bf9-b18b-e834b2acbd47",
+    "context": "SO8601DateTimeTag\u0000RequireNonEmptyMap\u0000IV\u0000KEYFORMAT\u0000KEYFORMATVERSIONS\u0000METHOD\u0000RecognizeMethod\u0000urn:uuid:3ea8778f-7742-4bf9-b18b-e834b2acbd47\u0000urn:uuid:be58615b-19c4-4684-88b3-c8c57e99e957\u0000urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\u0000ValidateKey",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://dashif.org/identifiers/content_protection/",
+      "sha256": "28eb0bbdd5c4eb81b3a4c11108ebe7d1046c4ba20d3b1c4a775d6d75a2cc0f46",
+      "literal": "3ea8778f-7742-4bf9-b18b-e834b2acbd47",
+      "excerpt": "ution provided by various vendors.</td>\n    </tr>\n    \n    <tr>\n      <td><code>3ea8778f-7742-4bf9-b18b-e834b2acbd47</code></td>\n      <td><a href=\"\">Clear Key AES-128</a></td>\n      <td></td>\n   "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237022,
+    "offset": 182841443,
+    "pattern": "be58615b-19c4-4684-88b3-c8c57e99e957",
+    "context": "MAT\u0000KEYFORMATVERSIONS\u0000METHOD\u0000RecognizeMethod\u0000urn:uuid:3ea8778f-7742-4bf9-b18b-e834b2acbd47\u0000urn:uuid:be58615b-19c4-4684-88b3-c8c57e99e957\u0000urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\u0000ValidateKeyTag\u0000../../media/formats/hls/types.cc\u0000\\d{1,20}\u0000",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://dashif.org/identifiers/content_protection/",
+      "sha256": "28eb0bbdd5c4eb81b3a4c11108ebe7d1046c4ba20d3b1c4a775d6d75a2cc0f46",
+      "literal": "be58615b-19c4-4684-88b3-c8c57e99e957",
+      "excerpt": "ystem information when using CPIX.</td>\n    </tr>\n    \n    <tr>\n      <td><code>be58615b-19c4-4684-88b3-c8c57e99e957</code></td>\n      <td><a href=\"\">Clear Key SAMPLE-AES</a></td>\n      <td></td>\n"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237022,
+    "offset": 182841489,
+    "pattern": "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed",
+    "context": "rn:uuid:3ea8778f-7742-4bf9-b18b-e834b2acbd47\u0000urn:uuid:be58615b-19c4-4684-88b3-c8c57e99e957\u0000urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\u0000ValidateKeyTag\u0000../../media/formats/hls/types.cc\u0000\\d{1,20}\u0000ParseDecimalInteger\u0000ParseDecimalFloatingPoint\u0000",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-standard",
+      "url": "https://dashif.org/identifiers/content_protection/",
+      "sha256": "28eb0bbdd5c4eb81b3a4c11108ebe7d1046c4ba20d3b1c4a775d6d75a2cc0f46",
+      "literal": "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed",
+      "excerpt": "G-DASH ContentProtection elements.</td>\n    </tr>\n    \n    <tr>\n      <td><code>edef8ba9-79d6-4ace-a3c8-27dcd51d21ed</code></td>\n      <td><a href=\"https://www.widevine.com\">Widevine Content Prote"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237782,
+    "offset": 183545841,
+    "pattern": "00001530-1212-efde-1523-785feabcd123",
+    "context": "wrapper.cc\u0000../../content/browser/bluetooth/bluetooth_allowed_devices.cc\u0000Generated repeated id.\u00001812\u000000001530-1212-efde-1523-785feabcd123\u0000f000ffc0-0451-4000-b000-000000000000\u000000060000\u0000fff9\u0000fffd\u0000fde2\u00002a02\u00002a03\u00002a25\u00002902\u00002903\u0000bad1c9a2-9a5b-401",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/01135bffec64608e65c787ea0345691638831f5e/content/browser/bluetooth/bluetooth_blocklist.cc",
+      "sha256": "24f555c85e3408410e0e0bbe3714b3342d7a51cf7e472452fd96efd184d3f2ff",
+      "commit": "01135bffec64608e65c787ea0345691638831f5e",
+      "literal": "00001530-1212-efde-1523-785feabcd123",
+      "excerpt": "// Services:\n  Add(BluetoothUUID(\"1812\"), Value::EXCLUDE);\n  Add(BluetoothUUID(\"00001530-1212-efde-1523-785feabcd123\"), Value::EXCLUDE);\n  Add(BluetoothUUID(\"f000ffc0-0451-4000-b000-000000000000\")"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237782,
+    "offset": 183545878,
+    "pattern": "f000ffc0-0451-4000-b000-000000000000",
+    "context": "tooth/bluetooth_allowed_devices.cc\u0000Generated repeated id.\u00001812\u000000001530-1212-efde-1523-785feabcd123\u0000f000ffc0-0451-4000-b000-000000000000\u000000060000\u0000fff9\u0000fffd\u0000fde2\u00002a02\u00002a03\u00002a25\u00002902\u00002903\u0000bad1c9a2-9a5b-4015-8b60-1579bbbf2135\u0000bad2ddcf-60db-45c",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/01135bffec64608e65c787ea0345691638831f5e/content/browser/bluetooth/bluetooth_blocklist.cc",
+      "sha256": "24f555c85e3408410e0e0bbe3714b3342d7a51cf7e472452fd96efd184d3f2ff",
+      "commit": "01135bffec64608e65c787ea0345691638831f5e",
+      "literal": "f000ffc0-0451-4000-b000-000000000000",
+      "excerpt": "(\"00001530-1212-efde-1523-785feabcd123\"), Value::EXCLUDE);\n  Add(BluetoothUUID(\"f000ffc0-0451-4000-b000-000000000000\"), Value::EXCLUDE);\n  Add(BluetoothUUID(\"00060000\"), Value::EXCLUDE);\n  Add(Blu"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237782,
+    "offset": 183545964,
+    "pattern": "bad1c9a2-9a5b-4015-8b60-1579bbbf2135",
+    "context": "-785feabcd123\u0000f000ffc0-0451-4000-b000-000000000000\u000000060000\u0000fff9\u0000fffd\u0000fde2\u00002a02\u00002a03\u00002a25\u00002902\u00002903\u0000bad1c9a2-9a5b-4015-8b60-1579bbbf2135\u0000bad2ddcf-60db-45cd-bef9-fd72b153cf7c\u0000bad3ec61-3cc3-4954-9702-7977df514114\u0000BluetoothDeviceChooserControl",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/01135bffec64608e65c787ea0345691638831f5e/content/browser/bluetooth/bluetooth_blocklist.cc",
+      "sha256": "24f555c85e3408410e0e0bbe3714b3342d7a51cf7e472452fd96efd184d3f2ff",
+      "commit": "01135bffec64608e65c787ea0345691638831f5e",
+      "literal": "bad1c9a2-9a5b-4015-8b60-1579bbbf2135",
+      "excerpt": "), Value::EXCLUDE);\n  // Characteristics for Layout Tests:\n  Add(BluetoothUUID(\"bad1c9a2-9a5b-4015-8b60-1579bbbf2135\"),\n      Value::EXCLUDE_READS);\n  // Descriptors:\n  Add(BluetoothUUID(\"2902\"), "
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237782,
+    "offset": 183546001,
+    "pattern": "bad2ddcf-60db-45cd-bef9-fd72b153cf7c",
+    "context": "-000000000000\u000000060000\u0000fff9\u0000fffd\u0000fde2\u00002a02\u00002a03\u00002a25\u00002902\u00002903\u0000bad1c9a2-9a5b-4015-8b60-1579bbbf2135\u0000bad2ddcf-60db-45cd-bef9-fd72b153cf7c\u0000bad3ec61-3cc3-4954-9702-7977df514114\u0000BluetoothDeviceChooserController\u0000../../content/browser/bluetooth/b",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/01135bffec64608e65c787ea0345691638831f5e/content/browser/bluetooth/bluetooth_blocklist.cc",
+      "sha256": "24f555c85e3408410e0e0bbe3714b3342d7a51cf7e472452fd96efd184d3f2ff",
+      "commit": "01135bffec64608e65c787ea0345691638831f5e",
+      "literal": "bad2ddcf-60db-45cd-bef9-fd72b153cf7c",
+      "excerpt": "Value::EXCLUDE_WRITES);\n  // Descriptors for Layout Tests:\n  Add(BluetoothUUID(\"bad2ddcf-60db-45cd-bef9-fd72b153cf7c\"), Value::EXCLUDE);\n  Add(BluetoothUUID(\"bad3ec61-3cc3-4954-9702-7977df514114\")"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1237782,
+    "offset": 183546038,
+    "pattern": "bad3ec61-3cc3-4954-9702-7977df514114",
+    "context": "\u00002a02\u00002a03\u00002a25\u00002902\u00002903\u0000bad1c9a2-9a5b-4015-8b60-1579bbbf2135\u0000bad2ddcf-60db-45cd-bef9-fd72b153cf7c\u0000bad3ec61-3cc3-4954-9702-7977df514114\u0000BluetoothDeviceChooserController\u0000../../content/browser/bluetooth/bluetooth_device_chooser_controller.cc",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/01135bffec64608e65c787ea0345691638831f5e/content/browser/bluetooth/bluetooth_blocklist.cc",
+      "sha256": "24f555c85e3408410e0e0bbe3714b3342d7a51cf7e472452fd96efd184d3f2ff",
+      "commit": "01135bffec64608e65c787ea0345691638831f5e",
+      "literal": "bad3ec61-3cc3-4954-9702-7977df514114",
+      "excerpt": "(\"bad2ddcf-60db-45cd-bef9-fd72b153cf7c\"), Value::EXCLUDE);\n  Add(BluetoothUUID(\"bad3ec61-3cc3-4954-9702-7977df514114\"),\n      Value::EXCLUDE_READS);\n}\n\nvoid BluetoothBlocklist::PopulateWithServerP"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "sha256": "392c0c57a6361f987ed98f635a69fdd93840f9952555a3c194fd8d93f52a20fd",
+    "line": 1243144,
+    "offset": 186898253,
+    "pattern": "00001234-0000-1000-8000-00805f9b34fb",
+    "context": "iptor\u0000 name: '\u0000'. It must be a valid UUID alias (e.g. 0x1234), UUID (lowercase hex characters e.g. '00001234-0000-1000-8000-00805f9b34fb'), or recognized standard name from \u0000https://www.bluetooth.com/specifications/gatt/services e.g. 'alert",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-upstream-file",
+      "url": "https://chromium.googlesource.com/chromium/src/+/aa269baa3fc24630e227f51a4ea61b2047d2cdee/chrome/browser/bluetooth/web_bluetooth_browsertest.cc",
+      "sha256": "4d5f79e661a41236b27fcedd26811d085740af71be141514ab185ebd6b4ed4da",
+      "commit": "aa269baa3fc24630e227f51a4ea61b2047d2cdee",
+      "literal": "00001234-0000-1000-8000-00805f9b34fb",
+      "excerpt": "000-8000-00805f9b34fb\";\nconstexpr char kHeartRateMeasurementUUIDString[] =\n    \"00001234-0000-1000-8000-00805f9b34fb\";\n\nconst device::BluetoothUUID kHeartRateUUID(kHeartRateUUIDString);\nconst devi"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/pty.node",
+    "sha256": "2b692581f645d8dfb69101f53d2e4095ccef3422948e53e3f15ddbbc193d51bd",
+    "line": 113,
+    "offset": 28722,
+    "pattern": "4bda9e7e-4913-4dbc-95de-891cbf66598e",
+    "context": "utf8\u0000napi_create_error\u0000Error::Error\u0000napi_create_object\u0000napi_define_properties\u0000napi_create_reference\u00004bda9e7e-4913-4dbc-95de-891cbf66598e-errorVal\u0000message\u0000EscapableHandleScope::~EscapableHandleScope\u0000napi_close_escapable_handle_scope\u0000HandleSc",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-compiled-package-constant",
+      "url": "https://registry.npmjs.org/node-addon-api/-/node-addon-api-7.1.1.tgz",
+      "package": "node-addon-api",
+      "version": "7.1.1",
+      "integrity": "sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==",
+      "path": "package/napi-inl.h",
+      "sha256": "4b053c184dfed740fbd802fdcf97e85fb8c7b0eb1d83322000d932d31662eda7",
+      "literal": "4bda9e7e-4913-4dbc-95de-891cbf66598e",
+      "excerpt": "EPTIONS\n\ninline const char* Error::ERROR_WRAP_VALUE() NAPI_NOEXCEPT {\n  return \"4bda9e7e-4913-4dbc-95de-891cbf66598e-errorVal\";\n}\n\ntemplate <typename TError>\ninline TError Error::New(napi_env env,"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
+  },
+  {
+    "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node",
+    "sha256": "ce83be9d8bf6d9e791fa26e95ae5d66433fd220341cc98c8f1e866f2c294119e",
+    "line": 1109,
+    "offset": 395269,
+    "pattern": "4bda9e7e-4913-4dbc-95de-891cbf66598e",
+    "context": "utf8\u0000napi_create_error\u0000Error::Error\u0000napi_create_object\u0000napi_define_properties\u0000napi_create_reference\u00004bda9e7e-4913-4dbc-95de-891cbf66598e-errorVal\u0000message\u0000EscapableHandleScope::~EscapableHandleScope\u0000napi_close_escapable_handle_scope\u0000Expect o",
+    "kind": "public-literal",
+    "source": {
+      "kind": "public-compiled-package-constant",
+      "url": "https://registry.npmjs.org/node-addon-api/-/node-addon-api-7.1.1.tgz",
+      "package": "node-addon-api",
+      "version": "7.1.1",
+      "integrity": "sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==",
+      "path": "package/napi-inl.h",
+      "sha256": "4b053c184dfed740fbd802fdcf97e85fb8c7b0eb1d83322000d932d31662eda7",
+      "literal": "4bda9e7e-4913-4dbc-95de-891cbf66598e",
+      "excerpt": "EPTIONS\n\ninline const char* Error::ERROR_WRAP_VALUE() NAPI_NOEXCEPT {\n  return \"4bda9e7e-4913-4dbc-95de-891cbf66598e-errorVal\";\n}\n\ntemplate <typename TError>\ninline TError Error::New(napi_env env,"
+    },
+    "justification": "Exact occurrence of a verified public upstream literal; unchanged file/context/source only. Candidate review required; no blanket path/package/value allowance. Signing-only rederivation: preserved native sections/entitlements/explicit requirements; same ordered scanned literal, exact new signed hash/position/context."
   }
 ]
