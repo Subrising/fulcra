@@ -165,6 +165,10 @@ class Counterpart:
                 rows[value] = parent
         return rows
 
+    def resource_users(self, commands, bundles):
+        observer = CommandPrefix(('/usr/sbin/lsof',), (FilePin.capture(Path('/usr/sbin/lsof')),))
+        return MacProcessTable(None, resource_command=observer).resource_users(commands, bundles)
+
     def roots(self):
         return tuple(mac_process_probe(pid) for pid in self.rows(None))
 
