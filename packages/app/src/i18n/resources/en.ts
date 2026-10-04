@@ -1853,6 +1853,7 @@ export const en = {
     modelCountPlural: "{{count}} models",
     retry: "Retry",
     retrying: "Retrying...",
+    savedModels: "Showing previously loaded {{provider}} models.",
     noMatches: "No models match your search",
     noMatchesForQuery: 'No models match "{{query}}"',
     searchAllPlaceholder: "Search all models...",

@@ -44,7 +44,12 @@ function fixture() {
       ref: (id) => {
         assert.equal(id, context.workspaceId);
         return {
-          refresh: async () => ({ id, projectId: context.projectId, archivingAt: null }),
+          refresh: async () => ({
+            id,
+            projectId: context.projectId,
+            archivingAt: null,
+            workspaceDirectory: "/fixture/existing",
+          }),
           agents: {
             create: async (options) => {
               created.push(options);
@@ -57,6 +62,23 @@ function fixture() {
       open: () => assert.fail("No root allocation"),
     },
     projects: { create: () => assert.fail("No project creation") },
+    providers: {
+      snapshot: async (options) => {
+        assert.equal(options.cwd, "/fixture/existing");
+        return {
+          entries: [
+            {
+              provider: "codex",
+              enabled: true,
+              status: "ready",
+              models: [{ id: "gpt-6.1-sol", thinkingOptions: [{ id: "high" }] }],
+              modes: [{ id: "auto-review" }],
+              defaultModeId: "auto-review",
+            },
+          ],
+        };
+      },
+    },
   };
   return {
     api,
@@ -114,7 +136,11 @@ test("unconfirmed native creation is retained and never automatically retried", 
   const f = fixture();
   let count = 0;
   f.api.workspaces.ref = () => ({
-    refresh: async () => ({ id: context.workspaceId, projectId: context.projectId }),
+    refresh: async () => ({
+      id: context.workspaceId,
+      projectId: context.projectId,
+      workspaceDirectory: "/fixture/existing",
+    }),
     agents: {
       create: async () => {
         count++;
@@ -340,4 +366,74 @@ test("a different delivery ID cannot duplicate an already retained conversation"
   );
   assert.equal(f.created.length, 0);
   assert.equal(f.effects.length, 0);
+});
+
+test("invalid current model, thinking or provider mode is refused before any reservation or native creation", async () => {
+  for (const patch of [
+    { modeId: "acceptEdits" },
+    { thinkingOptionId: "unsupported" },
+    { provider: "codex/removed-model" },
+  ]) {
+    const f = fixture();
+    await assert.rejects(
+      createIntakeChat({
+        ...f,
+        intake,
+        project,
+        config: { ...config, ...patch },
+        deliveryId: "new-delivery",
+        agentId: "new-agent",
+      }),
+      /supported|offered/,
+    );
+    assert.deepEqual(f.effects, []);
+    assert.deepEqual(f.created, []);
+  }
+});
+test("a stale current catalog or connection refuses allocation without changing retained request identity", async () => {
+  const f = fixture();
+  f.api.providers.snapshot = async () => ({
+    entries: [
+      { provider: "codex", enabled: true, status: "error", models: [{ id: "gpt-6.1-sol" }] },
+    ],
+  });
+  await assert.rejects(
+    createIntakeChat({
+      ...f,
+      intake,
+      project,
+      config,
+      deliveryId: "new-delivery",
+      agentId: "new-agent",
+    }),
+    /not ready/,
+  );
+  assert.deepEqual(f.effects, []);
+  assert.deepEqual(f.created, []);
+});
+
+test("current context recheck refuses a directory/archiving change after catalog validation", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.api.workspaces.ref = () => ({
+    refresh: async () => ({
+      id: context.workspaceId,
+      projectId: context.projectId,
+      workspaceDirectory: ++reads === 1 ? "/fixture/existing" : "/fixture/replaced",
+      archivingAt: null,
+    }),
+    agents: { create: () => assert.fail("No creation in changed context") },
+  });
+  await assert.rejects(
+    createIntakeChat({
+      ...f,
+      intake,
+      project,
+      config,
+      deliveryId: "new-delivery",
+      agentId: "new-agent",
+    }),
+    /changed during validation/,
+  );
+  assert.deepEqual(f.effects, []);
 });

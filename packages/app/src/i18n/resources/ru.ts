@@ -1856,6 +1856,7 @@ export const ru: TranslationResources = {
     modelCountPlural: "{{count}} моделей",
     retry: "Повторить попытку",
     retrying: "Повторная попытка...",
+    savedModels: "Показаны ранее загруженные модели {{provider}}.",
     noMatches: "Ни одна модель не соответствует вашему запросу",
     noMatchesForQuery: "Нет моделей, соответствующих «{{query}}»",
     searchAllPlaceholder: "Поиск по всем моделям...",

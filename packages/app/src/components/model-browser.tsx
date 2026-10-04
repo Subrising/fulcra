@@ -1,4 +1,11 @@
-import { createContext, useCallback, useContext, useMemo, useReducer, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useReducer,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import {
   FlatList,
@@ -34,7 +41,7 @@ import {
   type AgentProfilePicker,
   type AgentProfilePickerRow as AgentProfilePickerRowModel,
   type AgentProfileSeed,
-} from "@/agent-profiles";
+} from "@/agent-profiles/presentation";
 import type { SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -979,6 +986,14 @@ function GroupProviderButton({
   }, [onDrillDown, provider.id, provider.label]);
 
   const stateNode = useMemo(() => {
+    if (selection.kind === "models" && selection.warning) {
+      return (
+        <View style={styles.rowStateInline}>
+          <ThemedAlertTriangle size={ICON_SIZE.sm} uniProps={foregroundMutedMapping} />
+          <Text style={styles.drillDownCount}>{t("modelSelector.error")}</Text>
+        </View>
+      );
+    }
     if (selection.kind === "models") {
       const count = selection.rows.length;
       return (
@@ -1222,11 +1237,13 @@ function ModelRowList({
 function ProviderErrorEmptyState({
   providerId,
   message,
+  savedModelsLabel,
   onRetryProvider,
   isRetryingProvider,
 }: {
   providerId: string;
   message: string;
+  savedModelsLabel?: string;
   onRetryProvider?: (provider: AgentProvider) => void;
   isRetryingProvider: boolean;
 }) {
@@ -1235,14 +1252,57 @@ function ProviderErrorEmptyState({
     onRetryProvider?.(providerId);
   }, [onRetryProvider, providerId]);
   return (
-    <View style={styles.emptyState}>
+    <View
+      style={styles.emptyState}
+      testID={`model-provider-error-${providerId}`}
+      accessibilityLiveRegion="polite"
+    >
       <ThemedAlertTriangle size={ICON_SIZE.md} uniProps={foregroundMutedMapping} />
+      {savedModelsLabel && <Text style={styles.emptyStateText}>{savedModelsLabel}</Text>}
       <Text style={styles.emptyStateText}>{message}</Text>
       {onRetryProvider ? (
-        <Button variant="default" size="sm" onPress={handleRetry} disabled={isRetryingProvider}>
+        <Button
+          variant={savedModelsLabel ? "outline" : "default"}
+          size="sm"
+          onPress={handleRetry}
+          disabled={isRetryingProvider}
+          testID={`model-provider-retry-${providerId}`}
+        >
           {isRetryingProvider ? t("modelSelector.retrying") : t("modelSelector.retry")}
         </Button>
       ) : null}
+    </View>
+  );
+}
+
+function ProviderModelWarnings({
+  providers,
+  onRetryProvider,
+  isRetryingProvider,
+}: {
+  providers: ProviderSelectorProvider[];
+  onRetryProvider?: (provider: AgentProvider) => void;
+  isRetryingProvider: boolean;
+}) {
+  const { t } = useTranslation();
+  const warnings = providers.flatMap((provider) => {
+    const selection = provider.modelSelection;
+    if (selection.kind !== "models" || !selection.warning) return [];
+    return [{ provider, warning: selection.warning }];
+  });
+  if (warnings.length === 0) return null;
+  return (
+    <View>
+      {warnings.map(({ provider, warning }) => (
+        <ProviderErrorEmptyState
+          key={provider.id}
+          providerId={provider.id}
+          message={warning.message}
+          savedModelsLabel={t("modelSelector.savedModels", { provider: provider.label })}
+          onRetryProvider={onRetryProvider}
+          isRetryingProvider={isRetryingProvider}
+        />
+      ))}
     </View>
   );
 }
@@ -1322,6 +1382,21 @@ function ProviderModelBrowserContent({
     ],
   );
 
+  const warningProviders = useMemo(() => (provider ? [provider] : []), [provider]);
+  const modelHeader = useMemo(() => {
+    if (provider?.modelSelection.kind !== "models" || !provider.modelSelection.warning)
+      return profileHeader;
+    return (
+      <View>
+        <ProviderModelWarnings
+          providers={warningProviders}
+          onRetryProvider={onRetryProvider}
+          isRetryingProvider={isRetryingProvider}
+        />
+        {profileHeader}
+      </View>
+    );
+  }, [isRetryingProvider, onRetryProvider, profileHeader, provider, warningProviders]);
   if (!provider) return <ModelSearchEmptyState />;
   const selection = provider.modelSelection;
   if (selection.kind === "loading") {
@@ -1355,6 +1430,13 @@ function ProviderModelBrowserContent({
     );
   }
   if (visibleRows.length === 0) {
+    if (selection.warning)
+      return (
+        <View>
+          {modelHeader}
+          <ModelSearchEmptyState />
+        </View>
+      );
     return profileHeader ?? <ModelSearchEmptyState />;
   }
   return (
@@ -1364,7 +1446,7 @@ function ProviderModelBrowserContent({
       selectedProvider={selectedProvider}
       selectedModel={selectedModel}
       onSelect={onSelect}
-      header={profileHeader}
+      header={modelHeader}
       scrolling={scrolling}
       profiledLookup={profiledLookup}
       onCreateProfile={onCreateProfile}
@@ -1418,6 +1500,16 @@ function ModelBrowserContent({
       }),
     [isSearchFocused, normalizedQuery, providers, searchAllOnFocus],
   );
+  const warningHeader = useMemo(
+    () => (
+      <ProviderModelWarnings
+        providers={providers}
+        onRetryProvider={onRetryProvider}
+        isRetryingProvider={isRetryingProvider}
+      />
+    ),
+    [isRetryingProvider, onRetryProvider, providers],
+  );
   const hasResults = profiles !== null || providers.length > 0 || rootBrowseContent != null;
 
   if (view.kind === "provider") {
@@ -1446,11 +1538,14 @@ function ModelBrowserContent({
 
   if (allView.kind === "noSearchMatches") {
     return (
-      <View style={styles.emptyState} testID="model-search-empty">
-        <ThemedSearch size={ICON_SIZE.md} uniProps={foregroundMutedMapping} />
-        <Text style={styles.emptyStateText}>
-          {t("modelSelector.noMatchesForQuery", { query: searchQuery.trim() })}
-        </Text>
+      <View>
+        {warningHeader}
+        <View style={styles.emptyState} testID="model-search-empty">
+          <ThemedSearch size={ICON_SIZE.md} uniProps={foregroundMutedMapping} />
+          <Text style={styles.emptyStateText}>
+            {t("modelSelector.noMatchesForQuery", { query: searchQuery.trim() })}
+          </Text>
+        </View>
       </View>
     );
   }
@@ -1460,6 +1555,7 @@ function ModelBrowserContent({
       <ModelRowList
         serverId={serverId}
         rows={allView.rows}
+        header={warningHeader}
         selectedProvider={selectedProvider}
         selectedModel={selectedModel}
         onSelect={onSelect}
@@ -1475,6 +1571,7 @@ function ModelBrowserContent({
 
   const allProvidersContent = (
     <View>
+      {warningHeader}
       {showProfilesSection && profiles ? (
         <AgentProfilesPickerContent
           rows={profiles.rows}

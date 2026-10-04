@@ -21,6 +21,7 @@ import {
   editPersistedConfig,
 } from "./persisted-config.js";
 import { loadConfig } from "./config.js";
+import { readNotificationSetting } from "./notification-settings.js";
 import {
   limitResumeSettingsPath,
   readLimitResumeSetting,
@@ -196,7 +197,7 @@ const oldApp =
   "/Users/david-mini/fulcra-releases/live-candidate-13/app/Fulcra.app";
 const oldExecutable = path.join(oldApp, "Contents/MacOS/Fulcra");
 test.runIf(process.platform === "darwin" && existsSync(oldExecutable))(
-  "exact candidate13 reader accepts actual new toggles and binary rollback/return",
+  "exact candidate13 reader accepts all six combined preferences and binary rollback/return",
   () => {
     const asar = path.join(oldApp, "Contents/Resources/app.asar");
     expect(createHash("sha256").update(readFileSync(asar)).digest("hex")).toBe(
@@ -252,18 +253,30 @@ catch(error) { console.log(JSON.stringify({accepted:false,message:error.message}
     }
     savePersistedConfig(root, baseline);
     const store = new DaemonConfigStore(root, initial());
-    for (const enabled of [false, true, false]) {
-      expect(store.patch({ autoResumeOnLimit: enabled }).autoResumeOnLimit).toBe(enabled);
+    for (const { mode, enabled } of (["all", "off", "primes"] as const).flatMap((selectedMode) =>
+      [false, true].map((selectedResume) => ({ mode: selectedMode, enabled: selectedResume })),
+    )) {
+      expect(store.patch({ notificationMode: mode, autoResumeOnLimit: enabled })).toMatchObject({
+        notificationMode: mode,
+        autoResumeOnLimit: enabled,
+      });
       const bytes = readFileSync(path.join(root, "config.json"), "utf8");
       expect(readOld()).toEqual({ accepted: true }); // old binary reads retained new state, with no state restore.
       expect(readFileSync(path.join(root, "config.json"), "utf8")).toBe(bytes);
       expect(new DaemonConfigStore(root, initial()).get().autoResumeOnLimit).toBe(enabled);
-      expect(loadConfig(root, { env: {} }).autoResumeOnLimit).toBe(enabled);
+      expect(loadConfig(root, { env: {} })).toMatchObject({
+        notificationMode: mode,
+        autoResumeOnLimit: enabled,
+      });
+      expect(readNotificationSetting(root)).toBe(mode);
+      expect(JSON.parse(bytes).daemon.notificationMode).toBeUndefined();
+      expect(JSON.parse(bytes).daemon.autoResumeOnLimit).toBeUndefined();
       console.info(
         "state-after",
         JSON.stringify({
           main: JSON.parse(bytes),
           preference: readLimitResumeSetting(root),
+          notificationMode: readNotificationSetting(root),
           newReaderPreference: new DaemonConfigStore(root, initial()).get().autoResumeOnLimit,
           oldReaderAccepted: true,
         }),

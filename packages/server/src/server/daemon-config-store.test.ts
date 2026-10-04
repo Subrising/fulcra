@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { DaemonConfigStore, applyMutableProviderConfigToOverrides } from "./daemon-config-store.js";
 import { loadPersistedConfig } from "./persisted-config.js";
+import { writeNotificationSetting } from "./notification-settings.js";
 import type { PersistedConfig } from "./persisted-config.js";
 import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
 
@@ -1033,6 +1034,14 @@ describe("DaemonConfigStore reload", () => {
     expect(store.reload().appliedPaths).toEqual([]);
   });
 
+  test("reload applies external sidecar policy without a main-file change", () => {
+    const { paseoHome, store } = createReloadableStore();
+    writeNotificationSetting(paseoHome, "off");
+    expect(store.reload().appliedPaths).toEqual(["daemon.notificationMode"]);
+    expect(store.get().notificationMode).toBe("off");
+    expect(store.reload().appliedPaths).toEqual([]);
+  });
+
   test("a failed notification transition rolls back both combined settings", () => {
     const { paseoHome, store } = createReloadableStore();
     const transitions: unknown[] = [];
@@ -1047,7 +1056,7 @@ describe("DaemonConfigStore reload", () => {
     expect(transitions).toEqual(["off", "primes"]);
     expect(store.get().notificationMode).toBe("primes");
     expect(store.get().autoResumeOnLimit).toBe(true);
-    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBeUndefined();
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("primes");
     expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(true);
   });
 
@@ -1077,7 +1086,7 @@ describe("DaemonConfigStore reload", () => {
     expect(ownerMode).toBe("off");
     expect(store.get().notificationMode).toBe("primes");
     expect(store.get().autoResumeOnLimit).toBe(true);
-    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBeUndefined();
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("primes");
     expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(true);
   });
 

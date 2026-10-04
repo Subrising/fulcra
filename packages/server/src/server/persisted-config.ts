@@ -1,3 +1,4 @@
+import { readNotificationSetting, writeNotificationSetting } from "./notification-settings.js";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -457,6 +458,12 @@ export function loadPersistedConfig(paseoHome: string, logger?: LoggerLike): Per
   }
 
   const config = parseConfigFile(configPath, raw);
+  const legacyNotification = config.daemon?.notificationMode;
+  let notification = readNotificationSetting(paseoHome);
+  if (legacyNotification !== undefined && notification === undefined) {
+    writeNotificationSetting(paseoHome, legacyNotification);
+    notification = legacyNotification;
+  }
   const legacy = config.daemon?.autoResumeOnLimit;
   let preference = readLimitResumeSetting(paseoHome);
   if (legacy !== undefined) {
@@ -465,12 +472,17 @@ export function loadPersistedConfig(paseoHome: string, logger?: LoggerLike): Per
       writeLimitResumeSetting(paseoHome, legacy);
       preference = legacy;
     }
+  }
+  if (legacy !== undefined || legacyNotification !== undefined) {
     const original = parseConfigText(raw) as Record<string, unknown>;
     const daemon = { ...(original.daemon as Record<string, unknown>) };
     delete daemon.autoResumeOnLimit;
+    delete daemon.notificationMode;
     writePrivateFileAtomicSync(configPath, `${JSON.stringify({ ...original, daemon }, null, 2)}\n`);
   }
   if (preference !== undefined) config.daemon = { ...config.daemon, autoResumeOnLimit: preference };
+  if (notification !== undefined)
+    config.daemon = { ...config.daemon, notificationMode: notification };
   log?.info(`Loaded from ${configPath}`);
   return config;
 }
@@ -490,6 +502,9 @@ export function readPersistedConfig(
     throw error;
   }
   const config = parseConfigFile(configPath, raw);
+  const notification = readNotificationSetting(paseoHome);
+  if (notification !== undefined)
+    config.daemon = { ...config.daemon, notificationMode: notification };
   const preference = readLimitResumeSetting(paseoHome);
   if (preference !== undefined) config.daemon = { ...config.daemon, autoResumeOnLimit: preference };
   return config;
@@ -552,6 +567,36 @@ export function getPersistedConfigValue(config: PersistedConfig, field: string):
   );
 }
 
+function isExplicitPreference(
+  field: string,
+  edit: { value: unknown } | { unset: true },
+  key: string,
+): boolean {
+  return (
+    field === `daemon.${key}` ||
+    (field === "daemon" &&
+      "value" in edit &&
+      edit.value !== null &&
+      typeof edit.value === "object" &&
+      Object.hasOwn(edit.value, key))
+  );
+}
+
+function writeExplicitPreferences(
+  paseoHome: string,
+  field: string,
+  edit: { value: unknown } | { unset: true },
+  config: PersistedConfig,
+): void {
+  const notification = isExplicitPreference(field, edit, "notificationMode");
+  const resume = isExplicitPreference(field, edit, "autoResumeOnLimit");
+  if (!notification && !resume) return;
+  PersistedConfigSchema.parse(config);
+  if (notification)
+    writeNotificationSetting(paseoHome, config.daemon?.notificationMode ?? "primes");
+  if (resume) writeLimitResumeSetting(paseoHome, config.daemon?.autoResumeOnLimit ?? true);
+}
+
 export function editPersistedConfig(
   paseoHome: string,
   field: string,
@@ -579,17 +624,7 @@ export function editPersistedConfig(
   }
   if ("unset" in edit) delete object[key];
   else object[key] = edit.value;
-  const explicitResume =
-    field === "daemon.autoResumeOnLimit" ||
-    (field === "daemon" &&
-      "value" in edit &&
-      edit.value &&
-      typeof edit.value === "object" &&
-      Object.hasOwn(edit.value, "autoResumeOnLimit"));
-  if (explicitResume) {
-    PersistedConfigSchema.parse(config);
-    writeLimitResumeSetting(paseoHome, config.daemon?.autoResumeOnLimit ?? true);
-  }
+  writeExplicitPreferences(paseoHome, field, edit, config);
   savePersistedConfig(paseoHome, config);
   return config;
 }
@@ -612,6 +647,13 @@ export function savePersistedConfig(
 
   try {
     const main = result.data;
+    const notification = main.daemon?.notificationMode;
+    if (notification !== undefined) {
+      // Generic saves must not replace a newer sidecar with a stale virtual value.
+      if (readNotificationSetting(paseoHome) === undefined)
+        writeNotificationSetting(paseoHome, notification);
+      delete main.daemon!.notificationMode;
+    }
     const legacy = main.daemon?.autoResumeOnLimit;
     if (legacy !== undefined) {
       // Generic saves may carry a stale virtual preference; only explicit setting writes replace it.

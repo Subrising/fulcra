@@ -1,3 +1,4 @@
+import { validateIntakeCreation } from "./creation-config.mjs";
 // A user-authored intake spends only the app's normal human-owned native route.
 export async function createIntakeChat({
   intake,
@@ -32,13 +33,29 @@ export async function createIntakeChat({
     current.archivingAt
   )
     throw new Error("The recorded execution context is unavailable or belongs to another project");
+  if (typeof current.workspaceDirectory !== "string" || !current.workspaceDirectory.trim())
+    throw new Error("The existing destination directory is not confirmed. No chat was reserved.");
+  const snapshot = await api.providers.snapshot({ cwd: current.workspaceDirectory });
+  const validatedConfig = validateIntakeCreation({ config, entries: snapshot.entries });
+  const confirmed = await workspace.refresh();
+  if (
+    !confirmed ||
+    confirmed.id !== current.id ||
+    confirmed.projectId !== current.projectId ||
+    confirmed.workspaceDirectory !== current.workspaceDirectory ||
+    confirmed.archivingAt
+  )
+    throw new Error("The existing destination changed during validation. No chat was reserved.");
+  // The connection/context may have changed during the metadata read; refuse before reserving.
+  if (!canReuseContext(intake.context.serverId))
+    throw new Error("Reconnect the destination before starting this retained request.");
   await record({ action: "reserve-chat", deliveryId, agentId });
   try {
     const agent = await workspace.agents.create({
       agentId,
       idempotencyKey: deliveryId,
       clientMessageId: deliveryId,
-      config,
+      config: validatedConfig,
       title: intake.text.slice(0, 120),
       prompt: intake.text,
       labels: { "fulcra.intake": intake.id, "fulcra.role": "implementation" },

@@ -1876,6 +1876,7 @@ export const es: TranslationResources = {
     modelCountPlural: "{{count}} modelos",
     retry: "Rever",
     retrying: "Reintentando...",
+    savedModels: "Se muestran los modelos de {{provider}} cargados anteriormente.",
     noMatches: "Ningún modelo coincide con tu búsqueda",
     noMatchesForQuery: "Ningún modelo coincide con «{{query}}»",
     searchAllPlaceholder: "Buscar en todos los modelos...",

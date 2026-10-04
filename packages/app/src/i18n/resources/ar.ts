@@ -1824,6 +1824,7 @@ export const ar: TranslationResources = {
     modelCountPlural: "{{count}} نماذج",
     retry: "أعد المحاولة",
     retrying: "جارٍ إعادة المحاولة...",
+    savedModels: "عرض نماذج {{provider}} المحمّلة سابقًا.",
     noMatches: "لا توجد نماذج تطابق بحثك",
     noMatchesForQuery: 'لا توجد نماذج تطابق "{{query}}"',
     searchAllPlaceholder: "ابحث في كل النماذج...",

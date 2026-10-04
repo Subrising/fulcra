@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type {
-  ProviderSelectionModelRow,
-  ProviderSelectorProvider,
+import {
+  buildSelectableProviderSelectorProviders,
+  resolveSelectedModelLabel,
+  type ProviderSelectionModelRow,
+  type ProviderSelectorProvider,
 } from "@/provider-selection/provider-selection";
 import {
   resolveInitialModelBrowserView,
@@ -232,5 +234,50 @@ describe("model browser all view", () => {
         isSearchFocused: true,
       }),
     ).toEqual({ kind: "noSearchMatches" });
+  });
+});
+
+describe("cached error model browsing", () => {
+  it("keeps selectable cached rows searchable and selected while retaining the provider warning", () => {
+    const providers = buildSelectableProviderSelectorProviders([
+      {
+        provider: "codex",
+        label: "Codex",
+        status: "error",
+        enabled: true,
+        error: "Discovery timed out",
+        fetchedAt: "2026-01-01T00:00:00Z",
+        models: [{ provider: "codex", id: "known", label: "Known model" }],
+      },
+    ]);
+    expect(
+      resolveInitialModelBrowserView({
+        providers,
+        selectedProvider: "codex",
+        selectedModel: "known",
+        hasProfiles: false,
+      }),
+    ).toEqual({ kind: "provider", providerId: "codex", providerLabel: "Codex" });
+    const view = resolveModelBrowserAllView({
+      providers,
+      normalizedQuery: "known",
+      isSearchFocused: true,
+    });
+    expect(view).toMatchObject({
+      kind: "searchResults",
+      rows: [{ favoriteKey: "codex:known", modelId: "known" }],
+    });
+    expect(providers[0].modelSelection).toMatchObject({
+      kind: "models",
+      warning: { message: "Discovery timed out", fetchedAt: "2026-01-01T00:00:00Z" },
+    });
+    expect(
+      resolveSelectedModelLabel({
+        providers,
+        selectedProvider: "codex",
+        selectedModel: "known",
+        isLoading: false,
+      }),
+    ).toBe("Known model");
   });
 });

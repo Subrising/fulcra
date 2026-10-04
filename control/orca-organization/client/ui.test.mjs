@@ -5139,22 +5139,29 @@ function intakeFixture(t) {
     },
     agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
     providers: {
-      snapshot: async () => ({
-        entries: [
-          {
-            enabled: true,
-            status: "ready",
-            models: [
-              {
-                id: "gpt-6.1-sol",
-                provider: "codex",
-                label: "GPT-6.1 Sol",
-                thinkingOptions: [{ id: "high", label: "High" }],
-              },
-            ],
-          },
-        ],
-      }),
+      snapshot: async (options) => {
+        assert(contexts.some((context) => context.workspaceDirectory === options?.cwd));
+        return {
+          entries: [
+            {
+              provider: "codex",
+              label: "Codex",
+              defaultModeId: "auto-review",
+              modes: [{ id: "auto-review", label: "Auto review" }],
+              enabled: true,
+              status: "ready",
+              models: [
+                {
+                  id: "gpt-6.1-sol",
+                  provider: "codex",
+                  label: "GPT-6.1 Sol",
+                  thinkingOptions: [{ id: "high", label: "High" }],
+                },
+              ],
+            },
+          ],
+        };
+      },
     },
   };
   setNativeHostCatalog(

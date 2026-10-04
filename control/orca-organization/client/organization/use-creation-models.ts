@@ -1,3 +1,4 @@
+import { intakeProvider } from "./creation-config.mjs";
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getPaseoClient } from "@getpaseo/plugin/client";
@@ -44,6 +45,22 @@ export function useCreationModels(
       );
     }
   }, [defaults.data?.modes, model, provider, providers.data, selected]);
+  const selectedProvider = intakeProvider(model.getState().model);
+  const selectedEntry = providers.data?.entries.find(
+    (entry) => entry.provider === selectedProvider && entry.status === "ready",
+  );
+  const configuredMode =
+    selectedProvider === "claude" || selectedProvider === "codex"
+      ? defaults.data?.modes?.[selectedProvider]
+      : undefined;
+  useEffect(() => {
+    model.applyProviderModes({
+      provider: selectedProvider,
+      modes: selectedEntry ? (selectedEntry.modes ?? []) : null,
+      configuredMode,
+      defaultMode: selectedEntry?.defaultModeId,
+    });
+  }, [configuredMode, model, selectedEntry, selectedProvider]);
   const models = (providers.data?.entries ?? [])
     .filter((entry) => entry.enabled !== false && entry.status === "ready")
     .flatMap((entry) =>
@@ -51,5 +68,5 @@ export function useCreationModels(
         .filter((item) => item.isSelectable !== false)
         .map((item) => ({ ...item, key: `${item.provider}/${item.id}` })),
     );
-  return { providers, models };
+  return { providers, models, modes: selectedEntry?.modes ?? [] };
 }

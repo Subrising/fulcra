@@ -1865,6 +1865,7 @@ export const ptBR: TranslationResources = {
     modelCountPlural: "{{count}} modelos",
     retry: "Tentar novamente",
     retrying: "Tentando novamente...",
+    savedModels: "Exibindo modelos de {{provider}} carregados anteriormente.",
     noMatches: "Nenhum modelo corresponde à sua busca",
     noMatchesForQuery: "Nenhum modelo corresponde a «{{query}}»",
     searchAllPlaceholder: "Buscar em todos os modelos...",

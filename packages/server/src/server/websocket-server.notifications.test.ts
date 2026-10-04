@@ -46,6 +46,10 @@ import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 
 interface WebSocketServerInternals {
   sessions: Map<unknown, unknown>;
+  buildServerInfoStatusPayload(
+    session: { getPermissions(): unknown },
+    capable?: boolean,
+  ): { features?: { notificationPolicy?: boolean } };
   broadcastAgentAttention(params: {
     agentId: string;
     reason: string;
@@ -466,3 +470,14 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     expect(pushNotifications.sent).toEqual([]);
   });
 });
+
+it.each(["all", "primes", "off"] as const)(
+  "advertises host AND session policy independently of %s mode",
+  (mode) => {
+    const { server } = createServer(undefined, mode);
+    const payload = asInternals<WebSocketServerInternals>(server).buildServerInfoStatusPayload({
+      getPermissions: () => [],
+    });
+    expect(payload.features?.notificationPolicy).toBe(true);
+  },
+);

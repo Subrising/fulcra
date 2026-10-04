@@ -4091,6 +4091,9 @@ export const ServerInfoStatusPayloadSchema = z
         nativeQueuedMessages: z.boolean().optional(),
         // Absent on older hosts means the usage-limit resume setting is unsupported.
         autoResumeOnLimit: z.boolean().optional(),
+        // COMPAT(notificationPolicy): added 2026-10-04; remove optional gate after 2027-10-04.
+        // Literal true supports host policy AND fulcra.notify session overrides, regardless of current mode.
+        notificationPolicy: z.boolean().optional(),
         pluginCatalogPaging: z.boolean().optional(),
         gitAiDrafts: z.boolean().optional(),
         nativeOwnerReportInbox: z.boolean().optional(),

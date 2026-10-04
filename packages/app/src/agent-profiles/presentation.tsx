@@ -1,3 +1,4 @@
+import React from "react";
 import { withUnistyles } from "react-native-unistyles";
 import {
   BookOpen,
@@ -39,7 +40,7 @@ import {
   resolveAgentProfileIconKey,
   type AgentProfileColor,
   type AgentProfileIconKey,
-} from "./profile-appearance";
+} from "./internal/profile-appearance";
 
 /** Drawn when a profile names no icon, and as the "default" cell in the picker grid. */
 const ThemedDefaultIcon = withUnistyles(Star);
@@ -126,3 +127,10 @@ export function AgentProfileGlyph({
   const Icon = iconKey ? THEMED_ICONS[iconKey] : ThemedDefaultIcon;
   return <Icon size={size} uniProps={mapping} />;
 }
+
+// Presentation consumers need these canonical view types without loading editor/host hooks.
+export type {
+  AgentProfilePicker,
+  AgentProfilePickerRow,
+} from "./internal/use-agent-profile-picker";
+export type { AgentProfileSeed } from "./internal/profile-form-model";

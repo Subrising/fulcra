@@ -1,3 +1,5 @@
+import { intakeProvider, selectIntakeMode } from "./creation-config.mjs";
+import type { AgentMode } from "@getpaseo/protocol/agent-types";
 import type { IntakeDraft } from "../../shared/intake-draft";
 export function openIntakeForm(draft: IntakeDraft) {
   let state = {
@@ -17,7 +19,8 @@ export function openIntakeForm(draft: IntakeDraft) {
     choosingProject: false,
   };
   let closed = false,
-    modelEdited = false;
+    modelEdited = false,
+    modeExplicit = false;
   const listeners = new Set<() => void>();
   const publish = (patch: Partial<typeof state>) => {
     if (
@@ -59,7 +62,31 @@ export function openIntakeForm(draft: IntakeDraft) {
     setTask: (taskId: string) => publish({ taskId, choiceEpoch: state.choiceEpoch + 1 }),
     setModel: (model: string, modelLabel = model) => {
       modelEdited = true;
-      publish({ model, modelLabel });
+      const changedProvider = intakeProvider(state.model) !== intakeProvider(model);
+      const modeId = changedProvider && !modeExplicit ? "" : state.modeId;
+      publish({ model, modelLabel, modeId });
+    },
+    setMode: (modeId: string) => {
+      modelEdited = true;
+      modeExplicit = true;
+      publish({ modeId });
+    },
+    applyProviderModes: (input: {
+      provider: string;
+      modes: AgentMode[] | null;
+      configuredMode?: string | null;
+      defaultMode?: string | null;
+    }) => {
+      if (intakeProvider(state.model) !== input.provider || input.modes === null) return;
+      if (modeExplicit && input.modes.some((mode) => mode.id === state.modeId)) return;
+      modeExplicit = false;
+      publish({
+        modeId: selectIntakeMode({
+          modes: input.modes,
+          configuredMode: input.configuredMode,
+          defaultMode: input.defaultMode,
+        }),
+      });
     },
     setThinking: (thinking: string) => {
       modelEdited = true;
@@ -70,7 +97,7 @@ export function openIntakeForm(draft: IntakeDraft) {
         publish({
           model,
           thinking,
-          modeId,
+          modeId: modeExplicit ? state.modeId : modeId,
           modelLabel: label ?? (state.model === model ? state.modelLabel : model),
         });
     },
