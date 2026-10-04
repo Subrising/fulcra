@@ -75,18 +75,79 @@ def transaction(spec):
     tx=LegacyFirstCutover(plan,host,mini_runtime=runtime,external_report=pathlib.Path(spec['external_report']))
     return tx
 
-def write_receipt(path,record):
+TERMINAL_LIMIT=32768
+EARLY_TERMINAL_LIMIT=4096
+
+def write_receipt(path,record,max_bytes=None):
     path=pathlib.Path(path)
+    raw=(json.dumps(record,indent=2)+'\n').encode()
+    if max_bytes is not None and len(raw)>max_bytes:raise RuntimeError('Bounded receipt exceeds reserved report budget')
     if path.exists() or path.is_symlink():raise RuntimeError('Receipt already exists; never overwrite an earlier attempt')
     fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-    with os.fdopen(fd,'w') as f:json.dump(record,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+    with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
 
 def error_record(record,error):
-    record['errorType']=type(error).__name__;record['error']=str(error)[:500]
+    record['errorType']=type(error).__name__
+    try:record['error']=str(error)[:500]
+    except Exception:record['error']='Original error text unavailable';record['errorTextUnavailable']=True
     record.pop('observerDiagnostic',None)
     diagnostic=getattr(error,'observer_diagnostic',None)
-    if isinstance(diagnostic,dict) and len(json.dumps(diagnostic).encode())<=16384:
-        record['observerDiagnostic']=diagnostic
+    try:
+        if isinstance(diagnostic,dict) and len(json.dumps(diagnostic).encode())<=16384:
+            record['observerDiagnostic']=diagnostic
+    except Exception as transport_error:
+        record['observerDiagnosticTransportError']=type(transport_error).__name__
+
+
+def terminal_failure(receipt,record,tx,error):
+    # Preserve the primary error even if its report cannot be committed. A
+    # reserved32KiB is charged BEFORE cutover; no effects start without it.
+    outcome={k:record[k] for k in ['mode','pid','ppid','uid','observedAtUTC','spec_sha256',
+        'ownerWindowSelected','phase','control_fifo','installedReceipt','priorRefusalReceipt'] if k in record}
+    outcome.update(state='terminal-failure-or-recovery-required',ownerWillExit=True,
+        serviceActions=record.get('serviceActions',0),transaction_state=getattr(tx,'state',None),
+        originalReceipt=receipt,automaticRetry=False,preparedTransactionReconstructed=False)
+    error_record(outcome,error)
+    commands=getattr(getattr(tx,'host',None),'commands',None)
+    if commands is not None:
+        outcome['serviceActions']=commands.action_count
+        outcome['uncertainCommandCount']=len(commands.uncertain)
+    reserved=record.get('terminalReportReserved') is True
+    outcome['reportBudget']='precharged32KiB' if reserved else 'bounded4KiB-pre-effect-driver-report'
+    limit=TERMINAL_LIMIT if reserved else EARLY_TERMINAL_LIMIT
+    if len((json.dumps(outcome,indent=2)+'\n').encode())>limit:
+        outcome.pop('observerDiagnostic',None);outcome['observerDiagnosticOmittedForBudget']=True
+    if len((json.dumps(outcome,indent=2)+'\n').encode())>limit:
+        for key in ['control_fifo','installedReceipt','priorRefusalReceipt','originalReceipt']:
+            if key in outcome:outcome[key]=str(outcome[key])[:256]
+        outcome['pathsTruncatedForReportBudget']=True
+    while len((json.dumps(outcome,indent=2)+'\n').encode())>limit:
+        # Preserve error type, actual phase/state/counts; make any textual loss
+        # explicit rather than losing the entire durable terminal outcome.
+        candidates=[key for key,value in outcome.items() if isinstance(value,str) and len(value)>64]
+        if not candidates:break
+        key=max(candidates,key=lambda k:len(json.dumps(outcome[k]).encode()))
+        outcome[key]=outcome[key][:max(64,len(outcome[key])//2)]
+        outcome['terminalTextTruncatedForBudget']=True
+    for ordinal in range(16):
+        path=receipt+'.terminal'+('' if ordinal==0 else '-'+str(ordinal))
+        if pathlib.Path(path).exists() or pathlib.Path(path).is_symlink():continue
+        try:
+            write_receipt(path,outcome,max_bytes=limit)
+            record['terminalReceipt']=path
+            return
+        except Exception as report_error:
+            # O_EXCL races can select another fresh name, never overwrite.
+            if isinstance(report_error,FileExistsError):continue
+            outcome['terminalReportErrorType']=type(report_error).__name__
+            break
+    else:outcome['terminalReportErrorType']='TerminalReceiptNamesOccupied'
+    # Reporting failure is secondary. Keep the original type/message/phase/state
+    # observable on launcher stderr and preserve main's original nonzero result.
+    fallback={k:outcome.get(k) for k in ['state','phase','transaction_state','serviceActions',
+        'errorType','error','uncertainCommandCount','terminalReportErrorType']}
+    try:sys.stderr.write(json.dumps(fallback)+'\n');sys.stderr.flush()
+    except Exception:pass
 
 def control_decision(path):
     with open(path,'r') as control:return control.readline(512).strip()
@@ -102,7 +163,9 @@ def cutover_retaining_prepared(tx,record,receipt,read_decision=control_decision)
     attempt=0
     while True:
         try:
+            record['phase']='cutover'
             tx.cutover(owner_window_selected=True)
+            record['phase']='installed-report'
             record.update(state=tx.state,serviceActions=tx.host.commands.action_count,
                           rollbackAvailableInThisProcess=True,preparedTransactionRetained=True)
             if not record.get('control_fifo'):
@@ -129,6 +192,7 @@ def cutover_retaining_prepared(tx,record,receipt,read_decision=control_decision)
             tx._charge_output(len(raw))
             write_receipt(path,record)
             while True:
+                record['phase']='prepared-control'
                 decision=read_decision(fifo)
                 if decision=='abort-before-effects':
                     record.update(state='owner-aborted-before-effects',ownerWindowSelected=False)
@@ -151,7 +215,7 @@ def main():
     parser.add_argument('--mode',choices=['probe','cutover'],default='probe')
     parser.add_argument('--owner-window-selected',action='store_true')
     args=parser.parse_args();record={'mode':args.mode,'pid':os.getpid(),'ppid':os.getppid(),'uid':os.getuid(),'observedAtUTC':datetime.datetime.now(datetime.timezone.utc).isoformat(),'ownerWindowSelected':False,'serviceActions':0}
-    tx=None
+    tx=None;fatal=False;record['phase']='configuration'
     try:
         spec=owned_json(args.spec);record['ancestry']=independent(os.getpid(),spec['old_root_pids']);record['outsideOldAncestry']=True
         record['spec_sha256']=hashlib.sha256(pathlib.Path(args.spec).read_bytes()).hexdigest()
@@ -160,10 +224,12 @@ def main():
             return 0
         if not args.owner_window_selected:raise RuntimeError('Actual parent-selected owner window required; receipt is not authority')
         record['ownerWindowSelected']=True
-        tx=transaction(spec)
+        record['phase']='construction';tx=transaction(spec)
         # Public legacy inspection can restore providers: do not invoke it in a
         # live preparation probe. It runs only inside the actual owner window.
-        tx.prepare();record['prepared']=True
+        record['phase']='preparation';tx.prepare();record['prepared']=True
+        record['phase']='terminal-report-reservation'
+        tx._charge_output(TERMINAL_LIMIT);record['terminalReportReserved']=True
         if not cutover_retaining_prepared(tx,record,args.receipt):return 2
         # Retain the owning transaction while delivery verifies loaded bytes and
         # selects finish or a separate actual rollback window. No automatic replay.
@@ -172,20 +238,38 @@ def main():
         # Installed receipt was already written, preserving any initial refusal.
         # No existing receipt is overwritten or relabelled as installed.
         while True:
+            record['phase']='installed-control'
             with open(record['control_fifo'],'r') as control:
                 decision=control.readline(128).strip()
             if decision=='finish':return 0
             if decision=='rollback-owner-window-selected':
-                tx.rollback(owner_window_selected=True);write_receipt(args.receipt+'.rollback',{'state':tx.state,'ownerWindowSelected':True});return 0
+                record['phase']='rollback';tx.rollback(owner_window_selected=True)
+                record['phase']='rollback-report';write_receipt(args.receipt+'.rollback',{'state':tx.state,'ownerWindowSelected':True});return 0
             # EOF/unknown input does not drop the live transaction or replay work.
             # Only an actual owner decision through the owned control FIFO finishes.
 
     except Exception as error:
+        fatal=True
         record['state']='refused-or-recovery-required';error_record(record,error)
         if tx is not None:
             record['transaction_state']=tx.state;record['serviceActions']=tx.host.commands.action_count if tx.host.commands else 0
+        try:terminal_failure(args.receipt,record,tx,error)
+        except Exception as reporting_error:
+            # Even a reporter implementation/storage failure cannot replace the
+            # original terminal reason or successful earlier immutable records.
+            fallback={k:record.get(k) for k in ['phase','transaction_state','serviceActions','errorType','error']}
+            fallback['terminalReportErrorType']=type(reporting_error).__name__
+            try:sys.stderr.write(json.dumps(fallback)+'\n');sys.stderr.flush()
+            except Exception:pass
         return 2
     finally:
-        if not pathlib.Path(args.receipt).exists():write_receipt(args.receipt,record)
+        if not pathlib.Path(args.receipt).exists():
+            try:write_receipt(args.receipt,record,max_bytes=TERMINAL_LIMIT if record.get('terminalReportReserved') else EARLY_TERMINAL_LIMIT)
+            except Exception as report_error:
+                if not fatal:raise
+                # A terminal outcome or its stderr fallback already exposes the
+                # original failure; initial-report failure cannot replace it.
+                try:sys.stderr.write('Initial receipt reporting failed: '+type(report_error).__name__+'\n')
+                except Exception:pass
 
 if __name__=='__main__':raise SystemExit(main())
