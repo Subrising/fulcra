@@ -168,7 +168,7 @@ class BoundedCommands:
         self.uncertain = []
         self.action_count = 0
 
-    def run(self, prefix, tail, *, action=False, timeout=15):
+    def run(self, prefix, tail, *, action=False, timeout=15, empty_ok=False, clean_stderr=False, include_pid=False, file_search=False):
         if self.uncertain:
             raise CommandUncertain("An earlier selected command is unresolved; no replay")
         prefix.validate()
@@ -210,9 +210,17 @@ class BoundedCommands:
             if child.poll() is not None:
                 child.stdout.close()
                 child.stderr.close()
-        if code != 0:
+        raw = bytes(output[child.stdout])
+        if clean_stderr and output[child.stderr]:
+            raise TopologyUnavailable("Selected resource inventory reported diagnostics; incomplete")
+        # lsof +D can exit1 for files with no open match even while reporting
+        # other current consumers (documented native file-search semantics).
+        # This is allowed only for the resource caller, with clean diagnostics
+        # and strict complete machine-field parsing by resource_users.
+        if code != 0 and not (code == 1 and not output[child.stderr]
+                and (file_search or empty_ok and not raw)):
             raise UpgradeRefused("Selected legacy command failed; no automatic retry")
-        return bytes(output[child.stdout])
+        return (raw, child.pid) if include_pid else raw
 
 
 class _CocoaApplication:
@@ -294,8 +302,9 @@ class CocoaAppTermination:
 
 
 class MacProcessTable:
-    def __init__(self, ps_command):
+    def __init__(self, ps_command, resource_command=None):
         self.ps_command = ps_command
+        self.resource_command = resource_command
 
     def rows(self, commands):
         raw = commands.run(self.ps_command, ("-U", str(os.getuid()), "-o", "pid=,ppid="))
@@ -309,6 +318,52 @@ class MacProcessTable:
                 raise TopologyUnavailable("Native PID table is ambiguous")
             rows[pid] = parent
         return rows
+
+    def resource_users(self, commands, bundles):
+        """Native vnode/file consumer selection, not process titles or guessed paths.
+
+        lsof +D selects current files beneath each canonical, sealed app root,
+        including mapped text and ordinary open resources. Unknown selected
+        lifetimes still refuse independently. Diagnostics/timeouts/malformed
+        fields refuse: no catch-and-skip of arbitrary kernel probe errors.
+        The inventory is bounded, non-atomic and limited by native observer
+        access; it does not establish a global admission or privileged lease.
+        """
+        if self.resource_command is None:
+            raise TopologyUnavailable("Pinned native selected-resource observer required")
+        if self.resource_command.argv != ("/usr/sbin/lsof",):
+            raise TopologyUnavailable("Selected resource observer must be pinned system lsof")
+        users = set()
+        for bundle in bundles:
+            root = canonical(bundle.path)
+            raw, observer_pid = commands.run(self.resource_command,
+                ("-nP", "-Fpf", "+D", str(root)), timeout=15,
+                empty_ok=True, clean_stderr=True, include_pid=True, file_search=True)
+            if len(raw) > 1024 * 1024:
+                raise TopologyUnavailable("Selected resource inventory exceeds bound")
+            current = None
+            has_file = False
+            try:
+                lines = raw.decode("ascii").splitlines()
+            except UnicodeError as error:
+                raise TopologyUnavailable("Selected resource inventory fields unavailable") from error
+            for line in lines:
+                if line.startswith("p") and line[1:].isdecimal() and int(line[1:]) > 1:
+                    if current is not None and not has_file:
+                        raise TopologyUnavailable("Selected resource inventory omitted file fields")
+                    current = int(line[1:])
+                    has_file = False
+                elif line.startswith("f") and current is not None and 1 < len(line) <= 64:
+                    has_file = True
+                    # +D can report its own temporary traversal-directory handle.
+                    # Exclude only this exact owned observer AFTER its confirmed exit.
+                    if current != observer_pid:
+                        users.add(current)
+                else:
+                    raise TopologyUnavailable("Malformed selected resource inventory")
+            if current is not None and not has_file:
+                raise TopologyUnavailable("Selected resource inventory omitted file fields")
+        return users
 
 
 def listener_inactive(endpoint):
@@ -537,6 +592,8 @@ class MacLegacyHost:
         self.transaction = transaction
         self.commands = BoundedCommands(transaction._before_command, transaction._charge_output)
         s = self.selection
+        self.original_installed_identity = identity(transaction.plan.installed)
+        self.staged_new_identity = identity(transaction.plan.install_stage)
         if (not isinstance(s, HostSelection) or s.topology not in ("mini-launchd", "book-desktop")
                 or not isinstance(s.selected_roots, tuple) or not s.selected_roots
                 or any(not isinstance(p, ProcessIdentity) for p in s.selected_roots)
@@ -589,8 +646,14 @@ class MacLegacyHost:
             # exact sealed packaged main executable, never a process title.
             return self.app_locator()
         main = (self.transaction.plan.installed / "Contents/MacOS/Fulcra").resolve(strict=True)
-        matches = [self.probe(pid) for pid in self.table.rows(self.commands)]
-        matches = [p for p in matches if p is not None and p.executable == main]
+        # Scope the main-executable lookup through the same native resource
+        # observation; unrestricted UID rows are not app ownership evidence.
+        users = self.table.resource_users(self.commands,
+            (BundlePin(self.transaction.plan.installed, self.transaction.plan.seal),))
+        matches = [self.probe(pid) for pid in sorted(users)]
+        if any(p is None for p in matches):
+            raise TopologyUnavailable("Selected app resource consumer exited during capture")
+        matches = [p for p in matches if p.executable == main]
         if len(matches) != 1:
             raise TopologyUnavailable("Selected packaged app lifetime is ambiguous")
         return matches[0]
@@ -695,18 +758,25 @@ class MacLegacyHost:
             if expanded == selected:
                 break
             selected = expanded
+        resource_users = self.table.resource_users(self.commands, bundles)
+        if resource_users - selected:
+            raise TopologyUnavailable("Unmatched process still uses selected app/runtime resources")
         processes = {}
-        for pid in rows:
+        for pid in sorted(selected):
             current = self.probe(pid)
             if current is None:
-                if pid in selected:
-                    raise TopologyUnavailable("Selected process exited during capture")
-                continue
-            if any(current.executable.is_relative_to(bundle.path) for bundle in bundles):
-                if pid not in selected:
-                    raise TopologyUnavailable("Unmatched process still uses a selected app/runtime path")
-            if pid in selected:
-                processes[pid] = current
+                raise TopologyUnavailable("Selected process exited during capture")
+            processes[pid] = current
+        # Refuse a changed descendant set; native inventory is still non-atomic.
+        again = self.table.rows(self.commands)
+        repeated = {p.pid for p in roots}
+        while True:
+            expanded = repeated | {pid for pid, parent in again.items() if parent in repeated}
+            if expanded == repeated:
+                break
+            repeated = expanded
+        if repeated != selected:
+            raise TopologyUnavailable("Selected process tree changed during resource capture")
         if any(processes.get(p.pid) != p for p in roots):
             raise UpgradeRefused("Captured kernel deployment/helper lifetime changed")
         return tuple(processes[pid] for pid in sorted(processes))
@@ -779,6 +849,37 @@ class MacLegacyHost:
                 or stopped.get("connectedDaemon") == "reachable"):
             raise StopIncomplete("Selected home remains active after legacy stop")
 
+    def _old_resource_bundles(self):
+        """Follow only OUR recorded rename; never accept an arbitrary missing root."""
+        tx = self.transaction
+        bundles = []
+        for bundle in self.selection.old_bundles:
+            if bundle.path != tx.plan.installed:
+                canonical(bundle.path)
+                bundles.append(bundle)
+                continue
+            target, expected = bundle.path, None
+            if bundle.seal == tx.old_seal and tx.old_moved:
+                target, expected = tx.plan.rollback, self.original_installed_identity
+            elif bundle.seal == tx.plan.seal and not tx.new_moved and tx.stop_confirmed:
+                target, expected = tx.plan.install_stage, self.staged_new_identity
+            if target != bundle.path:
+                if (tx.bindings.get(target) != expected or identity(target) != expected):
+                    raise UpgradeRefused("Recorded retained app rename identity changed")
+                require_seal(target, bundle.seal)
+                bundles.append(BundlePin(target, bundle.seal))
+                # Also refuse an unrequested relaunch through a new/current app
+                # at the original path while the retained old app is projected.
+                if os.path.lexists(bundle.path):
+                    if (tx.bindings.get(bundle.path) is None
+                            or identity(bundle.path) != tx.bindings[bundle.path]):
+                        raise UpgradeRefused("Original app path changed after recorded rename")
+                    bundles.append(BundlePin(bundle.path, bundle.seal))
+            else:
+                canonical(bundle.path)
+                bundles.append(bundle)
+        return tuple(bundles)
+
     def assert_old_absent(self, captured, *, check_listener=True):
         if self.commands.uncertain:
             raise CommandUncertain("Unresolved selected command blocks path replacement")
@@ -799,11 +900,8 @@ class MacLegacyHost:
         if check_listener:
             # Before restart, any process using the selected old binary route is a
             # survivor/relaunch. This is an explicit selected-path check, not names.
-            for pid in self.table.rows(self.commands):
-                current = self.probe(pid)
-                if current is not None and any(current.executable.is_relative_to(b.path)
-                        for b in self.selection.old_bundles):
-                    raise StopIncomplete("A selected old binary route is still in use")
+            if self.table.resource_users(self.commands, self._old_resource_bundles()):
+                raise StopIncomplete("A selected old binary/resource route is still in use")
 
     def start(self, *, prior=False):
         s = self.selection
