@@ -747,11 +747,88 @@ class MacLegacyHost:
             raise TopologyUnavailable("Public session set changed during non-atomic observation")
         return tuple(views)
 
+    def _tree_refusal(self, error, kind, roots, before, selected, captured,
+                      *, after=None, failed_pid=None, after_selected=None):
+        """Attach bounded native facts, never a causal or admission classification."""
+        after_error = None
+        if after is None:
+            # One best-effort read-only snapshot; never retry an uncertain command.
+            if not getattr(self.commands, "uncertain", ()):
+                try:
+                    after = self.table.rows(self.commands)
+                except Exception as diagnostic_error:
+                    after_error = {"type": type(diagnostic_error).__name__,
+                                   "message": str(diagnostic_error)[:256]}
+            else:
+                after_error = {"type": "CommandUncertain", "message": "No diagnostic command replay"}
+        repeated = {p.pid for p in roots if after is not None and p.pid in after}
+        if after_selected is not None:
+            repeated = set(after_selected)
+        elif after is not None:
+            while True:
+                expanded = repeated | {pid for pid, parent in after.items() if parent in repeated}
+                if expanded == repeated:
+                    break
+                repeated = expanded
+        added = repeated - selected if after is not None else set()
+        removed = selected - repeated if after is not None else set()
+        def kernel(p):
+            return {"pid": p.pid, "started": p.started,
+                    "executable": str(p.executable)[:512],
+                    "executableTruncated": len(str(p.executable)) > 512,
+                    "file_identity": list(p.file_identity)}
+        focus = sorted(set(added) | set(removed) | {p.pid for p in roots}
+                       | ({failed_pid} if failed_pid is not None else set()))
+        current = []
+        for pid in focus[:8]:
+            try:
+                p = self.probe(pid)
+                current.append({"pid": pid, "kernel": kernel(p) if p is not None else None})
+            except Exception as probe_error:
+                current.append({"pid": pid, "errorType": type(probe_error).__name__,
+                                "error": str(probe_error)[:128]})
+        transaction = getattr(self, "transaction", None)
+        prior = getattr(transaction, "captured", None)
+        prepared = {p.pid: p for p in getattr(prior, "processes", ())}
+        error.observer_diagnostic = {
+            "version": 1, "kind": kind, "failedPid": failed_pid,
+            "beforeCount": len(selected), "afterCount": len(repeated) if after is not None else None,
+            "before": sorted(selected)[:256], "after": sorted(repeated)[:256] if after is not None else None,
+            "addedCount": len(added), "removedCount": len(removed),
+            "added": sorted(added)[:256], "removed": sorted(removed)[:256],
+            "parentsBefore": [[pid, before.get(pid)] for pid in focus[:32]],
+            "parentsAfter": [[pid, after.get(pid)] for pid in focus[:32]] if after is not None else None,
+            "capturedKernel": [kernel(captured[pid]) for pid in focus[:8] if pid in captured],
+            "preparedKernel": [kernel(prepared[pid]) for pid in focus[:8] if pid in prepared],
+            "expectedRoots": [kernel(p) for p in roots[:8]], "currentKernel": current,
+            "setsTruncated": max(len(selected), len(repeated), len(added), len(removed)) > 256,
+            "focusTruncated": len(focus) > 8, "parentFocusTruncated": len(focus) > 32,
+            "afterSnapshotError": after_error, "refusalUnchanged": True,
+            "causalClassification": None,
+        }
+        # Fields are capped individually and this transport limit is asserted.
+        if len(json.dumps(error.observer_diagnostic).encode()) > 16384:
+            error.observer_diagnostic["capturedKernel"] = []
+            error.observer_diagnostic["currentKernel"] = []
+            error.observer_diagnostic["preparedKernel"] = []
+            error.observer_diagnostic["kernelDetailsOmittedForBudget"] = True
+        if len(json.dumps(error.observer_diagnostic).encode()) > 16384:
+            error.observer_diagnostic["expectedRoots"] = [{"pid": p.pid, "detailsOmitted": True} for p in roots[:8]]
+        if len(json.dumps(error.observer_diagnostic).encode()) > 16384:
+            # Pathological metadata still cannot obscure the original refusal.
+            error.observer_diagnostic = {"version": 1, "kind": kind, "failedPid": str(failed_pid)[:32],
+                "beforeCount": len(selected), "afterCount": len(repeated) if after is not None else None,
+                "addedCount": len(added), "removedCount": len(removed),
+                "detailsOmittedForBudget": True, "refusalUnchanged": True, "causalClassification": None}
+        return error
+
     def _tree(self, roots, bundles):
         rows = self.table.rows(self.commands)
         selected = {p.pid for p in roots}
         if not selected.issubset(rows):
-            raise UpgradeRefused("Captured deployment root is missing or changed")
+            raise self._tree_refusal(UpgradeRefused("Captured deployment root is missing or changed"),
+                "initial-root-missing", roots, rows, selected & set(rows), {},
+                failed_pid=min(selected - set(rows)))
         while True:
             children = {pid for pid, parent in rows.items() if parent in selected}
             expanded = selected | children
@@ -763,9 +840,14 @@ class MacLegacyHost:
             raise TopologyUnavailable("Unmatched process still uses selected app/runtime resources")
         processes = {}
         for pid in sorted(selected):
-            current = self.probe(pid)
+            try:
+                current = self.probe(pid)
+            except Exception as error:
+                raise self._tree_refusal(error, "selected-identity-unknown", roots,
+                                         rows, selected, processes, failed_pid=pid)
             if current is None:
-                raise TopologyUnavailable("Selected process exited during capture")
+                raise self._tree_refusal(TopologyUnavailable("Selected process exited during capture"),
+                    "selected-process-exited", roots, rows, selected, processes, failed_pid=pid)
             processes[pid] = current
         # Refuse a changed descendant set; native inventory is still non-atomic.
         again = self.table.rows(self.commands)
@@ -775,10 +857,16 @@ class MacLegacyHost:
             if expanded == repeated:
                 break
             repeated = expanded
+        if not {p.pid for p in roots}.issubset(again):
+            raise self._tree_refusal(TopologyUnavailable("Selected root exited during resource capture"),
+                "selected-root-missing", roots, rows, selected, processes, after=again)
         if repeated != selected:
-            raise TopologyUnavailable("Selected process tree changed during resource capture")
+            raise self._tree_refusal(TopologyUnavailable("Selected process tree changed during resource capture"),
+                "selected-tree-changed", roots, rows, selected, processes, after=again)
         if any(processes.get(p.pid) != p for p in roots):
-            raise UpgradeRefused("Captured kernel deployment/helper lifetime changed")
+            raise self._tree_refusal(UpgradeRefused("Captured kernel deployment/helper lifetime changed"),
+                "selected-root-reused", roots, rows, selected, processes, after=again)
+        self.last_tree_parents = {pid: again[pid] for pid in selected}
         return tuple(processes[pid] for pid in sorted(processes))
 
     def observe(self, *, new=False, allow_busy=False):
@@ -816,7 +904,18 @@ class MacLegacyHost:
     def same_deployment(self, before, after):
         if ((before.server_id, before.supervisor_pid, before.started_at, before.worker_pid, before.processes)
                 != (after.server_id, after.supervisor_pid, after.started_at, after.worker_pid, after.processes)):
-            raise UpgradeRefused("Selected boot/kernel tree changed since preparation")
+            captured = {p.pid: p for p in before.processes}
+            root_ids = {before.supervisor_pid, before.worker_pid}
+            if self.selection.app_process is not None:
+                root_ids.add(self.selection.app_process.pid)
+            roots = tuple(captured[pid] for pid in sorted(root_ids) if pid in captured)
+            parents = getattr(self.transaction, "captured_parent_rows", {})
+            error = self._tree_refusal(UpgradeRefused("Selected boot/kernel tree changed since preparation"),
+                "prepared-observation-changed", roots, parents, set(captured), captured,
+                after=getattr(self, "last_tree_parents", {}),
+                after_selected={p.pid for p in after.processes})
+            error.observer_diagnostic["preparedParentsAvailable"] = bool(parents)
+            raise error
 
     def stop(self, captured):
         self.same_deployment(captured, self.observe())
@@ -980,6 +1079,7 @@ class LegacyFirstCutover(Upgrade):
             self.selector_states[target] = (identity(target), read_state(target))
             self.staged_selectors[selector.path] = target
         self.captured = self.host.observe(allow_busy=True)
+        self.captured_parent_rows = dict(getattr(self.host, "last_tree_parents", {}))
         self.legacy_observation = self.captured
         if self.external_report is not None:
             self._report_preparation()
