@@ -84,7 +84,9 @@ Status: in this release. See [Trackers in detail](#trackers-in-detail) below.
 
 ## Organisation in detail
 
-The **Organisation** tab opens on this view. It shows your primes, what each one owns, their projects, who runs each project, and how many of its sessions are working. On a phone it is a list you can fold up by prime. On a wide screen the work map is one tap away under **Map**; a phone says "The work map needs a wider screen." On a wide screen the old work map is one tap away under **Map**.
+The **Organisation** tab opens on your recorded prime/project tree. **Map** is available on wide and compact screens, with an accessible list alternative. Start with active work, expand project branches and select a session to open its exact host conversation or native Changes view. Changes needs an online host and a known Git workspace. Cache-only native events update activity without restoring a provider or loading its history; resident processes alone are not labelled model work.
+
+Map distinguishes recorded prime responsibility, explicit message channels and creation ancestry. It never connects every project to every prime. All recorded prime seats remain top-level when prime reporting relationships are unknown. Native sessions outside expanded branches remain visible; sessions with no recorded responsibility in the bounded observation have a separate group. Coverage, stale/offline states and hidden counts stay visible. Nothing in the graph assigns roles or grants authority.
 
 - **A prime** has a one-line remit, such as _"Owns Platform work · 2 projects"_ or _"Owns 2 projects: Command Centre and Tally"_.
 - **A project** shows its orchestrator (_"Tally orchestrator · working now"_, or _"No orchestrator yet"_) and its live work (_"2 of 5 sessions working"_).

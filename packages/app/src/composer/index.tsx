@@ -273,7 +273,6 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
       status: agent?.status ?? null,
       contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
       contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
-      totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
       model: agent?.model ?? null,
       provider: agent?.provider ?? null,
     };
@@ -283,7 +282,6 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
 function renderContextWindowMeter(
   contextWindowMaxTokens: number | null,
   contextWindowUsedTokens: number | null,
-  totalCostUsd: number | null,
   showPercentage: boolean,
   serverId: string,
   agentId: string,
@@ -291,15 +289,10 @@ function renderContextWindowMeter(
   pending: boolean,
   glyphSize: number,
 ): ReactElement | null {
-  const hasData = contextWindowMaxTokens !== null && contextWindowUsedTokens !== null;
-  if (!hasData && !pending) {
-    return null;
-  }
   return (
     <ContextWindowMeter
       maxTokens={contextWindowMaxTokens}
       usedTokens={contextWindowUsedTokens}
-      totalCostUsd={totalCostUsd}
       showPercentage={showPercentage}
       serverId={serverId}
       agentId={agentId}
@@ -2095,7 +2088,6 @@ function ComposerContentImpl({
       renderContextWindowMeter(
         contextWindowMaxTokens,
         contextWindowUsedTokens,
-        agentState.totalCostUsd,
         false,
         serverId,
         agentId,
@@ -2106,7 +2098,6 @@ function ComposerContentImpl({
     [
       contextWindowMaxTokens,
       contextWindowUsedTokens,
-      agentState.totalCostUsd,
       serverId,
       agentId,
       agentState.provider,

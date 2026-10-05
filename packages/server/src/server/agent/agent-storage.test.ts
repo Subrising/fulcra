@@ -148,6 +148,27 @@ describe("AgentStorage", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test("actual snapshot persistence omits live recorded usage across restart", async () => {
+    await storage.applySnapshot(
+      createManagedAgent({
+        id: "usage-wire-only",
+        lastUsage: {
+          inputTokens: 100,
+          recorded: {
+            provider: "codex",
+            source: "codex-app-server-token-usage",
+            observedAt: "2026-10-04T00:00:00Z",
+            latest: { scope: "unknown", tokens: { inputNew: 70, cacheRead: 30 } },
+          },
+        },
+      }),
+    );
+    const fresh = new AgentStorage(storagePath, logger);
+    const record = await fresh.get("usage-wire-only");
+    expect(record).not.toHaveProperty("lastUsage");
+    expect(JSON.stringify(record)).not.toContain("recorded");
+  });
+
   test("applySnapshot persists configs and snapshot metadata", async () => {
     await storage.applySnapshot(
       createManagedAgent({

@@ -49,7 +49,7 @@ interface WebSocketServerInternals {
   buildServerInfoStatusPayload(
     session: { getPermissions(): unknown },
     capable?: boolean,
-  ): { features?: { notificationPolicy?: boolean } };
+  ): { features?: { notificationPolicy?: boolean; pooledAccountUsageObservation?: boolean } };
   broadcastAgentAttention(params: {
     agentId: string;
     reason: string;
@@ -479,5 +479,6 @@ it.each(["all", "primes", "off"] as const)(
       getPermissions: () => [],
     });
     expect(payload.features?.notificationPolicy).toBe(true);
+    expect(payload.features?.pooledAccountUsageObservation).toBe(true);
   },
 );

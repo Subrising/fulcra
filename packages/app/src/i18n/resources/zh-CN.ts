@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -2407,6 +2408,7 @@ export const zhCN: TranslationResources = {
   sidebarCallout: {
     dismiss: "关闭",
   },
+  usagePanel: usagePanelCopy["zh-CN"],
   contextWindow: {
     title: "上下文窗口",
     used: "已使用 {{percentage}}%",

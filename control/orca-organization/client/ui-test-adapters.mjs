@@ -180,3 +180,25 @@ export function SettingsSection({ title, children }) {
 export function SettingsGroup({ title, children }) {
   return React.createElement("section", null, React.createElement("h2", null, title), children);
 }
+
+let nativeDirectory = Object.freeze({
+  entries: Object.freeze([]),
+  total: 0,
+  truncated: 0,
+  source: "native-cache",
+});
+const nativeListeners = new Set();
+export function setObservedAgents(next) {
+  nativeDirectory = next;
+  for (const listener of nativeListeners) listener();
+}
+export function useObservedAgents() {
+  return React.useSyncExternalStore(
+    (listener) => {
+      nativeListeners.add(listener);
+      return () => nativeListeners.delete(listener);
+    },
+    () => nativeDirectory,
+    () => nativeDirectory,
+  );
+}

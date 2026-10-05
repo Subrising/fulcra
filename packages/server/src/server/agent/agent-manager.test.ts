@@ -14525,3 +14525,41 @@ test("F15 native-session change invalidates held completion even when SDK object
     await f.close();
   }
 });
+
+test("live context-only usage retains recorded counters without making them durable", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "usage-recorded-"));
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const session = agent.session as TestAgentSession;
+    const recorded = {
+      provider: "codex" as const,
+      source: "codex-app-server-token-usage" as const,
+      observedAt: "2026-10-04T00:00:00Z",
+      latest: { scope: "unknown" as const, tokens: { inputNew: 70, cacheRead: 30 } },
+    };
+    session.pushEvent({
+      type: "usage_updated",
+      provider: "codex",
+      usage: { recorded, inputTokens: 100 },
+    });
+    await manager.flush();
+    session.pushEvent({
+      type: "usage_updated",
+      provider: "codex",
+      usage: { contextWindowUsedTokens: 150 },
+    });
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.lastUsage).toMatchObject({
+      recorded,
+      contextWindowUsedTokens: 150,
+    });
+  } finally {
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

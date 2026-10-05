@@ -1,3 +1,4 @@
+import { RecordedUsageSchema } from "@getpaseo/protocol/recorded-usage";
 import { validatedTimestamp } from "./runtime-observation.js";
 import type {
   AgentListItemPayload,
@@ -477,7 +478,7 @@ function sanitizeMetadataArray(value: unknown): AgentMetadata[] | undefined {
   return sanitized.length > 0 ? sanitized : undefined;
 }
 
-type UsageNumericField = Exclude<keyof AgentUsage, never>;
+type UsageNumericField = Exclude<keyof AgentUsage, "recorded">;
 
 function assignFiniteNumber(
   source: { [key: string]: JsonValue },
@@ -511,6 +512,8 @@ function sanitizeUsage(value: unknown): AgentUsage | undefined {
       return undefined;
     }
   }
+  const recorded = RecordedUsageSchema.safeParse(sanitized.recorded);
+  if (recorded.success) result.recorded = recorded.data;
   return Object.keys(result).length ? result : undefined;
 }
 

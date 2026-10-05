@@ -7,6 +7,7 @@ import {
   SessionOutboundMessageSchema,
   WorkspaceProjectDescriptorPayloadSchema,
   ProviderUsageSchema,
+  ProviderUsageListResponseMessageSchema,
   AgentQuotaSnapshotSchema,
   AccountUsageRowSchema,
 } from "./messages.js";
@@ -743,4 +744,37 @@ test("notification policy is one explicit optional host/session feature", () => 
       "notificationPolicy" in features ? features.notificationPolicy : undefined,
     );
   }
+});
+
+test("observation usage RPC remains additive and explicitly gated", () => {
+  const old = { type: "provider.usage.list.request", requestId: "r" };
+  expect(SessionInboundMessageSchema.parse(old)).toEqual(old);
+  expect(SessionInboundMessageSchema.parse({ ...old, observationOnly: true })).toMatchObject({
+    observationOnly: true,
+  });
+  for (const features of [
+    {},
+    { pooledAccountUsageObservation: false },
+    { pooledAccountUsageObservation: true },
+  ])
+    expect(
+      parseServerInfoStatusPayload({ status: "server_info", serverId: "s", features })?.features
+        ?.pooledAccountUsageObservation,
+    ).toBe(
+      "pooledAccountUsageObservation" in features
+        ? features.pooledAccountUsageObservation
+        : undefined,
+    );
+  expect(
+    ProviderUsageListResponseMessageSchema.parse({
+      type: "provider.usage.list.response",
+      payload: {
+        requestId: "r",
+        fetchedAt: "2026-01-01T00:00:00Z",
+        providers: [],
+        observationOnly: true,
+        sessionAccount: null,
+      },
+    }).payload.sessionAccount,
+  ).toBeNull();
 });

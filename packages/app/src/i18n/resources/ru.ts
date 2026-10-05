@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -2479,6 +2480,7 @@ export const ru: TranslationResources = {
   sidebarCallout: {
     dismiss: "Закрыть",
   },
+  usagePanel: usagePanelCopy["ru"],
   contextWindow: {
     title: "Контекстное окно",
     used: "Использовано: {{percentage}}%",

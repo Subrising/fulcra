@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inboxHeadline, type InboxData } from "./inbox-model";
+import { inboxHeadline, humanInboxItems, type InboxData } from "./inbox-model";
 
 const ALL_CLEAR = "Nothing is waiting for you.";
 const counts = (total = 0) => ({
@@ -116,4 +116,27 @@ test("the all-clear still appears when every source was read and nothing is wait
   assert.equal(h.failed, false);
   assert.equal(h.canRetry, false);
   assert.equal(inboxHeadline(undefined, true).text, "Checking what needs you…");
+});
+
+test("personal inbox surfaces only open human packets, retaining all held and FYI records", () => {
+  const packet = {
+    ...item(1, "decision", "now"),
+    ref: "decision:00000000-0000-4000-8000-000000000001",
+  };
+  const held = item(2, "held", "now");
+  const answered = {
+    ...item(3, "decision", "fyi"),
+    ref: "decision:00000000-0000-4000-8000-000000000002",
+  };
+  const data = base({
+    items: [held, packet, { ...packet, key: "same-packet-report" }, answered],
+    counts: counts(4),
+  });
+  const view = humanInboxItems(data);
+  assert.equal(view.confirmed.length, 1);
+  assert.equal(view.retained.length, 1);
+  assert.equal(view.other.length, 2);
+  assert.equal(data.items.length, 4, "classification does not consume any source record");
+  assert.equal(humanInboxItems({ ...data, stale: true }).confirmed.length, 0);
+  assert.equal(humanInboxItems({ ...data, stale: true }).unknown, true);
 });

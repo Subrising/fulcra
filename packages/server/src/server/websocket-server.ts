@@ -2027,6 +2027,7 @@ export class VoiceAssistantWebSocketServer {
         nativeQueuedMessages: true,
         autoResumeOnLimit: true,
         notificationPolicy: true,
+        pooledAccountUsageObservation: true,
         nativeOwnerReportInbox: true,
         nativeEvidenceIndex: true,
         managedArtifactContent: true,

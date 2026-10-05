@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Agent, WorkspaceDescriptor } from "@/stores/session-store";
+import { projectObservedAgents, OBSERVED_AGENT_LIMIT } from "../observed-agents-model";
 import { createPluginAgentSnapshot, createPluginWorkspaceSnapshot } from "./snapshots";
 
 const workspace: WorkspaceDescriptor = {
@@ -115,5 +116,76 @@ describe("plugin context snapshots", () => {
     expect(snapshot.labels).toEqual({ phase: "implementation" });
     expect(agent.title).toBe("Implement plugin panels");
     expect(agent.labels).toEqual({ phase: "implementation" });
+  });
+});
+
+describe("passive native map projection", () => {
+  const hosts = [
+    { serverId: "mini", label: "Mini", status: "online" as const },
+    { serverId: "book", label: "Book", status: "online" as const },
+  ];
+  const cache = (value: Agent) => ({
+    agents: new Map([[value.id, value]]),
+    agentDetails: new Map<string, Agent>(),
+    workspaces: new Map([[workspace.id, workspace]]),
+  });
+  it("preserves composite identity and immutable metadata without equating a process with a turn", () => {
+    const value = { ...agent, serverId: "mini", workspaceId: workspace.id };
+    const input = {
+      mini: cache(value),
+      book: cache({
+        ...value,
+        serverId: "book",
+        turn: {
+          phase: "open" as const,
+          turnId: "turn",
+          startedAt: null,
+          cancellationRequestId: null,
+        },
+      }),
+    };
+    const result = projectObservedAgents(hosts, input);
+    expect(result.entries.map((entry) => [entry.serverId, entry.agentId, entry.activity])).toEqual([
+      ["mini", agent.id, "idle"],
+      ["book", agent.id, "working"],
+    ]);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.entries[0].workspace)).toBe(true);
+    expect(result.entries[0]).not.toHaveProperty("cwd");
+    expect(result.entries[0].workspace).not.toHaveProperty("projectRootPath");
+    expect(result.entries[0].observedAt).toBe(agent.lastActivityAt.toISOString());
+    expect(value.turn.phase).toBe("idle");
+  });
+  it("marks disconnected/reconnected cache unavailable or unknown, and never guesses a missing workspace", () => {
+    const value = { ...agent, serverId: "mini", workspaceId: "absent" };
+    const input = { mini: cache(value) };
+    expect(
+      projectObservedAgents([{ ...hosts[0], status: "offline" }], input).entries[0].activity,
+    ).toBe("unavailable");
+    const reconnected = projectObservedAgents(
+      [{ ...hosts[0], lastOnlineAt: "2026-10-04T12:00:00Z" }],
+      input,
+    ).entries[0];
+    expect(reconnected.activity).toBe("unknown");
+    expect(reconnected.workspace).toBeNull();
+    expect(projectObservedAgents([], input).entries).toEqual([]);
+  });
+  it("reports projection overflow and excludes archived records without touching history", () => {
+    const agents = new Map(
+      Array.from({ length: OBSERVED_AGENT_LIMIT + 3 }, (_, index) => [
+        String(index),
+        { ...agent, serverId: "mini", id: String(index) },
+      ]),
+    );
+    agents.set("archived", { ...agent, id: "archived", archivedAt: new Date() });
+    const result = projectObservedAgents([hosts[0]], { mini: { ...cache(agent), agents } });
+    expect(result.total).toBe(OBSERVED_AGENT_LIMIT + 3);
+    expect(result.entries.length).toBe(OBSERVED_AGENT_LIMIT);
+    expect(result.truncated).toBe(3);
+    const malformed = projectObservedAgents([hosts[0]], {
+      mini: cache({ ...agent, serverId: "book" }),
+    });
+    expect(malformed.entries).toEqual([]);
+    expect(malformed.withheld).toBe(1);
   });
 });

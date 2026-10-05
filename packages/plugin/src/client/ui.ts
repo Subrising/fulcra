@@ -13,6 +13,8 @@ export interface SettingsRowProps {
   error?: string | null;
   children?: ReactNode;
   testID?: string;
+  /** Form fields can stack label/control; ordinary settings keep their row layout. */
+  layout?: "row" | "stacked";
 }
 export interface SettingsSwitchProps extends SettingsRowProps {
   value: boolean;

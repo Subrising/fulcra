@@ -301,7 +301,8 @@ client-owned navigation to a saved host. Feature-check the method itself on olde
 host is offline or connecting; the existing host-specific loading/error UI handles the connection.
 `"host-unavailable"` means the registry is still loading or the target is absent. No request is queued
 or automatically replayed: the caller can offer an explicit retry. `"requested"` does not confirm that
-a conversation has loaded.
+a conversation has loaded. Cache-only work observation and exact native Changes navigation follow the
+[public observation contract](../public-docs/plugins/reference.md#observe-cached-native-work).
 
 Workspace panels, Command Center items, and client slash commands are client contributions. The
 daemon transports their compiled bundle without interpreting placement or callbacks. Panel props

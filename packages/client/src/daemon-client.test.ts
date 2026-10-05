@@ -6581,6 +6581,128 @@ test("sends provider.usage.list.request and resolves provider.usage.list.respons
   });
 });
 
+async function observationUsageClient(features: Record<string, boolean>) {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "usage-observation-test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen({ features });
+  await connected;
+  return { client, mock };
+}
+
+const unsupportedObservationFeatures: Record<string, boolean>[] = [
+  {},
+  { pooledAccountUsageObservation: false },
+];
+test.each(unsupportedObservationFeatures)(
+  "observation-only usage refuses unsupported hosts without dispatch (%s)",
+  async (features) => {
+    const { client, mock } = await observationUsageClient(features);
+    await expect(
+      client.listProviderUsage({ observationOnly: true, agentId: "chat" }),
+    ).rejects.toThrow("observation-only usage");
+    expect(mock.sent).toEqual([]);
+  },
+);
+test("observation-only usage forwards the exact option, scope and response echo", async () => {
+  const { client, mock } = await observationUsageClient({ pooledAccountUsageObservation: true });
+  const reading = client.listProviderUsage({
+    requestId: "observation",
+    agentId: "chat",
+    accounts: true,
+    observationOnly: true,
+  });
+  expect(JSON.parse(assertStr(mock.sent[0]))).toEqual({
+    type: "session",
+    message: {
+      type: "provider.usage.list.request",
+      requestId: "observation",
+      agentId: "chat",
+      accounts: true,
+      observationOnly: true,
+    },
+  });
+  const payload = {
+    requestId: "observation",
+    fetchedAt: "2026-10-04T00:00:00Z",
+    providers: [],
+    accounts: [],
+    observationOnly: true,
+    sessionAccount: null,
+  };
+  mock.triggerMessage(wrapSessionMessage({ type: "provider.usage.list.response", payload }));
+  await expect(reading).resolves.toEqual(payload);
+});
+test("observation-only usage refuses a generating refresh without dispatch", async () => {
+  const { client, mock } = await observationUsageClient({ pooledAccountUsageObservation: true });
+  await expect(client.listProviderUsage({ observationOnly: true, refresh: true })).rejects.toThrow(
+    "generating refresh",
+  );
+  expect(mock.sent).toEqual([]);
+});
+test.each([undefined, false])(
+  "observation-only usage requires a literal echo (%s)",
+  async (observationOnly) => {
+    const { client, mock } = await observationUsageClient({ pooledAccountUsageObservation: true });
+    const reading = client.listProviderUsage({ requestId: "echo", observationOnly: true });
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "provider.usage.list.response",
+        payload: {
+          requestId: "echo",
+          fetchedAt: "2026-10-04T00:00:00Z",
+          providers: [],
+          observationOnly,
+        },
+      }),
+    );
+    await expect(reading).rejects.toThrow("observation-only usage reply");
+  },
+);
+test("observation-only usage rejects superseded server info at reply publication", async () => {
+  const { client, mock } = await observationUsageClient({ pooledAccountUsageObservation: true });
+  const reading = client.listProviderUsage({ requestId: "changed", observationOnly: true });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "status",
+      payload: {
+        status: "server_info",
+        serverId: "replacement",
+        hostname: null,
+        version: null,
+        features: { pooledAccountUsageObservation: true },
+      },
+    }),
+  );
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "provider.usage.list.response",
+      payload: {
+        requestId: "changed",
+        fetchedAt: "2026-10-04T00:00:00Z",
+        providers: [],
+        observationOnly: true,
+      },
+    }),
+  );
+  await expect(reading).rejects.toThrow("reconnect the host");
+});
+test("observation-only usage never queues against a disconnected runtime", async () => {
+  const { client, mock } = await observationUsageClient({ pooledAccountUsageObservation: true });
+  mock.triggerClose({ code: 1000, reason: "closed" });
+  await expect(client.listProviderUsage({ observationOnly: true })).rejects.toThrow(
+    "reconnect the host",
+  );
+  expect(mock.sent).toEqual([]);
+});
+
 test("sends close_items_request and resolves close_items_response", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();

@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -2512,6 +2513,7 @@ export const fr: TranslationResources = {
   sidebarCallout: {
     dismiss: "Rejeter",
   },
+  usagePanel: usagePanelCopy["fr"],
   contextWindow: {
     title: "Fenêtre contextuelle",
     used: "{{percentage}}% utilisé",

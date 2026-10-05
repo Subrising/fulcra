@@ -164,7 +164,7 @@ export function OrganizationSurface(
     ) : pillar === "changes" ? (
       <ChangesSurface {...props} />
     ) : pillar === "inbox" ? (
-      <InboxSurface theme={props.theme} layout={props.layout} />
+      <InboxSurface theme={props.theme} layout={props.layout} host={props.host} />
     ) : pillar === "environments" ? (
       <EnvironmentsSurface
         theme={props.theme}
@@ -189,7 +189,7 @@ export function OrganizationSurface(
     ) : view === "portfolio" ? (
       <PortfolioSurface {...props} onTask={onTask} />
     ) : (
-      <OrganisationSurface key={focus ?? "all"} {...props} initialProject={focus} />
+      <OrganisationSurface key={focus ?? "all"} {...props} initialProject={focus} onTask={onTask} />
     );
   const subStrip = {
     flexDirection: "row" as const,

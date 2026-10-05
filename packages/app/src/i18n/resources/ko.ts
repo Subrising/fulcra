@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -2455,6 +2456,7 @@ export const ko: TranslationResources = {
   sidebarCallout: {
     dismiss: "닫기",
   },
+  usagePanel: usagePanelCopy["ko"],
   contextWindow: {
     title: "컨텍스트 윈도우",
     used: "{{percentage}}% 사용됨",
