@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "typecheck": "tsgo --noEmit",
     "deploy": "npm run build && wrangler deploy",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:fulcra": "node scripts/prepare-fulcra-site.mjs --out dist-fulcra",
+    "build:fulcra:preview": "node scripts/prepare-fulcra-site.mjs --preview --out dist-fulcra-preview"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.29.1",

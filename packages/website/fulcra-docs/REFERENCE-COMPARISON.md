@@ -1,0 +1,17 @@
+# Redesign reference pass
+
+The human rejected the first draft. Its source/tree53ff, source patch, exported ZIP and first/confirm renders are preserved in private evidence. Their self-checks did not establish design acceptance.
+
+Current primary pages were opened directly and inspected through an isolated existing Chrome headless session at1440px and390px. Three sites only; no copied assets, typography files, UI, testimonials, logos or statistics. Raw captures/DOM observations remain private in artifacts/references.
+
+| Reference | Actually observed                                                                                                                                                                                                             | Chosen mechanism                                                                                | Avoided                                                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Linear    | Desktop/mobile live navigation, muted hierarchy and primary-page workflow content. Its hero/product animation stayed hidden in this headless renderer, even with reduced motion; full hero visual comparison remains limited. | Organise the story around stages of work; one product narrative rather than feature slogans.    | Customer proof, interface examples and specific styling were not copied. Do not claim the unrendered hero was visually inspected. |
+| Raycast   | Desktop/mobile live offer, navigation, restrained heading/body scale and a specific action. Current home promotes its keyboard; visual effects/product media did not fully settle in headless.                                | Distinct primary action and secondary access; reduce marketing text before the visitor can act. | Hardware positioning, dark glow, gradient treatment, asset imagery and endorsements.                                              |
+| Warp      | Valid desktop/mobile current opening, direct audience positioning, two clearly different actions, a substantial interactive product region and narrow-screen adaptation.                                                      | Make the mechanism and visitor’s next step concrete; let interaction help explain the work.     | Factory claims, discounts, task metrics, grid aesthetic and its UI were not transferred.                                          |
+
+## Fulcra identity authority
+
+These sites informed action hierarchy, narrative and interaction quality. The human subsequently pinned colour, font and illustration authority to the actual Fulcra GitHub README and retained generator. DESIGN.md owns that replacement; no reference-site palette or type is authoritative.
+
+The mechanism is you → primes → project orchestrators → working sessions, with project-local boards/tasks, responsibilities and communications, and reports/decisions returning through primes. The conceptual hierarchy is explanatory brand content. Actual latest installed app imagery and independent design acceptance remain open; reference inspection does not close them.
