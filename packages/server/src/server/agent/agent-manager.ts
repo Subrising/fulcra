@@ -1,4 +1,5 @@
 import { PermissionAttentionError } from "./permission-attention-error.js";
+import { retainRecordedUsage } from "./usage-recording.js";
 import { fingerprintLimitResumeBinding } from "../limit-resume/binding.js";
 import { registerOwnerArtifactContent } from "../owner-report-read.js";
 import {
@@ -6860,7 +6861,7 @@ export class AgentManager {
         this.onStreamThreadStarted(agent);
         return undefined;
       case "usage_updated":
-        agent.lastUsage = event.usage;
+        agent.lastUsage = retainRecordedUsage(agent.lastUsage, event.usage);
         this.emitState(agent);
         return undefined;
       case "mode_changed":

@@ -2732,6 +2732,46 @@ describe("ClaudeAgentSession context window usage", () => {
     };
   }
 
+  test("passive recorded usage comes from actual injected SDK result with distinct cache creation", async () => {
+    const session = await createSessionForTurns([
+      [
+        createInitMessage(),
+        createSuccessResult({
+          usage: {
+            input_tokens: 10,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 30,
+            output_tokens: 40,
+          },
+          modelUsage: {
+            "fixture-model": {
+              inputTokens: 10,
+              cacheReadInputTokens: 20,
+              cacheCreationInputTokens: 30,
+              outputTokens: 40,
+            },
+          },
+          total_cost_usd: 0.25,
+        }),
+      ],
+    ]);
+    try {
+      const result = await session.run("fixture");
+      expect(result.usage?.recorded).toMatchObject({
+        provider: "claude",
+        source: "claude-sdk-result",
+        latest: {
+          scope: "unknown",
+          tokens: { inputNew: 10, cacheRead: 20, cacheWritten: 30, output: 40 },
+        },
+        total: { scope: "provider-query" },
+        estimate: { kind: "provider-api-estimate", amountUsd: 0.25 },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
   test("emits turn_started before the submitted user message", async () => {
     const session = await createSessionForTurns([[]]);
     const events: AgentStreamEvent[] = [];

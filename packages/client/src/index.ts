@@ -449,6 +449,8 @@ export interface PaseoProviderUsageOptions {
   accounts?: boolean;
   /** update-7c: the on-demand button; the host still probes an account at most once a minute. */
   refresh?: boolean;
+  /** Existing cache/native observations only; requires pooledAccountUsageObservation. */
+  observationOnly?: boolean;
 }
 
 export interface PaseoProviderListOptions {
@@ -1095,6 +1097,7 @@ function listProviderUsage(
   daemonClient: DaemonClient,
   options?: PaseoProviderUsageOptions,
 ): Promise<PaseoProviderUsageResult> {
+  if (options?.observationOnly === true) return daemonClient.listProviderUsage(options);
   // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-02-28 once daemon floor >= v0.1.98.
   if (daemonClient.getLastServerInfoMessage()?.features?.providerUsageList !== true) {
     return Promise.reject(new Error("Update the host to list provider usage."));

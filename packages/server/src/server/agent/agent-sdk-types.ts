@@ -1,3 +1,4 @@
+import type { RecordedUsage } from "@getpaseo/protocol/recorded-usage";
 import type { TrustedCodexTurnV11, QuotaReadFailureV11 } from "@getpaseo/plugin/server";
 import type {
   AccountCredential,
@@ -254,6 +255,7 @@ export interface SteerActiveTurnOptions extends AgentSteerOptions {
 }
 
 export interface AgentUsage {
+  recorded?: RecordedUsage;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;

@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -2437,6 +2438,7 @@ export const ar: TranslationResources = {
   sidebarCallout: {
     dismiss: "رفض",
   },
+  usagePanel: usagePanelCopy["ar"],
   contextWindow: {
     title: "نافذة السياق",
     used: "تم استخدام{{percentage}}%",

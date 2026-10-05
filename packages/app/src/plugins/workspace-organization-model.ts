@@ -64,3 +64,12 @@ export function bindIntakeSource(
     );
   return { ...sources, [intakeId]: serverId };
 }
+
+/** Company navigation is independent of the execution host. A missing saved source is never replaced. */
+export function selectCompanyTarget<T extends { plugin: { serverId: string } }>(
+  targets: readonly T[],
+  companyHost: string | null,
+): T | null {
+  if (companyHost) return targets.find((target) => target.plugin.serverId === companyHost) ?? null;
+  return targets.length === 1 ? targets[0] : null;
+}

@@ -17,6 +17,7 @@ import {
 } from "../../shared/workspace-organization.mjs";
 import { useOrganization } from "./use-organization";
 import { useNativeCatalog } from "./use-native-catalog";
+import { WorkspacesSurface } from "./workspaces";
 import { useIntakeForm } from "./use-intake-form";
 import { useCreationModels } from "./use-creation-models";
 import { askIntakePrime, createIntakeChat } from "./native-actions.mjs";
@@ -224,7 +225,13 @@ export function IntakeSurface(props: Props) {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: c.surface0 }}
-      contentContainerStyle={{ padding: 16, gap: 14 }}
+      contentContainerStyle={{
+        padding: 16,
+        gap: 14,
+        width: "100%",
+        maxWidth: 760,
+        alignSelf: "flex-start",
+      }}
       keyboardShouldPersistTaps="handled"
     >
       <Text style={{ color: c.foregroundMuted }}>
@@ -232,7 +239,15 @@ export function IntakeSurface(props: Props) {
         {responsible
           ? `Responsible intake: ${responsible.label ?? responsible.seat ?? "recorded receiver"}`
           : "Responsible intake: you"}
+        {responsible?.kind === "human-session" ? " · human-held; no automated prime routing" : ""}
       </Text>
+      {responsible && (
+        <WorkButton
+          theme={props.theme}
+          label="Open the original receiving conversation"
+          onPress={() => openOriginal(responsible.serverId, responsible.agentId)}
+        />
+      )}
       {query.isPending && (
         <Text style={{ color: c.foregroundMuted }}>Reading the company’s saved intake route…</Text>
       )}
@@ -252,6 +267,7 @@ export function IntakeSurface(props: Props) {
       )}
       {!saved && (
         <SettingsInput
+          layout="stacked"
           key={draft.id}
           label="What would you like to work on?"
           initialValue={state.text}
@@ -265,12 +281,16 @@ export function IntakeSurface(props: Props) {
           {saved.text}
         </Text>
       )}
-      {query.data?.workspaces.length === 0 && (
-        <Text style={{ color: c.foreground }}>
-          Create a company workspace in Workspaces and add its existing projects. Starting a request
-          creates no repo, project or execution context.
-        </Text>
-      )}
+      {query.data &&
+        (query.data.workspaces.length === 0 || (workspace && !workspace.projects.length)) && (
+          <View style={{ gap: 12 }}>
+            <Text style={{ color: c.foreground }}>
+              Set up this company intake here. Link an existing project; your request and goal stay
+              in place.
+            </Text>
+            <WorkspacesSurface {...props} embedded initialWorkspaceId={workspace?.id} />
+          </View>
+        )}
       {!workspace &&
         query.data?.workspaces.map((entry) => (
           <WorkButton

@@ -1,3 +1,4 @@
+import type { RecordedUsage } from "./recorded-usage.js";
 import type { AgentAttachment } from "./messages.js";
 
 export type AgentProvider = string;
@@ -187,6 +188,7 @@ export interface AgentRunOptions {
 }
 
 export interface AgentUsage {
+  recorded?: RecordedUsage;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;

@@ -56,6 +56,11 @@ interface PluginNavigableHostProps extends PluginHostProps {
      * An unloaded registry or missing host returns unavailable; requests are never queued.
      * Distinct from openAgent's optional serverId, which navigates without checking the host.
      */
+    /** Opens the exact cached agent's native Changes view. Never resolves a host/workspace by path. */
+    readonly openAgentChangesOnHost?: (input: {
+      readonly serverId: string;
+      readonly agentId: string;
+    }) => "requested" | "host-unavailable" | "changes-unavailable";
     readonly openAgentOnHost?: (input: {
       readonly serverId: string;
       readonly agentId: string;

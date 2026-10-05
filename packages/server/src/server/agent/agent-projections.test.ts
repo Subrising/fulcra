@@ -539,3 +539,145 @@ it("publishes only the live host instance identity and never persists it", () =>
     toAgentPayload(createManagedAgent({ instanceId: "closed-instance", lifecycle: "closed" })),
   ).not.toHaveProperty("runtimeInstanceId");
 });
+
+it("recorded usage is cloned on live wire only and never enters stored metadata", () => {
+  const recorded = {
+    provider: "codex" as const,
+    source: "codex-app-server-token-usage" as const,
+    observedAt: "2026-10-04T00:00:00Z",
+    latest: { scope: "unknown" as const, tokens: { inputNew: 70, cacheRead: 30, output: 20 } },
+  };
+  const agent = createManagedAgent({ lastUsage: { inputTokens: 100, recorded } });
+  expect(toAgentPayload(agent).lastUsage?.recorded).toEqual(recorded);
+  expect(toAgentPayload(agent).lastUsage?.recorded).not.toBe(recorded);
+  const stored = toStoredAgentRecord(agent);
+  expect(stored).not.toHaveProperty("lastUsage");
+  expect(JSON.stringify(stored)).not.toContain("recorded");
+  expect(buildStoredAgentPayload(stored, ["claude", "codex"])).not.toHaveProperty("lastUsage");
+});
+
+it.runIf(process.platform === "darwin")(
+  "actual pinned prior reader accepts optional live recorded usage and unchanged stored history",
+  async () => {
+    const { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } =
+      await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const { execFileSync } = await import("node:child_process");
+    const { createHash } = await import("node:crypto");
+    const app =
+      process.env.FULCRA_USAGE_OLD_APP ??
+      "/Users/user/fulcra-releases/live-candidate-13/app/Fulcra.app";
+    const expected =
+      process.env.FULCRA_USAGE_OLD_ASAR_SHA256 ??
+      "c45c1ff45c6916620560140fa229a5157016a13031bc9011caac7d52f96d9114";
+    const executable =
+      process.env.FULCRA_USAGE_ORACLE_EXECUTABLE ?? path.join(app, "Contents/MacOS/Fulcra");
+    if (!existsSync(executable))
+      throw Error(
+        "Exact prior reader unavailable: configure pinned fixture app, never count missing as acceptance",
+      );
+    expect(
+      createHash("sha256")
+        .update(readFileSync(path.join(app, "Contents/Resources/app.asar")))
+        .digest("hex"),
+    ).toBe(expected);
+    const home = mkdtempSync(path.join(tmpdir(), "usage-prior-reader-"));
+    try {
+      const agent = createManagedAgent();
+      const baseline = toAgentPayload(agent),
+        stored = toStoredAgentRecord(agent);
+      agent.lastUsage = {
+        inputTokens: 100,
+        cachedInputTokens: 30,
+        outputTokens: 20,
+        recorded: {
+          provider: "codex",
+          source: "codex-app-server-token-usage",
+          observedAt: "2026-10-04T00:00:00Z",
+          latest: { scope: "unknown", tokens: { inputNew: 70, cacheRead: 30, output: 20 } },
+        },
+      };
+      const wire = toAgentPayload(agent),
+        after = toStoredAgentRecord(agent);
+      expect(after).toEqual(stored);
+      const fixture = path.join(home, "fixture.json"),
+        history = path.join(home, "history.jsonl"),
+        script = path.join(home, "reader.cjs");
+      writeFileSync(history, '{"role":"user","text":"preserved fixture"}\n');
+      const before = readFileSync(history, "utf8");
+      writeFileSync(fixture, JSON.stringify({ baseline, wire, stored: after }));
+      writeFileSync(
+        script,
+        `const {createRequire}=require('node:module');const fs=require('node:fs');const path=require('node:path');const [app,fixture]=process.argv.slice(2);const base=path.join(app,'Contents/Resources/app.asar');const req=createRequire(path.join(base,'package.json'));const messages=req(path.join(base,'node_modules/@getpaseo/protocol/dist/messages.js'));const agents=req(path.join(base,'node_modules/@getpaseo/server/dist/server/server/agent/agent-storage.js'));const data=JSON.parse(fs.readFileSync(fixture,'utf8'));messages.AgentSnapshotPayloadSchema.parse(data.baseline);const parsed=messages.AgentSnapshotPayloadSchema.parse(data.wire);agents.parseStoredAgentRecord(data.stored);console.log(JSON.stringify({baselineAccepted:true,liveAccepted:true,storedAccepted:true,legacyInput:parsed.lastUsage.inputTokens,recordedIgnored:!parsed.lastUsage.recorded}));`,
+      );
+      const result = JSON.parse(
+        execFileSync(executable, [script, app, fixture], {
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+          encoding: "utf8",
+          timeout: 10_000,
+        }).trim(),
+      );
+      expect(result).toEqual({
+        baselineAccepted: true,
+        liveAccepted: true,
+        storedAccepted: true,
+        legacyInput: 100,
+        recordedIgnored: true,
+      });
+      expect(readFileSync(history, "utf8")).toBe(before);
+      expect(after).not.toHaveProperty("lastUsage");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
+
+it("generated outbound decoder preserves recorded usage and observation identity/echo", async () => {
+  const { validateWSOutboundMessage } = await import("@getpaseo/protocol/validation/ws-outbound");
+  const agent = createManagedAgent({
+    lastUsage: {
+      recorded: {
+        provider: "codex",
+        source: "codex-app-server-token-usage",
+        observedAt: "2026-10-04T00:00:00Z",
+        latest: { scope: "unknown", tokens: { inputNew: 70, cacheRead: 30 } },
+      },
+    },
+  });
+  const usage = validateWSOutboundMessage({
+    type: "session",
+    message: { type: "agent_update", payload: { kind: "upsert", agent: toAgentPayload(agent) } },
+  });
+  expect(usage.success).toBe(true);
+  if (
+    usage.success &&
+    usage.data.type === "session" &&
+    usage.data.message.type === "agent_update" &&
+    usage.data.message.payload.kind === "upsert"
+  )
+    expect(usage.data.message.payload.agent.lastUsage?.recorded).toEqual(agent.lastUsage?.recorded);
+  const response = validateWSOutboundMessage({
+    type: "session",
+    message: {
+      type: "provider.usage.list.response",
+      payload: {
+        requestId: "r",
+        fetchedAt: "2026-10-04T00:00:00Z",
+        providers: [],
+        observationOnly: true,
+        sessionAccount: null,
+      },
+    },
+  });
+  expect(response.success).toBe(true);
+  if (
+    response.success &&
+    response.data.type === "session" &&
+    response.data.message.type === "provider.usage.list.response"
+  )
+    expect(response.data.message.payload).toMatchObject({
+      observationOnly: true,
+      sessionAccount: null,
+    });
+});

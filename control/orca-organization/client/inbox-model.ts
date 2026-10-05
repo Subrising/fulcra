@@ -92,3 +92,34 @@ function plain(e: unknown): string {
     ? `Fulcra could not reach the service that keeps the inbox (${m.slice(0, 80)}).`
     : m.slice(0, 160);
 }
+
+/** Controller inbox only emits open human packets as now/today; closed packets are FYI. Held age is not a personal obligation. */
+export function humanInboxItems(data: InboxData | undefined, now?: number) {
+  const listed = data?.items ?? [];
+  const packets = listed.filter(
+    (item) =>
+      item.source === "decision" &&
+      item.urgency !== "fyi" &&
+      /^decision:[a-f\d-]{36}$/i.test(item.ref ?? ""),
+  );
+  const unique = [...new Map(packets.map((item) => [item.ref, item])).values()];
+  const age = now === undefined ? 0 : now - Date.parse(data?.observedAt ?? "");
+  const fresh = Number.isFinite(age) && age >= -5000 && age <= 45000;
+  const confirmed =
+    data && !data.stale && fresh
+      ? unique.sort(
+          (a, b) =>
+            Number(b.urgency === "now") - Number(a.urgency === "now") ||
+            (a.projectId ?? "").localeCompare(b.projectId ?? "") ||
+            a.key.localeCompare(b.key),
+        )
+      : [];
+  const refs = new Set(confirmed.map((item) => item.ref));
+  return {
+    confirmed,
+    other: listed.filter((item) => !refs.has(item.ref)),
+    unknown: !data || data.stale || data.partial || !fresh,
+    retained: listed.filter((item) => item.source === "held"),
+    total: data?.counts.total ?? 0,
+  };
+}

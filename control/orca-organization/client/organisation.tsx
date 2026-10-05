@@ -3,7 +3,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
-import { workMapRpc } from "../shared/work-map";
+import { workMapProjectRpc, workMapRpc } from "../shared/work-map";
 import { fleetRpc } from "../shared/fleet";
 import { remitsRpc } from "../shared/cc/remit";
 import {
@@ -13,6 +13,8 @@ import {
   relativeTime,
   type TreeProject,
 } from "./organisation-model";
+import { OriginalConversation } from "./original-conversation";
+import { WorkButton } from "./work-button";
 import { ProjectSessions } from "./project-sessions";
 import { ProjectStory } from "./organisation-story";
 import { RemitSheet } from "./organisation-remit";
@@ -67,13 +69,14 @@ function ProjectRow({
 }
 
 export function OrganisationSurface(
-  props: PluginSurfaceProps & { initialProject?: string | null },
+  props: PluginSurfaceProps & { initialProject?: string | null; onTask?: (id: string) => void },
 ) {
   const { theme, layout } = props,
     c = theme.colors,
     compact = layout.compact,
     hostId = props.host?.id;
   const readMap = useContract(workMapRpc),
+    readProject = useContract(workMapProjectRpc),
     readFleet = useContract(fleetRpc),
     readRemits = useContract(remitsRpc);
   // The same query keys the work map and Live work use, so this view adds no second poll of the same read.
@@ -109,17 +112,22 @@ export function OrganisationSurface(
   const tree = buildTree(map.data, remits.data, fleet.data);
   const all = [...tree.primes.flatMap((p) => p.projects), ...tree.unassigned];
   const project = all.find((p) => p.projectId === chosen) ?? null;
+  const board = useQuery({
+    queryKey: ["orca-work-map-project", hostId, chosen],
+    queryFn: () => readProject({ projectId: chosen! }),
+    enabled: !!chosen,
+    retry: false,
+  });
+  const leaders = project?.orchestrator.sessionId
+    ? (fleet.data?.nodes.filter((node) => node.id === project.orchestrator.sessionId) ?? [])
+    : [];
+  const leader = leaders.length === 1 ? leaders[0] : null;
   const pick = (id: string) => {
     setChosen(chosen === id && !compact ? null : id);
     setEditing(false);
   };
 
-  // The map stays wide-screen only (C1 decision); a phone says so in the toggle's place instead of offering it.
-  const toggle = compact ? (
-    <Text testID="org-map-needs-wide" style={{ color: c.foregroundMuted }}>
-      The work map needs a wider screen.
-    </Text>
-  ) : (
+  const toggle = (
     <View style={{ flexDirection: "row", gap: 8 }}>
       <Button
         theme={theme}
@@ -143,11 +151,11 @@ export function OrganisationSurface(
       </Button>
     </View>
   );
-  if (view === "map" && !compact)
+  if (view === "map")
     return (
       <View style={{ flex: 1, backgroundColor: c.surface0 }}>
         <View style={{ paddingHorizontal: 24, paddingTop: 12 }}>{toggle}</View>
-        <WorkMapSurface {...props} />
+        <WorkMapSurface {...props} fleet={fleet.data} remits={remits.data} />
       </View>
     );
 
@@ -166,6 +174,53 @@ export function OrganisationSurface(
           <Text style={{ color: c.foreground, fontWeight: "600" }}>‹ All projects</Text>
         </Button>
       )}
+      {leader && (
+        <OriginalConversation
+          {...props}
+          targetHost={leader.host}
+          targetServerId={leader.serverId}
+          agentId={leader.agentId}
+          label={`Talk to project orchestrator: ${leader.title}`}
+        />
+      )}
+      <View style={{ gap: 8 }} testID="org-project-board">
+        <SectionTitle colors={c}>Project board and tasks</SectionTitle>
+        {!board.data && (
+          <Text style={{ color: c.foregroundMuted }}>
+            {board.isPending
+              ? "Reading this project's recorded board…"
+              : "The project board is unavailable; no tasks were inferred."}
+          </Text>
+        )}
+        {board.data?.workstreams.map((workstream) => {
+          const issue = board.data.issues.issues.find(
+            (entry) => entry.relation === "is" && entry.linkedTo.scopeId === workstream.taskId,
+          );
+          return (
+            <WorkButton
+              key={workstream.taskId}
+              theme={theme}
+              label={
+                issue
+                  ? `${issue.key} · ${issue.title} · ${issue.state}`
+                  : "Recorded project task · no linked board title"
+              }
+              disabled={!props.onTask}
+              onPress={() => props.onTask?.(workstream.taskId)}
+            />
+          );
+        })}
+        {board.data?.available && !board.data.workstreams.length && (
+          <Text style={{ color: c.foregroundMuted }}>
+            No recorded project tasks in this observation.
+          </Text>
+        )}
+        {board.data?.membership?.partial && (
+          <Text style={{ color: c.foregroundMuted }}>
+            Project membership is partial. This view cannot establish that the board is complete.
+          </Text>
+        )}
+      </View>
       <ProjectStory
         key={project.projectId}
         projectId={project.projectId}

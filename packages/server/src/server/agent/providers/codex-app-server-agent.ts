@@ -1,4 +1,5 @@
 import { PermissionAttentionError } from "../permission-attention-error.js";
+import { recordedCodexUsage } from "../usage-recording.js";
 import {
   captureNativeEvidence,
   assertNativeEvidence,
@@ -1073,7 +1074,10 @@ function filterCodexThreadsByCwd(
   );
 }
 
-export function toAgentUsage(tokenUsage: unknown): AgentUsage | undefined {
+export function toAgentUsage(
+  tokenUsage: unknown,
+  runtimeSessionId?: string,
+): AgentUsage | undefined {
   const usage = toObjectRecord(tokenUsage);
   if (!usage) return undefined;
   const last = toObjectRecord(usage.last);
@@ -1082,7 +1086,9 @@ export function toAgentUsage(tokenUsage: unknown): AgentUsage | undefined {
     usage.modelContextWindow,
   );
   const contextWindowUsedTokens = firstPositiveFiniteNumber(last?.total_tokens, last?.totalTokens);
+  const recorded = recordedCodexUsage(tokenUsage, runtimeSessionId);
   return {
+    ...(recorded ? { recorded } : {}),
     inputTokens: typeof last?.inputTokens === "number" ? last.inputTokens : undefined,
     cachedInputTokens:
       typeof last?.cachedInputTokens === "number" ? last.cachedInputTokens : undefined,
@@ -6607,7 +6613,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   private handleTokenUsageUpdatedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "token_usage_updated" }>,
   ): void {
-    this.latestUsage = toAgentUsage(parsed.tokenUsage);
+    this.latestUsage = toAgentUsage(
+      parsed.tokenUsage,
+      parsed.threadId ?? this.currentThreadId ?? undefined,
+    );
     if (this.latestUsage) {
       this.notifySubscribers({
         type: "usage_updated",

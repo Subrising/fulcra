@@ -1,3 +1,4 @@
+import { recordedClaudeUsage } from "../../usage-recording.js";
 import {
   assertFinalInputCheck,
   commitFinalInputCheck,
@@ -2065,7 +2066,12 @@ class ClaudeContextUsageState {
       if (!message.usage) {
         return undefined;
       }
+      const recorded = recordedClaudeUsage({
+        ...message,
+        modelUsage: modelUsage ?? message.modelUsage,
+      });
       const usage: AgentUsage = {
+        ...(recorded ? { recorded } : {}),
         inputTokens: message.usage.input_tokens,
         cachedInputTokens: message.usage.cache_read_input_tokens,
         outputTokens: message.usage.output_tokens,

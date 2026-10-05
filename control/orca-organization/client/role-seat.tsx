@@ -78,7 +78,12 @@ export function SeatPanel({
     retry: false,
     queryFn: () => taskManage({ taskId: taskId!, command: { action: "list" } }),
   });
-  const sessions = (rows.data?.sessions ?? []).filter((s) => s.task === taskId);
+  const readRefused =
+    rows.isError ||
+    rows.data?.status === "error" ||
+    (!!rows.data && !Array.isArray(rows.data.sessions));
+  const refusal = rows.error instanceof Error ? rows.error.message : rows.data?.message;
+  const sessions = readRefused ? [] : (rows.data?.sessions ?? []).filter((s) => s.task === taskId);
   const chosen = sessions.find((s) => s.id === sessionId) ?? null;
   const short = reason.trim().length < MIN_REASON;
 
@@ -156,13 +161,31 @@ export function SeatPanel({
           </Text>
         )}
         {taskId && rows.isPending && <Text style={text}>Reading this workstream's sessions…</Text>}
-        {taskId && rows.isError && (
+        {taskId && readRefused && (
           <Text accessibilityLiveRegion="polite" style={text}>
             Fulcra could not read this workstream's sessions, so none can be chosen. Nothing was
-            changed.
+            changed.{" "}
+            {refusal
+              ? `Read refusal: ${refusal.slice(0, 1000)}`
+              : "No refusal detail was returned."}
           </Text>
         )}
-        {taskId && rows.data && !sessions.length && (
+        {taskId && readRefused && (
+          <WorkButton
+            theme={props.theme}
+            label="Retry workstream session read"
+            onPress={() => {
+              void rows.refetch();
+            }}
+          />
+        )}
+        {taskId && readRefused && (
+          <Text style={muted}>
+            Use the saved company source. Resolve any management/direct-connection refusal there;
+            this read does not assign a role or change permissions.
+          </Text>
+        )}
+        {taskId && !readRefused && rows.data && !sessions.length && (
           <Text style={text}>This workstream has no saved sessions.</Text>
         )}
         {sessions.map((s) => {

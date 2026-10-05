@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -2476,6 +2477,7 @@ export const ja: TranslationResources = {
   sidebarCallout: {
     dismiss: "閉じる",
   },
+  usagePanel: usagePanelCopy["ja"],
   contextWindow: {
     title: "コンテキストウィンドウ",
     used: "{{percentage}}%使用",

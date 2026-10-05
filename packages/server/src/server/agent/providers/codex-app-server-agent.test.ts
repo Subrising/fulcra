@@ -2349,7 +2349,7 @@ describe("Codex app-server provider", () => {
           outputTokens: 15000,
         },
       }),
-    ).toEqual({
+    ).toMatchObject({
       inputTokens: 30000,
       cachedInputTokens: 5000,
       outputTokens: 15000,
@@ -2369,7 +2369,7 @@ describe("Codex app-server provider", () => {
           outputTokens: 15000,
         },
       }),
-    ).toEqual({
+    ).toMatchObject({
       inputTokens: 30000,
       cachedInputTokens: 5000,
       outputTokens: 15000,
@@ -2387,7 +2387,7 @@ describe("Codex app-server provider", () => {
           outputTokens: 15000,
         },
       }),
-    ).toEqual({
+    ).toMatchObject({
       inputTokens: 30000,
       cachedInputTokens: 5000,
       outputTokens: 15000,
@@ -2407,7 +2407,7 @@ describe("Codex app-server provider", () => {
           outputTokens: 15000,
         },
       }),
-    ).toEqual({
+    ).toMatchObject({
       inputTokens: 30000,
       cachedInputTokens: 5000,
       outputTokens: 15000,

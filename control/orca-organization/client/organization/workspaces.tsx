@@ -11,7 +11,11 @@ import { useOrganization } from "./use-organization";
 import { useNativeCatalog } from "./use-native-catalog";
 import type { OrganizationProject, WorkspaceUmbrella } from "../../shared/workspace-organization";
 import type { OrganizationNavigation } from "../../shared/intake-draft";
-type SurfaceProps = PluginSurfaceProps & { organizationNavigation?: OrganizationNavigation };
+type SurfaceProps = PluginSurfaceProps & {
+  organizationNavigation?: OrganizationNavigation;
+  embedded?: boolean;
+  initialWorkspaceId?: string;
+};
 type Catalog = ReturnType<typeof useNativeCatalog>;
 type Changes = ReturnType<typeof useOrganization>;
 type Run = (action: () => Promise<unknown>) => Promise<void>;
@@ -27,7 +31,11 @@ export function WorkspacesSurface(props: SurfaceProps) {
   });
   const { model, state, nameInput } = useWorkspacesForm();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [configureWorkspaceId, setConfigureWorkspaceId] = useState<string | null>(null);
+  const [configureWorkspaceId, setConfigureWorkspaceId] = useState<string | null>(
+    props.initialWorkspaceId ?? null,
+  );
+  const [receiverSearch, setReceiverSearch] = useState("");
+  const [savedReceiverOpen, setSavedReceiverOpen] = useState(false);
   const c = props.theme.colors;
   const recorded = (roles.data?.primes ?? []).filter(
     (prime) => prime.state === "assigned" && prime.sessionId,
@@ -57,15 +65,22 @@ export function WorkspacesSurface(props: SurfaceProps) {
       `${prime.seat} prime`,
     );
   };
-  return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: c.surface0 }}
-      contentContainerStyle={{ padding: 16, gap: 16 }}
-      keyboardShouldPersistTaps="handled"
-    >
+  const content = (
+    <View style={{ gap: 16, width: "100%", maxWidth: 760 }} testID="company-workspace-setup">
       <SettingsGroup title={query.data?.companyName ?? "Company workspaces"}>
         <Text style={{ color: c.foregroundMuted }}>
           Workspace → projects → features and tasks → conversations and execution contexts.
+        </Text>
+        {props.organizationNavigation && (
+          <WorkButton
+            theme={props.theme}
+            label={`Use this company organisation from ${props.host.label || "this host"}`}
+            onPress={props.organizationNavigation.setDefaultCompanySource}
+          />
+        )}
+        <Text style={{ color: c.foregroundMuted }}>
+          Company source: {props.host.label || "this host"}. Choosing this source changes app
+          navigation, not project or session ownership.
         </Text>
         <WorkButton
           theme={props.theme}
@@ -75,6 +90,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
         {(settingsOpen || query.data?.workspaces.length === 0) && (
           <View style={{ gap: 8 }}>
             <SettingsInput
+              layout="stacked"
               label="Company display name"
               initialValue={state.companyName}
               onChangeText={model.setCompanyName}
@@ -90,6 +106,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
             />
             <SettingsSection title="New workspace">
               <SettingsInput
+                layout="stacked"
                 label="Workspace name"
                 placeholder="AI Game Dev"
                 ref={nameInput}
@@ -112,6 +129,62 @@ export function WorkspacesSurface(props: SurfaceProps) {
                   onPress={() => selectPrime(prime)}
                 />
               ))}
+              <WorkButton
+                theme={props.theme}
+                label={
+                  savedReceiverOpen
+                    ? "Hide saved intake conversations"
+                    : "Choose a saved conversation for human-held intake"
+                }
+                expanded={savedReceiverOpen}
+                onPress={() => setSavedReceiverOpen((open) => !open)}
+              />
+              {savedReceiverOpen && (
+                <View style={{ gap: 8 }}>
+                  <SettingsInput
+                    layout="stacked"
+                    label="Find the existing intake conversation"
+                    initialValue={receiverSearch}
+                    onChangeText={setReceiverSearch}
+                  />
+                  <Text style={{ color: c.foregroundMuted }}>
+                    This records a human-held intake reference. It creates no prime seat, grants no
+                    control and sends no instruction.
+                  </Text>
+                  {catalog.sessions
+                    .filter((session) =>
+                      session.title.toLowerCase().includes(receiverSearch.toLowerCase()),
+                    )
+                    .slice(0, 24)
+                    .map((session) => (
+                      <WorkButton
+                        key={`${session.serverId}:${session.agentId}`}
+                        theme={props.theme}
+                        label={`Retain intake with ${session.title} · ${catalog.hosts.find((host) => host.serverId === session.serverId)?.label ?? "Saved host"}`}
+                        selected={
+                          state.prime?.serverId === session.serverId &&
+                          state.prime.agentId === session.agentId
+                        }
+                        onPress={() =>
+                          model.setPrime(
+                            {
+                              serverId: session.serverId,
+                              agentId: session.agentId,
+                              seat: null,
+                              kind: "human-session",
+                              label: session.title,
+                            },
+                            `${session.title} (human-held)`,
+                          )
+                        }
+                      />
+                    ))}
+                  <Text style={{ color: c.foregroundMuted }}>
+                    Showing up to 24 matching cached catalogue conversations. Search narrows this
+                    list; unavailable host pages remain unknown.
+                  </Text>
+                </View>
+              )}
               {!roles.data?.available && (
                 <Text style={{ color: c.foregroundMuted }}>
                   Prime records are unavailable. Human-owned chats still use an existing project
@@ -129,6 +202,10 @@ export function WorkspacesSurface(props: SurfaceProps) {
                       name: state.name,
                       prime: state.prime,
                     });
+                    const created = result.workspaces.find(
+                      (entry) => !query.data?.workspaces.some((old) => old.id === entry.id),
+                    );
+                    if (created) setConfigureWorkspaceId(created.id);
                     if (result.workspaces.length === 1)
                       props.organizationNavigation?.setDefaultCompanySource();
                     model.clearName();
@@ -246,6 +323,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
             {configureWorkspaceId === workspace.id && (
               <>
                 <SettingsInput
+                  layout="stacked"
                   label={`Find an existing project for ${workspace.name}`}
                   initialValue={state.projectSearch}
                   onChangeText={model.setProjectSearch}
@@ -317,6 +395,16 @@ export function WorkspacesSurface(props: SurfaceProps) {
           </Text>
         )}
       </SettingsGroup>
+    </View>
+  );
+  if (props.embedded) return content;
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: c.surface0 }}
+      contentContainerStyle={{ padding: 16 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      {content}
     </ScrollView>
   );
 }
@@ -377,6 +465,7 @@ function ProjectWork({
       {adding && (
         <>
           <SettingsInput
+            layout="stacked"
             label={`New feature or task for ${project.name}`}
             ref={nameInput}
             initialValue={state.name}

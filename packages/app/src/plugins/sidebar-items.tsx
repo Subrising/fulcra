@@ -9,6 +9,9 @@ import {
 } from "./contribution-host";
 import { type PluginSidebarGroup, type PluginSidebarTarget } from "./sidebar-groups";
 import { PrimeSidebar } from "./prime-sidebar";
+import { useOrganizationIntakePreferences } from "@/stores/organization-intake-preferences-store";
+import { selectCompanyTarget } from "./workspace-organization-model";
+import { globalIntakeRoute } from "./organization-navigation-model";
 import { COMMAND_CENTRE_PLUGIN_ID } from "./command-centre-connection";
 
 function selectTarget(
@@ -30,11 +33,19 @@ export function PluginSidebarItemRow({
   onBeforeNavigate?: () => void;
 }) {
   const pathname = usePathname();
-  const target = selectTarget(group, hostIdFromPathname(pathname));
-  const route = buildPluginSurfaceRoute(target.plugin.serverId, group.pluginId, {
-    kind: "sidebar",
-    id: group.contributionId,
-  });
+  const companyHost = useOrganizationIntakePreferences((state) => state.companyHost);
+  const hydrated = useOrganizationIntakePreferences((state) => state.hydrated);
+  const hydrationError = useOrganizationIntakePreferences((state) => state.hydrationError);
+  const company = group.pluginId === COMMAND_CENTRE_PLUGIN_ID;
+  let target: PluginSidebarTarget | null;
+  if (company) target = hydrationError ? null : selectCompanyTarget(group.targets, companyHost);
+  else target = selectTarget(group, hostIdFromPathname(pathname));
+  const route = target
+    ? buildPluginSurfaceRoute(target.plugin.serverId, group.pluginId, {
+        kind: "sidebar",
+        id: group.contributionId,
+      })
+    : null;
   const isActive = group.targets.some(
     (candidate) =>
       pathname ===
@@ -44,10 +55,41 @@ export function PluginSidebarItemRow({
       }),
   );
   const navigate = useCallback(() => {
+    if (company && !hydrated) return;
+    if (!route || !target || (company && !hydrated)) {
+      onBeforeNavigate?.();
+      if (hydrationError || !companyHost) router.push(globalIntakeRoute());
+      else router.push("/settings");
+      return;
+    }
     rememberPluginContributionHost(group.key, target.plugin.serverId);
     onBeforeNavigate?.();
     router.push(route);
-  }, [group.key, onBeforeNavigate, route, target.plugin.serverId]);
+  }, [group.key, onBeforeNavigate, route, target, company, hydrated, companyHost, hydrationError]);
+  if (!target || (company && !hydrated)) {
+    let label = "Choose company organisation";
+    let accessibilityLabel = "Choose the company organisation for Fulcra";
+    if (hydrationError) {
+      label = "Saved company preference unavailable · Retry";
+      accessibilityLabel = "Retry the saved company organisation preference";
+    } else if (!hydrated) {
+      label = "Reading company organisation…";
+      accessibilityLabel = "Reading saved company organisation";
+    } else if (companyHost) {
+      label = "Company connection unavailable · Review";
+      accessibilityLabel = "Review the saved company connection in Hosts";
+    }
+    return (
+      <SidebarHeaderRow
+        icon={resolvePluginIcon(group.icon)}
+        variant="compact"
+        label={label}
+        accessibilityLabel={accessibilityLabel}
+        onPress={navigate}
+        testID={`plugin-sidebar-${group.pluginId}-${group.contributionId}`}
+      />
+    );
+  }
   return (
     <>
       <SidebarHeaderRow

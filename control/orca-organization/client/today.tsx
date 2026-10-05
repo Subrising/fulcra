@@ -1,6 +1,9 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useQueries, useQuery } from "@tanstack/react-query";
+import * as pluginClient from "@getpaseo/plugin/client";
+import { EMPTY_NATIVE } from "./live-map-model";
+import { freshness } from "./work-map-model";
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { workMapRpc } from "../shared/work-map";
@@ -13,6 +16,8 @@ import { DecisionCard, HeldCard, viaFor } from "./inbox";
 import { Button, Notice, Pill, type Colors, type Theme } from "./organisation-ui";
 import {
   buildToday,
+  humanAttention,
+  retainedTodayNeeds,
   healthWord,
   ago,
   type Today,
@@ -29,6 +34,10 @@ import { LaunchpadSection, useLaunchpad } from "./launchpad";
  * from reads the other tabs already make; the only actions are the Inbox's own (choose, read, reply, release)
  * and opening a session or project. One column on a phone, two on a wide screen.
  */
+// COMPAT(observedOverview): added in the next development build, remove after 2027-02-01 when cached native observations are in the app floor.
+const nativeApi = pluginClient as Partial<Pick<typeof pluginClient, "useObservedAgents">>;
+const useObservedWork = nativeApi.useObservedAgents ?? (() => EMPTY_NATIVE);
+
 export interface TodayNavigate {
   inbox: () => void;
   project: (projectId: string) => void;
@@ -143,7 +152,7 @@ function NeedCard({
   theme: Theme;
   platform: string;
   go: TodayNavigate;
-  openAgent?: (id: string) => void;
+  openAgent?: (id: string, serverId?: string) => void;
   onChanged: () => void;
 }) {
   const c = theme.colors,
@@ -159,10 +168,12 @@ function NeedCard({
           {item.project.toUpperCase()}
         </Text>
       )}
-      <Text style={{ color: c.foreground, fontSize: 16, fontWeight: "600", lineHeight: 22 }}>
-        {stuck ? "Stuck · " : ""}
-        {item.text}
-      </Text>
+      {!(open && a?.kind === "decision") && (
+        <Text style={{ color: c.foreground, fontSize: 16, fontWeight: "600", lineHeight: 22 }}>
+          {stuck ? "Stuck · " : ""}
+          {item.text}
+        </Text>
+      )}
       {item.detail && (
         <Text style={{ color: c.foregroundMuted, lineHeight: 20 }}>{item.detail}</Text>
       )}
@@ -185,7 +196,11 @@ function NeedCard({
           <Link colors={c} label="Open the project" onPress={() => go.project(a.projectId)} />
         )}
         {a?.kind === "session" && openAgent && (
-          <Link colors={c} label="Open the conversation" onPress={() => openAgent(a.agentId)} />
+          <Link
+            colors={c}
+            label="Open the conversation"
+            onPress={() => openAgent(a.agentId, a.serverId)}
+          />
         )}
       </View>
       {open && a?.kind === "decision" && (
@@ -211,10 +226,10 @@ function Row({
   item: TodayItem;
   colors: Colors;
   mark: string;
-  openAgent?: (id: string) => void;
+  openAgent?: (id: string, serverId?: string) => void;
 }) {
   const a = item.action,
-    press = a?.kind === "session" && openAgent ? () => openAgent(a.agentId) : undefined;
+    press = a?.kind === "session" && openAgent ? () => openAgent(a.agentId, a.serverId) : undefined;
   return (
     <Pressable
       testID={`today-row-${item.key}`}
@@ -249,7 +264,7 @@ function ByProject({
   items: TodayItem[];
   colors: Colors;
   mark: string;
-  openAgent?: (id: string) => void;
+  openAgent?: (id: string, serverId?: string) => void;
   limit?: number;
   testID: string;
 }) {
@@ -330,6 +345,7 @@ export function TodaySurface({
   navigation,
   go,
 }: PluginSurfaceProps & { go: TodayNavigate }) {
+  const observedWork = useObservedWork();
   const c = theme.colors,
     compact = layout.compact,
     hostId = host?.id ?? "";
@@ -384,8 +400,12 @@ export function TodaySurface({
       ...poll,
     })),
   });
-  const now = Date.now();
-  const today: Today = buildToday({
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+  const inputs = {
     now,
     since,
     map: map.data,
@@ -394,7 +414,12 @@ export function TodaySurface({
     inbox: inbox.data,
     inboxFailed: inbox.isError,
     recovery: recovery.data?.status === "observed" ? recovery.data.recovery : undefined,
-  });
+  };
+  const today: Today = buildToday(inputs);
+  const personal = humanAttention(inputs);
+  const reportedDone = today.done.filter((item) => item.key.startsWith("shipped-"));
+  const [allPersonal, setAllPersonal] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
   const named = useMemo(
     () =>
       (map.data?.projects ?? []).map((p) => ({
@@ -413,7 +438,11 @@ export function TodaySurface({
     briefs.forEach((b) => void b.refetch());
     void lp.refresh();
   };
-  const openAgent = navigation ? (agentId: string) => navigation.openAgent({ agentId }) : undefined;
+  const openAgent = navigation?.openAgentOnHost
+    ? (agentId: string, serverId?: string) => {
+        if (serverId) navigation.openAgentOnHost!({ serverId, agentId });
+      }
+    : undefined;
   const reading = map.isPending || fleets.some((f) => f.isPending && f.fetchStatus !== "idle");
   const running = today.projects.flatMap((p) => p.running),
     waiting = today.projects.flatMap((p) => p.waiting.slice(0, 2));
@@ -421,11 +450,20 @@ export function TodaySurface({
     ? "Here's the last day"
     : `Since you last looked, ${ago(today.since, now)}`;
   // M4: "Needs you" is one list: decisions, stuck work and the pull requests and issues waiting on you (unsnoozed).
-  const needsYou = today.needs.length + today.blocked.length + lp.pad.youTotal;
+  const retainedNeeds = retainedTodayNeeds(today.needs, personal.actions);
+  const retainedBlocked = retainedTodayNeeds(today.blocked, personal.actions);
+  const retainedActivityCount = retainedNeeds.length + retainedBlocked.length + lp.pad.youTotal;
   const counts = [
-    [needsYou, "need you"],
-    [running.length, "working"],
-    [today.done.length, "finished"],
+    [personal.actions.length, "confirmed actions"],
+    [
+      observedWork.entries.filter(
+        (entry) =>
+          entry.activity === "working" &&
+          freshness(entry.observedAt ?? undefined, now, false, false) === "live",
+      ).length,
+      "observed model turns",
+    ],
+    [reportedDone.length, "reported completions"],
   ] as const;
 
   const done = (
@@ -462,18 +500,18 @@ export function TodaySurface({
     <View style={{ gap: 14 }}>
       <Section
         testID="today-needs"
-        title="Needs you"
-        count={needsYou}
+        title="Activity and retained updates"
+        count={retainedActivityCount}
         colors={c}
         empty={
-          needsYou
+          retainedActivityCount
             ? null
             : reading || lp.reading
-              ? "Checking what needs you…"
-              : "Nothing needs you right now."
+              ? "Reading activity and retained updates…"
+              : "No additional activity or retained update in the available observations."
         }
       >
-        {today.blocked.map((i) => (
+        {retainedBlocked.map((i) => (
           <NeedCard
             key={i.key}
             item={i}
@@ -485,7 +523,7 @@ export function TodaySurface({
             onChanged={refresh}
           />
         ))}
-        {today.needs.map((i) => (
+        {retainedNeeds.map((i) => (
           <NeedCard
             key={i.key}
             item={i}
@@ -501,7 +539,7 @@ export function TodaySurface({
       <LaunchpadSection theme={theme} lp={lp} agentOf={agentOf} openAgent={openAgent} />
     </View>
   );
-  const now_ = (
+  const progress = (
     <Section
       testID="today-running"
       title="Running now and next"
@@ -588,29 +626,116 @@ export function TodaySurface({
           ))}
         </View>
       </View>
+      <Text style={{ color: c.foregroundMuted }}>
+        Source: {host?.label ?? "Selected company organisation"}. Today includes runtime
+        permissions, role needs and retained updates; Inbox counts inbox records only.
+        {inbox.data
+          ? ` ${inbox.data.counts.held} held messages are retained for review, not counted as urgent solely because they are held.`
+          : " Inbox coverage is unavailable."}
+      </Text>
       {today.gaps.map((g) => (
         <Notice key={g} colors={c} tone="warning" testID="today-gap">
           {g}
         </Notice>
       ))}
-      {/* Needs you leads: it is the part that asks something of you, and on a phone it must not sit below a long list. */}
-      {compact ? (
-        <>
+      <Section
+        testID="today-personal-actions"
+        title="Needs you"
+        count={personal.actions.length}
+        colors={c}
+        empty={
+          personal.actions.length
+            ? null
+            : "No confirmed unresolved human action in the available observations."
+        }
+      >
+        {(allPersonal ? personal.actions : personal.actions.slice(0, 3)).map((item) => (
+          <NeedCard
+            key={item.key}
+            item={item}
+            stuck={false}
+            theme={theme}
+            platform={layout.platform}
+            go={go}
+            openAgent={openAgent}
+            onChanged={refresh}
+          />
+        ))}
+        {personal.actions.length > 3 && (
+          <Link
+            colors={c}
+            label={allPersonal ? "Show fewer actions" : "Show all confirmed actions"}
+            onPress={() => setAllPersonal((value) => !value)}
+          />
+        )}
+        {personal.unknown && (
+          <Text style={{ color: c.foregroundMuted }}>
+            Some observations are unavailable or incomplete. Additional actions may be unknown.
+          </Text>
+        )}
+      </Section>
+      <Section
+        testID="today-project-progress"
+        title="Project progress and blockers"
+        colors={c}
+        count={today.projects.length}
+      >
+        {[...today.projects]
+          .sort(
+            (a, b) =>
+              Number(b.story.written && b.story.health === "blocked") -
+                Number(a.story.written && a.story.health === "blocked") ||
+              a.name.localeCompare(b.name),
+          )
+          .slice(0, 5)
+          .map((project) => (
+            <View key={project.projectId} style={{ gap: 4 }}>
+              <Text style={{ color: c.foreground }}>
+                {project.name} · {project.lead}
+              </Text>
+              <Text style={{ color: c.foregroundMuted }}>
+                {project.story.written ? project.story.headline : "No owner update published yet."}
+                {project.blocked.length ? ` · ${project.blocked.length} recorded blockers` : ""}
+              </Text>
+              <Link
+                colors={c}
+                label={`Open ${project.name} work`}
+                onPress={() => go.project(project.projectId)}
+              />
+            </View>
+          ))}
+        {today.projects.length > 5 && (
+          <Link colors={c} label="All projects and work" onPress={() => setShowActivity(true)} />
+        )}
+      </Section>
+      <Section
+        testID="today-reported-completions"
+        title="Reported completions since your last visit"
+        colors={c}
+        count={reportedDone.length}
+        empty={
+          reportedDone.length ? null : "No completion report recorded in this observed period."
+        }
+      >
+        {reportedDone.slice(0, 3).map((item) => (
+          <Row key={item.key} item={item} colors={c} mark="✓" openAgent={openAgent} />
+        ))}
+      </Section>
+      <Button
+        theme={theme}
+        label={showActivity ? "Hide all activity and history" : "All activity and history"}
+        onPress={() => setShowActivity((value) => !value)}
+      />
+      {showActivity && (
+        <View style={{ gap: 20 }}>
+          <Text style={{ color: c.foregroundMuted }}>
+            Retained runtime status and reports are source observations; idle or closed
+            conversations do not establish task acceptance.
+          </Text>
           {needs}
           {done}
-          {now_}
+          {progress}
           {stories}
-        </>
-      ) : (
-        <View style={{ flexDirection: "row", gap: 24, alignItems: "flex-start" }}>
-          <View style={{ flex: 1, minWidth: 0, gap: 24 }}>
-            {needs}
-            {done}
-          </View>
-          <View style={{ flex: 1, minWidth: 0, gap: 24 }}>
-            {now_}
-            {stories}
-          </View>
         </View>
       )}
     </ScrollView>

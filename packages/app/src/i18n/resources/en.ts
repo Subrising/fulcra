@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 export const en = {
   plugins: {
     commandCentreRelay: {
@@ -2505,6 +2506,7 @@ export const en = {
   sidebarCallout: {
     dismiss: "Dismiss",
   },
+  usagePanel: usagePanelCopy["en"],
   contextWindow: {
     title: "Context window",
     used: "{{percentage}}% used",

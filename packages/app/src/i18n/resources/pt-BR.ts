@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -2489,6 +2490,7 @@ export const ptBR: TranslationResources = {
   sidebarCallout: {
     dismiss: "Dispensar",
   },
+  usagePanel: usagePanelCopy["pt-BR"],
   contextWindow: {
     title: "Janela de contexto",
     used: "{{percentage}}% usado",
