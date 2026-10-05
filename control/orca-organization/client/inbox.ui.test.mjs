@@ -16,7 +16,8 @@ globalThis.document = dom.window.document;
 Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
 globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-const { render, screen, fireEvent, waitFor, cleanup } = await import("@testing-library/react");
+const { render, screen, fireEvent, waitFor, cleanup, act, within } =
+  await import("@testing-library/react");
 const h = React.createElement;
 const theme = {
   colors: {
@@ -664,3 +665,95 @@ test("history expansion exposes additional confirmed decisions once while held r
     "history disclosure does not read/release retained bodies",
   );
 });
+
+for (const decisionCount of [0, 1]) {
+  test(`a thrown refetch keeps the cached ${decisionCount}-decision observation visibly last-known and recovers through Retry`, async () => {
+    const listed = decisionCount ? items : [];
+    const cached = {
+      ...inbox,
+      observedAt: new Date().toISOString(),
+      items: listed,
+      counts: {
+        ...inbox.counts,
+        now: decisionCount ? 2 : 0,
+        decisions: decisionCount,
+        held: decisionCount,
+        digests: decisionCount,
+        fyi: decisionCount,
+        total: listed.length,
+      },
+    };
+    let failed = false;
+    setHandler(
+      handler({
+        "organization.inbox": () => {
+          if (failed) throw new Error("Current inbox read refused");
+          return { ...cached, observedAt: new Date().toISOString() };
+        },
+      }),
+    );
+    mount();
+    const currentHeadline = decisionCount
+      ? "1 open decision is addressed to you"
+      : "No confirmed unresolved decision is addressed to you in this observation.";
+    await screen.findByText(currentHeadline);
+    const client = clients.at(-1);
+    const cachedRecords = client.getQueryData(["orca-organization", "inbox"]).items;
+    failed = true;
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["orca-organization", "inbox"], exact: true });
+    });
+    await screen.findByText(/The latest inbox read failed/);
+    assert.match(screen.getByTestId("inbox-headline").textContent, /coverage is unknown/);
+    assert.equal(
+      screen.queryByText(currentHeadline),
+      null,
+      "the current failure replaces the confirmed-only headline",
+    );
+    assert(screen.getByText(/Current inbox read refused/));
+    assert(screen.getByText(/other personal actions cannot be ruled out/));
+    assert(screen.getByTestId("inbox-retry"));
+    const personal = within(screen.getByTestId("inbox-personal-decisions"));
+    assert.equal(personal.queryAllByTestId(`inbox-item-decision-${DEC}`).length, decisionCount);
+    if (decisionCount)
+      assert(personal.getByText("Last-known open decisions; current status could not be checked."));
+    assert.equal(
+      personal.queryByText(items[1].title),
+      null,
+      "held updates do not become obligations after a read failure",
+    );
+    assert.equal(
+      client.getQueryData(["orca-organization", "inbox"]).items,
+      cachedRecords,
+      "the failed query retains the exact cached records",
+    );
+    await showAllActivity();
+    if (decisionCount) {
+      assert(screen.getByText("Held messages · 1"));
+      assert(screen.getByText("Digest · 1"));
+    } else {
+      assert.equal(screen.queryByText("Held messages · 1"), null);
+      assert.equal(screen.queryByText("Digest · 1"), null);
+    }
+    assert.equal(
+      screen.queryAllByTestId(`inbox-item-decision-${DEC}`).length,
+      decisionCount,
+      "last-known decisions have one home",
+    );
+    assert(
+      calls.every((call) => call.name === "organization.inbox"),
+      "read failure/disclosure never writes or reads held bodies",
+    );
+    failed = false;
+    fireEvent.click(screen.getByTestId("inbox-retry"));
+    await screen.findByText(currentHeadline);
+    assert.equal(screen.queryByTestId("inbox-retry"), null);
+    assert.equal(screen.queryByText(/other personal actions cannot be ruled out/), null);
+    assert.equal(
+      screen.queryByText("Last-known open decisions; current status could not be checked."),
+      null,
+    );
+    assert.equal(screen.queryAllByTestId(`inbox-item-decision-${DEC}`).length, decisionCount);
+    assert(calls.every((call) => call.name === "organization.inbox"));
+  });
+}

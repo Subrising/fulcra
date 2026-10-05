@@ -49,6 +49,15 @@ export function inboxHeadline(
     .map(([k]) => SECTION_NAMES[k] ?? k);
   const total = d.counts.total;
   const urgent = d.items.filter((i) => i.source !== "held" && i.urgency === "now").length;
+  if (readError !== undefined && readError !== null) {
+    return {
+      text: `The latest inbox read failed. Showing the last inbox that could be read: ${d.partial ? "at least " : ""}${total} in all. Current coverage is unknown.`,
+      failed: true,
+      problem: plain(readError),
+      missing,
+      canRetry: true,
+    };
+  }
   if (d.stale) {
     const never = total === 0 && d.items.length === 0;
     return {
@@ -94,7 +103,7 @@ function plain(e: unknown): string {
 }
 
 /** Controller inbox only emits open human packets as now/today; closed packets are FYI. Held age is not a personal obligation. */
-export function humanInboxItems(data: InboxData | undefined, now?: number) {
+export function humanInboxItems(data: InboxData | undefined, now?: number, readError?: unknown) {
   const listed = data?.items ?? [];
   const packets = listed.filter(
     (item) =>
@@ -118,7 +127,7 @@ export function humanInboxItems(data: InboxData | undefined, now?: number) {
   return {
     confirmed,
     other: listed.filter((item) => !refs.has(item.ref)),
-    unknown: !data || data.stale || data.partial || !fresh,
+    unknown: !data || data.stale || data.partial || !fresh || readError != null,
     retained: listed.filter((item) => item.source === "held"),
     total: data?.counts.total ?? 0,
   };

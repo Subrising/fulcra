@@ -403,3 +403,60 @@ test("nothing readable still gives a page that says so, not a blank", async () =
   await screen.findByText(/Your projects could not be read just now/);
   assert(screen.getByText("Today"));
 });
+
+for (const observation of ["missing", "stale"]) {
+  test(`zero confirmed actions still shows unknown coverage with a ${observation} permission observation`, async () => {
+    setHandler(
+      reads({
+        "organization.inbox": () => ({
+          ...inbox,
+          observedAt: iso(0),
+          items: [],
+          counts: { ...inbox.counts, now: 0, decisions: 0, total: 0 },
+        }),
+        "organization.fleet": () => ({
+          ...fleet,
+          observedAt: iso(0),
+          total: 1,
+          nodes: [
+            node(8, "running", iso(0), {
+              pending: 1,
+              serverId: "Book",
+              observedAt: observation === "missing" ? null : iso(60000),
+            }),
+          ],
+        }),
+      }),
+    );
+    mount();
+    await screen.findByText("Fulcra Command Centre · Has a project lead");
+    await waitFor(() =>
+      assert.equal(
+        clients.at(-1).getQueryState(["orca-fleet", `today-${clients.length}`, "project", P])
+          .status,
+        "success",
+      ),
+    );
+    const personal = within(screen.getByTestId("today-personal-actions"));
+    await waitFor(() =>
+      assert(
+        personal.getByText(
+          "Some observations are unavailable or incomplete. Additional actions may be unknown.",
+        ),
+      ),
+    );
+    assert(
+      personal.getByText("No confirmed unresolved human action in the available observations."),
+    );
+    assert(screen.getByText("0 confirmed actions"));
+    assert.equal(
+      personal.queryByRole("button"),
+      null,
+      "unknown permission records are not human action buttons",
+    );
+    assert(
+      calls.every((call) => !call.name.includes("choose") && !call.name.includes("release")),
+      "coverage rendering does not write",
+    );
+  });
+}
