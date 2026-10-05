@@ -1779,7 +1779,14 @@ export class AgentManager {
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
   private readonly agents = new Map<string, LiveManagedAgent>();
   // FIX-8 W3: permission requests a trusted plugin answered before they were surfaced, per agent.
-  private readonly automaticPermissionIds = new Map<string, Set<string>>();
+  private readonly automaticPermissions = new Map<
+    string,
+    Map<string, { current: () => boolean; completed: boolean }>
+  >();
+  private readonly automaticResolutionOrigins = new WeakMap<
+    object,
+    { current: () => boolean; completed: boolean }
+  >();
   private readonly timelineStore = new InMemoryAgentTimelineStore();
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
@@ -6097,6 +6104,7 @@ export class AgentManager {
     if (agent.unsubscribeSession) {
       agent.unsubscribeSession();
       agent.unsubscribeSession = null;
+      this.automaticPermissions.delete(agent.id);
     }
     this.runs.cancelWaiters(agent, (turnId) => ({
       type: "turn_canceled",
@@ -6256,13 +6264,26 @@ export class AgentManager {
     }
     this.registerEvidenceProvider(agent);
     const agentId = agent.id;
-    const unsubscribe = agent.session.subscribe((event: AgentStreamEvent) => {
+    const session = agent.session,
+      instanceId = agent.instanceId;
+    const unsubscribe = session.subscribe((event: AgentStreamEvent) => {
+      if (
+        event.type === "permission_resolved" &&
+        (this.agents.get(agentId) !== agent ||
+          agent.session !== session ||
+          agent.instanceId !== instanceId)
+      )
+        return;
       this.enqueueSessionEvent(agentId, event);
     });
     agent.unsubscribeSession = unsubscribe;
   }
 
   private enqueueSessionEvent(agentId: string, event: AgentStreamEvent): void {
+    if (event.type === "permission_resolved") {
+      const automatic = this.automaticPermissions.get(agentId)?.get(event.requestId);
+      if (automatic) this.automaticResolutionOrigins.set(event, automatic);
+    }
     this.logger.trace(
       {
         agentId,
@@ -6691,9 +6712,11 @@ export class AgentManager {
     event: AgentStreamEvent,
     options?: HandleStreamEventOptions,
   ): Promise<boolean> {
+    const automaticOrigin = this.automaticResolutionOrigins.get(event);
     event = limitAgentStreamEventContent(event);
     const identified = attachManagedTurnIdentity(agent, event, options?.fromHistory === true);
     event = identified.event;
+    if (automaticOrigin) this.automaticResolutionOrigins.set(event, automaticOrigin);
     const eventTurnId = identified.turnId;
     const isForegroundEvent = agent.activeForegroundTurnId === eventTurnId;
     this.traceHandleStreamEventStart(agent, event, eventTurnId, isForegroundEvent);
@@ -7166,9 +7189,10 @@ export class AgentManager {
       !this.mcpRefreshes.has(agent.id);
     if (agent.internal || !this.trustedPlugins.automaticPermission(agent, event.request))
       return false;
-    let ids = this.automaticPermissionIds.get(agent.id);
-    if (!ids) this.automaticPermissionIds.set(agent.id, (ids = new Set()));
-    ids.add(event.request.id);
+    let pending = this.automaticPermissions.get(agent.id);
+    if (!pending) this.automaticPermissions.set(agent.id, (pending = new Map()));
+    const automatic = { current, completed: false };
+    pending.set(event.request.id, automatic);
     flags.shouldDispatchEvent = false;
     flags.shouldNotifyWaiters = false;
     void Promise.resolve()
@@ -7176,25 +7200,72 @@ export class AgentManager {
         // Revalidate after the async scheduling gap, with no await between the
         // final decision and dispatch to the captured provider session.
         if (!current()) {
-          ids?.delete(event.request.id);
+          this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
           return;
         }
         if (!this.trustedPlugins.automaticPermission(agent, event.request)) {
-          ids?.delete(event.request.id);
+          this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
           this.onStreamPermissionRequested(agent, event);
           return;
         }
-        return session.respondToPermission(event.request.id, { behavior: "allow" });
+        return Promise.resolve(
+          session.respondToPermission(event.request.id, { behavior: "allow" }),
+        ).then(() => {
+          this.completeAutomaticPermission(agent, event.request.id, automatic, false);
+          return undefined;
+        });
       })
       .catch((error: unknown) => {
-        ids?.delete(event.request.id);
+        const owns = this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
         this.logger.warn(
           { err: error, agentId: agent.id },
           "Automatic permission answer failed; surfacing it",
         );
-        if (current()) this.onStreamPermissionRequested(agent, event);
+        if (owns && current()) this.onStreamPermissionRequested(agent, event);
       });
     return true;
+  }
+
+  private forgetAutomaticPermission(
+    agentId: string,
+    requestId: string,
+    automatic: { current: () => boolean; completed: boolean },
+  ): boolean {
+    const pending = this.automaticPermissions.get(agentId);
+    if (pending?.get(requestId) !== automatic) return false;
+    pending.delete(requestId);
+    if (pending.size === 0) this.automaticPermissions.delete(agentId);
+    return true;
+  }
+
+  private completeAutomaticPermission(
+    agent: ActiveManagedAgent,
+    requestId: string,
+    automatic: { current: () => boolean; completed: boolean },
+    nativeResolution: boolean,
+  ): void {
+    const active = this.automaticPermissions.get(agent.id)?.get(requestId);
+    if (active && active !== automatic) return;
+    if (!automatic.current()) {
+      // A late matching event still needs its original scope, even after the reply promise settled.
+      if (nativeResolution) this.forgetAutomaticPermission(agent.id, requestId, automatic);
+      return;
+    }
+    if (!nativeResolution) {
+      try {
+        if (agent.session.getPendingPermissions().some((request) => request.id === requestId))
+          return;
+      } catch {
+        return;
+      }
+      if (automatic.completed) return;
+    }
+    automatic.completed = true;
+    // Keep the completed token until a late native event, preserving automatic event suppression.
+    if (nativeResolution) this.forgetAutomaticPermission(agent.id, requestId, automatic);
+    agent.pendingPermissions.delete(requestId);
+    this.refreshSessionPersistence(agent);
+    this.emitState(agent);
   }
 
   private onStreamPermissionRequested(
@@ -7217,7 +7288,11 @@ export class AgentManager {
     flags: StreamEventFlags;
   }): void {
     const { agent, event, options, flags } = params;
-    if (this.automaticPermissionIds.get(agent.id)?.delete(event.requestId)) {
+    const automatic =
+      this.automaticResolutionOrigins.get(event) ??
+      this.automaticPermissions.get(agent.id)?.get(event.requestId);
+    if (automatic) {
+      this.completeAutomaticPermission(agent, event.requestId, automatic, true);
       flags.shouldDispatchEvent = false;
       flags.shouldNotifyWaiters = false;
       return;
@@ -7256,6 +7331,8 @@ export class AgentManager {
       new Set(pending.map((request) => request.id)),
     );
     for (const request of pending) {
+      const automatic = this.automaticPermissions.get(agent.id)?.get(request.id);
+      if (automatic && !automatic.completed && automatic.current()) continue;
       if (!agent.pendingPermissions.has(request.id))
         this.onStreamPermissionRequested(agent, {
           type: "permission_requested",
