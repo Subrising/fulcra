@@ -251,7 +251,7 @@ export function InboxSurface({
     const timer = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(timer);
   }, []);
-  const attention = humanInboxItems(d, now);
+  const attention = humanInboxItems(d, now, query.error);
   const pad = layout.compact ? 12 : 24;
   const head = inboxHeadline(d, query.isPending, query.error);
   const renderItem = (item: InboxItem) => (
@@ -357,7 +357,7 @@ export function InboxSurface({
         <Notice colors={c} tone="warning">
           {head.problem ? `${head.problem} ` : ""}
           {head.missing.length ? `Could not be read: ${head.missing.join(", ")}. ` : ""}
-          {d?.stale && d.items.length ? `Last read ${ago(d.observedAt)}. ` : ""}
+          {d && (d.stale || query.isError) ? `Last read ${ago(d.observedAt)}. ` : ""}
           {head.canRetry && (
             <Text
               testID="inbox-retry"
@@ -373,6 +373,11 @@ export function InboxSurface({
         </Notice>
       )}
       <View style={{ gap: 10 }} testID="inbox-personal-decisions">
+        {query.isError && attention.confirmed.length > 0 && (
+          <Text style={{ color: c.foregroundMuted }}>
+            Last-known open decisions; current status could not be checked.
+          </Text>
+        )}
         {(allActivity ? attention.confirmed : attention.confirmed.slice(0, 3)).map(renderItem)}
         {!allActivity && attention.confirmed.length > 3 && (
           <Text style={{ color: c.foregroundMuted }}>

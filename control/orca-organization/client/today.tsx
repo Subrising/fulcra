@@ -643,12 +643,12 @@ export function TodaySurface({
         title="Needs you"
         count={personal.actions.length}
         colors={c}
-        empty={
-          personal.actions.length
-            ? null
-            : "No confirmed unresolved human action in the available observations."
-        }
       >
+        {personal.actions.length === 0 && (
+          <Text style={{ color: c.foregroundMuted, lineHeight: 20 }}>
+            No confirmed unresolved human action in the available observations.
+          </Text>
+        )}
         {(allPersonal ? personal.actions : personal.actions.slice(0, 3)).map((item) => (
           <NeedCard
             key={item.key}
