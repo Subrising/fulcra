@@ -14265,3 +14265,263 @@ test("pooled usage enumeration excludes unqualified runtimes before reading cred
   expect(read).toHaveBeenCalledTimes(2);
   expect(deniedRead).not.toHaveBeenCalled();
 });
+
+async function delayedAutomaticFailureFixture(emitResolution = true) {
+  const workdir = mkdtempSync(join(tmpdir(), "f15-auto-completion-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const entered = deferred<void>(),
+    released = deferred<void>(),
+    completed = deferred<void>();
+  const request = {
+    id: "perm-f15",
+    provider: "opencode",
+    kind: "tool" as const,
+    name: "mcp__docs__search",
+  };
+  let admitted = true,
+    unknown = false,
+    keepNative = false;
+  const responses: unknown[] = [];
+  const seen: AgentStreamEvent[] = [];
+  const published: number[] = [];
+  class DelayedSession extends TestAgentSession {
+    nativePending = new Map<string, typeof request>();
+    override getPendingPermissions() {
+      if (unknown) throw Error("fixture snapshot unavailable");
+      return [...this.nativePending.values()];
+    }
+    override async respondToPermission(id: string, response: unknown) {
+      responses.push([id, response]);
+      entered.resolve();
+      await released.promise;
+      if (!keepNative) this.nativePending.delete(id);
+      if (emitResolution)
+        this.pushEvent({
+          type: "permission_resolved",
+          provider: this.provider,
+          requestId: id,
+          resolution: { behavior: "allow" },
+        });
+      completed.resolve();
+    }
+    override describePersistence() {
+      return {
+        provider: this.provider,
+        sessionId: this.id,
+        metadata: { pending: [...this.nativePending.keys()] },
+      };
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new DelayedSession(config);
+    }
+  })("opencode");
+  const manager = new AgentManager({ clients: { opencode: client }, registry: storage, logger });
+  manager.trustedPlugins.initializeKnownAgents([]);
+  manager.trustedPlugins.registerV11("f15-trusted", true, (server) => {
+    server.permissions.automatic(() => (admitted ? "allow" : "ask"));
+  });
+  const agent = await manager.createAgent({ provider: "opencode", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const session = agent.session as DelayedSession;
+  // Start without initial native pending state, then issue the real held request.
+  session.nativePending.clear();
+  manager.subscribe(
+    (event) => {
+      if (event.type === "agent_stream") seen.push(event.event);
+      if (event.type === "agent_state") published.push(event.agent.pendingPermissions.size);
+    },
+    { replayState: false },
+  );
+  return {
+    manager,
+    agent,
+    session,
+    request,
+    responses,
+    seen,
+    published,
+    storage,
+    entered,
+    released,
+    completed,
+    setAdmitted: (value: boolean) => {
+      admitted = value;
+    },
+    setUnknown: (value: boolean) => {
+      unknown = value;
+    },
+    setKeepNative: (value: boolean) => {
+      keepNative = value;
+    },
+    replace() {
+      const live = (manager as unknown as { agents: Map<string, ManagedAgent> }).agents.get(
+        agent.id,
+      )!;
+      const replacement = new DelayedSession({ provider: "opencode", cwd: workdir });
+      const replacementResponses: unknown[] = [];
+      replacement.respondToPermission = async (id, response) => {
+        replacementResponses.push([id, response]);
+      };
+      replacement.nativePending.set(request.id, { ...request, name: "replacement-request" });
+      live.session = replacement;
+      live.instanceId = randomUUID();
+      live.runtimeInfo = { provider: "opencode", sessionId: replacement.id };
+      live.pendingPermissions = new Map([
+        [request.id, { ...request, name: "replacement-request" }],
+      ]);
+      live.persistence = replacement.describePersistence();
+      return { replacement, replacementResponses };
+    },
+    ask() {
+      session.nativePending.set(request.id, request);
+      session.pushEvent({ type: "permission_requested", provider: "opencode", request });
+    },
+    fail() {
+      session.pushEvent({
+        type: "turn_failed",
+        provider: "opencode",
+        error: "fixture native failed",
+      });
+    },
+    async close() {
+      released.resolve();
+      await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    },
+  };
+}
+
+test.each([true, false])(
+  "F15 automatic response failure overlap clears projection with resolution event=%s",
+  async (emit) => {
+    const f = await delayedAutomaticFailureFixture(emit);
+    try {
+      f.ask();
+      await f.entered.promise;
+      f.fail();
+      await f.manager.flush();
+      f.released.resolve();
+      await f.completed.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await f.manager.flush();
+      expect(f.session.getPendingPermissions()).toEqual([]);
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(0);
+      expect(f.responses).toEqual([[f.request.id, { behavior: "allow" }]]);
+      expect(f.seen.filter((event) => event.type === "permission_resolved")).toEqual([]);
+      expect(f.manager.getAgent(f.agent.id)?.persistence?.metadata?.pending).toEqual([]);
+      expect((await f.storage.get(f.agent.id))?.persistence?.metadata?.pending).toEqual([]);
+      expect(f.published.at(-1)).toBe(0);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each([true, false])(
+  "F15 held automatic completion cannot clear replacement with native event=%s",
+  async (emit) => {
+    const f = await delayedAutomaticFailureFixture(emit);
+    try {
+      f.ask();
+      await f.entered.promise;
+      f.fail();
+      await f.manager.flush();
+      const replaced = f.replace();
+      f.released.resolve();
+      await f.completed.promise;
+      await new Promise<void>((r) => setImmediate(r));
+      await f.manager.flush();
+      // A late old-session event after completion must remain unable to mutate the new projection.
+      f.session.pushEvent({
+        type: "permission_resolved",
+        provider: "opencode",
+        requestId: f.request.id,
+        resolution: { behavior: "allow" },
+      });
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.get(f.request.id)?.name).toBe(
+        "replacement-request",
+      );
+      expect(replaced.replacement.getPendingPermissions()).toHaveLength(1);
+      expect(replaced.replacementResponses).toEqual([]);
+      expect(f.responses).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each(["unknown", "still-pending"] as const)(
+  "F15 successful automatic reply does not invent clearance when snapshot is %s",
+  async (state) => {
+    const f = await delayedAutomaticFailureFixture(false);
+    try {
+      f.setAdmitted(false);
+      f.ask();
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(1);
+      f.setAdmitted(true);
+      f.ask();
+      await f.entered.promise;
+      f.setUnknown(state === "unknown");
+      f.setKeepNative(state === "still-pending");
+      f.fail();
+      await f.manager.flush();
+      f.released.resolve();
+      await f.completed.promise;
+      await new Promise<void>((r) => setImmediate(r));
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(1);
+      expect(f.responses).toHaveLength(1);
+      f.setUnknown(false);
+      f.session.nativePending.delete(f.request.id);
+      f.session.pushEvent({
+        type: "permission_resolved",
+        provider: "opencode",
+        requestId: f.request.id,
+        resolution: { behavior: "allow" },
+      });
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(0);
+      expect(f.responses).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test("F15 native-session change invalidates held completion even when SDK object is reused", async () => {
+  const f = await delayedAutomaticFailureFixture(false);
+  try {
+    f.ask();
+    await f.entered.promise;
+    f.fail();
+    await f.manager.flush();
+    const live = (f.manager as unknown as { agents: Map<string, ManagedAgent> }).agents.get(
+      f.agent.id,
+    )!;
+    live.runtimeInfo = { provider: "opencode", sessionId: "different-native-session" };
+    live.pendingPermissions.set(f.request.id, { ...f.request, name: "new-native-request" });
+    f.released.resolve();
+    await f.completed.promise;
+    await new Promise<void>((r) => setImmediate(r));
+    await f.manager.flush();
+    f.session.pushEvent({
+      type: "permission_resolved",
+      provider: "opencode",
+      requestId: f.request.id,
+      resolution: { behavior: "allow" },
+    });
+    await f.manager.flush();
+    expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.get(f.request.id)?.name).toBe(
+      "new-native-request",
+    );
+    expect(f.responses).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
