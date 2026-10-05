@@ -132,6 +132,9 @@ jobs:
       - name: Typecheck all packages
         run: npm run typecheck
 
+      - name: Verify Fulcra public-site source and publication boundary
+        run: npx vitest run packages/website/src/fulcra-public-site.test.ts --bail=1
+
       - name: Install website test browsers
         run: npx playwright install --with-deps chromium webkit
 

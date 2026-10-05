@@ -54,6 +54,28 @@ Nix Update Hash needs `PASEO_BOT_APP_ID` and `PASEO_BOT_APP_PRIVATE_KEY` to
 commit refreshed hashes back to the branch. Without them it reports how to
 refresh by hand instead of failing on a token error.
 
+## Fulcra product website
+
+The dedicated Fulcra static entry publishes to the existing `Subrising/fulcra`
+repository's GitHub Pages project URL, `https://subrising.github.io/fulcra/`.
+`deploy-fulcra-website.yml` runs only in that repository on `main`; it exports
+only the dedicated entry, not the inherited Paseo website or app. It needs no
+Cloudflare token, domain, dependency install or app build. Keep the upstream
+Cloudflare configuration unchanged.
+
+Enable Pages with the GitHub Actions build source in this repository before the
+first deploy. Merge the normally checked and reviewed website source, then let
+its main push trigger the workflow (or dispatch it on main). The GitHub Pages
+environment protects the deployment and records its actual URL. A configured
+URL or exported artifact is not proof of publication; check the deployed page
+and its product-image requests after the deployment succeeds.
+
+The export refuses pending, one-host, mismatched or changed capture input.
+Both Macs must have genuine public-safe installed-build captures with private
+provenance retained by the capture owner. Preview exports have `noindex` and
+never enter the deploy workflow. `npm run build:fulcra` in the website workspace
+produces the dedicated artifact; its output directory must not already exist.
+
 ## npm version
 
 The root `package.json` overrides `markdown-it`. npm 10, which ships with Node

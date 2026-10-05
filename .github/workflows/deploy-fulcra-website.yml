@@ -1,0 +1,47 @@
+name: Deploy Fulcra Product Website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/website/public/fulcra/**"
+      - "packages/website/scripts/prepare-fulcra-site.mjs"
+      - ".github/workflows/deploy-fulcra-website.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fulcra-product-pages
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.repository == 'Subrising/fulcra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # This dedicated static entry needs no dependency install or upstream build.
+      # Pending, missing or changed public-safe capture bytes fail publication.
+      - run: node packages/website/scripts/prepare-fulcra-site.mjs --out _fulcra-pages
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _fulcra-pages
+
+  deploy:
+    needs: package
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy dedicated Fulcra artifact
+        id: deployment
+        uses: actions/deploy-pages@v4
