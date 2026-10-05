@@ -1,3 +1,4 @@
+import { PermissionAttentionError } from "./permission-attention-error.js";
 import { fingerprintLimitResumeBinding } from "../limit-resume/binding.js";
 import { registerOwnerArtifactContent } from "../owner-report-read.js";
 import {
@@ -4511,6 +4512,9 @@ export class AgentManager {
         type: "turn_failed",
         provider: agent.provider,
         error: errorMsg,
+        ...(error instanceof PermissionAttentionError
+          ? { code: error.code, diagnostic: error.diagnostic }
+          : {}),
       });
       this.finalizeForegroundTurn(agent);
       this.runs.settleForegroundRun(agentId, pendingRun.token);
@@ -7049,7 +7053,7 @@ export class AgentManager {
       this.formatTurnFailedMessage(event),
       options,
     );
-    this.resolvePendingPermissionsForAgent(agent, event.provider, options, "Turn failed");
+    this.reconcilePermissionsAfterFailure(agent, event.provider, options);
     if (!isForegroundEvent && !agent.activeForegroundTurnId) {
       this.emitState(agent);
     }
@@ -7228,13 +7232,49 @@ export class AgentManager {
     this.emitState(agent);
   }
 
+  private reconcilePermissionsAfterFailure(
+    agent: ActiveManagedAgent,
+    provider: AgentProvider,
+    options: { fromHistory?: boolean } | undefined,
+  ): void {
+    let pending: AgentPermissionRequest[];
+    try {
+      pending = agent.session.getPendingPermissions();
+    } catch {
+      // Unknown provider state cannot authorize fake resolutions or hide an outstanding approval.
+      this.logger.warn(
+        { agentId: agent.id },
+        "Provider pending permissions unavailable after failed turn; retaining projection",
+      );
+      return;
+    }
+    this.resolvePendingPermissionsForAgent(
+      agent,
+      provider,
+      options,
+      "Turn failed",
+      new Set(pending.map((request) => request.id)),
+    );
+    for (const request of pending) {
+      if (!agent.pendingPermissions.has(request.id))
+        this.onStreamPermissionRequested(agent, {
+          type: "permission_requested",
+          provider,
+          request,
+        });
+    }
+    this.refreshSessionPersistence(agent);
+  }
+
   private resolvePendingPermissionsForAgent(
     agent: ActiveManagedAgent,
     provider: AgentProvider,
     options: { fromHistory?: boolean } | undefined,
     message: string,
+    retain?: ReadonlySet<string>,
   ): void {
     for (const [requestId] of agent.pendingPermissions) {
+      if (retain?.has(requestId)) continue;
       agent.pendingPermissions.delete(requestId);
       if (!options?.fromHistory) {
         this.dispatchStream(agent.id, {

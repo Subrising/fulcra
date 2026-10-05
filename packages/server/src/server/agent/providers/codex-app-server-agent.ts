@@ -1,3 +1,4 @@
+import { PermissionAttentionError } from "../permission-attention-error.js";
 import {
   captureNativeEvidence,
   assertNativeEvidence,
@@ -4591,8 +4592,9 @@ export class CodexAppServerAgentSession implements AgentSession {
             throw new CodexQuotaError("session_changed");
           if (pendingStart.cancelRequested)
             throw new Error("Codex turn start was interrupted before reaching Codex");
-          if (this.getPendingPermissions().length > 0)
-            throw new Error("Codex turn start requires permission attention");
+          const pendingPermissions = this.getPendingPermissions();
+          if (pendingPermissions.length > 0)
+            throw new PermissionAttentionError("Codex", pendingPermissions);
           if (typeof admission !== "function") {
             if (
               !admission ||
