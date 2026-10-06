@@ -345,7 +345,11 @@ test.each(["unavailable", "read_failed", "invalid_reply"] as const)(
     try {
       await expect(
         f.session.startTurn("work", { [CODEX_TURN_ADMISSION]: admission }),
-      ).rejects.toMatchObject({ code: "admission_refused" });
+      ).rejects.toMatchObject({
+        code: "admission_refused",
+        readFailure: code,
+        message: expect.stringMatching(/^The Codex turn wasn't sent: /),
+      });
       expect(failures).toEqual([
         {
           turn: {
@@ -379,7 +383,7 @@ test("P5: callback throw or attempted allow cannot turn a quota failure into dis
         f.session.startTurn("work", {
           [CODEX_TURN_ADMISSION]: capturedAdmission({ onQuotaReadFailure: callback }),
         }),
-      ).rejects.toMatchObject({ code: "admission_refused" });
+      ).rejects.toMatchObject({ code: "admission_refused", readFailure: "read_failed" });
       expect(f.submissions()).toEqual([]);
     } finally {
       await f.session.close();
