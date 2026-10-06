@@ -2171,7 +2171,8 @@ export const ja: TranslationResources = {
     },
     architectureMap: {
       mainOnly: "コード構造はワークスペースのメインビューです。+ タブメニューから開いてください。",
-      entryUnavailable: "保存済みのコードマップを追加するか、コードグラフや変更解析をサポートするホストに接続してください。",
+      entryUnavailable:
+        "保存済みのコードマップを追加するか、コードグラフや変更解析をサポートするホストに接続してください。",
       label: "アーキテクチャマップ",
       subtitle: "プロジェクトのアーキテクチャ",
       tooltip: "プロジェクトのアーキテクチャマップを表示",

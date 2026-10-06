@@ -71,10 +71,17 @@ describe("architecture map discovery", () => {
   });
 });
 
-
 it("code entry matches the panel’s saved-IR or literal native capability paths, never a team graph", () => {
-  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: false, canGraph: false })).toBe(false);
-  expect(canOpenCodeArchitecture({ hasMaps: true, canGenerate: false, canGraph: false })).toBe(true);
-  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: true, canGraph: false })).toBe(true);
-  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: false, canGraph: true })).toBe(true);
+  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: false, canGraph: false })).toBe(
+    false,
+  );
+  expect(canOpenCodeArchitecture({ hasMaps: true, canGenerate: false, canGraph: false })).toBe(
+    true,
+  );
+  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: true, canGraph: false })).toBe(
+    true,
+  );
+  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: false, canGraph: true })).toBe(
+    true,
+  );
 });

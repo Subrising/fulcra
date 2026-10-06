@@ -80,9 +80,17 @@ test("every earlier tab id survives the regroup, and the new ones follow the sam
   assert.equal(new Set(ids).size, ids.length, "no id is used twice");
 });
 
-
 test("task-first primary navigation preserves every extra route behind More", () => {
-  assert.deepEqual(primaryPillars().map((p) => p.label), ["Home", "Projects", "Team workflow", "Changes & impact", "Settings"]);
-  assert.deepEqual(extraPillars().map((p) => p.key), ["inbox", "environments", "sessions", "trackers"]);
-  assert.deepEqual(new Set([...primaryPillars(), ...extraPillars()].map((p) => p.key)), new Set(readyPillars().map((p) => p.key)));
+  assert.deepEqual(
+    primaryPillars().map((p) => p.label),
+    ["Home", "Projects", "Team workflow", "Changes & impact", "Settings"],
+  );
+  assert.deepEqual(
+    extraPillars().map((p) => p.key),
+    ["inbox", "environments", "sessions", "trackers"],
+  );
+  assert.deepEqual(
+    new Set([...primaryPillars(), ...extraPillars()].map((p) => p.key)),
+    new Set(readyPillars().map((p) => p.key)),
+  );
 });

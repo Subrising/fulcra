@@ -133,11 +133,26 @@ it("explicit commits ignore a cached current-branch PR", () => {
   expect(result.current.error).toBeNull();
 });
 
-
 it("Code architecture navigation carries the exact selected host, workspace and native PR without fallback", async () => {
   const { codeArchitectureNavigation } = await import("./change-view-request");
-  expect(codeArchitectureNavigation({ serverId: "book", workspaceId: "same-workspace", pullRequest: 42 })).toEqual({ key: "book\0same-workspace", target: { kind: "architecture_map" }, selection: { pullRequest: 42 } });
-  expect(codeArchitectureNavigation({ serverId: "mini", workspaceId: "same-workspace" }).key).toBe("mini\0same-workspace");
-  expect(codeArchitectureNavigation({ serverId: "book", workspaceId: "same-workspace" }).selection).toBeUndefined();
-  expect(() => codeArchitectureNavigation({ serverId: "book", workspaceId: "same-workspace", pullRequest: 0 })).toThrow("Choose one pull request");
+  expect(
+    codeArchitectureNavigation({
+      serverId: "book",
+      workspaceId: "same-workspace",
+      pullRequest: 42,
+    }),
+  ).toEqual({
+    key: "book\0same-workspace",
+    target: { kind: "architecture_map" },
+    selection: { pullRequest: 42 },
+  });
+  expect(codeArchitectureNavigation({ serverId: "mini", workspaceId: "same-workspace" }).key).toBe(
+    "mini\0same-workspace",
+  );
+  expect(
+    codeArchitectureNavigation({ serverId: "book", workspaceId: "same-workspace" }).selection,
+  ).toBeUndefined();
+  expect(() =>
+    codeArchitectureNavigation({ serverId: "book", workspaceId: "same-workspace", pullRequest: 0 }),
+  ).toThrow("Choose one pull request");
 });

@@ -461,9 +461,9 @@ for (const observation of ["missing", "stale"]) {
   });
 }
 
-
 test("Home exposes Inbox directly without discarding retained activity", async () => {
-  setHandler(reads()); mount();
+  setHandler(reads());
+  mount();
   fireEvent.click(await screen.findByRole("button", { name: "Open Inbox" }));
   assert.deepEqual(went, ["inbox"]);
   assert(screen.getByRole("button", { name: "All activity and history" }));

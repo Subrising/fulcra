@@ -2154,7 +2154,8 @@ export const ko: TranslationResources = {
     },
     architectureMap: {
       mainOnly: "코드 아키텍처는 기본 작업 공간 보기입니다. + 탭 메뉴에서 여세요.",
-      entryUnavailable: "저장된 코드 맵을 추가하거나 코드 그래프 또는 변경 분석을 지원하는 호스트에 연결하세요.",
+      entryUnavailable:
+        "저장된 코드 맵을 추가하거나 코드 그래프 또는 변경 분석을 지원하는 호스트에 연결하세요.",
       label: "아키텍처 맵",
       subtitle: "프로젝트 아키텍처",
       tooltip: "프로젝트 아키텍처 맵 보기",

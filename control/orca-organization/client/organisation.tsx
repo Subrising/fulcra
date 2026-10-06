@@ -69,7 +69,11 @@ function ProjectRow({
 }
 
 export function OrganisationSurface(
-  props: PluginSurfaceProps & { initialProject?: string | null; initialMode?: "tree" | "map"; onTask?: (id: string) => void },
+  props: PluginSurfaceProps & {
+    initialProject?: string | null;
+    initialMode?: "tree" | "map";
+    onTask?: (id: string) => void;
+  },
 ) {
   const { theme, layout } = props,
     c = theme.colors,
@@ -147,7 +151,9 @@ export function OrganisationSurface(
         selected={view === "map"}
         onPress={() => setView("map")}
       >
-        <Text style={{ color: c.foreground, fontWeight: view === "map" ? "700" : "500" }}>Team workflow</Text>
+        <Text style={{ color: c.foreground, fontWeight: view === "map" ? "700" : "500" }}>
+          Team workflow
+        </Text>
       </Button>
     </View>
   );
@@ -155,7 +161,10 @@ export function OrganisationSurface(
     return (
       <View style={{ flex: 1, backgroundColor: c.surface0 }}>
         <View style={{ paddingHorizontal: 24, paddingTop: 12 }}>{toggle}</View>
-        <Text style={{ paddingHorizontal: 24, paddingVertical: 12, color: c.foregroundMuted }}>Team workflow shows project leadership and working sessions. Code architecture and change impact are separate views in the project’s workspace.</Text>
+        <Text style={{ paddingHorizontal: 24, paddingVertical: 12, color: c.foregroundMuted }}>
+          Team workflow shows project leadership and working sessions. Code architecture and change
+          impact are separate views in the project’s workspace.
+        </Text>
         <WorkMapSurface {...props} fleet={fleet.data} remits={remits.data} />
       </View>
     );

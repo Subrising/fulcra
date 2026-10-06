@@ -98,7 +98,9 @@ export function OrganizationSurface(
     [focus, setFocus] = useState<string | null>(null);
   const [view, setView] = useState<OrganisationView>(props.initialView ?? "workmap"),
     [settings, setSettings] = useState<SettingsView>("accounts");
-  const [moreOpen, setMoreOpen] = useState(() => !PRIMARY_PILLAR_KEYS.includes(props.initialPillar ?? "today"));
+  const [moreOpen, setMoreOpen] = useState(
+    () => !PRIMARY_PILLAR_KEYS.includes(props.initialPillar ?? "today"),
+  );
   // J0-8: the sheet remembers the pillar it was opened from, so Back returns there (Sessions, not Organisation).
   const [sheetFrom, setSheetFrom] = useState<PillarKey | null>(null),
     sheet = sheetFrom !== null;
@@ -232,8 +234,28 @@ export function OrganizationSurface(
         )}
       </View>
       <View style={{ paddingHorizontal: 12, gap: 10, paddingBottom: 10 }}>
-        <WorkButton theme={props.theme} label={moreOpen ? "Hide more views" : "More views"} onPress={() => setMoreOpen((open) => !open)} />
-        {moreOpen && <View style={subStrip}>{extraPillars().map((p) => tab(p.key, p.label, pillar === p.key, () => { setPillar(p.key); setSheetFrom(null); }, p.legacyKey, 15))}</View>}
+        <WorkButton
+          theme={props.theme}
+          label={moreOpen ? "Hide more views" : "More views"}
+          onPress={() => setMoreOpen((open) => !open)}
+        />
+        {moreOpen && (
+          <View style={subStrip}>
+            {extraPillars().map((p) =>
+              tab(
+                p.key,
+                p.label,
+                pillar === p.key,
+                () => {
+                  setPillar(p.key);
+                  setSheetFrom(null);
+                },
+                p.legacyKey,
+                15,
+              ),
+            )}
+          </View>
+        )}
       </View>
       {pillar === "organisation" && (
         <View style={subStrip}>
@@ -276,9 +298,13 @@ export function OrganizationSurface(
       )}
       {pillar === "settings" && (
         <View style={subStrip}>
-          {SETTINGS_VIEWS.filter((v) => v.key === "accounts").map((v) => tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15))}
+          {SETTINGS_VIEWS.filter((v) => v.key === "accounts").map((v) =>
+            tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15),
+          )}
           <Details theme={props.theme} label="Advanced settings">
-            {SETTINGS_VIEWS.filter((v) => v.key !== "accounts").map((v) => tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15))}
+            {SETTINGS_VIEWS.filter((v) => v.key !== "accounts").map((v) =>
+              tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15),
+            )}
           </Details>
         </View>
       )}

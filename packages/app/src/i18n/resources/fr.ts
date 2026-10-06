@@ -2201,8 +2201,10 @@ export const fr: TranslationResources = {
         "Créez une demande de fusion pour cette copie de travail afin d’afficher ses détails ici.",
     },
     architectureMap: {
-      mainOnly: "L’architecture du code est une vue principale. Ouvrez-la dans le menu des onglets +.",
-      entryUnavailable: "Ajoutez une carte de code enregistrée ou connectez un hôte prenant en charge les graphes ou l’analyse des changements.",
+      mainOnly:
+        "L’architecture du code est une vue principale. Ouvrez-la dans le menu des onglets +.",
+      entryUnavailable:
+        "Ajoutez une carte de code enregistrée ou connectez un hôte prenant en charge les graphes ou l’analyse des changements.",
       label: "Carte d'architecture",
       subtitle: "Architecture du projet",
       tooltip: "Afficher la carte d'architecture du projet",

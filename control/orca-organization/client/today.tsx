@@ -598,7 +598,9 @@ export function TodaySurface({
           >
             Home
           </Text>
-          <Button theme={theme} testID="today-open-inbox" label="Open Inbox" onPress={go.inbox}><Text style={{ color: c.foreground, fontWeight: "600" }}>Inbox</Text></Button>
+          <Button theme={theme} testID="today-open-inbox" label="Open Inbox" onPress={go.inbox}>
+            <Text style={{ color: c.foreground, fontWeight: "600" }}>Inbox</Text>
+          </Button>
           <Button theme={theme} testID="today-refresh" label="Refresh" onPress={refresh}>
             <Text style={{ color: c.foreground, fontWeight: "600" }}>Refresh</Text>
           </Button>
@@ -628,8 +630,8 @@ export function TodaySurface({
         </View>
       </View>
       <Text style={{ color: c.foregroundMuted }}>
-        Source: {host?.label ?? "Selected company organisation"}. Home also includes
-        permission requests, role needs and saved updates; Inbox counts Inbox items only.
+        Source: {host?.label ?? "Selected company organisation"}. Home also includes permission
+        requests, role needs and saved updates; Inbox counts Inbox items only.
         {inbox.data
           ? ` ${inbox.data.counts.held} held messages are kept for review; they are not counted as urgent just because they are held.`
           : " The Inbox could not be read."}
