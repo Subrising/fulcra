@@ -4134,7 +4134,8 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     const preparedClient = this.client;
-    const params: Record<string, unknown> = { threadId: this.currentThreadId };
+    const preparedThread = this.currentThreadId;
+    const params: Record<string, unknown> = { threadId: preparedThread };
     const developerInstructions = this.composeDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
@@ -4151,7 +4152,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       const response = await this.client.request("thread/resume", params);
       this.rememberResolvedThreadConfig(response);
-      this.markPublicBaselineSubmitted(preparedClient, params);
+      this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);
     } catch (error) {
       const threadId = this.currentThreadId;
       const message = error instanceof Error ? error.message : String(error);
@@ -4165,7 +4166,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         }
         const response = await this.client.request("thread/resume", params);
         this.rememberResolvedThreadConfig(response);
-        this.markPublicBaselineSubmitted(preparedClient, params);
+        this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);
         this.logger.info({ threadId }, "Unarchived Codex thread to restore active Paseo agent");
         return;
       }
@@ -4755,7 +4756,12 @@ export class CodexAppServerAgentSession implements AgentSession {
       } else {
         await this.client.request("turn/start", turnStart.params, TURN_START_TIMEOUT_MS);
       }
-      this.markPublicBaselineSubmitted(preparedClient, turnStart.params, Boolean(queued));
+      this.markPublicBaselineSubmitted(
+        preparedClient,
+        turnStart.params,
+        preparedThread,
+        Boolean(queued),
+      );
       return { turnId };
     } catch (error) {
       this.pendingForegroundTurnIdentification?.resolve(null);
@@ -5687,7 +5693,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.cachedRuntimeInfo = null;
     }
     this.currentThreadId = threadId;
-    this.markPublicBaselineSubmitted(preparedClient, params);
+    this.markPublicBaselineSubmitted(preparedClient, params, threadId);
   }
 
   private composeDeveloperInstructions(): string | undefined {
@@ -5715,6 +5721,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private markPublicBaselineSubmitted(
     client: CodexAppServerClient,
     params: Record<string, unknown>,
+    expectedThread: string | null,
     queued = false,
   ): void {
     if (queued) return;
@@ -5722,6 +5729,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       !this.publicBaselineTransport ||
       this.closed ||
       client !== this.client ||
+      !expectedThread ||
+      this.currentThreadId !== expectedThread ||
+      (params.threadId !== undefined && params.threadId !== expectedThread) ||
       typeof params.developerInstructions !== "string"
     )
       return;
@@ -5742,14 +5752,14 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.publicBaselineTransport = {
       receipt: { ...composed.receipt, state: "SUBMITTED" },
       client,
-      threadId: this.currentThreadId,
+      threadId: expectedThread,
     };
     this.cachedRuntimeInfo = null;
     if (this.currentThreadId)
       this.emitEvent({
         type: "host_public_baseline_transport",
         provider: CODEX_PROVIDER,
-        nativeSessionId: this.currentThreadId,
+        nativeSessionId: expectedThread,
         receipt: structuredClone(this.publicBaselineTransport.receipt),
       });
   }

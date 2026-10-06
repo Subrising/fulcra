@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { CodexAppServerAgentClient } from "./codex-app-server-agent.js";
-import { createFakeCodexAppServer } from "./codex/test-utils/fake-app-server.js";
+import { createFakeCodexAppServer, waitForNextEvent } from "./codex/test-utils/fake-app-server.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
 import {
   composeHostPublicBaseline,
@@ -22,7 +22,7 @@ function baseline(): HostPublicBaseline {
     digest: sha(JSON.stringify(files.map(({ id, sha256 }) => ({ id, sha256 })))),
   };
 }
-function fixture(loaded = false) {
+function fixture(loaded = false, overrides: Record<string, (params: unknown) => unknown> = {}) {
   const app = createFakeCodexAppServer({
     "thread/start": () => ({
       thread: { id: "new-thread", turns: [] },
@@ -35,6 +35,7 @@ function fixture(loaded = false) {
       model: "gpt-6.1-sol",
     }),
     "thread/loaded/list": () => ({ data: loaded ? ["old-thread"] : [] }),
+    ...overrides,
   });
   const client = new CodexAppServerAgentClient(createTestLogger());
   Reflect.set(client, "goalsEnabledPromise", Promise.resolve(false));
@@ -236,6 +237,231 @@ test("ordinary turn composition retains baseline, while native queued preparatio
       state: "SUBMITTED",
     });
   } finally {
+    await session.close();
+  }
+});
+
+function heldReply() {
+  let release = (_value: unknown) => {},
+    reject = (_error: Error) => {},
+    entered = () => {};
+  const started = new Promise<void>((r) => {
+    entered = r;
+  });
+  const response = new Promise<unknown>((r, j) => {
+    release = r;
+    reject = j;
+  });
+  return {
+    started,
+    release,
+    reject,
+    handle: () => {
+      entered();
+      return response;
+    },
+  };
+}
+async function rewindSameClient(
+  f: ReturnType<typeof fixture>,
+  session: Awaited<ReturnType<CodexAppServerAgentClient["resumeSession"]>>,
+) {
+  const seen = waitForNextEvent(session, "timeline");
+  f.app.child.stdout.write(
+    JSON.stringify({
+      method: "item/started",
+      params: {
+        threadId: "old-thread",
+        item: {
+          type: "userMessage",
+          id: "f20-user",
+          content: [{ type: "text", text: "fixture saved context" }],
+        },
+      },
+    }) + "\n",
+  );
+  await seen;
+  await session.revertConversation!({ messageId: "f20-user" });
+  expect(session.id).toBe("forked-thread");
+}
+function resolvedAccount(session: Awaited<ReturnType<CodexAppServerAgentClient["resumeSession"]>>) {
+  Reflect.set(session, "quotaModelProvider", "openai");
+  vi.spyOn(session, "getQuota").mockResolvedValue({
+    provider: "codex",
+    sessionId: "old-thread",
+    model: "gpt-6.1-sol",
+    serviceTier: null,
+    accountScope: "fixture-account",
+    observedAt: new Date().toISOString(),
+    ordinaryUsageAllowed: true,
+    limits: [],
+  });
+}
+test.each(["thread/resume", "turn/start"] as const)(
+  "F20 late %s acknowledgment cannot mark the public-rewound thread SUBMITTED",
+  async (method) => {
+    const reply = heldReply();
+    let loaded = true;
+    const f = fixture(true, {
+      "thread/loaded/list": () => ({ data: loaded ? ["old-thread"] : [] }),
+      [method]: reply.handle,
+    });
+    const session = await f.client.resumeSession(
+      { sessionId: "old-thread", metadata: { cwd: tmpdir(), model: "gpt-6.1-sol" } },
+      f.config,
+      f.launch,
+    );
+    const events: Array<{ nativeSessionId: string; state: string }> = [];
+    const off = session.subscribe((event) => {
+      if (event.type === "host_public_baseline_transport")
+        events.push({ nativeSessionId: event.nativeSessionId, state: event.receipt.state });
+    });
+    try {
+      const { CODEX_TURN_ADMISSION } = await import("../agent-sdk-types.js");
+      if (method === "thread/resume") loaded = false;
+      else resolvedAccount(session);
+      const pending =
+        method === "thread/resume"
+          ? Reflect.get(session, "ensureThreadLoaded").call(session)
+          : session.startTurn("fixture continuation", { [CODEX_TURN_ADMISSION]: () => true });
+      await reply.started;
+      loaded = true;
+      // Use the actual public rewind and real fake-native fork/rollback/setThreadId boundary.
+      await rewindSameClient(f, session);
+      reply.release(
+        method === "thread/resume"
+          ? {
+              thread: { id: "old-thread", turns: [] },
+              modelProvider: "openai",
+              model: "gpt-6.1-sol",
+            }
+          : {},
+      );
+      await pending;
+      expect(session.id).toBe("forked-thread");
+      expect((await session.getRuntimeInfo()).extra?.hostPublicBaselineTransport).toBeUndefined();
+      expect(events).toEqual([]);
+      expect(f.app.requests().filter((r) => r.method === method)).toHaveLength(1);
+      f.app.assertNoErrors();
+    } finally {
+      off();
+      reply.release({});
+      await session.close();
+    }
+  },
+);
+test.each(["current", "failed", "client-replaced", "closed"] as const)(
+  "F20 held resume %s preserves completion guard without replay",
+  async (outcome) => {
+    const reply = heldReply();
+    let loaded = true;
+    const f = fixture(true, {
+      "thread/loaded/list": () => ({ data: loaded ? ["old-thread"] : [] }),
+      "thread/resume": reply.handle,
+    });
+    const session = await f.client.resumeSession(
+      { sessionId: "old-thread", metadata: { cwd: tmpdir(), model: "gpt-6.1-sol" } },
+      f.config,
+      f.launch,
+    );
+    const events: string[] = [];
+    const off = session.subscribe((event) => {
+      if (event.type === "host_public_baseline_transport") events.push(event.nativeSessionId);
+    });
+    const originalClient = Reflect.get(session, "client");
+    try {
+      loaded = false;
+      const pending = Reflect.get(session, "ensureThreadLoaded").call(session) as Promise<void>;
+      void pending.catch(() => {});
+      await reply.started;
+      if (outcome === "client-replaced") Reflect.set(session, "client", {});
+      if (outcome === "closed") await session.close();
+      if (outcome === "failed") reply.reject(Error("fixture failed acknowledgment"));
+      else
+        reply.release({
+          thread: { id: "old-thread", turns: [] },
+          modelProvider: "openai",
+          model: "gpt-6.1-sol",
+        });
+      await pending.catch(() => {});
+      const readback = Reflect.get(session, "baselineReadback").call(session);
+      if (outcome === "current") {
+        expect(readback.hostPublicBaselineTransport?.state).toBe("SUBMITTED");
+        expect(events).toEqual(["old-thread"]);
+      } else {
+        expect(readback.hostPublicBaselineTransport?.state).not.toBe("SUBMITTED");
+        expect(events).toEqual([]);
+      }
+      expect(f.app.requests().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+    } finally {
+      off();
+      Reflect.set(session, "client", originalClient);
+      reply.release({});
+      await session.close();
+    }
+  },
+);
+test("F20 thread/start uses the correlated returned thread ID, not a guessed request thread", async () => {
+  const f = fixture(false, {
+    "thread/start": () => ({
+      thread: { id: "returned-thread", turns: [] },
+      modelProvider: "openai",
+      model: "gpt-6.1-sol",
+    }),
+  });
+  const session = await f.client.createSession(f.config, f.launch);
+  const ids: string[] = [];
+  const off = session.subscribe((event) => {
+    if (event.type === "host_public_baseline_transport") ids.push(event.nativeSessionId);
+  });
+  try {
+    const info = await session.getRuntimeInfo();
+    expect(info.sessionId).toBe("returned-thread");
+    expect(info.extra?.hostPublicBaselineTransport).toMatchObject({ state: "SUBMITTED" });
+    expect(ids).toEqual(["returned-thread"]);
+    expect(f.app.requests().find((r) => r.method === "thread/start")?.params).not.toHaveProperty(
+      "threadId",
+    );
+  } finally {
+    off();
+    await session.close();
+  }
+});
+
+test("F20 timed-out real resume request never upgrades or replays its receipt", async () => {
+  const reply = heldReply();
+  let loaded = true;
+  const f = fixture(true, {
+    "thread/loaded/list": () => ({ data: loaded ? ["old-thread"] : [] }),
+    "thread/resume": reply.handle,
+  });
+  const session = await f.client.resumeSession(
+    { sessionId: "old-thread", metadata: { cwd: tmpdir(), model: "gpt-6.1-sol" } },
+    f.config,
+    f.launch,
+  );
+  const ids: string[] = [];
+  const off = session.subscribe((event) => {
+    if (event.type === "host_public_baseline_transport") ids.push(event.nativeSessionId);
+  });
+  try {
+    vi.useFakeTimers();
+    loaded = false;
+    const pending = Reflect.get(session, "ensureThreadLoaded").call(session) as Promise<void>;
+    void pending.catch(() => {});
+    await reply.started;
+    // Exercise the actual app-server timeout at its original default; only fixture time advances.
+    await vi.advanceTimersByTimeAsync(14 * 24 * 60 * 60 * 1000 + 1);
+    await expect(pending).rejects.toThrow(/timed out/i);
+    expect(
+      Reflect.get(session, "baselineReadback").call(session).hostPublicBaselineTransport?.state,
+    ).not.toBe("SUBMITTED");
+    expect(ids).toEqual([]);
+    expect(f.app.requests().filter((r) => r.method === "thread/resume")).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+    off();
+    reply.release({});
     await session.close();
   }
 });
