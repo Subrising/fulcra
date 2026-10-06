@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { configuredControllerPluginId } from "@getpaseo/protocol/bundled-controller";
 import { readPagedPluginCatalog } from "./plugin-catalog-paging.js";
 import {
   PluginCatalogPageRequestSchema,
@@ -2104,6 +2106,8 @@ export class DaemonClient {
     timeout?: number;
     select: (msg: SessionOutboundMessage) => T | null;
     options?: { skipQueue?: boolean };
+    /** An admitted observation must dispatch on this connection, never enter the reconnect queue. */
+    dispatchGuard?: () => void;
   }): Promise<T> {
     const wire = this.owned.prepareRequest(params.message);
     const timeout = params.timeout ?? DEFAULT_SESSION_RPC_TIMEOUT_MS;
@@ -2132,7 +2136,12 @@ export class DaemonClient {
     );
 
     try {
-      await this.sendSessionMessageOrThrow(wire.message);
+      if (params.dispatchGuard) {
+        params.dispatchGuard();
+        this.sendSessionMessageStrict(wire.message);
+      } else {
+        await this.sendSessionMessageOrThrow(wire.message);
+      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       cancel(err);
@@ -6061,7 +6070,47 @@ export class DaemonClient {
     accounts?: boolean;
     /** update-7c: the on-demand button; the host still probes an account at most once a minute. */
     refresh?: boolean;
+    /** Read only existing native/cache observations on supporting hosts; never probes. */
+    observationOnly?: boolean;
   }): Promise<ProviderUsageListPayload> {
+    if (options?.observationOnly === true) {
+      if (options.refresh === true)
+        throw new Error("Observation-only usage cannot request a generating refresh");
+      const requestId = this.createRequestId(options.requestId);
+      const message = SessionInboundMessageSchema.parse({
+        type: "provider.usage.list.request",
+        requestId,
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        ...(options.accounts ? { accounts: true } : {}),
+        observationOnly: true,
+      });
+      const host = this.lastServerInfoMessage;
+      const connection = this.connectionState;
+      const assertCurrent = () => {
+        if (
+          this.connectionState !== connection ||
+          connection.status !== "connected" ||
+          this.lastServerInfoMessage !== host ||
+          host?.features?.pooledAccountUsageObservation !== true
+        )
+          throw new Error("Update or reconnect the host for observation-only usage");
+      };
+      assertCurrent();
+      const payload = await this.sendRequest({
+        requestId,
+        message,
+        options: { skipQueue: true },
+        dispatchGuard: assertCurrent,
+        select: (reply) =>
+          reply.type === "provider.usage.list.response" && reply.payload.requestId === requestId
+            ? reply.payload
+            : null,
+      });
+      assertCurrent();
+      if (payload.observationOnly !== true)
+        throw new Error("Host did not return an observation-only usage reply");
+      return payload;
+    }
     return this.sendNamespacedCorrelatedSessionRequest({
       requestId: options?.requestId,
       message: {
@@ -6856,10 +6905,11 @@ export class DaemonClient {
   /** One explicit owner scratch attempt. A confirmation selects purpose; only the host authenticates it. */
   async simulateRadiusScratch(
     input: RadiusScratchInput | (RadiusScratchInput & { confirmDestructive: true }),
-    options: { signal: AbortSignal; checkOriginalLifetime: () => void },
+    options: { signal: AbortSignal; checkOriginalLifetime: () => void; pluginId?: string },
   ): Promise<RadiusScratchOutput> {
     const host = this.lastServerInfoMessage;
     const { signal, checkOriginalLifetime } = options;
+    const pluginId = configuredControllerPluginId(options.pluginId);
     const check = () => {
       checkOriginalLifetime();
       if (
@@ -6887,7 +6937,7 @@ export class DaemonClient {
       message: {
         type: "plugin.rpc.invoke.request",
         requestId,
-        pluginId: "orca-organization-next",
+        pluginId,
         method: destructive
           ? "organization.radius.scratch.prune-simulate"
           : "organization.radius.scratch.simulate",

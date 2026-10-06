@@ -1,4 +1,14 @@
 import {
+  baselineForSession,
+  withoutPublicBaselineTransport,
+  cloneHostPublicBaseline,
+  composeHostPublicBaseline,
+  type HostPublicBaseline,
+  type PublicBaselineTransport,
+} from "../host-public-baseline.js";
+import { PermissionAttentionError } from "../permission-attention-error.js";
+import { recordedCodexUsage } from "../usage-recording.js";
+import {
   captureNativeEvidence,
   assertNativeEvidence,
   publishNativeEvidence,
@@ -84,6 +94,7 @@ import { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
 import { composeSystemPromptParts } from "../system-prompt.js";
@@ -218,6 +229,10 @@ export class CodexMissingRolloutError extends Error {
 }
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;
+// Turn admission re-reads quota when account notifications or a transient read failure
+// race the check. Each read is bounded by its own timeout, so the total wait is bounded.
+const CODEX_ADMISSION_MAX_QUOTA_READS = 3;
+const CODEX_ADMISSION_RETRY_DELAY_MS = 150;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const CODEX_PROVIDER = "codex" as const;
 // Codex treats most app-server client names as the model-request originator.
@@ -338,6 +353,7 @@ interface CodexAppServerClientLike {
 }
 
 interface CodexAppServerAgentDeps {
+  publicBaseline?: HostPublicBaseline;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   customProvider?: {
     id: string;
@@ -1067,7 +1083,10 @@ function filterCodexThreadsByCwd(
   );
 }
 
-export function toAgentUsage(tokenUsage: unknown): AgentUsage | undefined {
+export function toAgentUsage(
+  tokenUsage: unknown,
+  runtimeSessionId?: string,
+): AgentUsage | undefined {
   const usage = toObjectRecord(tokenUsage);
   if (!usage) return undefined;
   const last = toObjectRecord(usage.last);
@@ -1076,7 +1095,9 @@ export function toAgentUsage(tokenUsage: unknown): AgentUsage | undefined {
     usage.modelContextWindow,
   );
   const contextWindowUsedTokens = firstPositiveFiniteNumber(last?.total_tokens, last?.totalTokens);
+  const recorded = recordedCodexUsage(tokenUsage, runtimeSessionId);
   return {
+    ...(recorded ? { recorded } : {}),
     inputTokens: typeof last?.inputTokens === "number" ? last.inputTokens : undefined,
     cachedInputTokens:
       typeof last?.cachedInputTokens === "number" ? last.cachedInputTokens : undefined,
@@ -3450,6 +3471,14 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private readonly logger: Logger;
   private readonly config: AgentSessionConfig;
+  private readonly publicBaseline: HostPublicBaseline | undefined;
+  private publicBaselineTransport:
+    | {
+        receipt: PublicBaselineTransport;
+        client: CodexAppServerClient | null;
+        threadId: string | null;
+      }
+    | undefined;
   private readonly asyncQuestions: CodexAsyncQuestions;
   private readonly codexHome: string;
   private currentMode: string;
@@ -3475,6 +3504,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   private quotaRevision = 0;
   private accountNotificationEpoch = 0n;
   private quotaModelProvider: string | null = null;
+  /** Account from the last fresh quota read; undefined until one succeeds. */
+  private lastQuotaAccountScope: string | null | undefined = undefined;
+  private resumeAccountUncertain = false;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
@@ -3580,7 +3612,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.hasWorkflowModeOverride = config.modeId !== undefined;
     this.currentMode = config.modeId ?? DEFAULT_CODEX_MODE_ID;
     this.providerOptions = CodexProviderOptionsSchema.parse(config.providerOptions ?? {});
-    this.config = config;
+    this.config = structuredClone(config);
+    this.publicBaseline = baselineForSession(
+      deps.publicBaseline,
+      config.internal,
+      initialResumePurpose,
+    );
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
     this.codexHome = deps.codexHome ?? resolveCodexHomeDir(process.env);
     this.config.thinkingOptionId = normalizeCodexThinkingOptionId(this.config.thinkingOptionId);
@@ -4096,11 +4133,10 @@ export class CodexAppServerAgentSession implements AgentSession {
       // Never resume/unarchive or submit developer instructions as queued preparation.
       return;
     }
-    const params: Record<string, unknown> = { threadId: this.currentThreadId };
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const preparedClient = this.client;
+    const preparedThread = this.currentThreadId;
+    const params: Record<string, unknown> = { threadId: preparedThread };
+    const developerInstructions = this.composeDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
     }
@@ -4116,6 +4152,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       const response = await this.client.request("thread/resume", params);
       this.rememberResolvedThreadConfig(response);
+      this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);
     } catch (error) {
       const threadId = this.currentThreadId;
       const message = error instanceof Error ? error.message : String(error);
@@ -4129,6 +4166,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         }
         const response = await this.client.request("thread/resume", params);
         this.rememberResolvedThreadConfig(response);
+        this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);
         this.logger.info({ threadId }, "Unarchived Codex thread to restore active Paseo agent");
         return;
       }
@@ -4256,10 +4294,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (options?.outputSchema) {
       params.outputSchema = normalizeCodexOutputSchema(options.outputSchema);
     }
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const developerInstructions = options?.[NATIVE_QUEUED_FINAL]
+      ? composeSystemPromptParts(this.config.systemPrompt, this.config.daemonAppendSystemPrompt)
+      : this.composeDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
     }
@@ -4500,7 +4537,6 @@ export class CodexAppServerAgentSession implements AgentSession {
   ): Promise<{ turnId: string }> {
     const queued = options?.[NATIVE_QUEUED_FINAL];
     assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
-    const originalAccountEpoch = this.accountNotificationEpoch;
     const admission = options?.[CODEX_TURN_ADMISSION];
     this.assertNativeForegroundStartAvailable(queued);
     let resolveStart!: () => void;
@@ -4537,6 +4573,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       const preparedClient = this.client;
       const preparedThread = this.currentThreadId;
       let preparedRevision = this.quotaRevision;
+      // Captured after connect and thread setup: Codex announces the account while
+      // starting, and that notification must not refuse the turn being prepared.
+      let preparedAccountEpoch = this.accountNotificationEpoch;
       const preparedModelProvider = this.quotaModelProvider;
       const preparationIntent = () =>
         JSON.stringify({
@@ -4567,6 +4606,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (admission !== undefined) {
         if (typeof preparedThread !== "string" || !preparedThread)
           throw new CodexQuotaError("session_changed");
+        // Permanent changes: the turn would be bound to a different session or intent.
         const validateCurrent = () => {
           validateQueuedPreparation();
           if (
@@ -4575,14 +4615,14 @@ export class CodexAppServerAgentSession implements AgentSession {
             this.client !== preparedClient ||
             this.currentThreadId !== preparedThread ||
             this.quotaModelProvider !== preparedModelProvider ||
-            this.accountNotificationEpoch !== originalAccountEpoch ||
             preparationIntent() !== originalPreparationIntent
           )
             throw new CodexQuotaError("session_changed");
           if (pendingStart.cancelRequested)
             throw new Error("Codex turn start was interrupted before reaching Codex");
-          if (this.getPendingPermissions().length > 0)
-            throw new Error("Codex turn start requires permission attention");
+          const pendingPermissions = this.getPendingPermissions();
+          if (pendingPermissions.length > 0)
+            throw new PermissionAttentionError("Codex", pendingPermissions);
           if (typeof admission !== "function") {
             if (
               !admission ||
@@ -4593,76 +4633,97 @@ export class CodexAppServerAgentSession implements AgentSession {
             admission.validate();
           }
         };
+        // Churn: revision and account notifications that a fresh read can absorb.
+        const churned = () =>
+          this.quotaRevision !== preparedRevision ||
+          this.accountNotificationEpoch !== preparedAccountEpoch;
         const validatePrepared = () => {
           validateCurrent();
-          if (this.quotaRevision !== preparedRevision) throw new CodexQuotaError("session_changed");
+          if (churned()) throw new CodexQuotaError("session_changed");
         };
-        let reprepared = false;
+        let accountNotified = false;
         const reprepare = async () => {
-          // Only a host-observed revision change before policy evaluation may
-          // refresh local text parameters. Never re-enter thread or transport setup.
+          // Only host-observed churn before policy evaluation may refresh local text
+          // parameters. Never re-enter thread or transport setup.
           validateCurrent();
-          if (
-            reprepared ||
-            typeof admission === "function" ||
-            typeof prompt !== "string" ||
-            slashCommand ||
-            this.quotaRevision !== preparedRevision + 1
-          )
+          if (typeof prompt !== "string" || slashCommand)
             throw new CodexQuotaError("session_changed");
-          reprepared = true;
+          if (this.accountNotificationEpoch !== preparedAccountEpoch) accountNotified = true;
           preparedRevision = this.quotaRevision;
+          preparedAccountEpoch = this.accountNotificationEpoch;
           const refreshed = await this.buildTurnStartParams(effectivePrompt, options);
           validatePrepared();
           if (JSON.stringify(refreshed.params) !== originalParameters)
             throw new CodexQuotaError("session_changed");
           turnStart = refreshed;
         };
+        // The account this session had before any notification seen during this start.
+        let knownAccountScope = this.lastQuotaAccountScope;
+        let reads = 0;
         const readPreparedQuota = async () => {
-          if (this.quotaRevision !== preparedRevision) await reprepare();
-          validatePrepared();
-          const turn = capturedCodexTurn(admission, preparedThread, turnStart.params);
-          let staleQuotaRead = false;
-          const read = async () => {
+          for (;;) {
+            if (churned()) await reprepare();
+            validatePrepared();
+            const turn = capturedCodexTurn(admission, preparedThread, turnStart.params);
+            let staleQuotaRead = false;
+            const read = async () => {
+              // Transient read failures retry here, before the failure callback runs.
+              for (;;) {
+                reads++;
+                try {
+                  return await this.getQuota();
+                } catch (error) {
+                  if (!(error instanceof CodexQuotaError)) throw error;
+                  if (error.code === "session_changed") {
+                    staleQuotaRead = true;
+                    if (knownAccountScope === undefined)
+                      knownAccountScope = error.staleAccountScope;
+                    throw error;
+                  }
+                  if (error.code !== "read_failed" || reads >= CODEX_ADMISSION_MAX_QUOTA_READS)
+                    throw error;
+                }
+                await delay(CODEX_ADMISSION_RETRY_DELAY_MS * reads);
+                validateCurrent();
+                if (churned()) {
+                  staleQuotaRead = true;
+                  throw new CodexQuotaError("session_changed");
+                }
+              }
+            };
             try {
-              return await this.getQuota();
+              const quota = await readCodexTurnQuota({
+                read,
+                validate: validatePrepared,
+                admission,
+                turn,
+              });
+              if (
+                accountNotified &&
+                knownAccountScope !== undefined &&
+                quota.accountScope !== knownAccountScope
+              )
+                throw new CodexQuotaError("account_changed");
+              return { quota, turn };
             } catch (error) {
-              staleQuotaRead = error instanceof CodexQuotaError && error.code === "session_changed";
-              throw error;
+              if (
+                !staleQuotaRead ||
+                !(error instanceof CodexQuotaError) ||
+                error.code !== "session_changed" ||
+                reads >= CODEX_ADMISSION_MAX_QUOTA_READS
+              )
+                throw error;
             }
-          };
-          try {
-            const quota = await readCodexTurnQuota({
-              read,
-              validate: validatePrepared,
-              admission,
-              turn,
-            });
-            return { quota, turn };
-          } catch (error) {
-            if (
-              !staleQuotaRead ||
-              !(error instanceof CodexQuotaError) ||
-              error.code !== "session_changed"
-            )
-              throw error;
-            await reprepare();
-            const quota = await readCodexTurnQuota({
-              read: () => this.getQuota(),
-              validate: validatePrepared,
-              admission,
-              turn,
-            });
-            return { quota, turn };
+            await delay(CODEX_ADMISSION_RETRY_DELAY_MS * reads);
           }
         };
         const { quota, turn } = await readPreparedQuota();
         validatePrepared();
         assertCodexTurnAdmission({ check: admission, turn, quota, parameters: turnStart.params });
-        // Policy mutation/refusal is outside the sole reprepare catch.
+        // Policy runs once, outside the retry loop: any change after it refuses.
         validatePrepared();
       }
-      if (this.accountNotificationEpoch !== originalAccountEpoch)
+      if (this.accountNotificationEpoch !== preparedAccountEpoch)
         throw new CodexQuotaError("session_changed");
       if (pendingStart.cancelRequested) {
         throw new Error("Codex turn start was interrupted before reaching Codex");
@@ -4675,7 +4736,7 @@ export class CodexAppServerAgentSession implements AgentSession {
           preparedClient,
           preparedThread,
           preparedRevision,
-          originalAccountEpoch,
+          preparedAccountEpoch,
           pendingStart,
           turnStart.params,
         );
@@ -4695,6 +4756,12 @@ export class CodexAppServerAgentSession implements AgentSession {
       } else {
         await this.client.request("turn/start", turnStart.params, TURN_START_TIMEOUT_MS);
       }
+      this.markPublicBaselineSubmitted(
+        preparedClient,
+        turnStart.params,
+        preparedThread,
+        Boolean(queued),
+      );
       return { turnId };
     } catch (error) {
       this.pendingForegroundTurnIdentification?.resolve(null);
@@ -4876,8 +4943,16 @@ export class CodexAppServerAgentSession implements AgentSession {
     return this.accountUsageLabel;
   }
 
-  getQuota() {
-    return readCodexQuota((): CodexQuotaBinding | null => {
+  limitResumeAccountBinding(): string | null {
+    if (this.resumeAccountUncertain) return null;
+    const id = this.launchEnv?.FULCRA_ACCOUNT_ID;
+    return id
+      ? JSON.stringify(["pool", id, this.lastQuotaAccountScope ?? null])
+      : (this.lastQuotaAccountScope ?? null);
+  }
+
+  async getQuota() {
+    const quota = await readCodexQuota((): CodexQuotaBinding | null => {
       if (
         this.closed ||
         this.connectionState !== "connected" ||
@@ -4895,10 +4970,13 @@ export class CodexAppServerAgentSession implements AgentSession {
         revision: this.quotaRevision,
       };
     });
+    this.lastQuotaAccountScope = quota.accountScope;
+    this.resumeAccountUncertain = false;
+    return quota;
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
-    if (this.cachedRuntimeInfo) return { ...this.cachedRuntimeInfo };
+    if (this.cachedRuntimeInfo) return this.runtimeReadback(this.cachedRuntimeInfo);
     if (this.connectionState === "disconnected") {
       await this.connect();
     }
@@ -4916,7 +4994,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         : undefined,
     };
     this.cachedRuntimeInfo = info;
-    return { ...info };
+    return this.runtimeReadback(info);
   }
 
   async getAvailableModes(): Promise<AgentMode[]> {
@@ -5593,7 +5671,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.config.thinkingOptionId = thinkingOptionId;
 
     const { params, approvalPolicy, sandbox } = this.buildThreadStartRequest(model);
-    const rawResponse = await this.client.request("thread/start", params);
+    const preparedClient = this.client;
+    const rawResponse = await preparedClient.request("thread/start", params);
     this.rememberResolvedThreadConfig(rawResponse);
     const response = toObjectRecord(rawResponse);
     const threadRecord = toObjectRecord(response?.thread);
@@ -5614,6 +5693,92 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.cachedRuntimeInfo = null;
     }
     this.currentThreadId = threadId;
+    this.markPublicBaselineSubmitted(preparedClient, params, threadId);
+  }
+
+  private composeDeveloperInstructions(): string | undefined {
+    const result = composeHostPublicBaseline(
+      this.publicBaseline,
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    if (result.receipt) {
+      const prior = this.publicBaselineTransport;
+      if (
+        !prior ||
+        prior.client !== this.client ||
+        prior.threadId !== this.currentThreadId ||
+        prior.receipt.developerInstructionsSha256 !== result.receipt.developerInstructionsSha256
+      )
+        this.publicBaselineTransport = {
+          receipt: result.receipt,
+          client: this.client,
+          threadId: this.currentThreadId,
+        };
+    }
+    return result.text;
+  }
+  private markPublicBaselineSubmitted(
+    client: CodexAppServerClient,
+    params: Record<string, unknown>,
+    expectedThread: string | null,
+    queued = false,
+  ): void {
+    if (queued) return;
+    if (
+      !this.publicBaselineTransport ||
+      this.closed ||
+      client !== this.client ||
+      !expectedThread ||
+      this.currentThreadId !== expectedThread ||
+      (params.threadId !== undefined && params.threadId !== expectedThread) ||
+      typeof params.developerInstructions !== "string"
+    )
+      return;
+    const composed = composeHostPublicBaseline(
+      this.publicBaseline,
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    if (!composed.receipt || params.developerInstructions !== composed.text) return;
+    const prior = this.publicBaselineTransport;
+    if (
+      prior.receipt.state === "SUBMITTED" &&
+      prior.client === client &&
+      prior.threadId === this.currentThreadId &&
+      prior.receipt.developerInstructionsSha256 === composed.receipt.developerInstructionsSha256
+    )
+      return;
+    this.publicBaselineTransport = {
+      receipt: { ...composed.receipt, state: "SUBMITTED" },
+      client,
+      threadId: expectedThread,
+    };
+    this.cachedRuntimeInfo = null;
+    if (this.currentThreadId)
+      this.emitEvent({
+        type: "host_public_baseline_transport",
+        provider: CODEX_PROVIDER,
+        nativeSessionId: expectedThread,
+        receipt: structuredClone(this.publicBaselineTransport.receipt),
+      });
+  }
+  private runtimeReadback(info: AgentRuntimeInfo): AgentRuntimeInfo {
+    const value = withoutPublicBaselineTransport(info)!;
+    const readback = this.baselineReadback();
+    return {
+      ...value,
+      ...(Object.keys(readback).length ? { extra: { ...value.extra, ...readback } } : {}),
+    };
+  }
+  private baselineReadback(): { hostPublicBaselineTransport?: PublicBaselineTransport } {
+    const value = this.publicBaselineTransport;
+    return !this.closed &&
+      value &&
+      value.client === this.client &&
+      value.threadId === this.currentThreadId
+      ? { hostPublicBaselineTransport: structuredClone(value.receipt) }
+      : {};
   }
 
   private buildThreadStartRequest(model: string): {
@@ -5631,10 +5796,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.providerOptions.sandbox_mode ??
       (this.hasWorkflowModeOverride ? preset.sandbox : undefined);
     const innerConfig = this.buildCodexInnerConfig();
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const developerInstructions = this.composeDeveloperInstructions();
     const params: Record<string, unknown> = {
       model,
       cwd: this.config.cwd ?? null,
@@ -5733,6 +5895,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     if (method === "account/updated") {
+      this.resumeAccountUncertain = true;
       this.quotaRevision++;
       this.accountNotificationEpoch++;
       return;
@@ -6562,7 +6725,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   private handleTokenUsageUpdatedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "token_usage_updated" }>,
   ): void {
-    this.latestUsage = toAgentUsage(parsed.tokenUsage);
+    this.latestUsage = toAgentUsage(
+      parsed.tokenUsage,
+      parsed.threadId ?? this.currentThreadId ?? undefined,
+    );
     if (this.latestUsage) {
       this.notifySubscribers({
         type: "usage_updated",
@@ -7746,9 +7912,13 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
 
-  private sessionDeps(launchEnv: Record<string, string> | undefined): CodexAppServerAgentDeps {
+  private sessionDeps(
+    launchEnv: Record<string, string> | undefined,
+    publicBaseline?: HostPublicBaseline,
+  ): CodexAppServerAgentDeps {
     return {
       ...this.deps,
+      publicBaseline: cloneHostPublicBaseline(publicBaseline),
       codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchEnv)),
       customCodexConfig: this.customProviderConfig(),
     };
@@ -7852,7 +8022,21 @@ export class CodexAppServerAgentClient implements AgentClient {
       // TODO: Honor persistSession=false if app-server adds support, or route
       // utility generations through `codex exec --ephemeral` in a larger change.
     }
-    const sessionConfig: AgentSessionConfig = { ...config, provider: CODEX_PROVIDER };
+    launchContext = launchContext
+      ? {
+          ...launchContext,
+          env: launchContext.env ? { ...launchContext.env } : undefined,
+          publicBaseline: baselineForSession(
+            launchContext.publicBaseline,
+            config.internal,
+            "interactive",
+          ),
+        }
+      : undefined;
+    const sessionConfig: AgentSessionConfig = structuredClone({
+      ...config,
+      provider: CODEX_PROVIDER,
+    });
     const goalsEnabled = await this.resolveGoalsEnabled();
     const autoReviewEnabled = await this.resolveAutoReviewEnabled();
     const session = new CodexAppServerAgentSession(
@@ -7861,7 +8045,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       this.logger,
       () =>
         this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(launchContext?.env),
+      this.sessionDeps(launchContext?.env, launchContext?.publicBaseline),
       options?.persistSession === false,
       goalsEnabled,
       autoReviewEnabled,
@@ -7881,12 +8065,23 @@ export class CodexAppServerAgentClient implements AgentClient {
     options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     const storedConfig = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
-    const merged: AgentSessionConfig = {
+    const merged: AgentSessionConfig = structuredClone({
       ...storedConfig,
       ...overrides,
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
-    };
+    });
+    launchContext = launchContext
+      ? {
+          ...launchContext,
+          env: launchContext.env ? { ...launchContext.env } : undefined,
+          publicBaseline: baselineForSession(
+            launchContext.publicBaseline,
+            merged.internal,
+            options?.purpose ?? "interactive",
+          ),
+        }
+      : undefined;
     const goalsEnabled = await this.resolveGoalsEnabled();
     const autoReviewEnabled = await this.resolveAutoReviewEnabled();
     const session = new CodexAppServerAgentSession(
@@ -7895,7 +8090,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       this.logger,
       () =>
         this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(launchContext?.env),
+      this.sessionDeps(launchContext?.env, launchContext?.publicBaseline),
       false,
       goalsEnabled,
       autoReviewEnabled,

@@ -116,3 +116,6 @@ describe("usePluginHostNavigation", () => {
     });
   });
 });
+
+vi.mock("@/constants/layout", () => ({ useIsCompactFormFactor: () => false }));
+vi.mock("@/workspace-tabs/explorer-sidebar", () => ({ openExplorerSidebarView: vi.fn() }));

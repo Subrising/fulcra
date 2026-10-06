@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { configuredControllerPluginId } from "@getpaseo/protocol/bundled-controller";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import { createPluginClientId } from "./plugin-session-identity.js";
 import { SessionInboundMessageSchema, WSOutboundMessageSchema } from "@getpaseo/protocol/messages";
@@ -16,12 +18,15 @@ import type { PluginPaseoSessionHost } from "./runtime.js";
 export async function createControllerService(
   host: PluginPaseoSessionHost,
   options: {
+    /** FULCRA(trusted-bundle): supplied only by the original host distribution. */
+    pluginId?: string;
     epoch: string;
     emit(frame: ControllerServiceFrame): void;
     revoke(): void;
     log?(reason: string): void;
   },
 ) {
+  const pluginId = configuredControllerPluginId(options.pluginId);
   let live = true,
     ready = false,
     opened = false,
@@ -95,12 +100,12 @@ export async function createControllerService(
     options.emit({ type: "daemon-closed", version: 1, epoch: options.epoch });
   }
   try {
-    const attachment = await host.attachPluginSocket("orca-organization-next", socket);
+    const attachment = await host.attachPluginSocket(pluginId, socket);
     void attachment.closed.then(close, close);
     socket.receive(
       JSON.stringify({
         type: "hello",
-        clientId: createPluginClientId("orca-organization-next"),
+        clientId: createPluginClientId(pluginId),
         clientType: "mcp",
         protocolVersion: 1,
         capabilities: {

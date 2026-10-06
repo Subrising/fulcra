@@ -144,7 +144,11 @@ test("the launch hook: a pooled Claude launch gets the token for this launch onl
   assert.equal(out.env.KEEP, "1");
   assert.equal(out.env.FULCRA_ACCOUNT_ID, b.id);
   assert.equal(out.env.FULCRA_ACCOUNT_NAME, "B");
-  assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).auth, "expired");
+  assert.equal(
+    readAccounts(root).accounts.find((x) => x.id === a.id).auth,
+    "ok",
+    "missing Keychain material is not token expiry",
+  );
   assert.equal(JSON.stringify(readAccounts(root)).includes(tokens.get(b.id)), false); // never stored in the account store
   assert.deepEqual((await hook(req(S(3), "claude", "history"))).env, { KEEP: "1" }); // a history read is not a launch
 });
@@ -742,4 +746,54 @@ test("Book local: unavailable enabled Work refuses ambient login before provider
   assert.deepEqual(f.reads, [work.id]);
   assert.equal(readAccounts(f.root).accounts.find((a) => a.id === personal.id).enabled, false);
   for (const key of Object.keys(inputEnv)) assert.equal(f.request.env[key] === inputEnv[key], true);
+});
+
+for (const outcome of ["recovered", "unavailable", "missing", "revoked"]) {
+  test(`Keychain launch revalidation: ${outcome} preserves expiry and admission semantics`, async (t) => {
+    const f = await admissionFixture(t, "claude", 1, [0]);
+    let reads = 0;
+    f.keychain.get = async () => {
+      reads++;
+      if (reads === 1) {
+        if (outcome === "revoked") await setAccount(f.root, f.accounts[0].id, { enabled: false });
+        if (outcome === "missing") return null;
+        throw Object.assign(Error("private fixture diagnostic"), {
+          code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+        });
+      }
+      if (outcome === "unavailable")
+        throw Object.assign(Error("private fixture diagnostic"), {
+          code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+        });
+      if (outcome === "missing") return null;
+      return "fixture-credential";
+    };
+    if (outcome === "recovered") {
+      const out = await f.hook({ request: f.request });
+      assert.equal(out.env.FULCRA_ACCOUNT_ID, f.accounts[0].id);
+    } else await assert.rejects(f.hook({ request: f.request }), admissionFailure);
+    assert.equal(reads, outcome === "revoked" ? 1 : 2);
+    assert.equal(readAccounts(f.root).accounts[0].auth, "ok");
+    assert.equal(JSON.stringify(readAccounts(f.root)).includes("fixture-credential"), false);
+  });
+}
+test("Keychain lookup distinguishes missing item from transient refusal without raw diagnostics", async () => {
+  const dir = scratch(),
+    bin = path.join(dir, "security");
+  for (const code of [44, 1]) {
+    fs.writeFileSync(bin, `#!/bin/sh\nprintf 'private fixture diagnostic' >&2\nexit ${code}\n`, {
+      mode: 0o700,
+    });
+    const k = createKeychain({ keychain: path.join(dir, "kc"), security: bin });
+    if (code === 44) assert.equal(await k.get(S(999)), null);
+    else
+      await assert.rejects(
+        k.get(S(999)),
+        (error) =>
+          error.code === "ACCOUNT_KEYCHAIN_UNAVAILABLE" &&
+          !JSON.stringify(error, Object.getOwnPropertyNames(error)).includes(
+            "private fixture diagnostic",
+          ),
+      );
+  }
 });

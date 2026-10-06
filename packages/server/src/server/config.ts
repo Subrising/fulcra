@@ -1,3 +1,4 @@
+import { readLimitResumeSetting } from "./limit-resume-settings.js";
 import { configurationEnvironment } from "./config-environment.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -601,7 +602,7 @@ export function resolveConfigFromPersisted(
   );
 
   const overrideControlledPaths = resolveOverrideControlledPaths(env, cli, speech.providers);
-  const persistedSettings = resolvePersistedPassThroughSettings(persisted);
+  const persistedSettings = resolvePersistedPassThroughSettings(paseoHome, persisted);
 
   return {
     listen,
@@ -616,7 +617,9 @@ export function resolveConfigFromPersisted(
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
+    notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
+    autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
     terminalProfiles,
     agentProfiles,
@@ -662,9 +665,12 @@ export function resolveConfigFromPersisted(
 }
 
 /** Settings read straight from the persisted file, with their defaults. */
-function resolvePersistedPassThroughSettings(persisted: PersistedConfig) {
+function resolvePersistedPassThroughSettings(paseoHome: string, persisted: PersistedConfig) {
   return {
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    autoResumeOnLimit:
+      readLimitResumeSetting(paseoHome) ?? persisted.daemon?.autoResumeOnLimit ?? true,
+    notificationMode: persisted.daemon?.notificationMode ?? ("primes" as const),
     skillSelection: persisted.agents?.skills?.selection,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     oauthClientIds: persisted.integrations?.oauthClientIds ?? {},

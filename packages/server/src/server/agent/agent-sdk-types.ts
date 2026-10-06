@@ -1,3 +1,4 @@
+import type { RecordedUsage } from "@getpaseo/protocol/recorded-usage";
 import type { TrustedCodexTurnV11, QuotaReadFailureV11 } from "@getpaseo/plugin/server";
 import type {
   AccountCredential,
@@ -254,6 +255,7 @@ export interface SteerActiveTurnOptions extends AgentSteerOptions {
 }
 
 export interface AgentUsage {
+  recorded?: RecordedUsage;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
@@ -454,6 +456,12 @@ export type AgentTimelineItem =
   | PluginTimelineItem;
 
 export type AgentStreamEvent =
+  | {
+      type: "host_public_baseline_transport";
+      provider: AgentProvider;
+      nativeSessionId: string;
+      receipt: import("./host-public-baseline.js").PublicBaselineTransport;
+    }
   | { type: "thread_started"; sessionId: string; provider: AgentProvider }
   | { type: "turn_started"; provider: AgentProvider; turnId?: string }
   | { type: "turn_completed"; provider: AgentProvider; usage?: AgentUsage; turnId?: string }
@@ -672,6 +680,8 @@ export interface AgentSessionConfig {
 }
 
 export interface AgentLaunchContext {
+  /** Host-selected public text/hash snapshot. Runtime-only; never an account/profile/config override. */
+  publicBaseline?: import("./host-public-baseline.js").HostPublicBaseline;
   agentId?: string;
   env?: Record<string, string>;
   /**
@@ -729,6 +739,8 @@ export interface AgentSession {
   getQuota?(): Promise<AgentQuotaSnapshot>;
   /** Non-secret account label captured by this runtime at launch, never read from a mutable assignment. */
   usageSourceLabel?(): string | null;
+  /** Cached non-secret account identity only; no credential read, transport request or authorization. */
+  limitResumeAccountBinding?(): string | null;
   /** Fulcra account pool: the credential this session was launched with and its account label (daemon-internal). */
   usageCredential?(): {
     credential: AccountCredential;

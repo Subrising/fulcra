@@ -1,4 +1,9 @@
-import { assertFinalInputCheck, recordFinalInputHandoff } from "../../final-input-check.js";
+import { recordedClaudeUsage } from "../../usage-recording.js";
+import {
+  assertFinalInputCheck,
+  commitFinalInputCheck,
+  recordFinalInputHandoff,
+} from "../../final-input-check.js";
 import { FINAL_INPUT_CHECK } from "../../agent-sdk-types.js";
 import type { ChildProcess } from "node:child_process";
 import type {
@@ -6,6 +11,7 @@ import type {
   AccountUsageReading,
 } from "../../../../services/quota-fetcher/account-usage-types.js";
 import { mergeRateLimitEvent } from "../../../../services/quota-fetcher/providers/claude-account-usage.js";
+import { createPassiveClaudeUsageObserver } from "./passive-usage-observer.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { promises } from "node:fs";
@@ -1653,6 +1659,7 @@ export class ClaudeAgentClient implements AgentClient {
         }),
       );
     } catch (error) {
+      context?.signal.throwIfAborted();
       this.logger.warn(
         { err: error },
         "Claude model discovery failed; using the built-in model list",
@@ -1673,6 +1680,7 @@ export class ClaudeAgentClient implements AgentClient {
       );
     } catch (error) {
       this.logger.warn({ err: error }, "Failed to resolve Claude Code version for model catalog");
+      context?.signal.throwIfAborted();
     }
     const env = this.buildProviderEnv();
     const runtimeModels = await this.discoverRuntimeModels(context);
@@ -1682,6 +1690,7 @@ export class ClaudeAgentClient implements AgentClient {
         claudeConfigDir(env),
         claudeCodeVersion,
         runtimeModels,
+        context?.signal,
       ),
     );
     recordClaudeRuntimeModels(runtimeModels?.length ? models : null);
@@ -2057,7 +2066,12 @@ class ClaudeContextUsageState {
       if (!message.usage) {
         return undefined;
       }
+      const recorded = recordedClaudeUsage({
+        ...message,
+        modelUsage: modelUsage ?? message.modelUsage,
+      });
       const usage: AgentUsage = {
+        ...(recorded ? { recorded } : {}),
         inputTokens: message.usage.input_tokens,
         cachedInputTokens: message.usage.cache_read_input_tokens,
         outputTokens: message.usage.output_tokens,
@@ -2203,6 +2217,7 @@ class ClaudeAgentSession implements AgentSession {
   private cancelCurrentTurn: (() => void) | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
   private accountUsageObservation: AccountUsageReading | null = null;
+  private readonly passiveUsageObserver: ReturnType<typeof createPassiveClaudeUsageObserver>;
   private lastOptionsModel: string | null = null;
   private lastRuntimeModel: string | null = null;
   private compacting = false;
@@ -2225,6 +2240,7 @@ class ClaudeAgentSession implements AgentSession {
     this.config = config;
     assertClaudeThinkingOptionSupported(config.model, config.thinkingOptionId);
     this.launchEnv = options.launchEnv;
+    this.passiveUsageObserver = createPassiveClaudeUsageObserver(options.launchEnv);
     this.agentId = options.agentId;
     this.defaults = options.defaults;
     this.runtimeSettings = options.runtimeSettings;
@@ -2281,6 +2297,11 @@ class ClaudeAgentSession implements AgentSession {
     return this.launchEnv?.FULCRA_ACCOUNT_NAME ?? null;
   }
 
+  limitResumeAccountBinding(): string | null {
+    const id = this.launchEnv?.FULCRA_ACCOUNT_ID;
+    return id ? `pool:${id}` : null;
+  }
+
   usageCredential(): {
     credential: AccountCredential;
     label: string | null;
@@ -2306,7 +2327,10 @@ class ClaudeAgentSession implements AgentSession {
       message.rate_limit_info,
       Date.now(),
     );
-    if (merged) this.accountUsageObservation = merged;
+    if (merged) {
+      this.accountUsageObservation = merged;
+      this.passiveUsageObserver?.publish(merged, message.rate_limit_info.rateLimitType);
+    }
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
@@ -2517,7 +2541,7 @@ class ClaudeAgentSession implements AgentSession {
       } else {
         if (finishCheck)
           this.assertFinishClaudePrepared({ cancelIssued, nativeId, preparedQuery, preparedInput });
-        assertFinalInputCheck(finishCheck);
+        commitFinalInputCheck(finishCheck);
         preparedInput.push(sdkMessage);
         recordFinalInputHandoff(finishCheck);
       }
@@ -2584,7 +2608,7 @@ class ClaudeAgentSession implements AgentSession {
       this.permissionClearingSteerUuids.add(uuid);
     }
     try {
-      assertFinalInputCheck(finalCheck);
+      commitFinalInputCheck(finalCheck);
       input.push(message);
       recordFinalInputHandoff(finalCheck);
       if (clearPendingPermissions) {

@@ -595,7 +595,11 @@ const run = (bin, args, input, env) =>
         // Interactive security can report refusal, then exit zero. Prompts alone
         // are normal; discard every other diagnostic and never retain raw errors.
         if (e || err.replace(/security>\s*/g, "").trim())
-          reject(Error("Account Keychain: operation-failed"));
+          reject(
+            Object.assign(Error("Account Keychain: operation-failed"), {
+              code: e?.code === 44 ? "ACCOUNT_ITEM_MISSING" : "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+            }),
+          );
         else resolve(out);
       },
     );
@@ -648,8 +652,13 @@ export function createKeychain({
       try {
         const v = await read(id);
         return TOKEN.test(v) ? v : null;
-      } catch {
-        return null;
+      } catch (error) {
+        if (error?.code === "ACCOUNT_ITEM_MISSING") return null;
+        // Timeout, locked Keychain and process/resource failures are not proof
+        // that a saved token expired. Preserve account state and permit retry.
+        throw Object.assign(Error("Account Keychain temporarily unavailable; retry"), {
+          code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+        });
       }
     },
     async remove(id) {
@@ -789,7 +798,30 @@ export function sessionOpenHook({
         const r = reservation.result;
         seen.push(r.account.id);
         // Credential preparation must not hold the store lock (it may outlive its stale timeout).
-        const token = provider === "claude" ? await keychain.get(r.account.id) : null;
+        let token = null;
+        if (provider === "claude") {
+          for (let readAttempt = 0; readAttempt < 2; readAttempt++) {
+            // A retry is still this exact reservation, never permission to select
+            // another account or revive a revoked one after awaiting Keychain.
+            const current = readAccounts(storeRoot);
+            const account = current.accounts.find(
+              (a) => a.id === r.account.id && a.provider === provider,
+            );
+            const state = account && accountStatus(account, now()).state;
+            if (
+              JSON.stringify(current.assignments[sessionId]) !== expected ||
+              (state !== "ok" && !(r.allLimited && state === "limited"))
+            )
+              throw refused();
+            try {
+              token = await keychain.get(r.account.id);
+            } catch (error) {
+              if (error?.code !== "ACCOUNT_KEYCHAIN_UNAVAILABLE" || readAttempt === 1)
+                throw refused();
+            }
+            if (token) break;
+          }
+        }
         const ready = provider === "claude" ? !!token : codexSignedIn(storeRoot, r.account.id);
         if (ready && r.allLimited) {
           try {
@@ -803,7 +835,9 @@ export function sessionOpenHook({
           if (state !== "ok" && !(r.allLimited && state === "limited")) throw refused();
           if (!ready) {
             if (r.takeover) throw refused();
-            account.auth = provider === "claude" ? "expired" : "signing-in";
+            // Missing/unreadable Keychain material is not a provider rejection.
+            // Keep Claude retryable on the next launch; never base-login fallback.
+            if (provider === "codex") account.auth = "signing-in";
             return null;
           }
           // The current assignment/one-use intent and account eligibility are checked together,

@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 export const en = {
   plugins: {
     commandCentreRelay: {
@@ -163,6 +164,8 @@ export const en = {
     },
     attachments: {
       addImage: "Add image",
+      choosePhoto: "Choose photo",
+      takePhoto: "Take photo",
       pasteImage: "Paste image",
       addFile: "Upload file",
       addIssueOrPr: "Add issue or PR",
@@ -1795,6 +1798,8 @@ export const en = {
     permissionMessage: "Please allow access to your photo library to attach images.",
     errorTitle: "Error",
     failedToSelect: "Failed to select image",
+    cameraPermissionMessage: "Please allow camera access to take photos.",
+    failedToTakePhoto: "Failed to take photo",
     dialogTitle: "Attach images",
     dialogFilterName: "Images",
   },
@@ -1849,6 +1854,7 @@ export const en = {
     modelCountPlural: "{{count}} models",
     retry: "Retry",
     retrying: "Retrying...",
+    savedModels: "Showing previously loaded {{provider}} models.",
     noMatches: "No models match your search",
     noMatchesForQuery: 'No models match "{{query}}"',
     searchAllPlaceholder: "Search all models...",
@@ -1891,6 +1897,17 @@ export const en = {
     hostPassword: {
       title: "Password for {{host}}",
       label: "Host password",
+    },
+    hostConfirmation: {
+      title: "Connect to this host?",
+      description:
+        "This host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      descriptionChanged:
+        "This link changes how you connect to this host. The host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      hostLabel: "Host",
+      fingerprintLabel: "Key fingerprint",
+      relayLabel: "Relay",
+      connect: "Connect",
     },
     connectionMethods: {
       title: "Add connection",
@@ -2184,11 +2201,15 @@ export const en = {
       emptyDescription: "Create a pull request for this checkout to see its details here.",
     },
     architectureMap: {
-      label: "Architecture map",
-      subtitle: "Project architecture",
-      tooltip: "Show the project's architecture map",
+      mainOnly: "Code architecture is a main workspace view. Open it from the + tab menu.",
+      entryUnavailable:
+        "Add a saved code map or connect a host that advertises code graph or change generation.",
+      label: "Code architecture",
+      subtitle: "Code structure & change impact",
+      tooltip: "Show code architecture and change impact",
       emptyTitle: "No architecture map in this project",
-      emptyDescription: "Fulcra shows maps stored in {{directory}}.",
+      emptyDescription:
+        "Add a saved code map under {{directory}}, or connect a host that can generate one. This shows code structure; Team workflow shows project leads and working sessions.",
       oversized: "Too large to show (over 1 MiB): {{names}}",
       truncated: "Only the first 20 maps are listed.",
       listFailed: "Couldn't list architecture maps",
@@ -2366,7 +2387,7 @@ export const en = {
         },
         viewMap: "Map",
         viewChange: "Change",
-        openFromPullRequest: "Architecture change",
+        openFromPullRequest: "Code change impact",
         openFromPullRequestHint: "Shows what this pull request changes in the system map",
         title: "What this change does to the system",
         comparedWith: "Compared with {{base}}",
@@ -2489,6 +2510,7 @@ export const en = {
   sidebarCallout: {
     dismiss: "Dismiss",
   },
+  usagePanel: usagePanelCopy["en"],
   contextWindow: {
     title: "Context window",
     used: "{{percentage}}% used",

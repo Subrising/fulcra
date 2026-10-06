@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { LEGACY_CONTROLLER_PLUGIN_ID } from "@getpaseo/protocol/bundled-controller";
 import type { AppState } from "react-native";
 import type { ActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import type {
@@ -14,7 +16,7 @@ import {
   buildOpenProjectRoute,
 } from "@/utils/host-routes";
 
-export const ORCA_ORGANIZATION_PLUGIN_ID = "orca-organization";
+export const ORCA_ORGANIZATION_PLUGIN_ID = LEGACY_CONTROLLER_PLUGIN_ID;
 export const ORCA_ORGANIZATION_SIDEBAR_ID = "organization";
 
 export type OrcaHomeAvailability = "unknown" | "present" | "absent";

@@ -16,7 +16,8 @@ globalThis.document = dom.window.document;
 Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
 globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-const { render, screen, fireEvent, waitFor, cleanup } = await import("@testing-library/react");
+const { render, screen, fireEvent, waitFor, cleanup, act, within } =
+  await import("@testing-library/react");
 const h = React.createElement;
 const theme = {
   colors: {
@@ -212,17 +213,31 @@ const handler =
                   }),
                 }
               : { ok: true, message: null, observedAt: now, state: "delivered" };
+async function showAllActivity() {
+  fireEvent.click(await screen.findByRole("button", { name: /^All activity and history \(/ }));
+}
 const chooseCalls = () => calls.filter((c) => c.name === "organization.decision-choose");
 
-test("U1: one list grouped Decisions, Held messages, Digest, with urgency badges and no held body", async () => {
+test("U1: confirmed human decisions open first; held updates and digest stay behind history without repeating obligations", async () => {
   setHandler(handler());
   const r = mount();
   await waitFor(() => assert(screen.getByTestId(`inbox-item-decision-${DEC}`)));
   assert(screen.getByTestId("inbox-list"));
-  assert(screen.getByText("Decisions · 1"));
+  assert(screen.getByText("1 open decision is addressed to you"));
+  assert.equal(
+    screen.queryByText("Held messages · 1"),
+    null,
+    "held records are not personal obligations",
+  );
+  await showAllActivity();
   assert(screen.getByText("Held messages · 1"));
   assert(screen.getByText("Digest · 1"));
-  assert(screen.getByText("1 needs you now · 3 in all"));
+  assert(screen.getByRole("button", { name: "Hide all activity and history" }));
+  assert.equal(
+    screen.getAllByTestId(`inbox-item-decision-${DEC}`).length,
+    1,
+    "history never repeats the same confirmed obligation",
+  );
   assert.equal(screen.getAllByText("Now").length, 1);
   assert.equal(screen.getAllByText("FYI").length, 1);
   assert(!r.container.textContent.includes("SECRET BODY"), "the list never carries a held body");
@@ -360,6 +375,7 @@ test('U4: "Changed since you looked" and "Already answered" are shown as states,
 test("U5: a held message shows its body only when opened; reply carries the observed pins, release takes two taps", async () => {
   setHandler(handler());
   mount();
+  await showAllActivity();
   fireEvent.click(
     await screen.findByRole("button", { name: "Show 1 held messages from a project lead" }),
   );
@@ -534,6 +550,7 @@ test("held messages start collapsed and group the same sender across channels", 
   ];
   setHandler(handler({ "organization.inbox": () => ({ ...inbox, items: grouped }) }));
   mount();
+  await showAllActivity();
   const button = await screen.findByRole("button", {
     name: "Show 2 held messages from the Fixture project lead",
   });
@@ -559,6 +576,7 @@ test("held badges show waiting time oldest first without changing the received i
   const original = JSON.stringify(rows);
   setHandler(handler({ "organization.inbox": () => ({ ...inbox, items: rows }) }));
   mount();
+  await showAllActivity();
   fireEvent.click(
     await screen.findByRole("button", { name: "Show 3 held messages from a project lead" }),
   );
@@ -587,6 +605,7 @@ test("read-only held cards never invite a reply", async () => {
     }),
   );
   mount();
+  await showAllActivity();
   fireEvent.click(
     await screen.findByRole("button", { name: "Show 1 held messages from a project lead" }),
   );
@@ -615,3 +634,126 @@ test("waiting time boundaries are plain elapsed time, including malformed and fu
     );
   assert.equal(waitingTime("invalid", now), "Waiting time unavailable");
 });
+
+test("history expansion exposes additional confirmed decisions once while held records stay separate", async () => {
+  const questions = Array.from({ length: 4 }, (_, index) => ({
+    ...items[0],
+    key: `decision-${index}`,
+    ref: `decision:11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`,
+    title: `Confirmed question ${index + 1}`,
+  }));
+  setHandler(
+    handler({
+      "organization.inbox": () => ({
+        ...inbox,
+        observedAt: new Date().toISOString(),
+        items: [...questions, items[1]],
+        counts: { ...inbox.counts, decisions: 4, held: 1, digests: 0, total: 5 },
+      }),
+    }),
+  );
+  mount();
+  await screen.findByText("Confirmed question 1");
+  assert.equal(screen.queryByText("Confirmed question 4"), null);
+  await showAllActivity();
+  await screen.findByText("Confirmed question 4");
+  for (const question of questions) assert.equal(screen.getAllByText(question.title).length, 1);
+  assert(screen.getByRole("button", { name: "Show 1 held messages from a project lead" }));
+  assert.equal(
+    calls.some((call) => call.name === "organization.held-message"),
+    false,
+    "history disclosure does not read/release retained bodies",
+  );
+});
+
+for (const decisionCount of [0, 1]) {
+  test(`a thrown refetch keeps the cached ${decisionCount}-decision observation visibly last-known and recovers through Retry`, async () => {
+    const listed = decisionCount ? items : [];
+    const cached = {
+      ...inbox,
+      observedAt: new Date().toISOString(),
+      items: listed,
+      counts: {
+        ...inbox.counts,
+        now: decisionCount ? 2 : 0,
+        decisions: decisionCount,
+        held: decisionCount,
+        digests: decisionCount,
+        fyi: decisionCount,
+        total: listed.length,
+      },
+    };
+    let failed = false;
+    setHandler(
+      handler({
+        "organization.inbox": () => {
+          if (failed) throw new Error("Current inbox read refused");
+          return { ...cached, observedAt: new Date().toISOString() };
+        },
+      }),
+    );
+    mount();
+    const currentHeadline = decisionCount
+      ? "1 open decision is addressed to you"
+      : "No confirmed unresolved decision is addressed to you in this observation.";
+    await screen.findByText(currentHeadline);
+    const client = clients.at(-1);
+    const cachedRecords = client.getQueryData(["orca-organization", "inbox"]).items;
+    failed = true;
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["orca-organization", "inbox"], exact: true });
+    });
+    await screen.findByText(/The latest inbox read failed/);
+    assert.match(screen.getByTestId("inbox-headline").textContent, /coverage is unknown/);
+    assert.equal(
+      screen.queryByText(currentHeadline),
+      null,
+      "the current failure replaces the confirmed-only headline",
+    );
+    assert(screen.getByText(/Current inbox read refused/));
+    assert(screen.getByText(/other personal actions cannot be ruled out/));
+    assert(screen.getByTestId("inbox-retry"));
+    const personal = within(screen.getByTestId("inbox-personal-decisions"));
+    assert.equal(personal.queryAllByTestId(`inbox-item-decision-${DEC}`).length, decisionCount);
+    if (decisionCount)
+      assert(personal.getByText("Last-known open decisions; current status could not be checked."));
+    assert.equal(
+      personal.queryByText(items[1].title),
+      null,
+      "held updates do not become obligations after a read failure",
+    );
+    assert.equal(
+      client.getQueryData(["orca-organization", "inbox"]).items,
+      cachedRecords,
+      "the failed query retains the exact cached records",
+    );
+    await showAllActivity();
+    if (decisionCount) {
+      assert(screen.getByText("Held messages · 1"));
+      assert(screen.getByText("Digest · 1"));
+    } else {
+      assert.equal(screen.queryByText("Held messages · 1"), null);
+      assert.equal(screen.queryByText("Digest · 1"), null);
+    }
+    assert.equal(
+      screen.queryAllByTestId(`inbox-item-decision-${DEC}`).length,
+      decisionCount,
+      "last-known decisions have one home",
+    );
+    assert(
+      calls.every((call) => call.name === "organization.inbox"),
+      "read failure/disclosure never writes or reads held bodies",
+    );
+    failed = false;
+    fireEvent.click(screen.getByTestId("inbox-retry"));
+    await screen.findByText(currentHeadline);
+    assert.equal(screen.queryByTestId("inbox-retry"), null);
+    assert.equal(screen.queryByText(/other personal actions cannot be ruled out/), null);
+    assert.equal(
+      screen.queryByText("Last-known open decisions; current status could not be checked."),
+      null,
+    );
+    assert.equal(screen.queryAllByTestId(`inbox-item-decision-${DEC}`).length, decisionCount);
+    assert(calls.every((call) => call.name === "organization.inbox"));
+  });
+}

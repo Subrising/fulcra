@@ -185,12 +185,12 @@ export function Activity({
         <Text style={muted}>
           {presentedHistorical.current
             ? "Historical page · automatic updates paused"
-            : "Activity updates paused · previous page retained"}
+            : "Live updates paused · showing the previous page"}
         </Text>
       )}
       {query.isError && <Text style={muted}>Return to latest to restart activity history.</Text>}
       {query.isFetching && d && (
-        <Text style={muted}>Loading requested page; retained details shown below.</Text>
+        <Text style={muted}>Loading the next page; earlier details are shown below.</Text>
       )}
       {!d && (
         <Text style={muted}>
@@ -241,10 +241,10 @@ export function Activity({
       <Text selectable style={muted}>
         Recorded title: {node.title}
       </Text>
-      <Text style={muted}>Native state: {node.status}</Text>
+      <Text style={muted}>Status: {node.status}</Text>
       <Text style={muted}>Session status describes activity, not task completion.</Text>
-      <Text style={muted}>State observed: {node.observedAt ?? "unknown"}</Text>
-      <Text style={muted}>Native update: {node.updatedAt ?? "unknown"}</Text>
+      <Text style={muted}>Last checked: {node.observedAt ?? "not known yet"}</Text>
+      <Text style={muted}>Last changed: {node.updatedAt ?? "not known yet"}</Text>
       {d && (
         <>
           <Text style={muted}>Activity observed: {d.observedAt}</Text>

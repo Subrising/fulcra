@@ -49,3 +49,11 @@ run(
       }
     : {},
 );
+if (process.platform === "darwin") {
+  const output = process.env.FULCRA_PACKAGE_OUTPUT ?? path.join(desktop, "release");
+  run(process.execPath, [
+    "scripts/packaged-runtime-gate.mjs",
+    path.join(output, `mac-${process.arch}`, "Fulcra.app"),
+    process.env.FULCRA_SPEECH_MODELS ?? path.join(process.env.HOME, ".paseo/models/local-speech"),
+  ]);
+}

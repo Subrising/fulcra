@@ -126,7 +126,7 @@ test("explicit protected operator queue uses one immutable attempt and displays 
     method: "operator-native-queue",
     input: { sessionId: id, expectedGeneration: 2, text: "bounded draft" },
   });
-  expect(container.textContent).toContain("Native receipt: queued");
+  expect(container.textContent).toContain("Message queued");
   expect(container.textContent).not.toContain("PRIVATE BODY");
   expect(container.querySelector("input")!.value).toBe("bounded draft");
 });
@@ -170,7 +170,7 @@ test("held generation replacement refuses old publication and keeps original att
   await send();
   await mount(true, 3);
   await act(async () => resolve({ ok: true, result: {} }));
-  expect(container.textContent).not.toContain("Native receipt");
+  expect(container.textContent).not.toContain("Message queued");
   await send();
   expect(rpc.invoke).toHaveBeenCalledTimes(1);
 });

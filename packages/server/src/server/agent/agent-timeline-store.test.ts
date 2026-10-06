@@ -21,6 +21,26 @@ import type { FileAgentTimelineStep } from "./file-agent-timeline-store.js";
 import { TimelineIndexBuilder, getTimelineFileHistory } from "./timeline-turn-index.js";
 
 describe("durable native timeline", () => {
+  it("reads existing journals without creating missing history or hiding corruption", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "paseo-timeline-existing-"));
+    try {
+      const store = new FileAgentTimelineStore(dir);
+      expect(await store.fetchExistingCommitted("missing")).toBeNull();
+      expect(readdirSync(dir)).toEqual([]);
+      await store.appendCommitted("agent", { type: "assistant_message", text: "persisted" });
+      const page = await store.fetchCommitted("agent");
+      const reopened = new FileAgentTimelineStore(dir);
+      expect(await reopened.fetchExistingCommitted("agent")).toEqual(page);
+      const file = readdirSync(dir).find((name) => name.endsWith(".jsonl"))!;
+      writeFileSync(join(dir, file), "corrupt journal\n");
+      await expect(
+        new FileAgentTimelineStore(dir).fetchExistingCommitted("agent"),
+      ).rejects.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("orders concurrent writes, snapshots queued inputs and fences delete", async () => {
     const dir = mkdtempSync(join(tmpdir(), "paseo-timeline-queue-"));
     try {

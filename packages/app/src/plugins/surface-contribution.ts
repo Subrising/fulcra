@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { LEGACY_CONTROLLER_PLUGIN_ID } from "@getpaseo/protocol/bundled-controller";
 import type { InstalledPlugin } from "./types";
 
 export type PluginSurfaceContributionIdentity =
@@ -42,6 +44,6 @@ export function getPluginSurfaceContributionServerIds(
 export function pluginSurfaceTitle(pluginId: string, contributionTitle?: string): string {
   return (
     contributionTitle ??
-    (pluginId === "orca-organization-next" ? "Fulcra Command Centre" : pluginId || "Plugin")
+    (pluginId === LEGACY_CONTROLLER_PLUGIN_ID ? "Fulcra Command Centre" : pluginId || "Plugin")
   );
 }

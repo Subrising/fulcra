@@ -1531,6 +1531,7 @@ test("config actions delegate to existing daemon config RPCs", async () => {
           mcp: { injectIntoAgents: true },
           providers: {},
           autoArchiveAfterMerge: false,
+          notificationMode: "primes",
         },
       },
     }),
@@ -1543,7 +1544,9 @@ test("config actions delegate to existing daemon config RPCs", async () => {
       browserTools: { enabled: false },
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
     },
   });
@@ -1582,6 +1585,7 @@ test("config actions delegate to existing daemon config RPCs", async () => {
             },
           },
           autoArchiveAfterMerge: false,
+          notificationMode: "primes",
         },
       },
     }),
@@ -1598,7 +1602,9 @@ test("config actions delegate to existing daemon config RPCs", async () => {
       browserTools: { enabled: false },
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
     },
   });
@@ -1851,4 +1857,45 @@ test("agent timeline handles expose the turn index behind the host feature", asy
     turnId: "turn-1",
   });
   await client.close();
+});
+
+test("observation-only usage public facade forwards the new flag without legacy feature requirements", async () => {
+  const { client, ws } = await connectClient({ pooledAccountUsageObservation: true });
+  const result = client.providers.listUsage({
+    requestId: "observed-public",
+    agentId: "chat",
+    accounts: true,
+    observationOnly: true,
+  });
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toEqual({
+    type: "provider.usage.list.request",
+    requestId: "observed-public",
+    agentId: "chat",
+    accounts: true,
+    observationOnly: true,
+  });
+  const payload = {
+    requestId: "observed-public",
+    fetchedAt: "2026-10-04T00:00:00Z",
+    providers: [],
+    accounts: [],
+    observationOnly: true,
+    sessionAccount: null,
+  };
+  ws.message(sessionMessage({ type: "provider.usage.list.response", payload }));
+  await expect(result).resolves.toEqual(payload);
+});
+test("observation-only usage public facade rejects old hosts and conflicting refresh without frames", async () => {
+  const { client, ws } = await connectClient({
+    providerUsageList: true,
+    pooledAccountUsageList: true,
+  });
+  const frames = ws.sent.length;
+  await expect(client.providers.listUsage({ observationOnly: true })).rejects.toThrow(
+    "observation-only usage",
+  );
+  await expect(
+    client.providers.listUsage({ observationOnly: true, refresh: true }),
+  ).rejects.toThrow("generating refresh");
+  expect(ws.sent.length).toBe(frames);
 });

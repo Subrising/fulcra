@@ -5,7 +5,7 @@ import type { PaseoSpeechConfig } from "../bootstrap.js";
 import type { InitializedLocalSpeech } from "./providers/local/runtime.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech-provider.js";
 import type { TurnDetectionProvider } from "./turn-detection-provider.js";
-import { createSpeechService } from "./speech-runtime.js";
+import { createSpeechService, findMissingRequiredLocalModels } from "./speech-runtime.js";
 
 const { ensureLocalSpeechModelsMock, initializeLocalSpeechServicesMock } = vi.hoisted(() => ({
   ensureLocalSpeechModelsMock: vi.fn(async () => ({})),
@@ -208,4 +208,39 @@ describe("createSpeechService readiness", () => {
 
     expect(downloadSignal?.aborted).toBe(true);
   });
+});
+
+it("detects VAD-only absence even when every selected STT component is complete", async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { listLocalSpeechModels, getLocalSpeechModelDir } =
+    await import("./providers/local/models.js");
+  const { listSherpaOnnxModels } = await import("./providers/local/sherpa/model-catalog.js");
+  const { recordModelCompletion } = await import("./providers/local/sherpa/model-integrity.js");
+  const { ensureSileroVadModel } = await import("./providers/local/sherpa/silero-vad-provider.js");
+  const root = await mkdtemp(path.join(tmpdir(), "fulcra-speech-readiness-"));
+  const modelId = "parakeet-tdt-0.6b-v2-int8";
+  const specs = listSherpaOnnxModels();
+  const spec = specs.find((model) => model.id === modelId)!;
+  const modelDir = path.join(root, spec.extractedDir);
+  try {
+    await mkdir(modelDir);
+    for (const file of spec.requiredFiles)
+      await writeFile(path.join(modelDir, file), "complete component fixture");
+    await recordModelCompletion(modelDir, spec.requiredFiles);
+    vi.mocked(listLocalSpeechModels).mockReturnValue(specs);
+    vi.mocked(getLocalSpeechModelDir).mockReturnValue(modelDir);
+    expect(
+      await findMissingRequiredLocalModels({ modelsDir: root, requiredModelIds: [modelId] }),
+    ).toEqual([modelId]);
+    await ensureSileroVadModel(root, pino({ level: "silent" }));
+    expect(
+      await findMissingRequiredLocalModels({ modelsDir: root, requiredModelIds: [modelId] }),
+    ).toEqual([]);
+  } finally {
+    vi.mocked(listLocalSpeechModels).mockReturnValue([]);
+    vi.mocked(getLocalSpeechModelDir).mockReturnValue("");
+    await rm(root, { recursive: true, force: true });
+  }
 });

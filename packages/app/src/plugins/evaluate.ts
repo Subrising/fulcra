@@ -1,4 +1,5 @@
 import type { createPluginHosts } from "./hosts";
+import { useObservedAgents } from "./observed-agents";
 import { openExternalUrl } from "@/utils/open-external-url";
 import * as pluginUiRuntime from "./react-native/ui";
 import { useSettings } from "./settings/use-settings";
@@ -381,6 +382,7 @@ export function runPluginClientBundle(
       return {
         ...pluginClientRuntime,
         useSettings,
+        useObservedAgents,
         openExternalUrl,
         getPaseoClient: (serverId: string) => runtime.hosts.getPaseoClient(serverId),
         useHosts: () =>

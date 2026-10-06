@@ -6,7 +6,13 @@ import assert from "node:assert/strict";
 import React from "react";
 import { JSDOM } from "jsdom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { calls, setHandler, copied } from "./ui-test-adapters.mjs";
+import {
+  calls,
+  setHandler,
+  copied,
+  setObservedAgents,
+  setNativeHostCatalog,
+} from "./ui-test-adapters.mjs";
 import { forgetAll } from "./last-good";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://component.test",
@@ -50,6 +56,8 @@ afterEach(() => {
   for (const c of clients.splice(0)) c.clear();
   copied.length = 0;
   forgetAll();
+  setObservedAgents({ entries: [], total: 0, truncated: 0, source: "native-cache" });
+  setNativeHostCatalog();
 });
 
 const seat = (role, id, session, mode, extra = {}) => ({
@@ -225,15 +233,8 @@ test("work map renders prime, projects and attention, and reads nothing but the 
     screen.getByRole("button", { name: "Attention: LinkedIn and content needs an orchestrator." }),
   );
   assert(screen.getByText(/Observed \d+ s ago/));
-  // Only the attention project opens by default; the other stays collapsed.
-  await waitFor(() =>
-    assert(
-      calls.some((c) => c.name === "organization.work-map-project" && c.input.projectId === P2),
-    ),
-  );
-  assert(
-    !calls.some((c) => c.name === "organization.work-map-project" && c.input.projectId === P1),
-  );
+  // The opening view stays at prime/project summaries and reads no project until expansion.
+  assert(!calls.some((call) => call.name === "organization.work-map-project"));
   assert(screen.getByRole("button", { name: /Project Orca platform.*collapsed/ }));
   assert(
     calls.every((c) => READS.has(c.name)),
@@ -244,6 +245,7 @@ test("work map renders prime, projects and attention, and reads nothing but the 
 test("expanding a project reads it once and shows workstreams and nested sessions with parent links", async () => {
   serve();
   mount(h(WorkMapSurface, props));
+  fireEvent.click(screen.getByRole("button", { name: "Activity: All observed" }));
   fireEvent.click(await screen.findByRole("button", { name: /Project Orca platform/ }));
   await screen.findByRole("button", { name: /Workstream AIN-107 · Work view, 2 sessions/ });
   assert(screen.getByRole("button", { name: "Session J2 design, run by Fulcra, running" }));
@@ -260,9 +262,10 @@ test("expanding a project reads it once and shows workstreams and nested session
   assert(calls.every((c) => READS.has(c.name)));
 });
 
-test("selecting a session shows its ids and the only action copies an id to this device", async () => {
+test("selecting a controller session shows its ids, preserves copying and disables unavailable native actions", async () => {
   serve();
   mount(h(WorkMapSurface, props));
+  fireEvent.click(screen.getByRole("button", { name: "Activity: All observed" }));
   fireEvent.click(await screen.findByRole("button", { name: /Project Orca platform/ }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Session J2 design, run by Fulcra, running" }),
@@ -280,6 +283,7 @@ test("selecting a session shows its ids and the only action copies an id to this
 test("no button on the work map is a control action", async () => {
   serve();
   mount(h(WorkMapSurface, props));
+  fireEvent.click(screen.getByRole("button", { name: "Activity: All observed" }));
   fireEvent.click(await screen.findByRole("button", { name: /Project Orca platform/ }));
   // Select a session first so the detail panel (the one place with an action) is on screen.
   fireEvent.click(
@@ -290,7 +294,7 @@ test("no button on the work map is a control action", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Show map" }));
   fireEvent.click(screen.getByRole("button", { name: "Status legend" }));
   const allowed =
-    /^(Refresh work map|Freeze updates|Resume updates|Show list|Show map|Status legend|Clear filters|Show details|Hide details|Copy id .*|Zoom in|Zoom out|Reset map|Pan (left|right|up|down)|Attention: .*|Prime seat .*|Project .*|Workstream .*|Session .*|Unplaced sessions.*|\d+ more sessions.*)$/;
+    /^(Refresh work map|Freeze updates|Resume updates|Show list|Show map|Status legend|Clear filters|Show details|Hide details|Show more filters|Hide more filters|Copy id .*|Open exact conversation|Open native Changes|Activity: .*|All hosts|Show active workers|Hide worker detail|Show recorded connections|Hide connections|Fit map|Focus selection|Zoom in|Zoom out|Reset map|Pan (left|right|up|down)|Attention: .*|Prime seat .*|Project .*|Workstream .*|Session .*|Unplaced sessions.*|\d+ more sessions.*)$/;
   for (const b of screen.getAllByRole("button"))
     assert.match(b.getAttribute("aria-label") ?? b.textContent, allowed);
   for (const word of [
@@ -366,6 +370,9 @@ test("freeze stops updates and says so; polling cadence is 15 s overview / 30 s 
   serve();
   const { client } = mount(h(WorkMapSurface, props));
   await screen.findByRole("button", { name: /Prime seat delivery/ });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Attention: LinkedIn and content needs an orchestrator." }),
+  );
   await waitFor(() =>
     assert(client.getQueryCache().find({ queryKey: ["orca-work-map-project", "mini", P2] })),
   );
@@ -393,6 +400,7 @@ test("the needs-attention filter and search narrow the outline; a miss offers to
   serve();
   mount(h(WorkMapSurface, props));
   await screen.findByRole("button", { name: /Project Orca platform/ });
+  fireEvent.click(screen.getByRole("button", { name: "Show more filters" }));
   fireEvent.click(screen.getByRole("radio", { name: "Filter: Needs attention" }));
   await waitFor(() =>
     assert.equal(screen.queryByRole("button", { name: /Project Orca platform/ }), null),
@@ -500,4 +508,73 @@ test("the home shows only ready tabs, and earlier tab ids still select their vie
     screen.getByTestId("organization-tab-channels").getAttribute("aria-selected"),
     "true",
   );
+});
+
+test("native cache event reveals Book work and opens only the exact Book conversation/Changes without a new read", async () => {
+  serve();
+  const targets = [];
+  const entry = {
+    serverId: "srv_book",
+    agentId: uuid(99),
+    hostName: "Book",
+    connection: "online",
+    title: "Book native worker",
+    provider: "codex",
+    model: "gpt-6.1-sol",
+    status: "running",
+    activity: "working",
+    observedAt: iso(),
+    creatorAgentId: null,
+    workspace: {
+      id: uuid(98),
+      projectId: uuid(97),
+      projectName: "Ship It",
+      kind: "worktree",
+      changesAvailable: true,
+    },
+  };
+  setNativeHostCatalog([{ serverId: "srv_book", label: "Book", status: "online" }]);
+  setObservedAgents({ entries: [entry], total: 1, truncated: 0, source: "native-cache" });
+  mount(
+    h(WorkMapSurface, {
+      ...props,
+      navigation: {
+        openAgentOnHost: (target) => {
+          targets.push(["chat", target]);
+          return "requested";
+        },
+        openAgentChangesOnHost: (target) => {
+          targets.push(["changes", target]);
+          return "requested";
+        },
+      },
+    }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Book native worker, Book, model turn active/ }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open exact conversation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open native Changes" }));
+  assert.deepEqual(targets, [
+    ["chat", { serverId: "srv_book", agentId: uuid(99) }],
+    ["changes", { serverId: "srv_book", agentId: uuid(99) }],
+  ]);
+  const count = calls.length;
+  await React.act(async () =>
+    setObservedAgents({
+      entries: [{ ...entry, connection: "offline", activity: "unavailable" }],
+      total: 1,
+      truncated: 0,
+      source: "native-cache",
+    }),
+  );
+  assert.equal(
+    screen.queryByRole("button", { name: "Open native Changes" }),
+    null,
+    "active filtering withdraws offline selection and its actions",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Activity: All observed" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Book native worker, Book,/ }));
+  assert.equal(screen.getByRole("button", { name: "Open native Changes" }).disabled, true);
+  assert.equal(calls.length, count, "a cached native event starts no provider/controller read");
 });

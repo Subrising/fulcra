@@ -1,3 +1,4 @@
+import { RecordedUsageSchema } from "./recorded-usage.js";
 import { GitAiDraftRequestSchema, GitAiDraftResponseSchema } from "./git-ai-draft.js";
 import {
   NativeArtifactContentReadInputSchema,
@@ -275,7 +276,9 @@ export const MutableDaemonConfigSchema = z
     providers: z.record(z.string(), MutableDaemonProviderConfigSchema).default({}),
     metadataGeneration: MutableMetadataGenerationConfigSchema.default({ providers: [] }),
     autoArchiveAfterMerge: z.boolean().default(false),
+    notificationMode: z.enum(["all", "primes", "off"]).default("primes"),
     enableTerminalAgentHooks: z.boolean().default(false),
+    autoResumeOnLimit: z.boolean().default(true),
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
@@ -296,7 +299,9 @@ export const MutableDaemonConfigPatchSchema = z
     removeProviders: z.array(z.string().min(1)).optional(),
     metadataGeneration: MutableMetadataGenerationConfigSchema.partial().optional(),
     autoArchiveAfterMerge: z.boolean().optional(),
+    notificationMode: z.enum(["all", "primes", "off"]).optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
+    autoResumeOnLimit: z.boolean().optional(),
     appendSystemPrompt: z.string().optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
@@ -457,6 +462,7 @@ const AgentCapabilityFlagsSchema: z.ZodType<AgentCapabilityFlags> = z
   .catchall(z.boolean());
 
 const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
+  recorded: RecordedUsageSchema.optional(),
   inputTokens: z.number().optional(),
   cachedInputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
@@ -1946,6 +1952,8 @@ export const ProviderUsageListRequestMessageSchema = z.object({
   // the daemon still probes an account at most once a minute. Older daemons ignore both.
   accounts: z.boolean().optional(),
   refresh: z.boolean().optional(),
+  // COMPAT(pooledAccountUsageObservation): added 2026-10-04; feature gate until host floor includes it.
+  observationOnly: z.boolean().optional(),
 });
 
 export const AgentQuotaReadRequestMessageSchema = z.object({
@@ -4085,6 +4093,12 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
         nativeQueuedMessages: z.boolean().optional(),
+        // Absent on older hosts means the usage-limit resume setting is unsupported.
+        autoResumeOnLimit: z.boolean().optional(),
+        // COMPAT(notificationPolicy): added 2026-10-04; remove optional gate after 2027-10-04.
+        // Literal true supports host policy AND fulcra.notify session overrides, regardless of current mode.
+        notificationPolicy: z.boolean().optional(),
+        pooledAccountUsageObservation: z.boolean().optional(),
         pluginCatalogPaging: z.boolean().optional(),
         gitAiDrafts: z.boolean().optional(),
         nativeOwnerReportInbox: z.boolean().optional(),
@@ -7279,6 +7293,19 @@ export const ProviderUsageListResponseMessageSchema = z.object({
     providers: z.array(ProviderUsageSchema),
     // update-7c: present when the request asked for `accounts` and the daemon has a pool.
     accounts: z.array(AccountUsageRowSchema).optional(),
+    observationOnly: z.boolean().optional(),
+    // Explicit session identity; null never authorizes presenting host defaults as bound account.
+    sessionAccount: z
+      .object({
+        accountId: z.string().nullable(),
+        provider: z.enum(["claude", "codex"]),
+        displayName: z.string(),
+        state: z.enum(["bound", "identity-unavailable"]),
+        source: z.literal("session-launch"),
+        usage: AccountUsageRowSchema.optional(),
+      })
+      .nullable()
+      .optional(),
   }),
 });
 

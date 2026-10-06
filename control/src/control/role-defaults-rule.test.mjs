@@ -6,16 +6,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { sessionDefaults, explicitSelection } from "./provider-mode.mjs";
-import { checkOverride, checkProvider } from "./provider-model.mjs";
-import {
-  readRoleDefaults,
-  writeRoleDefaults,
-} from "../../orca-organization/server/role-defaults-store.mjs";
+import { firstRun } from "../config.mjs";
 
-const scratch = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-role-rule-")));
+// Installation settings are read during module import. The test owns that root
+// before loading provider-mode, even when the invoking process has a real home.
+const installationRoot = fs.realpathSync(
+  fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-role-install-")),
+);
+firstRun({ ORCA_HOME: installationRoot });
+process.env.ORCA_HOME = installationRoot;
+after(() => fs.rmSync(installationRoot, { recursive: true, force: true }));
+const { sessionDefaults, explicitSelection } = await import("./provider-mode.mjs");
+const { checkOverride, checkProvider } = await import("./provider-model.mjs");
+const { readRoleDefaults, writeRoleDefaults, initializeRoleDefaults } =
+  await import("../../orca-organization/server/role-defaults-store.mjs");
+
+const scratch = () => fs.realpathSync(fs.mkdtempSync(path.join(installationRoot, "case-")));
 const pick = (d) => [d.model, d.thinkingOptionId, d.source.model, d.source.thinkingOptionId];
 const OPUS = { model: "claude/claude-opus-5-5", thinkingOptionId: "medium" };
 
@@ -217,11 +225,11 @@ test("checkProvider: a provider this host lists models for is available; an erro
   );
 });
 
-// Update-7 W3 (owner, 01:29Z): new sessions default to Claude `auto` / Codex `full-access`, stored per provider in the
+// Installation defaults: new sessions use Claude `auto` / Codex `auto-review`, stored per provider in the
 // Fulcra-owned store (no shared config key), editable in Settings, applied on every create path; an explicit mode wins.
-test("default permission modes: Claude auto, Codex full-access; a Settings choice wins over config, config over the seed", async () => {
+test("default permission modes: Claude auto, Codex auto-review; a Settings choice wins over config, config over the seed", async () => {
   const root = scratch();
-  assert.deepEqual(readRoleDefaults(root).modes, { claude: "auto", codex: "full-access" });
+  assert.deepEqual(readRoleDefaults(root).modes, { claude: "auto", codex: "auto-review" });
   assert.deepEqual(
     readRoleDefaults(root, null, { codex: "auto-review" }).modes,
     { claude: "auto", codex: "auto-review" },
@@ -242,13 +250,17 @@ test("default permission modes: Claude auto, Codex full-access; a Settings choic
   );
 });
 
-test("every controller create path launches with the default mode; an explicit mode wins; Codex full-access carries its pins", async () => {
+test("every controller create path launches with the default mode; an explicit mode wins; Codex auto-review carries its pins", async () => {
   const config = { home: scratch() };
+  initializeRoleDefaults(config.home);
   const claude = sessionDefaults("claude", {}, config, "implementation"),
     codex = sessionDefaults("codex", {}, config, "orchestration");
   assert.equal(claude.modeId, "auto");
-  assert.equal(codex.modeId, "full-access");
-  assert.deepEqual(codex.options, { approval_policy: "never", sandbox_mode: "danger-full-access" });
+  assert.equal(codex.modeId, "auto-review");
+  assert.deepEqual(codex.options, {
+    approval_policy: "on-request",
+    sandbox_mode: "workspace-write",
+  });
   assert.equal(
     sessionDefaults("codex", { modeId: "auto-review" }, config).modeId,
     "auto-review",
@@ -272,4 +284,26 @@ test("every controller create path launches with the default mode; an explicit m
     /Refused mode for claude/,
     "Claude bypass stays refused",
   );
+});
+
+test("fresh and migrated homes seed installation modes once and preserve explicit Settings bytes", async () => {
+  const root = scratch();
+  const table = initializeRoleDefaults(root);
+  assert.deepEqual(table.modes, { claude: "auto", codex: "auto-review" });
+  assert.equal(table.roles.implementation.provider, "codex");
+  assert.equal(table.roles.research.provider, "codex");
+  assert.equal(fs.statSync(path.join(root, "accounts/defaults.json")).mode & 0o777, 0o600);
+  assert.equal(sessionDefaults("claude", {}, { home: root }, "implementation").modeId, "auto");
+  assert.equal(
+    sessionDefaults("codex", {}, { home: root }, "implementation").modeId,
+    "auto-review",
+  );
+  await writeRoleDefaults(root, { mode: { provider: "claude", modeId: "plan" } });
+  const before = fs.readFileSync(path.join(root, "accounts/defaults.json"));
+  initializeRoleDefaults(root, null, { claude: "auto" });
+  assert.deepEqual(fs.readFileSync(path.join(root, "accounts/defaults.json")), before);
+  assert.equal(readRoleDefaults(root).modes.claude, "plan");
+  const migrated = scratch();
+  initializeRoleDefaults(migrated, null, { claude: "acceptEdits", codex: "auto" });
+  assert.deepEqual(readRoleDefaults(migrated).modes, { claude: "acceptEdits", codex: "auto" });
 });

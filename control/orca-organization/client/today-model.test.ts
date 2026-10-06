@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildToday, plain, plainTitle, limitWords, type TodayInputs } from "./today-model";
+import {
+  buildToday,
+  humanAttention,
+  retainedTodayNeeds,
+  type TodayItem,
+  plain,
+  plainTitle,
+  limitWords,
+  type TodayInputs,
+} from "./today-model";
 
 const P = "00000000-0000-46cd-9b65-000000002006",
   Q = "00000000-0000-46cd-9b65-000000002009";
@@ -12,6 +21,7 @@ const node = (n: number, status: string, updatedAt: string, extra: object = {}) 
   id: sid(n),
   task: T,
   host: "local",
+  serverId: "srv_TEST0001",
   agentId: sid(n),
   title: `Session ${n}`,
   provider: "claude",
@@ -433,4 +443,113 @@ test("U7 pending running session appears under Needs you and never Working", () 
   assert.equal(t.projects[0].running.length, 0);
   assert.equal(t.needs.filter((n) => n.action?.kind === "session").length, 1);
   assert.match(t.needs[0].text, /needs you/i);
+});
+
+test("human overview excludes old held/FYI/unknown events and groups the same open decision", () => {
+  const ref = `decision:${sid(80)}`;
+  const decision = {
+    key: "approval-one",
+    source: "decision",
+    ref,
+    title: "Choose release scope",
+    summary: "The project lead needs the release scope before shipping.",
+    projectId: P,
+    urgency: "now",
+    createdAt: new Date(NOW).toISOString(),
+    unread: true,
+  };
+  const held = { ...decision, key: "held-old", source: "held", ref: null, urgency: "now" };
+  const answered = { ...decision, key: "answered", ref: `decision:${sid(81)}`, urgency: "fyi" };
+  const input = base({
+    inbox: {
+      version: 1,
+      observedAt: new Date(NOW).toISOString(),
+      error: null,
+      counts: {
+        now: 1,
+        today: 0,
+        fyi: 1,
+        decisions: 2,
+        approvals: 1,
+        held: 1,
+        digests: 0,
+        total: 4,
+      },
+      stale: false,
+      partial: false,
+      items: [held, decision, { ...decision, key: "duplicate-report" }, answered],
+    } as any,
+  });
+  const view = humanAttention(input);
+  assert.equal(view.actions.length, 1);
+  assert.equal(view.actions[0].action?.kind, "decision");
+  assert.match(view.actions[0].detail!, /project lead needs/);
+  assert.equal(view.actions[0].project, "Fulcra Command Centre");
+});
+
+test("only fresh uniquely addressed native permission waits become human actions", () => {
+  const fresh = node(1, "idle", new Date(NOW).toISOString(), {
+    pending: 1,
+    serverId: "srv_book",
+    observedAt: new Date(NOW).toISOString(),
+  });
+  const stale = node(2, "idle", new Date(NOW).toISOString(), {
+    pending: 1,
+    serverId: "srv_book",
+    observedAt: new Date(NOW - 60000).toISOString(),
+  });
+  const unbound = node(3, "idle", new Date(NOW).toISOString(), {
+    serverId: null,
+    pending: 1,
+    observedAt: new Date(NOW).toISOString(),
+  });
+  const view = humanAttention(
+    base({ fleets: { [P]: fleet([fresh, stale, unbound]), [Q]: fleet([fresh]) } }),
+  );
+  assert.equal(view.actions.filter((item) => item.action?.kind === "session").length, 1);
+  const action = view.actions.find((item) => item.action?.kind === "session")!.action;
+  assert.equal(action?.kind === "session" && action.serverId, "srv_book");
+  assert.equal(view.unknown, true);
+});
+
+test("stale/missing human decision sources remain unknown, never an all-clear obligation count", () => {
+  const view = humanAttention(base({ inbox: undefined, inboxFailed: true }));
+  assert.deepEqual(view.actions, []);
+  assert.equal(view.unknown, true);
+});
+
+test("confirmed obligations have one home while held/history and unmatched source identity remain retained", () => {
+  const question: TodayItem = {
+    key: "question",
+    text: "Choose",
+    detail: null,
+    projectId: P,
+    project: "Tally",
+    at: null,
+    action: { kind: "decision", id: "question-id" },
+  };
+  const permission: TodayItem = {
+    ...question,
+    key: "permission",
+    action: { kind: "session", agentId: "agent", serverId: "Book" },
+  };
+  const report: TodayItem = { ...question, key: "held", action: { kind: "held-list" } };
+  const otherHost: TodayItem = {
+    ...permission,
+    key: "other-host",
+    action: { kind: "session", agentId: "agent", serverId: "Mini" },
+  };
+  const unknownHost: TodayItem = {
+    ...permission,
+    key: "unknown",
+    action: { kind: "session", agentId: "agent" },
+  };
+  const records = [question, permission, report, otherHost, unknownHost];
+  assert.deepEqual(retainedTodayNeeds(records, [question, permission]), [
+    report,
+    otherHost,
+    unknownHost,
+  ]);
+  assert.equal(records.length, 5);
+  assert.equal(retainedTodayNeeds(records, []).length, 5);
 });

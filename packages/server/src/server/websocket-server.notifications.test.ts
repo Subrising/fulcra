@@ -46,6 +46,10 @@ import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 
 interface WebSocketServerInternals {
   sessions: Map<unknown, unknown>;
+  buildServerInfoStatusPayload(
+    session: { getPermissions(): unknown },
+    capable?: boolean,
+  ): { features?: { notificationPolicy?: boolean; pooledAccountUsageObservation?: boolean } };
   broadcastAgentAttention(params: {
     agentId: string;
     reason: string;
@@ -82,13 +86,21 @@ class RecordingPushNotificationSender implements PushNotificationSender {
   }
 }
 
-function createServer(agentManagerOverrides?: Record<string, unknown>) {
+function createServer(
+  agentManagerOverrides?: Record<string, unknown>,
+  notificationMode: "all" | "primes" | "off" = "all",
+) {
   const pushNotifications = new RecordingPushNotificationSender();
   const agentManager = {
     subscribe: vi.fn(() => () => {}),
     setAgentAttentionCallback: vi.fn(),
     setNativeMessageReceipts: vi.fn(),
-    getAgent: vi.fn(() => ({ workspaceId: WORKSPACE_ID, pendingPermissions: new Map() })),
+    getAgent: vi.fn(() => ({
+      config: { title: null },
+      workspaceId: WORKSPACE_ID,
+      pendingPermissions: new Map(),
+    })),
+    listAgents: vi.fn(() => []),
     getLastAssistantMessage: vi.fn(async () => null),
     getMetricsSnapshot: vi.fn(() => ({
       total: 0,
@@ -104,6 +116,7 @@ function createServer(agentManagerOverrides?: Record<string, unknown>) {
   const daemonConfigStore = {
     onApply: vi.fn(() => () => {}),
     onChange: vi.fn(() => () => {}),
+    get: vi.fn(() => ({ notificationMode })),
   };
 
   const server = new VoiceAssistantWebSocketServer(
@@ -286,6 +299,99 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     expect(getLastAssistantMessage).toHaveBeenCalledWith("agent-1");
   });
 
+  it("pushes a prime reply under the session title and suppresses a worker reply", async () => {
+    const agentFor = (labels: Record<string, string>) =>
+      vi.fn(() => ({
+        config: { title: "Release prime" },
+        cwd: "/tmp/worktree",
+        workspaceId: WORKSPACE_ID,
+        labels,
+        pendingPermissions: new Map(),
+      }));
+    const getLastAssistantMessage = vi.fn(async () => "Shipped v0.2.1 candidate.");
+    const prime = createServer(
+      { getAgent: agentFor({ "fulcra.role": "orchestration" }), getLastAssistantMessage },
+      "primes",
+    );
+    const worker = createServer(
+      { getAgent: agentFor({ "fulcra.role": "implementation" }), getLastAssistantMessage },
+      "primes",
+    );
+
+    for (const { server } of [prime, worker]) {
+      await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+        agentId: "agent-1",
+        provider: "claude",
+        reason: "finished",
+      });
+    }
+
+    expect(prime.pushNotifications.sent).toEqual([
+      expect.objectContaining({ title: "Release prime", body: "Shipped v0.2.1 candidate." }),
+    ]);
+    expect(worker.pushNotifications.sent).toHaveLength(0);
+  });
+
+  it("pushes a pinned worker in primes mode and not an unpinned one", async () => {
+    const getAgent = vi.fn(() => ({
+      config: { title: "Pinned" },
+      workspaceId: WORKSPACE_ID,
+      labels: { "fulcra.role": "implementation" },
+      pendingPermissions: new Map(),
+    }));
+    const pinned = createServer({ getAgent }, "primes");
+    const unpinned = createServer({ getAgent }, "primes");
+    Object.assign(pinned.server, {
+      workspaceRegistry: { get: async () => ({ pinnedAt: "2026-10-01T00:00:00.000Z" }) },
+    });
+
+    for (const { server } of [pinned, unpinned]) {
+      await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+        agentId: "agent-1",
+        provider: "claude",
+        reason: "finished",
+      });
+    }
+
+    expect(pinned.pushNotifications.sent).toHaveLength(1);
+    expect(unpinned.pushNotifications.sent).toHaveLength(0);
+  });
+
+  it("pushes for a worker that has children and honours the per-session off toggle", async () => {
+    const base = {
+      config: { title: "Lead" },
+      workspaceId: WORKSPACE_ID,
+      pendingPermissions: new Map(),
+    };
+    const parent = createServer(
+      {
+        getAgent: vi.fn(() => ({ ...base, labels: { "fulcra.role": "implementation" } })),
+        listAgents: vi.fn(() => [{ labels: { "paseo.parent-agent-id": "agent-1" } }]),
+      },
+      "primes",
+    );
+    const muted = createServer(
+      {
+        getAgent: vi.fn(() => ({
+          ...base,
+          labels: { "fulcra.role": "orchestration", "fulcra.notify": "off" },
+        })),
+      },
+      "primes",
+    );
+
+    for (const { server } of [parent, muted]) {
+      await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+        agentId: "agent-1",
+        provider: "claude",
+        reason: "finished",
+      });
+    }
+
+    expect(parent.pushNotifications.sent).toHaveLength(1);
+    expect(muted.pushNotifications.sent).toHaveLength(0);
+  });
+
   it("sends push notifications regardless of UI label presence", async () => {
     const getLastAssistantMessage = vi.fn(async () => "Done.");
     const { server, pushNotifications } = createServer({
@@ -364,3 +470,15 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     expect(pushNotifications.sent).toEqual([]);
   });
 });
+
+it.each(["all", "primes", "off"] as const)(
+  "advertises host AND session policy independently of %s mode",
+  (mode) => {
+    const { server } = createServer(undefined, mode);
+    const payload = asInternals<WebSocketServerInternals>(server).buildServerInfoStatusPayload({
+      getPermissions: () => [],
+    });
+    expect(payload.features?.notificationPolicy).toBe(true);
+    expect(payload.features?.pooledAccountUsageObservation).toBe(true);
+  },
+);

@@ -38,6 +38,7 @@ import {
   GitPullRequest,
   Image as ImageIcon,
   ClipboardPaste,
+  Camera,
   Paperclip,
 } from "lucide-react-native";
 import * as Clipboard from "expo-clipboard";
@@ -90,6 +91,8 @@ import { AutocompletePopover } from "@/components/ui/autocomplete-popover";
 import type { AutocompleteOption } from "@/components/ui/autocomplete";
 import { useAgentAutocomplete } from "@/hooks/use-agent-autocomplete";
 import { usePluginClientSlashCommands } from "@/plugins/client-slash-commands";
+import { useAgentCommandsQuery } from "@/hooks/use-agent-commands-query";
+import { unhandledSlashCommandError } from "@/plugins/client-slash-commands/model";
 import {
   executePluginClientSlashCommand,
   resolvePluginClientSlashCommand,
@@ -272,7 +275,6 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
       status: agent?.status ?? null,
       contextWindowMaxTokens: agent?.lastUsage?.contextWindowMaxTokens ?? null,
       contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
-      totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
       model: agent?.model ?? null,
       provider: agent?.provider ?? null,
     };
@@ -282,7 +284,6 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
 function renderContextWindowMeter(
   contextWindowMaxTokens: number | null,
   contextWindowUsedTokens: number | null,
-  totalCostUsd: number | null,
   showPercentage: boolean,
   serverId: string,
   agentId: string,
@@ -290,15 +291,10 @@ function renderContextWindowMeter(
   pending: boolean,
   glyphSize: number,
 ): ReactElement | null {
-  const hasData = contextWindowMaxTokens !== null && contextWindowUsedTokens !== null;
-  if (!hasData && !pending) {
-    return null;
-  }
   return (
     <ContextWindowMeter
       maxTokens={contextWindowMaxTokens}
       usedTokens={contextWindowUsedTokens}
-      totalCostUsd={totalCostUsd}
       showPercentage={showPercentage}
       serverId={serverId}
       agentId={agentId}
@@ -1403,6 +1399,24 @@ function ComposerContentImpl({
     workspaceId,
     agentId,
   });
+  const { commands: providerSlashCommands } = useAgentCommandsQuery({
+    serverId,
+    agentId,
+    draftConfig: commandDraftConfig,
+  });
+  const rejectUnhandledSlashCommand = useCallback(
+    (text: string, hasAttachments: boolean) => {
+      const error = unhandledSlashCommandError({
+        text,
+        hasAttachments,
+        providerCommands: providerSlashCommands,
+      });
+      if (!error) return false;
+      setSendError(error);
+      return true;
+    },
+    [providerSlashCommands],
+  );
   const isComposerLocked = resolveIsComposerLocked(submitBehavior, isSubmitLoading);
   const keyboardHandlerIdRef = useRef(
     `message-input:${serverId}:${agentId}:${Math.random().toString(36).slice(2)}`,
@@ -1475,7 +1489,7 @@ function ComposerContentImpl({
     [blurOnSubmit, clearDraft, replaceUserInput, resetSuppression, setSelectedAttachments],
   );
 
-  const { pickImages } = useImageAttachmentPicker();
+  const { pickImages, takePhoto } = useImageAttachmentPicker();
   const { pickFiles } = useFilePicker();
   const agentIdRef = useRef(agentId);
   const sendAgentMessageRef = useRef<
@@ -1729,6 +1743,8 @@ function ComposerContentImpl({
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
 
+      if (rejectUnhandledSlashCommand(payload.text, outgoingAttachments.length > 0)) return;
+
       if (blurOnSubmit) {
         messageInputRef.current?.blur();
       }
@@ -1741,6 +1757,7 @@ function ComposerContentImpl({
       runClientSlashCommand,
       pluginClientSlashCommands,
       runPluginClientSlashCommand,
+      rejectUnhandledSlashCommand,
       sendMessageWithContent,
     ],
   );
@@ -1753,6 +1770,15 @@ function ComposerContentImpl({
     if (newImages.length === 0) return;
     addImages(newImages);
   }, [addImages, pickImages]);
+
+  const handleTakePhoto = useCallback(async () => {
+    const newImages = await pickAndPersistImages({
+      pickImages: takePhoto,
+      persister: composerImageAttachmentPersister,
+    });
+    if (newImages.length === 0) return;
+    addImages(newImages);
+  }, [addImages, takePhoto]);
 
   const handlePasteImage = useCallback(async () => {
     try {
@@ -1981,6 +2007,7 @@ function ComposerContentImpl({
         commands: pluginClientSlashCommands,
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
+      if (rejectUnhandledSlashCommand(payload.text, outgoingAttachments.length > 0)) return;
       queueMessage(payload.text, outgoingAttachments);
     },
     [
@@ -1990,6 +2017,7 @@ function ComposerContentImpl({
       queueMessage,
       runClientSlashCommand,
       runPluginClientSlashCommand,
+      rejectUnhandledSlashCommand,
     ],
   );
 
@@ -2085,7 +2113,6 @@ function ComposerContentImpl({
       renderContextWindowMeter(
         contextWindowMaxTokens,
         contextWindowUsedTokens,
-        agentState.totalCostUsd,
         false,
         serverId,
         agentId,
@@ -2096,7 +2123,6 @@ function ComposerContentImpl({
     [
       contextWindowMaxTokens,
       contextWindowUsedTokens,
-      agentState.totalCostUsd,
       serverId,
       agentId,
       agentState.provider,
@@ -2162,7 +2188,7 @@ function ComposerContentImpl({
     const items: AttachmentMenuItem[] = [
       {
         id: "image",
-        label: t("composer.attachments.addImage"),
+        label: t(isNative ? "composer.attachments.choosePhoto" : "composer.attachments.addImage"),
         icon: <ThemedImageIcon size={ICON_SIZE.md} uniProps={iconForegroundMutedMapping} />,
         onSelect: () => {
           void handlePickImage();
@@ -2170,6 +2196,14 @@ function ComposerContentImpl({
       },
     ];
     if (isNative) {
+      items.push({
+        id: "take-photo",
+        label: t("composer.attachments.takePhoto"),
+        icon: <ThemedCamera size={ICON_SIZE.md} uniProps={iconForegroundMutedMapping} />,
+        onSelect: () => {
+          void handleTakePhoto();
+        },
+      });
       items.push({
         id: "paste-image",
         label: t("composer.attachments.pasteImage"),
@@ -2204,6 +2238,7 @@ function ComposerContentImpl({
   }, [
     forgePresentation,
     handlePasteImage,
+    handleTakePhoto,
     handlePickFile,
     handlePickImage,
     pluginAttachments.menuItems,
@@ -2664,6 +2699,7 @@ const ThemedCircleDot = withUnistyles(CircleDot);
 const ThemedAudioLines = withUnistyles(AudioLines);
 const ThemedPaperclip = withUnistyles(Paperclip);
 const ThemedImageIcon = withUnistyles(ImageIcon);
+const ThemedCamera = withUnistyles(Camera);
 const ThemedClipboardPaste = withUnistyles(ClipboardPaste);
 const ThemedFileText = withUnistyles(FileText);
 const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });

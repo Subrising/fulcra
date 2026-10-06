@@ -340,3 +340,21 @@ describe("DictationStreamSender", () => {
     expect(client.finishes).toEqual([{ dictationId: "d1", finalSeq: 479 }]);
   });
 });
+
+it("keeps local dictation audio off the host until fallback, and retains it after refusal", async () => {
+  const client = new FakeDaemonClient();
+  const sender = new DictationStreamSender({ client, format: "audio/pcm;rate=16000;bits=16" });
+  sender.setPaused(true);
+  sender.enqueueSegment("inert-audio-one");
+  sender.enqueueSegment("inert-audio-two");
+  await tick();
+  expect(client.starts).toHaveLength(0);
+  expect(client.chunks).toHaveLength(0);
+  expect(sender.getSegmentCount()).toBe(2);
+  sender.setPaused(false);
+  const result = await sender.finish(sender.getFinalSeq());
+  expect(result.text).toBe("ok");
+  expect(client.chunks.map((chunk) => chunk.audio)).toEqual(["inert-audio-one", "inert-audio-two"]);
+  expect(sender.hasSegments()).toBe(true);
+  sender.dispose();
+});

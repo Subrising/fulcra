@@ -338,17 +338,23 @@ export class Events {
       this.lastError = { worker, message: e.message, at: new Date().toISOString() };
     }
   }
-  inbox(id, capability) {
+  inbox(id, capability, includeConsumed = false) {
     this.checkInbox(id, capability);
+    if (typeof includeConsumed !== "boolean") throw Error("Invalid inbox history option");
+    // Keep consumption history in the journal without replaying old worker previews on each wake.
+    const historyFilter = includeConsumed ? "" : " AND consumed IS NULL";
     return {
-      handoffs: this.control.leadership?.summary(id) ?? [],
+      handoffs: this.control.leadership?.summary(id, includeConsumed) ?? [],
       events: this.db
         .prepare(
-          "SELECT * FROM event_inbox WHERE supervisor=? ORDER BY (consumed IS NULL) DESC,rowid DESC LIMIT 20",
+          `SELECT * FROM event_inbox WHERE supervisor=?${historyFilter} ORDER BY (consumed IS NULL) DESC,rowid DESC LIMIT 20`,
         )
         .all(id)
         .map((e) => ({ ...e, payload: JSON.parse(e.payload) })),
       total: this.db.prepare("SELECT count(*) n FROM event_inbox WHERE supervisor=?").get(id).n,
+      unconsumed: this.db
+        .prepare("SELECT count(*) n FROM event_inbox WHERE supervisor=? AND consumed IS NULL")
+        .get(id).n,
     };
   }
   acknowledge(a, capability) {

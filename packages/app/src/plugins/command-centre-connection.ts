@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { LEGACY_CONTROLLER_PLUGIN_ID } from "@getpaseo/protocol/bundled-controller";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { i18n } from "@/i18n/i18next";
 import { getHostRuntimeStore, type ActiveConnection } from "@/runtime/host-runtime";
@@ -9,7 +11,7 @@ import { getHostRuntimeStore, type ActiveConnection } from "@/runtime/host-runti
  * app sends none and says plainly what the user can do; the host runtime switches to a direct connection
  * whenever one is reachable (connection-selection.ts).
  */
-export const COMMAND_CENTRE_PLUGIN_ID = "orca-organization-next";
+export const COMMAND_CENTRE_PLUGIN_ID = LEGACY_CONTROLLER_PLUGIN_ID;
 
 export class CommandCentreNeedsDirectConnectionError extends Error {
   constructor() {

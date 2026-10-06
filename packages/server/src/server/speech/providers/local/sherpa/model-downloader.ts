@@ -1,3 +1,4 @@
+import { hasCompleteModelFiles, recordModelCompletion } from "./model-integrity.js";
 import { createWriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
@@ -111,7 +112,7 @@ export async function ensureSherpaOnnxModel(
 
   const spec = getSherpaOnnxModelSpec(options.modelId);
   const modelDir = path.join(options.modelsDir, spec.extractedDir);
-  if (await hasRequiredFiles(modelDir, spec.requiredFiles)) {
+  if (await hasCompleteModelFiles(modelDir, spec.requiredFiles)) {
     return modelDir;
   }
 
@@ -153,13 +154,8 @@ export async function ensureSherpaOnnxModel(
       );
     }
 
-    logger.info(
-      {
-        modelId: options.modelId,
-        archivePath,
-      },
-      "Finalizing model artifacts",
-    );
+    await recordModelCompletion(modelDir, spec.requiredFiles);
+    logger.info({ modelId: options.modelId, archivePath }, "Finalizing complete model artifacts");
     try {
       await rm(archivePath, { force: true });
     } catch {

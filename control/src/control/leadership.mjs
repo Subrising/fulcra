@@ -195,11 +195,12 @@ export class Leadership {
   row(id) {
     return this.db.prepare("SELECT * FROM leadership_handoffs WHERE id=?").get(id);
   }
-  summary(destination) {
+  summary(destination, includeConsumed = true) {
+    const historyFilter = includeConsumed ? "" : " AND consumed IS NULL";
     const rows = destination
       ? this.db
           .prepare(
-            "SELECT * FROM leadership_handoffs WHERE destination=? ORDER BY (state='pending') DESC,rowid DESC LIMIT 20",
+            `SELECT * FROM leadership_handoffs WHERE destination=?${historyFilter} ORDER BY (state='pending') DESC,rowid DESC LIMIT 20`,
           )
           .all(destination)
       : this.db.prepare("SELECT * FROM leadership_handoffs ORDER BY rowid DESC LIMIT 20").all();

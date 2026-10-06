@@ -14,6 +14,7 @@ import {
   isHostRuntimeConnected,
   useHosts,
   useHostMutations,
+  type PasswordRequiredPairing,
 } from "@/runtime/host-runtime";
 import { machineName } from "@/hosts/replace-host";
 import { ReplaceOldHostCard } from "@/components/hosts/replace-old-host";
@@ -23,6 +24,7 @@ import {
   pairEveryOffer,
   parsePairingBundle,
 } from "@/relay/pairing-bundle";
+import { getConnectionAuthFailureReason } from "@/utils/test-daemon-connection";
 import { decodeOfferFragmentPayload } from "@/utils/daemon-endpoints";
 import {
   parseConnectionOffer,
@@ -71,6 +73,7 @@ const styles = StyleSheet.create((theme) => ({
 export interface PairLinkModalProps {
   visible: boolean;
   repairHost?: HostProfile;
+  passwordRequired?: PasswordRequiredPairing;
   onClose: () => void;
   onCancel?: () => void;
   onSaved?: (result: {
@@ -81,24 +84,35 @@ export interface PairLinkModalProps {
   }) => void;
 }
 
-export function PairLinkModal({
+export function PairLinkModal(props: PairLinkModalProps) {
+  return (
+    <PairLinkModalContent
+      key={`${props.visible}:${props.passwordRequired?.link ?? ""}`}
+      {...props}
+    />
+  );
+}
+function PairLinkModalContent({
   visible,
   onClose,
   onCancel,
   onSaved,
   repairHost,
+  passwordRequired,
 }: PairLinkModalProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const daemons = useHosts();
-  const { upsertConnectionFromOfferUrl: upsertDaemonFromOfferUrl, upsertConnectionFromOffer } =
-    useHostMutations();
+  const { beginLinkPairing, upsertConnectionFromOffer } = useHostMutations();
   // Pair once, see every Mac: a link carrying one offer per Mac, and what pairing with each did.
   const [bundle, setBundle] = useState<ConnectionOffer[] | null>(null);
   const [bundleResult, setBundleResult] = useState<string | null>(null);
   const isMobile = useIsCompactFormFactor();
 
-  const offerUrlRef = useRef("");
+  const [pairing] = useState(() => passwordRequired?.pairing ?? beginLinkPairing());
+  const [password, setPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(passwordRequired !== undefined);
+  const offerUrlRef = useRef(passwordRequired?.link ?? "");
   const inputRef = useRef<EditingTextInputHandle>(null);
   const [preview, setPreview] = useState<ConnectionOffer | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -133,6 +147,21 @@ export function PairLinkModal({
     setErrorMessage("");
     (onCancel ?? onClose)();
   }, [isSaving, clearInput, onCancel, onClose]);
+
+  const hasStaleHost = useCallback(
+    (profile: HostProfile, isNewHost: boolean) => {
+      const name = machineName(profile.label);
+      const stale = daemons.some(
+        (other) =>
+          other.serverId !== profile.serverId &&
+          other.label !== other.serverId &&
+          machineName(other.label) === name &&
+          !isHostRuntimeConnected(getHostRuntimeStore().getSnapshot(other.serverId)),
+      );
+      return isNewHost && !repairHost && Boolean(name) && stale;
+    },
+    [daemons, repairHost],
+  );
 
   const handleSave = useCallback(async () => {
     if (isSaving) return;
@@ -194,22 +223,16 @@ export function PairLinkModal({
       setErrorMessage("");
 
       const isNewHost = !daemons.some((daemon) => daemon.serverId === parsedOffer.serverId);
-      const profile = await upsertDaemonFromOfferUrl(raw, parsedOffer.hostLabel);
+      const outcome = await pairing.submit(raw, password || undefined);
+      if (outcome.status === "cancelled") return;
+      const { profile } = outcome;
       onSaved?.({
         profile,
         serverId: parsedOffer.serverId,
         hostname: parsedOffer.hostLabel ?? null,
         isNewHost,
       });
-      const name = machineName(profile.label);
-      const stale = daemons.some(
-        (other) =>
-          other.serverId !== profile.serverId &&
-          other.label !== other.serverId &&
-          machineName(other.label) === name &&
-          !isHostRuntimeConnected(getHostRuntimeStore().getSnapshot(other.serverId)),
-      );
-      if (isNewHost && !repairHost && name && stale) {
+      if (hasStaleHost(profile, isNewHost)) {
         clearInput();
         setPairedAgain(profile.serverId);
         return;
@@ -219,6 +242,10 @@ export function PairLinkModal({
       const message =
         error instanceof Error ? error.message : t("pairing.link.errors.unableToPair");
       setErrorMessage(message);
+      if (getConnectionAuthFailureReason(error)) {
+        setNeedsPassword(true);
+        return;
+      }
       if (!isMobile) {
         Alert.alert(t("pairing.link.alert.failedTitle"), message);
       }
@@ -230,16 +257,22 @@ export function PairLinkModal({
     clearInput,
     daemons,
     handleClose,
+    hasStaleHost,
     isMobile,
     isSaving,
     onSaved,
     repairHost,
     t,
     upsertConnectionFromOffer,
-    upsertDaemonFromOfferUrl,
+    pairing,
+    password,
   ]);
 
   const handleChangeOfferUrl = useCallback((next: string) => {
+    if (offerUrlRef.current !== next) {
+      setPassword("");
+      setNeedsPassword(false);
+    }
     offerUrlRef.current = next;
     if (isPairingBundle(next)) {
       setPreview(null);
@@ -309,6 +342,7 @@ export function PairLinkModal({
             <Text style={styles.label}>{t("pairing.link.label")}</Text>
             <AdaptiveTextInput
               ref={inputRef}
+              initialValue={passwordRequired?.link}
               testID="pair-link-input"
               nativeID="pair-link-input"
               accessibilityLabel={t("pairing.link.label")}
@@ -324,6 +358,17 @@ export function PairLinkModal({
             {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
           </View>
 
+          {needsPassword ? (
+            <View style={styles.field}>
+              <Text style={styles.label}>{t("pairing.hostPassword.label")}</Text>
+              <AdaptiveTextInput
+                testID="pair-link-password-input"
+                onChangeText={setPassword}
+                secureTextEntry
+                style={styles.input}
+              />
+            </View>
+          ) : null}
           {preview ? <PairingHostIdentity offer={preview} /> : null}
           {bundle ? (
             <View testID="pair-link-bundle">

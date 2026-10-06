@@ -137,7 +137,7 @@ test("authority revoked while quota is pending cannot submit", async () => {
   }
 });
 
-test.each(["model", "fast", "account", "disconnect"])(
+test.each(["model", "fast", "disconnect"])(
   "changed %s during quota read cannot submit",
   async (kind) => {
     const quota = deferred(),
@@ -150,14 +150,10 @@ test.each(["model", "fast", "account", "disconnect"])(
           return true;
         },
       });
-      const failed = expect(turn).rejects.toThrow(/quota/);
+      const failed = expect(turn).rejects.toBeInstanceOf(CodexQuotaError);
       await f.server.waitForRequest("account/rateLimits/read");
       if (kind === "model") await f.session.setModel("gpt-5.5");
       if (kind === "fast") await f.session.setFeature("fast_mode", true);
-      if (kind === "account")
-        f.server.child.stdout.write(
-          JSON.stringify({ method: "account/updated", params: {} }) + "\n",
-        );
       if (kind === "disconnect") f.server.disconnect();
       quota.release(allowed);
       await failed;
@@ -200,7 +196,9 @@ test.each([
     options: AgentRunOptions = {};
   Reflect.set(options, CODEX_TURN_ADMISSION, invalid);
   try {
-    await expect(f.session.startTurn("Owned work", options)).rejects.toThrow(/admission_refused/);
+    await expect(f.session.startTurn("Owned work", options)).rejects.toMatchObject({
+      code: "admission_refused",
+    });
     expect(f.submissions()).toEqual([]);
   } finally {
     await f.session.close();
@@ -217,7 +215,7 @@ test("a configuration change inside the synchronous callback cannot submit stale
           return true;
         },
       }),
-    ).rejects.toThrow(/session_changed/);
+    ).rejects.toMatchObject({ code: "session_changed" });
     expect(f.submissions()).toEqual([]);
   } finally {
     await f.session.close();
@@ -347,7 +345,11 @@ test.each(["unavailable", "read_failed", "invalid_reply"] as const)(
     try {
       await expect(
         f.session.startTurn("work", { [CODEX_TURN_ADMISSION]: admission }),
-      ).rejects.toThrow("admission_refused");
+      ).rejects.toMatchObject({
+        code: "admission_refused",
+        readFailure: code,
+        message: expect.stringMatching(/^The Codex turn wasn't sent: /),
+      });
       expect(failures).toEqual([
         {
           turn: {
@@ -381,7 +383,7 @@ test("P5: callback throw or attempted allow cannot turn a quota failure into dis
         f.session.startTurn("work", {
           [CODEX_TURN_ADMISSION]: capturedAdmission({ onQuotaReadFailure: callback }),
         }),
-      ).rejects.toThrow("admission_refused");
+      ).rejects.toMatchObject({ code: "admission_refused", readFailure: "read_failed" });
       expect(f.submissions()).toEqual([]);
     } finally {
       await f.session.close();
@@ -500,7 +502,7 @@ test("local reprepare: stable account epoch permits one same-intent quota refres
   }
 });
 
-test("local reprepare: a second stale preparation refuses finitely without policy or write", async () => {
+test("local reprepare: repeated stale preparation refuses after a bounded number of reads", async () => {
   let reads = 0;
   const check = vi.fn(() => true as const);
   const f = fixture(async () => {
@@ -511,8 +513,8 @@ test("local reprepare: a second stale preparation refuses finitely without polic
   try {
     await expect(
       f.session.startTurn("Same text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
-    ).rejects.toThrow(/session_changed/);
-    expect(reads).toBe(2);
+    ).rejects.toMatchObject({ code: "session_changed" });
+    expect(reads).toBe(3);
     expect(check).not.toHaveBeenCalled();
     expect(f.submissions()).toEqual([]);
   } finally {
@@ -520,21 +522,149 @@ test("local reprepare: a second stale preparation refuses finitely without polic
   }
 });
 
-test("local reprepare: actual same-thread/model account notification refuses with zero writes", async () => {
+function notifyAccountUpdated(f: ReturnType<typeof fixture>) {
+  f.server.child.stdout.write(JSON.stringify({ method: "account/updated", params: {} }) + "\n");
+}
+
+test("a new agent's first turn admits despite Codex announcing the account during startup", async () => {
+  const check = vi.fn(() => true as const);
+  const server = createFakeCodexAppServer({
+    "thread/start": () => {
+      server.child.stdout.write(JSON.stringify({ method: "account/updated", params: {} }) + "\n");
+      return { thread: { id: "owned-thread" }, modelProvider: "openai", model: "gpt-5.6-sol" };
+    },
+    "account/rateLimits/read": () => allowed,
+  });
+  const session = new CodexAppServerAgentSession(
+    { provider: "codex", cwd: "/tmp/owned-turn-fence", model: "gpt-5.6-sol", modeId: "read-only" },
+    null,
+    createTestLogger(),
+    async () => server.child,
+  );
+  try {
+    await session.startTurn("First work", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) });
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(server.requests().filter((r) => r.method === "turn/start")).toHaveLength(1);
+    server.assertNoErrors();
+  } finally {
+    await session.close();
+  }
+});
+
+test("local reprepare: a same-account notification during the read retries and admits", async () => {
+  let reads = 0;
+  const check = vi.fn(() => true as const);
+  const f = fixture(() => {
+    if (++reads === 1) notifyAccountUpdated(f);
+    return allowed;
+  });
+  try {
+    await f.session.startTurn("Same text", {
+      [CODEX_TURN_ADMISSION]: capturedAdmission({ check }),
+    });
+    expect(reads).toBe(2);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(f.submissions()).toHaveLength(1);
+    f.server.assertNoErrors();
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: an account switch announced during the read fails closed", async () => {
+  let reads = 0,
+    accountId = "original-account";
+  const check = vi.fn(() => true as const);
+  const failure = vi.fn();
+  const f = fixture(() => {
+    if (++reads === 1) {
+      notifyAccountUpdated(f);
+      const observed = accountId;
+      accountId = "replacement-account";
+      return { ...allowed, accountId: observed };
+    }
+    return { ...allowed, accountId };
+  });
+  try {
+    const error = await f.session
+      .startTurn("Same text", {
+        [CODEX_TURN_ADMISSION]: capturedAdmission({ check, onQuotaReadFailure: failure }),
+      })
+      .catch((rejection) => rejection);
+    expect(error).toMatchObject({ code: "account_changed" });
+    expect(error.message).toMatch(/Codex account changed/);
+    expect(reads).toBe(2);
+    expect(check).not.toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: an account switch after an earlier turn's read fails closed", async () => {
+  let reads = 0,
+    accountId = "original-account";
+  const check = vi.fn(() => true as const);
+  const f = fixture(() => {
+    // The second read is this turn's first: the switch lands while it is in flight.
+    if (++reads === 2) {
+      accountId = "replacement-account";
+      notifyAccountUpdated(f);
+    }
+    return { ...allowed, accountId };
+  });
+  try {
+    await f.session.getRuntimeInfo();
+    await f.session.getQuota();
+    await expect(
+      f.session.startTurn("Same text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
+    ).rejects.toMatchObject({ code: "account_changed" });
+    expect(reads).toBe(3);
+    expect(check).not.toHaveBeenCalled();
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("local reprepare: account churn on every read refuses after bounded reads", async () => {
   let reads = 0;
   const check = vi.fn(() => true as const);
   const f = fixture(() => {
     reads++;
-    f.server.child.stdout.write(JSON.stringify({ method: "account/updated", params: {} }) + "\n");
+    notifyAccountUpdated(f);
     return allowed;
   });
   try {
     await expect(
       f.session.startTurn("Same text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
-    ).rejects.toThrow(/session_changed/);
-    expect(reads).toBe(1);
+    ).rejects.toMatchObject({ code: "session_changed" });
+    expect(reads).toBe(3);
     expect(check).not.toHaveBeenCalled();
     expect(f.submissions()).toEqual([]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+test("a transient quota read failure retries before reporting a failure", async () => {
+  const check = vi.fn(() => true as const);
+  const failure = vi.fn();
+  const f = fixture();
+  const real = f.session.getQuota.bind(f.session);
+  const getQuota = vi
+    .spyOn(f.session, "getQuota")
+    .mockRejectedValueOnce(new CodexQuotaError("read_failed"))
+    .mockImplementation(real);
+  try {
+    await f.session.startTurn("work", {
+      [CODEX_TURN_ADMISSION]: capturedAdmission({ check, onQuotaReadFailure: failure }),
+    });
+    expect(getQuota).toHaveBeenCalledTimes(2);
+    expect(failure).not.toHaveBeenCalled();
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(f.submissions()).toHaveLength(1);
   } finally {
     await f.session.close();
   }
@@ -742,9 +872,9 @@ test.each(["model", "tier", "options"] as const)(
       return allowed;
     });
     try {
-      await expect(f.session.startTurn("Original text", options)).rejects.toThrow(
-        /session_changed/,
-      );
+      await expect(f.session.startTurn("Original text", options)).rejects.toMatchObject({
+        code: "session_changed",
+      });
       expect(reads).toBe(1);
       expect(f.submissions()).toEqual([]);
     } finally {
@@ -766,7 +896,7 @@ test("local reprepare: account notification from the policy callback refuses fin
   try {
     await expect(
       f.session.startTurn("Text", { [CODEX_TURN_ADMISSION]: capturedAdmission({ check }) }),
-    ).rejects.toThrow(/session_changed/);
+    ).rejects.toMatchObject({ code: "session_changed" });
     expect(reads).toBe(1);
     expect(check).toHaveBeenCalledTimes(1);
     expect(f.submissions()).toEqual([]);
@@ -791,7 +921,7 @@ test("local reprepare: refreshed read failure reports genuine refusal without an
       f.session.startTurn("Original text", {
         [CODEX_TURN_ADMISSION]: capturedAdmission({ check, onQuotaReadFailure: failure }),
       }),
-    ).rejects.toThrow(/admission_refused/);
+    ).rejects.toMatchObject({ code: "admission_refused" });
     expect(reads).toBe(2);
     expect(check).not.toHaveBeenCalled();
     expect(failure).toHaveBeenCalledTimes(1);
@@ -820,7 +950,7 @@ test("local reprepare: a genuine validation refusal using session_changed is nev
   try {
     await expect(
       f.session.startTurn("Original text", { [CODEX_TURN_ADMISSION]: admission }),
-    ).rejects.toThrow(/session_changed/);
+    ).rejects.toMatchObject({ code: "session_changed" });
     expect(reads).toBe(1);
     expect(check).not.toHaveBeenCalled();
     expect(f.submissions()).toEqual([]);

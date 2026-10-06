@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -166,6 +167,8 @@ export const zhCN: TranslationResources = {
     },
     attachments: {
       addImage: "添加图片",
+      choosePhoto: "选择照片",
+      takePhoto: "拍摄照片",
       pasteImage: "粘贴图片",
       addFile: "Upload file",
       addIssueOrPr: "添加 issue 或 PR",
@@ -1743,6 +1746,8 @@ export const zhCN: TranslationResources = {
     permissionMessage: "请允许访问照片图库以附加图片。",
     errorTitle: "错误",
     failedToSelect: "选择图片失败",
+    cameraPermissionMessage: "请允许访问相机以拍摄照片。",
+    failedToTakePhoto: "无法拍摄照片",
     dialogTitle: "附加图片",
     dialogFilterName: "图片",
   },
@@ -1797,6 +1802,7 @@ export const zhCN: TranslationResources = {
     modelCountPlural: "{{count}} 个模型",
     retry: "重试",
     retrying: "正在重试...",
+    savedModels: "正在显示之前加载的 {{provider}} 模型。",
     noMatches: "没有匹配的模型",
     noMatchesForQuery: "没有与“{{query}}”匹配的模型",
     searchAllPlaceholder: "搜索所有模型...",
@@ -1839,6 +1845,16 @@ export const zhCN: TranslationResources = {
     hostPassword: {
       title: "{{host}} 的密码",
       label: "主机密码",
+    },
+    hostConfirmation: {
+      title: "连接到此主机？",
+      description: "此主机将能在此应用中运行代码，并访问你其他已连接的主机。仅在你认识它时才连接。",
+      descriptionChanged:
+        "此链接会改变你连接此主机的方式。该主机将能在此应用中运行代码，并访问你其他已连接的主机。仅在你认识它时才连接。",
+      hostLabel: "主机",
+      fingerprintLabel: "密钥指纹",
+      relayLabel: "中继",
+      connect: "连接",
     },
     connectionMethods: {
       title: "添加连接",
@@ -2094,6 +2110,8 @@ export const zhCN: TranslationResources = {
       emptyDescription: "为此检出创建拉取请求后，可在此处查看其详情。",
     },
     architectureMap: {
+      mainOnly: "代码架构是工作区主视图。请从 + 标签页菜单打开。",
+      entryUnavailable: "添加已保存的代码图，或连接支持代码图或变更分析的主机。",
       label: "架构图",
       subtitle: "项目架构",
       tooltip: "显示项目的架构图",
@@ -2392,6 +2410,7 @@ export const zhCN: TranslationResources = {
   sidebarCallout: {
     dismiss: "关闭",
   },
+  usagePanel: usagePanelCopy["zh-CN"],
   contextWindow: {
     title: "上下文窗口",
     used: "已使用 {{percentage}}%",

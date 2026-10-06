@@ -1,5 +1,6 @@
 // Fulcra J1 Organisation behaviour with synthetic component adapters (not a Paseo/phone UI test). The stable test
 // ids (org-tree, org-project-<id>, org-remit-edit, org-story) are the ones the brief fixes.
+import { SeatPanel } from "./role-seat";
 import { OrganisationSurface } from "./organisation";
 import { buildTree, remitLine, relativeTime } from "./organisation-model";
 import test, { afterEach } from "node:test";
@@ -46,14 +47,14 @@ const TALLY = id(21),
   H1 = id(41);
 const iso = (ago = 0) => new Date(Date.now() - ago).toISOString();
 const clients = [];
-function mount(layout = { compact: false, platform: "web" }) {
+function mount(layout = { compact: false, platform: "web" }, extra = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
   return render(
     h(
       QueryClientProvider,
       { client },
-      h(OrganisationSurface, { theme, layout, host: { id: "mini" } }),
+      h(OrganisationSurface, { theme, layout, host: { id: "mini" }, ...extra }),
     ),
   );
 }
@@ -505,7 +506,7 @@ test("U6: a project with no prime gets its own remit; a refusal is shown as it i
   );
 });
 
-test('U7: the work map stays one tap away as "Map" on wide screens only; on a phone the story replaces the list', async () => {
+test('U7: the work map stays one tap away as "Map" on wide and compact screens; the phone retains its project story', async () => {
   serve();
   const wide = mount();
   fireEvent.click(await screen.findByTestId("org-view-map"));
@@ -516,12 +517,10 @@ test('U7: the work map stays one tap away as "Map" on wide screens only; on a ph
   serve();
   mount({ compact: true, platform: "ios" });
   await screen.findByTestId(`org-project-${TALLY}`);
-  assert.equal(screen.queryByTestId("org-view-map"), null);
-  // C1: the phone says why there is no Map, in one plain line where the toggle would be.
-  assert.equal(
-    screen.getByTestId("org-map-needs-wide").textContent,
-    "The work map needs a wider screen.",
-  );
+  fireEvent.click(screen.getByTestId("org-view-map"));
+  await screen.findByText("Fulcra work map");
+  fireEvent.click(screen.getByTestId("org-view-tree"));
+  await screen.findByTestId(`org-project-${TALLY}`);
   fireEvent.click(screen.getByTestId(`org-project-${TALLY}`));
   await screen.findByTestId("org-story");
   assert.equal(screen.queryByTestId("org-tree"), null);
@@ -553,11 +552,75 @@ test("a project session opens step-through directly", async () => {
   });
   mount();
   fireEvent.click(await screen.findByTestId(`org-project-${TALLY}`));
-  fireEvent.click(await screen.findByTestId(`org-session-${LEAD}`));
+  fireEvent.click(screen.getByRole("button", { name: /Show saved conversations/ }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Read activity history: Tally orchestrator" }),
+  );
   await waitFor(() =>
     assert(
       calls.some((c) => c.name === "organization.session-turns" && c.input.sessionId === LEAD),
     ),
   );
+  assert.deepEqual(
+    calls.filter((c) => c.name === "organization.session-turns").map((c) => c.input.sessionId),
+    [LEAD],
+    "only the exact selected orchestrator history is read",
+  );
   assert(calls.some((c) => c.name === "organization.fleet" && c.input.projectId === TALLY));
+});
+
+test("a management session-read refusal stays visible and does not become an empty membership or role write", async () => {
+  setHandler((name) =>
+    name === "organization.task-manage"
+      ? Promise.resolve({
+          status: "error",
+          message: "management_unavailable: saved session list refused",
+          observedAt: iso(),
+        })
+      : Promise.reject(new Error(`Unexpected ${name}`)),
+  );
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  render(
+    h(
+      QueryClientProvider,
+      { client },
+      h(SeatPanel, {
+        target: {
+          seat: map.primes[0],
+          label: "company intake",
+          candidateTaskIds: [W],
+          scope: "Existing programme membership only",
+        },
+        props: {
+          theme,
+          layout: { compact: false, platform: "web" },
+          host: { id: "mini", label: "Mini" },
+        },
+        onDone() {},
+        onChanged() {},
+      }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Workstream:/ }));
+  await screen.findByText(/Read refusal: management_unavailable/);
+  assert.equal(screen.queryByText("This workstream has no saved sessions."), null);
+  assert(screen.getByRole("button", { name: "Retry workstream session read" }));
+  assert.equal(
+    screen.getByRole("button", { name: /^Record this session as accountable/ }).disabled,
+    true,
+  );
+  assert(
+    !calls.some((call) => call.name.includes("assign")),
+    "failed metadata does not produce a role assignment",
+  );
+});
+
+test("the direct Team workflow entry uses the existing map without changing project membership", async () => {
+  serve();
+  mount({ compact: false, platform: "web" }, { initialMode: "map" });
+  await screen.findByText("Fulcra work map");
+  assert(screen.getByText(/Team workflow shows project leadership/));
+  assert(screen.getByTestId("org-view-tree"));
+  assert(calls.every((call) => !call.name.includes("assign") && !call.name.includes("send")));
 });

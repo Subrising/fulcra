@@ -35,6 +35,7 @@ files:
   - "!node_modules/@getpaseo/*/conversations/**"
   - "!node_modules/@getpaseo/*/test-results/**"
 asarUnpack:
+  - node_modules/sherpa-onnx-*/**/*
   - dist/daemon/node-entrypoint-runner.js
   - node_modules/@getpaseo/server/dist/server/terminal/shell-integration/**/*
 extraResources:
@@ -47,6 +48,12 @@ extraResources:
 # Orca has no public update feed yet. Never publish into the upstream project.
 publish: null
 mac:
+  files:
+    # Keep the complete native package alongside the production dependency tree.
+    - from: ../../node_modules/sherpa-onnx-darwin-${arch}
+      to: node_modules/sherpa-onnx-darwin-${arch}
+      filter:
+        - "**/*"
   artifactName: "Fulcra-${version}-${arch}.${ext}"
   minimumSystemVersion: "13.0.0"
   category: public.app-category.developer-tools

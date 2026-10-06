@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -170,6 +171,8 @@ export const fr: TranslationResources = {
     },
     attachments: {
       addImage: "Ajouter une image",
+      choosePhoto: "Choisir une photo",
+      takePhoto: "Prendre une photo",
       pasteImage: "Coller une image",
       addFile: "Upload file",
       addIssueOrPr: "Ajouter un problème ouPR",
@@ -1825,6 +1828,8 @@ export const fr: TranslationResources = {
     permissionMessage: "Veuillez autoriser l'accès à votre photothèque pour joindre des images.",
     errorTitle: "Erreur",
     failedToSelect: "Échec de la sélection de l'image",
+    cameraPermissionMessage: "Veuillez autoriser l’accès à la caméra pour prendre des photos.",
+    failedToTakePhoto: "Impossible de prendre la photo",
     dialogTitle: "Joindre des images",
     dialogFilterName: "Images",
   },
@@ -1879,6 +1884,7 @@ export const fr: TranslationResources = {
     modelCountPlural: "{{count}} modèles",
     retry: "Réessayer",
     retrying: "Nouvelle tentative...",
+    savedModels: "Affichage des modèles {{provider}} chargés précédemment.",
     noMatches: "Aucun modèle ne correspond à votre recherche",
     noMatchesForQuery: "Aucun modèle ne correspond à « {{query}} »",
     searchAllPlaceholder: "Rechercher dans tous les modèles...",
@@ -1921,6 +1927,17 @@ export const fr: TranslationResources = {
     hostPassword: {
       title: "Mot de passe pour {{host}}",
       label: "Mot de passe de l’hôte",
+    },
+    hostConfirmation: {
+      title: "Se connecter à cet hôte ?",
+      description:
+        "Cet hôte pourra exécuter du code dans cette application et accéder à vos autres hôtes connectés. Connectez-vous uniquement si vous le reconnaissez.",
+      descriptionChanged:
+        "Ce lien modifie la façon dont vous vous connectez à cet hôte. L'hôte pourra exécuter du code dans cette application et accéder à vos autres hôtes connectés. Connectez-vous uniquement si vous le reconnaissez.",
+      hostLabel: "Hôte",
+      fingerprintLabel: "Empreinte de la clé",
+      relayLabel: "Relais",
+      connect: "Se connecter",
     },
     connectionMethods: {
       title: "Ajouter une connexion",
@@ -2184,6 +2201,10 @@ export const fr: TranslationResources = {
         "Créez une demande de fusion pour cette copie de travail afin d’afficher ses détails ici.",
     },
     architectureMap: {
+      mainOnly:
+        "L’architecture du code est une vue principale. Ouvrez-la dans le menu des onglets +.",
+      entryUnavailable:
+        "Ajoutez une carte de code enregistrée ou connectez un hôte prenant en charge les graphes ou l’analyse des changements.",
       label: "Carte d'architecture",
       subtitle: "Architecture du projet",
       tooltip: "Afficher la carte d'architecture du projet",
@@ -2496,6 +2517,7 @@ export const fr: TranslationResources = {
   sidebarCallout: {
     dismiss: "Rejeter",
   },
+  usagePanel: usagePanelCopy["fr"],
   contextWindow: {
     title: "Fenêtre contextuelle",
     used: "{{percentage}}% utilisé",

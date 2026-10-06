@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -168,6 +169,8 @@ export const ptBR: TranslationResources = {
     },
     attachments: {
       addImage: "Adicionar imagem",
+      choosePhoto: "Escolher foto",
+      takePhoto: "Tirar foto",
       pasteImage: "Colar imagem",
       addFile: "Enviar arquivo",
       addIssueOrPr: "Adicionar issue ou PR",
@@ -1807,6 +1810,8 @@ export const ptBR: TranslationResources = {
     permissionMessage: "Permita acesso à sua biblioteca de fotos para anexar imagens.",
     errorTitle: "Erro",
     failedToSelect: "Falha ao selecionar imagem",
+    cameraPermissionMessage: "Permita o acesso à câmera para tirar fotos.",
+    failedToTakePhoto: "Não foi possível tirar a foto",
     dialogTitle: "Anexar imagens",
     dialogFilterName: "Imagens",
   },
@@ -1861,6 +1866,7 @@ export const ptBR: TranslationResources = {
     modelCountPlural: "{{count}} modelos",
     retry: "Tentar novamente",
     retrying: "Tentando novamente...",
+    savedModels: "Exibindo modelos de {{provider}} carregados anteriormente.",
     noMatches: "Nenhum modelo corresponde à sua busca",
     noMatchesForQuery: "Nenhum modelo corresponde a «{{query}}»",
     searchAllPlaceholder: "Buscar em todos os modelos...",
@@ -1903,6 +1909,17 @@ export const ptBR: TranslationResources = {
     hostPassword: {
       title: "Senha de {{host}}",
       label: "Senha do host",
+    },
+    hostConfirmation: {
+      title: "Conectar a este host?",
+      description:
+        "Este host poderá executar código neste app e acessar seus outros hosts conectados. Conecte apenas se você o reconhecer.",
+      descriptionChanged:
+        "Este link muda como você se conecta a este host. O host poderá executar código neste app e acessar seus outros hosts conectados. Conecte apenas se você o reconhecer.",
+      hostLabel: "Host",
+      fingerprintLabel: "Impressão da chave",
+      relayLabel: "Relay",
+      connect: "Conectar",
     },
     connectionMethods: {
       title: "Adicionar conexão",
@@ -2165,6 +2182,9 @@ export const ptBR: TranslationResources = {
       emptyDescription: "Crie um pull request para este checkout para ver os detalhes aqui.",
     },
     architectureMap: {
+      mainOnly: "A arquitetura do código é uma visualização principal. Abra-a no menu de abas +.",
+      entryUnavailable:
+        "Adicione um mapa de código salvo ou conecte um host que ofereça grafos ou análise de alterações.",
       label: "Mapa de arquitetura",
       subtitle: "Arquitetura do projeto",
       tooltip: "Mostrar o mapa de arquitetura do projeto",
@@ -2473,6 +2493,7 @@ export const ptBR: TranslationResources = {
   sidebarCallout: {
     dismiss: "Dispensar",
   },
+  usagePanel: usagePanelCopy["pt-BR"],
   contextWindow: {
     title: "Janela de contexto",
     used: "{{percentage}}% usado",

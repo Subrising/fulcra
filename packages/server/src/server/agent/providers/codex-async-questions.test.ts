@@ -22,6 +22,21 @@ const questionItem = {
 
 async function setup(metadata?: Record<string, unknown>, rejectSteer = false) {
   const appServer = createFakeCodexAppServer({
+    "thread/start": () => ({
+      thread: { id: "thread-1", turns: [] },
+      modelProvider: "openai",
+      model: "gpt-5.4",
+    }),
+    "thread/resume": () => ({
+      thread: { id: "thread-1", turns: [] },
+      modelProvider: "openai",
+      model: "gpt-5.4",
+    }),
+    "account/rateLimits/read": () => ({
+      accountId: "fixture-account",
+      ordinaryUsageAllowed: true,
+      rateLimits: {},
+    }),
     "turn/interrupt": () => ({}),
     "turn/steer": () => {
       if (rejectSteer) return { __jsonRpcError: { code: -32000, message: "Delivery failed" } };
@@ -60,10 +75,16 @@ async function setup(metadata?: Record<string, unknown>, rejectSteer = false) {
     appServer.says({ threadId: "thread-1", text });
     await shown;
   }
-  async function finish(status: "completed" | "interrupted" = "completed") {
+  async function finish(status: "completed" | "interrupted" | "failed" = "completed") {
     const finished = waitForNextEvent(
       session,
-      status === "completed" ? "turn_completed" : "turn_canceled",
+      (
+        {
+          completed: "turn_completed",
+          failed: "turn_failed",
+          interrupted: "turn_canceled",
+        } as const
+      )[status],
     );
     appServer.completeTurn({ status });
     await finished;
@@ -551,4 +572,190 @@ test("L54: allow without answers is refused plainly (never a ZodError) and deny 
   expect(prepared.prompt).toBeUndefined();
   expect(prepared.complete().detail).toMatchObject({ text: expect.stringContaining("Dismissed") });
   expect(questions.hasPending(request.id)).toBe(false);
+});
+
+test("a native failed turn keeps its real async question visible through failed sends until explicit dismissal", async () => {
+  const { CODEX_TURN_ADMISSION } = await import("../agent-sdk-types.js");
+  const f = await setup();
+  const { manager, agent } = await manage(f.session);
+  const events: AgentStreamEvent[] = [];
+  manager.subscribe(
+    (event) => {
+      if (event.type === "agent_stream" && event.agentId === agent.id) events.push(event.event);
+    },
+    { replayState: false },
+  );
+  try {
+    await f.ask();
+    await manager.flush();
+    const [permission] = f.session.getPendingPermissions();
+    await f.finish("failed");
+    await manager.flush();
+    expect(f.session.getPendingPermissions().map((p) => p.id)).toEqual([permission.id]);
+    expect(manager.getAgent(agent.id)?.pendingPermissions.has(permission.id)).toBe(true);
+    const before = f.appServer.requests().filter((r) => r.method === "turn/start").length;
+    await expect(
+      manager.runAgent(agent.id, "fixture retry", { [CODEX_TURN_ADMISSION]: () => true }),
+    ).rejects.toThrow("requires permission attention");
+    expect(f.appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(before);
+    expect(manager.getAgent(agent.id)?.pendingPermissions.has(permission.id)).toBe(true);
+    expect(events.some((event) => event.type === "permission_resolved")).toBe(false);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "turn_failed",
+        code: "permission_attention",
+        error: expect.stringContaining(permission.id),
+      }),
+    );
+    await manager.respondToPermission(agent.id, permission.id, {
+      behavior: "deny",
+      message: "Dismissed explicitly",
+    });
+    await manager.flush();
+    expect(f.session.getPendingPermissions()).toEqual([]);
+    expect(f.session.describePersistence()?.metadata?.asyncQuestions).toEqual([
+      expect.objectContaining({ resolution: "dismissed" }),
+    ]);
+    await f.session.startTurn("human continuation", { [CODEX_TURN_ADMISSION]: () => true });
+    expect(f.appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(
+      before + 1,
+    );
+  } finally {
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+  }
+});
+
+test("a genuine command approval survives failed turn and cannot be bypassed by full access or new send", async () => {
+  const { CODEX_TURN_ADMISSION } = await import("../agent-sdk-types.js");
+  const f = await setup();
+  const { manager, agent } = await manage(f.session);
+  try {
+    const shown = waitForNextEvent(f.session, "permission_requested");
+    f.appServer.requestCommandApproval({
+      itemId: "command-attention",
+      threadId: "thread-1",
+      turnId: "native-turn",
+      command: "echo fixture",
+      cwd: tmpdir(),
+      reason: "fixture approval",
+    });
+    await shown;
+    await manager.flush();
+    const [permission] = f.session.getPendingPermissions();
+    expect(permission.kind).toBe("tool");
+    await f.finish("failed");
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.pendingPermissions.has(permission.id)).toBe(true);
+    const starts = f.appServer.requests().filter((r) => r.method === "turn/start").length;
+    await expect(
+      f.session.startTurn("new send", { [CODEX_TURN_ADMISSION]: () => true }),
+    ).rejects.toMatchObject({ code: "permission_attention" });
+    expect(f.appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(starts);
+    const decision = f.appServer.waitForCommandApprovalDecision("command-attention");
+    await manager.respondToPermission(agent.id, permission.id, {
+      behavior: "deny",
+      message: "Explicit denial",
+    });
+    expect(await decision).toEqual({ decision: "decline" });
+    expect(f.session.getPendingPermissions()).toEqual([]);
+  } finally {
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+  }
+});
+
+test("spontaneous async attention during guarded preparation resurfaces instead of becoming a phantom failed send", async () => {
+  const { CODEX_TURN_ADMISSION } = await import("../agent-sdk-types.js");
+  const f = await setup();
+  const { manager, agent } = await manage(f.session);
+  let enteredResolve = () => {},
+    releaseResolve = () => {};
+  const entered = new Promise<void>((r) => {
+      enteredResolve = r;
+    }),
+    release = new Promise<void>((r) => {
+      releaseResolve = r;
+    });
+  try {
+    await f.finish();
+    await manager.flush();
+    const quota = await f.session.getQuota();
+    const read = vi.spyOn(f.session, "getQuota").mockImplementationOnce(async () => {
+      enteredResolve();
+      await release;
+      return quota;
+    });
+    const before = f.appServer.requests().filter((r) => r.method === "turn/start").length;
+    const run = manager.runAgent(agent.id, "preparing", { [CODEX_TURN_ADMISSION]: () => true });
+    const refused = expect(run).rejects.toThrow("requires permission attention");
+    await entered;
+    await f.ask();
+    releaseResolve();
+    await refused;
+    await manager.flush();
+    const [question] = f.session.getPendingPermissions();
+    expect(question.kind).toBe("question");
+    expect(manager.getAgent(agent.id)?.pendingPermissions.has(question.id)).toBe(true);
+    expect(f.appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(before);
+    const savedQuestions = f.session.describePersistence()?.metadata?.asyncQuestions;
+    expect(savedQuestions).toHaveLength(1);
+    if (!Array.isArray(savedQuestions)) throw Error("Fixture question persistence missing");
+    expect(savedQuestions[0]).not.toHaveProperty("resolution");
+    read.mockRestore();
+    await manager.respondToPermission(agent.id, question.id, {
+      behavior: "deny",
+      message: "Explicit dismissal",
+    });
+    await manager.flush();
+    await f.session.startTurn("human resume", { [CODEX_TURN_ADMISSION]: () => true });
+    expect(f.appServer.requests().filter((r) => r.method === "turn/start")).toHaveLength(
+      before + 1,
+    );
+  } finally {
+    releaseResolve();
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+  }
+});
+
+test("permission refusal diagnostics contain only bounded public identity/type", async () => {
+  const { PermissionAttentionError } = await import("../permission-attention-error.js");
+  const pending = Array.from({ length: 10 }, (_, i) => ({
+    id: `permission-${i}`,
+    provider: "codex",
+    name: "fixture",
+    kind: "question" as const,
+    title: "private question",
+    input: { question: "private payload" },
+  }));
+  const error = new PermissionAttentionError("Codex", pending);
+  expect(error.code).toBe("permission_attention");
+  expect(error.message).toContain("question: permission-0");
+  expect(error.message).not.toContain("permission-8");
+  expect(error.message).not.toContain("private");
+  expect(
+    new PermissionAttentionError("Codex", [{ ...pending[0], id: "/private/path" }]).message,
+  ).toContain("unavailable-id");
+});
+
+test("unavailable provider permission snapshot cannot clear an existing question after failure", async () => {
+  const f = await setup();
+  const { manager, agent } = await manage(f.session);
+  let read: ReturnType<typeof vi.spyOn> | undefined;
+  try {
+    await f.ask();
+    await manager.flush();
+    const [question] = f.session.getPendingPermissions();
+    read = vi.spyOn(f.session, "getPendingPermissions").mockImplementation(() => {
+      throw Error("fixture snapshot unavailable");
+    });
+    await f.finish("failed");
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.pendingPermissions.has(question.id)).toBe(true);
+  } finally {
+    read?.mockRestore();
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+  }
 });

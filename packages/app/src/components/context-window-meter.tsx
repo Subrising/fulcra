@@ -1,12 +1,11 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { StyleSheet, UnistylesRuntime } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ProviderUsageTooltipSection } from "@/provider-usage/tooltip-section";
-import { useProviderUsage } from "@/provider-usage/use-provider-usage";
-import { formatTokenCount } from "./context-window-meter.utils";
+import { Combobox } from "@/components/ui/combobox";
+import { UsagePanel } from "@/provider-usage/usage-panel";
+import { useUsagePanel } from "@/provider-usage/use-usage-panel";
 
 interface ContextWindowMeterProps {
   maxTokens: number | null;
@@ -23,6 +22,8 @@ interface ContextWindowMeterProps {
   /** Optional glyph envelope for icon-toolbar alignment. */
   glyphSize?: number;
 }
+
+function ignoreSelection() {}
 
 const SVG_SIZE = 14;
 const COMPACT_SVG_SIZE = 12;
@@ -49,16 +50,6 @@ function getUsagePercentage(maxTokens: number, usedTokens: number): number | nul
 
 function clampPercentage(value: number): number {
   return Math.max(0, Math.min(100, value));
-}
-
-function formatSessionCost(value: number): string | null {
-  if (!Number.isFinite(value) || value <= 0) {
-    return null;
-  }
-  if (value < 0.01) {
-    return `$${value.toFixed(4)}`;
-  }
-  return `$${value.toFixed(2)}`;
 }
 
 function getMeterColors(
@@ -101,113 +92,59 @@ function getMeterGeometry(showPercentage: boolean, glyphSize?: number) {
 export function ContextWindowMeter({
   maxTokens,
   usedTokens,
-  totalCostUsd,
   showPercentage = false,
   serverId,
   agentId,
-  provider,
-  pending = false,
   glyphSize,
 }: ContextWindowMeterProps) {
   const theme = UnistylesRuntime.getTheme();
   const { t } = useTranslation();
-  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
-  const tooltipOpenRef = useRef(false);
-  const { view: providerUsageView, refresh: refreshProviderUsage } = useProviderUsage(
-    serverId ?? null,
-    { enabled: isTooltipOpen, agentId: agentId ?? null, accounts: true },
-  );
+  const [isOpen, setIsOpen] = useState(false);
+  const anchorRef = useRef<View>(null);
+  const panel = useUsagePanel(serverId ?? "", agentId ?? "", isOpen);
   const percentage =
     maxTokens !== null && usedTokens !== null ? getUsagePercentage(maxTokens, usedTokens) : null;
-  const handleRefreshAccounts = useCallback(() => {
-    void refreshProviderUsage({ force: true }).catch(() => {});
-  }, [refreshProviderUsage]);
-  const handleTooltipOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (tooltipOpenRef.current === nextOpen) return;
-      tooltipOpenRef.current = nextOpen;
-      setIsTooltipOpen(nextOpen);
-      if (nextOpen) {
-        void refreshProviderUsage().catch(() => {});
-      }
-    },
-    [refreshProviderUsage],
-  );
 
+  const openPanel = useCallback(() => setIsOpen(true), [setIsOpen]);
+  const accessibilityState = useMemo(() => ({ expanded: isOpen }), [isOpen]);
+  const header = useMemo(() => ({ title: t("usagePanel.title") }), [t]);
   const geometry = getMeterGeometry(showPercentage, glyphSize);
 
-  // No usage yet: reserve the footprint with a track-only ring while a session is
-  // active so the real ring fades in without shifting siblings. Render nothing when
-  // no usage is expected.
-  if (percentage === null || maxTokens === null || usedTokens === null) {
-    if (!pending) {
-      return null;
-    }
-    return (
-      <View style={geometry.containerStyle}>
+  const clampedPercentage = clampPercentage(percentage ?? 0);
+  const roundedPercentage = percentage === null ? null : Math.round(percentage);
+  const { svgSize, center, radius, strokeWidth, circumference, containerStyle } = geometry;
+  const dashOffset = circumference - (clampedPercentage / 100) * circumference;
+  const colors = getMeterColors(clampedPercentage, theme);
+
+  return (
+    <>
+      <Pressable
+        ref={anchorRef}
+        style={containerStyle}
+        testID="context-window-meter"
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={t("usagePanel.title")}
+        accessibilityState={accessibilityState}
+        onPress={openPanel}
+      >
         <Svg
-          width={geometry.svgSize}
-          height={geometry.svgSize}
-          viewBox={`0 0 ${geometry.svgSize} ${geometry.svgSize}`}
+          width={svgSize}
+          height={svgSize}
+          viewBox={`0 0 ${svgSize} ${svgSize}`}
           style={styles.svg}
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
         >
           <Circle
-            cx={geometry.center}
-            cy={geometry.center}
-            r={geometry.radius}
+            cx={center}
+            cy={center}
+            r={radius}
             fill="none"
-            stroke={theme.colors.surface3}
-            strokeWidth={geometry.strokeWidth}
+            stroke={colors.track}
+            strokeWidth={strokeWidth}
           />
-        </Svg>
-        {showPercentage ? <View style={styles.skeletonLabel} /> : null}
-      </View>
-    );
-  }
-
-  const clampedPercentage = clampPercentage(percentage);
-  const roundedPercentage = Math.round(percentage);
-  const { svgSize, center, radius, strokeWidth, circumference, containerStyle } = geometry;
-  const dashOffset = circumference - (clampedPercentage / 100) * circumference;
-  const colors = getMeterColors(clampedPercentage, theme);
-  const formattedSessionCost =
-    typeof totalCostUsd === "number" ? formatSessionCost(totalCostUsd) : null;
-
-  return (
-    <Tooltip
-      open={isTooltipOpen}
-      onOpenChange={handleTooltipOpenChange}
-      delayDuration={0}
-      enabledOnDesktop
-      enabledOnMobile
-    >
-      <TooltipTrigger asChild triggerRefProp="ref">
-        <Pressable
-          style={containerStyle}
-          testID="context-window-meter"
-          accessibilityRole="image"
-          accessibilityLabel={t("contextWindow.accessibility", {
-            percentage: roundedPercentage,
-          })}
-        >
-          <Svg
-            width={svgSize}
-            height={svgSize}
-            viewBox={`0 0 ${svgSize} ${svgSize}`}
-            style={styles.svg}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-          >
-            <Circle
-              cx={center}
-              cy={center}
-              r={radius}
-              fill="none"
-              stroke={colors.track}
-              strokeWidth={strokeWidth}
-            />
+          {percentage !== null ? (
             <Circle
               cx={center}
               cy={center}
@@ -219,37 +156,31 @@ export function ContextWindowMeter({
               strokeDasharray={circumference}
               strokeDashoffset={dashOffset}
             />
-          </Svg>
-          {showPercentage ? (
-            <Text style={styles.percentageLabel}>{`${roundedPercentage}%`}</Text>
           ) : null}
-        </Pressable>
-      </TooltipTrigger>
-      <TooltipContent side="top" align="center" offset={8}>
-        <View style={styles.tooltipContent}>
-          <Text style={styles.tooltipTitle}>{t("contextWindow.title")}</Text>
-          <Text style={styles.tooltipText}>
-            {t("contextWindow.used", { percentage: roundedPercentage })}
+        </Svg>
+        {showPercentage ? (
+          <Text style={styles.percentageLabel}>
+            {roundedPercentage === null ? "—" : `${roundedPercentage}%`}
           </Text>
-          <Text style={styles.tooltipDetail}>
-            {t("contextWindow.tokens", {
-              used: formatTokenCount(usedTokens),
-              max: formatTokenCount(maxTokens),
-            })}
-          </Text>
-          {formattedSessionCost ? (
-            <Text style={styles.tooltipDetail}>
-              {t("contextWindow.sessionCost", { cost: formattedSessionCost })}
-            </Text>
-          ) : null}
-          <ProviderUsageTooltipSection
-            view={providerUsageView}
-            activeProviderId={provider}
-            onRefreshAccounts={handleRefreshAccounts}
-          />
-        </View>
-      </TooltipContent>
-    </Tooltip>
+        ) : null}
+      </Pressable>
+      <Combobox
+        options={[]}
+        value=""
+        onSelect={ignoreSelection}
+        anchorRef={anchorRef}
+        open={isOpen}
+        onOpenChange={setIsOpen}
+        header={header}
+        searchable={false}
+        desktopPlacement="top-start"
+        desktopMinWidth={420}
+        desktopFixedHeight={600}
+        desktopPreventInitialFlash
+      >
+        <UsagePanel {...panel} />
+      </Combobox>
+    </>
   );
 }
 
@@ -276,29 +207,5 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
-  },
-  skeletonLabel: {
-    width: 22,
-    height: theme.fontSize.base,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.surface3,
-  },
-  tooltipContent: {
-    gap: theme.spacing[1.5],
-    minWidth: 200,
-  },
-  tooltipTitle: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-  },
-  tooltipText: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    lineHeight: theme.fontSize.base * 1.4,
-  },
-  tooltipDetail: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-    lineHeight: theme.fontSize.sm * 1.4,
   },
 }));

@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { packagedFiles, scanFiles, forbidden } from "./no-machine-ties.mjs";
 import { credentialSource, personalBlocker, safeFinding } from "./packaged-review-policy.mjs";
+import { approvedPublicLiteral, matchesPublicLiteral } from "./public-literal-policy.mjs";
 const approvedPemMarkers = JSON.parse(
   fs.readFileSync(new URL("./reviewed-pem-markers.json", import.meta.url)),
 );
@@ -104,9 +105,11 @@ export function auditPackagedBundle(base, exemptions = []) {
     const exact = entry.kind !== undefined;
     if (exact) {
       if (
-        (entry.kind === "vendor-pem-marker"
-          ? !approvedPem(entry)
-          : entry.kind !== (thirdParty(entry.file) ? "vendor-generic" : "first-party-generic")) ||
+        (entry.kind === "public-literal"
+          ? !approvedPublicLiteral(entry)
+          : entry.kind === "vendor-pem-marker"
+            ? !approvedPem(entry)
+            : entry.kind !== (thirdParty(entry.file) ? "vendor-generic" : "first-party-generic")) ||
         !Number.isSafeInteger(entry.line) ||
         entry.line < 1 ||
         !Number.isSafeInteger(entry.offset) ||
@@ -164,7 +167,9 @@ export function auditPackagedBundle(base, exemptions = []) {
               ex.context === hit.context),
       );
       if (ex) matched.add(ex);
-      const reviewedFalsePositive = !!ex && ex.kind === "vendor-pem-marker" && approvedPem(ex);
+      const publicLiteral = !!ex && matchesPublicLiteral(ex, file, digest, hit);
+      const reviewedFalsePositive =
+        publicLiteral || (!!ex && ex.kind === "vendor-pem-marker" && approvedPem(ex));
       findings.push({
         ...safeFinding(hit, blocker),
         file,
@@ -172,6 +177,7 @@ export function auditPackagedBundle(base, exemptions = []) {
         classification: thirdParty(file) ? "third-party" : "own",
         blocker,
         reviewedFalsePositive,
+        ...(publicLiteral ? { sourceEvidence: ex.source } : {}),
         exempted: !!ex && (!blocker || reviewedFalsePositive),
       });
     }

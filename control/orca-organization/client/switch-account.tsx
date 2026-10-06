@@ -191,21 +191,27 @@ export function registerAccountSwitch(client: Client) {
         name: "account",
         context: "agent",
         description: "List this session’s accounts, or switch it to one",
-        argumentHint: "[account name]",
+        argumentHint: "[account name|list]",
         async onSubmit(ctx) {
           const name = ctx.args.trim();
-          if (name) {
+          if (name && name.toLowerCase() !== "list") {
+            setNotice(ctx.agent.id, "Switching account…");
+            ctx.openPanel(SWITCH_PANEL);
             try {
               const r = (await ctx.rpc(accountSwitchRpc as any, {
                 agentId: ctx.agent.id,
-                account: name.slice(0, 80),
+                account: name,
               })) as { ok: boolean; message: string | null };
               setNotice(ctx.agent.id, r.message ?? (r.ok ? "Switched." : "That did not work."));
-            } catch {
-              setNotice(ctx.agent.id, "The account could not be switched. Try again in a moment.");
+            } catch (error) {
+              setNotice(
+                ctx.agent.id,
+                ownerAsk(error) ?? "The account could not be switched. Try again in a moment.",
+              );
             }
+          } else {
+            ctx.openPanel(SWITCH_PANEL);
           }
-          ctx.openPanel(SWITCH_PANEL);
         },
       }),
     );

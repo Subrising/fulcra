@@ -8,6 +8,7 @@ import {
   buildSelectableProviderSelectorProviders,
   buildSelectedTriggerLabel,
   filterAndRankModelRows,
+  getProviderModelRows,
   matchesModelSearch,
   resolveSelectedModelLabel,
   resolveSubmissionReadiness,
@@ -416,6 +417,77 @@ describe("combined model selector data", () => {
         isLoading: false,
       }),
     ).toBe("Error");
+  });
+
+  it("retains known same-key models, the real failure and original fetchedAt without changing the selected model", () => {
+    const fetchedAt = "2026-01-01T00:00:00.000Z";
+    const providers = buildSelectableProviderSelectorProviders([
+      snapshotEntry({
+        provider: "codex",
+        label: "Codex",
+        status: "error",
+        error: "Model discovery timed out",
+        fetchedAt,
+        models: [codexModel],
+      }),
+    ]);
+    expect(providers[0].modelSelection).toEqual({
+      kind: "models",
+      rows: [
+        {
+          favoriteKey: "codex:gpt-5.4",
+          provider: "codex",
+          providerLabel: "Codex",
+          modelId: "gpt-5.4",
+          modelLabel: "GPT-5.4",
+          description: "gpt-5.4",
+          isDefault: undefined,
+        },
+      ],
+      warning: { message: "Model discovery timed out", fetchedAt },
+    });
+    expect(
+      resolveSelectedModelLabel({
+        providers,
+        selectedProvider: "codex",
+        selectedModel: "gpt-5.4",
+        isLoading: false,
+      }),
+    ).toBe("GPT-5.4");
+    expect(getProviderModelRows(providers[0]).map((row) => row.modelId)).toEqual(["gpt-5.4"]);
+  });
+
+  it("clears the warning only when a subsequent ready snapshot succeeds", () => {
+    const failed = snapshotEntry({
+      provider: "codex",
+      status: "error",
+      error: "Timeout",
+      models: [codexModel],
+    });
+    const stale = buildSelectableProviderSelectorProviders([failed]);
+    expect(stale[0].modelSelection).toMatchObject({
+      kind: "models",
+      warning: { message: "Timeout" },
+    });
+    expect(stale[0].modelSelection).not.toHaveProperty("warning.fetchedAt");
+    const ready = buildSelectableProviderSelectorProviders([
+      { ...failed, status: "ready", error: undefined },
+    ]);
+    expect(ready[0].modelSelection).not.toHaveProperty("warning");
+    expect(getProviderModelRows(ready[0])).toEqual(getProviderModelRows(stale[0]));
+  });
+
+  it("does not invent a synthetic default or select compatibility-only rows after a failed snapshot", () => {
+    const providers = buildSelectableProviderSelectorProviders([
+      snapshotEntry({
+        provider: "codex",
+        status: "error",
+        error: "Timeout",
+        models: [{ ...codexModel, isSelectable: false }],
+      }),
+    ]);
+    expect(providers[0].modelSelection).toEqual({ kind: "error", message: "Timeout" });
+    expect(getProviderModelRows(providers[0])).toEqual([]);
   });
 
   it("returns observable submission readiness reasons", () => {

@@ -13,7 +13,12 @@ import path from "node:path";
 const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
 const imports = (source: string) =>
   [...source.matchAll(/^\s*import\s[^'"]*?from\s+["']([^"']+)["']/gm)].map((m) => m[1]);
-const CLIENT = ["client/work-map.tsx", "client/work-map-model.ts", "client/details.tsx"];
+const CLIENT = [
+  "client/work-map.tsx",
+  "client/work-map-model.ts",
+  "client/live-map-model.ts",
+  "client/details.tsx",
+];
 const ALLOWED_IMPORTS = new Set([
   "react",
   "react-native",
@@ -28,6 +33,10 @@ const ALLOWED_IMPORTS = new Set([
   // J0: the Details disclosure (presentation only) and the in-memory last good result (no I/O).
   "./details",
   "./last-good",
+  "./live-map-model",
+  "../shared/fleet",
+  "../shared/manager-display",
+  "../shared/cc/remit",
 ]);
 const WRITE_CONTRACTS = [
   "roleAssignRpc",
@@ -95,19 +104,17 @@ test("T3 work-map client modules name no write contract and call no contract but
   }
 });
 
-test("T3 the work map navigates nowhere and opens nothing", () => {
+test("work map only requests explicit native navigation; never a mutation or external opener", () => {
   for (const file of CLIENT) {
     const source = read(file);
-    for (const token of [
-      "navigation",
-      "openAgent",
-      "openAgentOnHost",
-      "Linking",
-      "openURL",
-      "window.open",
-    ])
+    for (const token of ["Linking", "openURL", "window.open"])
       assert.ok(!source.includes(token), `${file} uses ${token}`);
     assert.ok(!/(?<![\w.])fetch\(/.test(source), `${file} calls fetch`);
+    const calls = [...source.matchAll(/navigation!?\.(\w+)/g)].map((match) => match[1]);
+    assert.ok(
+      calls.every((name) => ["openAgentOnHost", "openAgentChangesOnHost"].includes(name)),
+      calls.join(","),
+    );
   }
 });
 
@@ -118,7 +125,7 @@ test("T3 the server reader has exactly one path to the controller, through the a
     1,
     "only allowlisted() may invoke the raw call",
   );
-  assert.match(source, /if \(!allowed\.has\(method\)\) return Promise\.reject/);
+  assert.match(source, /if \(!allowed\.has\(method\)\)\s+return Promise\.reject/);
   for (const method of MUTATING_METHODS)
     assert.ok(
       !source.includes(`"${method}"`) && !source.includes(`'${method}'`),
@@ -189,8 +196,8 @@ test('J6 no user-visible "Orca" text or staging label in the plugin client sourc
 test("J6 map view puts the graph above the attention panel; list view keeps the panel first", () => {
   const source = read("client/work-map.tsx"),
     at = (s: string) => source.indexOf(s);
-  const map = at("<MapView rows="),
-    summary = at('{showAttention && view === "map" && <Text'),
+  const map = at("<MapView"),
+    summary = at('{showAttention && view === "map" && ('),
     panelAfterMap = at('{showAttention && view === "map" && attentionPanel}');
   const listPanel = at('{showAttention && view === "list" && attentionPanel}'),
     outline = at('accessibilityLabel="Fulcra work outline"');

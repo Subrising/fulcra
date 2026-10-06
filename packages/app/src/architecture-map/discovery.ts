@@ -64,3 +64,12 @@ export function selectArchitectureMaps(
 export function isMissingDirectoryError(message: string): boolean {
   return /ENOENT|no such file|not found|does not exist/i.test(message);
 }
+
+/** Entry availability mirrors the existing panel: saved IR or an explicitly advertised native code view. */
+export function canOpenCodeArchitecture(input: {
+  hasMaps: boolean;
+  canGenerate: boolean;
+  canGraph: boolean;
+}): boolean {
+  return input.hasMaps || input.canGenerate || input.canGraph;
+}

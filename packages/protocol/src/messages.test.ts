@@ -7,6 +7,7 @@ import {
   SessionOutboundMessageSchema,
   WorkspaceProjectDescriptorPayloadSchema,
   ProviderUsageSchema,
+  ProviderUsageListResponseMessageSchema,
   AgentQuotaSnapshotSchema,
   AccountUsageRowSchema,
 } from "./messages.js";
@@ -708,4 +709,72 @@ describe("account usage session count compatibility", () => {
     for (const sessionCount of [-1, 0.5, Infinity, NaN])
       expect(AccountUsageRowSchema.safeParse({ ...row, sessionCount }).success).toBe(false);
   });
+});
+
+test("usage-limit resume support is an explicit optional host feature", () => {
+  const oldHost = parseServerInfoStatusPayload({
+    status: "server_info",
+    serverId: "old-host",
+    features: {},
+  });
+  expect(oldHost?.features?.autoResumeOnLimit).toBeUndefined();
+  const newHost = parseServerInfoStatusPayload({
+    status: "server_info",
+    serverId: "new-host",
+    features: { autoResumeOnLimit: true },
+  });
+  expect(newHost?.features?.autoResumeOnLimit).toBe(true);
+  expect(
+    parseServerInfoStatusPayload({
+      status: "server_info",
+      serverId: "host",
+      features: { autoResumeOnLimit: false },
+    })?.features?.autoResumeOnLimit,
+  ).toBe(false);
+});
+
+test("notification policy is one explicit optional host/session feature", () => {
+  for (const features of [{}, { notificationPolicy: false }, { notificationPolicy: true }]) {
+    const host = parseServerInfoStatusPayload({
+      status: "server_info",
+      serverId: "fixture",
+      features,
+    });
+    expect(host?.features?.notificationPolicy).toBe(
+      "notificationPolicy" in features ? features.notificationPolicy : undefined,
+    );
+  }
+});
+
+test("observation usage RPC remains additive and explicitly gated", () => {
+  const old = { type: "provider.usage.list.request", requestId: "r" };
+  expect(SessionInboundMessageSchema.parse(old)).toEqual(old);
+  expect(SessionInboundMessageSchema.parse({ ...old, observationOnly: true })).toMatchObject({
+    observationOnly: true,
+  });
+  for (const features of [
+    {},
+    { pooledAccountUsageObservation: false },
+    { pooledAccountUsageObservation: true },
+  ])
+    expect(
+      parseServerInfoStatusPayload({ status: "server_info", serverId: "s", features })?.features
+        ?.pooledAccountUsageObservation,
+    ).toBe(
+      "pooledAccountUsageObservation" in features
+        ? features.pooledAccountUsageObservation
+        : undefined,
+    );
+  expect(
+    ProviderUsageListResponseMessageSchema.parse({
+      type: "provider.usage.list.response",
+      payload: {
+        requestId: "r",
+        fetchedAt: "2026-01-01T00:00:00Z",
+        providers: [],
+        observationOnly: true,
+        sessionAccount: null,
+      },
+    }).payload.sessionAccount,
+  ).toBeNull();
 });

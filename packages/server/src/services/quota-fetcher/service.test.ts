@@ -1,3 +1,4 @@
+import pino from "pino";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -2253,4 +2254,30 @@ describe("KimiQuotaProvider usage windows", () => {
       "coding_limit_300_time_unit_minute_2",
     ]);
   });
+});
+
+it("observation projection returns cold/mature cached values without fetch/TTL work", async () => {
+  const fetchUsage = vi.fn(async () => ({
+    providerId: "fixture",
+    displayName: "Fixture",
+    status: "available" as const,
+    planLabel: null,
+    fetchedAt: "2026-01-01T00:00:00Z",
+    windows: [],
+  }));
+  let now = 0;
+  const service = new ProviderUsageService({
+    logger: pino({ level: "silent" }),
+    fetchers: [{ providerId: "fixture", displayName: "Fixture", fetchUsage }],
+    now: () => now,
+  });
+  expect(service.observeUsage().providers).toEqual([]);
+  expect(fetchUsage).not.toHaveBeenCalled();
+  await service.listUsage();
+  now += 10 * 60_000;
+  const observed = service.observeUsage();
+  expect(observed.providers[0].fetchedAt).toBe("2026-01-01T00:00:00Z");
+  expect(fetchUsage).toHaveBeenCalledTimes(1);
+  observed.providers[0].displayName = "mutated";
+  expect(service.observeUsage().providers[0].displayName).toBe("Fixture");
 });

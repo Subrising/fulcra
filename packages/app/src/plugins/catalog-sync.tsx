@@ -21,6 +21,7 @@ export function PluginCatalogSync({
     let cancelled = false;
     let refreshQueue = Promise.resolve();
     let generation = 0;
+    let connectionAvailable = connected;
     let reading: AbortController | undefined;
     if (!connected) {
       pluginRegistry.suspendHost(serverId);
@@ -36,11 +37,21 @@ export function PluginCatalogSync({
       pluginRegistry.removeHost(serverId);
       return;
     }
+    const releaseConnection = client.subscribeConnectionStatus((state) => {
+      connectionAvailable = state.status === "connected";
+      if (!connectionAvailable) {
+        // Invalidate preparation before React observes the drop, including a same-client reconnect.
+        generation++;
+        reading?.abort();
+        pluginRegistry.clearHostInputPolicy(serverId, client);
+      }
+    });
     const refresh = (replacePluginId?: string) => {
       const epoch = ++generation;
+      pluginRegistry.clearHostInputPolicy(serverId, client);
       reading?.abort();
       refreshQueue = refreshQueue.then(async () => {
-        if (cancelled || epoch !== generation) return;
+        if (cancelled || !connectionAvailable || epoch !== generation) return;
         const abort = new AbortController();
         reading = abort;
         try {
@@ -62,7 +73,11 @@ export function PluginCatalogSync({
           if (cancelled || abort.signal.aborted || epoch !== generation) return;
           const plugins = await preparePluginCatalog(catalog.plugins);
           if (!cancelled && !abort.signal.aborted && epoch === generation) {
-            pluginRegistry.installCatalog(serverId, plugins, { replacePluginId, client });
+            pluginRegistry.installCatalog(serverId, plugins, {
+              replacePluginId,
+              client,
+              trustedPlugins: catalog.trustedPlugins,
+            });
           }
         } catch {
           if (!cancelled && epoch === generation) {
@@ -103,6 +118,8 @@ export function PluginCatalogSync({
     return () => {
       cancelled = true;
       generation++;
+      pluginRegistry.clearHostInputPolicy(serverId, client);
+      releaseConnection();
       reading?.abort();
       void observation
         .release()

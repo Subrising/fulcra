@@ -1,4 +1,6 @@
-import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { WorkspacesSurface } from "./client/organization/workspaces";
+import { IntakeSurface } from "./client/organization/intake";
+import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { OrganizationSurface } from "./client/organization";
 import { registerReturnCommands } from "./client/navigation";
 import { SIDEBAR_TITLE } from "./client/build-identity";
@@ -6,8 +8,20 @@ import { AccountsSurface } from "./client/accounts";
 import { IntegrationsScreen } from "./client/integrations";
 import { AgentStepThroughPanel } from "./client/step-through-panel";
 import { registerAccountSwitch } from "./client/switch-account";
+function LeadershipSurface(props: PluginSurfaceProps) {
+  return <OrganizationSurface {...props} initialPillar="organisation" initialView="leadership" />;
+}
 export default function contribute(client: PluginClientContext) {
   const surface = client.addSurface("organization", OrganizationSurface);
+  const workspaces = client.addSurface("workspaces", WorkspacesSurface);
+  const intake = client.addSurface("intake", IntakeSurface);
+  const workspaceSidebar = client.addSidebarItem({
+    id: "workspaces",
+    title: "Workspaces",
+    icon: "FolderKanban",
+    surface: "workspaces",
+  });
+  const leadership = client.addSurface("leadership", LeadershipSurface);
   const sidebar = client.addSidebarItem({
     id: "organization",
     title: SIDEBAR_TITLE,
@@ -55,5 +69,9 @@ export default function contribute(client: PluginClientContext) {
     commands();
     sidebar();
     surface();
+    leadership();
+    workspaceSidebar();
+    intake();
+    workspaces();
   };
 }

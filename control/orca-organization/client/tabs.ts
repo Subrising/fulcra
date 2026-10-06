@@ -4,6 +4,7 @@
 export type PillarKey =
   | "today"
   | "organisation"
+  | "team"
   | "inbox"
   | "changes"
   | "environments"
@@ -18,11 +19,12 @@ export interface Pillar {
 }
 export const PILLARS: readonly Pillar[] = Object.freeze([
   // The front door: what finished, what needs you, what is running and each project's story. Opens first.
-  { key: "today", label: "Today", ready: true, legacyKey: null },
-  { key: "organisation", label: "Organisation", ready: true, legacyKey: null },
+  { key: "today", label: "Home", ready: true, legacyKey: null },
+  { key: "organisation", label: "Projects", ready: true, legacyKey: null },
+  { key: "team", label: "Team workflow", ready: true, legacyKey: null },
   // J0-8: J3's Inbox (InboxSurface). Its keys match J3's tab, so J3's test ids keep working.
   { key: "inbox", label: "Inbox", ready: true, legacyKey: null },
-  { key: "changes", label: "Changes", ready: true, legacyKey: null },
+  { key: "changes", label: "Changes & impact", ready: true, legacyKey: null },
   // Changes lists project pull requests and opens the app-owned Architecture map comparison.
   { key: "environments", label: "Environments", ready: true, legacyKey: null },
   { key: "sessions", label: "Sessions", ready: true, legacyKey: "fleet" },
@@ -37,7 +39,7 @@ export const ORGANISATION_VIEWS: readonly { key: OrganisationView; label: string
   Object.freeze([
     // C1 (orchestrator decision): this view opens J1's organisation, so it says "Organisation"; the id stays "workmap"
     // so saved routes and links keep working. The work map itself is one tap away inside it, on wide screens.
-    { key: "workmap", label: "Organisation" },
+    { key: "workmap", label: "Projects" },
     { key: "leadership", label: "Leadership" },
     { key: "portfolio", label: "Workstreams" },
   ]);
@@ -45,11 +47,23 @@ export const MANAGE_TASK_KEY = "task";
 // J0-8: Settings holds J3's Devices and Channels views, under their J3 tab ids.
 export type SettingsView = "devices" | "channels" | "cleanup" | "accounts";
 export const SETTINGS_VIEWS: readonly { key: SettingsView; label: string }[] = Object.freeze([
-  { key: "cleanup", label: "Clean-up" },
-  { key: "accounts", label: "Accounts & Defaults" }, // update-7 (Clean-up still leads: WL)
+  { key: "accounts", label: "Accounts & Defaults" },
+  { key: "cleanup", label: "Clean-up" }, // update-7 (Clean-up still leads: WL)
   { key: "devices", label: "Devices" },
   { key: "channels", label: "Channels" },
 ]);
 export const readyPillars = (pillars: readonly Pillar[] = PILLARS) =>
   pillars.filter((p) => p.ready);
 export const tabTestId = (key: string) => `organization-tab-${key}`;
+
+export const PRIMARY_PILLAR_KEYS: readonly PillarKey[] = [
+  "today",
+  "organisation",
+  "team",
+  "changes",
+  "settings",
+];
+export const primaryPillars = () =>
+  readyPillars().filter((pillar) => PRIMARY_PILLAR_KEYS.includes(pillar.key));
+export const extraPillars = () =>
+  readyPillars().filter((pillar) => !PRIMARY_PILLAR_KEYS.includes(pillar.key));

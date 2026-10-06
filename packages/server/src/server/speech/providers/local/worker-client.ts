@@ -23,10 +23,34 @@ import type {
   LocalSpeechWorkerResponse,
   LocalSpeechWorkerToParentMessage,
 } from "./worker-protocol.js";
+import { parsePcm16MonoWav, parsePcmRateFromFormat } from "../../audio.js";
 import { bufferToWorkerBytes, workerBytesToBuffer } from "./worker-bytes.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
-const DEFAULT_IDLE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000;
+const MAX_STT_TIMEOUT_MS = 5 * 60 * 1000;
+export function localSttTimeout(
+  audioDurationMs: number,
+  base = DEFAULT_REQUEST_TIMEOUT_MS,
+): number {
+  return Math.min(
+    MAX_STT_TIMEOUT_MS,
+    base + 3 * (Number.isFinite(audioDurationMs) ? Math.max(0, audioDurationMs) : 0),
+  );
+}
+export function localAudioDurationMs(audio: Buffer, format: string): number {
+  try {
+    if (/audio\/(?:x-)?wav/i.test(format)) {
+      const parsed = parsePcm16MonoWav(audio);
+      return (parsed.pcm16.length / (parsed.sampleRate * 2)) * 1000;
+    }
+    if (/audio\/pcm/i.test(format))
+      return (audio.length / ((parsePcmRateFromFormat(format, 16000) ?? 16000) * 2)) * 1000;
+  } catch {
+    /* malformed audio will be refused by the worker */
+  }
+  return 0;
+}
 const DEFAULT_LOCAL_SAMPLE_RATE = 16000;
 const STDERR_TAIL_MAX_CHARS = 8000;
 const USER_ERROR_STDERR_MAX_CHARS = 1000;
@@ -182,6 +206,7 @@ export class LocalSpeechWorkerClient {
   private readonly forkWorker: () => LocalSpeechWorkerProcess;
   private readonly pendingRequests = new Map<string, PendingRequest>();
   private readonly activeSessionIds = new Set<string>();
+  private readonly sessionAudioBytes = new Map<string, number>();
   private readonly sessionEmitters = new Map<string, EventEmitter>();
   private worker: LocalSpeechWorkerProcess | null = null;
   private workerPid: number | null = null;
@@ -227,6 +252,7 @@ export class LocalSpeechWorkerClient {
   ): Promise<{ sessionId: string; requiredSampleRate: number }> {
     const sessionId = randomUUID();
     this.activeSessionIds.add(sessionId);
+    this.sessionAudioBytes.set(sessionId, 0);
     this.sessionEmitters.set(sessionId, emitter);
     try {
       const result = await this.sendRequest<LocalSpeechCreateSessionResult>({
@@ -238,6 +264,7 @@ export class LocalSpeechWorkerClient {
       return { sessionId, requiredSampleRate: result.requiredSampleRate };
     } catch (err) {
       this.activeSessionIds.delete(sessionId);
+      this.sessionAudioBytes.delete(sessionId);
       this.sessionEmitters.delete(sessionId);
       this.scheduleIdleShutdownIfReady();
       throw err;
@@ -245,6 +272,10 @@ export class LocalSpeechWorkerClient {
   }
 
   appendSessionAudio(sessionId: string, audio: Buffer): void {
+    this.sessionAudioBytes.set(
+      sessionId,
+      (this.sessionAudioBytes.get(sessionId) ?? 0) + audio.length,
+    );
     void this.sendRequest({
       type: "session.append",
       sessionId,
@@ -261,6 +292,7 @@ export class LocalSpeechWorkerClient {
   }
 
   clearSession(sessionId: string): void {
+    this.sessionAudioBytes.set(sessionId, 0);
     void this.sendRequest({ type: "session.clear", sessionId }).catch((err) => {
       this.emitSessionError(sessionId, err);
     });
@@ -273,6 +305,7 @@ export class LocalSpeechWorkerClient {
   }
 
   resetSession(sessionId: string): void {
+    this.sessionAudioBytes.set(sessionId, 0);
     void this.sendRequest({ type: "session.reset", sessionId }).catch((err) => {
       this.emitSessionError(sessionId, err);
     });
@@ -280,6 +313,7 @@ export class LocalSpeechWorkerClient {
 
   closeSession(sessionId: string): void {
     this.activeSessionIds.delete(sessionId);
+    this.sessionAudioBytes.delete(sessionId);
     this.sessionEmitters.delete(sessionId);
     void this.sendRequest({ type: "session.close", sessionId }).catch(() => {
       // Closing is best-effort; the parent already dropped the session.
@@ -291,6 +325,7 @@ export class LocalSpeechWorkerClient {
     this.clearIdleTimer();
     this.rejectAllPending(new Error("Local speech worker shut down"));
     this.activeSessionIds.clear();
+    this.sessionAudioBytes.clear();
     this.sessionEmitters.clear();
     const worker = this.worker;
     this.worker = null;
@@ -315,6 +350,18 @@ export class LocalSpeechWorkerClient {
     const requestId = randomUUID();
     const message = { ...input, requestId } as LocalSpeechWorkerRequest;
     const requestSummary = summarizeWorkerRequest(message);
+    let audioDurationMs = 0;
+    if ("sessionId" in input) {
+      audioDurationMs =
+        ((this.sessionAudioBytes.get(input.sessionId) ?? 0) / (DEFAULT_LOCAL_SAMPLE_RATE * 2)) *
+        1000;
+    } else if (input.type === "stt.transcribe") {
+      audioDurationMs = localAudioDurationMs(workerBytesToBuffer(input.audio), input.format);
+    }
+    const requestTimeout =
+      input.type === "stt.transcribe" || ["session.flush", "session.commit"].includes(input.type)
+        ? localSttTimeout(audioDurationMs, this.requestTimeoutMs)
+        : this.requestTimeoutMs;
     this.inFlightRequests++;
     this.clearIdleTimer();
 
@@ -324,7 +371,7 @@ export class LocalSpeechWorkerClient {
         this.inFlightRequests = Math.max(0, this.inFlightRequests - 1);
         this.scheduleIdleShutdownIfReady();
         reject(new Error(`Local speech worker request timed out: ${input.type}`));
-      }, this.requestTimeoutMs);
+      }, requestTimeout);
       this.pendingRequests.set(requestId, {
         resolve: (value) => resolve(value as T),
         reject,

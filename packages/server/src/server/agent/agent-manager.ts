@@ -1,3 +1,11 @@
+import {
+  readHostPublicCodexBaseline,
+  cloneHostPublicBaseline,
+  publicBaselineLaunchAllowed,
+} from "./host-public-baseline.js";
+import { PermissionAttentionError } from "./permission-attention-error.js";
+import { retainRecordedUsage } from "./usage-recording.js";
+import { fingerprintLimitResumeBinding } from "../limit-resume/binding.js";
 import { registerOwnerArtifactContent } from "../owner-report-read.js";
 import {
   NativeArtifactProduceInputSchema,
@@ -1777,7 +1785,14 @@ export class AgentManager {
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
   private readonly agents = new Map<string, LiveManagedAgent>();
   // FIX-8 W3: permission requests a trusted plugin answered before they were surfaced, per agent.
-  private readonly automaticPermissionIds = new Map<string, Set<string>>();
+  private readonly automaticPermissions = new Map<
+    string,
+    Map<string, { current: () => boolean; completed: boolean }>
+  >();
+  private readonly automaticResolutionOrigins = new WeakMap<
+    object,
+    { current: () => boolean; completed: boolean }
+  >();
   private readonly timelineStore = new InMemoryAgentTimelineStore();
   private readonly providerSubagents = new ProviderSubagentStore();
   private readonly agentsAwaitingInitialSnapshotPersist = new Set<string>();
@@ -2038,6 +2053,12 @@ export class AgentManager {
       Boolean(agent.activeForegroundTurnId) ||
       this.runs.hasRun(agentId)
     );
+  }
+
+  /** A failed startup emits its terminal event before its pending foreground run settles. */
+  async waitForFailedRunSettlement(agentId: string): Promise<void> {
+    const pending = this.runs.getPendingRun(agentId);
+    if (pending?.start.status === "failed") await pending.settledPromise;
   }
 
   subscribe(callback: AgentSubscriber, options?: SubscribeOptions): () => void {
@@ -2483,7 +2504,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       options?.env,
-      { reason: "create", purpose: "interactive", workspaceId: options.workspaceId ?? null },
+      {
+        reason: "create",
+        purpose: "interactive",
+        workspaceId: options.workspaceId ?? null,
+        internal: storedConfig.internal,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
@@ -2631,6 +2657,8 @@ export class AgentManager {
       {
         reason: "resume",
         purpose,
+        suppressPublicBaseline: resumeOptions?.purpose === "history",
+        internal: storedConfig.internal,
         workspaceId: options?.workspaceId ?? null,
       },
     );
@@ -2686,7 +2714,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "import", purpose: "interactive", workspaceId: input.workspaceId },
+      {
+        reason: "import",
+        purpose: "interactive",
+        workspaceId: input.workspaceId,
+        internal: storedConfig.internal,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const imported = await client.importSession(
@@ -2967,7 +3000,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
+      {
+        reason: "refresh",
+        purpose: "interactive",
+        workspaceId: existing.workspaceId,
+        internal: existing.internal,
+      },
     );
     const providerConfig = this.resolveProviderLaunchConfig(launchConfig, context);
     const commitClose = await beforeClose();
@@ -3103,7 +3141,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
+      {
+        reason: "refresh",
+        purpose: "interactive",
+        workspaceId: existing.workspaceId,
+        internal: existing.internal,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     if (
@@ -4128,6 +4171,58 @@ export class AgentManager {
     await this.unarchiveSnapshot(matched.id);
   }
 
+  /** Host-generated status only. No wire route, caller-selected label or input authority. */
+  async updateLimitResumeMarker(agentId: string, resumeAtIso: string | null): Promise<void> {
+    if (resumeAtIso !== null && !Number.isFinite(Date.parse(resumeAtIso)))
+      throw new Error("Invalid limit resume status time");
+    await this.runLifecycleMutation(agentId, () =>
+      this.writeLabels(agentId, { "fulcra.limit-resume-at": resumeAtIso ?? "" }).then(
+        () => undefined,
+      ),
+    );
+  }
+
+  /** Synchronous stop fingerprint. Unknown/credential-bearing configuration is refusal, not authority. */
+  getLimitResumeBinding(agentId: string): string | null {
+    const agent = this.agents.get(agentId);
+    if (
+      !agent?.session ||
+      !agent.config.model ||
+      !agent.config.modeId ||
+      this.lifecycleMutationTails.has(agentId) ||
+      agent.pendingReplacement
+    )
+      return null;
+    try {
+      const account = agent.session.limitResumeAccountBinding?.();
+      if (typeof account !== "string" || !account) return null;
+      const sessionId = agent.persistence?.sessionId ?? agent.session.id;
+      if (!sessionId) return null;
+      return fingerprintLimitResumeBinding(agent.config, {
+        provider: agent.provider,
+        cwd: agent.cwd,
+        sessionId,
+        account,
+        appendSystemPrompt: this.appendSystemPrompt,
+        lastUserMessageAt: agent.lastUserMessageAt?.toISOString() ?? null,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /** No ownership classifier exists for trusted input authorities: unknown ownership refuses fallback. */
+  canRunUnscopedLimitResume(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.internal || agent.owner || !["codex", "claude"].includes(agent.provider))
+      return false;
+    try {
+      return !this.trustedPlugins.catalog().some((plugin) => plugin.hooks.includes("input"));
+    } catch {
+      return false;
+    }
+  }
+
   async updateAgentMetadata(
     agentId: string,
     updates: {
@@ -4452,6 +4547,9 @@ export class AgentManager {
         type: "turn_failed",
         provider: agent.provider,
         error: errorMsg,
+        ...(error instanceof PermissionAttentionError
+          ? { code: error.code, diagnostic: error.diagnostic }
+          : {}),
       });
       this.finalizeForegroundTurn(agent);
       this.runs.settleForegroundRun(agentId, pendingRun.token);
@@ -5458,6 +5556,23 @@ export class AgentManager {
     return this.timelineStore.fetch(agentId, { ...options, turn });
   }
 
+  /** Read unloaded journal-backed history without restoring a provider runtime. */
+  async fetchStoredTimeline(
+    agentId: string,
+    options: AgentTimelineFetchOptions & { turnId?: string },
+  ): Promise<AgentTimelineFetchResult | null> {
+    const store = this.durableTimelineStore;
+    if (this.agents.has(agentId) || !store?.fetchExistingCommitted) return null;
+    const { turnId, ...fetchOptions } = options;
+    const page = await store.fetchExistingCommitted(agentId, fetchOptions);
+    if (!page || this.agents.has(agentId)) return null;
+    if (!turnId) return page;
+    const snapshot = await store.getTimelineIndex?.(agentId);
+    const turn = snapshot ? findTimelineTurn(snapshot.index, turnId) : null;
+    if (!turn) throw new Error(`Turn ${turnId} not found`);
+    return store.fetchExistingCommitted(agentId, { ...fetchOptions, turn });
+  }
+
   /**
    * A page of a deleted agent's retained history, optionally one turn of it, with the placement
    * recorded when it was retained. Null when nothing was retained.
@@ -6017,6 +6132,7 @@ export class AgentManager {
     if (agent.unsubscribeSession) {
       agent.unsubscribeSession();
       agent.unsubscribeSession = null;
+      this.automaticPermissions.delete(agent.id);
     }
     this.runs.cancelWaiters(agent, (turnId) => ({
       type: "turn_canceled",
@@ -6176,13 +6292,26 @@ export class AgentManager {
     }
     this.registerEvidenceProvider(agent);
     const agentId = agent.id;
-    const unsubscribe = agent.session.subscribe((event: AgentStreamEvent) => {
+    const session = agent.session,
+      instanceId = agent.instanceId;
+    const unsubscribe = session.subscribe((event: AgentStreamEvent) => {
+      if (
+        event.type === "permission_resolved" &&
+        (this.agents.get(agentId) !== agent ||
+          agent.session !== session ||
+          agent.instanceId !== instanceId)
+      )
+        return;
       this.enqueueSessionEvent(agentId, event);
     });
     agent.unsubscribeSession = unsubscribe;
   }
 
   private enqueueSessionEvent(agentId: string, event: AgentStreamEvent): void {
+    if (event.type === "permission_resolved") {
+      const automatic = this.automaticPermissions.get(agentId)?.get(event.requestId);
+      if (automatic) this.automaticResolutionOrigins.set(event, automatic);
+    }
     this.logger.trace(
       {
         agentId,
@@ -6611,9 +6740,11 @@ export class AgentManager {
     event: AgentStreamEvent,
     options?: HandleStreamEventOptions,
   ): Promise<boolean> {
+    const automaticOrigin = this.automaticResolutionOrigins.get(event);
     event = limitAgentStreamEventContent(event);
     const identified = attachManagedTurnIdentity(agent, event, options?.fromHistory === true);
     event = identified.event;
+    if (automaticOrigin) this.automaticResolutionOrigins.set(event, automaticOrigin);
     const eventTurnId = identified.turnId;
     const isForegroundEvent = agent.activeForegroundTurnId === eventTurnId;
     this.traceHandleStreamEventStart(agent, event, eventTurnId, isForegroundEvent);
@@ -6753,11 +6884,13 @@ export class AgentManager {
     const { agent, event, options, isForegroundEvent, eventTurnId, terminalDisposition, flags } =
       params;
     switch (event.type) {
+      case "host_public_baseline_transport":
+        return this.onPublicBaselineTransport(agent, event, flags);
       case "thread_started":
         this.onStreamThreadStarted(agent);
         return undefined;
       case "usage_updated":
-        agent.lastUsage = event.usage;
+        agent.lastUsage = retainRecordedUsage(agent.lastUsage, event.usage);
         this.emitState(agent);
         return undefined;
       case "mode_changed":
@@ -6837,6 +6970,30 @@ export class AgentManager {
       default:
         return undefined;
     }
+  }
+
+  private onPublicBaselineTransport(
+    agent: ActiveManagedAgent,
+    event: Extract<AgentStreamEvent, { type: "host_public_baseline_transport" }>,
+    flags: StreamEventFlags,
+  ): undefined {
+    flags.shouldDispatchEvent = false;
+    flags.shouldNotifyWaiters = false;
+    if (
+      this.agents.get(agent.id) !== agent ||
+      agent.session.id !== event.nativeSessionId ||
+      !agent.runtimeInfo
+    )
+      return undefined;
+    agent.runtimeInfo = {
+      ...agent.runtimeInfo,
+      extra: {
+        ...agent.runtimeInfo.extra,
+        hostPublicBaselineTransport: structuredClone(event.receipt),
+      },
+    };
+    this.emitState(agent);
+    return undefined;
   }
 
   private onStreamThreadStarted(agent: ActiveManagedAgent): void {
@@ -6973,7 +7130,7 @@ export class AgentManager {
       this.formatTurnFailedMessage(event),
       options,
     );
-    this.resolvePendingPermissionsForAgent(agent, event.provider, options, "Turn failed");
+    this.reconcilePermissionsAfterFailure(agent, event.provider, options);
     if (!isForegroundEvent && !agent.activeForegroundTurnId) {
       this.emitState(agent);
     }
@@ -7086,9 +7243,10 @@ export class AgentManager {
       !this.mcpRefreshes.has(agent.id);
     if (agent.internal || !this.trustedPlugins.automaticPermission(agent, event.request))
       return false;
-    let ids = this.automaticPermissionIds.get(agent.id);
-    if (!ids) this.automaticPermissionIds.set(agent.id, (ids = new Set()));
-    ids.add(event.request.id);
+    let pending = this.automaticPermissions.get(agent.id);
+    if (!pending) this.automaticPermissions.set(agent.id, (pending = new Map()));
+    const automatic = { current, completed: false };
+    pending.set(event.request.id, automatic);
     flags.shouldDispatchEvent = false;
     flags.shouldNotifyWaiters = false;
     void Promise.resolve()
@@ -7096,25 +7254,72 @@ export class AgentManager {
         // Revalidate after the async scheduling gap, with no await between the
         // final decision and dispatch to the captured provider session.
         if (!current()) {
-          ids?.delete(event.request.id);
+          this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
           return;
         }
         if (!this.trustedPlugins.automaticPermission(agent, event.request)) {
-          ids?.delete(event.request.id);
+          this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
           this.onStreamPermissionRequested(agent, event);
           return;
         }
-        return session.respondToPermission(event.request.id, { behavior: "allow" });
+        return Promise.resolve(
+          session.respondToPermission(event.request.id, { behavior: "allow" }),
+        ).then(() => {
+          this.completeAutomaticPermission(agent, event.request.id, automatic, false);
+          return undefined;
+        });
       })
       .catch((error: unknown) => {
-        ids?.delete(event.request.id);
+        const owns = this.forgetAutomaticPermission(agent.id, event.request.id, automatic);
         this.logger.warn(
           { err: error, agentId: agent.id },
           "Automatic permission answer failed; surfacing it",
         );
-        if (current()) this.onStreamPermissionRequested(agent, event);
+        if (owns && current()) this.onStreamPermissionRequested(agent, event);
       });
     return true;
+  }
+
+  private forgetAutomaticPermission(
+    agentId: string,
+    requestId: string,
+    automatic: { current: () => boolean; completed: boolean },
+  ): boolean {
+    const pending = this.automaticPermissions.get(agentId);
+    if (pending?.get(requestId) !== automatic) return false;
+    pending.delete(requestId);
+    if (pending.size === 0) this.automaticPermissions.delete(agentId);
+    return true;
+  }
+
+  private completeAutomaticPermission(
+    agent: ActiveManagedAgent,
+    requestId: string,
+    automatic: { current: () => boolean; completed: boolean },
+    nativeResolution: boolean,
+  ): void {
+    const active = this.automaticPermissions.get(agent.id)?.get(requestId);
+    if (active && active !== automatic) return;
+    if (!automatic.current()) {
+      // A late matching event still needs its original scope, even after the reply promise settled.
+      if (nativeResolution) this.forgetAutomaticPermission(agent.id, requestId, automatic);
+      return;
+    }
+    if (!nativeResolution) {
+      try {
+        if (agent.session.getPendingPermissions().some((request) => request.id === requestId))
+          return;
+      } catch {
+        return;
+      }
+      if (automatic.completed) return;
+    }
+    automatic.completed = true;
+    // Keep the completed token until a late native event, preserving automatic event suppression.
+    if (nativeResolution) this.forgetAutomaticPermission(agent.id, requestId, automatic);
+    agent.pendingPermissions.delete(requestId);
+    this.refreshSessionPersistence(agent);
+    this.emitState(agent);
   }
 
   private onStreamPermissionRequested(
@@ -7137,7 +7342,11 @@ export class AgentManager {
     flags: StreamEventFlags;
   }): void {
     const { agent, event, options, flags } = params;
-    if (this.automaticPermissionIds.get(agent.id)?.delete(event.requestId)) {
+    const automatic =
+      this.automaticResolutionOrigins.get(event) ??
+      this.automaticPermissions.get(agent.id)?.get(event.requestId);
+    if (automatic) {
+      this.completeAutomaticPermission(agent, event.requestId, automatic, true);
       flags.shouldDispatchEvent = false;
       flags.shouldNotifyWaiters = false;
       return;
@@ -7152,13 +7361,51 @@ export class AgentManager {
     this.emitState(agent);
   }
 
+  private reconcilePermissionsAfterFailure(
+    agent: ActiveManagedAgent,
+    provider: AgentProvider,
+    options: { fromHistory?: boolean } | undefined,
+  ): void {
+    let pending: AgentPermissionRequest[];
+    try {
+      pending = agent.session.getPendingPermissions();
+    } catch {
+      // Unknown provider state cannot authorize fake resolutions or hide an outstanding approval.
+      this.logger.warn(
+        { agentId: agent.id },
+        "Provider pending permissions unavailable after failed turn; retaining projection",
+      );
+      return;
+    }
+    this.resolvePendingPermissionsForAgent(
+      agent,
+      provider,
+      options,
+      "Turn failed",
+      new Set(pending.map((request) => request.id)),
+    );
+    for (const request of pending) {
+      const automatic = this.automaticPermissions.get(agent.id)?.get(request.id);
+      if (automatic && !automatic.completed && automatic.current()) continue;
+      if (!agent.pendingPermissions.has(request.id))
+        this.onStreamPermissionRequested(agent, {
+          type: "permission_requested",
+          provider,
+          request,
+        });
+    }
+    this.refreshSessionPersistence(agent);
+  }
+
   private resolvePendingPermissionsForAgent(
     agent: ActiveManagedAgent,
     provider: AgentProvider,
     options: { fromHistory?: boolean } | undefined,
     message: string,
+    retain?: ReadonlySet<string>,
   ): void {
     for (const [requestId] of agent.pendingPermissions) {
+      if (retain?.has(requestId)) continue;
       agent.pendingPermissions.delete(requestId);
       if (!options?.fromHistory) {
         this.dispatchStream(agent.id, {
@@ -7874,6 +8121,8 @@ export class AgentManager {
       reason: PluginSessionOpenRequest["reason"];
       purpose: PluginSessionOpenRequest["purpose"];
       workspaceId?: string | null;
+      internal?: boolean;
+      suppressPublicBaseline?: boolean;
     },
   ): Promise<AgentLaunchContext> {
     if (this.pluginLifecycle) {
@@ -7897,6 +8146,10 @@ export class AgentManager {
         PASEO_AGENT_CWD: cwd,
       },
     };
+    if (publicBaselineLaunchAllowed(client.provider, opening)) {
+      const baseline = await readHostPublicCodexBaseline();
+      if (baseline) context.publicBaseline = cloneHostPublicBaseline(baseline);
+    }
     if (
       this.paseoToolsEnabled &&
       isPaseoToolPolicyEnabled(paseoToolPolicy) &&

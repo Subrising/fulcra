@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -167,6 +168,8 @@ export const ko: TranslationResources = {
     },
     attachments: {
       addImage: "이미지 추가",
+      choosePhoto: "사진 선택",
+      takePhoto: "사진 촬영",
       pasteImage: "이미지 붙여넣기",
       addFile: "파일 업로드",
       addIssueOrPr: "이슈 또는 PR 추가",
@@ -1778,6 +1781,8 @@ export const ko: TranslationResources = {
     permissionMessage: "이미지를 첨부하려면 사진 라이브러리 접근을 허용해 주세요.",
     errorTitle: "오류",
     failedToSelect: "이미지를 선택하지 못했습니다",
+    cameraPermissionMessage: "사진을 촬영하려면 카메라 접근을 허용해 주세요.",
+    failedToTakePhoto: "사진을 촬영하지 못했습니다",
     dialogTitle: "이미지 첨부",
     dialogFilterName: "이미지",
   },
@@ -1832,6 +1837,7 @@ export const ko: TranslationResources = {
     modelCountPlural: "모델 {{count}}개",
     retry: "다시 시도",
     retrying: "다시 시도 중...",
+    savedModels: "이전에 불러온 {{provider}} 모델을 표시합니다.",
     noMatches: "검색과 일치하는 모델이 없습니다",
     noMatchesForQuery: '"{{query}}"과(와) 일치하는 모델이 없습니다',
     searchAllPlaceholder: "모든 모델 검색...",
@@ -1874,6 +1880,17 @@ export const ko: TranslationResources = {
     hostPassword: {
       title: "{{host}}의 비밀번호",
       label: "호스트 비밀번호",
+    },
+    hostConfirmation: {
+      title: "이 호스트에 연결할까요?",
+      description:
+        "이 호스트는 이 앱에서 코드를 실행하고 연결된 다른 호스트에 접근할 수 있게 됩니다. 알고 있는 호스트인 경우에만 연결하세요.",
+      descriptionChanged:
+        "이 링크는 이 호스트에 연결하는 방식을 변경합니다. 호스트는 이 앱에서 코드를 실행하고 연결된 다른 호스트에 접근할 수 있게 됩니다. 알고 있는 호스트인 경우에만 연결하세요.",
+      hostLabel: "호스트",
+      fingerprintLabel: "키 지문",
+      relayLabel: "릴레이",
+      connect: "연결",
     },
     connectionMethods: {
       title: "연결 추가",
@@ -2136,6 +2153,9 @@ export const ko: TranslationResources = {
       emptyDescription: "이 체크아웃에 풀 리퀘스트를 만들면 세부 정보가 여기에 표시됩니다.",
     },
     architectureMap: {
+      mainOnly: "코드 아키텍처는 기본 작업 공간 보기입니다. + 탭 메뉴에서 여세요.",
+      entryUnavailable:
+        "저장된 코드 맵을 추가하거나 코드 그래프 또는 변경 분석을 지원하는 호스트에 연결하세요.",
       label: "아키텍처 맵",
       subtitle: "프로젝트 아키텍처",
       tooltip: "프로젝트 아키텍처 맵 보기",
@@ -2439,6 +2459,7 @@ export const ko: TranslationResources = {
   sidebarCallout: {
     dismiss: "닫기",
   },
+  usagePanel: usagePanelCopy["ko"],
   contextWindow: {
     title: "컨텍스트 윈도우",
     used: "{{percentage}}% 사용됨",

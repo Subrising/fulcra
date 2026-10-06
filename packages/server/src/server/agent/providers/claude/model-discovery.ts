@@ -39,6 +39,7 @@ export type ClaudeModelProbe = (input: ClaudeModelProbeInput) => Promise<ClaudeR
 export async function probeClaudeModels(
   input: ClaudeModelProbeInput,
 ): Promise<ClaudeRuntimeModel[]> {
+  input.signal?.throwIfAborted();
   let releasePrompt: () => void = () => {};
   const promptHeld = new Promise<void>((resolve) => {
     releasePrompt = resolve;
@@ -53,6 +54,7 @@ export async function probeClaudeModels(
     }),
   };
   let child: ChildProcess | undefined;
+  let childExit: Promise<void> | undefined;
   const query = claudeQuery(
     {
       prompt: noPrompt,
@@ -71,6 +73,16 @@ export async function probeClaudeModels(
       queryFactory: input.queryFactory,
       onChildProcess: (spawned) => {
         child = spawned;
+        childExit = new Promise<void>((resolve) => {
+          const settled = () => {
+            spawned.removeListener("exit", settled);
+            spawned.removeListener("close", settled);
+            resolve();
+          };
+          spawned.once("exit", settled);
+          // A failed spawn may close without an exit event; no process remains.
+          spawned.once("close", settled);
+        });
       },
     },
   );
@@ -97,7 +109,9 @@ export async function probeClaudeModels(
       onAbort = () => reject(input.signal?.reason ?? new Error("Claude model probe aborted"));
       input.signal?.addEventListener("abort", onAbort, { once: true });
     });
+    input.signal?.throwIfAborted();
     const models = await Promise.race([query.supportedModels(), bounded]);
+    input.signal?.throwIfAborted();
     if (!Array.isArray(models)) {
       throw new Error("Claude model probe returned no model list");
     }
@@ -111,8 +125,13 @@ export async function probeClaudeModels(
     } catch {
       // Already closed.
     }
-    if (child && child.exitCode === null && !child.killed) {
-      child.kill();
+    if (child && child.exitCode === null && child.signalCode === null) {
+      // A signal submission is not an exit. Keep the catalog flight occupied until
+      // this exact probe child exits; the outer refresh deadline bounds its caller.
+      if (!child.killed) child.kill();
+      // Standalone callers retain their existing probe bound. A refresh has an
+      // outer caller deadline and must keep its cleanup flight until observed exit.
+      if (input.signal) await childExit;
     }
   }
 }

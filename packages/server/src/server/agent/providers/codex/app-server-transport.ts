@@ -1,4 +1,4 @@
-import { assertFinalInputCheck, recordFinalInputHandoff } from "../../final-input-check.js";
+import { commitFinalInputCheck, recordFinalInputHandoff } from "../../final-input-check.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import type { Logger } from "pino";
@@ -245,7 +245,7 @@ export class CodexAppServerClient {
     });
   }
 
-  /** Refusal-only host notice fence at the actual synchronous write; no authority is minted. */
+  /** Host refusal check and optional one-time commitment at the actual write; no authority is minted. */
   requestWithFinalInputCheck(
     method: string,
     params: unknown,
@@ -269,7 +269,7 @@ export class CodexAppServerClient {
           void Promise.resolve(result).catch(() => {});
           throw new Error("Final prepared check must be synchronous");
         }
-        assertFinalInputCheck(handle);
+        commitFinalInputCheck(handle);
         this.child.stdin.write(`${serialized}\n`);
         recordFinalInputHandoff(handle);
       } catch (error) {

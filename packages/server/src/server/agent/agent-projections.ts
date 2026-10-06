@@ -1,3 +1,5 @@
+import { withoutPublicBaselineTransport } from "./host-public-baseline.js";
+import { RecordedUsageSchema } from "@getpaseo/protocol/recorded-usage";
 import { validatedTimestamp } from "./runtime-observation.js";
 import type {
   AgentListItemPayload,
@@ -72,7 +74,7 @@ export function toStoredAgentRecord(
   const createdAt = options?.createdAt ?? agent.createdAt.toISOString();
   const config = buildSerializableConfig(agent.config);
   const persistence = sanitizePersistenceHandle(agent.persistence);
-  const runtimeInfo = sanitizeRuntimeInfo(agent.runtimeInfo);
+  const runtimeInfo = withoutPublicBaselineTransport(sanitizeRuntimeInfo(agent.runtimeInfo));
 
   return {
     id: agent.id,
@@ -106,7 +108,8 @@ export function toAgentPayload(
   agent: ManagedAgent,
   options?: ProjectionOptions,
 ): AgentSnapshotPayload {
-  const runtimeInfo = sanitizeRuntimeInfo(agent.runtimeInfo);
+  const observed = sanitizeRuntimeInfo(agent.runtimeInfo);
+  const runtimeInfo = agent.session ? observed : withoutPublicBaselineTransport(observed);
   const thinkingOptionId = agent.config.thinkingOptionId ?? null;
   const effectiveThinkingOptionId = resolveEffectiveThinkingOptionId({
     runtimeInfo,
@@ -202,7 +205,7 @@ function buildStoredRuntimeInfo(record: StoredAgentRecord): AgentRuntimeInfo | u
   if (ri.extra) {
     runtimeInfo.extra = ri.extra;
   }
-  return runtimeInfo;
+  return withoutPublicBaselineTransport(runtimeInfo);
 }
 
 function buildStoredPersistenceHandle(
@@ -477,7 +480,7 @@ function sanitizeMetadataArray(value: unknown): AgentMetadata[] | undefined {
   return sanitized.length > 0 ? sanitized : undefined;
 }
 
-type UsageNumericField = Exclude<keyof AgentUsage, never>;
+type UsageNumericField = Exclude<keyof AgentUsage, "recorded">;
 
 function assignFiniteNumber(
   source: { [key: string]: JsonValue },
@@ -511,6 +514,8 @@ function sanitizeUsage(value: unknown): AgentUsage | undefined {
       return undefined;
     }
   }
+  const recorded = RecordedUsageSchema.safeParse(sanitized.recorded);
+  if (recorded.success) result.recorded = recorded.data;
   return Object.keys(result).length ? result : undefined;
 }
 

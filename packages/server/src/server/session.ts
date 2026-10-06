@@ -1,3 +1,4 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { GitAiDraftResponseSchema } from "@getpaseo/protocol/git-ai-draft";
 import { createGitAiDraftHelp } from "./session/checkout/git-ai-draft-help.js";
 import { createToollessGitDraftGeneration } from "./session/checkout/git-ai-draft-generation.js";
@@ -2933,7 +2934,7 @@ export class Session {
         throw new Error("Original content delivery authority changed");
     };
     const management = this.agentManager.trustedPlugins.management.open(
-      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      this.pluginRuntime.managementTarget?.(this.agentManager.trustedPlugins.controllerPluginId),
       () => {
         try {
           guard();
@@ -2997,7 +2998,7 @@ export class Session {
     const signal = this.delivery.requestSignal;
     const captured = this.managementSources.get(source);
     const management = this.agentManager.trustedPlugins.management.open(
-      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      this.pluginRuntime.managementTarget?.(this.agentManager.trustedPlugins.controllerPluginId),
       () => {
         const live = this.managementSources.get(source);
         return live && live === captured && !this.isCleanedUp
@@ -3127,7 +3128,7 @@ export class Session {
   ): Promise<void> {
     if (!this.pluginRuntime) throw new Error("Plugin service is unavailable");
     if (
-      msg.pluginId === "orca-organization-next" &&
+      msg.pluginId === this.agentManager.trustedPlugins.controllerPluginId &&
       [
         "organization.radius.scratch.simulate",
         "organization.radius.scratch.prune-simulate",
@@ -9016,17 +9017,30 @@ export class Session {
   }
 
   /**
-   * A live or archived agent is loaded as before. An agent that no longer exists is served from
-   * its retained history, labelled with the provider recorded when it was deleted.
+   * Journal-backed stored agents are read without restoring a provider. Legacy provider-only
+   * history still loads on demand. Deleted agents are served from their retained history.
    */
   private async resolveTimelineFetch(
     msg: Extract<SessionInboundMessage, { type: "fetch_agent_timeline_request" }>,
     options: AgentTimelineFetchOptions,
   ) {
-    if (
-      this.agentManager.getAgent(msg.agentId) === null &&
-      !(await this.agentStorage.get(msg.agentId))
-    ) {
+    const stored =
+      this.agentManager.getAgent(msg.agentId) === null
+        ? await this.agentStorage.get(msg.agentId)
+        : null;
+    if (stored) {
+      const timeline = await this.agentManager.fetchStoredTimeline(msg.agentId, {
+        ...options,
+        ...(msg.turnId ? { turnId: msg.turnId } : {}),
+      });
+      if (timeline)
+        return {
+          timeline,
+          provider: stored.provider,
+          agent: this.buildStoredAgentPayload(stored),
+          retained: false,
+        };
+    } else if (this.agentManager.getAgent(msg.agentId) === null) {
       const retained = await this.agentManager.fetchRetainedTimeline(msg.agentId, {
         ...options,
         ...(msg.turnId ? { turnId: msg.turnId } : {}),

@@ -1,3 +1,5 @@
+import { NotificationModeCard } from "./notification-mode-card";
+import { AutoResumeOnLimitCard } from "./auto-resume-on-limit-card";
 import {
   ArrowDown,
   ArrowUp,
@@ -322,6 +324,8 @@ export function HostWorkspacesPage({ serverId }: { serverId: string }) {
       {isConnected ? (
         <SettingsSection title={t("settings.hostSections.workspaces")}>
           <AutoArchiveMergedWorkspacesCard serverId={serverId} />
+          <AutoResumeOnLimitCard serverId={serverId} />
+          <NotificationModeCard serverId={serverId} />
         </SettingsSection>
       ) : (
         <View style={[settingsStyles.card, styles.emptyCard]}>

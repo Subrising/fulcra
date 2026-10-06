@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -168,6 +169,8 @@ export const ru: TranslationResources = {
     },
     attachments: {
       addImage: "Добавить изображение",
+      choosePhoto: "Выбрать фото",
+      takePhoto: "Сделать фото",
       pasteImage: "Вставить изображение",
       addFile: "Загрузить файл",
       addIssueOrPr: "Добавить проблему или PR",
@@ -1798,6 +1801,8 @@ export const ru: TranslationResources = {
     permissionMessage: "Разрешите доступ к медиатеке, чтобы прикреплять изображения.",
     errorTitle: "Ошибка",
     failedToSelect: "Не удалось выбрать изображение",
+    cameraPermissionMessage: "Разрешите доступ к камере, чтобы делать фотографии.",
+    failedToTakePhoto: "Не удалось сделать фото",
     dialogTitle: "Прикрепить изображения",
     dialogFilterName: "Изображения",
   },
@@ -1852,6 +1857,7 @@ export const ru: TranslationResources = {
     modelCountPlural: "{{count}} моделей",
     retry: "Повторить попытку",
     retrying: "Повторная попытка...",
+    savedModels: "Показаны ранее загруженные модели {{provider}}.",
     noMatches: "Ни одна модель не соответствует вашему запросу",
     noMatchesForQuery: "Нет моделей, соответствующих «{{query}}»",
     searchAllPlaceholder: "Поиск по всем моделям...",
@@ -1894,6 +1900,17 @@ export const ru: TranslationResources = {
     hostPassword: {
       title: "Пароль для {{host}}",
       label: "Пароль хоста",
+    },
+    hostConfirmation: {
+      title: "Подключиться к этому хосту?",
+      description:
+        "Этот хост сможет выполнять код в приложении и обращаться к другим вашим подключённым хостам. Подключайтесь, только если узнаёте его.",
+      descriptionChanged:
+        "Эта ссылка меняет способ подключения к этому хосту. Хост сможет выполнять код в приложении и обращаться к другим вашим подключённым хостам. Подключайтесь, только если узнаёте его.",
+      hostLabel: "Хост",
+      fingerprintLabel: "Отпечаток ключа",
+      relayLabel: "Реле",
+      connect: "Подключить",
     },
     connectionMethods: {
       title: "Добавить подключение",
@@ -2158,6 +2175,9 @@ export const ru: TranslationResources = {
       emptyDescription: "Создайте PR для этой рабочей копии, чтобы увидеть здесь сведения о нём.",
     },
     architectureMap: {
+      mainOnly: "Архитектура кода открывается в основном окне. Используйте меню вкладок +.",
+      entryUnavailable:
+        "Добавьте сохранённую карту кода или подключите хост с поддержкой графов кода или анализа изменений.",
       label: "Карта архитектуры",
       subtitle: "Архитектура проекта",
       tooltip: "Показать карту архитектуры проекта",
@@ -2463,6 +2483,7 @@ export const ru: TranslationResources = {
   sidebarCallout: {
     dismiss: "Закрыть",
   },
+  usagePanel: usagePanelCopy["ru"],
   contextWindow: {
     title: "Контекстное окно",
     used: "Использовано: {{percentage}}%",

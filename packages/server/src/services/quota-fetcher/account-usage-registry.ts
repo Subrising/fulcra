@@ -199,6 +199,18 @@ export class AccountUsageRegistry {
     return this.row(entry);
   }
 
+  /** Cached/resident observations only; no roster enumeration, probe, timer, or in-flight wait. */
+  observe(): AccountUsageRow[] {
+    this.absorbSessions();
+    return accountRows([...this.entries.values()], (entry) => this.row(entry));
+  }
+
+  observeRowFor(account: PooledAccount): AccountUsageRow {
+    const entry = this.upsert(account);
+    this.absorbSessions();
+    return this.row(entry);
+  }
+
   /** The timer's work: probe each account whose last reading or attempt is older than the periodic minimum. */
   async periodicPass(): Promise<void> {
     const entries = await this.sync();

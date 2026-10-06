@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -167,6 +168,8 @@ export const ar: TranslationResources = {
     },
     attachments: {
       addImage: "أضف صورة",
+      choosePhoto: "اختيار صورة",
+      takePhoto: "التقاط صورة",
       pasteImage: "لصق صورة",
       addFile: "Upload file",
       addIssueOrPr: "أضف مشكلة أو PR",
@@ -1766,6 +1769,8 @@ export const ar: TranslationResources = {
     permissionMessage: "يرجى السماح بالوصول إلى مكتبة الصور الخاصة بك لإرفاق الصور.",
     errorTitle: "خطأ",
     failedToSelect: "فشل في تحديد الصورة",
+    cameraPermissionMessage: "يرجى السماح بالوصول إلى الكاميرا لالتقاط الصور.",
+    failedToTakePhoto: "تعذر التقاط الصورة",
     dialogTitle: "إرفاق الصور",
     dialogFilterName: "الصور",
   },
@@ -1820,6 +1825,7 @@ export const ar: TranslationResources = {
     modelCountPlural: "{{count}} نماذج",
     retry: "أعد المحاولة",
     retrying: "جارٍ إعادة المحاولة...",
+    savedModels: "عرض نماذج {{provider}} المحمّلة سابقًا.",
     noMatches: "لا توجد نماذج تطابق بحثك",
     noMatchesForQuery: 'لا توجد نماذج تطابق "{{query}}"',
     searchAllPlaceholder: "ابحث في كل النماذج...",
@@ -1862,6 +1868,17 @@ export const ar: TranslationResources = {
     hostPassword: {
       title: "كلمة المرور لـ {{host}}",
       label: "كلمة مرور المضيف",
+    },
+    hostConfirmation: {
+      title: "الاتصال بهذا المضيف؟",
+      description:
+        "سيتمكن هذا المضيف من تشغيل تعليمات برمجية في هذا التطبيق والوصول إلى مضيفيك الآخرين المتصلين. اتصل فقط إذا كنت تعرفه.",
+      descriptionChanged:
+        "يغيّر هذا الرابط طريقة اتصالك بهذا المضيف. سيتمكن المضيف من تشغيل تعليمات برمجية في هذا التطبيق والوصول إلى مضيفيك الآخرين المتصلين. اتصل فقط إذا كنت تعرفه.",
+      hostLabel: "المضيف",
+      fingerprintLabel: "بصمة المفتاح",
+      relayLabel: "المُرحّل",
+      connect: "اتصال",
     },
     connectionMethods: {
       title: "إضافة اتصال",
@@ -2122,6 +2139,8 @@ export const ar: TranslationResources = {
       emptyDescription: "أنشئ طلب سحب لنسخة العمل هذه لعرض تفاصيله هنا.",
     },
     architectureMap: {
+      mainOnly: "بنية الكود عرض في مساحة العمل الرئيسية. افتحه من قائمة علامة التبويب +.",
+      entryUnavailable: "أضف خريطة كود محفوظة أو اتصل بمضيف يدعم رسم الكود أو تحليل التغييرات.",
       label: "خريطة البنية",
       subtitle: "بنية المشروع",
       tooltip: "عرض خريطة بنية المشروع",
@@ -2421,6 +2440,7 @@ export const ar: TranslationResources = {
   sidebarCallout: {
     dismiss: "رفض",
   },
+  usagePanel: usagePanelCopy["ar"],
   contextWindow: {
     title: "نافذة السياق",
     used: "تم استخدام{{percentage}}%",

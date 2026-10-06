@@ -16,6 +16,8 @@ import {
   ArrowRightToLine,
   Copy,
   Pencil,
+  Bell,
+  BellOff,
   RotateCw,
   Columns2,
   Rows2,
@@ -58,6 +60,7 @@ import {
 import { buildDeterministicWorkspaceTabId } from "@/workspace-tabs/identity";
 import {
   buildWorkspaceDesktopTabActions,
+  type AgentNotifyControls,
   type WorkspaceDesktopTabActions,
   type WorkspaceTabMenuEntry,
   type WorkspaceTabMenuLabels,
@@ -117,6 +120,8 @@ const ThemedX = withUnistyles(X);
 const ThemedCopy = withUnistyles(Copy);
 
 const ThemedRotateCw = withUnistyles(RotateCw);
+const ThemedBell = withUnistyles(Bell);
+const ThemedBellOff = withUnistyles(BellOff);
 const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
 const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
@@ -403,6 +408,10 @@ function TabContextMenuItem({
     switch (entry.icon) {
       case "copy":
         return <ThemedCopy size={16} uniProps={mutedColorMapping} />;
+      case "bell":
+        return <ThemedBell size={16} uniProps={mutedColorMapping} />;
+      case "bell-off":
+        return <ThemedBellOff size={16} uniProps={mutedColorMapping} />;
       case "rotate-cw":
         return <ThemedRotateCw size={16} uniProps={mutedColorMapping} />;
       case "arrow-left-to-line":
@@ -511,6 +520,7 @@ interface WorkspaceDesktopTabsRowProps {
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
   onCloseTabsToRight: (tabId: string) => Promise<void> | void;
@@ -1012,6 +1022,7 @@ function ResolvedWorkspaceDesktopTabsRow({
   onCopyTerminalId,
   onCopyFilePath,
   onReloadAgent,
+  notifications,
   onRenameTab,
   onCloseTabsToLeft,
   onCloseTabsToRight,
@@ -1269,6 +1280,7 @@ function ResolvedWorkspaceDesktopTabsRow({
           onCopyTerminalId={onCopyTerminalId}
           onCopyFilePath={onCopyFilePath}
           onReloadAgent={onReloadAgent}
+          notifications={notifications}
           onRenameTab={onRenameTab}
           onCloseTabsToLeft={onCloseTabsToLeft}
           onCloseTabsToRight={onCloseTabsToRight}
@@ -1302,6 +1314,7 @@ function ResolvedWorkspaceDesktopTabsRow({
       onCopyResumeCommand,
       onNavigateTab,
       onReloadAgent,
+      notifications,
       onRenameTab,
       setHoveredCloseTabKey,
       tabMenuLabels,
@@ -1416,6 +1429,7 @@ function ResolvedDesktopTabChip({
   onCopyTerminalId,
   onCopyFilePath,
   onReloadAgent,
+  notifications,
   onRenameTab,
   onCloseTabsToLeft,
   onCloseTabsToRight,
@@ -1442,6 +1456,7 @@ function ResolvedDesktopTabChip({
   onCopyTerminalId: (terminalId: string) => Promise<void> | void;
   onCopyFilePath: (path: string) => Promise<void> | void;
   onReloadAgent: (agentId: string) => Promise<void> | void;
+  notifications?: AgentNotifyControls;
   onRenameTab: (tab: WorkspaceTabDescriptor) => void;
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
   onCloseTabsToRight: (tabId: string) => Promise<void> | void;
@@ -1470,6 +1485,7 @@ function ResolvedDesktopTabChip({
         onCopyTerminalId,
         onCopyFilePath,
         onReloadAgent,
+        notifications,
         onRenameTab,
         onCloseTab,
         onCloseTabsToLeft,
@@ -1490,6 +1506,7 @@ function ResolvedDesktopTabChip({
       onCopyResumeCommand,
       labels,
       onReloadAgent,
+      notifications,
       onRenameTab,
       tabCount,
     ],
