@@ -3,4 +3,4 @@ export function prepareSite(options: {
   source?: string;
   output?: string;
   preview?: boolean;
-}): Promise<{ publicUrl: string; preview: boolean; files: string[]; captures: number }>;
+}): Promise<{ publicUrl: string; preview: boolean; files: string[] }>;

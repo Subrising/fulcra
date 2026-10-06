@@ -1,13 +1,13 @@
-# Fulcra website product truth
+# Fulcra website: product truth
 
-Surface mode: Persuade. Audience: builders and small teams. Confirmed positioning: run your AI team across projects and devices. Main actions: explore a product demonstration and get the actual available source/download.
+Audience: builders and small teams. Positioning: run your AI team across projects and devices. Main actions: see it work, get Fulcra.
 
-You set direction through one or several primes. Primes coordinate project orchestrators; each project keeps its tasks/board, responsibilities, related working sessions and configured communications together. Project briefs and decisions return up the chain, reducing the need to manage each worker chat. Fulcra retains Claude Code/Codex sessions and host connections. Work and credentials stay with the configured host environment. Organisation/umbrella/intake refinements belong to the current development candidate, not a claimed public release. Product imagery must be real screenshots of the latest build with verified source/build provenance. No fabricated dashboard or mock UI is allowed, even labelled illustrative. If latest capture is unavailable, complete page structure/copy and keep image acceptance open; never substitute an older capture. The current source implements recorded role seats, project-scoped tasks/sessions, published project briefs, a decision inbox and explicitly configured role-message channels. Workspace umbrellas, retained intake and the unified board/communication experience are development work; a separate automatic board/channel for every technical workspace is not promised. The conceptual hierarchy is permitted explanatory artwork. The website does not execute agents or grant authority.
+Say only what the product does today:
 
-The public repository is https://github.com/Subrising/fulcra. Public releases checked on 2026-10-05: v0.2.0 has a source-only description and attached Windows build assets; v0.1.0 has older macOS arm64 assets. Do not promise a current Mac installer or finished Windows acceptance from asset presence alone. There is no verified public v0.2.1 or v0.2.3 release and no verified Fulcra App Store/TestFlight listing. Source/build documentation and the actual release page are the primary access path.
+- Persistent Claude Code and Codex sessions on the Mac host, each in its own Git worktree, with history, files, terminals and diffs.
+- Primes, project leads and worker sessions are recorded roles. Roles record accountability; actions still check ownership and permissions. The hierarchy on the page is an illustration, not a screenshot.
+- Accounts & Defaults sets model and effort per role and pools Claude/Codex accounts.
+- Phone access needs the iPhone app built from source with Xcode. Android and Windows are untested.
+- Access is source only (v0.2.0 is a source release). No signed download, store listing, testimonials, metrics or savings claims.
 
-Use no adopters, stars, testimonials, performance, cost or token-savings claims. No analytics, live account names, session IDs, machine identities, pairing data or operational paths. The current project homepage points to its README. Publication uses the existing repository’s standard GitHub Pages project URL; no custom domain is claimed.
-
-README art and its retained generator are the human visual authority; DESIGN.md owns the exact tokens. Asset provenance and the unchanged full-colour app icon are in ASSETS.md. Existing v0.2.0 captures are reference material only and cannot substitute for the latest candidate. Compact web screenshots are not native iOS proof. Generated concept images are withdrawn as product imagery. Delivery11 owns one batched latest desktop/compact capture and legitimate redaction without UI invention.
-
-This delivery creates and publishes a portable static Fulcra entry through a dedicated fork-guarded GitHub Pages workflow. It does not change upstream Cloudflare deployment, buy a domain or enter the app artifact. Public-safe real capture, normal checks and shared review remain publication prerequisites. Ship review follows the existing shared ADW owner; no extra reviewer/session.
+Publication: `deploy-fulcra-website.yml` deploys `packages/website/public/fulcra` to https://subrising.github.io/fulcra/ on pushes to `main`. See `docs/pipelines.md`.

@@ -70,11 +70,11 @@ environment protects the deployment and records its actual URL. A configured
 URL or exported artifact is not proof of publication; check the deployed page
 and its product-image requests after the deployment succeeds.
 
-The export refuses pending, one-host, mismatched or changed capture input.
-Both Macs must have genuine public-safe installed-build captures with private
-provenance retained by the capture owner. Preview exports have `noindex` and
-never enter the deploy workflow. `npm run build:fulcra` in the website workspace
-produces the dedicated artifact; its output directory must not already exist.
+The export copies only `index.html`, `site.css`, the app icon, the social
+preview and the images in `assets/shots/`, and refuses a page that points at a
+missing image. Preview exports have `noindex` and never enter the deploy
+workflow. `npm run build:fulcra` in the website workspace produces the
+dedicated artifact; its output directory must not already exist.
 
 ## npm version
 
