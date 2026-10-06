@@ -346,10 +346,10 @@ export function InboxSurface({
               : "No confirmed unresolved decision is addressed to you in this observation."}
         </Text>
         <Text style={{ color: c.foregroundMuted }}>
-          Source: {host?.label ?? "Selected company organisation"}. Inbox-only scope; Today also
-          includes role and runtime needs.
+          Source: {host?.label ?? "Selected company organisation"}. This shows Inbox items only; Home
+          also shows role and permission needs.
           {d
-            ? ` ${d.counts.held} held messages remain retained; reading them does not release or acknowledge them.`
+            ? ` ${d.counts.held} held messages are kept for you; reading them does not release them.`
             : ""}
         </Text>
       </View>

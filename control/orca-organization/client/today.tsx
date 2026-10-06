@@ -500,15 +500,15 @@ export function TodaySurface({
     <View style={{ gap: 14 }}>
       <Section
         testID="today-needs"
-        title="Activity and retained updates"
+        title="Other updates"
         count={retainedActivityCount}
         colors={c}
         empty={
           retainedActivityCount
             ? null
             : reading || lp.reading
-              ? "Reading activity and retained updates…"
-              : "No additional activity or retained update in the available observations."
+              ? "Reading other updates…"
+              : "No other updates right now."
         }
       >
         {retainedBlocked.map((i) => (
@@ -628,11 +628,11 @@ export function TodaySurface({
         </View>
       </View>
       <Text style={{ color: c.foregroundMuted }}>
-        Source: {host?.label ?? "Selected company organisation"}. Today includes runtime
-        permissions, role needs and retained updates; Inbox counts inbox records only.
+        Source: {host?.label ?? "Selected company organisation"}. Home also includes
+        permission requests, role needs and saved updates; Inbox counts Inbox items only.
         {inbox.data
-          ? ` ${inbox.data.counts.held} held messages are retained for review, not counted as urgent solely because they are held.`
-          : " Inbox coverage is unavailable."}
+          ? ` ${inbox.data.counts.held} held messages are kept for review; they are not counted as urgent just because they are held.`
+          : " The Inbox could not be read."}
       </Text>
       {today.gaps.map((g) => (
         <Notice key={g} colors={c} tone="warning" testID="today-gap">

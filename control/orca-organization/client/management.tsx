@@ -631,10 +631,10 @@ export function ManagementPanel({
             <>
               <Text style={muted}>
                 {["resume", "leadership"].includes(d.kind)
-                  ? "Reconcile closes an uncommitted handback. It does not change current authority or replay work."
+                  ? "Reconcile finishes a hand-over that was left half-done. It does not change who is in charge or repeat any work."
                   : d.kind === "create"
-                    ? "Reconcile checks the original creation identity and may finish that creation."
-                    : "Reconcile reads the native receipt without resending the instruction."}
+                    ? "Reconcile checks the original request and may finish creating it."
+                    : "Reconcile checks whether the message arrived without sending it again."}
               </Text>
               {button(
                 `Reconcile ${d.id}`,
