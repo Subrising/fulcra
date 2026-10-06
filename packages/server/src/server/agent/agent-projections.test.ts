@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+// Load the actual generated decoder during collection, outside the unchanged per-case timeout.
+import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
 
 import { AGENT_LIFECYCLE_STATUSES } from "./agent-manager.js";
 import {
@@ -634,7 +636,6 @@ it.runIf(process.platform === "darwin")(
 );
 
 it("generated outbound decoder preserves recorded usage and observation identity/echo", async () => {
-  const { validateWSOutboundMessage } = await import("@getpaseo/protocol/validation/ws-outbound");
   const agent = createManagedAgent({
     lastUsage: {
       recorded: {
@@ -680,4 +681,32 @@ it("generated outbound decoder preserves recorded usage and observation identity
       observationOnly: true,
       sessionAccount: null,
     });
+});
+
+it("public baseline transport digest is live only, excluded from stored and closed snapshots", () => {
+  const digest = {
+    version: 1,
+    state: "SUBMITTED",
+    baselineSha256: "a".repeat(64),
+    developerInstructionsSha256: "b".repeat(64),
+    files: [{ id: "common", sha256: "c".repeat(64) }],
+  };
+  const agent = createManagedAgent({
+    runtimeInfo: {
+      provider: "codex",
+      sessionId: "fixture",
+      extra: { existing: "keep", hostPublicBaselineTransport: digest },
+    },
+  });
+  expect(toAgentPayload(agent).runtimeInfo?.extra?.hostPublicBaselineTransport).toEqual(digest);
+  const stored = toStoredAgentRecord(agent);
+  expect(stored.runtimeInfo?.extra).toEqual({ existing: "keep" });
+  expect(
+    buildStoredAgentPayload({ ...stored, runtimeInfo: agent.runtimeInfo }, ["codex"]).runtimeInfo
+      ?.extra,
+  ).toEqual({ existing: "keep" });
+  expect(
+    toAgentPayload({ ...agent, session: null, lifecycle: "closed" }).runtimeInfo?.extra,
+  ).toEqual({ existing: "keep" });
+  expect(agent.runtimeInfo?.extra?.hostPublicBaselineTransport).toEqual(digest);
 });
