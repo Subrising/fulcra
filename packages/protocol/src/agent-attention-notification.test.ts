@@ -43,7 +43,7 @@ describe("buildAgentAttentionNotificationPayload", () => {
     });
   });
 
-  it("builds permission notifications from request details", () => {
+  it("summarises a permission by tool name, never by its command text", () => {
     const payload = buildAgentAttentionNotificationPayload({
       reason: "permission",
       serverId: "srv-2",
@@ -61,7 +61,7 @@ describe("buildAgentAttentionNotificationPayload", () => {
 
     expect(payload).toEqual({
       title: "Agent needs permission",
-      body: "Approve command - Run git push",
+      body: "Wants to use exec",
       data: {
         serverId: "srv-2",
         workspaceId: "workspace-2",
@@ -69,6 +69,61 @@ describe("buildAgentAttentionNotificationPayload", () => {
         reason: "permission",
       },
     });
+  });
+
+  it("keeps a question's text, redacted, since it is the assistant's own prose", () => {
+    const payload = buildAgentAttentionNotificationPayload({
+      reason: "permission",
+      serverId: "s",
+      workspaceId: "w",
+      agentId: "a",
+      permissionRequest: {
+        id: "q",
+        provider: "claude",
+        name: "AskUserQuestion",
+        kind: "question",
+        title: "Which library should we use?",
+        description: "Set API_KEY=FAKE-REVIEW-SENTINEL first?",
+      },
+    });
+    expect(payload.body).toContain("Which library should we use?");
+    expect(payload.body).not.toContain("FAKE-REVIEW-SENTINEL");
+  });
+
+  it("never puts a secret in the body or title, on any text path", () => {
+    const sentinel = "FAKE-REVIEW-SENTINEL";
+    const base = { serverId: "s", workspaceId: "w", agentId: "a" } as const;
+    const everything = (payload: { title: string; body: string }) =>
+      JSON.stringify([payload.title, payload.body]);
+
+    const permission = buildAgentAttentionNotificationPayload({
+      ...base,
+      reason: "permission",
+      permissionRequest: {
+        id: "p",
+        provider: "codex",
+        name: "shell",
+        kind: "tool",
+        title: `TOKEN=${sentinel} npm publish`,
+        description: `curl -H "Authorization: Bearer ${sentinel}" https://x`,
+        input: { command: `TOKEN=${sentinel}` },
+        metadata: { env: `API_KEY=${sentinel}` },
+      },
+    });
+    expect(everything(permission)).not.toContain(sentinel);
+
+    const finished = buildAgentAttentionNotificationPayload({
+      ...base,
+      reason: "finished",
+      agentTitle: `deploy PASSWORD=${sentinel}`,
+      assistantMessage: [
+        `Ran with GITHUB_TOKEN=${sentinel}, then \`curl --token ${sentinel} https://h\`.`,
+        "Key sk-abcdefghijklmnop1234 and ghp_abcdefghijklmnop1234 and",
+        `https://user:${sentinel}@host/path and ${"a1B2c3D4".repeat(6)}`,
+      ].join(" "),
+    });
+    expect(everything(finished)).not.toContain(sentinel);
+    expect(everything(finished)).not.toMatch(/sk-abcdef|ghp_abcdef|a1B2c3D4a1B2/);
   });
 
   it("uses error-specific defaults when reason is error", () => {
