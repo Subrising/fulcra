@@ -3,6 +3,23 @@ export interface SlashCommandDescriptor {
   aliases?: readonly string[];
 }
 
+/** Unresolved commands fail closed, including when a plugin is still loading. */
+export function unhandledSlashCommandError(input: {
+  text: string;
+  hasAttachments: boolean;
+  providerCommands: readonly SlashCommandDescriptor[];
+}): string | null {
+  const match = /^\/([^\s]+)(?:\s|$)/.exec(input.text.trim());
+  if (!match) return null;
+  if (input.hasAttachments)
+    return "Slash commands do not accept attachments. Remove them and retry.";
+  if (match[1] !== "account" && input.providerCommands.some((command) => command.name === match[1]))
+    return null;
+  return match[1] === "account"
+    ? "Account switching is unavailable here. Wait for Fulcra to connect, then retry /account."
+    : `Unknown slash command: /${match[1]}. Choose a command from the menu.`;
+}
+
 export type AvailableSlashCommand<
   BuiltIn extends SlashCommandDescriptor,
   Plugin extends SlashCommandDescriptor,

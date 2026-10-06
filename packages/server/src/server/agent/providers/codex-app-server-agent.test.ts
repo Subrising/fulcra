@@ -6049,6 +6049,14 @@ describe("Codex app-server provider", () => {
       turn: { status: "completed", error: null },
     });
 
+    const recorded = {
+      latest: { scope: "unknown", tokens: { cacheRead: 5000, inputNew: 25000, output: 15000 } },
+      observedAt: expect.any(String),
+      provider: "codex",
+      runtimeSessionId: "test-thread",
+      source: "codex-app-server-token-usage",
+    };
+
     expect(events).toContainEqual({
       type: "usage_updated",
       provider: "codex",
@@ -6059,6 +6067,7 @@ describe("Codex app-server provider", () => {
         outputTokens: 15000,
         contextWindowMaxTokens: 200000,
         contextWindowUsedTokens: 50000,
+        recorded,
       },
     });
     expect(events.at(-1)).toEqual({
@@ -6071,6 +6080,7 @@ describe("Codex app-server provider", () => {
         outputTokens: 15000,
         contextWindowMaxTokens: 200000,
         contextWindowUsedTokens: 50000,
+        recorded,
       },
     });
   });

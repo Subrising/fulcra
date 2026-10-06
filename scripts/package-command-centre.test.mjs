@@ -9,13 +9,19 @@ const source = fs
   .readFileSync(url, "utf8")
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", JSON.stringify(url.href));
-function calls(env) {
+function calls(env, platform = "linux") {
   const result = [];
   vm.runInNewContext(source, {
     path,
     URL,
     fileURLToPath,
-    process: { argv: ["node", "script", "/reviewed/control"], execPath: "/node", env },
+    process: {
+      argv: ["node", "script", "/reviewed/control"],
+      execPath: "/node",
+      env,
+      platform,
+      arch: "arm64",
+    },
     execFileSync: (...args) => result.push(args),
   });
   return result;
@@ -28,6 +34,17 @@ test("default package location and build scratch stay unchanged", () => {
     false,
   );
   for (const call of result) assert.equal(call[2].env.TMPDIR, "/external/scratch");
+});
+
+test("macOS packaging always gates its own CLI, daemon and cached speech models before delivery", () => {
+  const result = calls(
+    { FULCRA_PACKAGE_OUTPUT: "/scratch/output", FULCRA_SPEECH_MODELS: "/cached/models" },
+    "darwin",
+  );
+  assert.deepEqual(
+    [...result.at(-1)[1]],
+    ["scripts/packaged-runtime-gate.mjs", "/scratch/output/mac-arm64/Fulcra.app", "/cached/models"],
+  );
 });
 test("run-only output and temp overrides apply only to electron-builder", () => {
   const result = calls({

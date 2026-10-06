@@ -3,9 +3,27 @@ import {
   executePluginClientSlashCommand,
   mergeSlashCommandSources,
   resolvePluginClientSlashCommand,
+  unhandledSlashCommandError,
 } from "./model";
 
 describe("plugin client slash commands", () => {
+  it("refuses unknown or unavailable account commands before model submission", () => {
+    const input = {
+      hasAttachments: false,
+      providerCommands: [{ name: "compact" }, { name: "account" }],
+    };
+    expect(unhandledSlashCommandError({ ...input, text: "/unknown details" })).toContain(
+      "Unknown slash command",
+    );
+    expect(unhandledSlashCommandError({ ...input, text: "/account Personal" })).toContain(
+      "Account switching is unavailable",
+    );
+    expect(unhandledSlashCommandError({ ...input, text: "/compact" })).toBeNull();
+    expect(unhandledSlashCommandError({ ...input, text: "hello /unknown" })).toBeNull();
+    expect(
+      unhandledSlashCommandError({ ...input, text: "/account list", hasAttachments: true }),
+    ).toContain("Remove them");
+  });
   it("uses built-in, plugin, then provider precedence", () => {
     const collision = vi.fn();
     const result = mergeSlashCommandSources({

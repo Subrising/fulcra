@@ -38,3 +38,42 @@ test("electron-builder can resolve the desktop production dependency tree", asyn
   const tree = await collector.buildNodeModulesTreeManually(desktop);
   assert.ok(tree.dependencies["@getpaseo/server"]);
 });
+
+test("the actual desktop packager collects clack and the host Sherpa runtime through declared dependencies", async () => {
+  const { fileURLToPath } = await import("node:url");
+  const { createRequire } = await import("node:module");
+  const path = await import("node:path");
+  const require = createRequire(import.meta.url);
+  const { computeNodeModuleFileSets } = require("app-builder-lib/out/util/appFileCopier.js");
+  const { FileMatcher } = require("app-builder-lib/out/fileMatcher.js");
+  const { TmpDir } = require("temp-file");
+  const desktop = fileURLToPath(new URL("../packages/desktop/", import.meta.url));
+  const temp = new TmpDir();
+  try {
+    const sets = await computeNodeModuleFileSets(
+      {
+        platform: process.platform,
+        config: {},
+        info: {
+          appInfo: { type: "module" },
+          config: {},
+          metadata: { name: "@getpaseo/desktop" },
+          appDir: desktop,
+          projectDir: desktop,
+          tempDirManager: temp,
+          getWorkspaceRoot: async () => path.resolve(desktop, "../.."),
+          getPackageManager: async () => "npm",
+        },
+      },
+      new FileMatcher(desktop, "/packaged", (value) => value, []),
+    );
+    const names = new Set(
+      sets.map((set) => path.relative("/packaged/node_modules", set.destination)),
+    );
+    assert.ok(names.has("@clack/core"), "CLI prompt core must be packaged");
+    assert.ok(names.has("sherpa-onnx-node"));
+    if (process.platform === "darwin") assert.ok(names.has(`sherpa-onnx-darwin-${process.arch}`));
+  } finally {
+    await temp.cleanup();
+  }
+});
