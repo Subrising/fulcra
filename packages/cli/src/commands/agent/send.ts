@@ -9,6 +9,7 @@ import type {
 } from "../../output/index.js";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
+import { listAccounts, switchAccountSession } from "../account.js";
 
 /** Result type for agent send command */
 export interface AgentSendResult {
@@ -234,6 +235,33 @@ function buildNativeSendResult(
   };
 }
 
+async function runSlashCommand(
+  client: Awaited<ReturnType<typeof connectToDaemon>>,
+  agentIdArg: string,
+  prompt: string,
+  hasImages: boolean,
+): Promise<AgentSendResult | null> {
+  const slash = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(prompt.trim());
+  if (slash) {
+    if (hasImages) throw new Error("Slash commands do not accept images.");
+    if (slash[1] === "account") {
+      const args = (slash[2] ?? "").trim();
+      const message =
+        !args || args.toLowerCase() === "list"
+          ? (await listAccounts(client, agentIdArg))
+              .map((row) => `${row.name}: ${row.status.state}`)
+              .join("\n") || "No pooled accounts for this session."
+          : await switchAccountSession(client, agentIdArg, args);
+      return { agentId: agentIdArg, status: "completed", message };
+    }
+    const { commands } = await client.listCommands({ agentId: agentIdArg });
+    if (!commands.some((command) => command.name === slash[1]))
+      throw new Error(`Unknown slash command: /${slash[1]}`);
+  }
+
+  return null;
+}
+
 export async function runSendCommand(
   agentIdArg: string,
   prompt: string | undefined,
@@ -271,8 +299,6 @@ export async function runSendCommand(
       const receipt = await client.sendNativeQueuedMessage(agentIdArg, promptInput, {
         messageId: messageId!,
       });
-      // Cleanup failure cannot replace an authoritative native delivery receipt.
-      await client.close().catch(() => {});
       return {
         type: "single",
         data: buildNativeSendResult(agentIdArg, receipt),
@@ -283,13 +309,19 @@ export async function runSendCommand(
     const images =
       options.image && options.image.length > 0 ? await readImageFiles(options.image) : undefined;
 
+    const slashResult = await runSlashCommand(
+      client,
+      agentIdArg,
+      promptInput,
+      Boolean(images?.length),
+    );
+    if (slashResult) return { type: "single", data: slashResult, schema: agentSendSchema };
+
     // Send the message
     await client.sendAgentMessage(agentIdArg, promptInput, { images });
 
     // If --no-wait, return immediately
     if (options.wait === false) {
-      await client.close();
-
       return {
         type: "single",
         data: {
@@ -302,7 +334,6 @@ export async function runSendCommand(
     }
 
     const state = await client.waitForFinish(agentIdArg, 600000); // 10 minute timeout
-    await client.close();
 
     return {
       type: "single",
@@ -310,8 +341,6 @@ export async function runSendCommand(
       schema: agentSendSchema,
     };
   } catch (err) {
-    await client.close().catch(() => {});
-
     // Re-throw CommandError as-is
     if (err && typeof err === "object" && "code" in err) {
       throw err;
@@ -323,5 +352,7 @@ export async function runSendCommand(
       message: `Failed to send message: ${message}`,
     };
     throw error;
+  } finally {
+    await client.close().catch(() => {});
   }
 }

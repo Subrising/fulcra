@@ -91,6 +91,8 @@ import { AutocompletePopover } from "@/components/ui/autocomplete-popover";
 import type { AutocompleteOption } from "@/components/ui/autocomplete";
 import { useAgentAutocomplete } from "@/hooks/use-agent-autocomplete";
 import { usePluginClientSlashCommands } from "@/plugins/client-slash-commands";
+import { useAgentCommandsQuery } from "@/hooks/use-agent-commands-query";
+import { unhandledSlashCommandError } from "@/plugins/client-slash-commands/model";
 import {
   executePluginClientSlashCommand,
   resolvePluginClientSlashCommand,
@@ -1397,6 +1399,24 @@ function ComposerContentImpl({
     workspaceId,
     agentId,
   });
+  const { commands: providerSlashCommands } = useAgentCommandsQuery({
+    serverId,
+    agentId,
+    draftConfig: commandDraftConfig,
+  });
+  const rejectUnhandledSlashCommand = useCallback(
+    (text: string, hasAttachments: boolean) => {
+      const error = unhandledSlashCommandError({
+        text,
+        hasAttachments,
+        providerCommands: providerSlashCommands,
+      });
+      if (!error) return false;
+      setSendError(error);
+      return true;
+    },
+    [providerSlashCommands],
+  );
   const isComposerLocked = resolveIsComposerLocked(submitBehavior, isSubmitLoading);
   const keyboardHandlerIdRef = useRef(
     `message-input:${serverId}:${agentId}:${Math.random().toString(36).slice(2)}`,
@@ -1723,6 +1743,8 @@ function ComposerContentImpl({
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
 
+      if (rejectUnhandledSlashCommand(payload.text, outgoingAttachments.length > 0)) return;
+
       if (blurOnSubmit) {
         messageInputRef.current?.blur();
       }
@@ -1735,6 +1757,7 @@ function ComposerContentImpl({
       runClientSlashCommand,
       pluginClientSlashCommands,
       runPluginClientSlashCommand,
+      rejectUnhandledSlashCommand,
       sendMessageWithContent,
     ],
   );
@@ -1984,6 +2007,7 @@ function ComposerContentImpl({
         commands: pluginClientSlashCommands,
       });
       if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
+      if (rejectUnhandledSlashCommand(payload.text, outgoingAttachments.length > 0)) return;
       queueMessage(payload.text, outgoingAttachments);
     },
     [
@@ -1993,6 +2017,7 @@ function ComposerContentImpl({
       queueMessage,
       runClientSlashCommand,
       runPluginClientSlashCommand,
+      rejectUnhandledSlashCommand,
     ],
   );
 

@@ -1,10 +1,12 @@
 import { randomId } from "../../../../control/orca-organization/client/random-id";
 import type { OrganizationNavigation } from "../../../../control/orca-organization/shared/intake-draft";
+type ProjectSettingsPath = `/settings/hosts/${string}/projects/${string}`;
+type IntakeNavigationPath = "/open-project" | `/intake?${string}` | ProjectSettingsPath;
 interface IntakeNavigationPorts {
-  push(path: string): void;
+  push(path: IntakeNavigationPath): void;
   newId(): string;
   chooseCompany(serverId: string): void;
-  projectRoute(serverId: string, projectId: string): string;
+  projectRoute(serverId: string, projectId: string): ProjectSettingsPath;
   connection(serverId: string): { online: boolean; workspaceMultiplicity: boolean };
 }
 export function createIntakeNavigation(
@@ -29,6 +31,6 @@ export function createIntakeNavigation(
 }
 
 export const newIntakeId = randomId;
-export function globalIntakeRoute(): string {
+export function globalIntakeRoute(): `/intake?thread=${string}` {
   return `/intake?thread=${newIntakeId()}`;
 }

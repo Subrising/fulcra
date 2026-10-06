@@ -374,6 +374,7 @@ test('registration: "Switch account…" in the session menu, and /account lists 
   });
   got.items[0].onSelect(ctx(""));
   await got.slash[0].onSubmit(ctx("  "));
+  await got.slash[0].onSubmit(ctx(" list "));
   assert.deepEqual(rpcs, []); // /account alone only lists
   await got.slash[0].onSubmit(ctx(" Spare "));
   assert.deepEqual(rpcs, [
@@ -381,7 +382,7 @@ test('registration: "Switch account…" in the session menu, and /account lists 
   ]);
   assert.deepEqual(
     opened.map((x) => x[0]),
-    [SWITCH_PANEL, SWITCH_PANEL, SWITCH_PANEL],
+    [SWITCH_PANEL, SWITCH_PANEL, SWITCH_PANEL, SWITCH_PANEL],
   );
   // the outcome of a typed switch shows in the menu it opens
   setupPanel();

@@ -166,7 +166,7 @@ describe("organization intake navigation", () => {
       push: (path) => destinations.push(path),
       newId: () => `new-${++next}`,
       chooseCompany: (id) => selected.push(id),
-      projectRoute: (host, project) => `/project/${host}/${project}`,
+      projectRoute: (host, project) => `/settings/hosts/${host}/projects/${project}`,
       connection: (host) => ({ online: online.has(host), workspaceMultiplicity: host === "book" }),
     });
     navigation.openIntake("same-request", "AI Game Dev");
@@ -188,7 +188,10 @@ describe("organization intake navigation", () => {
     expect(navigation.canReuseContext("old-host")).toBe(false);
     navigation.openProject("book", "unchanged-project");
     navigation.createProject();
-    expect(destinations.slice(-2)).toEqual(["/project/book/unchanged-project", "/open-project"]);
+    expect(destinations.slice(-2)).toEqual([
+      "/settings/hosts/book/projects/unchanged-project",
+      "/open-project",
+    ]);
   });
 });
 

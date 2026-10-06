@@ -111,6 +111,25 @@ async function waitForReplacementAgentId(page: Page, oldAgentId: string): Promis
 }
 
 test.describe("Client slash commands", () => {
+  test("unknown slash commands retain the draft and show an actionable error", async ({ page }) => {
+    await withOpenReadyMockAgent(page, { title: "Unknown slash command" }, async () => {
+      const composer = composerLocator(page);
+      await composer.fill("/not-a-command details");
+      await composer.press("Enter");
+      await expect(
+        page.getByText("Unknown slash command: /not-a-command. Choose a command from the menu."),
+      ).toBeVisible();
+      await expect(composer).toHaveValue("/not-a-command details");
+      await page.screenshot({ path: "test-results/slash-command-rejection-desktop.png" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(composer).toHaveValue("/not-a-command details");
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await expect(
+        page.getByText("Unknown slash command: /not-a-command. Choose a command from the menu."),
+      ).toBeVisible();
+      await page.screenshot({ path: "test-results/slash-command-rejection-mobile.png" });
+    });
+  });
   test("slash quit archives the active agent and removes its tab", async ({ page }) => {
     await withOpenReadyMockAgent(page, { title: "Slash quit e2e" }, async ({ agentId, title }) => {
       await runClientSlashCommand(page, "/quit");

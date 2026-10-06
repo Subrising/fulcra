@@ -57,6 +57,18 @@ Closing a window leaves the background service running. Enabling Command Centre 
 
 ## HTTP dependency compatibility
 
+Packaging uses the declared production dependency traversal in electron-builder
+26.8.1. Its npm collector accepts a nonempty partial hoisted-workspace tree:
+the failed d68e bundle lost `@clack/core` and other transitive modules. Keep the
+`app-builder-lib` patch until the npm collector preserves the complete tree.
+The collector regression exercises the actual packager filesets.
+
+Every Mac Command Centre build runs `scripts/packaged-runtime-gate.mjs` before
+delivery. It requires at least 10,271 ASAR entries, Clack core, the unpacked Sherpa
+platform payload, the candidate CLI and daemon in a temporary home, and actual
+Parakeet, Kokoro and Silero model loads. Set `FULCRA_SPEECH_MODELS` to the cached
+local-speech directory. A native module import alone does not pass this gate.
+
 Keep `qs` at the patched 6.16.0 floor for CVE-2026-82417 (GHSA-4mjr-xmp4-gh2g). The older body-parser 1.20.6 and Express 4 query-parser ranges excluded that version, even though npm applied the security override; electron-builder resolves declared production ranges separately and could not collect the package. Express 4.22.3 and body-parser 1.20.8 both declare `qs ~6.16.0`. Update those parents instead of weakening the override. The lockfile regression checks the collector-compatible ranges and every locked qs copy; the HTTP behavior regression checks hostile query serialization and ordinary parsing.
 
 The collector preflight also checks the complete desktop production tree. The server declares markdown-it 15.0.2 to match the existing security override and installed runtime; leaving its historical `^10` declaration prevents collection even though npm already installs 15.0.2. This changes metadata, not the resolved parser version.
