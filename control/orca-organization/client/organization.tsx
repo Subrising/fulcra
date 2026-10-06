@@ -23,7 +23,9 @@ import {
   ORGANISATION_VIEWS,
   PILLARS,
   SETTINGS_VIEWS,
-  readyPillars,
+  primaryPillars,
+  extraPillars,
+  PRIMARY_PILLAR_KEYS,
   tabTestId,
   type OrganisationView,
   type PillarKey,
@@ -95,7 +97,8 @@ export function OrganizationSurface(
   const [pillar, setPillar] = useState<PillarKey>(props.initialPillar ?? "today"),
     [focus, setFocus] = useState<string | null>(null);
   const [view, setView] = useState<OrganisationView>(props.initialView ?? "workmap"),
-    [settings, setSettings] = useState<SettingsView>("devices");
+    [settings, setSettings] = useState<SettingsView>("accounts");
+  const [moreOpen, setMoreOpen] = useState(() => !PRIMARY_PILLAR_KEYS.includes(props.initialPillar ?? "today"));
   // J0-8: the sheet remembers the pillar it was opened from, so Back returns there (Sessions, not Organisation).
   const [sheetFrom, setSheetFrom] = useState<PillarKey | null>(null),
     sheet = sheetFrom !== null;
@@ -141,10 +144,12 @@ export function OrganizationSurface(
   const go = {
     inbox: () => {
       setPillar("inbox");
+      setMoreOpen(true);
       setSheetFrom(null);
     },
     recovery: () => {
       setPillar("sessions");
+      setMoreOpen(true);
       setSheetFrom(null);
     },
     project: (id: string) => {
@@ -157,6 +162,8 @@ export function OrganizationSurface(
   const body =
     pillar === "today" ? (
       <TodaySurface {...props} go={go} />
+    ) : pillar === "team" ? (
+      <OrganisationSurface key="team-workflow" {...props} initialMode="map" onTask={onTask} />
     ) : pillar === "sessions" ? (
       <FleetSurface {...props} onTask={onTask} />
     ) : pillar === "trackers" ? (
@@ -210,7 +217,7 @@ export function OrganizationSurface(
         </View>
       )}
       <View style={{ flexDirection: "row", flexWrap: "wrap", padding: 12, gap: 20 }}>
-        {readyPillars().map((p) =>
+        {primaryPillars().map((p) =>
           tab(
             p.key,
             p.label,
@@ -223,6 +230,10 @@ export function OrganizationSurface(
             17,
           ),
         )}
+      </View>
+      <View style={{ paddingHorizontal: 12, gap: 10, paddingBottom: 10 }}>
+        <WorkButton theme={props.theme} label={moreOpen ? "Hide more views" : "More views"} onPress={() => setMoreOpen((open) => !open)} />
+        {moreOpen && <View style={subStrip}>{extraPillars().map((p) => tab(p.key, p.label, pillar === p.key, () => { setPillar(p.key); setSheetFrom(null); }, p.legacyKey, 15))}</View>}
       </View>
       {pillar === "organisation" && (
         <View style={subStrip}>
@@ -265,9 +276,10 @@ export function OrganizationSurface(
       )}
       {pillar === "settings" && (
         <View style={subStrip}>
-          {SETTINGS_VIEWS.map((v) =>
-            tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15),
-          )}
+          {SETTINGS_VIEWS.filter((v) => v.key === "accounts").map((v) => tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15))}
+          <Details theme={props.theme} label="Advanced settings">
+            {SETTINGS_VIEWS.filter((v) => v.key !== "accounts").map((v) => tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15))}
+          </Details>
         </View>
       )}
       <TabBoundary key={`${pillar}:${view}:${settings}:${sheet}`} theme={props.theme}>

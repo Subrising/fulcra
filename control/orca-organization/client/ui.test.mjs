@@ -4941,6 +4941,7 @@ test("Manage task opened from Sessions keeps its tab id and Back returns to Sess
       host: { id: "sheet-host" },
     }),
   );
+  fireEvent.click(await screen.findByRole("button", { name: "More views" }));
   fireEvent.click(await screen.findByTestId("organization-tab-sessions"));
   fireEvent.click(await screen.findByRole("button", { name: "Inspect Steady author" }));
   fireEvent.click(await screen.findByRole("button", { name: "Open task decisions and work" }));
@@ -4995,6 +4996,7 @@ test("a broken session view leaves tabs usable and retry is scoped to that view"
       host: { id: "broken-tab" },
     }),
   );
+  fireEvent.click(await screen.findByRole("button", { name: "More views" }));
   fireEvent.click(await screen.findByTestId("organization-tab-sessions"));
   await screen.findByRole("button", { name: "Retry this view" });
   assert(screen.getByTestId("organization-tab-today"));
@@ -5291,4 +5293,30 @@ test("empty workspace intake retains ownership without spending a prime turn or 
     ).length,
     0,
   );
+});
+
+
+test("task-first Home keeps primary tasks clear, Inbox direct and extra history routes available", async () => {
+  setFleetHandler((name) => name === "organization.inbox" ? { version: 1, observedAt: time(), partial: false, stale: false, error: null, items: [], counts: { now: 0, today: 0, fyi: 0, decisions: 0, approvals: 0, held: 0, digests: 0, total: 0 } } : Promise.reject(new Error("Fixture source unavailable")));
+  mount(h(HomeSurface, { theme, layout: { compact: true, platform: "web" }, host: { id: "task-first", label: "Fixture host" } }));
+  for (const label of ["Home", "Projects", "Team workflow", "Changes & impact", "Settings"]) assert(screen.getByRole("button", { name: label }));
+  assert.equal(screen.queryByTestId("organization-tab-sessions"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Open Inbox" }));
+  await screen.findByTestId("inbox-list");
+  assert(screen.getByTestId("organization-tab-inbox"));
+  assert(screen.getByRole("button", { name: /^All activity and history/ }));
+  for (const key of ["sessions", "environments", "trackers"]) assert(screen.getByTestId(`organization-tab-${key}`));
+  assert(calls.every((call) => !call.name.includes("choose") && !call.name.includes("send") && !call.name.includes("release")), "navigation grants no write authority");
+});
+
+
+test("Settings opens Accounts & Defaults and retains Devices, Channels and Clean-up under Advanced", async () => {
+  setFleetHandler(() => Promise.reject(new Error("Fixture source unavailable")));
+  mount(h(HomeSurface, { theme, layout: { compact: true, platform: "web" }, host: { id: "settings-default", label: "Fixture host" }, initialPillar: "settings" }));
+  assert.equal(screen.getByTestId("organization-tab-accounts").getAttribute("aria-selected"), "true");
+  for (const key of ["devices", "channels", "cleanup"]) assert.equal(screen.queryByTestId(`organization-tab-${key}`), null);
+  fireEvent.click(screen.getByRole("button", { name: "Show advanced settings" }));
+  for (const key of ["devices", "channels", "cleanup"]) assert(screen.getByTestId(`organization-tab-${key}`));
+  fireEvent.click(screen.getByTestId("organization-tab-devices"));
+  assert.equal(screen.getByTestId("organization-tab-devices").getAttribute("aria-selected"), "true");
 });

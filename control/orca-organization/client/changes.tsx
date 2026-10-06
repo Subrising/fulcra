@@ -40,11 +40,12 @@ export function ChangesSurface(props: Props) {
         accessibilityRole="header"
         style={{ color: c.foreground, fontSize: 26, fontWeight: "700" }}
       >
-        Changes
+        Changes & impact
       </Text>
       <Text style={{ color: c.foregroundMuted, lineHeight: 22 }}>
         See what changed and which parts of the product are affected.
       </Text>
+      <Text style={{ color: c.foregroundMuted, lineHeight: 22 }}>Inspect code changes and their architecture impact in the original project workspace. Team workflow is the separate view of people, leads and working sessions.</Text>
       {typeof props.navigation?.openArchitectureChange === "function" ? (
         <ChangesProjects {...props} />
       ) : (

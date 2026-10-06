@@ -596,8 +596,9 @@ export function TodaySurface({
             accessibilityRole="header"
             style={{ color: c.foreground, fontSize: compact ? 28 : 32, fontWeight: "700", flex: 1 }}
           >
-            Today
+            Home
           </Text>
+          <Button theme={theme} testID="today-open-inbox" label="Open Inbox" onPress={go.inbox}><Text style={{ color: c.foreground, fontWeight: "600" }}>Inbox</Text></Button>
           <Button theme={theme} testID="today-refresh" label="Refresh" onPress={refresh}>
             <Text style={{ color: c.foreground, fontWeight: "600" }}>Refresh</Text>
           </Button>

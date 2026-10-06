@@ -69,7 +69,7 @@ function ProjectRow({
 }
 
 export function OrganisationSurface(
-  props: PluginSurfaceProps & { initialProject?: string | null; onTask?: (id: string) => void },
+  props: PluginSurfaceProps & { initialProject?: string | null; initialMode?: "tree" | "map"; onTask?: (id: string) => void },
 ) {
   const { theme, layout } = props,
     c = theme.colors,
@@ -102,7 +102,7 @@ export function OrganisationSurface(
     retry: false,
   });
   const scroll = useRef<ScrollView>(null);
-  const [view, setView] = useState<"tree" | "map">("tree");
+  const [view, setView] = useState<"tree" | "map">(props.initialMode ?? "tree");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [chosen, setChosen] = useState<string | null>(props.initialProject ?? null),
     [editing, setEditing] = useState(false);
@@ -143,11 +143,11 @@ export function OrganisationSurface(
       <Button
         theme={theme}
         testID="org-view-map"
-        label="Show the work map"
+        label="Show team workflow"
         selected={view === "map"}
         onPress={() => setView("map")}
       >
-        <Text style={{ color: c.foreground, fontWeight: view === "map" ? "700" : "500" }}>Map</Text>
+        <Text style={{ color: c.foreground, fontWeight: view === "map" ? "700" : "500" }}>Team workflow</Text>
       </Button>
     </View>
   );
@@ -155,6 +155,7 @@ export function OrganisationSurface(
     return (
       <View style={{ flex: 1, backgroundColor: c.surface0 }}>
         <View style={{ paddingHorizontal: 24, paddingTop: 12 }}>{toggle}</View>
+        <Text style={{ paddingHorizontal: 24, paddingVertical: 12, color: c.foregroundMuted }}>Team workflow shows project leadership and working sessions. Code architecture and change impact are separate views in the project’s workspace.</Text>
         <WorkMapSurface {...props} fleet={fleet.data} remits={remits.data} />
       </View>
     );
