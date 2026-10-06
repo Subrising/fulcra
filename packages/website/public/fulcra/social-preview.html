@@ -2,50 +2,107 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Fulcra social preview</title>
-    <link rel="stylesheet" href="site.css" />
+    <title>Fulcra social preview (source for assets/social-preview.png)</title>
     <style>
+      * {
+        margin: 0;
+        box-sizing: border-box;
+      }
       html,
       body {
-        margin: 0;
         width: 1200px;
         height: 630px;
         overflow: hidden;
+        background: #121112;
+        color: #f5efe6;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+        -webkit-font-smoothing: antialiased;
       }
-      .preview {
-        height: 100%;
-        padding: 60px 74px;
+      .bg {
+        position: absolute;
+        inset: 0;
         background:
-          radial-gradient(60% 46% at 50% 2%, rgba(255, 138, 91, 0.3), transparent 70%),
-          radial-gradient(90% 70% at 50% 0%, rgba(94, 22, 35, 0.85), transparent 72%), #121112;
+          radial-gradient(50% 50% at 50% 0%, rgba(255, 138, 91, 0.3), transparent 70%),
+          radial-gradient(85% 75% at 50% 0%, rgba(94, 22, 35, 0.85), transparent 75%);
       }
-      .preview .brand {
+      .copy {
+        position: relative;
+        text-align: center;
+        padding-top: 50px;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
         font-size: 34px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
       }
-      .preview h1 {
-        font-size: 77px;
-        margin: 52px 0 28px;
-        line-height: 1.08;
+      .brand img {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+      }
+      h1 {
+        margin-top: 22px;
+        font-size: 56px;
+        line-height: 1.06;
         letter-spacing: -0.035em;
-        font-weight: 650;
+        font-weight: 700;
       }
-      .preview h1 span {
-        color: #ff8a5b;
+      h1 span {
+        color: #ffb08f;
       }
-      .preview p {
-        font-size: 24px;
-        color: #b9b0a6;
-        max-width: 1000px;
+      .shot {
+        position: absolute;
+        left: 110px;
+        right: 110px;
+        top: 268px;
+        height: 420px;
+        border-radius: 12px 12px 0 0;
+        overflow: hidden;
+        box-shadow:
+          0 40px 80px -24px rgba(0, 0, 0, 0.75),
+          0 0 0 1px rgba(242, 231, 213, 0.1);
+        background: #1d1b1c;
+      }
+      .bar {
+        height: 26px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 12px;
+        background: #1b1a1b;
+        border-bottom: 1px solid rgba(242, 231, 213, 0.1);
+      }
+      .bar i {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #ff5f57;
+      }
+      .bar i:nth-child(2) {
+        background: #febc2e;
+      }
+      .bar i:nth-child(3) {
+        background: #28c840;
+      }
+      .shot img {
+        display: block;
+        width: 100%;
       }
     </style>
   </head>
   <body>
-    <div class="preview">
-      <div class="brand">
-        <img src="assets/fulcra-mark.svg" alt="" width="42" height="42" />Fulcra
-      </div>
-      <h1>You set direction.<br />Primes coordinate<br /><span>the work.</span></h1>
-      <p>You → primes → project orchestrators → working sessions</p>
+    <div class="bg"></div>
+    <div class="copy">
+      <div class="brand"><img src="assets/fulcra-mark.svg" alt="" />Fulcra</div>
+      <h1>Run your AI team<br /><span>across projects and devices.</span></h1>
+    </div>
+    <div class="shot">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <img src="assets/shots/diff@2x.jpg" alt="" />
     </div>
   </body>
 </html>

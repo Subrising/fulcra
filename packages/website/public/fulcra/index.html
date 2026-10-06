@@ -2,19 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#121112" />
-    <title>Fulcra — Lead your AI team through primes and project orchestrators</title>
+    <title>Fulcra — Run your AI team across projects and devices</title>
     <meta
       name="description"
-      content="You set direction. Primes coordinate project orchestrators and working sessions, with boards, communications and decisions kept with each project. Continue across devices."
+      content="Fulcra keeps your Claude Code and Codex sessions running on your Mac, each in its own worktree, and gives you one place to lead them across projects."
     />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Fulcra" />
-    <meta property="og:title" content="Fulcra — A place to lead your AI team" />
+    <meta property="og:title" content="Fulcra — Run your AI team across projects and devices" />
     <meta
       property="og:description"
-      content="You → primes → project orchestrators → working sessions."
+      content="Persistent Claude Code and Codex sessions, each in its own worktree, with one place to lead the work."
     />
     <meta property="og:image" content="assets/social-preview.png" />
     <meta property="og:image:width" content="1200" />
@@ -23,293 +23,306 @@
     <meta name="twitter:image" content="assets/social-preview.png" />
     <link rel="icon" href="assets/fulcra-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="site.css" />
-    <script src="site.js" type="module"></script>
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <header class="masthead">
-      <a class="brand" href="#top" aria-label="Fulcra home"
-        ><img src="assets/fulcra-mark.svg" alt="" width="32" height="32" /><span>Fulcra</span></a
-      >
-      <nav aria-label="Main navigation">
-        <a href="#workflow">The workflow</a><a href="#environment">Across devices</a
-        ><a href="https://github.com/Subrising/fulcra">GitHub</a>
-      </nav>
-      <a class="nav-action" href="#download"
-        >Get Fulcra <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m8 5 7 7-7 7" /></svg
-      ></a>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="top">
+      <div class="wrap top-inner">
+        <a class="brand" href="#main" aria-label="Fulcra home"
+          ><img src="assets/fulcra-mark.svg" alt="" width="30" height="30" /><span>Fulcra</span></a
+        >
+        <nav aria-label="Main">
+          <a href="#work">How it works</a>
+          <a href="#team">Your team</a>
+          <a href="https://github.com/Subrising/fulcra">GitHub</a>
+          <a class="nav-cta" href="#get">Get Fulcra</a>
+        </nav>
+      </div>
     </header>
+
     <main id="main">
-      <section class="hero" id="top" aria-labelledby="offer">
-        <div class="hero-top">
-          <h1 id="offer">You set direction.<br />Primes coordinate<br /><span>the work.</span></h1>
-          <figure
-            class="coordination-map"
-            aria-label="Conceptual hierarchy: you, one or several primes, project orchestrators, working sessions, and decisions returning to you"
-          >
-            <div class="map-you">You set direction</div>
-            <div class="map-stem" aria-hidden="true"></div>
-            <div class="map-prime">
-              <strong>One or several primes</strong
-              ><span>Coordinate across projects · bring decisions to you</span>
-            </div>
-            <div class="map-projects">
-              <div class="map-project">
-                <strong>Project orchestrator</strong
-                ><span
-                  >Own board &amp; tasks<br />Responsibilities<br />Project communications</span
-                >
-                <p>Working sessions</p>
-              </div>
-              <div class="map-project">
-                <strong>Project orchestrator</strong
-                ><span
-                  >Own board &amp; tasks<br />Responsibilities<br />Project communications</span
-                >
-                <p>Working sessions</p>
-              </div>
-            </div>
-            <p class="map-return">Reports &amp; decisions return through your primes</p>
-            <figcaption>Workspace / project leadership · conceptual illustration</figcaption>
-          </figure>
-        </div>
-        <div class="hero-bottom">
-          <p>
-            Lead through one or several primes. They coordinate project orchestrators, who organise
-            their own boards, responsibilities and communications—and guide the sessions doing the
-            work. You focus on direction and decisions, not every worker chat.
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="glow" aria-hidden="true"></div>
+        <div class="wrap hero-copy">
+          <h1 id="hero-title">Run your AI team<br /><span>across projects and devices.</span></h1>
+          <p class="lede">
+            Fulcra keeps your Claude Code and Codex sessions running on your Mac. Each one works in
+            its own Git worktree, keeps its history and shows you exactly what it changed.
           </p>
           <div class="actions">
-            <a class="button primary" href="#workflow"
-              >Explore the workflow
-              <svg aria-hidden="true" viewBox="0 0 24 24">
-                <path d="M5 12h14m-6-6 6 6-6 6" /></svg></a
-            ><a class="quiet-action" href="#download">Source &amp; downloads</a>
+            <a class="btn primary" href="#get">Get Fulcra</a>
+            <a class="btn ghost" href="#work">See it work</a>
           </div>
         </div>
-        <div class="hero-proof" id="product" data-capture-frame>
-          <figure class="capture" data-capture hidden>
-            <figcaption data-capture-caption></figcaption>
-          </figure>
-          <div class="capture-controls" data-capture-controls hidden>
-            <div data-capture-tabs class="capture-tabs" aria-label="Real product views"></div>
-            <button type="button" class="text-button" data-enlarge>
-              Inspect the product view
-              <svg aria-hidden="true" viewBox="0 0 24 24">
-                <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />
-              </svg>
-            </button>
-          </div>
-          <div class="capture-pending" data-capture-pending>
-            <p>Development preview · latest product views pending.</p>
-            <span hidden>No mock or older product image is substituted.</span>
-          </div>
-        </div>
-      </section>
-      <section class="workflow" id="workflow" aria-labelledby="workflow-title">
-        <div class="story-intro">
-          <h2 id="workflow-title">
-            Lead the team.<br /><span>Keep coordination with the project.</span>
-          </h2>
-          <p>
-            Fulcra is a hierarchy of accountable AI leads and working sessions, with communication
-            in both directions.
-          </p>
-        </div>
-        <div class="story-layout">
-          <div
-            class="story-nav"
-            role="tablist"
-            aria-orientation="vertical"
-            aria-label="How Fulcra works"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected="true"
-              aria-controls="story-panel"
-              id="tab-organise"
-              data-story="organise"
-            >
-              <span>You &amp; your primes</span
-              ><svg aria-hidden="true" viewBox="0 0 24 24">
-                <path d="M5 12h14m-6-6 6 6-6 6" />
-              </svg></button
-            ><button
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="story-panel"
-              id="tab-delegate"
-              data-story="delegate"
-            >
-              <span>Project orchestrators</span
-              ><svg aria-hidden="true" viewBox="0 0 24 24">
-                <path d="M5 12h14m-6-6 6 6-6 6" />
-              </svg></button
-            ><button
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="story-panel"
-              id="tab-follow"
-              data-story="follow"
-            >
-              <span>Working sessions</span
-              ><svg aria-hidden="true" viewBox="0 0 24 24">
-                <path d="M5 12h14m-6-6 6 6-6 6" />
-              </svg></button
-            ><button
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="story-panel"
-              id="tab-continue"
-              data-story="continue"
-            >
-              <span>Reports &amp; decisions</span
-              ><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
-            </button>
-          </div>
-          <div
-            class="story-panel"
-            id="story-panel"
-            role="tabpanel"
-            aria-labelledby="tab-organise"
-            tabindex="0"
-          >
-            <div class="story-sentence" data-story-title>
-              Set the direction.<br />Let primes coordinate.
+        <figure class="wrap hero-shot">
+          <div class="window">
+            <div class="chrome" aria-hidden="true">
+              <i></i><i></i><i></i><span>Fulcra — habit-tracker</span>
             </div>
-            <p data-story-copy>
-              Give your primes the outcomes and priorities. A prime coordinates its project leads,
-              connects work across projects and brings the decisions that need you back up.
-            </p>
-            <div class="story-detail">
-              <span class="story-key" data-story-key>You → primes → project orchestrators</span>
-              <p data-story-detail>
-                One prime can lead several projects; several primes can have different remits. You
-                keep the high-level direction instead of managing every working session.
+            <img
+              src="assets/shots/diff.jpg"
+              srcset="assets/shots/diff.jpg 1440w, assets/shots/diff@2x.jpg 2880w"
+              sizes="(min-width: 1200px) 1120px, 94vw"
+              width="1440"
+              height="900"
+              fetchpriority="high"
+              alt="The Fulcra Mac app. The sidebar lists two projects, habit-tracker and weather-cli, with a branch per task. The middle shows the diff a session made to app.js; the right panel lists the three changed files."
+            />
+          </div>
+          <figcaption>
+            Five sessions across two projects. This one added streaks; its diff is open for review.
+          </figcaption>
+        </figure>
+        <ul class="wrap facts" aria-label="At a glance">
+          <li>
+            <strong>Persistent sessions</strong><span>Claude Code and Codex, history kept</span>
+          </li>
+          <li>
+            <strong>One worktree per task</strong><span>Parallel work that doesn't collide</span>
+          </li>
+          <li><strong>Runs on your Mac</strong><span>Your code and sign-ins stay there</span></li>
+        </ul>
+      </section>
+
+      <section id="work" class="wrap section" aria-labelledby="work-title">
+        <p class="eyebrow">How it works</p>
+        <h2 id="work-title">Give the goal. Check the result. Decide.</h2>
+        <p class="section-lede">
+          Every task goes through the same three steps. These are real screens from one demo
+          project.
+        </p>
+
+        <ol class="steps">
+          <li class="step">
+            <div class="step-text">
+              <span class="num" aria-hidden="true">1</span>
+              <h3>Hand a task to a session</h3>
+              <p>
+                Start a session on a new branch with one line. It gets its own worktree, so several
+                can work on the same project at once. Pick Claude or Codex, the model, effort and
+                permission mode for each session.
               </p>
             </div>
+            <figure class="window">
+              <div class="chrome" aria-hidden="true">
+                <i></i><i></i><i></i><span>weather-cli · feat/units</span>
+              </div>
+              <img
+                src="assets/shots/units.jpg"
+                srcset="assets/shots/units.jpg 1120w, assets/shots/units@2x.jpg 2240w"
+                sizes="(min-width: 1000px) 720px, 94vw"
+                width="1120"
+                height="900"
+                loading="lazy"
+                alt="A session that added a --units flag to a weather CLI. It lists the files it wrote and the commands it ran, then summarises the change and the tests it ran."
+              />
+            </figure>
+          </li>
+          <li class="step">
+            <div class="step-text">
+              <span class="num" aria-hidden="true">2</span>
+              <h3>It checks its own work</h3>
+              <p>
+                Sessions run the code, take screenshots and tell you what they did and didn't test.
+                The conversation stays with the branch, so you can pick it up tomorrow or from your
+                phone.
+              </p>
+            </div>
+            <figure class="window">
+              <div class="chrome" aria-hidden="true">
+                <i></i><i></i><i></i><span>habit-tracker · feat/streaks</span>
+              </div>
+              <img
+                src="assets/shots/session-proof.jpg"
+                srcset="
+                  assets/shots/session-proof.jpg    1120w,
+                  assets/shots/session-proof@2x.jpg 2240w
+                "
+                sizes="(min-width: 1000px) 720px, 94vw"
+                width="1120"
+                height="900"
+                loading="lazy"
+                alt="A session's reply showing a browser screenshot it took of the habit tracker, with streak counts and check-off buttons, followed by its summary. The Changes panel lists README.md, app.js and style.css."
+              />
+            </figure>
+          </li>
+          <li class="step">
+            <div class="step-text">
+              <span class="num" aria-hidden="true">3</span>
+              <h3>Review before anything lands</h3>
+              <p>
+                Read the diff beside the chat, or ask another session for a second opinion. Nothing
+                is committed until you say so.
+              </p>
+            </div>
+            <figure class="window">
+              <div class="chrome" aria-hidden="true">
+                <i></i><i></i><i></i><span>habit-tracker · main</span>
+              </div>
+              <img
+                src="assets/shots/review.jpg"
+                srcset="assets/shots/review.jpg 1120w, assets/shots/review@2x.jpg 2240w"
+                sizes="(min-width: 1000px) 720px, 94vw"
+                width="1120"
+                height="900"
+                loading="lazy"
+                alt="A review session's prioritised list of storage bugs and edge cases in app.js, ending with a suggested fix. It made no edits."
+              />
+            </figure>
+          </li>
+        </ol>
+      </section>
+
+      <section id="team" class="team" aria-labelledby="team-title">
+        <div class="wrap section">
+          <p class="eyebrow">Your team</p>
+          <h2 id="team-title">You lead. Primes coordinate. Projects keep moving.</h2>
+          <p class="section-lede">
+            Instead of watching every chat, you talk to one or a few primes. Each project has a lead
+            with its own tasks, sessions and messages. Decisions come back up to you.
+          </p>
+
+          <figure class="org" aria-labelledby="org-cap">
+            <div class="tier">
+              <span class="tier-label">You</span>
+              <div class="row"><div class="node you">You set the direction</div></div>
+            </div>
+            <div class="tier">
+              <span class="tier-label">Primes</span>
+              <div class="row">
+                <div class="node prime">
+                  <small>Prime</small><strong>Product</strong
+                  ><span>Owns an area and brings decisions to you</span>
+                </div>
+                <div class="node prime">
+                  <small>Prime</small><strong>Platform</strong
+                  ><span>Add more primes as you grow</span>
+                </div>
+              </div>
+            </div>
+            <div class="tier">
+              <span class="tier-label">Projects</span>
+              <div class="row">
+                <div class="node">
+                  <small>Project lead</small><strong>habit-tracker</strong
+                  ><span>Tasks · sessions · messages</span>
+                </div>
+                <div class="node">
+                  <small>Project lead</small><strong>weather-cli</strong
+                  ><span>Tasks · sessions · messages</span>
+                </div>
+                <div class="node">
+                  <small>Project lead</small><strong>infra</strong
+                  ><span>Tasks · sessions · messages</span>
+                </div>
+              </div>
+            </div>
+            <div class="tier">
+              <span class="tier-label">Sessions</span>
+              <div class="row chips">
+                <span>Implementer · Claude</span><span>Reviewer · Codex</span
+                ><span>Writer · Claude</span><span>QA · Codex</span>
+              </div>
+            </div>
+            <figcaption id="org-cap">
+              <span class="tag">Illustration</span> How Fulcra organises work. Roles record who is
+              accountable; every action still checks ownership and permissions.
+            </figcaption>
+          </figure>
+
+          <div class="split">
+            <div class="split-text">
+              <h3>Every role starts the way you set it</h3>
+              <p>
+                Choose the provider, model and effort for leads, planners, reviewers, implementers
+                and research. New sessions pick it up wherever they start: in the app, from a lead
+                or from the command line.
+              </p>
+              <p>
+                Add several Claude or Codex accounts and sessions carry on under the next one when
+                an account reaches its usage limit. Tokens are kept in the Keychain.
+              </p>
+            </div>
+            <figure class="window">
+              <div class="chrome" aria-hidden="true">
+                <i></i><i></i><i></i><span>Fulcra · Accounts &amp; Defaults</span>
+              </div>
+              <img
+                src="assets/shots/roles.jpg"
+                srcset="assets/shots/roles.jpg 1120w, assets/shots/roles@2x.jpg 2240w"
+                sizes="(min-width: 1000px) 640px, 94vw"
+                width="1120"
+                height="900"
+                loading="lazy"
+                alt="Fulcra's Accounts and Defaults settings, showing model and effort choices for prime and project leads, planners and reviewers."
+              />
+            </figure>
           </div>
         </div>
-        <div class="human-focus">
-          <h3>Direction. Decisions. Exceptions.</h3>
-          <p>
-            Your attention belongs on the outcomes and choices that need you. Project leads keep the
-            working detail; primes bring priorities, blockers and decisions back to you.
-          </p>
-          <p class="human-focus-scope">
-            The streamlined human-attention view is in development. Current project briefs and the
-            decision inbox provide the building blocks.
-          </p>
-        </div>
-        <div class="implementation-scope">
-          <p>
-            <strong>Implemented in the current source</strong>Recorded prime/project leadership,
-            project-scoped tasks and sessions, project briefs, decision inbox and configured
-            role-message channels.
-          </p>
-          <p>
-            <strong>In development</strong>Workspace umbrellas, retained prime intake and the
-            unified board/communication experience. The board and communication flow is being
-            brought together around each project.
-          </p>
-        </div>
       </section>
-      <section class="continuity" id="environment" aria-labelledby="continuity-title">
-        <div class="continuity-lead">
-          <h2 id="continuity-title">Leave the desk.<br /><span>Keep the thread.</span></h2>
-          <p>
-            Your agents keep working on the host where the project lives. Connected desktop, web and
-            compatible source-built mobile clients give you another view of the same work.
-          </p>
-          <a class="text-link" href="https://github.com/Subrising/fulcra/blob/v0.2.0/README.md"
-            >How to connect your environment
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10" /></svg
-          ></a>
-        </div>
-        <div class="continuity-note">
-          <div class="continuity-word">
-            Same project.<br />Same conversation.<br /><span>Another device.</span>
+
+      <section class="wrap section" aria-labelledby="devices-title">
+        <p class="eyebrow">Across devices</p>
+        <h2 id="devices-title">The work stays on the Mac. You don't have to.</h2>
+        <div class="cards">
+          <div class="card">
+            <h3>Your Mac</h3>
+            <p>
+              The host. Sessions, worktrees, provider sign-ins and code live here, and keep running
+              when you close the window.
+            </p>
           </div>
-          <p>
-            Work stays connected to your own environment. Use the provider tools you have configured
-            and pair the devices you trust.
-          </p>
+          <div class="card">
+            <h3>Your phone</h3>
+            <p>
+              Pair an iPhone to read and answer the same chats while the Mac keeps working. For now
+              you build the iPhone app yourself with Xcode.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Your other Macs</h3>
+            <p>
+              Connect the app to another Mac's host and lead its sessions from the same sidebar.
+            </p>
+          </div>
         </div>
       </section>
-      <section class="access" id="download" aria-labelledby="access-title">
-        <div class="access-heading">
-          <h2 id="access-title">Make room<br />for your AI team.</h2>
+
+      <section id="get" class="wrap section" aria-labelledby="get-title">
+        <div class="get">
+          <img src="assets/fulcra-mark.svg" alt="" width="56" height="56" />
+          <h2 id="get-title">Get Fulcra</h2>
           <p>
-            Fulcra is early, open-source software. Explore the published source and choose the
-            available build for your environment.
+            Fulcra is open source under Apache-2.0. There's no signed download yet, so you build it
+            from source on a Mac with Apple silicon. It takes a few commands.
           </p>
-          <a class="button dark" href="https://github.com/Subrising/fulcra/tree/v0.2.0"
-            >Get the source
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10" /></svg
-          ></a>
-        </div>
-        <div class="access-options">
-          <h3>Available today</h3>
-          <a class="release-link" href="https://github.com/Subrising/fulcra/releases/tag/v0.2.0"
-            ><span
-              ><strong>Public source · v0.2.0</strong
-              ><small>Release notes and platform assets</small></span
-            ><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10" /></svg
-          ></a>
-          <details>
-            <summary>macOS</summary>
-            <p>
-              Build the published source. The available public arm64 binary is the older v0.1.0
-              release.
-            </p>
-            <a href="https://github.com/Subrising/fulcra/releases/tag/v0.1.0">Older Mac release</a>
-          </details>
-          <details>
-            <summary>Windows</summary>
-            <p>
-              v0.2.0 x64 and arm64 build previews are attached to the release. Installation and
-              workflow support remain under validation.
-            </p>
-            <a href="https://github.com/Subrising/fulcra/releases/tag/v0.2.0"
-              >Windows build previews</a
+          <div class="actions">
+            <a
+              class="btn primary"
+              href="https://github.com/Subrising/fulcra/blob/main/docs/getting-started.md"
+              >Build and launch guide</a
             >
-          </details>
-          <details>
-            <summary>Mobile</summary>
-            <p>
-              Compatible source builds and personal-device setup. No Fulcra App Store or TestFlight
-              offer is listed here.
-            </p>
-            <a href="https://github.com/Subrising/fulcra/blob/v0.2.0/docs/ios-personal-device.md"
-              >Personal iPhone build guide</a
-            >
-          </details>
-          <p class="availability-note">
-            Public availability checked 5 October 2026. Development screenshots do not imply a new
-            published release.
+            <a class="btn ghost" href="https://github.com/Subrising/fulcra">View on GitHub</a>
+          </div>
+          <p class="fine">
+            You'll need Node.js 24, the Xcode command-line tools and a signed-in Claude Code or
+            Codex CLI. iPhone, Android and Windows guides are in the repository; Android and Windows
+            are untested.
           </p>
         </div>
       </section>
     </main>
-    <footer>
-      <a class="brand" href="#top"
-        ><img src="assets/fulcra-mark.svg" alt="" width="28" height="28" /><span>Fulcra</span></a
+
+    <footer class="wrap foot">
+      <span class="foot-brand"
+        ><img src="assets/fulcra-mark.svg" alt="" width="20" height="20" /> Fulcra ·
+        Apache-2.0</span
       >
-      <p>A modified fork of <a href="https://github.com/getpaseo/paseo">Paseo</a>.</p>
-      <nav aria-label="Footer">
-        <a href="https://github.com/Subrising/fulcra/issues">Issues</a
-        ><a href="https://github.com/Subrising/fulcra/blob/v0.2.0/LICENSE">License</a
-        ><a href="https://github.com/Subrising/fulcra/blob/v0.2.0/NOTICE">Attribution</a>
-      </nav>
+      <span
+        >Screens are real captures of the Fulcra 0.2.3 Mac app (development build) on a demo
+        workspace, 6 October 2026. The team diagram is an illustration.</span
+      >
     </footer>
-    <dialog data-capture-dialog aria-label="Full real product screenshot">
-      <button type="button" class="button dark" data-close-dialog>Close</button>
-      <div data-dialog-content></div>
-      <p data-dialog-caption></p>
-    </dialog>
   </body>
 </html>
