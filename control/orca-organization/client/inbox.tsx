@@ -346,8 +346,8 @@ export function InboxSurface({
               : "No confirmed unresolved decision is addressed to you in this observation."}
         </Text>
         <Text style={{ color: c.foregroundMuted }}>
-          Source: {host?.label ?? "Selected company organisation"}. This shows Inbox items only; Home
-          also shows role and permission needs.
+          Source: {host?.label ?? "Selected company organisation"}. This shows Inbox items only;
+          Home also shows role and permission needs.
           {d
             ? ` ${d.counts.held} held messages are kept for you; reading them does not release them.`
             : ""}

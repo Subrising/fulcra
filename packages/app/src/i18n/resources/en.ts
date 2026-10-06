@@ -2202,12 +2202,14 @@ export const en = {
     },
     architectureMap: {
       mainOnly: "Code architecture is a main workspace view. Open it from the + tab menu.",
-      entryUnavailable: "Add a saved code map or connect a host that advertises code graph or change generation.",
+      entryUnavailable:
+        "Add a saved code map or connect a host that advertises code graph or change generation.",
       label: "Code architecture",
       subtitle: "Code structure & change impact",
       tooltip: "Show code architecture and change impact",
       emptyTitle: "No architecture map in this project",
-      emptyDescription: "Add an Archify-compatible .ir.json map under {{directory}}, or connect a host that supports generated code graphs. This is code structure; Team workflow shows project leads and working sessions.",
+      emptyDescription:
+        "Add a saved code map under {{directory}}, or connect a host that can generate one. This shows code structure; Team workflow shows project leads and working sessions.",
       oversized: "Too large to show (over 1 MiB): {{names}}",
       truncated: "Only the first 20 maps are listed.",
       listFailed: "Couldn't list architecture maps",

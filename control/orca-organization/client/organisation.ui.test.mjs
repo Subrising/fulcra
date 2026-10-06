@@ -616,7 +616,6 @@ test("a management session-read refusal stays visible and does not become an emp
   );
 });
 
-
 test("the direct Team workflow entry uses the existing map without changing project membership", async () => {
   serve();
   mount({ compact: false, platform: "web" }, { initialMode: "map" });

@@ -56,6 +56,14 @@ export const readyPillars = (pillars: readonly Pillar[] = PILLARS) =>
   pillars.filter((p) => p.ready);
 export const tabTestId = (key: string) => `organization-tab-${key}`;
 
-export const PRIMARY_PILLAR_KEYS: readonly PillarKey[] = ["today", "organisation", "team", "changes", "settings"];
-export const primaryPillars = () => readyPillars().filter((pillar) => PRIMARY_PILLAR_KEYS.includes(pillar.key));
-export const extraPillars = () => readyPillars().filter((pillar) => !PRIMARY_PILLAR_KEYS.includes(pillar.key));
+export const PRIMARY_PILLAR_KEYS: readonly PillarKey[] = [
+  "today",
+  "organisation",
+  "team",
+  "changes",
+  "settings",
+];
+export const primaryPillars = () =>
+  readyPillars().filter((pillar) => PRIMARY_PILLAR_KEYS.includes(pillar.key));
+export const extraPillars = () =>
+  readyPillars().filter((pillar) => !PRIMARY_PILLAR_KEYS.includes(pillar.key));

@@ -2183,7 +2183,8 @@ export const ptBR: TranslationResources = {
     },
     architectureMap: {
       mainOnly: "A arquitetura do código é uma visualização principal. Abra-a no menu de abas +.",
-      entryUnavailable: "Adicione um mapa de código salvo ou conecte um host que ofereça grafos ou análise de alterações.",
+      entryUnavailable:
+        "Adicione um mapa de código salvo ou conecte um host que ofereça grafos ou análise de alterações.",
       label: "Mapa de arquitetura",
       subtitle: "Arquitetura do projeto",
       tooltip: "Mostrar o mapa de arquitetura do projeto",

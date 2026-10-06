@@ -156,7 +156,8 @@ function ArchitectureMapPanel() {
   }
   const listed = list.data?.kind === "listed" ? list.data : null;
   const hasMaps = Boolean(listed && listed.maps.length > 0);
-  if (!canOpenCodeArchitecture({ hasMaps, canGenerate, canGraph })) return <NoMaps listing={listed} />;
+  if (!canOpenCodeArchitecture({ hasMaps, canGenerate, canGraph }))
+    return <NoMaps listing={listed} />;
   return (
     <View style={styles.root}>
       <ViewToggle view={viewState.view} onChoose={setViewState} />
