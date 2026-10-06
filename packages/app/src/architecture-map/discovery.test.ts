@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   architectureMapPath,
+  canOpenCodeArchitecture,
   isArchitectureMapFileName,
   isMissingDirectoryError,
   MAX_ARCHITECTURE_MAPS,
@@ -68,4 +69,12 @@ describe("architecture map discovery", () => {
     expect(isMissingDirectoryError("ENOENT: no such file or directory")).toBe(true);
     expect(isMissingDirectoryError("Access outside of workspace is not allowed")).toBe(false);
   });
+});
+
+
+it("code entry matches the panel’s saved-IR or literal native capability paths, never a team graph", () => {
+  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: false, canGraph: false })).toBe(false);
+  expect(canOpenCodeArchitecture({ hasMaps: true, canGenerate: false, canGraph: false })).toBe(true);
+  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: true, canGraph: false })).toBe(true);
+  expect(canOpenCodeArchitecture({ hasMaps: false, canGenerate: false, canGraph: true })).toBe(true);
 });

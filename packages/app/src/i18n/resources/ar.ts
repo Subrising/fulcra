@@ -2139,6 +2139,8 @@ export const ar: TranslationResources = {
       emptyDescription: "أنشئ طلب سحب لنسخة العمل هذه لعرض تفاصيله هنا.",
     },
     architectureMap: {
+      mainOnly: "بنية الكود عرض في مساحة العمل الرئيسية. افتحه من قائمة علامة التبويب +.",
+      entryUnavailable: "أضف خريطة كود محفوظة أو اتصل بمضيف يدعم رسم الكود أو تحليل التغييرات.",
       label: "خريطة البنية",
       subtitle: "بنية المشروع",
       tooltip: "عرض خريطة بنية المشروع",

@@ -2193,6 +2193,8 @@ export const es: TranslationResources = {
       emptyDescription: "Crea una solicitud para este checkout y consulta aquí sus detalles.",
     },
     architectureMap: {
+      mainOnly: "La arquitectura del código se abre en la vista principal. Usa el menú de pestañas +.",
+      entryUnavailable: "Añade un mapa de código guardado o conecta un host que admita grafos o análisis de cambios.",
       label: "Mapa de arquitectura",
       subtitle: "Arquitectura del proyecto",
       tooltip: "Mostrar el mapa de arquitectura del proyecto",

@@ -47,14 +47,14 @@ const TALLY = id(21),
   H1 = id(41);
 const iso = (ago = 0) => new Date(Date.now() - ago).toISOString();
 const clients = [];
-function mount(layout = { compact: false, platform: "web" }) {
+function mount(layout = { compact: false, platform: "web" }, extra = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
   return render(
     h(
       QueryClientProvider,
       { client },
-      h(OrganisationSurface, { theme, layout, host: { id: "mini" } }),
+      h(OrganisationSurface, { theme, layout, host: { id: "mini" }, ...extra }),
     ),
   );
 }
@@ -614,4 +614,14 @@ test("a management session-read refusal stays visible and does not become an emp
     !calls.some((call) => call.name.includes("assign")),
     "failed metadata does not produce a role assignment",
   );
+});
+
+
+test("the direct Team workflow entry uses the existing map without changing project membership", async () => {
+  serve();
+  mount({ compact: false, platform: "web" }, { initialMode: "map" });
+  await screen.findByText("Fulcra work map");
+  assert(screen.getByText(/Team workflow shows project leadership/));
+  assert(screen.getByTestId("org-view-tree"));
+  assert(calls.every((call) => !call.name.includes("assign") && !call.name.includes("send")));
 });

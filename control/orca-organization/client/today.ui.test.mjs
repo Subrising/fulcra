@@ -401,7 +401,7 @@ test("nothing readable still gives a page that says so, not a blank", async () =
   setHandler(() => Promise.reject(Error("Management unavailable")));
   mount();
   await screen.findByText(/Your projects could not be read just now/);
-  assert(screen.getByText("Today"));
+  assert(screen.getByText("Home"));
 });
 
 for (const observation of ["missing", "stale"]) {
@@ -460,3 +460,11 @@ for (const observation of ["missing", "stale"]) {
     );
   });
 }
+
+
+test("Home exposes Inbox directly without discarding retained activity", async () => {
+  setHandler(reads()); mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Open Inbox" }));
+  assert.deepEqual(went, ["inbox"]);
+  assert(screen.getByRole("button", { name: "All activity and history" }));
+});

@@ -2110,6 +2110,8 @@ export const zhCN: TranslationResources = {
       emptyDescription: "为此检出创建拉取请求后，可在此处查看其详情。",
     },
     architectureMap: {
+      mainOnly: "代码架构是工作区主视图。请从 + 标签页菜单打开。",
+      entryUnavailable: "添加已保存的代码图，或连接支持代码图或变更分析的主机。",
       label: "架构图",
       subtitle: "项目架构",
       tooltip: "显示项目的架构图",
