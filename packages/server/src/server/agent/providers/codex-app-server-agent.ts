@@ -1,3 +1,11 @@
+import {
+  baselineForSession,
+  withoutPublicBaselineTransport,
+  cloneHostPublicBaseline,
+  composeHostPublicBaseline,
+  type HostPublicBaseline,
+  type PublicBaselineTransport,
+} from "../host-public-baseline.js";
 import { PermissionAttentionError } from "../permission-attention-error.js";
 import { recordedCodexUsage } from "../usage-recording.js";
 import {
@@ -345,6 +353,7 @@ interface CodexAppServerClientLike {
 }
 
 interface CodexAppServerAgentDeps {
+  publicBaseline?: HostPublicBaseline;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   customProvider?: {
     id: string;
@@ -3462,6 +3471,14 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private readonly logger: Logger;
   private readonly config: AgentSessionConfig;
+  private readonly publicBaseline: HostPublicBaseline | undefined;
+  private publicBaselineTransport:
+    | {
+        receipt: PublicBaselineTransport;
+        client: CodexAppServerClient | null;
+        threadId: string | null;
+      }
+    | undefined;
   private readonly asyncQuestions: CodexAsyncQuestions;
   private readonly codexHome: string;
   private currentMode: string;
@@ -3595,7 +3612,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.hasWorkflowModeOverride = config.modeId !== undefined;
     this.currentMode = config.modeId ?? DEFAULT_CODEX_MODE_ID;
     this.providerOptions = CodexProviderOptionsSchema.parse(config.providerOptions ?? {});
-    this.config = config;
+    this.config = structuredClone(config);
+    this.publicBaseline = baselineForSession(
+      deps.publicBaseline,
+      config.internal,
+      initialResumePurpose,
+    );
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
     this.codexHome = deps.codexHome ?? resolveCodexHomeDir(process.env);
     this.config.thinkingOptionId = normalizeCodexThinkingOptionId(this.config.thinkingOptionId);
@@ -4111,11 +4133,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       // Never resume/unarchive or submit developer instructions as queued preparation.
       return;
     }
+    const preparedClient = this.client;
     const params: Record<string, unknown> = { threadId: this.currentThreadId };
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const developerInstructions = this.composeDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
     }
@@ -4131,6 +4151,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       const response = await this.client.request("thread/resume", params);
       this.rememberResolvedThreadConfig(response);
+      this.markPublicBaselineSubmitted(preparedClient, params);
     } catch (error) {
       const threadId = this.currentThreadId;
       const message = error instanceof Error ? error.message : String(error);
@@ -4144,6 +4165,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         }
         const response = await this.client.request("thread/resume", params);
         this.rememberResolvedThreadConfig(response);
+        this.markPublicBaselineSubmitted(preparedClient, params);
         this.logger.info({ threadId }, "Unarchived Codex thread to restore active Paseo agent");
         return;
       }
@@ -4271,10 +4293,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (options?.outputSchema) {
       params.outputSchema = normalizeCodexOutputSchema(options.outputSchema);
     }
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const developerInstructions = options?.[NATIVE_QUEUED_FINAL]
+      ? composeSystemPromptParts(this.config.systemPrompt, this.config.daemonAppendSystemPrompt)
+      : this.composeDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
     }
@@ -4734,6 +4755,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       } else {
         await this.client.request("turn/start", turnStart.params, TURN_START_TIMEOUT_MS);
       }
+      this.markPublicBaselineSubmitted(preparedClient, turnStart.params, Boolean(queued));
       return { turnId };
     } catch (error) {
       this.pendingForegroundTurnIdentification?.resolve(null);
@@ -4948,7 +4970,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
-    if (this.cachedRuntimeInfo) return { ...this.cachedRuntimeInfo };
+    if (this.cachedRuntimeInfo) return this.runtimeReadback(this.cachedRuntimeInfo);
     if (this.connectionState === "disconnected") {
       await this.connect();
     }
@@ -4966,7 +4988,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         : undefined,
     };
     this.cachedRuntimeInfo = info;
-    return { ...info };
+    return this.runtimeReadback(info);
   }
 
   async getAvailableModes(): Promise<AgentMode[]> {
@@ -5643,7 +5665,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.config.thinkingOptionId = thinkingOptionId;
 
     const { params, approvalPolicy, sandbox } = this.buildThreadStartRequest(model);
-    const rawResponse = await this.client.request("thread/start", params);
+    const preparedClient = this.client;
+    const rawResponse = await preparedClient.request("thread/start", params);
     this.rememberResolvedThreadConfig(rawResponse);
     const response = toObjectRecord(rawResponse);
     const threadRecord = toObjectRecord(response?.thread);
@@ -5664,6 +5687,88 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.cachedRuntimeInfo = null;
     }
     this.currentThreadId = threadId;
+    this.markPublicBaselineSubmitted(preparedClient, params);
+  }
+
+  private composeDeveloperInstructions(): string | undefined {
+    const result = composeHostPublicBaseline(
+      this.publicBaseline,
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    if (result.receipt) {
+      const prior = this.publicBaselineTransport;
+      if (
+        !prior ||
+        prior.client !== this.client ||
+        prior.threadId !== this.currentThreadId ||
+        prior.receipt.developerInstructionsSha256 !== result.receipt.developerInstructionsSha256
+      )
+        this.publicBaselineTransport = {
+          receipt: result.receipt,
+          client: this.client,
+          threadId: this.currentThreadId,
+        };
+    }
+    return result.text;
+  }
+  private markPublicBaselineSubmitted(
+    client: CodexAppServerClient,
+    params: Record<string, unknown>,
+    queued = false,
+  ): void {
+    if (queued) return;
+    if (
+      !this.publicBaselineTransport ||
+      this.closed ||
+      client !== this.client ||
+      typeof params.developerInstructions !== "string"
+    )
+      return;
+    const composed = composeHostPublicBaseline(
+      this.publicBaseline,
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    if (!composed.receipt || params.developerInstructions !== composed.text) return;
+    const prior = this.publicBaselineTransport;
+    if (
+      prior.receipt.state === "SUBMITTED" &&
+      prior.client === client &&
+      prior.threadId === this.currentThreadId &&
+      prior.receipt.developerInstructionsSha256 === composed.receipt.developerInstructionsSha256
+    )
+      return;
+    this.publicBaselineTransport = {
+      receipt: { ...composed.receipt, state: "SUBMITTED" },
+      client,
+      threadId: this.currentThreadId,
+    };
+    this.cachedRuntimeInfo = null;
+    if (this.currentThreadId)
+      this.emitEvent({
+        type: "host_public_baseline_transport",
+        provider: CODEX_PROVIDER,
+        nativeSessionId: this.currentThreadId,
+        receipt: structuredClone(this.publicBaselineTransport.receipt),
+      });
+  }
+  private runtimeReadback(info: AgentRuntimeInfo): AgentRuntimeInfo {
+    const value = withoutPublicBaselineTransport(info)!;
+    const readback = this.baselineReadback();
+    return {
+      ...value,
+      ...(Object.keys(readback).length ? { extra: { ...value.extra, ...readback } } : {}),
+    };
+  }
+  private baselineReadback(): { hostPublicBaselineTransport?: PublicBaselineTransport } {
+    const value = this.publicBaselineTransport;
+    return !this.closed &&
+      value &&
+      value.client === this.client &&
+      value.threadId === this.currentThreadId
+      ? { hostPublicBaselineTransport: structuredClone(value.receipt) }
+      : {};
   }
 
   private buildThreadStartRequest(model: string): {
@@ -5681,10 +5786,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.providerOptions.sandbox_mode ??
       (this.hasWorkflowModeOverride ? preset.sandbox : undefined);
     const innerConfig = this.buildCodexInnerConfig();
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const developerInstructions = this.composeDeveloperInstructions();
     const params: Record<string, unknown> = {
       model,
       cwd: this.config.cwd ?? null,
@@ -7800,9 +7902,13 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
 
-  private sessionDeps(launchEnv: Record<string, string> | undefined): CodexAppServerAgentDeps {
+  private sessionDeps(
+    launchEnv: Record<string, string> | undefined,
+    publicBaseline?: HostPublicBaseline,
+  ): CodexAppServerAgentDeps {
     return {
       ...this.deps,
+      publicBaseline: cloneHostPublicBaseline(publicBaseline),
       codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchEnv)),
       customCodexConfig: this.customProviderConfig(),
     };
@@ -7906,7 +8012,21 @@ export class CodexAppServerAgentClient implements AgentClient {
       // TODO: Honor persistSession=false if app-server adds support, or route
       // utility generations through `codex exec --ephemeral` in a larger change.
     }
-    const sessionConfig: AgentSessionConfig = { ...config, provider: CODEX_PROVIDER };
+    launchContext = launchContext
+      ? {
+          ...launchContext,
+          env: launchContext.env ? { ...launchContext.env } : undefined,
+          publicBaseline: baselineForSession(
+            launchContext.publicBaseline,
+            config.internal,
+            "interactive",
+          ),
+        }
+      : undefined;
+    const sessionConfig: AgentSessionConfig = structuredClone({
+      ...config,
+      provider: CODEX_PROVIDER,
+    });
     const goalsEnabled = await this.resolveGoalsEnabled();
     const autoReviewEnabled = await this.resolveAutoReviewEnabled();
     const session = new CodexAppServerAgentSession(
@@ -7915,7 +8035,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       this.logger,
       () =>
         this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(launchContext?.env),
+      this.sessionDeps(launchContext?.env, launchContext?.publicBaseline),
       options?.persistSession === false,
       goalsEnabled,
       autoReviewEnabled,
@@ -7935,12 +8055,23 @@ export class CodexAppServerAgentClient implements AgentClient {
     options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     const storedConfig = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
-    const merged: AgentSessionConfig = {
+    const merged: AgentSessionConfig = structuredClone({
       ...storedConfig,
       ...overrides,
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
-    };
+    });
+    launchContext = launchContext
+      ? {
+          ...launchContext,
+          env: launchContext.env ? { ...launchContext.env } : undefined,
+          publicBaseline: baselineForSession(
+            launchContext.publicBaseline,
+            merged.internal,
+            options?.purpose ?? "interactive",
+          ),
+        }
+      : undefined;
     const goalsEnabled = await this.resolveGoalsEnabled();
     const autoReviewEnabled = await this.resolveAutoReviewEnabled();
     const session = new CodexAppServerAgentSession(
@@ -7949,7 +8080,7 @@ export class CodexAppServerAgentClient implements AgentClient {
       this.logger,
       () =>
         this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(launchContext?.env),
+      this.sessionDeps(launchContext?.env, launchContext?.publicBaseline),
       false,
       goalsEnabled,
       autoReviewEnabled,

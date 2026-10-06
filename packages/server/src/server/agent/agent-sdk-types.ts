@@ -456,6 +456,12 @@ export type AgentTimelineItem =
   | PluginTimelineItem;
 
 export type AgentStreamEvent =
+  | {
+      type: "host_public_baseline_transport";
+      provider: AgentProvider;
+      nativeSessionId: string;
+      receipt: import("./host-public-baseline.js").PublicBaselineTransport;
+    }
   | { type: "thread_started"; sessionId: string; provider: AgentProvider }
   | { type: "turn_started"; provider: AgentProvider; turnId?: string }
   | { type: "turn_completed"; provider: AgentProvider; usage?: AgentUsage; turnId?: string }
@@ -674,6 +680,8 @@ export interface AgentSessionConfig {
 }
 
 export interface AgentLaunchContext {
+  /** Host-selected public text/hash snapshot. Runtime-only; never an account/profile/config override. */
+  publicBaseline?: import("./host-public-baseline.js").HostPublicBaseline;
   agentId?: string;
   env?: Record<string, string>;
   /**

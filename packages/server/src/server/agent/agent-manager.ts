@@ -1,3 +1,8 @@
+import {
+  readHostPublicCodexBaseline,
+  cloneHostPublicBaseline,
+  publicBaselineLaunchAllowed,
+} from "./host-public-baseline.js";
 import { PermissionAttentionError } from "./permission-attention-error.js";
 import { retainRecordedUsage } from "./usage-recording.js";
 import { fingerprintLimitResumeBinding } from "../limit-resume/binding.js";
@@ -2499,7 +2504,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       options?.env,
-      { reason: "create", purpose: "interactive", workspaceId: options.workspaceId ?? null },
+      {
+        reason: "create",
+        purpose: "interactive",
+        workspaceId: options.workspaceId ?? null,
+        internal: storedConfig.internal,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
@@ -2647,6 +2657,8 @@ export class AgentManager {
       {
         reason: "resume",
         purpose,
+        suppressPublicBaseline: resumeOptions?.purpose === "history",
+        internal: storedConfig.internal,
         workspaceId: options?.workspaceId ?? null,
       },
     );
@@ -2702,7 +2714,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "import", purpose: "interactive", workspaceId: input.workspaceId },
+      {
+        reason: "import",
+        purpose: "interactive",
+        workspaceId: input.workspaceId,
+        internal: storedConfig.internal,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const imported = await client.importSession(
@@ -2983,7 +3000,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
+      {
+        reason: "refresh",
+        purpose: "interactive",
+        workspaceId: existing.workspaceId,
+        internal: existing.internal,
+      },
     );
     const providerConfig = this.resolveProviderLaunchConfig(launchConfig, context);
     const commitClose = await beforeClose();
@@ -3119,7 +3141,12 @@ export class AgentManager {
       storedConfig.cwd,
       paseoToolPolicy,
       undefined,
-      { reason: "refresh", purpose: "interactive", workspaceId: existing.workspaceId },
+      {
+        reason: "refresh",
+        purpose: "interactive",
+        workspaceId: existing.workspaceId,
+        internal: existing.internal,
+      },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     if (
@@ -6857,6 +6884,8 @@ export class AgentManager {
     const { agent, event, options, isForegroundEvent, eventTurnId, terminalDisposition, flags } =
       params;
     switch (event.type) {
+      case "host_public_baseline_transport":
+        return this.onPublicBaselineTransport(agent, event, flags);
       case "thread_started":
         this.onStreamThreadStarted(agent);
         return undefined;
@@ -6941,6 +6970,30 @@ export class AgentManager {
       default:
         return undefined;
     }
+  }
+
+  private onPublicBaselineTransport(
+    agent: ActiveManagedAgent,
+    event: Extract<AgentStreamEvent, { type: "host_public_baseline_transport" }>,
+    flags: StreamEventFlags,
+  ): undefined {
+    flags.shouldDispatchEvent = false;
+    flags.shouldNotifyWaiters = false;
+    if (
+      this.agents.get(agent.id) !== agent ||
+      agent.session.id !== event.nativeSessionId ||
+      !agent.runtimeInfo
+    )
+      return undefined;
+    agent.runtimeInfo = {
+      ...agent.runtimeInfo,
+      extra: {
+        ...agent.runtimeInfo.extra,
+        hostPublicBaselineTransport: structuredClone(event.receipt),
+      },
+    };
+    this.emitState(agent);
+    return undefined;
   }
 
   private onStreamThreadStarted(agent: ActiveManagedAgent): void {
@@ -8068,6 +8121,8 @@ export class AgentManager {
       reason: PluginSessionOpenRequest["reason"];
       purpose: PluginSessionOpenRequest["purpose"];
       workspaceId?: string | null;
+      internal?: boolean;
+      suppressPublicBaseline?: boolean;
     },
   ): Promise<AgentLaunchContext> {
     if (this.pluginLifecycle) {
@@ -8091,6 +8146,10 @@ export class AgentManager {
         PASEO_AGENT_CWD: cwd,
       },
     };
+    if (publicBaselineLaunchAllowed(client.provider, opening)) {
+      const baseline = await readHostPublicCodexBaseline();
+      if (baseline) context.publicBaseline = cloneHostPublicBaseline(baseline);
+    }
     if (
       this.paseoToolsEnabled &&
       isPaseoToolPolicyEnabled(paseoToolPolicy) &&

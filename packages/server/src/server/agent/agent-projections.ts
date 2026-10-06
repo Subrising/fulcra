@@ -1,3 +1,4 @@
+import { withoutPublicBaselineTransport } from "./host-public-baseline.js";
 import { RecordedUsageSchema } from "@getpaseo/protocol/recorded-usage";
 import { validatedTimestamp } from "./runtime-observation.js";
 import type {
@@ -73,7 +74,7 @@ export function toStoredAgentRecord(
   const createdAt = options?.createdAt ?? agent.createdAt.toISOString();
   const config = buildSerializableConfig(agent.config);
   const persistence = sanitizePersistenceHandle(agent.persistence);
-  const runtimeInfo = sanitizeRuntimeInfo(agent.runtimeInfo);
+  const runtimeInfo = withoutPublicBaselineTransport(sanitizeRuntimeInfo(agent.runtimeInfo));
 
   return {
     id: agent.id,
@@ -107,7 +108,8 @@ export function toAgentPayload(
   agent: ManagedAgent,
   options?: ProjectionOptions,
 ): AgentSnapshotPayload {
-  const runtimeInfo = sanitizeRuntimeInfo(agent.runtimeInfo);
+  const observed = sanitizeRuntimeInfo(agent.runtimeInfo);
+  const runtimeInfo = agent.session ? observed : withoutPublicBaselineTransport(observed);
   const thinkingOptionId = agent.config.thinkingOptionId ?? null;
   const effectiveThinkingOptionId = resolveEffectiveThinkingOptionId({
     runtimeInfo,
@@ -203,7 +205,7 @@ function buildStoredRuntimeInfo(record: StoredAgentRecord): AgentRuntimeInfo | u
   if (ri.extra) {
     runtimeInfo.extra = ri.extra;
   }
-  return runtimeInfo;
+  return withoutPublicBaselineTransport(runtimeInfo);
 }
 
 function buildStoredPersistenceHandle(
