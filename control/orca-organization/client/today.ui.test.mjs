@@ -491,6 +491,29 @@ test("a session with a question shows it on Home as an answerable card, with the
   assert.equal(section.queryByText(/Quiet worker/), null);
 });
 
+test("a main assistant outside every project still gets its question card on Home", async () => {
+  // Project reads carry no main assistant; only the whole host's fleet (no projectId) does.
+  setHandler(
+    reads({
+      "organization.fleet": (input) => ({
+        ...fleet,
+        observedAt: iso(0),
+        total: input?.projectId ? 0 : 1,
+        nodes: input?.projectId
+          ? []
+          : [node(7, "running", iso(0), { pending: 1, serverId: "Book", title: "Main assistant" })],
+      }),
+    }),
+  );
+  mount();
+  const section = within(await screen.findByTestId("today-questions"));
+  assert(section.getByText("Main assistant is waiting for you"));
+  assert.equal(
+    section.getByTestId(`agent-questions-${sid(7)}`).getAttribute("data-server"),
+    "Book",
+  );
+});
+
 test("a question from a session on an unbound This Mac still shows, asked on the connected host", async () => {
   // Installs leave the organisation's "This Mac" without a serverId, so the fleet sends none.
   setHandler(
