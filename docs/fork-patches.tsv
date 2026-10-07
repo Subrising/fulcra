@@ -451,7 +451,7 @@ build-ci	A	231	0	scripts/dependency-overrides.test.mjs
 build-ci	A	25	0	scripts/desktop-release-workflow.test.mjs
 build-ci	M	1	0	scripts/emit-release-env.mjs
 build-ci	A	124	0	scripts/ensure-protocol-build.mjs
-build-ci	A	299	0	scripts/fork-ledger.mjs
+build-ci	A	307	0	scripts/fork-ledger.mjs
 build-ci	A	29	0	scripts/fork-ledger.test.mjs
 build-ci	A	188	0	scripts/http-dependencies.test.mjs
 build-ci	A	294	0	scripts/native-build-dependency-overrides.test.mjs
@@ -1017,6 +1017,10 @@ features	A	197	0	packages/server/src/utils/insights/delivery.ts
 features	A	109	0	packages/server/src/utils/insights/recorder.ts
 features	A	54	0	packages/server/src/utils/insights/service.test.ts
 features	A	149	0	packages/server/src/utils/insights/service.ts
+image-retention	M	155	2	packages/server/src/server/agent/providers/provider-image-output.posix.test.ts
+image-retention	M	41	1	packages/server/src/server/agent/providers/provider-image-output.test.ts
+image-retention	M	223	32	packages/server/src/server/agent/providers/provider-image-output.ts
+image-retention	M	13	1	packages/server/src/server/session/files/workspace-files-session.ts
 orchestration	A	0	0	docs/assets/features/leadership-dark.png
 orchestration	A	0	0	docs/assets/features/leadership-light.png
 orchestration	A	0	0	docs/assets/screens/leadership-dark.png
@@ -1461,9 +1465,6 @@ session-launch	M	5	1	packages/server/src/server/agent/providers/opencode-agent.t
 session-launch	M	60	53	packages/server/src/server/agent/providers/pi/agent.test.ts
 session-launch	M	1	1	packages/server/src/server/agent/providers/pi/extensions/tintinweb-pi-subagents/index.ts
 session-launch	M	22	0	packages/server/src/server/agent/providers/provider-availability.test.ts
-session-launch	M	155	2	packages/server/src/server/agent/providers/provider-image-output.posix.test.ts
-session-launch	M	11	1	packages/server/src/server/agent/providers/provider-image-output.test.ts
-session-launch	M	179	32	packages/server/src/server/agent/providers/provider-image-output.ts
 session-launch	M	11	2	packages/server/src/server/agent/runtime-mcp-config.ts
 session-launch	M	90	24	packages/server/src/server/agent/tools/paseo-tools.ts
 session-launch	M	5	0	packages/server/src/server/agent/tools/types.ts
