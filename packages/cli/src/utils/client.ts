@@ -74,6 +74,7 @@ export function buildDaemonConnectionCommandError(options: ConnectOptions & { er
   };
 }
 
+<<<<<<< HEAD
 /**
  * Schemes a user may reasonably type for a daemon that is reachable over HTTP(S) or WebSocket --
  * a `tailscale serve` front end, a reverse proxy, or the daemon's own listener. The value is whether
@@ -121,6 +122,8 @@ function parseUrlEndpoint(trimmed: string): UrlEndpoint | null {
   };
 }
 
+=======
+>>>>>>> refs/tags/v0.10.3
 function describeConnectionRemedy(code: string, target: DaemonTarget): string {
   if (code === "AUTH_REQUIRED")
     return "The daemon requires a password. Set PASEO_PASSWORD and retry.";

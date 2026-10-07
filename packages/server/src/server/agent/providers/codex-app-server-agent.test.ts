@@ -881,6 +881,7 @@ describe("Codex app-server provider", () => {
     });
   });
 
+<<<<<<< HEAD
   // FIX-8 W3 (gate M): a session whose pins arrive as provider options (the controller's creates) sends them at the top
   // level of thread/start and turn/start too, so the launch visibly carries approval never + danger-full-access.
   test("provider-option pins are sent as the thread and turn policy", async () => {
@@ -913,6 +914,8 @@ describe("Codex app-server provider", () => {
     });
   });
 
+=======
+>>>>>>> refs/tags/v0.10.3
   test("Default Permissions pins the user as approvals reviewer on thread/start", async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const session = createSession(

@@ -250,7 +250,11 @@ export class WorkspaceReconciliationService {
     // alone. The skew can only withhold an archive, never produce one.
     const reachableProjectIds = new Set(
       activeProjects
+<<<<<<< HEAD
         .filter((project) => states.get(project.rootPath) === "directory")
+=======
+        .filter((project) => this.inspectDirectory(project.rootPath) === "directory")
+>>>>>>> refs/tags/v0.10.3
         .map((project) => project.projectId),
     );
 

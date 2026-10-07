@@ -1,6 +1,10 @@
+<<<<<<< HEAD
 import { NativeArtifactProduceInputSchema } from "@getpaseo/protocol/native-evidence";
 import { stat } from "node:fs/promises";
 import type { NativeReportOrigin } from "../../report-origin.js";
+=======
+import { stat } from "node:fs/promises";
+>>>>>>> refs/tags/v0.10.3
 import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
@@ -1991,7 +1995,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           callerAgentId,
           logger: childLogger,
         });
+<<<<<<< HEAD
         return !agentManager.nativeReportOwnsFinish(agentId, callerAgentId);
+=======
+        return true;
+>>>>>>> refs/tags/v0.10.3
       }
 
       const { disposition } = await sendPromptToAgent({

@@ -1888,6 +1888,20 @@ export const ja: TranslationResources = {
       title: "{{host}} のパスワード",
       label: "ホストのパスワード",
     },
+<<<<<<< HEAD
+=======
+    hostConfirmation: {
+      title: "このホストに接続しますか？",
+      description:
+        "このホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      descriptionChanged:
+        "このリンクはこのホストへの接続方法を変更します。ホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      hostLabel: "ホスト",
+      fingerprintLabel: "鍵のフィンガープリント",
+      relayLabel: "リレー",
+      connect: "接続",
+    },
+>>>>>>> refs/tags/v0.10.3
     connectionMethods: {
       title: "接続を追加",
       direct: {

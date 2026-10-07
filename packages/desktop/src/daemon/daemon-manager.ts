@@ -658,6 +658,7 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
         path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), "bundled-plugins"),
       ),
     desktop_daemon_status: () => resolveDesktopDaemonStatus(),
+<<<<<<< HEAD
     desktop_daemon_connection_check: async (args) => {
       if (typeof args?.url !== "string" || args.url.length > 2048)
         throw Error("Invalid connection target");
@@ -673,6 +674,8 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
       }
       return true; // Never return a credential, even to this app's main world.
     },
+=======
+>>>>>>> refs/tags/v0.10.3
     desktop_local_credential: async (args) => {
       const instance = await readDaemonInstance(getPaseoHome());
       if (!instance?.desktopManaged || typeof args?.listen !== "string") return null;

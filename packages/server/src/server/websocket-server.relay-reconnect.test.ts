@@ -520,6 +520,7 @@ const PLUGIN_DENIAL: Record<string, string> = {
 };
 
 describe("relay external socket reconnect behavior", () => {
+<<<<<<< HEAD
   test("refuses relay endpoint changes from a device despite daemon.manage", async () => {
     const server = createServer();
     const socket = new MockSocket();
@@ -902,6 +903,98 @@ describe("relay external socket reconnect behavior", () => {
     await server.close();
   });
 
+=======
+  test("closes only a hello socket when post-admission setup throws", async () => {
+    const server = createServer();
+    class ThrowOnceSocket extends MockSocket {
+      private firstClose = true;
+      override close(code?: number, reason?: string): void {
+        if (this.firstClose) {
+          this.firstClose = false;
+          throw new Error("socket close failed during hello");
+        }
+        super.close(code, reason);
+      }
+    }
+    const failed = new ThrowOnceSocket();
+    try {
+      await server.attachExternalSocket(failed, { transport: "relay" });
+      failed.emit("message", JSON.stringify(createHelloMessage("plugin:not-a-plugin")));
+      await vi.waitFor(() => expect(failed.readyState).toBe(3));
+      const initiallyFailed = new ThrowOnceSocket();
+      await server.attachExternalSocket(
+        initiallyFailed,
+        { transport: "relay" },
+        null,
+        createHelloMessage("plugin:initially-invalid"),
+      );
+      await vi.waitFor(() => expect(initiallyFailed.readyState).toBe(3));
+      const healthy = new MockSocket();
+      await attachRelayAndHello({ server, socket: healthy, clientId: "still-running" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("does not log malformed pre-admission credential frames", async () => {
+    const logger = createLogger();
+    const server = createServer({ logger });
+    const socket = new MockSocket();
+    try {
+      await server.attachExternalSocket(socket, { transport: "relay" });
+      socket.emit("message", '{"type":"hello","auth":{"kind":"password","password":"log-secret"},');
+      await vi.waitFor(() => expect(socket.readyState).toBe(3));
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain("log-secret");
+    } finally {
+      await server.close();
+    }
+  });
+  test("admits a hello password and an old relay hello, but rejects a wrong password", async () => {
+    const server = createServer({
+      auth: {
+        password: "$2b$12$OLxyuuP9uLK30Uzc4wQX0O6liuU/Q1t5P2b0Ebf36mULvpVK3DRZW",
+        localCredential: () => "local-token",
+      },
+    });
+    try {
+      const passwordSocket = new MockSocket();
+      await server.attachExternalSocket(passwordSocket, { transport: "relay" });
+      passwordSocket.emit(
+        "message",
+        JSON.stringify({
+          ...createHelloMessage("relay-password"),
+          auth: { kind: "password", password: "correct-password" },
+        }),
+      );
+      await vi.waitFor(() => expect(sentServerInfoEnvelopes(passwordSocket)).toHaveLength(1));
+
+      const legacySocket = new MockSocket();
+      await server.attachExternalSocket(legacySocket, { transport: "relay" });
+      legacySocket.emit("message", JSON.stringify(createHelloMessage("relay-legacy")));
+      await vi.waitFor(() => expect(sentServerInfoEnvelopes(legacySocket)).toHaveLength(1));
+
+      const wrongSocket = new MockSocket();
+      await server.attachExternalSocket(wrongSocket, { transport: "relay" });
+      wrongSocket.emit(
+        "message",
+        JSON.stringify({
+          ...createHelloMessage("relay-wrong"),
+          auth: { kind: "password", password: "wrong" },
+        }),
+      );
+      await vi.waitFor(() => expect(wrongSocket.readyState).toBe(3));
+      expect(wrongSocket.sent).toContain(
+        JSON.stringify({
+          type: "hello.rejected",
+          reason: "incorrect_password",
+          accepts: ["password"],
+        }),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+>>>>>>> refs/tags/v0.10.3
   beforeEach(() => {
     sessionMock.instances.length = 0;
     vi.useFakeTimers();

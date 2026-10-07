@@ -10,6 +10,7 @@ import {
   hashDaemonPassword,
   isAgentMcpRequestAuthorized,
   isBearerTokenValidAsync,
+<<<<<<< HEAD
   selectDaemonProtocol,
   shouldBypassBearerAuth,
 } from "./auth.js";
@@ -18,6 +19,10 @@ import {
   daemonAuthorizationHeader,
   daemonAuthProtocols,
 } from "@getpaseo/protocol/daemon-credential";
+=======
+  shouldBypassBearerAuth,
+} from "./auth.js";
+>>>>>>> refs/tags/v0.10.3
 import { resolveSessionAdmission } from "./session-admission-auth.js";
 import {
   deleteLocalCredential,
@@ -152,6 +157,7 @@ describe("agent MCP request authorizer", () => {
 });
 
 describe("hello admission", () => {
+<<<<<<< HEAD
   test("never promotes an unpaired relay hello to owner authority", async () => {
     for (const credential of [
       undefined,
@@ -169,6 +175,8 @@ describe("hello admission", () => {
     }
   });
 
+=======
+>>>>>>> refs/tags/v0.10.3
   test("admits a stale local credential when no password is configured", async () => {
     expect(
       await resolveSessionAdmission({
@@ -219,13 +227,21 @@ describe("hello admission", () => {
           transport: "relay",
           credential: { kind: "password", password: "wrong" },
         }),
+<<<<<<< HEAD
       ).toEqual({ rejection: "password_required" });
+=======
+      ).toEqual({ rejection: "incorrect_password" });
+>>>>>>> refs/tags/v0.10.3
       expect(await resolveSessionAdmission({ ...input, credential: undefined })).toEqual({
         rejection: "password_required",
       });
       expect(
         await resolveSessionAdmission({ ...input, transport: "relay", credential: undefined }),
+<<<<<<< HEAD
       ).toEqual({ rejection: "password_required" });
+=======
+      ).toMatchObject({ admission: { principalId: "owner" } });
+>>>>>>> refs/tags/v0.10.3
     } finally {
       await deleteLocalCredential(home);
       await rm(home, { recursive: true, force: true });
@@ -252,6 +268,7 @@ describe("hello admission", () => {
     }
   });
 });
+<<<<<<< HEAD
 
 test("report credentials never authenticate the agent MCP action endpoint, including passwordless or matching-token hosts", async () => {
   const report = "report1." + "x".repeat(43);
@@ -265,3 +282,5 @@ test("report credentials never authenticate the agent MCP action endpoint, inclu
         }),
       ).toBe(false);
 });
+=======
+>>>>>>> refs/tags/v0.10.3

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { Command } from "commander";
+=======
+>>>>>>> refs/tags/v0.10.3
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import {
   addRunOptions,

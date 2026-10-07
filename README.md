@@ -220,4 +220,67 @@ Fulcra is a modified fork of [Paseo](https://github.com/getpaseo/paseo), created
 
 Archify-derived map code and assets keep their [MIT notice](packages/app/src/architecture-map/fixtures/NOTICE-archify-LICENSE.txt). Radius is an Apache-2.0 project; structural planning does not mean its native compiler or deployment service is bundled. Other nested MIT and third-party terms remain authoritative for their components.
 
+<<<<<<< HEAD
 Internal `@getpaseo/*` package and API names, the `paseo` CLI executable and existing runtime identities remain where compatibility requires them. They are technical names, not a separate Fulcra install offer.
+=======
+See the [SDK quickstart](https://paseo.sh/docs/sdk/quickstart), [recipes](https://paseo.sh/docs/sdk/recipes), and [API reference](https://paseo.sh/docs/sdk/reference).
+
+## Skills
+
+Skills teach your agent to use Paseo to orchestrate other agents.
+
+```bash
+npx skills add getpaseo/paseo
+```
+
+Then use them in any agent conversation:
+
+- `/paseo-handoff` — hand off work between agents. I use this to plan with Claude and then handoff to Codex to implement.
+- `/paseo-advisor` — spin up a single agent as an advisor for a second opinion, without delegating the work itself.
+- `/paseo-committee` — form a committee of two contrasting agents to step back, do root cause analysis, and produce a plan.
+
+## Development
+
+Quick monorepo package map:
+
+- `packages/server`: Paseo daemon (agent process orchestration, WebSocket API, MCP server)
+- `packages/app`: Expo client (iOS, Android, web)
+- `packages/cli`: `paseo` CLI for daemon and agent workflows
+- `packages/desktop`: Electron desktop app
+- `packages/relay`: Relay transport and encryption used by the daemon and clients
+- `packages/website`: Marketing site and documentation (`paseo.sh`)
+
+Common commands:
+
+```bash
+# run all local dev services
+npm run dev
+
+# run individual surfaces
+npm run dev:server
+npm run dev:app
+npm run dev:desktop
+npm run dev:website
+
+# build the server stack
+npm run build:server
+
+# repo-wide checks
+npm run typecheck
+```
+
+## Sponsors
+
+Paseo is built by one person and funded by the people who use it. Support the work on [GitHub Sponsors](https://github.com/sponsors/boudra). Companies can [sponsor Paseo](https://paseo.sh/sponsor#spot) monthly and have their logo shown here and on the paseo.sh homepage.
+
+<!-- Sponsor logos go here, in the same order as packages/website/src/data/sponsors.ts -->
+
+## Related projects
+
+- [getpaseo/paseo-relay](https://github.com/getpaseo/paseo-relay) — official distributed relay, written in Elixir
+- [paseo-vscode](https://marketplace.visualstudio.com/items?itemName=hinnes.paseo-vscode) — VS Code extension
+
+## License
+
+Apache-2.0
+>>>>>>> refs/tags/v0.10.3
