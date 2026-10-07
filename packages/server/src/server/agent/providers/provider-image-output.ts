@@ -86,7 +86,8 @@ function getPrivateRoot(): PrivateRoot {
       // proves no retained image remains; otherwise every later image failed after macOS
       // cleared its temporary folder.
       const retained = fsSync.fstatSync(privateRoot.fd);
-      const released = retained.nlink === 0 || (process.platform === "darwin" && retained.nlink <= 2);
+      const released =
+        retained.nlink === 0 || (process.platform === "darwin" && retained.nlink <= 2);
       if (retained.dev !== privateRoot.dev || retained.ino !== privateRoot.ino || !released)
         throw new Error("Private image root moved or deletion unproved", { cause: error });
       fsSync.closeSync(privateRoot.fd);
@@ -140,7 +141,8 @@ function evictOldest(root: PrivateRoot): void {
   const oldest = root.files.entries().next().value;
   if (!oldest) return;
   const [name, known] = oldest;
-  const entryPath = process.platform === "linux" ? `/proc/self/fd/${root.fd}/${name}` : path.join(root.path, name);
+  const entryPath =
+    process.platform === "linux" ? `/proc/self/fd/${root.fd}/${name}` : path.join(root.path, name);
   let current: fsSync.Stats | undefined;
   try {
     current = fsSync.lstatSync(entryPath);
