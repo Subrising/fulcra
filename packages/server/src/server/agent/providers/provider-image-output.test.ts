@@ -143,8 +143,9 @@ describe("provider image retention", () => {
       expect(item.text).not.toContain("Image output was omitted");
       if (i === MAX_PRIVATE_FILES) newest = item.text;
     }
-    const newestPath = /\]\((.*)\)$/.exec(newest)?.[1] ?? "";
     expect(isProviderImageMarkdown(newest)).toBe(true);
+    // Same bytes reuse the retained file, so this is the path the newest message renders.
+    const newestPath = materializeProviderImage(image(MAX_PRIVATE_FILES)).path;
     expect(existsSync(newestPath)).toBe(true);
     expect(isEvictedProviderImage(newestPath)).toBe(false);
     expect(existsSync(first)).toBe(false);
