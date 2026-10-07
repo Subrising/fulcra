@@ -1017,9 +1017,9 @@ features	A	197	0	packages/server/src/utils/insights/delivery.ts
 features	A	109	0	packages/server/src/utils/insights/recorder.ts
 features	A	54	0	packages/server/src/utils/insights/service.test.ts
 features	A	149	0	packages/server/src/utils/insights/service.ts
-image-retention	M	155	2	packages/server/src/server/agent/providers/provider-image-output.posix.test.ts
-image-retention	M	41	1	packages/server/src/server/agent/providers/provider-image-output.test.ts
-image-retention	M	223	32	packages/server/src/server/agent/providers/provider-image-output.ts
+image-retention	M	157	2	packages/server/src/server/agent/providers/provider-image-output.posix.test.ts
+image-retention	M	42	1	packages/server/src/server/agent/providers/provider-image-output.test.ts
+image-retention	M	226	32	packages/server/src/server/agent/providers/provider-image-output.ts
 image-retention	M	13	1	packages/server/src/server/session/files/workspace-files-session.ts
 orchestration	A	0	0	docs/assets/features/leadership-dark.png
 orchestration	A	0	0	docs/assets/features/leadership-light.png
