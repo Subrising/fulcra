@@ -80,13 +80,14 @@ function getPrivateRoot(): PrivateRoot {
       return privateRoot;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      // A missing pathname may be a still-live renamed directory. Never release its pool.
+      // A missing pathname may be a still-live renamed directory. Never release its pool while
+      // it may still hold images. Linux reports a removed directory with nlink 0. FULCRA(image-retention):
+      // APFS keeps nlink at 2 + entries even after removal, so on macOS an empty directory (2)
+      // proves no retained image remains; otherwise every later image failed after macOS
+      // cleared its temporary folder.
       const retained = fsSync.fstatSync(privateRoot.fd);
-      if (
-        retained.dev !== privateRoot.dev ||
-        retained.ino !== privateRoot.ino ||
-        retained.nlink !== 0
-      )
+      const released = retained.nlink === 0 || (process.platform === "darwin" && retained.nlink <= 2);
+      if (retained.dev !== privateRoot.dev || retained.ino !== privateRoot.ino || !released)
         throw new Error("Private image root moved or deletion unproved", { cause: error });
       fsSync.closeSync(privateRoot.fd);
       privateRoot = undefined;
