@@ -18,6 +18,7 @@ import { ROLE_TOOLS } from "./grant-file.mjs";
 import { CONTROLLER_HOME } from "./installation-settings.mjs";
 import { ToolSurfaces } from "./tool-refresh.mjs";
 import { HostNative } from "./host-native.mjs";
+import { canonicalMemoryConfig } from "../canonical-memory-route.mjs";
 import {
   supervisorServer,
   toolPolicy,
@@ -47,7 +48,7 @@ test("the creation surface is exactly the pre-H6 one, and it carries the G7/G8 t
   assert.equal(path.basename(INBOX), "inbox.mjs");
   assert.equal(s.type, "stdio");
   assert.deepEqual(
-    Object.keys(s.env).filter((k) => k !== "ORCA_HOME"),
+    Object.keys(s.env).filter((k) => k !== "ORCA_HOME" && k !== "ELECTRON_RUN_AS_NODE"),
     ["ORCA_INBOX_FILE", "ORCA_MANAGER_FILE", "ORCA_ROLE_FILE"],
   );
   for (const [k, lane] of [
@@ -86,7 +87,7 @@ test("the creation surface is exactly the pre-H6 one, and it carries the G7/G8 t
     /\[SUPERVISOR_SERVER\]: supervisorServer\(a\.messageId\)/,
     "native.create uses the one definition",
   );
-  assert.match(native, /toolPolicy: toolPolicy\(\) \}/);
+  assert.match(native, /toolPolicy: toolPolicy\(\),?\s*\}/);
   assert.match(native, /toolSurface: TOOL_SURFACE/);
 });
 function fakeAgent({
@@ -110,7 +111,7 @@ function fakeAgent({
     },
   };
 }
-test("refreshToolsFor sends one fenced refresh: the daemon’s own expectation, the supervisor entry only, and the full policy", async () => {
+test("refreshToolsFor sends one fenced refresh: the daemon’s own expectation, both owned runtime entries, and the full policy", async () => {
   const m = randomUUID(),
     agent = fakeAgent();
   let verified = 0;
@@ -125,10 +126,11 @@ test("refreshToolsFor sends one fenced refresh: the daemon’s own expectation, 
   });
   assert.deepEqual(
     Object.keys(input.changes),
-    ["orca-supervisor"],
-    "every other server is preserved (omitted)",
+    ["orca-supervisor", "orca-canonical"],
+    "user servers are preserved (omitted)",
   );
   assert.deepEqual(input.changes["orca-supervisor"], supervisorServer(m));
+  assert.deepEqual(input.changes["orca-canonical"], canonicalMemoryConfig("claude"));
   assert.deepEqual(input.toolPolicy, toolPolicy());
   const noMemory = fakeAgent({
     state: {
@@ -141,6 +143,7 @@ test("refreshToolsFor sends one fenced refresh: the daemon’s own expectation, 
     },
   });
   await refreshToolsFor(noMemory, m, noVerify);
+  assert.deepEqual(Object.keys(noMemory.calls[0].changes), ["orca-supervisor"]);
   assert.deepEqual(
     noMemory.calls[0].toolPolicy,
     toolPolicy({ memory: false }),
@@ -148,6 +151,18 @@ test("refreshToolsFor sends one fenced refresh: the daemon’s own expectation, 
   );
 });
 test("refreshToolsFor refuses clearly: a pinned SDK without the API, an unsupported session, a daemon refusal", async () => {
+  const active = fakeAgent({
+    state: {
+      provider: "claude",
+      sessionId: "p",
+      configRevision: "r",
+      lifecycle: "running",
+      supported: true,
+      mcpServerNames: ["orca-supervisor", "orca-canonical"],
+    },
+  });
+  await assert.rejects(refreshToolsFor(active, randomUUID(), noVerify), /idle session/);
+  assert.equal(active.calls.length, 0, "an active turn is never reloaded");
   await assert.rejects(
     refreshToolsFor({ current: () => null }, randomUUID(), noVerify),
     (e) =>
@@ -470,6 +485,85 @@ test("a session created by this release records its surface and needs no refresh
     TOOL_SURFACE,
   );
   assert.equal(f.control.tools.describe(created.result.id).state, "current");
+});
+test("runtime reconciliation refreshes old delegated workers but preserves human control and current sessions", async (t) => {
+  const f = fixture(t),
+    old = f.enrol(T(1)),
+    human = f.enrol(T(1)),
+    current = f.enrol(T(1));
+  await f.delegate(old.id);
+  await f.delegate(current.id);
+  f.control.tools.record(
+    current.id,
+    f.store.get(current.id).generation,
+    "refreshed",
+    "fixture",
+    TOOL_SURFACE,
+  );
+  await f.control.tools.reconcile();
+  assert.deepEqual(f.refreshed, [{ id: old.id, messageId: old.messageId }]);
+  assert.equal(f.control.tools.describe(old.id).lastAttempt.reason, "runtime");
+  assert.equal(f.store.get(human.id).mode, "human");
+  await f.control.tools.reconcile();
+  assert.equal(f.refreshed.length, 1, "a current runtime is not refreshed again");
+});
+test("runtime reconciliation records refusals and bounds retries", async (t) => {
+  let attempts = 0;
+  const f = fixture(t, {
+    refresh: async () => {
+      attempts++;
+      throw Error("Tool refresh waits for an idle session");
+    },
+  });
+  const old = f.enrol(T(1));
+  await f.delegate(old.id);
+  await f.control.tools.reconcile();
+  await f.control.tools.reconcile();
+  assert.equal(attempts, 1);
+  assert.equal(f.control.tools.describe(old.id).state, "unrecorded");
+  assert.match(f.control.tools.describe(old.id).lastAttempt.reason, /runtime: .*idle/);
+});
+test("runtime reconciliation revalidates a captured generation and rotates bounded failed batches", async (t) => {
+  const refreshed = [];
+  let later;
+  const f = fixture(t, {
+    refresh: async (id) => {
+      refreshed.push(id);
+      if (later)
+        f.store.db.prepare("UPDATE sessions SET generation=generation+1 WHERE id=?").run(later.id);
+      return { outcome: "refreshed", surface: TOOL_SURFACE };
+    },
+  });
+  const first = f.enrol(T(1));
+  later = f.enrol(T(1));
+  await f.delegate(first.id);
+  await f.delegate(later.id);
+  await f.control.tools.reconcile();
+  assert.deepEqual(refreshed, [first.id], "a changed generation refuses before native refresh");
+  assert.equal(f.control.tools.describe(later.id).state, "unrecorded");
+
+  const failures = fixture(t, {
+    refresh: async () => {
+      throw Error("Not idle");
+    },
+  });
+  const pending = [];
+  for (let n = 0; n < 9; n++) {
+    const row = failures.enrol(T(1));
+    pending.push(row);
+    await failures.delegate(row.id);
+  }
+  await failures.control.tools.reconcile();
+  assert.equal(
+    pending.filter(({ id }) => failures.control.tools.describe(id).lastAttempt).length,
+    8,
+  );
+  await failures.control.tools.reconcile();
+  assert.equal(
+    pending.filter(({ id }) => failures.control.tools.describe(id).lastAttempt).length,
+    9,
+    "an untouched session is not starved by older refusals",
+  );
 });
 test("only a local session\u2019s tools are refreshed here; a Book (remote) session is refused before anything is sent", async (t) => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-tool-surface-host-"))),

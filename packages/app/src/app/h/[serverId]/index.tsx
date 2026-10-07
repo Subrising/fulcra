@@ -3,13 +3,12 @@ import { useEffect, useState } from "react";
 import { useHostRouteServerId } from "@/navigation/host-route-context";
 import {
   ORCA_HOME_UNKNOWN_BOUND_MS,
-  ORCA_ORGANIZATION_PLUGIN_ID,
   ORCA_ORGANIZATION_SIDEBAR_ID,
   resolveHostIndexRoute,
   resolveOrcaHomeAvailability,
   resolveWorkspaceSelectionStatus,
 } from "@/navigation/host-runtime-bootstrap";
-import { useHostCatalogSettled, useInstalledPlugin } from "@/plugins/registry";
+import { pluginRegistry, useControllerPlugin, useHostCatalogSettled } from "@/plugins/registry";
 import { resolvePluginSurfaceContribution } from "@/plugins/surface-contribution";
 import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeConnectionStatus } from "@/runtime/host-runtime";
@@ -37,7 +36,7 @@ export default function HostIndexRoute() {
   const isWorkspaceSelectionLoaded = useIsLastWorkspaceSelectionHydrated();
   const workspaceSelectionWorkspaceId =
     workspaceSelection?.serverId === serverId ? workspaceSelection.workspaceId : null;
-  const organizationPlugin = useInstalledPlugin(serverId ?? "", ORCA_ORGANIZATION_PLUGIN_ID);
+  const organizationPlugin = useControllerPlugin(serverId ?? "");
   const connection = useHostRuntimeConnectionStatus(serverId ?? "");
   // Null until the host sends its features. Treating that as false sent a host that has Orca
   // home to the fallback, and the redirect is permanent.
@@ -72,6 +71,7 @@ export default function HostIndexRoute() {
       workspaceExists: workspaceSelectionExists,
     }),
     orcaHome,
+    controllerPluginId: pluginRegistry.controllerPluginId(serverId ?? ""),
   });
 
   // Null means the catalog is still arriving on a connected host that supports plugins. Waiting

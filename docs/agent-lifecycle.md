@@ -34,8 +34,8 @@ workflows all live in the CLI process, and the completion notification that woul
 agent never arrives. A runtime that dies mid-turn is reported by whatever is draining its stream, but
 between turns nothing is watching, so the agent sits at `idle` looking healthy while its background
 work is gone. Report that exit as a turn failure so the agent lands in `error` with a timeline entry.
-Only the Claude provider does this today; the others still report a death only when a turn happens to
-be in flight.
+Claude and OMP report exits between turns. OMP relaunches from its session file on the next prompt;
+the unfinished turn is lost.
 
 ### Quiet MCP configuration refresh
 
@@ -79,6 +79,32 @@ stops waiting. Do not replay the request automatically, use public history refre
 or import a second writer. Revisions are daemon-local and change on runtime replacement, so inspect
 after restarting the daemon. Live adoption, service reachability checks and subsequent prompts are
 separate authorized actions.
+
+### Controller compaction loops
+
+The bundled controller observes canonical provider compaction rows only for delegated local sessions.
+Three automatic compactions without intervening assistant output, tools or a new prompt within ten
+minutes, or an observed loading row still running after fifteen minutes, triggers context rotation.
+Manual compaction and token estimates do not trigger it. Existing history establishes the observation
+baseline; replay never triggers a rotation.
+
+`agent.context.rotate.request` requires `server_info.features.agentContextRotation` and the original
+private controller channel. It keeps the Paseo ID, timeline, workspace, owner, labels, saved provider
+configuration and cwd while creating a new native provider session. A private handoff file records the
+last instruction, task, recent output and history cursor. Native resume handles before and after the
+rotation remain in private `agents/context-rotations/<agent-id>/<rotation-id>.json` receipts; rotation
+does not archive or delete the old provider session. Resume rollback requires an explicit recovery
+action; do not retry a lost rotation response.
+
+The lifecycle lane requires acknowledged interruption and closure before launching a replacement.
+The host rechecks the original controller lifetime, delegated ownership revision and human-input
+fence before each effect. Native report hierarchy membership moves only through a one-use approved
+old/new identity transition; labels grant no authority. A host with native report hierarchy support
+refuses rotation when it cannot capture that membership for transfer. Human-held sessions and remote sessions are
+left to their own host. Two fresh contexts per session in twenty-four hours exhaust the automatic
+budget; another loop receives an acknowledged stop and remains paused for review. Recovery status
+reports each rotation, handoff path and any refusal or uncertain outcome. Provider context-window
+settings are preserved.
 
 ### Cancellation
 

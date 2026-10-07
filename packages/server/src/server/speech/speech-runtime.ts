@@ -1,5 +1,5 @@
-import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { hasCompleteModelFiles } from "./providers/local/sherpa/model-integrity.js";
+import { hasCompleteSileroVadModel } from "./providers/local/sherpa/silero-vad-provider.js";
 import type { Logger } from "pino";
 
 import type { PaseoOpenAIConfig, PaseoSpeechConfig } from "../bootstrap.js";
@@ -76,19 +76,7 @@ function resolveRequestedSpeechProviders(
   };
 }
 
-async function hasRequiredLocalModelFile(filePath: string): Promise<boolean> {
-  try {
-    const fileStat = await stat(filePath);
-    if (fileStat.isDirectory()) {
-      return true;
-    }
-    return fileStat.isFile() && fileStat.size > 0;
-  } catch {
-    return false;
-  }
-}
-
-async function findMissingRequiredLocalModels(params: {
+export async function findMissingRequiredLocalModels(params: {
   modelsDir: string | null;
   requiredModelIds: LocalSpeechModelId[];
 }): Promise<LocalSpeechModelId[]> {
@@ -98,17 +86,18 @@ async function findMissingRequiredLocalModels(params: {
   }
 
   const specsById = new Map(listLocalSpeechModels().map((model) => [model.id, model]));
-  const missing = new Set<LocalSpeechModelId>();
+  // VAD is a required dependency of the local speech pipeline. Associate a
+  // missing dependency with its selected models so existing readiness/download
+  // states engage even when all STT/TTS files themselves are present.
+  const vadReady = await hasCompleteSileroVadModel(modelsDir);
+  const missing = new Set<LocalSpeechModelId>(vadReady ? [] : requiredModelIds);
 
   const checks = await Promise.all(
     requiredModelIds.map(async (modelId) => {
       const spec = specsById.get(modelId);
       if (!spec) return { modelId, missing: true };
       const modelDir = getLocalSpeechModelDir(modelsDir, modelId);
-      const filePresence = await Promise.all(
-        spec.requiredFiles.map((relPath) => hasRequiredLocalModelFile(join(modelDir, relPath))),
-      );
-      return { modelId, missing: !filePresence.every((present) => present) };
+      return { modelId, missing: !(await hasCompleteModelFiles(modelDir, spec.requiredFiles)) };
     }),
   );
   for (const check of checks) {
@@ -265,7 +254,7 @@ function buildVoiceFeatureReadiness(params: {
       enabled: true,
       available: false,
       reasonCode: "models_missing",
-      message: `Voice features are unavailable: missing local models (${joinModelIds(missingModelIds)}).`,
+      message: `Voice features are unavailable: missing local models or Silero VAD (${joinModelIds(missingModelIds)}).`,
       retryable: true,
       missingModelIds,
     };

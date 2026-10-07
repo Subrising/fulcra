@@ -11,7 +11,7 @@ const state = vi.hoisted(() => ({
   // Shaped like the real contribution lookup: a plugin is only Orca home when it actually
   // contributes the organization sidebar surface.
   organizationPlugin: {
-    sidebarItems: [{ id: "organization", surface: "organization" }],
+    legacySidebarItems: [{ id: "organization", surface: "organization" }],
     surfaces: [{ id: "organization" }],
   } as object | null,
   connection: "online" as "idle" | "connecting" | "online" | "offline" | "error",
@@ -33,6 +33,8 @@ vi.mock("@/stores/session-store-hooks", () => ({
 vi.mock("@/screens/startup-splash-screen", () => ({ StartupSplashScreen: () => null }));
 vi.mock("@/plugins/registry", () => ({
   useInstalledPlugin: () => state.organizationPlugin,
+  useControllerPlugin: () => state.organizationPlugin,
+  pluginRegistry: { controllerPluginId: () => "orca-organization-next" },
   useHostCatalogSettled: () => state.catalogSettled,
 }));
 vi.mock("@/runtime/host-runtime", () => ({
@@ -50,7 +52,7 @@ beforeEach(() => {
   state.selection = null;
   state.hydrated = true;
   state.organizationPlugin = {
-    sidebarItems: [{ id: "organization", surface: "organization" }],
+    legacySidebarItems: [{ id: "organization", surface: "organization" }],
     surfaces: [{ id: "organization" }],
   };
   state.connection = "online";
@@ -73,7 +75,7 @@ it("waits for saved selection hydration instead of losing the original conversat
 it("opens Orca home when no conversation is remembered", () => {
   renderToString(<HostIndexRoute />);
   expect(state.redirect.mock.calls[0]?.[0]).toEqual({
-    href: "/h/book/plugin/orca-organization/sidebar/organization",
+    href: "/h/book/plugin/orca-organization-next/sidebar/organization",
   });
 });
 
@@ -99,13 +101,13 @@ it("opens Orca home once the delayed catalog arrives", () => {
   expect(state.redirect).not.toHaveBeenCalled();
 
   state.organizationPlugin = {
-    sidebarItems: [{ id: "organization", surface: "organization" }],
+    legacySidebarItems: [{ id: "organization", surface: "organization" }],
     surfaces: [{ id: "organization" }],
   };
   state.catalogSettled = true;
   renderToString(<HostIndexRoute />);
   expect(state.redirect.mock.calls[0]?.[0]).toEqual({
-    href: "/h/book/plugin/orca-organization/sidebar/organization",
+    href: "/h/book/plugin/orca-organization-next/sidebar/organization",
   });
 });
 

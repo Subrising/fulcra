@@ -33,8 +33,8 @@ vi.mock("@/runtime/host-runtime", () => ({
     },
   }),
 }));
-vi.mock("./command-centre-connection", () => ({
-  COMMAND_CENTRE_PLUGIN_ID: "orca-organization-next",
+vi.mock("./registry", () => ({
+  pluginRegistry: { controllerPluginId: () => "orca-organization-next" },
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: React.PropsWithChildren) => <div>{children}</div>,

@@ -1,3 +1,4 @@
+import { PLUGIN_ID } from "../src/control/plugin-identity.mjs";
 // Real Session/manager/client/channel; only the physical child/socket transport is in-memory.
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -40,7 +41,7 @@ export async function controllerTestConnection({ host, manager, storage, logger,
   const channel = new ControllerChannel({
     child,
     issue: (binding) => api.issueProvenance(binding),
-    revoke: () => host.revokeProvenance("orca-organization-next"),
+    revoke: () => host.revokeProvenance(PLUGIN_ID),
     send: async () => {
       throw Error("No management command transport in this input fixture");
     },

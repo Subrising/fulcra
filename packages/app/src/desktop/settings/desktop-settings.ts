@@ -11,10 +11,15 @@ import { i18n } from "@/i18n/i18next";
 
 const DESKTOP_SETTINGS_QUERY_KEY = ["desktop-settings"] as const;
 
+export const DIGEST_MINUTES = [5, 15, 30, 60] as const;
+export type DigestMinutes = (typeof DIGEST_MINUTES)[number];
+
 export interface DesktopSettings {
   releaseChannel: ReleaseChannel;
   notifications: {
     playSound: boolean;
+    delivery: "immediate" | "digest";
+    digestMinutes: DigestMinutes;
   };
   daemon: {
     manageBuiltInDaemon: boolean;
@@ -33,6 +38,8 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   releaseChannel: "stable",
   notifications: {
     playSound: true,
+    delivery: "immediate",
+    digestMinutes: 15,
   },
   daemon: {
     manageBuiltInDaemon: true,
@@ -163,6 +170,10 @@ function parseDesktopSettings(raw: unknown): DesktopSettings {
         typeof notifications.playSound === "boolean"
           ? notifications.playSound
           : DEFAULT_DESKTOP_SETTINGS.notifications.playSound,
+      delivery: notifications.delivery === "digest" ? "digest" : "immediate",
+      digestMinutes: DIGEST_MINUTES.includes(notifications.digestMinutes as DigestMinutes)
+        ? (notifications.digestMinutes as DigestMinutes)
+        : DEFAULT_DESKTOP_SETTINGS.notifications.digestMinutes,
     },
     daemon: {
       commandCentreEnabled: daemon.commandCentreEnabled === true,

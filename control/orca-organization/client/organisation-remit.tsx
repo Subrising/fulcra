@@ -86,7 +86,7 @@ export function RemitSheet({
           ok: true,
           text:
             kind === "end"
-              ? `${project.name} no longer has its own prime.`
+              ? `${project.name} no longer has its own main assistant.`
               : `${project.name} now belongs to the ${primeName(prime!)}.`,
         });
         setReason("");
@@ -122,7 +122,7 @@ export function RemitSheet({
         <Text style={muted}>
           {project.owner.primeSeat
             ? `Now: the ${primeName(project.owner.primeSeat)}${project.owner.kind === "domain" ? ", through its area" : ""}.`
-            : "Now: no prime yet."}{" "}
+            : "Now: no main assistant yet."}{" "}
           The owning prime can write this project's update and sees it in its list. It gains no
           other control.
         </Text>
@@ -134,7 +134,7 @@ export function RemitSheet({
       )}
       <SectionTitle colors={c}>Move to</SectionTitle>
       {!primes.length ? (
-        <Text style={text}>No prime seat is recorded yet. Record one in Leadership first.</Text>
+        <Text style={text}>No main assistant is recorded yet. Record one in Leadership first.</Text>
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {primes.map((p) => {
@@ -167,7 +167,7 @@ export function RemitSheet({
         maxLength={MAX}
         value={reason}
         onChangeText={setReason}
-        placeholder="For example: the delivery prime is taking over all launch work this month"
+        placeholder="For example: the delivery assistant is taking over all launch work this month"
         placeholderTextColor={c.foregroundMuted}
         style={{
           minHeight: 72,
@@ -195,7 +195,11 @@ export function RemitSheet({
           theme={theme}
           primary
           testID="org-remit-save"
-          label={prime ? `Move ${project.name} to the ${primeName(prime)}` : "Choose a prime first"}
+          label={
+            prime
+              ? `Move ${project.name} to the ${primeName(prime)}`
+              : "Choose a main assistant first"
+          }
           disabled={!prime || !reasonOk || busy}
           onPress={() => void submit("save")}
         >
@@ -211,7 +215,7 @@ export function RemitSheet({
             disabled={!reasonOk || busy}
             onPress={() => void submit("end")}
           >
-            <Text style={{ color: c.foreground, fontWeight: "600" }}>Remove prime</Text>
+            <Text style={{ color: c.foreground, fontWeight: "600" }}>Remove main assistant</Text>
           </Button>
         )}
         <Button theme={theme} testID="org-remit-close" label="Close" onPress={onClose} />

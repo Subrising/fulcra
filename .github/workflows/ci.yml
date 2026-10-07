@@ -129,11 +129,14 @@ jobs:
       - name: Build server stack
         run: npm run build:server
 
+      - name: Verify built-in plugins from built output
+        run: node --test scripts/builtin-plugins-dist.test.mjs
+
       - name: Typecheck all packages
         run: npm run typecheck
 
-      - name: Verify Fulcra public-site source and publication boundary
-        run: npx vitest run packages/website/src/fulcra-public-site.test.ts --bail=1
+      - name: Run website tests
+        run: npx vitest run packages/website/src --bail=1
 
       - name: Install website test browsers
         run: npx playwright install --with-deps chromium webkit
@@ -187,6 +190,17 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      - name: Run built-in plugin tests
+        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        run: npm run test --workspace=@getpaseo/builtin-plugins
+      - name: Run controller lifecycle contracts
+        if: ${{ runner.os == 'Linux' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
+        env:
+          ORCA_HOME: ${{ runner.temp }}/fulcra-controller-contracts
+        run: |
+          node --input-type=module -e 'import { firstRun } from "./control/src/config.mjs"; firstRun({ ORCA_HOME: process.env.ORCA_HOME });'
+          node --test control/src/control/tool-surface.test.mjs control/src/control/provider-recovery.test.mjs control/src/control/role-channels.test.mjs control/src/control/recovery.test.mjs control/src/control/compaction-loops.test.mjs control/src/control/worktree-lifecycle-runtime.test.mjs control/src/control/worktree-lifecycle.test.mjs control/src/control/command-parser.test.mjs control/src/control/rpc-methods.test.mjs
 
       - name: Run Hub CLI/daemon contract
         if: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.server == 'false' && needs.changes.outputs.hub != 'false' }}

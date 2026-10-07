@@ -4,6 +4,21 @@
 import { validateRecovery } from "../shared/recovery-view.mjs";
 const id = (v) => typeof v === "string" && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(v);
 const reasonOk = (v) => typeof v === "string" && v.trim().length >= 12 && v.length <= 2000;
+const HUMAN_TOUCHED =
+  "Someone used this chat directly since it was handed to Fulcra, or it was restarted another way, so nothing changed. Hand it back to Fulcra, then try again";
+// The controller's fresh-start words, made readable inside one sentence: no repeated "Stopped for review:" prefix,
+// no doubled full stop, and the one internal race message said plainly.
+const STARTED_WORKING =
+  "It started working just before the fresh start, so nothing changed. Try again when it is idle";
+function freshStartWords(text) {
+  const words = String(text ?? "")
+    .replace(/^Stopped for review:\s*/i, "")
+    .trim()
+    .replace(/[.\s]+$/, "");
+  if (/no longer idle/i.test(words)) return STARTED_WORKING;
+  if (/human input or changed native identity/i.test(words)) return HUMAN_TOUCHED;
+  return words;
+}
 export function createRecovery(call, now = () => new Date().toISOString()) {
   async function read() {
     const observedAt = now();
@@ -96,6 +111,25 @@ export function createRecovery(call, now = () => new Date().toISOString()) {
           d.state === "delivered"
             ? "The host confirmed this delivery. Recovery takes the session over; hand it back when ready."
             : `Still ${d.state}; no instruction was re-sent.`,
+          { messageId: input.messageId },
+        );
+      }
+      if (input.action === "fresh-start") {
+        if (!id(input.messageId) || !id(input.sessionId) || !reasonOk(input.reason))
+          throw Error("Invalid fresh start");
+        const d = await call("session-fresh-start", {
+          messageId: input.messageId,
+          sessionId: input.sessionId,
+          reason: input.reason.trim(),
+        });
+        const state = d?.state ?? "refused";
+        return done(
+          state,
+          state === "rotated"
+            ? "Started fresh. The handoff is saved and the same chat continues in a new context."
+            : state === "held"
+              ? `Fresh start stopped for review: ${freshStartWords(d?.outcome) || "the controller held it"}.`
+              : `Fresh start was not applied: ${freshStartWords(d?.error ?? d?.outcome ?? state)}.`,
           { messageId: input.messageId },
         );
       }

@@ -99,7 +99,10 @@ vi.mock("@/stores/session-store", () => ({
 }));
 
 const reportHost = vi.hoisted(() => ({ lifetime: new AbortController(), invoke: vi.fn() }));
-vi.mock("@/plugins/registry", () => ({ useInstalledPlugin: () => reportHost }));
+vi.mock("@/plugins/registry", () => ({
+  useInstalledPlugin: () => reportHost,
+  useControllerPlugin: () => reportHost,
+}));
 vi.mock("@/plugins/surface-runtime", () => ({ usePluginSurfaceRuntime: () => reportHost }));
 vi.mock("@/plugins/command-centre-connection", () => ({
   COMMAND_CENTRE_PLUGIN_ID: "orca-organization-next",

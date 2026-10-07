@@ -209,7 +209,7 @@ export function mergedModes(): Modes {
     (c.defaults?.modes ?? null) as any,
   ).modes;
 }
-// Update-7: the persisted table (Settings -> Accounts & Defaults, its own file) over the shared config's roles.
+// Update-7: the persisted table (Settings -> Accounts & models, its own file) over the shared config's roles.
 export function mergedRoles(): unknown {
   const c = loadConfig() as { home: string; defaults?: { roles?: unknown } };
   return hookRoles(readRoleDefaults(c.home, (c.defaults?.roles ?? null) as any));

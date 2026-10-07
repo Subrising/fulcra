@@ -195,7 +195,9 @@ test("policy and role defaults: only the efforts the chosen model offers; a mode
   );
   const lead = screen.getByTestId("role-defaults-orchestration");
   assert.ok(lead.textContent.includes("max")); // Opus offers max
-  fireEvent.click(screen.getByRole("button", { name: "Prime and project leads model Sonnet 5.5" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Main assistant and project leads model Sonnet 5.5" }),
+  );
   await waitFor(() => assert.equal(writes.at(-1).input.role, "orchestration"));
   assert.deepEqual(writes.at(-1).input.defaults.claude, {
     model: "claude/claude-sonnet-5-5",
@@ -328,7 +330,7 @@ test("a session with no account pool says so plainly", async () => {
   setupPanel(session({ provider: null, current: null, accounts: [] }));
   assert.ok(
     await screen.findByText(
-      "This session’s provider has no account pool. Add accounts in Settings › Accounts & Defaults.",
+      "This session’s provider has no account pool. Add accounts in Settings › Accounts & models.",
     ),
   );
 });
@@ -374,6 +376,7 @@ test('registration: "Switch account…" in the session menu, and /account lists 
   });
   got.items[0].onSelect(ctx(""));
   await got.slash[0].onSubmit(ctx("  "));
+  await got.slash[0].onSubmit(ctx(" list "));
   assert.deepEqual(rpcs, []); // /account alone only lists
   await got.slash[0].onSubmit(ctx(" Spare "));
   assert.deepEqual(rpcs, [
@@ -381,7 +384,7 @@ test('registration: "Switch account…" in the session menu, and /account lists 
   ]);
   assert.deepEqual(
     opened.map((x) => x[0]),
-    [SWITCH_PANEL, SWITCH_PANEL, SWITCH_PANEL],
+    [SWITCH_PANEL, SWITCH_PANEL, SWITCH_PANEL, SWITCH_PANEL],
   );
   // the outcome of a typed switch shows in the menu it opens
   setupPanel();
@@ -1083,7 +1086,7 @@ test("the rundown lists every account with 5h and weekly use, resets and status;
           fetchedAt: new Date().toISOString(),
           providers: [],
           accounts: [
-            usageRow(),
+            usageRow({ sessionCount: 2 }),
             usageRow({
               accountId: B,
               name: "Personal",
@@ -1114,6 +1117,10 @@ test("the rundown lists every account with 5h and weekly use, resets and status;
   assert.match(box.textContent, /Weekly 61%/);
   assert.match(box.textContent, /Personal.*Limited/s);
   assert.match(box.textContent, /Codex A.*Usage unavailable/s);
+  // The pool summary the host Settings page used to show, and each account's sessions here.
+  assert.match(box.textContent, /3 accounts · 1 ready · 1 limited · 1 without usage/);
+  assert.match(box.textContent, /Work.*2 sessions on this host/s);
+  assert.match(box.textContent, /Personal.*Claude.*Limited/s);
   assert.deepEqual(asked, [{ accounts: true }]);
   fireEvent.click(screen.getByLabelText("Refresh account usage"));
   await waitFor(() => assert.deepEqual(asked.at(-1), { accounts: true, refresh: true }));
@@ -1125,6 +1132,14 @@ test("a host that cannot list usage shows no rundown and does not break the page
   setup();
   assert.ok(await screen.findByText("1. Work"));
   assert.equal(screen.queryByTestId("account-usage-rundown"), null);
+  setPaseo(null);
+});
+
+test("the account rundown says so plainly when there is no usage yet", async () => {
+  setPaseo({ providers: { listUsage: async () => ({ accounts: [] }) } });
+  setup();
+  const empty = await screen.findByTestId("account-usage-empty");
+  assert.equal(empty.textContent, "No usage data yet.");
   setPaseo(null);
 });
 
@@ -1237,7 +1252,7 @@ test("Settings Accounts route retains registered host, saves defaults and reopen
       ),
     );
     fireEvent.click(screen.getByTestId("organization-tab-settings"));
-    fireEvent.click(screen.getByRole("button", { name: "Accounts & Defaults" }));
+    fireEvent.click(screen.getByRole("button", { name: "Accounts & models" }));
     await screen.findByTestId("accounts-settings");
     assert.ok(await screen.findByText("1. Work"));
     assert.ok(screen.getByText(/^0 sessions using it now/));

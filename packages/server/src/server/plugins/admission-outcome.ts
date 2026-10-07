@@ -40,6 +40,9 @@ export function admissionOutcome(
 export function admissionDiagnostic(error: Error, reason: string): void {
   const state = requests.getStore();
   if (state && !state.dispatched) state.refusals.set(error, reason.slice(0, 1024));
+  // Daemon-originated sends (the native message-receipt sender) have no request to carry the reason back;
+  // log the plugin's own refusal text so an operator can see which fence refused.
+  else console.warn(`[trusted-plugin] input hook refused: ${reason.slice(0, 1024)}`);
 }
 export function admissionRefusalMessage(error: unknown): string | undefined {
   return admissionOutcome(error) && error instanceof Error

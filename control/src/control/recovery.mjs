@@ -564,7 +564,7 @@ export class Recovery {
       items,
       unsettled,
       error: this.lastError,
-      note: "Resumed is not completed, and the quoted brief is context, not a replay. Resume is an operator decision: it hands the session back, re-confers only what it held, and sends one controller-written continuation.",
+      note: "Resumed is not completed, and the quoted brief is context, not a replay. Automatic recovery requires a confirmed interrupted turn and a clean sealed boot chain. Other interruptions remain an operator decision. Resume re-confers only what the session held and sends one controller-written continuation.",
     };
   }
   dismiss(a) {
@@ -603,7 +603,9 @@ export class Recovery {
       );
   }
   // ---- session-resume: ONE audited operation. DESIGN-R §4. ----
-  async resume(a) {
+  async resume(a, internal = {}) {
+    if (internal.automaticCheck && typeof internal.continuationCheck !== "function")
+      throw Error("Automatic resume requires its continuation authority check");
     const shape = "expectedGeneration,interruptionId,messageId,reason,sessionId";
     if (
       !(keys(a, shape) || keys(a, "continuation," + shape)) ||
@@ -639,7 +641,7 @@ export class Recovery {
         prior.result?.continuation &&
         prior.result.continuation.state !== "delivered"
       )
-        return this.retryContinuation(prior);
+        return this.retryContinuation(prior, internal);
       return prior;
     }
     const lock = "recovery:" + a.sessionId;
@@ -647,10 +649,16 @@ export class Recovery {
     this.control.busy.add(lock);
     // session NULL: an 'intent' resume row must not count as an unsettled delivery of the session it resumes,
     // or it would block its own continuation (store.admit, controller.send).
-    this.store.admit(a.messageId, null, "resume-session", body);
     let i = null,
       handedBack = null;
     try {
+      this.store.admit(
+        a.messageId,
+        null,
+        "resume-session",
+        body,
+        internal.automaticCheck ? () => this.control.automationGuard() : undefined,
+      );
       i = this.row(a.interruptionId);
       const s = this.store.get(a.sessionId);
       const first = await this.control.native.inspect(a.sessionId);
@@ -662,6 +670,7 @@ export class Recovery {
         this.facts(i ?? {}, s ?? { id: a.sessionId }, a.expectedGeneration, authority),
       );
       if (!verdict.allow) throw new GateRefusal(verdict);
+      let automaticRestartProof = internal.automaticCheck?.(i, s, first);
       const turn = this.turn(i),
         brief = this.lastBrief(i);
       // The ordinary handback, not a new transfer path. Its own second observation is re-gated here, at the no-gap
@@ -671,7 +680,9 @@ export class Recovery {
         "Resume after host restart: " + body.reason,
         a.expectedGeneration,
         false,
-        (current) => {
+        (current, _initial, freshAuthority) => {
+          if (internal.automaticCheck && freshAuthority === undefined)
+            throw Error("Fresh handback authority unavailable for automatic recovery");
           if (!observationStable(first, current))
             throw new GateRefusal({
               allow: false,
@@ -682,9 +693,19 @@ export class Recovery {
             this.row(a.interruptionId),
             this.store.get(a.sessionId),
             current,
-            this.facts(i, this.store.get(a.sessionId), a.expectedGeneration, authority),
+            this.facts(
+              i,
+              this.store.get(a.sessionId),
+              a.expectedGeneration,
+              freshAuthority ?? authority,
+            ),
           );
           if (!again.allow) throw new GateRefusal(again);
+          automaticRestartProof = internal.automaticCheck?.(
+            this.row(a.interruptionId),
+            this.store.get(a.sessionId),
+            current,
+          );
         },
       );
       const generation = granted.generation;
@@ -744,6 +765,7 @@ export class Recovery {
         turn,
         generation,
         grants,
+        ...(automaticRestartProof ? { automaticRestartProof } : {}),
         continuation: { messageId: continuation.messageId, state: "pending" },
         note: "Handed back after a host restart and continued with one controller-written message. The interrupted prompt was not replayed and no prior work was accepted.",
       };
@@ -752,7 +774,8 @@ export class Recovery {
           .prepare("UPDATE session_interruptions SET state='resumed',resolution=? WHERE id=?")
           .run(
             JSON.stringify({
-              by: "operator",
+              by: automaticRestartProof ? "automatic-restart" : "operator",
+              ...(automaticRestartProof ? { automaticRestartProof } : {}),
               reason: body.reason,
               messageId: a.messageId,
               generation,
@@ -767,7 +790,7 @@ export class Recovery {
           continuationText: continuation.text,
         });
       });
-      return this.sendContinuation(this.store.delivery(a.messageId));
+      return this.sendContinuation(this.store.delivery(a.messageId), internal);
     } catch (e) {
       if (e instanceof GateRefusal && e.verdict.disposition === "revoke" && i)
         this.supersede(i, e.verdict.reason);
@@ -801,7 +824,7 @@ export class Recovery {
   // The continuation goes through the ORDINARY send path: every fence, the task allowance and a delivery row.
   // A failure after the handback leaves the session delegated -- the handback was a valid human act -- and is
   // reported, then retried by re-sending the same session-resume.
-  async sendContinuation(record) {
+  async sendContinuation(record, internal = {}) {
     const r = record.result,
       text = r.continuationText;
     let state = "delivered",
@@ -811,6 +834,9 @@ export class Recovery {
         { sessionId: r.sessionId, messageId: r.continuation.messageId, text },
         undefined,
         r.generation,
+        internal.automaticCheck
+          ? { automated: "automatic-restart", check: () => internal.continuationCheck?.(record) }
+          : undefined,
       );
       state = d.state;
       reason = d.result?.error ?? null;
@@ -823,7 +849,7 @@ export class Recovery {
       continuation: { messageId: r.continuation.messageId, state, reason },
     });
   }
-  async retryContinuation(prior) {
+  async retryContinuation(prior, internal = {}) {
     const s = this.store.get(prior.result.sessionId);
     if (!s || s.mode !== "delegated" || s.generation !== prior.result.generation)
       return this.store.finish(prior.id, "delivered", {
@@ -834,7 +860,7 @@ export class Recovery {
           reason: "Session control changed after the resume; the continuation was not sent",
         },
       });
-    return this.sendContinuation(prior);
+    return this.sendContinuation(prior, internal);
   }
   // Leaders before workers, one audited resume each, under one operator request. NOT atomic across sessions:
   // each item is its own gate and its own record, because a partial team is safer than one resumed on stale facts.

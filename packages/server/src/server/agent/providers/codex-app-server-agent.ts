@@ -1,3 +1,14 @@
+import { validateProviderOptions } from "../provider-options.js";
+import {
+  baselineForSession,
+  withoutPublicBaselineTransport,
+  cloneHostPublicBaseline,
+  composeHostPublicBaseline,
+  type HostPublicBaseline,
+  type PublicBaselineTransport,
+} from "../host-public-baseline.js";
+import { PermissionAttentionError } from "../permission-attention-error.js";
+import { recordedCodexUsage } from "../usage-recording.js";
 import {
   captureNativeEvidence,
   assertNativeEvidence,
@@ -17,7 +28,6 @@ import {
   refuseNativeQueuedDispatch,
   recordNativeQueuedAcceptance,
 } from "../native-queued-dispatch.js";
-import { resolvedServiceTier } from "../runtime-observation.js";
 import type {
   AccountCredential,
   AccountUsageReading,
@@ -84,6 +94,7 @@ import { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { renderPromptAttachmentAsText } from "../prompt-attachments.js";
 import { composeSystemPromptParts } from "../system-prompt.js";
@@ -92,12 +103,12 @@ import { CodexAsyncQuestions, codexAsyncQuestionToTimeline } from "./codex/async
 import {
   mapCodexToolCallEnvelope,
   mapCodexToolCallFromThreadItem,
+  normalizeCommandExecutionCommand,
   splitCodexMcpToolResultImages,
 } from "./codex/tool-call-mapper.js";
 import {
   checkProviderLaunchAvailable,
   createProviderEnv,
-  createProviderEnvSpec,
   resolveProviderLaunch,
   type ProviderRuntimeSettings,
   type ResolvedProviderLaunch,
@@ -109,7 +120,12 @@ import {
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
 import { spawnProcess } from "../../../utils/spawn.js";
 import { extractCodexTerminalSessionId, nonEmptyString } from "./tool-call-mapper-utils.js";
-import { buildCodexFeatures, codexModelSupportsFastMode } from "./codex-feature-definitions.js";
+import {
+  buildCodexFeatures,
+  CodexServiceTierSchema,
+  readCodexServiceTier,
+  type CodexServiceTier,
+} from "./codex-feature-definitions.js";
 import {
   CodexAppServerClient,
   CodexAppServerRpcError,
@@ -218,6 +234,10 @@ export class CodexMissingRolloutError extends Error {
 }
 
 const TURN_START_TIMEOUT_MS = 90 * 1000;
+// Turn admission re-reads quota when account notifications or a transient read failure
+// race the check. Each read is bounded by its own timeout, so the total wait is bounded.
+const CODEX_ADMISSION_MAX_QUOTA_READS = 3;
+const CODEX_ADMISSION_RETRY_DELAY_MS = 150;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const CODEX_PROVIDER = "codex" as const;
 // Codex treats most app-server client names as the model-request originator.
@@ -250,6 +270,9 @@ const CODEX_PLAN_IMPLEMENTATION_PROMPT_PREFIX =
 // (and the /goal slash command) when the binary is too old.
 const CODEX_GOALS_MIN_VERSION: readonly [number, number, number] = [0, 128, 0];
 const CODEX_AUTO_REVIEW_MIN_VERSION: readonly [number, number, number] = [0, 115, 0];
+// Codex removed `thread/rollback` in 0.156.0, so rewinding a legacy thread there
+// has to fork before the target turn instead.
+const CODEX_THREAD_ROLLBACK_REMOVED_VERSION: readonly [number, number, number] = [0, 156, 0];
 
 function parseCodexVersion(versionOutput: string): [number, number, number] | null {
   const match = versionOutput.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -268,6 +291,15 @@ function codexVersionAtLeast(
     if (parsed[i] < min[i]) return false;
   }
   return true;
+}
+
+// The initialize userAgent starts with `<client>/<codex version>`. An agent we
+// cannot parse is treated as an older server that still has rollback.
+function codexServerHasThreadRollback(userAgent: unknown): boolean {
+  return (
+    typeof userAgent !== "string" ||
+    !codexVersionAtLeast(userAgent, CODEX_THREAD_ROLLBACK_REMOVED_VERSION)
+  );
 }
 
 type GoalSubcommand =
@@ -338,6 +370,8 @@ interface CodexAppServerClientLike {
 }
 
 interface CodexAppServerAgentDeps {
+  publicBaseline?: HostPublicBaseline;
+  environment?: Record<string, string>;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   customProvider?: {
     id: string;
@@ -450,19 +484,67 @@ function isObjectSchemaNode(schema: Record<string, unknown>): boolean {
   );
 }
 
-function normalizeCodexOutputSchemaNode(schema: unknown, schemaPath: string): unknown {
+// Keywords whose value maps names to schemas.
+const SCHEMA_MAP_KEYWORDS = [
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+] as const;
+
+// Keywords whose value is a schema or an array of schemas.
+const SUBSCHEMA_KEYWORDS = [
+  "items",
+  "prefixItems",
+  "additionalItems",
+  "contains",
+  "additionalProperties",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+  "propertyNames",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "not",
+  "if",
+  "then",
+  "else",
+] as const;
+
+function normalizeCodexOutputSubschema(schema: unknown, schemaPath: string): unknown {
   if (Array.isArray(schema)) {
     return schema.map((entry, index) =>
       normalizeCodexOutputSchemaNode(entry, `${schemaPath}[${index}]`),
     );
   }
+  return normalizeCodexOutputSchemaNode(schema, schemaPath);
+}
+
+function normalizeCodexOutputSchemaNode(schema: unknown, schemaPath: string): unknown {
   if (!isSchemaRecord(schema)) {
     return schema;
   }
 
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    normalized[key] = normalizeCodexOutputSchemaNode(value, `${schemaPath}.${key}`);
+  const normalized: Record<string, unknown> = { ...schema };
+  for (const keyword of SCHEMA_MAP_KEYWORDS) {
+    const schemas = schema[keyword];
+    if (isSchemaRecord(schemas)) {
+      normalized[keyword] = Object.fromEntries(
+        Object.entries(schemas).map(([name, child]) => [
+          name,
+          normalizeCodexOutputSchemaNode(child, `${schemaPath}.${keyword}.${name}`),
+        ]),
+      );
+    }
+  }
+  for (const keyword of SUBSCHEMA_KEYWORDS) {
+    if (keyword in schema) {
+      normalized[keyword] = normalizeCodexOutputSubschema(
+        schema[keyword],
+        `${schemaPath}.${keyword}`,
+      );
+    }
   }
 
   if (!isObjectSchemaNode(normalized)) {
@@ -871,25 +953,21 @@ function expandCodexCustomPrompt(template: string, args: string | undefined): st
     positional.push(token);
   }
 
-  const dollarPlaceholder = "__CODEX_DOLLAR_PLACEHOLDER__";
-  let out = template.split("$$").join(dollarPlaceholder);
+  // Match every placeholder in one pass, so inserted argument text is never expanded again.
+  const namedPlaceholders = Object.keys(named)
+    .sort((a, b) => b.length - a.length)
+    .map((key) => `${escapeRegExp(key)}\\b`);
+  const placeholder = new RegExp(
+    `\\$(${["\\$", "ARGUMENTS", "[1-9]", ...namedPlaceholders].join("|")})`,
+    "g",
+  );
 
-  out = out.split("$ARGUMENTS").join(trimmedArgs);
-
-  for (let i = 1; i <= 9; i += 1) {
-    const value = positional[i - 1] ?? "";
-    out = out.split(`$${i}`).join(value);
-  }
-
-  const namedKeys = Object.keys(named).sort((a, b) => b.length - a.length);
-  for (const key of namedKeys) {
-    const value = named[key] ?? "";
-    const re = new RegExp(`\\$${escapeRegExp(key)}\\b`, "g");
-    out = out.replace(re, value);
-  }
-
-  out = out.split(dollarPlaceholder).join("$");
-  return out;
+  return template.replace(placeholder, (match, name: string) => {
+    if (name === "$") return "$";
+    if (name === "ARGUMENTS") return trimmedArgs;
+    if (/^[1-9]$/.test(name)) return positional[Number(name) - 1] ?? "";
+    return named[name] ?? match;
+  });
 }
 
 interface CodexMcpServerConfig {
@@ -970,6 +1048,7 @@ interface CodexModel {
   model?: string;
   defaultReasoningEffort?: string;
   supportedReasoningEfforts?: CodexReasoningEffortEntry[];
+  serviceTiers?: CodexServiceTier[];
 }
 
 const CodexModelListResponseSchema = z.object({
@@ -977,6 +1056,7 @@ const CodexModelListResponseSchema = z.object({
     .array(
       z.object({
         id: z.string(),
+        serviceTiers: z.array(CodexServiceTierSchema).optional(),
         displayName: z.string().optional(),
         description: z.string().optional(),
         isDefault: z.boolean().optional(),
@@ -1067,7 +1147,10 @@ function filterCodexThreadsByCwd(
   );
 }
 
-export function toAgentUsage(tokenUsage: unknown): AgentUsage | undefined {
+export function toAgentUsage(
+  tokenUsage: unknown,
+  runtimeSessionId?: string,
+): AgentUsage | undefined {
   const usage = toObjectRecord(tokenUsage);
   if (!usage) return undefined;
   const last = toObjectRecord(usage.last);
@@ -1076,7 +1159,9 @@ export function toAgentUsage(tokenUsage: unknown): AgentUsage | undefined {
     usage.modelContextWindow,
   );
   const contextWindowUsedTokens = firstPositiveFiniteNumber(last?.total_tokens, last?.totalTokens);
+  const recorded = recordedCodexUsage(tokenUsage, runtimeSessionId);
   return {
+    ...(recorded ? { recorded } : {}),
     inputTokens: typeof last?.inputTokens === "number" ? last.inputTokens : undefined,
     cachedInputTokens:
       typeof last?.cachedInputTokens === "number" ? last.cachedInputTokens : undefined,
@@ -1972,6 +2057,15 @@ function mapCodexThreadImageItem(
   if (normalizedType === "imageView") {
     return renderProviderImageOutputAsAssistantMarkdown({
       path: firstStringField(normalizedItem, ["path"]),
+    });
+  }
+
+  if (normalizedItem.status === "failed") {
+    return mapCodexToolCallEnvelope({
+      callId: firstStringField(normalizedItem, ["id"]),
+      name: "image_generation",
+      input: { prompt: firstStringField(normalizedItem, ["revisedPrompt", "revised_prompt"]) },
+      error: normalizedItem.failure ?? { message: "Image generation failed" },
     });
   }
 
@@ -3344,7 +3438,7 @@ function toCodexTextInput(text: string): Extract<CodexAppServerUserInput, { type
 export function buildCodexAppServerEnv(
   runtimeSettings?: ProviderRuntimeSettings,
   launchEnv?: Record<string, string>,
-): NodeJS.ProcessEnv {
+) {
   return createProviderEnv({
     runtimeSettings,
     overlays: [launchEnv],
@@ -3450,6 +3544,14 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private readonly logger: Logger;
   private readonly config: AgentSessionConfig;
+  private readonly publicBaseline: HostPublicBaseline | undefined;
+  private publicBaselineTransport:
+    | {
+        receipt: PublicBaselineTransport;
+        client: CodexAppServerClient | null;
+        threadId: string | null;
+      }
+    | undefined;
   private readonly asyncQuestions: CodexAsyncQuestions;
   private readonly codexHome: string;
   private currentMode: string;
@@ -3475,12 +3577,17 @@ export class CodexAppServerAgentSession implements AgentSession {
   private quotaRevision = 0;
   private accountNotificationEpoch = 0n;
   private quotaModelProvider: string | null = null;
+  /** Account from the last fresh quota read; undefined until one succeeds. */
+  private lastQuotaAccountScope: string | null | undefined = undefined;
+  private resumeAccountUncertain = false;
+  private threadRollbackAvailable = true;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private nextTurnOrdinal = 0;
   private activeForegroundTurnId: string | null = null;
   private activeClientMessageId: string | null = null;
   private cachedRuntimeInfo: AgentRuntimeInfo | null = null;
-  private serviceTier: "fast" | null = null;
+  private serviceTier: string | null = null;
+  private speedModels: CodexModel[] = [];
   private planModeEnabled = false;
   private historyPending = false;
   private persistedHistory: PersistedTimelineEntry[] = [];
@@ -3546,6 +3653,19 @@ export class CodexAppServerAgentSession implements AgentSession {
   private processId: number | null = null;
   private accountUsageObservation: AccountUsageReading | null = null;
 
+  private readonly usageSessionKey = randomUUID();
+  private readonly harnessEnvironment: Record<string, string>;
+
+  usageSession() {
+    if (this.closed) return null;
+    return {
+      provider: "codex",
+      model: this.config.model,
+      env: this.harnessEnvironment,
+      sessionKey: this.usageSessionKey,
+    };
+  }
+
   constructor(
     config: AgentSessionConfig,
     private readonly resumeHandle: { sessionId: string; metadata?: Record<string, unknown> } | null,
@@ -3579,14 +3699,19 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     this.hasWorkflowModeOverride = config.modeId !== undefined;
     this.currentMode = config.modeId ?? DEFAULT_CODEX_MODE_ID;
-    this.providerOptions = CodexProviderOptionsSchema.parse(config.providerOptions ?? {});
-    this.config = config;
+    this.providerOptions =
+      validateProviderOptions("codex", CodexProviderOptionsSchema, config.providerOptions) ?? {};
+    this.config = structuredClone(config);
+    this.publicBaseline = baselineForSession(
+      deps.publicBaseline,
+      config.internal,
+      initialResumePurpose,
+    );
+    this.harnessEnvironment = deps.environment ?? buildCodexAppServerEnv();
     this.asyncQuestions = new CodexAsyncQuestions(resumeHandle?.metadata?.asyncQuestions);
     this.codexHome = deps.codexHome ?? resolveCodexHomeDir(process.env);
     this.config.thinkingOptionId = normalizeCodexThinkingOptionId(this.config.thinkingOptionId);
-    if (this.config.featureValues?.fast_mode && codexModelSupportsFastMode(this.config.model)) {
-      this.serviceTier = resolvedServiceTier(true);
-    }
+    this.serviceTier = readCodexServiceTier(this.config.featureValues);
     if (this.config.featureValues?.plan_mode) {
       this.planModeEnabled = true;
     }
@@ -3603,8 +3728,8 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   get features(): AgentFeature[] {
     return buildCodexFeatures({
-      modelId: this.config.model,
-      fastModeEnabled: this.serviceTier === "fast",
+      serviceTiers: this.currentServiceTiers(),
+      serviceTier: this.serviceTier ?? "default",
       planModeEnabled: this.planModeEnabled,
       planModeAvailable: this.hasPlanCollaborationMode(),
     });
@@ -3664,9 +3789,15 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.registerRequestHandlers();
 
     try {
-      await client.request("initialize", buildCodexAppServerInitializeParams());
+      const initialized = toObjectRecord(
+        await client.request("initialize", buildCodexAppServerInitializeParams()),
+      );
+      this.threadRollbackAvailable = codexServerHasThreadRollback(initialized?.userAgent);
       client.notify("initialized", {});
 
+      this.speedModels =
+        CodexModelListResponseSchema.parse(await client.request("model/list", {})).data ?? [];
+      this.reconcileServiceTier();
       await this.loadResolvedWorkspaceWrite();
       await this.loadCollaborationModes();
       await this.loadSkills();
@@ -3674,6 +3805,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (this.currentThreadId) {
         await this.ensureThreadLoaded();
         await this.loadPersistedHistory(this.client);
+        await this.applyDefaultModelAndThinking();
       }
 
       if (this.closed) {
@@ -3872,18 +4004,30 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.resolvedCollaborationMode = this.resolveCollaborationMode();
   }
 
-  private applyFeatureValue(featureId: "fast_mode" | "plan_mode", value: boolean): void {
-    this.config.featureValues = {
-      ...this.config.featureValues,
-      [featureId]: value,
-    };
+  private currentServiceTiers(): CodexServiceTier[] {
+    const selectedModel = this.config.model
+      ? this.speedModels.find(
+          (model) => model.id === this.config.model || model.model === this.config.model,
+        )
+      : (this.speedModels.find((model) => model.isDefault) ?? this.speedModels[0]);
+    return selectedModel?.serviceTiers ?? [];
+  }
 
-    if (featureId === "fast_mode") {
-      this.serviceTier = resolvedServiceTier(value);
-      this.cachedRuntimeInfo = null;
-      return;
+  private reconcileServiceTier(): void {
+    const tiers = this.currentServiceTiers();
+    // COMPAT(codexFastPreference): added in v0.10.0, remove after 2027-03-29 once saved Fast preferences have migrated.
+    if (this.serviceTier === "fast" && !tiers.some((tier) => tier.id === "fast")) {
+      this.serviceTier = tiers.find((tier) => tier.name.toLowerCase() === "fast")?.id ?? null;
     }
+    if (this.serviceTier !== "default" && !tiers.some((tier) => tier.id === this.serviceTier)) {
+      this.serviceTier = null;
+    }
+    const { fast_mode: _legacyFast, ...values } = this.config.featureValues ?? {};
+    this.config.featureValues = { ...values, service_tier: this.serviceTier ?? "default" };
+  }
 
+  private applyFeatureValue(featureId: "plan_mode", value: boolean): void {
+    this.config.featureValues = { ...this.config.featureValues, [featureId]: value };
     this.planModeEnabled = value;
     this.refreshResolvedCollaborationMode();
     this.cachedRuntimeInfo = null;
@@ -4096,11 +4240,10 @@ export class CodexAppServerAgentSession implements AgentSession {
       // Never resume/unarchive or submit developer instructions as queued preparation.
       return;
     }
-    const params: Record<string, unknown> = { threadId: this.currentThreadId };
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const preparedClient = this.client;
+    const preparedThread = this.currentThreadId;
+    const params: Record<string, unknown> = { threadId: preparedThread };
+    const developerInstructions = this.composeDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
     }
@@ -4116,6 +4259,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       const response = await this.client.request("thread/resume", params);
       this.rememberResolvedThreadConfig(response);
+      this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);
     } catch (error) {
       const threadId = this.currentThreadId;
       const message = error instanceof Error ? error.message : String(error);
@@ -4129,6 +4273,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         }
         const response = await this.client.request("thread/resume", params);
         this.rememberResolvedThreadConfig(response);
+        this.markPublicBaselineSubmitted(preparedClient, params, preparedThread);
         this.logger.info({ threadId }, "Unarchived Codex thread to restore active Paseo agent");
         return;
       }
@@ -4241,9 +4386,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (thinkingOptionId) {
       params.effort = thinkingOptionId;
     }
-    if (this.serviceTier) {
-      params.serviceTier = this.serviceTier;
-    }
+    params.serviceTier = this.serviceTier ?? "default";
     if (this.resolvedCollaborationMode) {
       params.collaborationMode = {
         mode: this.resolvedCollaborationMode.mode,
@@ -4256,10 +4399,9 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (options?.outputSchema) {
       params.outputSchema = normalizeCodexOutputSchema(options.outputSchema);
     }
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const developerInstructions = options?.[NATIVE_QUEUED_FINAL]
+      ? composeSystemPromptParts(this.config.systemPrompt, this.config.daemonAppendSystemPrompt)
+      : this.composeDeveloperInstructions();
     if (developerInstructions) {
       params.developerInstructions = developerInstructions;
     }
@@ -4494,13 +4636,18 @@ export class CodexAppServerAgentSession implements AgentSession {
     };
   }
 
+  private dismissQuestionsForPrompt(queued: unknown, options?: AgentRunOptions): void {
+    if (queued) return;
+    this.dismissPendingPlanApprovals("Dismissed by a new prompt");
+    if (options?.clearPendingQuestions) this.dismissInterruptedAsyncQuestions();
+  }
+
   async startTurn(
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
     const queued = options?.[NATIVE_QUEUED_FINAL];
     assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
-    const originalAccountEpoch = this.accountNotificationEpoch;
     const admission = options?.[CODEX_TURN_ADMISSION];
     this.assertNativeForegroundStartAvailable(queued);
     let resolveStart!: () => void;
@@ -4513,7 +4660,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     };
     const validateQueuedPreparation = this.captureNativeQueuedStart(prompt, queued, pendingStart);
     this.pendingForegroundStart = pendingStart;
-    if (!queued) this.dismissPendingPlanApprovals("Dismissed by a new prompt");
+    this.dismissQuestionsForPrompt(queued, options);
 
     try {
       await this.connect();
@@ -4537,6 +4684,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       const preparedClient = this.client;
       const preparedThread = this.currentThreadId;
       let preparedRevision = this.quotaRevision;
+      // Captured after connect and thread setup: Codex announces the account while
+      // starting, and that notification must not refuse the turn being prepared.
+      let preparedAccountEpoch = this.accountNotificationEpoch;
       const preparedModelProvider = this.quotaModelProvider;
       const preparationIntent = () =>
         JSON.stringify({
@@ -4567,6 +4717,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       if (admission !== undefined) {
         if (typeof preparedThread !== "string" || !preparedThread)
           throw new CodexQuotaError("session_changed");
+        // Permanent changes: the turn would be bound to a different session or intent.
         const validateCurrent = () => {
           validateQueuedPreparation();
           if (
@@ -4575,14 +4726,14 @@ export class CodexAppServerAgentSession implements AgentSession {
             this.client !== preparedClient ||
             this.currentThreadId !== preparedThread ||
             this.quotaModelProvider !== preparedModelProvider ||
-            this.accountNotificationEpoch !== originalAccountEpoch ||
             preparationIntent() !== originalPreparationIntent
           )
             throw new CodexQuotaError("session_changed");
           if (pendingStart.cancelRequested)
             throw new Error("Codex turn start was interrupted before reaching Codex");
-          if (this.getPendingPermissions().length > 0)
-            throw new Error("Codex turn start requires permission attention");
+          const pendingPermissions = this.getPendingPermissions();
+          if (pendingPermissions.length > 0)
+            throw new PermissionAttentionError("Codex", pendingPermissions);
           if (typeof admission !== "function") {
             if (
               !admission ||
@@ -4593,76 +4744,97 @@ export class CodexAppServerAgentSession implements AgentSession {
             admission.validate();
           }
         };
+        // Churn: revision and account notifications that a fresh read can absorb.
+        const churned = () =>
+          this.quotaRevision !== preparedRevision ||
+          this.accountNotificationEpoch !== preparedAccountEpoch;
         const validatePrepared = () => {
           validateCurrent();
-          if (this.quotaRevision !== preparedRevision) throw new CodexQuotaError("session_changed");
+          if (churned()) throw new CodexQuotaError("session_changed");
         };
-        let reprepared = false;
+        let accountNotified = false;
         const reprepare = async () => {
-          // Only a host-observed revision change before policy evaluation may
-          // refresh local text parameters. Never re-enter thread or transport setup.
+          // Only host-observed churn before policy evaluation may refresh local text
+          // parameters. Never re-enter thread or transport setup.
           validateCurrent();
-          if (
-            reprepared ||
-            typeof admission === "function" ||
-            typeof prompt !== "string" ||
-            slashCommand ||
-            this.quotaRevision !== preparedRevision + 1
-          )
+          if (typeof prompt !== "string" || slashCommand)
             throw new CodexQuotaError("session_changed");
-          reprepared = true;
+          if (this.accountNotificationEpoch !== preparedAccountEpoch) accountNotified = true;
           preparedRevision = this.quotaRevision;
+          preparedAccountEpoch = this.accountNotificationEpoch;
           const refreshed = await this.buildTurnStartParams(effectivePrompt, options);
           validatePrepared();
           if (JSON.stringify(refreshed.params) !== originalParameters)
             throw new CodexQuotaError("session_changed");
           turnStart = refreshed;
         };
+        // The account this session had before any notification seen during this start.
+        let knownAccountScope = this.lastQuotaAccountScope;
+        let reads = 0;
         const readPreparedQuota = async () => {
-          if (this.quotaRevision !== preparedRevision) await reprepare();
-          validatePrepared();
-          const turn = capturedCodexTurn(admission, preparedThread, turnStart.params);
-          let staleQuotaRead = false;
-          const read = async () => {
+          for (;;) {
+            if (churned()) await reprepare();
+            validatePrepared();
+            const turn = capturedCodexTurn(admission, preparedThread, turnStart.params);
+            let staleQuotaRead = false;
+            const read = async () => {
+              // Transient read failures retry here, before the failure callback runs.
+              for (;;) {
+                reads++;
+                try {
+                  return await this.getQuota();
+                } catch (error) {
+                  if (!(error instanceof CodexQuotaError)) throw error;
+                  if (error.code === "session_changed") {
+                    staleQuotaRead = true;
+                    if (knownAccountScope === undefined)
+                      knownAccountScope = error.staleAccountScope;
+                    throw error;
+                  }
+                  if (error.code !== "read_failed" || reads >= CODEX_ADMISSION_MAX_QUOTA_READS)
+                    throw error;
+                }
+                await delay(CODEX_ADMISSION_RETRY_DELAY_MS * reads);
+                validateCurrent();
+                if (churned()) {
+                  staleQuotaRead = true;
+                  throw new CodexQuotaError("session_changed");
+                }
+              }
+            };
             try {
-              return await this.getQuota();
+              const quota = await readCodexTurnQuota({
+                read,
+                validate: validatePrepared,
+                admission,
+                turn,
+              });
+              if (
+                accountNotified &&
+                knownAccountScope !== undefined &&
+                quota.accountScope !== knownAccountScope
+              )
+                throw new CodexQuotaError("account_changed");
+              return { quota, turn };
             } catch (error) {
-              staleQuotaRead = error instanceof CodexQuotaError && error.code === "session_changed";
-              throw error;
+              if (
+                !staleQuotaRead ||
+                !(error instanceof CodexQuotaError) ||
+                error.code !== "session_changed" ||
+                reads >= CODEX_ADMISSION_MAX_QUOTA_READS
+              )
+                throw error;
             }
-          };
-          try {
-            const quota = await readCodexTurnQuota({
-              read,
-              validate: validatePrepared,
-              admission,
-              turn,
-            });
-            return { quota, turn };
-          } catch (error) {
-            if (
-              !staleQuotaRead ||
-              !(error instanceof CodexQuotaError) ||
-              error.code !== "session_changed"
-            )
-              throw error;
-            await reprepare();
-            const quota = await readCodexTurnQuota({
-              read: () => this.getQuota(),
-              validate: validatePrepared,
-              admission,
-              turn,
-            });
-            return { quota, turn };
+            await delay(CODEX_ADMISSION_RETRY_DELAY_MS * reads);
           }
         };
         const { quota, turn } = await readPreparedQuota();
         validatePrepared();
         assertCodexTurnAdmission({ check: admission, turn, quota, parameters: turnStart.params });
-        // Policy mutation/refusal is outside the sole reprepare catch.
+        // Policy runs once, outside the retry loop: any change after it refuses.
         validatePrepared();
       }
-      if (this.accountNotificationEpoch !== originalAccountEpoch)
+      if (this.accountNotificationEpoch !== preparedAccountEpoch)
         throw new CodexQuotaError("session_changed");
       if (pendingStart.cancelRequested) {
         throw new Error("Codex turn start was interrupted before reaching Codex");
@@ -4675,7 +4847,7 @@ export class CodexAppServerAgentSession implements AgentSession {
           preparedClient,
           preparedThread,
           preparedRevision,
-          originalAccountEpoch,
+          preparedAccountEpoch,
           pendingStart,
           turnStart.params,
         );
@@ -4695,6 +4867,12 @@ export class CodexAppServerAgentSession implements AgentSession {
       } else {
         await this.client.request("turn/start", turnStart.params, TURN_START_TIMEOUT_MS);
       }
+      this.markPublicBaselineSubmitted(
+        preparedClient,
+        turnStart.params,
+        preparedThread,
+        Boolean(queued),
+      );
       return { turnId };
     } catch (error) {
       this.pendingForegroundTurnIdentification?.resolve(null);
@@ -4876,8 +5054,16 @@ export class CodexAppServerAgentSession implements AgentSession {
     return this.accountUsageLabel;
   }
 
-  getQuota() {
-    return readCodexQuota((): CodexQuotaBinding | null => {
+  limitResumeAccountBinding(): string | null {
+    if (this.resumeAccountUncertain) return null;
+    const id = this.launchEnv?.FULCRA_ACCOUNT_ID;
+    return id
+      ? JSON.stringify(["pool", id, this.lastQuotaAccountScope ?? null])
+      : (this.lastQuotaAccountScope ?? null);
+  }
+
+  async getQuota() {
+    const quota = await readCodexQuota((): CodexQuotaBinding | null => {
       if (
         this.closed ||
         this.connectionState !== "connected" ||
@@ -4895,10 +5081,13 @@ export class CodexAppServerAgentSession implements AgentSession {
         revision: this.quotaRevision,
       };
     });
+    this.lastQuotaAccountScope = quota.accountScope;
+    this.resumeAccountUncertain = false;
+    return quota;
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
-    if (this.cachedRuntimeInfo) return { ...this.cachedRuntimeInfo };
+    if (this.cachedRuntimeInfo) return this.runtimeReadback(this.cachedRuntimeInfo);
     if (this.connectionState === "disconnected") {
       await this.connect();
     }
@@ -4916,7 +5105,7 @@ export class CodexAppServerAgentSession implements AgentSession {
         : undefined,
     };
     this.cachedRuntimeInfo = info;
-    return { ...info };
+    return this.runtimeReadback(info);
   }
 
   async getAvailableModes(): Promise<AgentMode[]> {
@@ -4944,9 +5133,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   async setModel(modelId: string | null): Promise<void> {
     this.quotaRevision++;
     this.config.model = modelId ?? undefined;
-    if (!codexModelSupportsFastMode(this.config.model)) {
-      this.serviceTier = null;
-    }
+    this.reconcileServiceTier();
     this.refreshResolvedCollaborationMode();
     this.cachedRuntimeInfo = null;
   }
@@ -4962,13 +5149,27 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
     this.quotaRevision++;
+    // COMPAT(codexFastPreference): added in v0.10.0, remove after 2027-03-29 once clients use service_tier.
     if (featureId === "fast_mode") {
-      if (Boolean(value) && !codexModelSupportsFastMode(this.config.model)) {
+      const fast = this.currentServiceTiers().find((tier) => tier.name.toLowerCase() === "fast");
+      if (value && !fast)
         throw new Error(
           `Codex fast mode is not available for model '${this.config.model ?? "default"}'`,
         );
+      return this.setFeature("service_tier", value ? fast!.id : "default");
+    }
+    if (featureId === "service_tier") {
+      if (
+        typeof value !== "string" ||
+        (value !== "default" && !this.currentServiceTiers().some((tier) => tier.id === value))
+      ) {
+        throw new Error(
+          `Codex speed '${String(value)}' is not available for model '${this.config.model ?? "default"}'`,
+        );
       }
-      this.applyFeatureValue("fast_mode", Boolean(value));
+      this.serviceTier = value;
+      this.reconcileServiceTier();
+      this.cachedRuntimeInfo = null;
       return;
     }
     if (featureId === "plan_mode") {
@@ -5140,6 +5341,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private async clearPendingPermissionsForSteer(): Promise<void> {
+    this.dismissInterruptedAsyncQuestions();
     const requestIds = Array.from(this.pendingPermissionHandlers.keys());
     for (const requestId of requestIds) {
       if (!this.pendingPermissionHandlers.has(requestId)) continue;
@@ -5242,7 +5444,6 @@ export class CodexAppServerAgentSession implements AgentSession {
         modeId: this.config.modeId,
         model: this.config.model ?? null,
         thinkingOptionId,
-        providerOptions: this.config.providerOptions,
         toolPolicy: this.config.toolPolicy,
         systemPrompt: this.config.systemPrompt,
         mcpServers: this.config.mcpServers,
@@ -5271,6 +5472,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       serviceTier: this.serviceTier,
       config: this.buildCodexInnerConfig(),
       userMessageTurns: this.codexUserMessageTurns(),
+      threadRollbackAvailable: this.threadRollbackAvailable,
       setThreadId: async (threadId) => {
         this.currentThreadId = threadId;
         this.cachedRuntimeInfo = null;
@@ -5584,16 +5786,25 @@ export class CodexAppServerAgentSession implements AgentSession {
     return { model, thinkingOptionId };
   }
 
+  // A session without a model or effort runs on Codex's configured defaults, whether its
+  // thread is new or resumed after a restart.
+  private async applyDefaultModelAndThinking(): Promise<string> {
+    const { model, thinkingOptionId } = await this.resolveModelAndThinking();
+    this.config.model = model;
+    this.reconcileServiceTier();
+    this.config.thinkingOptionId = thinkingOptionId;
+    return model;
+  }
+
   private async ensureThread(): Promise<void> {
     if (!this.client) return;
     if (this.currentThreadId) return;
 
-    const { model, thinkingOptionId } = await this.resolveModelAndThinking();
-    this.config.model = model;
-    this.config.thinkingOptionId = thinkingOptionId;
+    const model = await this.applyDefaultModelAndThinking();
 
     const { params, approvalPolicy, sandbox } = this.buildThreadStartRequest(model);
-    const rawResponse = await this.client.request("thread/start", params);
+    const preparedClient = this.client;
+    const rawResponse = await preparedClient.request("thread/start", params);
     this.rememberResolvedThreadConfig(rawResponse);
     const response = toObjectRecord(rawResponse);
     const threadRecord = toObjectRecord(response?.thread);
@@ -5614,6 +5825,92 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.cachedRuntimeInfo = null;
     }
     this.currentThreadId = threadId;
+    this.markPublicBaselineSubmitted(preparedClient, params, threadId);
+  }
+
+  private composeDeveloperInstructions(): string | undefined {
+    const result = composeHostPublicBaseline(
+      this.publicBaseline,
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    if (result.receipt) {
+      const prior = this.publicBaselineTransport;
+      if (
+        !prior ||
+        prior.client !== this.client ||
+        prior.threadId !== this.currentThreadId ||
+        prior.receipt.developerInstructionsSha256 !== result.receipt.developerInstructionsSha256
+      )
+        this.publicBaselineTransport = {
+          receipt: result.receipt,
+          client: this.client,
+          threadId: this.currentThreadId,
+        };
+    }
+    return result.text;
+  }
+  private markPublicBaselineSubmitted(
+    client: CodexAppServerClient,
+    params: Record<string, unknown>,
+    expectedThread: string | null,
+    queued = false,
+  ): void {
+    if (queued) return;
+    if (
+      !this.publicBaselineTransport ||
+      this.closed ||
+      client !== this.client ||
+      !expectedThread ||
+      this.currentThreadId !== expectedThread ||
+      (params.threadId !== undefined && params.threadId !== expectedThread) ||
+      typeof params.developerInstructions !== "string"
+    )
+      return;
+    const composed = composeHostPublicBaseline(
+      this.publicBaseline,
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    if (!composed.receipt || params.developerInstructions !== composed.text) return;
+    const prior = this.publicBaselineTransport;
+    if (
+      prior.receipt.state === "SUBMITTED" &&
+      prior.client === client &&
+      prior.threadId === this.currentThreadId &&
+      prior.receipt.developerInstructionsSha256 === composed.receipt.developerInstructionsSha256
+    )
+      return;
+    this.publicBaselineTransport = {
+      receipt: { ...composed.receipt, state: "SUBMITTED" },
+      client,
+      threadId: expectedThread,
+    };
+    this.cachedRuntimeInfo = null;
+    if (this.currentThreadId)
+      this.emitEvent({
+        type: "host_public_baseline_transport",
+        provider: CODEX_PROVIDER,
+        nativeSessionId: expectedThread,
+        receipt: structuredClone(this.publicBaselineTransport.receipt),
+      });
+  }
+  private runtimeReadback(info: AgentRuntimeInfo): AgentRuntimeInfo {
+    const value = withoutPublicBaselineTransport(info)!;
+    const readback = this.baselineReadback();
+    return {
+      ...value,
+      ...(Object.keys(readback).length ? { extra: { ...value.extra, ...readback } } : {}),
+    };
+  }
+  private baselineReadback(): { hostPublicBaselineTransport?: PublicBaselineTransport } {
+    const value = this.publicBaselineTransport;
+    return !this.closed &&
+      value &&
+      value.client === this.client &&
+      value.threadId === this.currentThreadId
+      ? { hostPublicBaselineTransport: structuredClone(value.receipt) }
+      : {};
   }
 
   private buildThreadStartRequest(model: string): {
@@ -5631,10 +5928,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.providerOptions.sandbox_mode ??
       (this.hasWorkflowModeOverride ? preset.sandbox : undefined);
     const innerConfig = this.buildCodexInnerConfig();
-    const developerInstructions = composeSystemPromptParts(
-      this.config.systemPrompt,
-      this.config.daemonAppendSystemPrompt,
-    );
+    const developerInstructions = this.composeDeveloperInstructions();
     const params: Record<string, unknown> = {
       model,
       cwd: this.config.cwd ?? null,
@@ -5733,6 +6027,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       return;
     }
     if (method === "account/updated") {
+      this.resumeAccountUncertain = true;
       this.quotaRevision++;
       this.accountNotificationEpoch++;
       return;
@@ -6562,7 +6857,10 @@ export class CodexAppServerAgentSession implements AgentSession {
   private handleTokenUsageUpdatedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "token_usage_updated" }>,
   ): void {
-    this.latestUsage = toAgentUsage(parsed.tokenUsage);
+    this.latestUsage = toAgentUsage(
+      parsed.tokenUsage,
+      parsed.threadId ?? this.currentThreadId ?? undefined,
+    );
     if (this.latestUsage) {
       this.notifySubscribers({
         type: "usage_updated",
@@ -7341,6 +7639,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     );
     const itemId = parsed.item.id;
     if (normalizedItemType === "commandExecution") {
+      this.rememberTerminalProcessForItem(parsed.item);
       const callId = timelineItem.callId || itemId;
       if (callId && this.emittedExecCommandStartedCallIds.has(callId)) {
         return;
@@ -7460,19 +7759,21 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private rememberTerminalProcessForCommand(command: unknown, output: string | null): void {
-    const normalizedCommand = normalizeCodexCommandValue(command);
-    if (!normalizedCommand) {
-      return;
-    }
-    const displayCommand =
-      typeof normalizedCommand === "string"
-        ? normalizedCommand
-        : normalizedCommand.join(" ").trim();
-    if (!displayCommand) {
-      return;
-    }
     const processId = extractCodexTerminalSessionId(output ?? undefined);
-    if (!processId) {
+    if (processId) {
+      this.rememberTerminalProcess(processId, command);
+    }
+  }
+
+  private rememberTerminalProcessForItem(item: { [key: string]: unknown }): void {
+    if (typeof item.processId === "string" && item.processId) {
+      this.rememberTerminalProcess(item.processId, item.command);
+    }
+  }
+
+  private rememberTerminalProcess(processId: string, command: unknown): void {
+    const displayCommand = normalizeCommandExecutionCommand(command);
+    if (!displayCommand) {
       return;
     }
     this.terminalCommandByProcessId.set(processId, displayCommand);
@@ -7544,6 +7845,8 @@ export class CodexAppServerAgentSession implements AgentSession {
     const parsed = z
       .object({
         itemId: z.string(),
+        // Set when several approval callbacks belong to one item; it names the callback.
+        approvalId: z.string().nullable().optional(),
         threadId: z.string(),
         turnId: z.string(),
         command: z.string().nullable().optional(),
@@ -7557,7 +7860,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       cwd: parsed.cwd ?? this.config.cwd ?? null,
       running: true,
     });
-    const requestId = `permission-${parsed.itemId}`;
+    const requestId = `permission-${parsed.approvalId ?? parsed.itemId}`;
     const title = parsed.command ? `Run command: ${parsed.command}` : "Run command";
     const request: AgentPermissionRequest = {
       id: requestId,
@@ -7746,9 +8049,13 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
 
-  private sessionDeps(launchEnv: Record<string, string> | undefined): CodexAppServerAgentDeps {
+  private sessionDeps(
+    launchEnv: Record<string, string> | undefined,
+    publicBaseline?: HostPublicBaseline,
+  ): CodexAppServerAgentDeps {
     return {
       ...this.deps,
+      publicBaseline: cloneHostPublicBaseline(publicBaseline),
       codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchEnv)),
       customCodexConfig: this.customProviderConfig(),
     };
@@ -7812,7 +8119,7 @@ export class CodexAppServerAgentClient implements AgentClient {
 
   private async spawnAppServer(
     launchEnv?: Record<string, string>,
-    options?: { goalsEnabled?: boolean; agentId?: string },
+    options?: { goalsEnabled?: boolean; agentId?: string; environment?: Record<string, string> },
   ): Promise<ChildProcessWithoutNullStreams> {
     const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
     const args = [...launchPrefix.args, "app-server"];
@@ -7831,10 +8138,7 @@ export class CodexAppServerAgentClient implements AgentClient {
     const child = spawnProcess(launchPrefix.command, args, {
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
-      ...createProviderEnvSpec({
-        runtimeSettings: this.runtimeSettings,
-        overlays: [launchEnv],
-      }),
+      baseEnv: options?.environment ?? buildCodexAppServerEnv(this.runtimeSettings, launchEnv),
     });
     assertChildWithPipes(child);
     return child;
@@ -7852,16 +8156,35 @@ export class CodexAppServerAgentClient implements AgentClient {
       // TODO: Honor persistSession=false if app-server adds support, or route
       // utility generations through `codex exec --ephemeral` in a larger change.
     }
-    const sessionConfig: AgentSessionConfig = { ...config, provider: CODEX_PROVIDER };
+    launchContext = launchContext
+      ? {
+          ...launchContext,
+          env: launchContext.env ? { ...launchContext.env } : undefined,
+          publicBaseline: baselineForSession(
+            launchContext.publicBaseline,
+            config.internal,
+            "interactive",
+          ),
+        }
+      : undefined;
+    const sessionConfig: AgentSessionConfig = structuredClone({
+      ...config,
+      provider: CODEX_PROVIDER,
+    });
     const goalsEnabled = await this.resolveGoalsEnabled();
     const autoReviewEnabled = await this.resolveAutoReviewEnabled();
+    const environment = buildCodexAppServerEnv(this.runtimeSettings, launchContext?.env);
     const session = new CodexAppServerAgentSession(
       sessionConfig,
       null,
       this.logger,
       () =>
-        this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(launchContext?.env),
+        this.spawnAppServer(launchContext?.env, {
+          goalsEnabled,
+          agentId: launchContext?.agentId,
+          environment,
+        }),
+      { ...this.sessionDeps(launchContext?.env, launchContext?.publicBaseline), environment },
       options?.persistSession === false,
       goalsEnabled,
       autoReviewEnabled,
@@ -7881,21 +8204,37 @@ export class CodexAppServerAgentClient implements AgentClient {
     options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     const storedConfig = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
-    const merged: AgentSessionConfig = {
+    const merged: AgentSessionConfig = structuredClone({
       ...storedConfig,
       ...overrides,
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
-    };
+    });
+    launchContext = launchContext
+      ? {
+          ...launchContext,
+          env: launchContext.env ? { ...launchContext.env } : undefined,
+          publicBaseline: baselineForSession(
+            launchContext.publicBaseline,
+            merged.internal,
+            options?.purpose ?? "interactive",
+          ),
+        }
+      : undefined;
     const goalsEnabled = await this.resolveGoalsEnabled();
     const autoReviewEnabled = await this.resolveAutoReviewEnabled();
+    const environment = buildCodexAppServerEnv(this.runtimeSettings, launchContext?.env);
     const session = new CodexAppServerAgentSession(
       merged,
       handle,
       this.logger,
       () =>
-        this.spawnAppServer(launchContext?.env, { goalsEnabled, agentId: launchContext?.agentId }),
-      this.sessionDeps(launchContext?.env),
+        this.spawnAppServer(launchContext?.env, {
+          goalsEnabled,
+          agentId: launchContext?.agentId,
+          environment,
+        }),
+      { ...this.sessionDeps(launchContext?.env, launchContext?.publicBaseline), environment },
       false,
       goalsEnabled,
       autoReviewEnabled,

@@ -116,6 +116,8 @@ export default {
     ios: {
       supportsTablet: true,
       infoPlist: {
+        NSSpeechRecognitionUsageDescription:
+          "Fulcra uses on-device speech recognition for phone dictation when available.",
         NSMicrophoneUsageDescription: "This app needs access to the microphone for voice commands.",
         NSFaceIDUsageDescription:
           "Fulcra uses Face ID to confirm that you are the one answering a decision on this device.",
@@ -158,6 +160,13 @@ export default {
       withAndroidScroll,
       [withAndroidAsyncStorageSize, 64],
       ...buildProfile.cameraPlugins,
+      [
+        "expo-image-picker",
+        {
+          photosPermission: "Allow $(PRODUCT_NAME) to attach photos to your chats.",
+          cameraPermission: "Allow $(PRODUCT_NAME) to take photos to attach to your chats.",
+        },
+      ],
       [
         "expo-splash-screen",
         {

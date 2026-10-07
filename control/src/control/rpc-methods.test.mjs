@@ -9,12 +9,12 @@ test("RPC_METHODS equals every method literal the dispatcher answers, and nothin
     body = src.slice(src.indexOf("export function rpc("));
   const literal = new Set(
     [
-      ...body.matchAll(/request\.method === '([a-z0-9-]+)'/g),
-      ...body.matchAll(/case '([a-z0-9-]+)':/g),
+      ...body.matchAll(/request\.method === ['"]([a-z0-9-]+)['"]/g),
+      ...body.matchAll(/case ['"]([a-z0-9-]+)['"]:/g),
     ].map((m) => m[1]),
   );
   const notify = /const notificationMethods = \{([^}]*)\}/.exec(body)?.[1] ?? "";
-  for (const m of notify.matchAll(/'([a-z0-9-]+)':/g)) literal.add(m[1]);
+  for (const m of notify.matchAll(/['"]([a-z0-9-]+)['"]:/g)) literal.add(m[1]);
   assert.deepEqual([...RPC_METHODS].sort(), [...literal].sort());
   assert.ok(RPC_METHODS.size > 90);
 });

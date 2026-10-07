@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -43,6 +44,7 @@ export const ja: TranslationResources = {
     total: "{{total}} 件の一致",
   },
   common: {
+    bottomSheetBackdrop: "ボトムシートの背景",
     back: "戻る",
     loading: "読み込み中...",
     actions: {
@@ -168,6 +170,8 @@ export const ja: TranslationResources = {
     },
     attachments: {
       addImage: "画像を追加",
+      choosePhoto: "写真を選択",
+      takePhoto: "写真を撮影",
       pasteImage: "画像を貼り付け",
       addFile: "ファイルをアップロード",
       addIssueOrPr: "イシューまたはPRを追加",
@@ -460,7 +464,9 @@ export const ja: TranslationResources = {
       recovery: {
         archivedTitle: "ワークスペースはアーカイブ済みです",
         restoreDescription:
-          "{{workspaceName}} はアーカイブされ、worktree が削除されました。ブランチ {{branch}} を復元して再度開きます。",
+          "{{workspaceName}} を復元してエージェントに戻ります。worktree ではブランチ {{branch}} を使用します。",
+        restoreWithoutBranchDescription:
+          "{{workspaceName}} を復元してエージェントに戻ります。保存されたベース、またはリポジトリのデフォルトブランチから新しいブランチを作成します。",
         unarchiveDescription:
           "{{workspaceName}} はアーカイブされています。再度開くにはアーカイブを解除してください。",
         restoreAction: "復元",
@@ -1400,6 +1406,9 @@ export const ja: TranslationResources = {
       settings: "設定",
       closeSidebar: "サイドバーを閉じる",
     },
+    footer: {
+      usage: "使用状況",
+    },
     help: {
       trigger: "ヘルプとサポート",
       sectionHelp: "ヘルプ",
@@ -1781,7 +1790,12 @@ export const ja: TranslationResources = {
     loadingCommands: "コマンドを読み込み中...",
     noFiles: "ファイルまたはディレクトリが見つかりません",
     noCommands: "コマンドが見つかりません",
+    accountUnavailable:
+      "このコンピューターではアカウントコマンドをまだ利用できません。{{host}} の Fulcra を更新してください。",
+    thisComputer: "このコンピューター",
     failedToLoad: "読み込みに失敗しました",
+    chooseProjectForCommands: "コマンドを表示するにはプロジェクトを選択してください",
+    chooseModelForCommands: "コマンドを表示するにはモデルを選択してください",
   },
   loadOlderHistory: {
     failed: "古い履歴を読み込めませんでした",
@@ -1791,6 +1805,8 @@ export const ja: TranslationResources = {
     permissionMessage: "画像を添付するにはフォトライブラリへのアクセスを許可してください。",
     errorTitle: "エラー",
     failedToSelect: "画像の選択に失敗しました",
+    cameraPermissionMessage: "写真を撮影するにはカメラへのアクセスを許可してください。",
+    failedToTakePhoto: "写真の撮影に失敗しました",
     dialogTitle: "画像を添付",
     dialogFilterName: "画像",
   },
@@ -1845,6 +1861,7 @@ export const ja: TranslationResources = {
     modelCountPlural: "{{count}}つのモデル",
     retry: "再試行",
     retrying: "再試行中...",
+    savedModels: "以前に読み込んだ{{provider}}のモデルを表示しています。",
     noMatches: "検索に一致するモデルがありません",
     noMatchesForQuery: "「{{query}}」に一致するモデルがありません",
     searchAllPlaceholder: "すべてのモデルを検索...",
@@ -1887,6 +1904,17 @@ export const ja: TranslationResources = {
     hostPassword: {
       title: "{{host}} のパスワード",
       label: "ホストのパスワード",
+    },
+    hostConfirmation: {
+      title: "このホストに接続しますか？",
+      description:
+        "このホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      descriptionChanged:
+        "このリンクはこのホストへの接続方法を変更します。ホストはこのアプリ内でコードを実行し、接続中の他のホストにアクセスできるようになります。心当たりがある場合のみ接続してください。",
+      hostLabel: "ホスト",
+      fingerprintLabel: "鍵のフィンガープリント",
+      relayLabel: "リレー",
+      connect: "接続",
     },
     connectionMethods: {
       title: "接続を追加",
@@ -1962,6 +1990,12 @@ export const ja: TranslationResources = {
       helper: "リモートホストで動作する Fulcra デーモンに接続します。",
       fields: {
         target: "SSH ホスト",
+        password: "デーモンのパスワード",
+        optional: "任意",
+      },
+      passwordVisibility: {
+        show: "パスワードを表示",
+        hide: "パスワードを非表示",
       },
       actions: {
         cancel: "キャンセル",
@@ -2153,6 +2187,9 @@ export const ja: TranslationResources = {
         "このチェックアウトのプルリクエストを作成すると、ここに詳細が表示されます。",
     },
     architectureMap: {
+      mainOnly: "コード構造はワークスペースのメインビューです。+ タブメニューから開いてください。",
+      entryUnavailable:
+        "保存済みのコードマップを追加するか、コードグラフや変更解析をサポートするホストに接続してください。",
       label: "アーキテクチャマップ",
       subtitle: "プロジェクトのアーキテクチャ",
       tooltip: "プロジェクトのアーキテクチャマップを表示",
@@ -2169,6 +2206,7 @@ export const ja: TranslationResources = {
       zoomIn: "拡大",
       zoomOut: "縮小",
       fit: "全体表示",
+      gestureHint: en.panels.architectureMap.gestureHint,
       actualSize: "実寸",
       components: "コンポーネント",
       boundaries: "境界",
@@ -2221,6 +2259,8 @@ export const ja: TranslationResources = {
         packageHint: "パッケージを選ぶとモジュールが開きます。",
         allLevels: "すべての階層を表示",
         showInMap: "マップで表示",
+        does: en.panels.architectureMap.graph.does,
+        panel: en.panels.architectureMap.graph.panel,
       },
       review: {
         open: "レビュー",
@@ -2251,6 +2291,7 @@ export const ja: TranslationResources = {
           NORMAL: "通常リスク: {{tests}} 件のテストが届くコード。",
           HIGH: "高リスク: どのテストも届かないコード、またはこの変更が削除するコード。",
         },
+        plain: en.panels.architectureMap.review.plain,
         loadingDiff: "変更を読み込んでいます…",
         noDiff: "このファイルに表示できるテキストの変更はありません。",
         noFindingsHere: "自動レビューはこのファイルで何も見つけませんでした。",
@@ -2460,7 +2501,10 @@ export const ja: TranslationResources = {
   sidebarCallout: {
     dismiss: "閉じる",
   },
+  usagePanel: usagePanelCopy["ja"],
   contextWindow: {
+    noData: "コンテキストデータがありません",
+    accessibilityNoData: "コンテキストウィンドウ：コンテキストデータがありません",
     title: "コンテキストウィンドウ",
     used: "{{percentage}}%使用",
     tokens: "{{used}} / {{max}}トークン",
@@ -2487,6 +2531,7 @@ export const ja: TranslationResources = {
       app: "アプリ",
       host: "ホスト",
     },
+    menu: en.settings.menu,
     hostPicker: {
       switchHost: "ホストを切り替え",
       local: "ローカル",
@@ -2528,6 +2573,11 @@ export const ja: TranslationResources = {
       refreshAccessibility: "通知の権限を更新",
       playSound: "サウンドを再生",
       playSoundHint: "デスクトップ通知が届いたときにサウンドを再生します",
+      digest: "完了したセッションをまとめる",
+      digestHint:
+        "完了したセッションごとに通知する代わりに、まとめて 1 件表示します。承認とエラーは引き続きすぐに通知します。",
+      digestFrequency: "頻度",
+      digestEvery: "{{count}} 分",
       test: "通知をテスト",
       testHint: "現在の設定でテスト通知を送信します",
       permissionRequired: "テストする前に通知へのアクセスを許可してください",
@@ -2721,8 +2771,15 @@ export const ja: TranslationResources = {
         description: "プロンプト間を移動するためのアウトラインを表示します",
       },
       sidebar: {
-        title: "サイドバー",
-        description: "サイドバー上部に表示する項目とその順序を選択します",
+        header: {
+          title: "ヘッダー",
+          description: "サイドバー上部に表示する項目とその順序を選択します",
+        },
+        footer: {
+          title: "フッター",
+          description:
+            "サイドバー下部に表示する行とその順序を選択します。プロジェクトを追加とアイコンの行は常に表示されます",
+        },
         moveUp: "上に移動",
         moveDown: "下に移動",
       },
@@ -2746,6 +2803,14 @@ export const ja: TranslationResources = {
         codeSize: "コードサイズ",
         codeSizeHint: "コード、差分、ターミナル出力に使用されます",
         codeSizeAccessibility: "コードフォントサイズ",
+      },
+      layout: {
+        title: "レイアウト",
+        contentWidth: "コンテンツ幅",
+        contentWidthHint: "ワイド画面でのチャットと Markdown ファイルの最大幅",
+        contentWidthAccessibility: "コンテンツ幅 (ピクセル)",
+        reset: "リセット",
+        resetAccessibility: "コンテンツ幅をデフォルトに戻す",
       },
       syntax: {
         title: "構文ハイライト",

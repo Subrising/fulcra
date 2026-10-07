@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   LocalSpeechWorkerClient,
+  localSttTimeout,
+  localAudioDurationMs,
   WorkerBackedSpeechToTextProvider,
   WorkerBackedTextToSpeechProvider,
   WorkerBackedTurnDetectionProvider,
@@ -394,5 +396,18 @@ describe("LocalSpeechWorkerClient", () => {
       format: "pcm;rate=24000",
     });
     await second;
+  });
+});
+
+describe("audio-length local transcription deadline", () => {
+  it("adds three times the recording duration while bounding invalid and long input", () => {
+    expect(localSttTimeout(0)).toBe(30000);
+    expect(localSttTimeout(60000)).toBe(210000);
+    expect(localSttTimeout(3600000)).toBe(300000);
+    expect(localSttTimeout(-1)).toBe(30000);
+    expect(localSttTimeout(Number.NaN)).toBe(30000);
+    expect(localAudioDurationMs(Buffer.alloc(32000), "audio/pcm;rate=16000;bits=16")).toBe(1000);
+    expect(localAudioDurationMs(Buffer.alloc(96000), "audio/pcm;rate=48000;bits=16")).toBe(1000);
+    expect(localAudioDurationMs(Buffer.alloc(32000), "audio/unknown")).toBe(0);
   });
 });

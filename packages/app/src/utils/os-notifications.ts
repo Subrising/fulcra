@@ -1,7 +1,7 @@
 import { Asset } from "expo-asset";
 import { getDesktopHost } from "@/desktop/host";
 import { buildNotificationRoute, resolveNotificationTarget } from "./notification-routing";
-import { isNative } from "@/constants/platform";
+import { getIsElectron, isNative } from "@/constants/platform";
 
 interface OsNotificationPayload {
   title: string;
@@ -164,7 +164,15 @@ function attachWebClickHandler(
 }
 
 export async function sendOsNotification(payload: OsNotificationPayload): Promise<boolean> {
-  // Mobile/native notifications should be remote push only.
+  // Agent attention belongs to the desktop; other generic web notifications keep their routing.
+  if (
+    typeof payload.data?.agentId === "string" &&
+    typeof payload.data?.reason === "string" &&
+    !getIsElectron()
+  ) {
+    return false;
+  }
+  // Native clients display attention in the app, without OS alerts.
   if (isNative) {
     return false;
   }

@@ -385,7 +385,7 @@ methods(
   object({ messageId: uuid, identity: reportIdentity, expectedEpoch: uuid }),
 );
 methods(
-  "bindings-activation bindings-status recovery-status channels-status channels-requests roles-session-requests roles-allowances trackers-status trackers-directory cc-tracker-legacy-pending decisions-inbox decisions-digest-run cc-channels-list devices-list devices-pair-open remits-list manager-summary events-status list task-index quota-status leadership-status permissions-status",
+  "bindings-activation bindings-status recovery-status wakes-status channels-status channels-requests roles-session-requests roles-allowances trackers-status trackers-directory cc-tracker-legacy-pending decisions-inbox decisions-digest-run cc-channels-list devices-list devices-pair-open remits-list manager-summary events-status list task-index quota-status leadership-status permissions-status",
   none,
 );
 methods(
@@ -453,6 +453,21 @@ methods(
 );
 methods("channels-close", object({ channelId: uuid, note: reason }));
 methods("channels-request-decline", object({ note: reason, requestId: uuid }));
+methods(
+  "worktree-lifecycle-settings",
+  object({
+    archiveFinished: opt(bool),
+    idleMinutes: opt(either(one("never"), num(1, 10080))),
+    retentionDays: opt(either(one("never"), num(0, 36500))),
+  }),
+);
+methods(
+  "worktree-lifecycle-now",
+  either(
+    object({ requestId: uuid }),
+    either(object({ previewId: uuid, requestId: uuid }), object({ operationId: uuid })),
+  ),
+);
 methods("worktree-lifecycle-preview", either(none, object({ operationId: opt(uuid) })));
 methods("worktree-lifecycle-apply", object({ confirm: one(true), planId: uuid }));
 methods(
@@ -694,6 +709,8 @@ methods(
   }),
 );
 methods("session-interruption-dismiss", object({ interruptionId: uuid, reason }));
+methods("session-fresh-start", object({ messageId: uuid, sessionId: uuid, reason }));
+methods("wakes-heartbeat-set", object({ minutes: num(0, 1440), note: reason }));
 methods(
   "task-allowance-set",
   object({
@@ -776,6 +793,7 @@ export const READ_METHODS = Object.freeze([
   "sessions-tool-surface",
   "seat-inbox",
   "recovery-status",
+  "wakes-status",
   "channels-status",
   "channels-requests",
   "session-defaults",

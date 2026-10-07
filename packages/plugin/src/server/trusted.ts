@@ -43,7 +43,13 @@ export type PermissionGuardDecision = AdmissionDecision | { requestId: string };
 export interface LegacyTrustedPluginServer {
   admission: {
     onInput(handler: (agent: TrustedAgent, input: TrustedInput) => AdmissionDecision): void;
-    mcpRefresh(handler: (agent: TrustedAgent) => { allowed: boolean; revision: string }): void;
+    mcpRefresh(
+      handler: (agent: TrustedAgent) => {
+        allowed: boolean;
+        revision: string;
+        contextRotationAllowed?: boolean;
+      },
+    ): void;
     codexTurn(handler: (agent: TrustedAgent, quota: AgentQuotaSnapshot) => AdmissionDecision): void;
   };
   guard(
@@ -133,6 +139,8 @@ export interface TrustedPluginServerV11 {
       handler: (agent: TrustedAgentV11) => {
         allowed: boolean;
         revision: string;
+        /** Whether a fresh provider context may replace the native one; absent means no. */
+        contextRotationAllowed?: boolean;
       },
     ): void;
     codexTurn(handlers: TrustedCodexAdmissionV11): void;

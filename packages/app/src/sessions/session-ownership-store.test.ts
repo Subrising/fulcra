@@ -13,10 +13,14 @@ vi.mock("@/runtime/host-runtime", () => ({
   }),
 }));
 let catalogSettled = true;
+let reportedController: string | null = null;
 vi.mock("@/plugins/registry", () => ({
   pluginRegistry: {
     getSnapshot: () => installedPlugins,
     isCatalogSettled: () => catalogSettled,
+    controllerPluginId: () => "orca-organization-next",
+    reportedControllerPluginId: () => reportedController,
+    isControllerPluginId: (id: string) => id === "orca-organization-next",
   },
 }));
 
@@ -296,6 +300,18 @@ describe("session ownership store", () => {
     requestSessionOwnership("host", "agent-3");
     await settle();
     expect(invokePluginRpc).not.toHaveBeenCalled();
+
+    // A host that reports its configured controller settles it: that one answers.
+    resetSessionOwnershipStore();
+    invokePluginRpc.mockClear();
+    reportedController = "orca-organization-next";
+    try {
+      requestSessionOwnership("host", "agent-4");
+      await settle();
+      expect(invokePluginRpc.mock.calls[0][0]).toBe("orca-organization-next");
+    } finally {
+      reportedController = null;
+    }
   });
 
   it("does not record an answer for a disconnected host", async () => {

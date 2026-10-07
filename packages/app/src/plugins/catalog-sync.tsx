@@ -1,4 +1,5 @@
 import { preparePluginCatalog } from "./bundle-trust";
+import { useVoiceAudioEngineOptional } from "@/contexts/voice-context";
 import { pluginSettingsKey } from "./settings/use-settings";
 import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -13,6 +14,7 @@ export function PluginCatalogSync({
   serverId: string;
   client: DaemonClient;
 }) {
+  const audio = useVoiceAudioEngineOptional();
   const connected = useHostRuntimeIsConnected(serverId);
   const supported = useHostFeatureAvailability(serverId, "plugins");
   const paging = useHostFeatureAvailability(serverId, "pluginCatalogPaging");
@@ -21,6 +23,7 @@ export function PluginCatalogSync({
     let cancelled = false;
     let refreshQueue = Promise.resolve();
     let generation = 0;
+    let connectionAvailable = connected;
     let reading: AbortController | undefined;
     if (!connected) {
       pluginRegistry.suspendHost(serverId);
@@ -32,15 +35,26 @@ export function PluginCatalogSync({
       pluginRegistry.suspendHost(serverId);
       return;
     }
+    // FULCRA(plugin-host): plugins install without an audio engine; playback falls back to silence.
     if (!supported) {
       pluginRegistry.removeHost(serverId);
       return;
     }
+    const releaseConnection = client.subscribeConnectionStatus((state) => {
+      connectionAvailable = state.status === "connected";
+      if (!connectionAvailable) {
+        // Invalidate preparation before React observes the drop, including a same-client reconnect.
+        generation++;
+        reading?.abort();
+        pluginRegistry.clearHostInputPolicy(serverId, client);
+      }
+    });
     const refresh = (replacePluginId?: string) => {
       const epoch = ++generation;
+      pluginRegistry.clearHostInputPolicy(serverId, client);
       reading?.abort();
       refreshQueue = refreshQueue.then(async () => {
-        if (cancelled || epoch !== generation) return;
+        if (cancelled || !connectionAvailable || epoch !== generation) return;
         const abort = new AbortController();
         reading = abort;
         try {
@@ -62,7 +76,12 @@ export function PluginCatalogSync({
           if (cancelled || abort.signal.aborted || epoch !== generation) return;
           const plugins = await preparePluginCatalog(catalog.plugins);
           if (!cancelled && !abort.signal.aborted && epoch === generation) {
-            pluginRegistry.installCatalog(serverId, plugins, { replacePluginId, client });
+            pluginRegistry.installCatalog(serverId, plugins, {
+              replacePluginId,
+              client,
+              trustedPlugins: catalog.trustedPlugins,
+              audio: audio ?? undefined,
+            });
           }
         } catch {
           if (!cancelled && epoch === generation) {
@@ -103,12 +122,14 @@ export function PluginCatalogSync({
     return () => {
       cancelled = true;
       generation++;
+      pluginRegistry.clearHostInputPolicy(serverId, client);
+      releaseConnection();
       reading?.abort();
       void observation
         .release()
         .catch((error) => console.warn("[Plugins] Failed to release catalog", error));
     };
-  }, [client, connected, serverId, supported, paging]);
+  }, [audio, client, connected, serverId, supported, paging]);
 
   useEffect(() => () => pluginRegistry.removeHost(serverId), [serverId]);
   return null;

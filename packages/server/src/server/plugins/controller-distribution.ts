@@ -23,6 +23,7 @@ export interface ControllerDistribution {
   start(host: {
     /** Host-owned private store path, never a shared config key or caller input. */
     intercomRateSettingsFile?: string;
+    automaticResumeEnabled?: () => boolean;
     boot: string;
     /** The boot this one replaced (daemon-boot.ts), or null when it cannot be established. */
     previousBoot?: string | null;

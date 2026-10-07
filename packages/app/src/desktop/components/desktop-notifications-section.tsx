@@ -6,9 +6,14 @@ import { RotateCw } from "lucide-react-native";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { SegmentedControl, type SegmentedControlOption } from "@/components/ui/segmented-control";
 import { DesktopPermissionRow } from "@/desktop/components/desktop-permission-row";
 import { useDesktopPermissions } from "@/desktop/permissions/use-desktop-permissions";
-import { useDesktopSettings } from "@/desktop/settings/desktop-settings";
+import {
+  DIGEST_MINUTES,
+  useDesktopSettings,
+  type DigestMinutes,
+} from "@/desktop/settings/desktop-settings";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { settingsStyles } from "@/styles/settings";
 
@@ -46,6 +51,36 @@ export function DesktopNotificationsSection() {
       });
     },
     [updateSettings],
+  );
+
+  const handleDigestChange = useCallback(
+    (digest: boolean) => {
+      void updateSettings({ notifications: { delivery: digest ? "digest" : "immediate" } }).catch(
+        () => {
+          // useDesktopSettings owns the user-visible IPC error.
+        },
+      );
+    },
+    [updateSettings],
+  );
+
+  const handleDigestMinutesChange = useCallback(
+    (value: string) => {
+      const digestMinutes = Number(value) as DigestMinutes;
+      void updateSettings({ notifications: { digestMinutes } }).catch(() => {
+        // useDesktopSettings owns the user-visible IPC error.
+      });
+    },
+    [updateSettings],
+  );
+
+  const digestOptions = useMemo<SegmentedControlOption<string>[]>(
+    () =>
+      DIGEST_MINUTES.map((minutes) => ({
+        value: String(minutes),
+        label: t("settings.notifications.digestEvery", { count: minutes }),
+      })),
+    [t],
   );
 
   const handleSendTestNotification = useCallback(() => {
@@ -108,6 +143,35 @@ export function DesktopNotificationsSection() {
             testID="desktop-notifications-play-sound-switch"
           />
         </View>
+        <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+          <View style={settingsStyles.rowContent}>
+            <Text style={settingsStyles.rowTitle}>{t("settings.notifications.digest")}</Text>
+            <Text style={settingsStyles.rowHint}>{t("settings.notifications.digestHint")}</Text>
+          </View>
+          <Switch
+            value={settings.notifications.delivery === "digest"}
+            onValueChange={handleDigestChange}
+            disabled={isSaving}
+            accessibilityLabel={t("settings.notifications.digest")}
+            testID="desktop-notifications-digest-switch"
+          />
+        </View>
+        {settings.notifications.delivery === "digest" ? (
+          <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+            <View style={settingsStyles.rowContent}>
+              <Text style={settingsStyles.rowTitle}>
+                {t("settings.notifications.digestFrequency")}
+              </Text>
+            </View>
+            <SegmentedControl
+              options={digestOptions}
+              value={String(settings.notifications.digestMinutes)}
+              onValueChange={handleDigestMinutesChange}
+              size="sm"
+              testID="desktop-notifications-digest-minutes"
+            />
+          </View>
+        ) : null}
         <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
           <View style={settingsStyles.rowContent}>
             <Text style={settingsStyles.rowTitle}>{t("settings.notifications.test")}</Text>

@@ -22,14 +22,15 @@ const ownerAsk = (error: unknown) => {
 };
 
 /**
- * Update-7: Settings › Accounts & Defaults. Fulcra's own pool of Claude and Codex subscription accounts (many at once:
- * a new session takes one by the pool's order and skips any that are limited; a session stopped by a usage limit moves
- * to the next account with its history), and the model + effort each role starts with. Nothing here shows a credential:
+ * Update-7: Settings › Accounts & models. Fulcra's own pool of Claude and Codex subscription accounts (many at once:
+ * a new session takes one by the pool's order and skips any that are limited; a session stopped by a usage limit waits
+ * for its account's reset, or moves to the next account with its history when the owner turns that on), and the model +
+ * effort each role starts with. Nothing here shows a credential:
  * a Claude token goes in once, to the Keychain on the host, and is never shown again.
  */
 type Props = Pick<PluginSurfaceProps, "theme" | "layout" | "host">;
 const ROLE_LABEL: Record<DefaultRole, string> = {
-  orchestration: "Prime and project leads",
+  orchestration: "Main assistant and project leads",
   planning: "Planners",
   review: "Reviewers",
   implementation: "Implementers",
@@ -136,15 +137,11 @@ export function AccountsSurface({ theme, layout, host }: Props) {
       }}
     >
       <View style={{ gap: 4 }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: c.foreground, fontSize: 26, fontWeight: "700" }}
-        >
-          Accounts & Defaults
-        </Text>
+        {/* The Settings page above already shows the "Accounts & models" title and its one-line description. */}
         <Text style={{ color: c.foregroundMuted }}>
-          Sessions share your subscription accounts. When one account reaches its usage limit, its
-          sessions carry on under the next account.
+          Sessions share your subscription accounts. When an account reaches its usage limit, its
+          sessions wait for that account to reset, unless you choose to continue on another account
+          below.
         </Text>
       </View>
       {!v && (
@@ -379,12 +376,47 @@ export function AccountsSurface({ theme, layout, host }: Props) {
                 .map((r) =>
                   r.to
                     ? `${when(r.at)}${r.reason === "manual" ? " (your switch)" : ""} ${r.from ? `from ${r.from} ` : ""}to ${r.to}`
-                    : `${when(r.at)} ${r.from} limited, none free`,
+                    : `${when(r.at)} ${r.from} limited, waiting for its reset`,
                 )
                 .join("; ")}`}</Text>
             )}
           </>,
           "policy",
+        )}
+      {v &&
+        box(
+          <>
+            <Text
+              accessibilityRole="header"
+              style={{ color: c.foreground, fontWeight: "700", fontSize: 18 }}
+            >
+              When an account hits its limit
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              <WorkButton
+                theme={theme}
+                label="Wait for its reset: sessions stay on their account"
+                selected={v.rotateOnLimit !== true}
+                disabled={busy}
+                onPress={() => void act(() => settings({ rotateOnLimit: false }))}
+              >
+                Wait for its reset
+              </WorkButton>
+              <WorkButton
+                theme={theme}
+                label="Continue on another account: uses that account's usage"
+                selected={v.rotateOnLimit === true}
+                disabled={busy}
+                onPress={() => void act(() => settings({ rotateOnLimit: true }))}
+              >
+                Continue on another account
+              </WorkButton>
+            </View>
+            <Text style={{ color: c.foregroundMuted }}>
+              Continuing on another account uses up that account's usage too.
+            </Text>
+          </>,
+          "limit",
         )}
       {v &&
         box(

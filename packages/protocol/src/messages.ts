@@ -1,3 +1,4 @@
+import { RecordedUsageSchema } from "./recorded-usage.js";
 import { GitAiDraftRequestSchema, GitAiDraftResponseSchema } from "./git-ai-draft.js";
 import {
   NativeArtifactContentReadInputSchema,
@@ -36,6 +37,7 @@ import {
   AccountsAuditListRequestSchema,
   AccountsAuditListResponseSchema,
 } from "./paired-devices.js";
+import { PluginRegistryIdentitySchema } from "./plugin-registry.js";
 import { AgentProfileSchema, AgentSkillSelectionSchema } from "./agent-profile.js";
 export {
   AgentProfileSchema,
@@ -275,7 +277,11 @@ export const MutableDaemonConfigSchema = z
     providers: z.record(z.string(), MutableDaemonProviderConfigSchema).default({}),
     metadataGeneration: MutableMetadataGenerationConfigSchema.default({ providers: [] }),
     autoArchiveAfterMerge: z.boolean().default(false),
+    // Written explanations (review files, map parts) a host makes per day; unset means the host default.
+    explainDailyLimit: z.number().int().min(0).max(1000).optional(),
+    notificationMode: z.enum(["all", "primes", "off"]).default("primes"),
     enableTerminalAgentHooks: z.boolean().default(false),
+    autoResumeOnLimit: z.boolean().default(true),
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
@@ -296,7 +302,10 @@ export const MutableDaemonConfigPatchSchema = z
     removeProviders: z.array(z.string().min(1)).optional(),
     metadataGeneration: MutableMetadataGenerationConfigSchema.partial().optional(),
     autoArchiveAfterMerge: z.boolean().optional(),
+    explainDailyLimit: z.number().int().min(0).max(1000).optional(),
+    notificationMode: z.enum(["all", "primes", "off"]).optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
+    autoResumeOnLimit: z.boolean().optional(),
     appendSystemPrompt: z.string().optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
@@ -377,6 +386,7 @@ export const AgentFeatureSelectSchema = z.object({
   description: z.string().optional(),
   tooltip: z.string().optional(),
   icon: z.string().optional(),
+  desktopTrigger: z.enum(["icon", "label"]).optional(),
   value: z.string().nullable(),
   options: z.array(AgentSelectOptionSchema),
 });
@@ -457,6 +467,7 @@ const AgentCapabilityFlagsSchema: z.ZodType<AgentCapabilityFlags> = z
   .catchall(z.boolean());
 
 const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
+  recorded: RecordedUsageSchema.optional(),
   inputTokens: z.number().optional(),
   cachedInputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
@@ -493,7 +504,7 @@ const McpServerConfigSchema = z.discriminatedUnion("type", [
   McpSseServerConfigSchema,
 ]);
 
-const ProviderOptionsSchema = z.record(z.string(), z.json());
+const ProviderOptionsSchema = z.record(z.string(), z.unknown());
 
 const McpToolRefSchema = z
   .object({
@@ -1612,8 +1623,18 @@ export const PluginSourceInstallRequestSchema = z.object({
 
 export const PluginSourceIdentitySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("directory"), path: z.string() }),
-  z.object({ kind: z.literal("git"), remote: z.string(), pluginPath: z.string() }),
-  z.object({ kind: z.literal("npm"), packageName: z.string(), pluginPath: z.string() }),
+  z.object({
+    kind: z.literal("git"),
+    remote: z.string(),
+    pluginPath: z.string(),
+    registry: PluginRegistryIdentitySchema.optional(),
+  }),
+  z.object({
+    kind: z.literal("npm"),
+    packageName: z.string(),
+    pluginPath: z.string(),
+    registry: PluginRegistryIdentitySchema.optional(),
+  }),
 ]);
 export const PluginInstallationSchema = z.object({
   identity: PluginSourceIdentitySchema,
@@ -1946,12 +1967,22 @@ export const ProviderUsageListRequestMessageSchema = z.object({
   // the daemon still probes an account at most once a minute. Older daemons ignore both.
   accounts: z.boolean().optional(),
   refresh: z.boolean().optional(),
+  // COMPAT(pooledAccountUsageObservation): added 2026-10-04; feature gate until host floor includes it.
+  observationOnly: z.boolean().optional(),
 });
 
 export const AgentQuotaReadRequestMessageSchema = z.object({
   type: z.literal("agent.quota.read.request"),
   agentId: z.string(),
   requestId: z.string(),
+});
+
+export const UsageListReportsRequestMessageSchema = z.object({
+  type: z.literal("usage.list_reports.request"),
+  agentId: z.string().optional(),
+  requestId: z.string(),
+  reportIds: z.array(z.string()).optional(),
+  forceRefresh: z.boolean().optional(),
 });
 
 export const ResumeAgentRequestMessageSchema = z.object({
@@ -2052,6 +2083,33 @@ export const AgentMcpRefreshRequestMessageSchema = AgentMcpRefreshInputSchema.ex
 export const AgentMcpRefreshResponseMessageSchema = z.object({
   type: z.literal("agent.mcp.refresh.response"),
   payload: AgentMcpRefreshResultSchema.extend({ requestId: z.string(), agentId: z.string() }),
+});
+
+// A fresh provider context keeps the managed conversation; the old native handle is retained by the host.
+export const AgentContextRotateInputSchema = z
+  .object({
+    agentId: z.string(),
+    rotationId: z.string().uuid(),
+    pauseOnly: z.boolean().optional(),
+    expected: AgentMcpRefreshInputSchema.shape.expected,
+  })
+  .strict();
+export type AgentContextRotateInput = z.infer<typeof AgentContextRotateInputSchema>;
+export const AgentContextRotateResultSchema = z.object({
+  outcome: z.enum(["rotated", "paused", "refused", "failed"]),
+  reason: z.string().nullable(),
+  previousSessionId: z.string().nullable(),
+  sessionId: z.string().nullable(),
+  rotationId: z.string().uuid(),
+});
+export type AgentContextRotateResult = z.infer<typeof AgentContextRotateResultSchema>;
+export const AgentContextRotateRequestMessageSchema = AgentContextRotateInputSchema.extend({
+  type: z.literal("agent.context.rotate.request"),
+  requestId: z.string(),
+});
+export const AgentContextRotateResponseMessageSchema = z.object({
+  type: z.literal("agent.context.rotate.response"),
+  payload: AgentContextRotateResultSchema.extend({ requestId: z.string(), agentId: z.string() }),
 });
 
 export const CancelAgentRequestMessageSchema = z.object({
@@ -2256,6 +2314,24 @@ export const AgentConfigApplyRequestMessageSchema = z.object({
 
 export const AgentConfigApplyResponseMessageSchema = z.object({
   type: z.literal("agent.config.apply.response"),
+  payload: AgentActionResponsePayloadSchema,
+});
+
+export const AgentCleanupIdleRequestMessageSchema = z.object({
+  inputProvenance: z.string().optional(),
+  messageId: z.string().optional(),
+  type: z.literal("agent.lifecycle.cleanup_idle.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+  runtimeInstanceId: z.string().min(1),
+  updatedAt: z.string(),
+  lastUserMessageAt: z.string().nullable(),
+  boot: z.string(),
+  humanAt: z.number().int().nonnegative(),
+  archive: z.boolean(),
+});
+export const AgentCleanupIdleResponseMessageSchema = z.object({
+  type: z.literal("agent.lifecycle.cleanup_idle.response"),
   payload: AgentActionResponsePayloadSchema,
 });
 
@@ -2640,6 +2716,22 @@ export const CheckoutPullRequestReviewFileDiffRequestSchema = z.object({
   base: z.string(),
   head: z.string(),
   path: z.string(),
+});
+
+// A model-written explanation of one file in a pull request review: 2-3 plain sentences ("summary") or short
+// pseudocode ("pseudocode"). "module" is the code map's "What it does" for one part: `path` is the part's folder,
+// `base` and `head` are both the map's commit, and the reply lists the folder's files. Cached on the host by head
+// commit, path and content hash; one daily cap covers every kind.
+export const PullRequestReviewExplainKindSchema = z.enum(["summary", "pseudocode", "module"]);
+
+export const CheckoutPullRequestReviewExplainRequestSchema = z.object({
+  type: z.literal("checkout.pull-request-review.explain.request"),
+  requestId: z.string(),
+  cwd: z.string(),
+  base: z.string(),
+  head: z.string(),
+  path: z.string(),
+  kind: PullRequestReviewExplainKindSchema,
 });
 
 export const PullRequestReviewDecisionKindSchema = z.enum([
@@ -3769,11 +3861,13 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ProviderDiagnosticRequestMessageSchema,
   ProviderUsageListRequestMessageSchema,
   AgentQuotaReadRequestMessageSchema,
+  UsageListReportsRequestMessageSchema,
   ResumeAgentRequestMessageSchema,
   ImportAgentRequestMessageSchema,
   RefreshAgentRequestMessageSchema,
   AgentMcpGetRefreshStateRequestMessageSchema,
   AgentMcpRefreshRequestMessageSchema,
+  AgentContextRotateRequestMessageSchema,
   CancelAgentRequestMessageSchema,
   ShutdownServerRequestMessageSchema,
   RestartServerRequestMessageSchema,
@@ -3794,6 +3888,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   SetAgentFeatureRequestMessageSchema,
   AgentConfigApplyRequestMessageSchema,
   AgentParentAdoptRequestMessageSchema,
+  AgentCleanupIdleRequestMessageSchema,
   AgentDetachRequestMessageSchema,
   AgentRewindRequestMessageSchema,
   AgentPermissionResponseMessageSchema,
@@ -3820,6 +3915,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutArchitectureGraphGetRequestSchema,
   CheckoutPullRequestReviewGetRequestSchema,
   CheckoutPullRequestReviewFileDiffRequestSchema,
+  CheckoutPullRequestReviewExplainRequestSchema,
   CheckoutPullRequestReviewDecideRequestSchema,
   InsightsGetRequestSchema,
   AutomationListRequestSchema,
@@ -4085,8 +4181,16 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
         nativeQueuedMessages: z.boolean().optional(),
+        // Absent on older hosts means the usage-limit resume setting is unsupported.
+        autoResumeOnLimit: z.boolean().optional(),
+        // COMPAT(notificationPolicy): added 2026-10-04; remove optional gate after 2027-10-04.
+        // Literal true supports host policy AND fulcra.notify session overrides, regardless of current mode.
+        notificationPolicy: z.boolean().optional(),
+        pooledAccountUsageObservation: z.boolean().optional(),
         pluginCatalogPaging: z.boolean().optional(),
         gitAiDrafts: z.boolean().optional(),
+        // COMPAT(pullRequestReviewExplain): added 2026-10-08; remove optional gate after 2027-10-08.
+        pullRequestReviewExplain: z.boolean().optional(),
         nativeOwnerReportInbox: z.boolean().optional(),
         nativeEvidenceIndex: z.boolean().optional(),
         managedArtifactContent: z.boolean().optional(),
@@ -4102,6 +4206,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(deviceAccountsManage): added 2026-09-30 (U7); a daemon without it has no accounts.manage grant.
         deviceAccountsManage: z.boolean().optional(),
         agentMcpRefresh: z.boolean().optional(),
+        agentContextRotation: z.boolean().optional(),
         agentMcpReconnect: z.boolean().optional(),
         // COMPAT(workspaceRequestReceipts): added in v0.8.0; remove gate after 2027-03-07.
         workspaceRequestReceipts: z.boolean().optional(),
@@ -4109,6 +4214,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
         hubAgentRpc: z.boolean().optional(),
         providersSnapshot: z.boolean().optional(),
+        usageSources: z.boolean().optional(),
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: z.boolean().optional(),
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -4218,6 +4324,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
         agentDetach: z.boolean().optional(),
         agentParentAdopt: z.boolean().optional(),
+        agentIdleCleanup: z.boolean().optional(),
         // COMPAT(agentThinkingUpdate): added in v0.2.4, remove gate after 2027-01-28.
         agentThinkingUpdate: z.boolean().optional(),
         // COMPAT(daemonDiagnostics): added in v0.1.100, remove gate after 2026-12-25 once daemon floor >= v0.1.100.
@@ -6398,6 +6505,25 @@ export const CheckoutPullRequestReviewFileDiffResponseSchema = z.object({
   }),
 });
 
+export const CheckoutPullRequestReviewExplainResponseSchema = z.object({
+  type: z.literal("checkout.pull-request-review.explain.response"),
+  payload: z.object({
+    requestId: z.string(),
+    cwd: z.string(),
+    path: z.string(),
+    kind: PullRequestReviewExplainKindSchema,
+    // "limit": today's cap is used up; "unavailable": no model could answer. Both leave the rule-based view as is.
+    status: z.enum(["ok", "limit", "unavailable", "error"]),
+    error: z.string().optional(),
+    text: z.string().optional(),
+    cached: z.boolean().optional(),
+    usedToday: z.number().int().nonnegative().optional(),
+    dailyLimit: z.number().int().nonnegative().optional(),
+    /** "module" only: the folder's files at the commit, repository-relative, cut to the first 200. */
+    files: z.array(z.string()).optional(),
+  }),
+});
+
 export const CheckoutPullRequestReviewDecideResponseSchema = z.object({
   type: z.literal("checkout.pull-request-review.decide.response"),
   payload: z.object({
@@ -7204,6 +7330,13 @@ export const ProviderUsageStatusSchema = z.enum(["available", "unavailable", "er
 export const ProviderUsageWindowSchema = z.object({
   id: z.string(),
   label: z.string(),
+  /**
+   * A few characters naming the window where space is tight, e.g. "5h" or "wk". An empty string
+   * shows the percent alone; leaving it out shows `label`.
+   */
+  shortLabel: z.string().optional(),
+  /** Shown in the usage summary until the user pins windows of their own. */
+  summary: z.boolean().optional(),
   usedPct: z.number().nullable().optional(),
   remainingPct: z.number().nullable().optional(),
   resetsAt: z.string().nullable().optional(),
@@ -7279,6 +7412,19 @@ export const ProviderUsageListResponseMessageSchema = z.object({
     providers: z.array(ProviderUsageSchema),
     // update-7c: present when the request asked for `accounts` and the daemon has a pool.
     accounts: z.array(AccountUsageRowSchema).optional(),
+    observationOnly: z.boolean().optional(),
+    // Explicit session identity; null never authorizes presenting host defaults as bound account.
+    sessionAccount: z
+      .object({
+        accountId: z.string().nullable(),
+        provider: z.enum(["claude", "codex"]),
+        displayName: z.string(),
+        state: z.enum(["bound", "identity-unavailable"]),
+        source: z.literal("session-launch"),
+        usage: AccountUsageRowSchema.optional(),
+      })
+      .nullable()
+      .optional(),
   }),
 });
 
@@ -7315,6 +7461,59 @@ export const AgentQuotaReadResponseMessageSchema = z.object({
     agentId: z.string(),
     quota: AgentQuotaSnapshotSchema,
   }),
+});
+
+export const UsageProblemSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("expired"),
+    expiresAt: z.iso.datetime(),
+    refreshedBy: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("rejected"),
+    status: z.number().int(),
+    refreshedBy: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("no_quota"), detail: z.string() }),
+]);
+export const UsageReportSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("available"),
+    planLabel: z.string().optional(),
+    windows: z.array(ProviderUsageWindowSchema),
+    balances: z.array(ProviderUsageBalanceSchema).optional(),
+    details: z.array(ProviderUsageDetailSchema).optional(),
+  }),
+  z.object({ status: z.literal("unavailable"), problem: UsageProblemSchema }),
+  z.object({ status: z.literal("error"), error: z.string() }),
+]);
+export const UsageReportEntrySchema = z.object({
+  id: z.string(),
+  account: z.object({ label: z.string().optional() }),
+  fetchedAt: z.string(),
+  sourceId: z.string(),
+  sourceLabel: z.string(),
+  icon: z.string().optional(),
+  report: UsageReportSchema,
+  loginErrors: z
+    .array(
+      z.object({
+        harness: z.string(),
+        report: z.discriminatedUnion("status", [
+          z.object({ status: z.literal("unavailable"), problem: UsageProblemSchema }),
+          z.object({ status: z.literal("error"), error: z.string() }),
+        ]),
+      }),
+    )
+    .optional(),
+});
+export const UsageListReportsUpdateMessageSchema = z.object({
+  type: z.literal("usage.list_reports.update"),
+  payload: z.object({ requestId: z.string(), report: UsageReportEntrySchema }),
+});
+export const UsageListReportsResponseMessageSchema = z.object({
+  type: z.literal("usage.list_reports.response"),
+  payload: z.object({ requestId: z.string(), error: z.string().nullable() }),
 });
 
 const AgentSlashCommandSchema = z.object({
@@ -7826,6 +8025,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   GitAiDraftResponseSchema,
   AgentMcpGetRefreshStateResponseMessageSchema,
   AgentMcpRefreshResponseMessageSchema,
+  AgentContextRotateResponseMessageSchema,
   BrowserHostRegisterResponseSchema,
   SubscriptionReleaseResponseSchema,
   SessionEventsSetSubscriptionResponseSchema,
@@ -7969,6 +8169,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   SetAgentFeatureResponseMessageSchema,
   AgentConfigApplyResponseMessageSchema,
   AgentParentAdoptResponseMessageSchema,
+  AgentCleanupIdleResponseMessageSchema,
   AgentDetachResponseMessageSchema,
   AgentRewindResponseMessageSchema,
   UpdateAgentResponseMessageSchema,
@@ -8009,6 +8210,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutArchitectureGraphGetResponseSchema,
   CheckoutPullRequestReviewGetResponseSchema,
   CheckoutPullRequestReviewFileDiffResponseSchema,
+  CheckoutPullRequestReviewExplainResponseSchema,
   CheckoutPullRequestReviewDecideResponseSchema,
   InsightsGetResponseSchema,
   AutomationListResponseSchema,
@@ -8056,6 +8258,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProviderDiagnosticResponseMessageSchema,
   ProviderUsageListResponseMessageSchema,
   AgentQuotaReadResponseMessageSchema,
+  UsageListReportsUpdateMessageSchema,
+  UsageListReportsResponseMessageSchema,
   ListCommandsResponseSchema,
   ListTerminalsResponseSchema,
   TerminalsChangedSchema,
@@ -8244,6 +8448,10 @@ export type ProviderDiagnosticResponseMessage = z.infer<
   typeof ProviderDiagnosticResponseMessageSchema
 >;
 export type ProviderUsageTone = z.infer<typeof ProviderUsageToneSchema>;
+export type UsageProblem = z.infer<typeof UsageProblemSchema>;
+export type UsageReport = z.infer<typeof UsageReportSchema>;
+export type UsageReportEntry = z.infer<typeof UsageReportEntrySchema>;
+export type UsageListReportsResponseMessage = z.infer<typeof UsageListReportsResponseMessageSchema>;
 export type ProviderUsageStatus = z.infer<typeof ProviderUsageStatusSchema>;
 export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
 export type AgentQuotaSnapshot = z.infer<typeof AgentQuotaSnapshotSchema>;
@@ -8410,6 +8618,13 @@ export type CheckoutPullRequestReviewFileDiffRequest = z.infer<
 >;
 export type CheckoutPullRequestReviewFileDiffResponse = z.infer<
   typeof CheckoutPullRequestReviewFileDiffResponseSchema
+>;
+export type PullRequestReviewExplainKind = z.infer<typeof PullRequestReviewExplainKindSchema>;
+export type CheckoutPullRequestReviewExplainRequest = z.infer<
+  typeof CheckoutPullRequestReviewExplainRequestSchema
+>;
+export type CheckoutPullRequestReviewExplainResponse = z.infer<
+  typeof CheckoutPullRequestReviewExplainResponseSchema
 >;
 export type CheckoutPullRequestReviewDecideRequest = z.infer<
   typeof CheckoutPullRequestReviewDecideRequestSchema

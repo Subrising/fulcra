@@ -366,3 +366,32 @@ describe("buildWorkspaceTabMenuEntries", () => {
     expect(terminalSeparator?.key).toBe("rename-separator");
   });
 });
+
+it("unsupported notifications show update guidance rather than effective Off and cannot advertise a switch", () => {
+  const entries = buildWorkspaceTabMenuEntries({
+    surface: "desktop",
+    tab: createAgentTab(),
+    index: 0,
+    tabCount: 1,
+    menuTestIDBase: "policy-test",
+    onCopyResumeCommand() {},
+    onCopyAgentId() {},
+    onCopyTerminalId() {},
+    onCopyFilePath() {},
+    onReloadAgent() {},
+    onRenameTab() {},
+    onCloseTab() {},
+    onCloseTabsBefore() {},
+    onCloseTabsAfter() {},
+    onCloseOtherTabs() {},
+    notifications: {
+      available: false,
+      unavailableReason: "Update this host to use notification controls.",
+      isEnabled: () => false,
+      onToggle() {},
+    },
+  });
+  expect(entries.find((entry) => entry.kind === "item" && entry.key === "notify-me")).toMatchObject(
+    { icon: "bell", hint: "Update this host to use notification controls.", disabled: true },
+  );
+});

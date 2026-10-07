@@ -48,6 +48,7 @@ async function loadModuleForPlatform(
   vi.doMock("react-native", () => ({ Platform: { OS: platform } }));
   vi.doMock("@/desktop/host", () => ({
     getDesktopHost: () => options?.desktopHost ?? null,
+    isElectronRuntime: () => !!options?.desktopHost,
   }));
   vi.doMock("expo-asset", () => ({
     Asset: {
@@ -262,6 +263,22 @@ describe("sendOsNotification", () => {
     expect(created).toHaveLength(1);
     expect(created[0]?.clickListeners).toHaveLength(0);
   });
+
+  it.each(["web", "ios", "android"] as const)(
+    "keeps agent attention off %s OS notifications",
+    async (platform) => {
+      const NotificationConstructor = vi.fn();
+      (globalThis as { Notification?: unknown }).Notification = NotificationConstructor;
+      const { sendOsNotification } = await loadModuleForPlatform(platform);
+      expect(
+        await sendOsNotification({
+          title: "Prime",
+          data: { serverId: "srv-1", agentId: "agent-1", reason: "finished" },
+        }),
+      ).toBe(false);
+      expect(NotificationConstructor).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the desktop notification bridge when available", async () => {
     const sendNotification = vi.fn(async () => true);

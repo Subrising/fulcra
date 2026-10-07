@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ArchitectureGraph } from "@getpaseo/protocol/messages";
 import {
+  callersOnly,
   drawnEdges,
-  expandPackage,
+  expandInPlace,
   facets,
   nearestOnly,
   nodeRole,
   packageOverview,
+  searchModules,
   selectModule,
   visibleNodes,
 } from "./dependency-graph-model";
@@ -116,22 +118,43 @@ describe("code dependency map model", () => {
     expect(overview.highlighted).toEqual(["pkg:client"]);
   });
 
-  it("opens a package into its modules with outside packages as single boxes", () => {
-    const opened = expandPackage(graph, "app");
+  it("opens a package in place: its modules in a frame where its box was, the rest moved aside", () => {
+    const overview = packageOverview(graph);
+    const { graph: opened, frame } = expandInPlace(graph, "app");
     expect(opened.nodes.map((n) => n.id).sort()).toEqual([
       "hooks",
       "pkg:client",
+      "pkg:protocol",
       "pkg:relay",
       "screen",
     ]);
+    // Imports that touch app go to its modules; the rest stay bundled between packages.
     expect(opened.edges).toEqual([
       { from: "hooks", to: "pkg:client", imports: 9 },
+      { from: "pkg:client", to: "pkg:protocol", imports: 12 },
+      { from: "pkg:relay", to: "pkg:protocol", imports: 5 },
       { from: "screen", to: "hooks", imports: 6 },
       { from: "screen", to: "pkg:relay", imports: 1 },
     ]);
-    // What app uses sits to the right of its modules.
-    const x = (id: string) => opened.nodes.find((n) => n.id === id)?.x ?? 0;
-    expect(x("pkg:client")).toBeGreaterThan(x("hooks"));
+    expect(opened.highlighted).toEqual(["pkg:client"]);
+    const at = (g: typeof opened, id: string) => g.nodes.find((n) => n.id === id)!;
+    const appBox = at(overview, "pkg:app");
+    expect(frame).toMatchObject({ group: "app", x: appBox.x, y: appBox.y });
+    // Modules sit inside the frame, and the next package in the row moved past it.
+    for (const id of ["hooks", "screen"]) {
+      const m = at(opened, id);
+      expect(m.x).toBeGreaterThanOrEqual(frame!.x);
+      expect(m.x + m.width).toBeLessThanOrEqual(frame!.x + frame!.width);
+      expect(m.y + m.height).toBeLessThanOrEqual(frame!.y + frame!.height);
+    }
+    expect(at(opened, "pkg:client").x).toBeGreaterThanOrEqual(frame!.x + frame!.width);
+    expect(expandInPlace(graph, "missing").frame).toBeNull();
+  });
+
+  it("finds modules by name or folder, names that start with the query first", () => {
+    expect(searchModules(graph, "re").map((n) => n.id)).toEqual(["relay", "screen"]);
+    expect(searchModules(graph, "packages/client").map((n) => n.id)).toEqual(["client"]);
+    expect(searchModules(graph, "  ")).toEqual([]);
   });
 
   it("lights up one hop by default and every level on request", () => {
@@ -155,5 +178,27 @@ describe("code dependency map model", () => {
       .sort();
     // Only client's own connections: screen>hooks is two hops away.
     expect(litNear).toEqual(["client>protocol", "hooks>client"]);
+  });
+
+  it("shows only what calls a module, at every level, when asked", () => {
+    const callers = callersOnly(selectModule(graph, "client"));
+    const role = (id: string) =>
+      nodeRole({
+        node: graph.nodes.find((n) => n.id === id)!,
+        selection: callers,
+        query: "",
+        highlighted: new Set(),
+      });
+    expect([role("screen"), role("hooks"), role("protocol")]).toEqual([
+      "dependent",
+      "dependent",
+      "dimmed",
+    ]);
+    const visible = new Set(graph.nodes.map((n) => n.id));
+    const lit = drawnEdges({ edges: graph.edges, visible, selection: callers })
+      .filter((e) => e.lit)
+      .map(({ edge }) => `${edge.from}>${edge.to}`)
+      .sort();
+    expect(lit).toEqual(["hooks>client", "screen>hooks"]);
   });
 });

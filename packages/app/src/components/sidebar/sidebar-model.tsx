@@ -19,7 +19,7 @@ import { buildSidebarProjection } from "./sidebar-projection";
 import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { filterWorkspacesByLabels, type SidebarWorkspaceGroup } from "./sidebar-labels";
 import { filterWorkspacesByProjects, resolveActiveProjectFilters } from "./sidebar-project-filter";
-import { markOfflineHostEntries } from "./sidebar-offline-hosts";
+import { markOfflineHostEntries, withoutDuplicateHosts } from "./sidebar-offline-hosts";
 import { useOfflineHosts } from "./use-offline-hosts";
 import {
   hasAuthoritativeWorkspaceLabelCatalog,
@@ -112,7 +112,8 @@ export function SidebarModelProvider({
     [savedHosts],
   );
   const workspaceEntriesByKey = useMemo(
-    () => markOfflineHostEntries(hostEntriesByKey, offlineHosts),
+    () =>
+      markOfflineHostEntries(withoutDuplicateHosts(hostEntriesByKey, offlineHosts), offlineHosts),
     [hostEntriesByKey, offlineHosts],
   );
   const filteredWorkspaceEntriesByKey = useMemo(() => {

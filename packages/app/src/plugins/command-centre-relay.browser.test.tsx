@@ -56,7 +56,12 @@ vi.mock("@/runtime/host-runtime", () => ({
     getSnapshot: () => ({ client, activeConnection: state.connection }),
   }),
 }));
-vi.mock("@/components/hosts/host-picker", () => ({ HostPicker: () => null }));
+vi.mock("@/components/hosts/host-picker", async () => ({
+  ...(await import("@/components/hosts/host-picker-constants")),
+  HostPicker: () => null,
+  HostPickerOption: () => null,
+  HostStatusDotSlot: () => null,
+}));
 vi.mock("./host-navigation", () => ({ usePluginHostNavigation: () => ({}) }));
 function Surface() {
   React.useEffect(() => {
@@ -69,12 +74,16 @@ const installed = {
   serverId: "srv_mini",
   lifetime: new AbortController(),
   queryClient: new (await import("@tanstack/react-query")).QueryClient(),
-  sidebarItems: [
+  legacySidebarItems: [
     { id: "organization", title: "Command Centre", icon: "ShieldAlert", surface: "main" },
   ],
   surfaces: [{ id: "main", Component: Surface }],
 };
 vi.mock("./registry", () => ({
+  pluginRegistry: {
+    controllerPluginId: () => "orca-organization-next",
+    isControllerPluginId: (id: string) => id === "orca-organization-next",
+  },
   useInstalledPlugin: () => installed,
   usePluginEvaluationError: () => null,
   usePluginInstallations: () => [installed],

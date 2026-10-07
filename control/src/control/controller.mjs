@@ -301,7 +301,7 @@ export class Controller {
         this.store.get(id).generation !== generation
       )
         throw new Error("Handback requires unchanged idle session");
-      check?.(current, initial);
+      check?.(current, initial, authorityKey(task));
       const grant = this.store.transfer(id, "delegated", reason, current.lastPromptId);
       this.store.db
         .prepare("UPDATE sessions SET authority=?,expectedAt=?,boot=?,grantedAt=? WHERE id=?")

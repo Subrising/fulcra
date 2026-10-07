@@ -157,6 +157,14 @@ describe("translation resources", () => {
     }
   });
 
+  it("localizes observation-only usage without changing metric scopes", () => {
+    for (const resource of [ar, es, fr, ja, ko, ptBR, ru, zhCN]) {
+      expect(resource.usagePanel.thisChat).not.toBe(en.usagePanel.thisChat);
+      expect(resource.usagePanel.costNote).not.toBe(en.usagePanel.costNote);
+      expect(resource.usagePanel.lastRequestUnknown).not.toBe(en.usagePanel.lastRequestUnknown);
+    }
+  });
+
   it("preserves interpolation placeholders in every language", () => {
     expect(findInterpolationMismatches(ar)).toEqual([]);
     expect(findInterpolationMismatches(es)).toEqual([]);
@@ -365,6 +373,7 @@ describe("translation resources", () => {
   it("includes provider selector and pairing keys for the Batch 4D migration", () => {
     expect(en.modelSelector.title).toBe("Select provider");
     expect(en.modelSelector.profiles).toBe("Profiles");
+    expect(en.modelSelector.savedModels).toBe("Showing previously loaded {{provider}} models.");
     expect(en.providerCatalog.title).toBe("Add provider");
     expect(en.providerCatalog.actions.installInstructions).toBe("Install instructions");
     expect(en.pairing.link.title).toBe("Paste pairing link");

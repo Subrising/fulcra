@@ -177,7 +177,7 @@ describe("ArchitectureMapPanel", () => {
     render();
     const empty = byTestId("architecture-map-empty");
     expect(empty?.textContent).toContain("No architecture map in this project");
-    expect(empty?.textContent).toContain("Fulcra shows maps stored in .fulcra/architecture.");
+    expect(empty?.textContent).toContain("Add a saved code map under .fulcra/architecture");
     expect(container?.textContent).not.toMatch(/archify/i);
   });
 

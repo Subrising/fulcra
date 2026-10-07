@@ -23,7 +23,9 @@ import { ToolSurfaces } from "./tool-refresh.mjs";
 import { UsageLimits } from "./usage-limits.mjs";
 import { Wakes } from "./wakes.mjs";
 import { Questions } from "./questions.mjs";
+import { CompactionLoops } from "./compaction-loops.mjs";
 import { ProviderRecovery } from "./provider-recovery.mjs";
+import { AutomaticRestarts } from "./automatic-restart.mjs";
 import { Decisions } from "./decisions.mjs";
 import { Environments } from "./environments.mjs";
 import { Devices } from "./devices.mjs";
@@ -110,6 +112,7 @@ export async function startController({
   control.limitNotifier = macLimitNotifier();
   control.wakes = new Wakes(control); // H7 items 1-2: owned sessions wake their seat; the idle-seat heartbeat
   control.questions = new Questions(control); // H7 item 5: a seat's reply answers its worker's pending question
+  control.compactionLoops = new CompactionLoops(control, { home: HOME });
   control.providerRecovery = new ProviderRecovery(control); // H7 items 3-4: Codex auth/quota and failed-refresh restarts in place
   control.devices = new Devices(control); // Fulcra §3.6: paired devices, the only proof of the owner. First-device pairing is a compiled release constant plus the host's own device flag (v1.13 R3-1): no file turns it on
   control.inboxChannels = new InboxChannels(control); // J3b: one inbox, any channel
@@ -124,6 +127,11 @@ export async function startController({
     settings: worktreeLifecycleSettings({ ORCA_HOME: HOME }),
   });
   native.attach(control);
+  control.automaticRestarts = new AutomaticRestarts(control, {
+    currentBoot: () => local.currentBoot(),
+  });
+  // Capture interrupted original delegations before the optional seat sweep re-pins their boots.
+  void control.automaticRestarts.tick();
   let lifecyclePass = null;
   const cleanFinishedJobs = () => {
     if (!closing && !lifecyclePass)
@@ -136,7 +144,7 @@ export async function startController({
           lifecyclePass = null;
         });
   };
-  const lifecycleTimer = setInterval(cleanFinishedJobs, 3600000);
+  const lifecycleTimer = setInterval(cleanFinishedJobs, 60000);
   lifecycleTimer.unref();
   cleanFinishedJobs();
   // Stage 2 seat sweep (STAGE2-DESIGN.md s3.2). Off unless the prime writes the mode file. Its first pass runs
@@ -144,7 +152,8 @@ export async function startController({
   // it so a daemon-only restart is also swept. It never throws and never delays startup on a fault.
   let sweeping = null;
   const sweep = () =>
-    (sweeping = sweepSeats(control, { home: HOME, currentBoot: () => local.currentBoot() })
+    (sweeping = Promise.resolve(control.automaticRestarts.ticking)
+      .then(() => sweepSeats(control, { home: HOME, currentBoot: () => local.currentBoot() }))
       .then((out) => {
         if (out.results.length || (out.mode !== "off" && out.reason)) log.line({ seatSweep: out });
       })
@@ -179,6 +188,7 @@ export async function startController({
         await control.wakes.pump();
         await control.quota.pump();
         await control.recovery.reconcile();
+        await control.tools.reconcile();
         void control.decisions.pump();
         void control.environments.pump();
       } while (eventDirty && !closing);
@@ -272,6 +282,8 @@ export async function startController({
       control.wakes.pumping,
       control.wakes.ticking,
       control.providerRecovery.ticking,
+      control.compactionLoops.stop(),
+      control.automaticRestarts.stop(),
       control.decisions.pumping,
       control.remits.refreshing,
       control.environments.pumping,
@@ -300,6 +312,8 @@ export async function startController({
     void control.usageLimits.onAgent(a);
     void control.wakes.onAgent(a);
     void control.providerRecovery.onAgent(a);
+    void control.compactionLoops.onAgent(a);
+    void control.automaticRestarts.tick();
   });
   for (const { id } of store.db
     .prepare("SELECT id FROM sessions WHERE mode='delegated' ORDER BY rowid DESC LIMIT 64")
@@ -318,6 +332,8 @@ export async function startController({
     void control.usageLimits.tick();
     void control.wakes.tick();
     void control.providerRecovery.tick();
+    void control.compactionLoops.tick();
+    void control.automaticRestarts.tick();
   }, 30000);
 
   return { stop, control };

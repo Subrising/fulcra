@@ -74,10 +74,10 @@ export function ProjectStory({
           <Button
             theme={theme}
             testID="org-remit-edit-open"
-            label={`Change which prime owns ${name}`}
+            label={`Change which main assistant owns ${name}`}
             onPress={onEditRemit}
           >
-            <Text style={{ color: c.foreground, fontWeight: "600" }}>Change prime</Text>
+            <Text style={{ color: c.foreground, fontWeight: "600" }}>Change main assistant</Text>
           </Button>
         </View>
       </View>

@@ -83,9 +83,40 @@ export default function ensureProtocolBuild() {
   return true;
 }
 
+const clientDir = path.join(repoRoot, "packages", "client");
+
+/** The CLI also reads @getpaseo/client through its `dist`; same check, for `--with-client`. */
+export function clientBuildReason() {
+  const oldestOutput = oldestOutputMtimeMs(path.join(clientDir, "dist"));
+  if (oldestOutput === null) return "client dist is missing";
+  const newestInput = Math.max(
+    ...["src", "package.json", "tsconfig.json"].map((entry) =>
+      newestMtimeMs(path.join(clientDir, entry)),
+    ),
+  );
+  return newestInput > oldestOutput ? "client sources are newer than its dist" : null;
+}
+
+function ensureClientBuild() {
+  const reason = clientBuildReason();
+  if (!reason) return false;
+  console.log(`[client] ${reason}; building once before continuing.`);
+  const result = spawnSync("npm", ["run", "build", "--workspace=@getpaseo/client"], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    shell: false,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`Building @getpaseo/client failed (${result.status ?? result.signal}).`);
+  }
+  return true;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     ensureProtocolBuild();
+    if (process.argv.includes("--with-client")) ensureClientBuild();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

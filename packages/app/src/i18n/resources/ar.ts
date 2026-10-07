@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -42,6 +43,7 @@ export const ar: TranslationResources = {
     total: "{{total}} تطابقات",
   },
   common: {
+    bottomSheetBackdrop: "خلفية اللوحة السفلية",
     back: "خلف",
     loading: "تحميل...",
     actions: {
@@ -167,6 +169,8 @@ export const ar: TranslationResources = {
     },
     attachments: {
       addImage: "أضف صورة",
+      choosePhoto: "اختيار صورة",
+      takePhoto: "التقاط صورة",
       pasteImage: "لصق صورة",
       addFile: "Upload file",
       addIssueOrPr: "أضف مشكلة أو PR",
@@ -455,7 +459,9 @@ export const ar: TranslationResources = {
       recovery: {
         archivedTitle: "مساحة العمل مؤرشفة",
         restoreDescription:
-          "تمت أرشفة {{workspaceName}} وإزالة شجرة العمل الخاصة بها. استعد الفرع {{branch}} لفتحها مجددًا.",
+          "استعد {{workspaceName}} للعودة إلى وكلائها. ستستخدم شجرة العمل الفرع {{branch}}.",
+        restoreWithoutBranchDescription:
+          "استعد {{workspaceName}} للعودة إلى وكلائها. سيبدأ فرع جديد من الفرع الأساسي المحفوظ أو الفرع الافتراضي للمستودع.",
         unarchiveDescription: "{{workspaceName}} مؤرشفة. ألغِ أرشفتها لفتحها مجددًا.",
         restoreAction: "استعادة",
         unarchiveAction: "إلغاء الأرشفة",
@@ -1378,6 +1384,9 @@ export const ar: TranslationResources = {
       settings: "إعدادات",
       closeSidebar: "إغلاق الشريط الجانبي",
     },
+    footer: {
+      usage: "الاستخدام",
+    },
     help: {
       trigger: "المساعدة والدعم",
       sectionHelp: "المساعدة",
@@ -1756,7 +1765,11 @@ export const ar: TranslationResources = {
     loadingCommands: "جارٍ تحميل الأوامر...",
     noFiles: "لم يتم العثور على ملفات أو أدلة",
     noCommands: "لم يتم العثور على أي أوامر",
+    accountUnavailable: "أوامر الحساب غير متاحة لهذا الكمبيوتر بعد. حدّث Fulcra على {{host}}.",
+    thisComputer: "هذا الكمبيوتر",
     failedToLoad: "فشل التحميل",
+    chooseProjectForCommands: "اختر مشروعًا لعرض الأوامر",
+    chooseModelForCommands: "اختر نموذجًا لعرض الأوامر",
   },
   loadOlderHistory: {
     failed: "تعذر تحميل السجل الأقدم",
@@ -1766,6 +1779,8 @@ export const ar: TranslationResources = {
     permissionMessage: "يرجى السماح بالوصول إلى مكتبة الصور الخاصة بك لإرفاق الصور.",
     errorTitle: "خطأ",
     failedToSelect: "فشل في تحديد الصورة",
+    cameraPermissionMessage: "يرجى السماح بالوصول إلى الكاميرا لالتقاط الصور.",
+    failedToTakePhoto: "تعذر التقاط الصورة",
     dialogTitle: "إرفاق الصور",
     dialogFilterName: "الصور",
   },
@@ -1820,6 +1835,7 @@ export const ar: TranslationResources = {
     modelCountPlural: "{{count}} نماذج",
     retry: "أعد المحاولة",
     retrying: "جارٍ إعادة المحاولة...",
+    savedModels: "عرض نماذج {{provider}} المحمّلة سابقًا.",
     noMatches: "لا توجد نماذج تطابق بحثك",
     noMatchesForQuery: 'لا توجد نماذج تطابق "{{query}}"',
     searchAllPlaceholder: "ابحث في كل النماذج...",
@@ -1862,6 +1878,17 @@ export const ar: TranslationResources = {
     hostPassword: {
       title: "كلمة المرور لـ {{host}}",
       label: "كلمة مرور المضيف",
+    },
+    hostConfirmation: {
+      title: "الاتصال بهذا المضيف؟",
+      description:
+        "سيتمكن هذا المضيف من تشغيل تعليمات برمجية في هذا التطبيق والوصول إلى مضيفيك الآخرين المتصلين. اتصل فقط إذا كنت تعرفه.",
+      descriptionChanged:
+        "يغيّر هذا الرابط طريقة اتصالك بهذا المضيف. سيتمكن المضيف من تشغيل تعليمات برمجية في هذا التطبيق والوصول إلى مضيفيك الآخرين المتصلين. اتصل فقط إذا كنت تعرفه.",
+      hostLabel: "المضيف",
+      fingerprintLabel: "بصمة المفتاح",
+      relayLabel: "المُرحّل",
+      connect: "اتصال",
     },
     connectionMethods: {
       title: "إضافة اتصال",
@@ -1935,6 +1962,12 @@ export const ar: TranslationResources = {
       helper: "الاتصال بخادم Fulcra يعمل على المضيف البعيد.",
       fields: {
         target: "مضيف SSH",
+        password: "كلمة مرور الدايمون",
+        optional: "خياري",
+      },
+      passwordVisibility: {
+        show: "إظهار كلمة المرور",
+        hide: "إخفاء كلمة المرور",
       },
       actions: {
         cancel: "إلغاء",
@@ -2122,6 +2155,8 @@ export const ar: TranslationResources = {
       emptyDescription: "أنشئ طلب سحب لنسخة العمل هذه لعرض تفاصيله هنا.",
     },
     architectureMap: {
+      mainOnly: "بنية الكود عرض في مساحة العمل الرئيسية. افتحه من قائمة علامة التبويب +.",
+      entryUnavailable: "أضف خريطة كود محفوظة أو اتصل بمضيف يدعم رسم الكود أو تحليل التغييرات.",
       label: "خريطة البنية",
       subtitle: "بنية المشروع",
       tooltip: "عرض خريطة بنية المشروع",
@@ -2138,6 +2173,7 @@ export const ar: TranslationResources = {
       zoomIn: "تكبير",
       zoomOut: "تصغير",
       fit: "ملاءمة",
+      gestureHint: en.panels.architectureMap.gestureHint,
       actualSize: "الحجم الفعلي",
       components: "المكوّنات",
       boundaries: "الحدود",
@@ -2189,6 +2225,8 @@ export const ar: TranslationResources = {
         packageHint: "اختر حزمة لفتح وحداتها.",
         allLevels: "إظهار كل المستويات",
         showInMap: "عرض في الخريطة",
+        does: en.panels.architectureMap.graph.does,
+        panel: en.panels.architectureMap.graph.panel,
       },
       review: {
         open: "مراجعة",
@@ -2219,6 +2257,7 @@ export const ar: TranslationResources = {
           NORMAL: "خطر عادي: كود تصل إليه اختبارات ({{tests}}).",
           HIGH: "خطر مرتفع: كود لا يصل إليه أي اختبار، أو كود يحذفه هذا التغيير.",
         },
+        plain: en.panels.architectureMap.review.plain,
         loadingDiff: "جارٍ تحميل التغييرات…",
         noDiff: "لا توجد تغييرات نصية لعرضها لهذا الملف.",
         noFindingsHere: "لم تجد المراجعة الآلية شيئًا في هذا الملف.",
@@ -2421,7 +2460,10 @@ export const ar: TranslationResources = {
   sidebarCallout: {
     dismiss: "رفض",
   },
+  usagePanel: usagePanelCopy["ar"],
   contextWindow: {
+    noData: "لا توجد بيانات للسياق",
+    accessibilityNoData: "نافذة السياق: لا توجد بيانات للسياق",
     title: "نافذة السياق",
     used: "تم استخدام{{percentage}}%",
     tokens: "رموز{{used}}/{{max}}",
@@ -2448,6 +2490,7 @@ export const ar: TranslationResources = {
       app: "برنامج",
       host: "Host",
     },
+    menu: en.settings.menu,
     hostPicker: {
       switchHost: "تبديل المضيف",
       local: "محلي",
@@ -2489,6 +2532,11 @@ export const ar: TranslationResources = {
       refreshAccessibility: "تحديث إذن الإشعارات",
       playSound: "تشغيل صوت",
       playSoundHint: "تشغيل صوت عند وصول إشعار سطح مكتب",
+      digest: "تجميع الجلسات المنتهية",
+      digestHint:
+        "عرض ملخص واحد للجلسات المنتهية بدلاً من تنبيه لكل جلسة. تظل الموافقات والأخطاء تنبّه فوراً.",
+      digestFrequency: "كم مرة",
+      digestEvery: "{{count}} د",
       test: "اختبار الإشعار",
       testHint: "إرسال إشعار باستخدام هذه الإعدادات",
       permissionRequired: "اسمح بالوصول إلى الإشعارات قبل الاختبار",
@@ -2683,8 +2731,15 @@ export const ar: TranslationResources = {
         description: "عرض مخطط للتنقل بين المطالبات",
       },
       sidebar: {
-        title: "الشريط الجانبي",
-        description: "اختر العناصر التي تظهر أعلى الشريط الجانبي وترتيبها",
+        header: {
+          title: "الرأس",
+          description: "اختر العناصر التي تظهر أعلى الشريط الجانبي وترتيبها",
+        },
+        footer: {
+          title: "التذييل",
+          description:
+            "اختر الصفوف التي تظهر أسفل الشريط الجانبي وترتيبها. يظهر «إضافة مشروع» وصف الأيقونات دائمًا",
+        },
         moveUp: "نقل لأعلى",
         moveDown: "نقل لأسفل",
       },
@@ -2707,6 +2762,14 @@ export const ar: TranslationResources = {
         codeSize: "حجم الكود",
         codeSizeHint: "يُستخدم للكود والفروقات ومخرجات الطرفية",
         codeSizeAccessibility: "حجم خط الكود",
+      },
+      layout: {
+        title: "التخطيط",
+        contentWidth: "عرض المحتوى",
+        contentWidthHint: "أقصى عرض للمحادثة وملفات Markdown على الشاشات العريضة",
+        contentWidthAccessibility: "عرض المحتوى بالبكسل",
+        reset: "إعادة تعيين",
+        resetAccessibility: "إعادة عرض المحتوى إلى الافتراضي",
       },
       syntax: {
         title: "بناء الجملة",

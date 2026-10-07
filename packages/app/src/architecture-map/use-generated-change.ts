@@ -10,6 +10,8 @@ import type { GeneratedPayload } from "./generated-change";
 
 const LIST_STALE_MS = 30_000;
 const CHANGE_STALE_MS = 60_000;
+// Explanations are cached on the host, so asking again after this is free; useFetchQuery needs a finite value.
+const EXPLAIN_STALE_MS = 10 * 60_000;
 
 export interface PullRequestChoice {
   number: number;
@@ -188,6 +190,51 @@ export function useReviewFileDiff(input: {
         base: input.base,
         head: input.head,
         path: input.path,
+      });
+    },
+  });
+}
+
+/**
+ * "In plain words" or pseudocode for one review file, asked once per file version. The host caches the text, so a
+ * re-open or a second reviewer costs nothing; the reply also carries today's use against the daily cap.
+ */
+export function useReviewExplanation(input: {
+  serverId: string;
+  cwd: string | null;
+  base: string | null;
+  head: string | null;
+  path: string | null;
+  /** "module": the code map's What it does for one folder; pass the map's commit as both base and head. */
+  kind: "summary" | "pseudocode" | "module";
+  enabled: boolean;
+}) {
+  const client = useSessionStore((state) => state.sessions[input.serverId]?.client ?? null);
+  return useFetchQuery({
+    dataShape: "value",
+    staleTimeMs: EXPLAIN_STALE_MS,
+    queryKey: [
+      "pull-request-review-explain",
+      input.serverId,
+      input.cwd,
+      input.base,
+      input.head,
+      input.path,
+      input.kind,
+    ],
+    enabled: Boolean(
+      input.enabled && client && input.cwd && input.base && input.head && input.path,
+    ),
+    retry: false,
+    queryFn: async () => {
+      if (!client || !input.cwd || !input.base || !input.head || !input.path)
+        throw new Error("No file chosen");
+      return client.explainPullRequestReviewFile({
+        cwd: input.cwd,
+        base: input.base,
+        head: input.head,
+        path: input.path,
+        kind: input.kind,
       });
     },
   });

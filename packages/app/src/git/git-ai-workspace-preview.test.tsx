@@ -83,16 +83,14 @@ afterEach(() => {
 });
 function open() {
   render(<GitAiWorkspacePreview serverId="host" workspaceId="workspace" cwd="/selected" />);
-  fireEvent.click(screen.getByText("AI Git help"));
+  fireEvent.click(screen.getByText("Write with AI"));
 }
 test("Use draft fills editable wording, with a separate human click required for the existing write action", async () => {
   open();
   act(() => h.panel?.onUseDraft({ kind: "commit-message", message: "Reviewed subject" }));
   expect(h.commit).not.toHaveBeenCalled();
   expect(h.createPr).not.toHaveBeenCalled();
-  await act(async () =>
-    fireEvent.click(screen.getByText("Commit all changes with reviewed subject")),
-  );
+  await act(async () => fireEvent.click(screen.getByText("Commit all changes")));
   expect(h.commit).toHaveBeenCalledExactlyOnceWith({
     serverId: "host",
     cwd: "/selected",
@@ -124,4 +122,28 @@ test("held draft after revoke and regain cannot publish or use the cancelled ori
   expect(() => original!.onUseDraft({ kind: "commit-message", message: "Late" })).toThrow();
   expect(h.commit).not.toHaveBeenCalled();
   expect(h.createPr).not.toHaveBeenCalled();
+});
+const COMMIT_START = { kind: "commit-message", nonce: 1 } as const;
+test("Commit opens straight onto a commit draft, titled plainly, and still needs a confirm", async () => {
+  const { rerender } = render(
+    <GitAiWorkspacePreview serverId="host" workspaceId="workspace" cwd="/selected" start={null} />,
+  );
+  expect(h.panel).toBeNull();
+  rerender(
+    <GitAiWorkspacePreview
+      serverId="host"
+      workspaceId="workspace"
+      cwd="/selected"
+      start={COMMIT_START}
+    />,
+  );
+  expect(h.panel?.startWith).toBe("commit-message");
+  act(() => h.panel?.onUseDraft({ kind: "commit-message", message: "Add the --days option" }));
+  expect(h.commit).not.toHaveBeenCalled();
+  await act(async () => fireEvent.click(screen.getByText("Commit all changes")));
+  expect(h.commit).toHaveBeenCalledExactlyOnceWith({
+    serverId: "host",
+    cwd: "/selected",
+    message: "Add the --days option",
+  });
 });

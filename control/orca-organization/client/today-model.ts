@@ -16,7 +16,7 @@ export type TodayAction =
   | { kind: "decision"; id: string }
   | { kind: "held"; channelId: string; messageId: string }
   | { kind: "held-list" }
-  | { kind: "session"; agentId: string }
+  | { kind: "session"; agentId: string; serverId?: string }
   | { kind: "project"; projectId: string }
   | { kind: "recovery" };
 // Update-7: what a running session runs on -- model, effort and its pool account, as far as its host reports them.
@@ -320,7 +320,10 @@ export function buildToday(i: TodayInputs): Today {
       needs: TodayItem[] = [];
     for (const n of [...nodes].sort((a, b) => (at(b.updatedAt) ?? 0) - (at(a.updatedAt) ?? 0))) {
       const title = plainTitle(n.title),
-        open = n.agentId ? { kind: "session" as const, agentId: n.agentId } : null;
+        open =
+          n.agentId && n.serverId
+            ? { kind: "session" as const, agentId: n.agentId, serverId: n.serverId }
+            : null;
       const why = blockedReason(n, rec, now, timeZone);
       if (n.pending) {
         needs.push(
@@ -605,4 +608,121 @@ export function buildToday(i: TodayInputs): Today {
     projects,
     gaps,
   };
+}
+
+export interface HumanAttention {
+  actions: TodayItem[];
+  unknown: boolean;
+}
+/** Personal obligations come from fresh open-human packets or fresh native permission waits, never counters/history. */
+export function humanAttention(input: TodayInputs): HumanAttention {
+  const actions: TodayItem[] = [];
+  let unknown =
+    input.inboxFailed ||
+    !input.inbox ||
+    !!input.inbox.stale ||
+    !!input.inbox.partial ||
+    !input.map?.available;
+  const names = new Map(
+    (input.map?.projects ?? []).map((project) => [project.projectId, project.name]),
+  );
+  const inboxTime = at(input.inbox?.observedAt),
+    inboxAge = inboxTime === null ? Infinity : input.now - inboxTime;
+  if (inboxAge < -5000 || inboxAge > 45000) unknown = true;
+  if (
+    input.inbox &&
+    !input.inbox.stale &&
+    !input.inboxFailed &&
+    inboxAge >= -5000 &&
+    inboxAge <= 45000
+  ) {
+    const seen = new Set<string>();
+    for (const row of input.inbox.items) {
+      if (
+        row.source !== "decision" ||
+        row.urgency === "fyi" ||
+        !row.ref?.startsWith("decision:") ||
+        seen.has(row.ref)
+      )
+        continue;
+      seen.add(row.ref);
+      actions.push({
+        key: `human-${row.key}`,
+        projectId: row.projectId,
+        project: row.projectId ? (names.get(row.projectId) ?? "Project name unavailable") : null,
+        text: plain(row.title),
+        detail: `Decision requested from you: ${plain(row.summary)}`,
+        at: row.createdAt,
+        action: { kind: "decision", id: row.ref.slice(9) },
+      });
+    }
+    // The controller's stored now/today urgency is the only relative decision priority.
+    const urgency = new Map(input.inbox.items.map((row) => [`human-${row.key}`, row.urgency]));
+    actions.sort(
+      (a, b) =>
+        Number(urgency.get(b.key) === "now") - Number(urgency.get(a.key) === "now") ||
+        (a.project ?? "").localeCompare(b.project ?? "") ||
+        a.key.localeCompare(b.key),
+    );
+  }
+  const permissionIds = new Set<string>();
+  for (const [projectId, fleet] of Object.entries(input.fleets)) {
+    if (!fleet) {
+      unknown = true;
+      continue;
+    }
+    for (const node of fleet.nodes) {
+      if (!(node.pending && node.pending > 0)) continue;
+      const observed = at(node.observedAt),
+        age = observed === null ? Infinity : input.now - observed;
+      if (!node.agentId || !node.serverId || node.error || age < -5000 || age > 45000) {
+        unknown = true;
+        continue;
+      }
+      const identity = `${node.serverId}:${node.agentId}`;
+      if (permissionIds.has(identity)) continue;
+      permissionIds.add(identity);
+      actions.push({
+        key: `human-permission-${identity}`,
+        projectId,
+        project: names.get(projectId) ?? "Project name unavailable",
+        text: `${plainTitle(node.title)} needs your permission`,
+        detail:
+          "This operation is waiting for your answer before it can proceed. Open its original conversation to inspect the request.",
+        at: node.observedAt,
+        action: { kind: "session", agentId: node.agentId, serverId: node.serverId },
+      });
+    }
+  }
+  const urgency = new Map(
+    (input.inbox?.items ?? []).map((row) => [`human-${row.key}`, row.urgency]),
+  );
+  const rank = (item: TodayItem) =>
+    item.action?.kind === "session" || urgency.get(item.key) === "now" ? 0 : 1;
+  actions.sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      (a.project ?? "").localeCompare(b.project ?? "") ||
+      a.key.localeCompare(b.key),
+  );
+  return { actions, unknown };
+}
+
+/** The personal list owns confirmed obligations; history keeps the remaining source observations. */
+export function retainedTodayNeeds(
+  items: readonly TodayItem[],
+  personal: readonly TodayItem[],
+): TodayItem[] {
+  function identity(item: TodayItem): string | null {
+    const action = item.action;
+    if (action?.kind === "decision") return `decision:${action.id}`;
+    if (action?.kind === "session" && action.serverId)
+      return `session:${action.serverId}:${action.agentId}`;
+    return null;
+  }
+  const confirmed = new Set(personal.map(identity).filter((value) => value !== null));
+  return items.filter((item) => {
+    const key = identity(item);
+    return key === null || !confirmed.has(key);
+  });
 }

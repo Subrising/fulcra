@@ -3,7 +3,7 @@
 // review) gets Fulcra's orchestration instruction by default: workers are sessions -- started with `paseo run` (or the
 // manager tools), which records the lead as parent, the task and project, and the implementation role's model and
 // effort -- never Agent-tool subagents for implementation or review; subagents only for read-only digests.
-// With the guard on (Settings › Accounts & Defaults), a Claude lead's session also has the subagent tools removed, so
+// With the guard on (Settings › Accounts & models), a Claude lead's session also has the subagent tools removed, so
 // implementation cannot go to a subagent at all (read-only digests then go to a session too). Codex has no such tool.
 // The hook never throws and never replaces a prompt: it appends to the one the creation already has.
 import { loadConfig } from "./config.mjs";

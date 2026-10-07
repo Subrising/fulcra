@@ -35,7 +35,8 @@ function SessionInfoTrigger({ account, testID }: { account: SessionAccount; test
   );
 }
 
-/** Shared row/header information. The account name comes from the live projection, including switches. */
+/** Shared row/header information. The account name comes from the live projection, including switches. Shows
+ * nothing until the host names the account: an unnamed account is not news, and "unknown" on every idle row is noise. */
 export function SessionAccountInfo({
   account,
   testID,
@@ -43,7 +44,7 @@ export function SessionAccountInfo({
   account: SessionAccount | null;
   testID?: string;
 }) {
-  if (!account) return null;
+  if (!account?.name) return null;
   return (
     <DropdownMenu>
       <SessionInfoTrigger account={account} testID={testID} />

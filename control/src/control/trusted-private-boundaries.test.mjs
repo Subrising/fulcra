@@ -84,7 +84,12 @@ function fixture(t, mode) {
   let input;
   createTrustedContribution({ home })({
     inputObservations: { boot: randomUUID(), require: () => ({ humanAt: 0 }) },
-    admission: { onInput: (h) => (input = h), mcpRefresh() {}, codexTurn() {} },
+    admission: {
+      onInput: (h) => (input = h),
+      mcpRefresh() {},
+      codexTurn() {},
+      nativeQueuedReceipt() {},
+    },
     guard() {},
     claude: { deny() {} },
   });

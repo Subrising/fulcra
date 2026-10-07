@@ -1,0 +1,17 @@
+# Paseo plugin qualification
+
+Keep the stable v0.10.3 intake separate from v0.11 plugin migration. Current production remains the stable fork until the delivery owner selects a verified candidate. No beta dependency or runtime is installed by this source qualification.
+
+Inputs: stable `b4af508e2a9e5a34a8b0ffb8dfaff6fd679da6c7`; beta tag `v0.11.0-beta.3`, commit `6166a7aca5e3184e8ab505caad28f6a595816414`. Both are read-only inbound refs from `getpaseo/paseo`.
+
+| Boundary                                            | Exact beta source                                                               | Disposition                                                                                                                                                                                                           |
+| --------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Usage source registration                           | `packages/plugin/src/server/usage.ts`, `server/contracts.ts`, `server/index.ts` | New discover/refresh/report and stable non-credential account keys are a viable extraction target. Keep native account origins and quota gating; do not replace them with display labels.                             |
+| Client usage UI                                     | `packages/plugin/src/client/contracts.ts`, `client/ui.ts`, `client/index.ts`    | Qualify compact/desktop UI and lifetime/cancellation before moving the fork's usage surface. Source presence is not runtime proof.                                                                                    |
+| Trusted admission, provenance, management           | Fulcra `packages/plugin/src/server/trusted.ts` and `management.ts`              | These owned extensions are absent from stock beta exports. Retain the native extension facade and its original guards; a wholesale stock SDK replacement is not compatible.                                           |
+| Secrets, credentials, notify                        | Fulcra `packages/plugin/src/server/contracts.ts`                                | Preserve the owned proxy and manifest-capability contracts. Beta's stock context is not a substitute for existing secret/OAuth or notification authority.                                                             |
+| Mutable parent/labels, cancel, durable report/inbox | Beta `packages/plugin/src/contracts.ts` and `server/lifecycle.ts`               | Stock source does not supply the complete owned mutation/replay contract. Extend the existing native facade, then move policy into the plugin; do not emulate durable delivery by polling or accepting caller labels. |
+
+Qualification performed here is an immutable source/API comparison. Beta compilation, producer/client integration, durable-event/revocation coverage and device/runtime acceptance are **not run**. Do not relabel them passed or silently deploy the beta. The configured native identity slice and stable host-confirmation tests run in the existing Book slot; beta qualification does not block their source progress.
+
+The [core patch ledger](fork-patches.md) owns allowed core seams and remaining extraction debt. All outward Fulcra-to-Paseo feature proposals are out of scope by the owner's no-upstreaming decision.

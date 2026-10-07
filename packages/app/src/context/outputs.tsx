@@ -5,9 +5,8 @@ import { IntercomStatusSchema } from "@getpaseo/protocol/native-intercom";
 import { Button } from "@/components/ui/button";
 import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
-import { useInstalledPlugin } from "@/plugins/registry";
+import { useControllerPlugin } from "@/plugins/registry";
 import { usePluginSurfaceRuntime } from "@/plugins/surface-runtime";
-import { COMMAND_CENTRE_PLUGIN_ID } from "@/plugins/command-centre-connection";
 import { useContextRead } from "./read-scope";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { Agent } from "@/stores/session-store";
@@ -32,7 +31,7 @@ export function ContextOutputs({
 }
 function ScopedOutputs(props: Props) {
   const client = useHostRuntimeClient(props.serverId);
-  const plugin = useInstalledPlugin(props.serverId, COMMAND_CENTRE_PLUGIN_ID);
+  const plugin = useControllerPlugin(props.serverId);
   const runtime = usePluginSurfaceRuntime(client, plugin);
   const admissionEpoch = useOutputAdmissionEpoch(props, client);
   const subscribe = useCallback(

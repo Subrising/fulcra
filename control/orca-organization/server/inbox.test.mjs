@@ -481,7 +481,7 @@ test("R-D1 (v1.6 §3.6): device RPCs against the real controller: pair, list, pr
   const { f, call } = await seeded(t);
   assert.equal(
     (await createDevices({ call }).open({})).message,
-    "Pairing arrives with the next Fulcra update",
+    "Device pairing isn't available in this version of Fulcra yet",
     "no host device API, no window",
   );
   const devices = createDevices({ call, hostDevice: true }),

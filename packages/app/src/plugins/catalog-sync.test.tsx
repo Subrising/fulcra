@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   supported: null as boolean | null,
   registry: {
     suspendHost: vi.fn(),
+    clearHostInputPolicy: vi.fn(),
     removeHost: vi.fn(),
     installCatalog: vi.fn(),
     markCatalogSettled: vi.fn(),
@@ -42,6 +43,7 @@ it("suspends before feature knowledge arrives, fences late catalogs, and removes
   // drives the component's first catalog fetch.
   const subscribe = vi.fn((handlers: { snapshot: () => void }) => handlers.snapshot());
   const client = {
+    subscribeConnectionStatus: () => () => {},
     getPluginCatalog: vi.fn(() => new Promise((resolve) => resolves.push(resolve))),
     observeEvents: vi.fn(() => ({ subscribe, release })),
   } as unknown as DaemonClient;
@@ -71,6 +73,7 @@ it("suspends before feature knowledge arrives, fences late catalogs, and removes
   expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("host", fresh, {
     client,
     replacePluginId: undefined,
+    trustedPlugins: undefined,
   });
   state.supported = false;
   view.rerender(React.createElement(PluginCatalogSync, { serverId: "host", client }));
@@ -84,6 +87,7 @@ it("suspends before feature knowledge arrives, fences late catalogs, and removes
 // settles the catalog, and the host index reads that as a permanent absence.
 it("waits instead of settling the catalog while the host has not reported features", async () => {
   const client = {
+    subscribeConnectionStatus: () => () => {},
     getPluginCatalog: vi.fn(() => new Promise(() => {})),
     observeEvents: vi.fn(() => ({ subscribe: vi.fn(), release: vi.fn(() => Promise.resolve()) })),
   } as unknown as DaemonClient;
@@ -110,6 +114,7 @@ it("m2 installs only prepared catalog entries after preparation completes", asyn
       }),
   );
   const client = {
+    subscribeConnectionStatus: () => () => {},
     getPluginCatalog: vi.fn(async () => ({ plugins: raw })),
     observeEvents: () => ({
       subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
@@ -141,6 +146,7 @@ it("uses the explicit paging method only and cancels a held read on disconnect",
     });
   });
   const client = {
+    subscribeConnectionStatus: () => () => {},
     getPluginCatalog: vi.fn(),
     getPagedPluginCatalog: paged,
     observeEvents: () => ({
@@ -164,6 +170,7 @@ it("paging refusal suspends prior surfaces and never falls back to the legacy bu
   state.supported = true;
   state.paging = true;
   const client = {
+    subscribeConnectionStatus: () => () => {},
     getPluginCatalog: vi.fn(),
     getPagedPluginCatalog: vi.fn(async () => {
       throw new Error("read_revoked");
@@ -181,3 +188,123 @@ it("paging refusal suspends prior surfaces and never falls back to the legacy bu
   expect(state.registry.markCatalogSettled).toHaveBeenCalledWith("host");
   expect(state.registry.installCatalog).not.toHaveBeenCalled();
 });
+
+it("retains actual trusted input-hook metadata without another catalog read or bundle evaluation", async () => {
+  state.connected = true;
+  state.supported = true;
+  const trustedPlugins = [
+    { id: "orca-organization-next", contract: "1.1", hooks: ["input", "mcp"] },
+  ];
+  const client = {
+    subscribeConnectionStatus: () => () => {},
+    getPluginCatalog: vi.fn(async () => ({ plugins: [], trustedPlugins })),
+    observeEvents: () => ({
+      subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+      release: async () => {},
+    }),
+  } as unknown as DaemonClient;
+  await act(async () => {
+    render(React.createElement(PluginCatalogSync, { serverId: "srv_-gsApGw5dJdC", client }));
+  });
+  expect(client.getPluginCatalog).toHaveBeenCalledOnce();
+  expect(state.prepare).toHaveBeenCalledExactlyOnceWith([]);
+  expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("srv_-gsApGw5dJdC", [], {
+    client,
+    replacePluginId: undefined,
+    trustedPlugins,
+  });
+});
+it("clears policy synchronously on a connection drop even before a reconnect render", async () => {
+  state.connected = true;
+  state.supported = true;
+  let connectionChanged!: (status: { status: string }) => void;
+  const releaseConnection = vi.fn();
+  const client = {
+    subscribeConnectionStatus: (listener: typeof connectionChanged) => {
+      connectionChanged = listener;
+      return releaseConnection;
+    },
+    getPluginCatalog: vi.fn(async () => ({ plugins: [], trustedPlugins: [] })),
+    observeEvents: () => ({
+      subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+      release: async () => {},
+    }),
+  } as unknown as DaemonClient;
+  const view = render(React.createElement(PluginCatalogSync, { serverId: "same-host", client }));
+  await act(async () => {});
+  state.registry.clearHostInputPolicy.mockClear();
+  act(() => connectionChanged({ status: "disconnected" }));
+  expect(state.registry.clearHostInputPolicy).toHaveBeenCalledExactlyOnceWith("same-host", client);
+  view.unmount();
+  expect(releaseConnection).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])(
+  "fences a held preparation synchronously through drop (same-client reconnect: %s)",
+  async (reconnect) => {
+    state.connected = true;
+    state.supported = true;
+    state.paging = true;
+    let connectionChanged!: (status: { status: string }) => void;
+    let snapshot!: () => void;
+    let completePreparation!: (entries: unknown[]) => void;
+    let signal: AbortSignal | undefined;
+    let policy: "unknown" | "standalone" = "unknown";
+    state.registry.clearHostInputPolicy.mockImplementation(() => {
+      policy = "unknown";
+    });
+    state.registry.installCatalog.mockImplementation(() => {
+      policy = "standalone";
+    });
+    state.prepare.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          completePreparation = resolve;
+        }),
+    );
+    const client = {
+      subscribeConnectionStatus: (listener: typeof connectionChanged) => {
+        connectionChanged = listener;
+        return () => {};
+      },
+      getPagedPluginCatalog: vi.fn(async (options: { signal: AbortSignal }) => {
+        signal = options.signal;
+        return { plugins: [], trustedPlugins: [] };
+      }),
+      observeEvents: () => ({
+        subscribe: (handlers: { snapshot: () => void }) => {
+          snapshot = handlers.snapshot;
+          snapshot();
+        },
+        release: async () => {},
+      }),
+    } as unknown as DaemonClient;
+    try {
+      await act(async () => {
+        render(React.createElement(PluginCatalogSync, { serverId: "same-host", client }));
+      });
+      expect(state.prepare).toHaveBeenCalledOnce();
+      act(() => connectionChanged({ status: "disconnected" }));
+      expect(signal?.aborted).toBe(true);
+      if (reconnect) act(() => connectionChanged({ status: "connected" }));
+      // No rerender or effect cleanup occurred. The production listener owns invalidation.
+      await act(async () => completePreparation([]));
+      expect(state.registry.installCatalog).not.toHaveBeenCalled();
+      expect(policy).toBe("unknown");
+      expect(client.getPagedPluginCatalog).toHaveBeenCalledOnce();
+      if (reconnect) {
+        await act(async () => snapshot());
+        expect(client.getPagedPluginCatalog).toHaveBeenCalledTimes(2);
+        expect(state.registry.installCatalog).toHaveBeenCalledExactlyOnceWith("same-host", [], {
+          client,
+          replacePluginId: undefined,
+          trustedPlugins: [],
+        });
+        expect(policy).toBe("standalone");
+      }
+    } finally {
+      state.registry.clearHostInputPolicy.mockReset();
+      state.registry.installCatalog.mockReset();
+    }
+  },
+);

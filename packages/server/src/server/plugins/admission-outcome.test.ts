@@ -1,5 +1,5 @@
-import { admissionCheck, admissionOutcome } from "./admission-outcome.js";
-import { afterEach, expect, test } from "vitest";
+import { admissionCheck, admissionDiagnostic, admissionOutcome } from "./admission-outcome.js";
+import { afterEach, expect, test, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -271,4 +271,16 @@ test("native archive restore marks dispatch before a nested admission failure", 
       expect(admissionOutcome(error)).toBeUndefined();
     }
   });
+});
+
+test("a refusal with no request to carry it back is logged with the plugin's reason", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    admissionDiagnostic(new AdmissionDeniedError(), "Live runtime or permission facts unavailable");
+    expect(warn).toHaveBeenCalledWith(
+      "[trusted-plugin] input hook refused: Live runtime or permission facts unavailable",
+    );
+  } finally {
+    warn.mockRestore();
+  }
 });

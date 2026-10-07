@@ -1,3 +1,4 @@
+import type { RecordedUsage } from "@getpaseo/protocol/recorded-usage";
 import type { TrustedCodexTurnV11, QuotaReadFailureV11 } from "@getpaseo/plugin/server";
 import type {
   AccountCredential,
@@ -6,6 +7,9 @@ import type {
 import type { TrustedOperationV11 } from "@getpaseo/protocol/trusted-input";
 import type { TrustedOperationHandle } from "../plugins/trusted.js";
 import type {
+  AgentFeature,
+  AgentFeatureSelect,
+  AgentFeatureToggle,
   AgentProviderNotice,
   AgentTaskItem,
   JsonValue,
@@ -16,7 +20,13 @@ import type { AgentAttachment, AgentQuotaSnapshot } from "@getpaseo/protocol/mes
 import type { AgentBackgroundWork } from "@getpaseo/protocol/agent-background-work";
 import type { PaseoToolCatalog } from "./tools/types.js";
 
-export type { AgentProviderNotice, AgentTaskItem };
+export type {
+  AgentFeature,
+  AgentFeatureSelect,
+  AgentFeatureToggle,
+  AgentProviderNotice,
+  AgentTaskItem,
+};
 export type { AgentQuotaSnapshot };
 
 export type AgentProvider = string;
@@ -165,29 +175,6 @@ export interface AgentCreateConfigUnattendedInput {
   availableModes: AgentMode[];
 }
 
-export interface AgentFeatureToggle {
-  type: "toggle";
-  id: string;
-  label: string;
-  description?: string;
-  tooltip?: string;
-  icon?: string;
-  value: boolean;
-}
-
-export interface AgentFeatureSelect {
-  type: "select";
-  id: string;
-  label: string;
-  description?: string;
-  tooltip?: string;
-  icon?: string;
-  value: string | null;
-  options: AgentSelectOption[];
-}
-
-export type AgentFeature = AgentFeatureToggle | AgentFeatureSelect;
-
 export interface AgentCapabilityFlags {
   [capability: string]: boolean | undefined;
   supportsStreaming: boolean;
@@ -232,6 +219,8 @@ export interface CapturedCodexAdmission {
   onQuotaReadFailure(turn: TrustedCodexTurnV11, failure: QuotaReadFailureV11): void;
 }
 export interface AgentRunOptions {
+  /** Human prompt intent: dismiss async question cards without authorizing tools. */
+  clearPendingQuestions?: boolean;
   [FINAL_INPUT_CHECK]?: object;
   [NATIVE_QUEUED_FINAL]?: () => void;
   [TRUSTED_OPERATION]?: TrustedOperationHandle;
@@ -254,6 +243,7 @@ export interface SteerActiveTurnOptions extends AgentSteerOptions {
 }
 
 export interface AgentUsage {
+  recorded?: RecordedUsage;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
@@ -454,6 +444,12 @@ export type AgentTimelineItem =
   | PluginTimelineItem;
 
 export type AgentStreamEvent =
+  | {
+      type: "host_public_baseline_transport";
+      provider: AgentProvider;
+      nativeSessionId: string;
+      receipt: import("./host-public-baseline.js").PublicBaselineTransport;
+    }
   | { type: "thread_started"; sessionId: string; provider: AgentProvider }
   | { type: "turn_started"; provider: AgentProvider; turnId?: string }
   | { type: "turn_completed"; provider: AgentProvider; usage?: AgentUsage; turnId?: string }
@@ -595,6 +591,7 @@ export interface AgentSlashCommand {
 }
 
 export interface ListImportableSessionsOptions {
+  providerOptions?: ProviderOptions;
   limit?: number;
   /** Optional case-insensitive descriptor search text. */
   query?: string;
@@ -672,6 +669,8 @@ export interface AgentSessionConfig {
 }
 
 export interface AgentLaunchContext {
+  /** Host-selected public text/hash snapshot. Runtime-only; never an account/profile/config override. */
+  publicBaseline?: import("./host-public-baseline.js").HostPublicBaseline;
   agentId?: string;
   env?: Record<string, string>;
   /**
@@ -687,6 +686,11 @@ export interface AgentCreateSessionOptions {
    * Defaults to true. Providers that cannot honor false should no-op.
    */
   persistSession?: boolean;
+  /**
+   * A context rotation needs the fresh native session's id before its first turn. Providers that
+   * allocate ids lazily (Claude) start the conversation under this id; others ignore it.
+   */
+  freshSessionId?: string;
 }
 
 /** What a resumed session is for: driving the agent, or reading what it already did. */
@@ -706,7 +710,15 @@ export interface AgentPermissionResult {
   followUpPrompt?: AgentPromptInput;
 }
 
+export interface AgentUsageSession {
+  provider: string;
+  model?: string;
+  env: Record<string, string>;
+  sessionKey: string;
+}
+
 export interface AgentSession {
+  usageSession?(): AgentUsageSession | null;
   readonly provider: AgentProvider;
   readonly id: string | null;
   readonly capabilities: AgentCapabilityFlags;
@@ -729,6 +741,8 @@ export interface AgentSession {
   getQuota?(): Promise<AgentQuotaSnapshot>;
   /** Non-secret account label captured by this runtime at launch, never read from a mutable assignment. */
   usageSourceLabel?(): string | null;
+  /** Cached non-secret account identity only; no credential read, transport request or authorization. */
+  limitResumeAccountBinding?(): string | null;
   /** Fulcra account pool: the credential this session was launched with and its account label (daemon-internal). */
   usageCredential?(): {
     credential: AccountCredential;
@@ -775,7 +789,7 @@ export interface AgentSession {
   } | null;
 }
 
-export type FetchCatalogOptions =
+export type FetchCatalogOptions = { providerOptions?: ProviderOptions } & (
   | {
       scope: "global";
       force: boolean;
@@ -784,7 +798,8 @@ export type FetchCatalogOptions =
       scope: "workspace";
       cwd: string;
       force: boolean;
-    };
+    }
+);
 
 export interface ProviderRefreshContext {
   readonly signal: AbortSignal;

@@ -46,11 +46,15 @@ def copy_exact(source,target,expected):
     assert not target.exists() and not target.is_symlink(),'Target already exists'
     run(['/usr/bin/ditto',str(source),str(target)]);assert inventory(target)==expected,'Copied inventory differs'
 
+def unindexed(root):
+    assert any(part.endswith('.noindex') for part in root.resolve().parts),'Candidate and rollback bundles must be inside a .noindex directory'
+
 def main():
     assert len(sys.argv)==4 and sys.argv[1] in ['install','rollback','reinstall']
     mode=sys.argv[1];package=Path(sys.argv[2]);assert sha(package)==sys.argv[3];p=json.loads(package.read_text());E=package.parent
     for file,digest in p['pins'].items():assert sha(file)==digest,file
     A=Path(p['bundle']);target=Path(p['target']);profile=Path(p['profile']);assert target==Path('/Applications/Orca.app') and profile==Path.home()/'Library/Application Support/Orca';assert E.stat().st_uid==os.getuid() and not E.is_symlink()
+    unindexed(A.parent);unindexed(E)
     expected=json.loads(Path(p['inventory']).read_text())['files'];assert inventory(A)==expected;run(['/usr/bin/codesign','--verify','--deep','--strict',str(A)])
     marker=E/(mode+'.started');fd=os.open(marker,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
     def record(name,value):
@@ -61,7 +65,7 @@ def main():
         assert profile.is_dir() and not profile.is_symlink() and profile.stat().st_uid==os.getuid(),'Unexpected normal profile directory'
         for owned in json.loads(Path(p['ownedProcesses']).read_text()):quit_owned(owned)
         inactive(profile);settings(profile);data=inventory(profile);copy_exact(profile,E/'profile-before',data);record('profile-before-inventory',data)
-        stage=target.with_name('Orca.installing-'+p['source'][:8]+'.app');copy_exact(A,stage,expected);run(['/usr/bin/codesign','--verify','--deep','--strict',str(stage)]);assert not target.exists();os.rename(stage,target)
+        staging=target.parent/('.Orca.installing-'+p['source'][:8]+'.noindex');staging.mkdir(mode=0o700);stage=staging/target.name;copy_exact(A,stage,expected);run(['/usr/bin/codesign','--verify','--deep','--strict',str(stage)]);assert not target.exists();os.rename(stage,target);staging.rmdir()
     elif mode=='rollback':
         assert inventory(target)==expected;quit_owned(json.loads((E/'verification-process.json').read_text()));inactive(profile);settings(profile)
         data=inventory(profile);record('profile-after-inventory',data);assert not (E/'profile-after').exists();os.rename(profile,E/'profile-after');assert inventory(E/'profile-before')==json.loads((E/'profile-before-inventory.json').read_text());copy_exact(E/'profile-before',profile,json.loads((E/'profile-before-inventory.json').read_text()));assert not (E/'Orca.retained.app').exists();os.rename(target,E/'Orca.retained.app')

@@ -1,6 +1,8 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { checkNativeReportOriginPublication } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
+import { startLimitResume } from "./limit-resume/start.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
@@ -11,13 +13,14 @@ import { ControllerChannel } from "./plugins/controller-channel.js";
 import { createControllerService } from "./plugins/controller-service.js";
 import { initializeTrustedPlugins } from "./plugins/trusted-bootstrap.js";
 import { daemonBootDenyRules, recordDaemonBoot } from "./plugins/daemon-boot.js";
+import type { PluginRegistries } from "@getpaseo/protocol/plugin-registry";
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
 import { createServer as createHTTPServer, type IncomingMessage, type ServerResponse } from "http";
 import { constants, existsSync, unlinkSync } from "fs";
 import { open, rm, stat } from "fs/promises";
 import { randomUUID } from "node:crypto";
-import { hostname as getHostname } from "node:os";
+import { getHostName } from "./host-name.js";
 import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Logger } from "pino";
@@ -254,6 +257,7 @@ import {
 } from "./hub/relationship-remote.js";
 import { DaemonExecutions } from "./hub/daemon-executions.js";
 import { PluginService } from "./plugins/index.js";
+import { BuiltinPluginLoader } from "./plugins/builtin/index.js";
 import { ManagedPluginSources } from "./plugins/managed-source.js";
 
 const MCP_DEBUG_BATCH_LIMIT = 10;
@@ -411,6 +415,8 @@ export type DaemonLifecycleIntent =
 export interface PaseoDaemonConfig {
   /** Immutable distribution input from the embedding host, never config.json. */
   bundledPluginsDirectory?: string;
+  /** FULCRA(trusted-bundle): immutable embedding-host identity; ordinary config and labels cannot set it. */
+  bundledControllerPluginId?: string;
   listen: string;
   paseoHome: string;
   daemonVersion?: string;
@@ -428,7 +434,10 @@ export interface PaseoDaemonConfig {
     maxProcessConcurrency: number;
   };
   autoArchiveAfterMerge?: boolean;
+  explainDailyLimit?: number;
+  notificationMode?: "all" | "primes" | "off";
   enableTerminalAgentHooks?: boolean;
+  autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
@@ -437,6 +446,9 @@ export interface PaseoDaemonConfig {
   // Public OAuth client ids per connector, from config.json `integrations.oauthClientIds`.
   oauthClientIds?: Record<string, string>;
   plugins?: Record<string, PluginSource>;
+  pluginRegistries?: PluginRegistries;
+  pluginRegistryUrl?: string;
+  pluginRegistryEnabled?: boolean;
   staticDir: string;
   mcpDebug: boolean;
   isDev?: boolean;
@@ -505,6 +517,7 @@ export interface PaseoDaemon {
 }
 
 export interface PaseoDaemonDependencies {
+  builtinPlugins?: BuiltinPluginLoader;
   hubRelationshipRemote?: HubRelationshipRemote;
   hubRelationshipClock?: HubRelationshipClock;
   hubRelationshipRetryPolicy?: HubRelationshipRetryPolicy;
@@ -555,6 +568,10 @@ async function finishTimelineRetention(
   }
 }
 
+function resolveBuiltinPluginLoader(dependencies: PaseoDaemonDependencies): BuiltinPluginLoader {
+  return dependencies.builtinPlugins ?? new BuiltinPluginLoader();
+}
+
 function createBootstrapManagedProcessRegistry(
   config: Pick<PaseoDaemonConfig, "paseoHome" | "managedProcesses">,
   logger: Logger,
@@ -586,7 +603,7 @@ function mountWebUi(app: express.Application, config: PaseoDaemonConfig, logger:
     createWebUiMiddleware({
       enabled: config.webUi?.enabled ?? false,
       distDir: config.webUi?.distDir ?? null,
-      label: getHostname(),
+      label: getHostName(),
       logger,
     }),
   );
@@ -606,6 +623,12 @@ function initialRelayConfig(config: PaseoDaemonConfig): MutableDaemonConfig["rel
       process.env.PASEO_RELAY_ENDPOINT === undefined &&
       process.env.PASEO_RELAY_USE_TLS === undefined,
   };
+}
+
+function initialNotificationMode(
+  config: PaseoDaemonConfig,
+): MutableDaemonConfig["notificationMode"] {
+  return config.notificationMode ?? "primes";
 }
 
 function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDaemonConfig {
@@ -631,7 +654,10 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
       providers: config.metadataGeneration?.providers ?? [],
     },
     autoArchiveAfterMerge: config.autoArchiveAfterMerge ?? false,
+    explainDailyLimit: config.explainDailyLimit,
+    notificationMode: initialNotificationMode(config),
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
+    autoResumeOnLimit: config.autoResumeOnLimit ?? true,
     appendSystemPrompt: config.appendSystemPrompt ?? "",
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
@@ -649,6 +675,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
   return initialConfig;
 }
 
+// oxlint-disable-next-line complexity -- FULCRA: upstream body plus the named core patch seams; split on the next upstream merge.
 export async function createPaseoDaemon(
   config: PaseoDaemonConfig,
   rootLogger: Logger,
@@ -711,6 +738,7 @@ export async function createPaseoDaemon(
     config.bundledPluginsDirectory,
     config.paseoHome,
     {
+      controllerPluginId: config.bundledControllerPluginId,
       // Lifecycle status and authenticated Retry remain available while the child is down.
       // ControllerChannel/supervisor still refuse operational dispatch until ready.
       enabled: () => controllerDistribution(trustedPlugins) !== undefined,
@@ -729,9 +757,18 @@ export async function createPaseoDaemon(
   // owned controller's per-boot chain cannot step over a boot that ran without it (W1 row 9).
   const previousBoot = recordDaemonBoot(config.paseoHome, trustedPlugins.boot);
   trustedPlugins.denyToAgents(daemonBootDenyRules(config.paseoHome));
-  const pluginRuntime = new PluginService(logger, daemonConfigStore, daemonVersion, {
+  const pluginRuntime: PluginService = new PluginService(logger, daemonConfigStore, daemonVersion, {
     trustedBundles: trustedPlugins,
-    managedSources: new ManagedPluginSources(config.paseoHome),
+    usageAgents: {
+      hasAgent: (id) => agentManager.getAgent(id) !== null,
+      usageSession: (id) => agentManager.usageSession(id),
+    },
+    managedSources: new ManagedPluginSources(config.paseoHome, {
+      enabled: config.pluginRegistryEnabled ?? false,
+      registries: config.pluginRegistries,
+      defaultUrl: config.pluginRegistryUrl,
+    }),
+    builtinPlugins: resolveBuiltinPluginLoader(dependencies),
     settingsDirectory: path.join(config.paseoHome, "plugin-settings"),
     hostCalls: (call) => handlePluginHostCall(hostIntegrations.services, call),
     hostCapabilities: {
@@ -915,7 +952,7 @@ export async function createPaseoDaemon(
     res.json({
       status: "server_info",
       serverId,
-      hostname: getHostname(),
+      hostname: getHostName(),
       version: daemonVersion,
       listen: formatListenTarget(boundListenTarget ?? listenTarget),
     });
@@ -1290,7 +1327,6 @@ export async function createPaseoDaemon(
         emit: emitExternalSessionMessage,
         sessionLogger: logger,
         terminalManager,
-        archiveWorkspaceRecord: archiveWorkspaceRecordExternal,
         serviceProxy,
         scriptRuntimeStore,
         getDaemonTcpPort: () => (boundListenTarget?.type === "tcp" ? boundListenTarget.port : null),
@@ -1365,7 +1401,7 @@ export async function createPaseoDaemon(
   });
   const hubRelationships = new HubRelationshipController({
     paseoHome: config.paseoHome,
-    hostname: getHostname(),
+    hostname: getHostName(),
     serverId,
     daemonPublicKey: daemonKeyPair.publicKeyB64,
     logger,
@@ -1498,6 +1534,14 @@ export async function createPaseoDaemon(
     subscribe: (listener) => agentManager.subscribe(listener),
     onError: (error) => logger.warn({ err: error }, "Insights recorder could not start"),
   });
+  // Resumes sessions that stopped on a usage limit once it resets (durable queue; Settings toggle).
+  const limitResume = startLimitResume({
+    paseoHome: config.paseoHome,
+    agentManager,
+    agentStorage,
+    daemonConfigStore,
+    logger,
+  });
   // Automations ("when X, do Y") drive the Schedule service above; see automations/automation-service.ts.
   const automationService = await startHostAutomations({
     paseoHome: config.paseoHome,
@@ -1572,9 +1616,8 @@ export async function createPaseoDaemon(
       serviceProxyPublicBaseUrl,
       resolveScriptHealth: (hostname) => scriptHealthMonitor.getHealthForHostname(hostname),
       logger,
-      // MCP operations do not belong to one WebSocket session, so lifecycle
-      // status updates fan out to every connected client.
       emit: (message) => wsServer?.broadcast(wrapSessionMessage(message)),
+      publishStatusUpdate: (message) => wsServer?.publishScriptStatusUpdate(message),
       spawnWorkspaceScript,
       assertAutomationAllowed: (workspaceId) =>
         assertWorkspaceAutomationAllowedForWorkspace(workspaceRegistry, workspaceId),
@@ -1923,10 +1966,11 @@ export async function createPaseoDaemon(
             await pluginRuntime.start();
             if (distribution && config.bundledPluginsDirectory) {
               await pluginRuntime.enableBundledPlugin(
-                "orca-organization-next",
-                path.join(config.bundledPluginsDirectory, "orca-organization-next"),
+                trustedPlugins.controllerPluginId,
+                path.join(config.bundledPluginsDirectory, trustedPlugins.controllerPluginId),
               );
               distribution.start({
+                automaticResumeEnabled: () => daemonConfigStore.get().autoResumeOnLimit !== false,
                 intercomRateSettingsFile: path.join(
                   config.paseoHome,
                   "agent-requests",
@@ -1946,7 +1990,8 @@ export async function createPaseoDaemon(
                       if (!service) throw Error("Controller service not attached");
                       return service.then((value) => value.dispatch(frame));
                     },
-                    revoke: () => trustedPlugins.revokeProvenance("orca-organization-next"),
+                    revoke: () =>
+                      trustedPlugins.revokeProvenance(trustedPlugins.controllerPluginId),
                     closeTransport: () => {
                       void service?.then(
                         (value) => value.close(),
@@ -1955,6 +2000,7 @@ export async function createPaseoDaemon(
                     },
                   });
                   service = createControllerService(wsServer!, {
+                    pluginId: trustedPlugins.controllerPluginId,
                     epoch: channel.epoch,
                     emit,
                     revoke: () => channel.close(),
@@ -1972,6 +2018,7 @@ export async function createPaseoDaemon(
                 },
               });
             }
+            providerSnapshotManager.settlePluginProviders();
             wsServer.beginAcceptingConnections();
             relayRuntime = createRelayRuntime({
               config: {
@@ -2040,6 +2087,7 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    limitResume.stop();
     await distribution?.stop();
     hostIntegrations.dispose();
     localCredential = null;
@@ -2052,7 +2100,12 @@ export async function createPaseoDaemon(
     // Freeze both ingress and registration before taking the agent closure snapshot.
     wsServer?.prepareForShutdown();
     agentManager.prepareForShutdown();
-    await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager));
+    await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage));
+    await withTimeout({
+      promise: pluginRuntime.drainEvents(),
+      timeoutMs: AGENT_CLOSE_TIMEOUT_MS,
+      label: "drain plugin lifecycle events",
+    }).catch((error) => logger.warn({ err: error }, "Plugin lifecycle events did not finish"));
     await agentManager.flushForShutdown().catch(() => undefined);
     detachAgentStoragePersistence();
     await agentStorage.flush().catch(() => undefined);
@@ -2119,10 +2172,30 @@ export async function createPaseoDaemon(
  */
 const AGENT_CLOSE_TIMEOUT_MS = 5_000;
 
-async function closeAllAgents(logger: Logger, agentManager: AgentManager): Promise<void> {
+async function closeAllAgents(
+  logger: Logger,
+  agentManager: AgentManager,
+  agentStorage: AgentStorage,
+): Promise<void> {
   const agents = agentManager.listAgents();
+  const detectedAt = new Date().toISOString();
+  const bootId = randomUUID();
   await Promise.all(
     agents.map(async (agent) => {
+      try {
+        if (agent.lifecycle === "running" || agent.lifecycle === "initializing")
+          await agentStorage.markShutdownInterruption(agent.id, {
+            previousStatus: agent.lifecycle,
+            detectedAt,
+            bootId,
+            lastUserMessageAt: agent.lastUserMessageAt?.toISOString() ?? null,
+          });
+      } catch (err) {
+        logger.error(
+          { err, agentId: agent.id },
+          "Failed to record an interrupted turn at shutdown",
+        );
+      }
       try {
         await withTimeout({
           promise: agentManager.closeAgent(agent.id),

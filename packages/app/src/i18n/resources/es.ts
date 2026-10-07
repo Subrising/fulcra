@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -43,6 +44,7 @@ export const es: TranslationResources = {
     total: "{{total}} coincidencias",
   },
   common: {
+    bottomSheetBackdrop: "Fondo del panel inferior",
     back: "Atrás",
     loading: "Cargando...",
     actions: {
@@ -168,6 +170,8 @@ export const es: TranslationResources = {
     },
     attachments: {
       addImage: "Agregar imagen",
+      choosePhoto: "Elegir foto",
+      takePhoto: "Tomar foto",
       pasteImage: "Pegar imagen",
       addFile: "Upload file",
       addIssueOrPr: "Agregar problema oPR",
@@ -460,7 +464,9 @@ export const es: TranslationResources = {
       recovery: {
         archivedTitle: "Espacio de trabajo archivado",
         restoreDescription:
-          "{{workspaceName}} se archivó y se eliminó su worktree. Restaura la rama {{branch}} para volver a abrirlo.",
+          "Restaura {{workspaceName}} para volver a sus agentes. Su worktree usará la rama {{branch}}.",
+        restoreWithoutBranchDescription:
+          "Restaura {{workspaceName}} para volver a sus agentes. Se creará una rama nueva desde la base guardada o la rama predeterminada del repositorio.",
         unarchiveDescription:
           "{{workspaceName}} está archivado. Desarchívalo para volver a abrirlo.",
         restoreAction: "Restaurar",
@@ -1420,6 +1426,9 @@ export const es: TranslationResources = {
       settings: "Ajustes",
       closeSidebar: "Cerrar barra lateral",
     },
+    footer: {
+      usage: "Uso",
+    },
     help: {
       trigger: "Ayuda y soporte",
       sectionHelp: "Ayuda",
@@ -1808,7 +1817,12 @@ export const es: TranslationResources = {
     loadingCommands: "Cargando comandos...",
     noFiles: "No se encontraron archivos ni directorios",
     noCommands: "No se encontraron comandos",
+    accountUnavailable:
+      "Los comandos de cuenta aún no están disponibles para este ordenador. Actualiza Fulcra en {{host}}.",
+    thisComputer: "este ordenador",
     failedToLoad: "No se pudo cargar",
+    chooseProjectForCommands: "Elige un proyecto para ver los comandos",
+    chooseModelForCommands: "Selecciona un modelo para ver los comandos",
   },
   loadOlderHistory: {
     failed: "No se pudo cargar el historial anterior",
@@ -1818,6 +1832,8 @@ export const es: TranslationResources = {
     permissionMessage: "Permita el acceso a su biblioteca de fotos para adjuntar imágenes.",
     errorTitle: "Error",
     failedToSelect: "No se pudo seleccionar la imagen",
+    cameraPermissionMessage: "Permite el acceso a la cámara para tomar fotos.",
+    failedToTakePhoto: "No se pudo tomar la foto",
     dialogTitle: "Adjuntar imágenes",
     dialogFilterName: "Imágenes",
   },
@@ -1872,6 +1888,7 @@ export const es: TranslationResources = {
     modelCountPlural: "{{count}} modelos",
     retry: "Rever",
     retrying: "Reintentando...",
+    savedModels: "Se muestran los modelos de {{provider}} cargados anteriormente.",
     noMatches: "Ningún modelo coincide con tu búsqueda",
     noMatchesForQuery: "Ningún modelo coincide con «{{query}}»",
     searchAllPlaceholder: "Buscar en todos los modelos...",
@@ -1914,6 +1931,17 @@ export const es: TranslationResources = {
     hostPassword: {
       title: "Contraseña de {{host}}",
       label: "Contraseña del host",
+    },
+    hostConfirmation: {
+      title: "¿Conectar con este host?",
+      description:
+        "Este host podrá ejecutar código en esta app y acceder a tus otros hosts conectados. Conéctate solo si lo reconoces.",
+      descriptionChanged:
+        "Este enlace cambia cómo te conectas a este host. El host podrá ejecutar código en esta app y acceder a tus otros hosts conectados. Conéctate solo si lo reconoces.",
+      hostLabel: "Host",
+      fingerprintLabel: "Huella de la clave",
+      relayLabel: "Relay",
+      connect: "Conectar",
     },
     connectionMethods: {
       title: "Agregar conexión",
@@ -1987,6 +2015,12 @@ export const es: TranslationResources = {
       helper: "Conéctate a un daemon de Fulcra en el host remoto.",
       fields: {
         target: "Host SSH",
+        password: "Contraseña del daemon",
+        optional: "Opcional",
+      },
+      passwordVisibility: {
+        show: "Mostrar contraseña",
+        hide: "Ocultar contraseña",
       },
       actions: {
         cancel: "Cancelar",
@@ -2176,6 +2210,10 @@ export const es: TranslationResources = {
       emptyDescription: "Crea una solicitud para este checkout y consulta aquí sus detalles.",
     },
     architectureMap: {
+      mainOnly:
+        "La arquitectura del código se abre en la vista principal. Usa el menú de pestañas +.",
+      entryUnavailable:
+        "Añade un mapa de código guardado o conecta un host que admita grafos o análisis de cambios.",
       label: "Mapa de arquitectura",
       subtitle: "Arquitectura del proyecto",
       tooltip: "Mostrar el mapa de arquitectura del proyecto",
@@ -2193,6 +2231,7 @@ export const es: TranslationResources = {
       zoomIn: "Acercar",
       zoomOut: "Alejar",
       fit: "Ajustar",
+      gestureHint: en.panels.architectureMap.gestureHint,
       actualSize: "Tamaño real",
       components: "Componentes",
       boundaries: "Límites",
@@ -2245,6 +2284,8 @@ export const es: TranslationResources = {
         packageHint: "Selecciona un paquete para abrir sus módulos.",
         allLevels: "Mostrar todos los niveles",
         showInMap: "Mostrar en el mapa",
+        does: en.panels.architectureMap.graph.does,
+        panel: en.panels.architectureMap.graph.panel,
       },
       review: {
         open: "Revisar",
@@ -2275,6 +2316,7 @@ export const es: TranslationResources = {
           NORMAL: "Riesgo normal: código que alcanzan {{tests}} pruebas.",
           HIGH: "Riesgo alto: código que ninguna prueba alcanza, o código que este cambio elimina.",
         },
+        plain: en.panels.architectureMap.review.plain,
         loadingDiff: "Cargando los cambios…",
         noDiff: "No hay cambios de texto que mostrar para este archivo.",
         noFindingsHere: "La revisión automática no encontró nada en este archivo.",
@@ -2485,7 +2527,10 @@ export const es: TranslationResources = {
   sidebarCallout: {
     dismiss: "Despedir",
   },
+  usagePanel: usagePanelCopy["es"],
   contextWindow: {
+    noData: "No hay datos de contexto",
+    accessibilityNoData: "Ventana de contexto: No hay datos de contexto",
     title: "ventana contextual",
     used: "{{percentage}}% utilizado",
     tokens: "Fichas{{used}}/{{max}}",
@@ -2512,6 +2557,7 @@ export const es: TranslationResources = {
       app: "Aplicación",
       host: "Host",
     },
+    menu: en.settings.menu,
     hostPicker: {
       switchHost: "Cambiar de anfitrión",
       local: "Local",
@@ -2553,6 +2599,11 @@ export const es: TranslationResources = {
       refreshAccessibility: "Actualizar permiso de notificaciones",
       playSound: "Reproducir sonido",
       playSoundHint: "Reproduce un sonido cuando llega una notificación de escritorio",
+      digest: "Agrupar sesiones terminadas",
+      digestHint:
+        "Mostrar un resumen de las sesiones terminadas en lugar de una alerta por cada una. Las aprobaciones y los errores siguen avisando al momento.",
+      digestFrequency: "Frecuencia",
+      digestEvery: "{{count}} min",
       test: "Probar notificación",
       testHint: "Envía una notificación con esta configuración",
       permissionRequired: "Permite el acceso a las notificaciones antes de probar",
@@ -2751,9 +2802,16 @@ export const es: TranslationResources = {
         description: "Muestra un esquema para saltar entre instrucciones",
       },
       sidebar: {
-        title: "Barra lateral",
-        description:
-          "Elige qué elementos aparecen en la parte superior de la barra lateral y en qué orden",
+        header: {
+          title: "Encabezado",
+          description:
+            "Elige qué elementos aparecen en la parte superior de la barra lateral y en qué orden",
+        },
+        footer: {
+          title: "Pie",
+          description:
+            "Elige qué filas aparecen en la parte inferior de la barra lateral y en qué orden. Añadir proyecto y la fila de iconos siempre se muestran",
+        },
         moveUp: "Mover hacia arriba",
         moveDown: "Mover hacia abajo",
       },
@@ -2777,6 +2835,14 @@ export const es: TranslationResources = {
         codeSize: "Tamaño del código",
         codeSizeHint: "Se usa en código, diferencias y la salida del terminal",
         codeSizeAccessibility: "Tamaño de fuente del código",
+      },
+      layout: {
+        title: "Diseño",
+        contentWidth: "Ancho del contenido",
+        contentWidthHint: "Ancho máximo del chat y de los archivos Markdown en pantallas anchas",
+        contentWidthAccessibility: "Ancho del contenido en píxeles",
+        reset: "Restablecer",
+        resetAccessibility: "Restablecer el ancho del contenido",
       },
       syntax: {
         title: "Sintaxis",

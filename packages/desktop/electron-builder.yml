@@ -28,6 +28,7 @@ files:
   - "!node_modules/@getpaseo/server/dist/server/web-ui/**"
   # Development-only conversation processor carries recorded debug fixture names.
   - "!node_modules/@getpaseo/server/scripts/process-conversation.ts"
+  - "!node_modules/@getpaseo/server/dist/server/builtin-plugins/**"
   # Workspace packages are symlinked, so anything a dev generates inside them
   # lands in the asar. CI never has these; a local .debug run adds gigabytes.
   - "!node_modules/@getpaseo/*/.debug/**"
@@ -35,11 +36,15 @@ files:
   - "!node_modules/@getpaseo/*/conversations/**"
   - "!node_modules/@getpaseo/*/test-results/**"
 asarUnpack:
+  - node_modules/sherpa-onnx-*/**/*
   - dist/daemon/node-entrypoint-runner.js
   - node_modules/@getpaseo/server/dist/server/terminal/shell-integration/**/*
 extraResources:
   - from: bundled-plugins
     to: bundled-plugins
+  # Preserve physical compiler inputs, including .d.ts files omitted from packaged node_modules.
+  - from: ../server/dist/server/builtin-plugins
+    to: builtin-plugins
   - from: ../app/dist
     to: app-dist
   - from: assets/editor-targets
@@ -47,6 +52,12 @@ extraResources:
 # Orca has no public update feed yet. Never publish into the upstream project.
 publish: null
 mac:
+  files:
+    # Keep the complete native package alongside the production dependency tree.
+    - from: ../../node_modules/sherpa-onnx-darwin-${arch}
+      to: node_modules/sherpa-onnx-darwin-${arch}
+      filter:
+        - "**/*"
   artifactName: "Fulcra-${version}-${arch}.${ext}"
   minimumSystemVersion: "13.0.0"
   category: public.app-category.developer-tools

@@ -70,12 +70,12 @@ export function DevicesSurface({ theme, layout }: Pick<PluginSurfaceProps, "them
           <Text style={{ color: c.foreground, fontWeight: "700", fontSize: 16 }}>
             {active.length
               ? `${active.length} device${active.length === 1 ? "" : "s"} paired`
-              : "Pair a device after the next Fulcra update"}
+              : "No devices paired"}
           </Text>
           <Text style={{ color: c.foreground }}>
             {active.length
               ? "Answers you confirm on a paired device count as yours. Anything answered without one is marked as answered by the operator."
-              : "Until then, answers from this app are marked as answered by the operator, and approvals that start work wait until you can confirm them on a paired device."}
+              : "Device pairing isn't available in this version of Fulcra yet. Until it is, answers from this app are marked as answered by the operator, and approvals that start work wait for a paired device."}
           </Text>
         </>,
         "status",
@@ -134,7 +134,7 @@ export function DevicesSurface({ theme, layout }: Pick<PluginSurfaceProps, "them
             )}
             {x.state === "active" && (
               <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
-                Revoking is confirmed on a paired device, after the next Fulcra update.
+                Revoking needs device pairing, which isn't available in this version yet.
               </Text>
             )}
           </>,

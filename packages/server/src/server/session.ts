@@ -1,3 +1,4 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { GitAiDraftResponseSchema } from "@getpaseo/protocol/git-ai-draft";
 import { createGitAiDraftHelp } from "./session/checkout/git-ai-draft-help.js";
 import { createToollessGitDraftGeneration } from "./session/checkout/git-ai-draft-generation.js";
@@ -35,6 +36,8 @@ import {
   handlePullRequestReviewGet,
   type PullRequestReviewDeps,
 } from "./checkout/pull-request-review-request.js";
+import { handlePullRequestReviewExplain } from "./checkout/pull-request-review-explain.js";
+import { readModuleExcerpt } from "./checkout/module-excerpt.js";
 import { runGitHubCli } from "../services/github-service.js";
 import { getInsights } from "../utils/insights/service.js";
 import { projectOf } from "../utils/insights/agents.js";
@@ -43,7 +46,7 @@ import {
   getHostAutomations,
   type AutomationRequest,
 } from "./automations/automation-service.js";
-import { getForgeRemoteUrl } from "../utils/checkout-git.js";
+import { getForgeRemoteUrl, getRangeFileDiff } from "../utils/checkout-git.js";
 import {
   handleArchitectureChangeFetchRequest,
   handleArchitectureChangeGetRequest,
@@ -57,13 +60,18 @@ import type {
   CheckoutFileAtCommitGetRequest,
   CheckoutPullRequestReviewDecideRequest,
   CheckoutPullRequestReviewFileDiffRequest,
+  CheckoutPullRequestReviewExplainRequest,
   CheckoutPullRequestReviewGetRequest,
   InsightsGetRequest,
   AutomationResult,
 } from "@getpaseo/protocol/messages";
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
-import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
+import type {
+  SessionEventSubscription,
+  UsageReportEntry,
+  ProviderUsage,
+} from "@getpaseo/protocol/messages";
 import { relative } from "node:path";
 import { isAbsolute } from "node:path";
 import { CreationService } from "./creation/index.js";
@@ -84,6 +92,7 @@ import {
   type FirstAgentContext,
   type SessionInboundMessage,
   type SessionOutboundMessage,
+  type ScriptStatusUpdateMessage,
   type GitSetupOptions,
   type StartWorkspaceScriptRequest,
   type WorkspaceScriptListRequest,
@@ -239,6 +248,7 @@ import {
 } from "./session/checkout/git-metadata-generator.js";
 import { ScheduleSession } from "./session/schedule/schedule-session.js";
 import { ProviderCatalogSession } from "./session/provider/provider-catalog-session.js";
+import { UsageSession } from "./session/usage/usage-session.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
 import { ProjectConfigSession } from "./session/project-config/project-config-session.js";
@@ -344,6 +354,8 @@ type ProviderSubagentManagerEvent = Extract<
 // TODO: Remove once all app store clients are on >=0.1.45 and understand arbitrary provider strings.
 // Clients before 0.1.45 validate providers with z.enum(["claude", "codex", "opencode"]) and reject
 // the entire session message if they encounter an unknown provider.
+// Review explanations and map summaries are short and read by people deciding where to look: a cheap model is enough.
+const REVIEW_EXPLAIN_MODEL = "claude-haiku-4-5-20251001";
 const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
 const MIN_VERSION_EXPLICIT_WORKSPACE_RECOVERY = "0.1.105";
@@ -534,6 +546,7 @@ export interface SessionOptions {
   getTransportBufferedAmount?: (source?: object) => number | null;
   onLifecycleIntent?: (intent: SessionLifecycleIntent) => void;
   onWorkspaceRecovered?: (workspace: PersistedWorkspaceRecord) => Promise<void>;
+  publishScriptStatusUpdate?: (message: ScriptStatusUpdateMessage) => void;
   logger: pino.Logger;
   downloadTokenStore: DownloadTokenStore;
   pushNotifications: PushNotifications;
@@ -604,6 +617,11 @@ export interface SessionOptions {
       management?: ManagementInvocation,
       options?: { readOnlyCaller?: boolean },
     ): Promise<unknown>;
+    listUsageReports(options?: {
+      forceRefresh?: boolean;
+      reportIds?: string[];
+    }): Promise<UsageReportEntry[]>;
+    listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
   // Plugin notifications and the shared credential store (Fulcra host APIs).
@@ -889,6 +907,7 @@ export class Session {
   private readonly checkoutSession: CheckoutSession;
   private readonly scheduleSession: ScheduleSession;
   private readonly providerCatalogSession: ProviderCatalogSession;
+  private readonly usageSession: UsageSession;
   private readonly workspaceFilesSession: WorkspaceFilesSession;
   private readonly agentConfigSession: AgentConfigSession;
   private readonly projectConfigSession: ProjectConfigSession;
@@ -912,6 +931,7 @@ export class Session {
       getTransportBufferedAmount,
       onLifecycleIntent,
       onWorkspaceRecovered,
+      publishScriptStatusUpdate,
       logger,
       downloadTokenStore,
       pushNotifications,
@@ -1113,6 +1133,11 @@ export class Session {
       accountUsage,
       logger: this.sessionLogger,
     });
+    this.usageSession = new UsageSession({
+      emit: (msg) => this.emit(msg),
+      runtime: pluginRuntime,
+      logger: this.sessionLogger,
+    });
     this.agentConfigSession = new AgentConfigSession({
       host: {
         emit: (msg) => this.emit(msg),
@@ -1262,8 +1287,11 @@ export class Session {
       resolveScriptHealth: this.resolveScriptHealth,
       logger: this.sessionLogger,
       emit: (message) => this.emit(message),
+      publishStatusUpdate: (message) => {
+        if (publishScriptStatusUpdate) publishScriptStatusUpdate(message);
+        else this.emit(message);
+      },
       spawnWorkspaceScript,
-      wantsStatusUpdates: () => this.wantsEvent("script_status_update"),
       assertAutomationAllowed: (workspaceId) =>
         assertWorkspaceAutomationAllowedForWorkspace(this.workspaceRegistry, workspaceId),
       globalServicePorts: loadPersistedConfig(this.paseoHome).worktrees?.servicePorts,
@@ -2933,7 +2961,7 @@ export class Session {
         throw new Error("Original content delivery authority changed");
     };
     const management = this.agentManager.trustedPlugins.management.open(
-      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      this.pluginRuntime.managementTarget?.(this.agentManager.trustedPlugins.controllerPluginId),
       () => {
         try {
           guard();
@@ -2997,7 +3025,7 @@ export class Session {
     const signal = this.delivery.requestSignal;
     const captured = this.managementSources.get(source);
     const management = this.agentManager.trustedPlugins.management.open(
-      this.pluginRuntime.managementTarget?.("orca-organization-next"),
+      this.pluginRuntime.managementTarget?.(this.agentManager.trustedPlugins.controllerPluginId),
       () => {
         const live = this.managementSources.get(source);
         return live && live === captured && !this.isCleanedUp
@@ -3127,7 +3155,7 @@ export class Session {
   ): Promise<void> {
     if (!this.pluginRuntime) throw new Error("Plugin service is unavailable");
     if (
-      msg.pluginId === "orca-organization-next" &&
+      msg.pluginId === this.agentManager.trustedPlugins.controllerPluginId &&
       [
         "organization.radius.scratch.simulate",
         "organization.radius.scratch.prune-simulate",
@@ -3431,6 +3459,8 @@ export class Session {
     source?: object,
   ): Promise<void> | undefined {
     switch (msg.type) {
+      case "agent.lifecycle.cleanup_idle.request":
+        return this.handleIdleCleanupRequest(msg);
       case "agent.parent.adopt.request":
         return this.handleParentAdoptRequest(msg, source);
       case "agent.detach.request":
@@ -3598,6 +3628,8 @@ export class Session {
     switch (msg.type) {
       case "agent.mcp.get_refresh_state.request":
         return this.handleAgentMcpGetRefreshState(msg);
+      case "agent.context.rotate.request":
+        return this.handleAgentContextRotate(msg);
       case "agent.mcp.refresh.request":
         return this.handleAgentMcpRefresh(msg);
       default:
@@ -3813,6 +3845,29 @@ export class Session {
     this.emit({ type: "checkout.pull-request-review.file-diff.response", payload });
   }
 
+  private async handlePullRequestReviewExplain(
+    msg: CheckoutPullRequestReviewExplainRequest,
+  ): Promise<void> {
+    const abort = new AbortController();
+    const payload = await handlePullRequestReviewExplain({
+      msg,
+      deps: {
+        ...this.pullRequestReviewDeps(),
+        readDiff: getRangeFileDiff,
+        readModule: readModuleExcerpt,
+        dailyLimit: this.daemonConfigStore.get().explainDailyLimit,
+        generation: createToollessGitDraftGeneration({
+          assertCurrent: () => {
+            if (this.isCleanedUp) throw new Error("Session closed");
+          },
+          signal: abort.signal,
+          model: REVIEW_EXPLAIN_MODEL,
+        }),
+      },
+    });
+    this.emit({ type: "checkout.pull-request-review.explain.response", payload });
+  }
+
   private async handlePullRequestReviewDecide(
     msg: CheckoutPullRequestReviewDecideRequest,
   ): Promise<void> {
@@ -3872,6 +3927,8 @@ export class Session {
         return this.handlePullRequestReviewGet(msg);
       case "checkout.pull-request-review.file-diff.request":
         return this.handlePullRequestReviewFileDiff(msg);
+      case "checkout.pull-request-review.explain.request":
+        return this.handlePullRequestReviewExplain(msg);
       case "checkout.pull-request-review.decide.request":
         return this.handlePullRequestReviewDecide(msg);
       case "validate_branch_request":
@@ -4072,9 +4129,12 @@ export class Session {
       case "provider_diagnostic_request":
         return this.providerCatalogSession.handleProviderDiagnosticRequest(msg);
       case "provider.usage.list.request":
+        // FULCRA(accounts): the legacy list carries the account pool's rows and the session's bound account.
         return this.providerCatalogSession.handleProviderUsageListRequest(msg);
       case "agent.quota.read.request":
         return this.handleAgentQuotaRead(msg);
+      case "usage.list_reports.request":
+        return this.usageSession.handleListReports(msg);
       default:
         return undefined;
     }
@@ -4340,6 +4400,22 @@ export class Session {
     }
 
     return { agentId, archivedAt };
+  }
+
+  private async handleIdleCleanupRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.lifecycle.cleanup_idle.request" }>,
+  ): Promise<void> {
+    let error: string | null = null;
+    try {
+      await this.agentManager.cleanupIdleAgent(msg);
+    } catch (failure) {
+      if (admissionOutcome(failure)) throw failure;
+      error = getErrorMessageOr(failure, "Idle cleanup refused");
+    }
+    this.emit({
+      type: "agent.lifecycle.cleanup_idle.response",
+      payload: { agentId: msg.agentId, requestId: msg.requestId, accepted: error === null, error },
+    });
   }
 
   private async handleParentAdoptRequest(
@@ -5737,6 +5813,38 @@ export class Session {
     });
   }
 
+  private async handleAgentContextRotate(
+    msg: Extract<SessionInboundMessage, { type: "agent.context.rotate.request" }>,
+  ): Promise<void> {
+    const signal = this.delivery.requestSignal;
+    const epoch = this.nativeMessagePermissionEpoch;
+    const guard = () => {
+      signal.throwIfAborted();
+      if (
+        this.isCleanedUp ||
+        this.nativeMessagePermissionEpoch !== epoch ||
+        this.pluginOriginId !== this.agentManager.trustedPlugins.controllerPluginId ||
+        !this.authorization.allowsPermission("workspace.write")
+      )
+        throw new Error("Original controller rotation lifetime or authority changed");
+    };
+    guard();
+    const result = await this.agentManager.rotateAgentContext(
+      {
+        agentId: msg.agentId,
+        rotationId: msg.rotationId,
+        expected: msg.expected,
+        ...(msg.pauseOnly !== undefined ? { pauseOnly: msg.pauseOnly } : {}),
+      },
+      guard,
+    );
+    guard();
+    this.emit({
+      type: "agent.context.rotate.response",
+      payload: { ...result, requestId: msg.requestId, agentId: msg.agentId },
+    });
+  }
+
   private async handleAgentMcpRefresh(
     msg: Extract<SessionInboundMessage, { type: "agent.mcp.refresh.request" }>,
   ): Promise<void> {
@@ -6473,10 +6581,10 @@ export class Session {
 
   private async resolveAgentIdentifier(
     identifier: string,
-  ): Promise<{ ok: true; agentId: string } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; agentId: string } | { ok: false; notFound: boolean; error: string }> {
     const trimmed = identifier.trim();
     if (!trimmed) {
-      return { ok: false, error: "Agent identifier cannot be empty" };
+      return { ok: false, notFound: false, error: "Agent identifier cannot be empty" };
     }
 
     const stored = await this.agentStorage.list();
@@ -6500,6 +6608,7 @@ export class Session {
     if (prefixMatches.length > 1) {
       return {
         ok: false,
+        notFound: false,
         error: `Agent identifier "${trimmed}" is ambiguous (${prefixMatches
           .slice(0, 5)
           .map((id) => id.slice(0, 8))
@@ -6514,6 +6623,7 @@ export class Session {
     if (titleMatches.length > 1) {
       return {
         ok: false,
+        notFound: false,
         error: `Agent title "${trimmed}" is ambiguous (${titleMatches
           .slice(0, 5)
           .map((r) => r.id.slice(0, 8))
@@ -6521,7 +6631,7 @@ export class Session {
       };
     }
 
-    return { ok: false, error: `Agent not found: ${trimmed}` };
+    return { ok: false, notFound: true, error: `Agent not found: ${trimmed}` };
   }
 
   private async getAgentPayloadById(agentId: string): Promise<AgentSnapshotPayload | null> {
@@ -8522,7 +8632,6 @@ export class Session {
         emit: (message) => this.emit(message),
         sessionLogger: this.sessionLogger,
         terminalManager: this.terminalManager,
-        archiveWorkspaceRecord: (workspaceId) => this.archiveWorkspaceRecord(workspaceId),
         serviceProxy: this.serviceProxy,
         scriptRuntimeStore: this.scriptRuntimeStore,
         getDaemonTcpPort: this.getDaemonTcpPort,
@@ -8569,7 +8678,6 @@ export class Session {
         emit: (message) => this.emit(message),
         sessionLogger: this.sessionLogger,
         terminalManager: this.terminalManager,
-        archiveWorkspaceRecord: (workspaceId) => this.archiveWorkspaceRecord(workspaceId),
         serviceProxy: this.serviceProxy,
         scriptRuntimeStore: this.scriptRuntimeStore,
         getDaemonTcpPort: this.getDaemonTcpPort,
@@ -8863,11 +8971,17 @@ export class Session {
   }
 
   private async handleFetchAgent(agentIdOrIdentifier: string, requestId: string): Promise<void> {
+    // An unknown agent is a null agent, not an error. Errors are for empty or ambiguous identifiers.
     const resolved = await this.resolveAgentIdentifier(agentIdOrIdentifier);
     if (!resolved.ok) {
       this.emit({
         type: "fetch_agent_response",
-        payload: { requestId, agent: null, project: null, error: resolved.error },
+        payload: {
+          requestId,
+          agent: null,
+          project: null,
+          error: resolved.notFound ? null : resolved.error,
+        },
       });
       return;
     }
@@ -8876,12 +8990,7 @@ export class Session {
     if (!agent) {
       this.emit({
         type: "fetch_agent_response",
-        payload: {
-          requestId,
-          agent: null,
-          project: null,
-          error: `Agent not found: ${resolved.agentId}`,
-        },
+        payload: { requestId, agent: null, project: null, error: null },
       });
       return;
     }
@@ -9016,17 +9125,30 @@ export class Session {
   }
 
   /**
-   * A live or archived agent is loaded as before. An agent that no longer exists is served from
-   * its retained history, labelled with the provider recorded when it was deleted.
+   * Journal-backed stored agents are read without restoring a provider. Legacy provider-only
+   * history still loads on demand. Deleted agents are served from their retained history.
    */
   private async resolveTimelineFetch(
     msg: Extract<SessionInboundMessage, { type: "fetch_agent_timeline_request" }>,
     options: AgentTimelineFetchOptions,
   ) {
-    if (
-      this.agentManager.getAgent(msg.agentId) === null &&
-      !(await this.agentStorage.get(msg.agentId))
-    ) {
+    const stored =
+      this.agentManager.getAgent(msg.agentId) === null
+        ? await this.agentStorage.get(msg.agentId)
+        : null;
+    if (stored) {
+      const timeline = await this.agentManager.fetchStoredTimeline(msg.agentId, {
+        ...options,
+        ...(msg.turnId ? { turnId: msg.turnId } : {}),
+      });
+      if (timeline)
+        return {
+          timeline,
+          provider: stored.provider,
+          agent: this.buildStoredAgentPayload(stored),
+          retained: false,
+        };
+    } else if (this.agentManager.getAgent(msg.agentId) === null) {
       const retained = await this.agentManager.fetchRetainedTimeline(msg.agentId, {
         ...options,
         ...(msg.turnId ? { turnId: msg.turnId } : {}),

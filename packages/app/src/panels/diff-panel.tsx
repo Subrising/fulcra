@@ -20,6 +20,7 @@ import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { defaultChangesState, changesStateSchema } from "@/panels/changes/state";
 import { usePanelState } from "@/panels/use-panel-state";
+import { ArchitectureEntry } from "./architecture-entry";
 import { RenderProfile } from "@/utils/render-profiler";
 
 const ThemedFileDiff = withUnistyles(FileDiff);
@@ -128,6 +129,7 @@ function ChangesPanel() {
 
   return (
     <View style={styles.container} testID={testID}>
+      <ArchitectureEntry />
       <RenderProfile id={profileId}>
         <ChangesSurface
           serverId={serverId}

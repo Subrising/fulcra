@@ -10,6 +10,7 @@ import { createTrustedContribution } from "./trusted-contribution.mjs";
 import { createChildSupervisor } from "./child-supervisor.mjs";
 import { captureOwnedFiles, recoverOwnedFiles } from "./owned-child-files.mjs";
 import { parseControllerCommand, READ_METHODS } from "./command-parser.mjs";
+import { initializeRoleDefaults } from "../../orca-organization/server/role-defaults-store.mjs";
 import { firstRun } from "../config.mjs";
 import { recordBootStart, sealBoot } from "./boot-chain.mjs";
 export const hostContract = "1.1";
@@ -17,8 +18,9 @@ export default function setup() {
   throw Error("Distribution startup context required");
 }
 export function createDistribution({ home, bundleDirectory }) {
-  firstRun({ ORCA_HOME: home });
-  let supervisor, mint, authority, intercomRateSettingsFile;
+  const config = firstRun({ ORCA_HOME: home });
+  initializeRoleDefaults(home, config.defaults?.roles, config.defaults?.modes);
+  let supervisor, mint, authority, intercomRateSettingsFile, automaticResumeEnabled;
   const epochs = new WeakMap(),
     owners = new WeakMap(),
     channels = new WeakMap();
@@ -39,6 +41,7 @@ export function createDistribution({ home, bundleDirectory }) {
       createTrustedContribution({
         home,
         rateSettingsFile: () => intercomRateSettingsFile,
+        automaticResumeEnabled: () => automaticResumeEnabled?.() === true,
         managementBridge: async (command, principal) => {
           if (!supervisor) throw Error("Controller not ready");
           if (["controller-status", "controller-retry"].includes(command.method)) {
@@ -57,6 +60,7 @@ export function createDistribution({ home, bundleDirectory }) {
     },
     start(host) {
       intercomRateSettingsFile = host.intercomRateSettingsFile;
+      automaticResumeEnabled = host.automaticResumeEnabled;
       authority = host.consumeManagement;
       if (supervisor || !mint) throw Error("Invalid controller startup order");
       // W1 row 9: this boot's record, before the controller (and its seat sweep) starts. Without it the sweep declines.

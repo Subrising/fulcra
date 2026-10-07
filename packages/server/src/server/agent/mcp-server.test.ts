@@ -812,7 +812,6 @@ function createPaseoWorktreeForMcpTest(options: {
         emit: () => {},
         sessionLogger: createTestLogger(),
         terminalManager: null,
-        archiveWorkspaceRecord: async () => {},
         serviceProxy: null,
         scriptRuntimeStore: null,
         getDaemonTcpPort: null,

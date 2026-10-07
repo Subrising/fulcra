@@ -197,7 +197,7 @@ vi.mock("@/sessions/session-account-info", () => ({
   }: {
     account: { name: string | null } | null;
     testID: string;
-  }) => <span data-testid={testID}>{account?.name ?? "Account unavailable"}</span>,
+  }) => <span data-testid={testID}>{account?.name ?? "Account unknown"}</span>,
 }));
 describe("mounted all-session sidebar", () => {
   let container: HTMLDivElement;

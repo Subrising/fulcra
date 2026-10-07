@@ -18,7 +18,8 @@ import {
   OPERATOR_INVOKE_METHODS,
   OPERATOR_INVOKE_RPC,
 } from "../../orca-organization/shared/operator-invoke-methods.mjs";
-export const PLUGIN_ID = "orca-organization-next";
+export { PLUGIN_ID } from "../../src/control/plugin-identity.mjs";
+import { PLUGIN_ID } from "../../src/control/plugin-identity.mjs";
 export const PASEO_HOME = localMachine("paseoHome");
 const SDK = localMachine("daemonClientSdk");
 // Selected explicitly at the cutover window (W1-PROCEDURES F9): ORCA_CONTROLLER_TOPOLOGY=owned-child selects this write route

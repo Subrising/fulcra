@@ -233,7 +233,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 vi.mock("@/components/provider-icons", () => ({
-  getProviderIcon: (provider: string) => () =>
+  useProviderIcon: (provider: string) => () =>
     React.createElement("span", { "data-icon": `provider-${provider}` }),
 }));
 
@@ -314,7 +314,9 @@ function makeConfig(providers: MutableDaemonConfig["providers"] = {}): MutableDa
     providers,
     metadataGeneration: { providers: [] },
     autoArchiveAfterMerge: false,
+    notificationMode: "primes",
     enableTerminalAgentHooks: false,
+    autoResumeOnLimit: true,
     appendSystemPrompt: "",
   };
 }

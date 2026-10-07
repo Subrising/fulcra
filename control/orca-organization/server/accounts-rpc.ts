@@ -1,4 +1,4 @@
-// Update-7: the Settings -> Accounts & Defaults handlers. Reads return names, order, status, sessions and defaults only;
+// Update-7: the Settings -> Accounts & models handlers. Reads return names, order, status, sessions and defaults only;
 // a Claude token is accepted on add/replace and goes straight to the Keychain, never to a store, a log or a reply.
 import fs from "node:fs";
 import {
@@ -9,6 +9,7 @@ import {
   moveAccount,
   removeAccount,
   setPolicy,
+  setRotateOnLimit,
   setDefaultAccount,
   sessionAccounts,
   switchSession,
@@ -326,6 +327,8 @@ export function createAccountHandlers(d: Deps) {
         if (input.mode)
           await writeRoleDefaults(d.root(), { mode: input.mode }, d.configRoles() as any);
         if (input.policy) await setPolicy(d.root(), input.policy);
+        if (input.rotateOnLimit !== undefined)
+          await setRotateOnLimit(d.root(), input.rotateOnLimit);
         if (input.defaultAccount)
           await setDefaultAccount(d.root(), input.defaultAccount.provider, input.defaultAccount.id);
         if (input.role || input.orchestrationGuard !== undefined)
@@ -342,13 +345,17 @@ export function createAccountHandlers(d: Deps) {
           ? (nameOf(input.defaultAccount.id) ?? "First ready account")
           : input.mode
             ? `Permission mode for ${input.mode.provider === "claude" ? "Claude" : "Codex"}`
-            : input.policy
-              ? input.policy === "spread"
-                ? "Spread evenly"
-                : "In order"
-              : input.role
-                ? `Defaults for ${input.role}`
-                : "Leads use sessions only";
+            : input.rotateOnLimit !== undefined
+              ? input.rotateOnLimit
+                ? "Continue on another account"
+                : "Wait for its reset"
+              : input.policy
+                ? input.policy === "spread"
+                  ? "Spread evenly"
+                  : "In order"
+                : input.role
+                  ? `Defaults for ${input.role}`
+                  : "Leads use sessions only";
         return {
           reply: ok(),
           audit: {

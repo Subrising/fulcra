@@ -1,5 +1,9 @@
 import { execFile } from "node:child_process";
 import type { PluginSecrets } from "@getpaseo/plugin/server";
+import {
+  createPlatformCredentialBackend,
+  type CredentialBackend,
+} from "../integrations/credential-backend.js";
 
 // Plugin secrets live in the macOS login keychain as generic passwords. The service name is derived
 // from the plugin id the host started the process with, so a plugin can only name an account inside its
@@ -38,6 +42,16 @@ export interface CreatePluginSecretStoreOptions {
   pluginId: string;
   platform?: NodeJS.Platform;
   run?: SecretCommandRunner;
+  // Where `save` writes. Defaults to the host's platform credential store; null leaves `save` unavailable.
+  backend?: CredentialBackend | null;
+}
+
+// FULCRA(plugin-sdk): items a plugin saves itself. A separate service from the legacy read-only namespace, so the
+// credential backend's write fence for `ai.fulcra.plugin.*` is untouched.
+export function pluginStoreService(pluginId: string): string {
+  if (!PLUGIN_ID.test(pluginId) || pluginId.includes("_"))
+    throw new Error("Invalid plugin id for secrets");
+  return `ai.fulcra.plugin-store.${pluginId}`;
 }
 
 export function pluginSecretService(pluginId: string): string {
@@ -107,8 +121,33 @@ export function createPluginSecretStore(
     return run(SECURITY_BINARY, args);
   }
 
+  const backend =
+    options.backend === undefined ? createPlatformCredentialBackend(platform) : options.backend;
+  const storeService = (() => {
+    try {
+      return pluginStoreService(options.pluginId);
+    } catch {
+      return null;
+    }
+  })();
+  async function readSaved(name: string): Promise<string | null> {
+    assertSecretName(name);
+    if (!backend || !storeService) return null;
+    try {
+      return await backend.get(storeService, name);
+    } catch {
+      throw new PluginSecretUnavailableError();
+    }
+  }
+
   const secrets: PluginSecrets = {
     async read(name) {
+      const saved = await readSaved(name);
+      if (saved !== null) {
+        const value = parseSecretValue(saved);
+        remember(value);
+        return value;
+      }
       const result = await lookup(name, true);
       if (result.exitCode === SECRET_NOT_FOUND_EXIT) return null;
       if (result.exitCode !== 0) throw new PluginSecretUnavailableError();
@@ -117,10 +156,37 @@ export function createPluginSecretStore(
       return value;
     },
     async exists(name) {
+      if ((await readSaved(name)) !== null) return true;
       const result = await lookup(name, false);
       if (result.exitCode === SECRET_NOT_FOUND_EXIT) return false;
       if (result.exitCode !== 0) throw new PluginSecretUnavailableError();
       return true;
+    },
+    async save(name, value) {
+      assertSecretName(name);
+      if (!backend || !storeService) throw new PluginSecretUnavailableError();
+      if (
+        typeof value !== "string" ||
+        !value ||
+        value.length > MAX_SECRET_LENGTH ||
+        hasControlCharacter(value)
+      )
+        throw new Error("A plugin secret must be one line of at most 8192 characters");
+      try {
+        await backend.set(storeService, name, value);
+      } catch {
+        throw new PluginSecretUnavailableError();
+      }
+      remember(value);
+    },
+    async remove(name) {
+      assertSecretName(name);
+      if (!backend || !storeService) throw new PluginSecretUnavailableError();
+      try {
+        await backend.delete(storeService, name);
+      } catch {
+        throw new PluginSecretUnavailableError();
+      }
     },
   };
 

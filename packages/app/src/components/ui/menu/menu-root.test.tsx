@@ -57,12 +57,10 @@ describe("session account information trigger", () => {
     rerender(<SessionAccountInfo account={ACCOUNT_A} testID="account" />);
     expect(screen.getByRole("button", { name: "Session info, Codex, Account: A" })).toBeTruthy();
   });
-  it("discloses unavailable account information without inventing a saved login", () => {
+  it("shows nothing for an unnamed account rather than inventing a saved login", () => {
     render(<SessionAccountInfo account={ACCOUNT_UNAVAILABLE} />);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Session info, Claude, Account unavailable" }),
-    );
-    expect(screen.getByText("Provider: Claude")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Session info/ })).toBeNull();
+    expect(screen.queryByText("Account unknown")).toBeNull();
     expect(screen.queryByText("Personal")).toBeNull();
   });
 });
@@ -117,9 +115,7 @@ it("the mounted header follows live projected store upserts A to B to A and miss
       new Map([[snapshot.id, { ...snapshot, labels: { "saved-login": "Personal" } }]]),
     ),
   );
-  expect(
-    screen.getByRole("button", { name: "Session info, Codex, Account unavailable" }),
-  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Session info/ })).toBeNull();
   expect(screen.queryByText("Personal")).toBeNull();
 });
 

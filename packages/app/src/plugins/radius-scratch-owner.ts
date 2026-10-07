@@ -7,7 +7,7 @@ import {
 import type { RadiusScratchOwnerAdapter } from "../../../../control/orca-organization/shared/radius-scratch";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import type { InstalledPlugin } from "./types";
-import { COMMAND_CENTRE_PLUGIN_ID } from "./command-centre-connection";
+import { pluginRegistry } from "./registry";
 
 /** Private mounted consumer lifetime, never an owner credential or a replacement host grant. */
 export function captureRadiusScratchOwner(
@@ -58,7 +58,7 @@ export function captureRadiusScratchOwner(
 
 export function useRadiusScratchOwner(
   serverId: string,
-  client: DaemonClient,
+  client: DaemonClient | null,
   plugin: Pick<InstalledPlugin, "id" | "lifetime">,
   enabled = false,
 ): RadiusScratchOwnerAdapter | undefined {
@@ -68,7 +68,7 @@ export function useRadiusScratchOwner(
     adapter: RadiusScratchOwnerAdapter;
   } | null>(null);
   useEffect(() => {
-    if (!enabled || plugin.id !== COMMAND_CENTRE_PLUGIN_ID) return;
+    if (!enabled || !client || plugin.id !== pluginRegistry.controllerPluginId(serverId)) return;
     const store = getHostRuntimeStore();
     const lifetime = plugin.lifetime;
     let mounted = true;

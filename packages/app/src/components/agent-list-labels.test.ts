@@ -77,7 +77,7 @@ describe("live account projection display", () => {
   it("keeps absent ownership unavailable instead of using a saved login", () => {
     const account = sessionAccount({ provider: "claude", labels: { "saved-login": "Personal" } });
     expect(account).toEqual({ providerLabel: "Claude", name: null });
-    expect(sessionAccountText(account!)).toBe("Account unavailable");
+    expect(sessionAccountText(account!)).toBe("Account unknown");
   });
   it("a disabled or removed roster row does not change an attached runtime label", () => {
     expect(

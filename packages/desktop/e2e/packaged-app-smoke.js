@@ -6,6 +6,8 @@ const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const { chromium } = require("playwright");
 const { extractFile } = require("@electron/asar");
+const { WebSocket } = require("ws");
+const assert = require("node:assert/strict");
 
 // Fallback only. electron-builder names the artifacts from ITS OWN productName, which is not
 // required to match this package.json -- and since the Fulcra rename it does not. Callers in the
@@ -38,6 +40,29 @@ const REQUIRED_DESKTOP_BRIDGE_KEYS = [
 
 function createTempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+async function assertBuiltinPluginsStarted(listen) {
+  const { DaemonClient } = await import("@getpaseo/client/internal/daemon-client");
+  const { builtinPlugins } =
+    await import("../../server/dist/server/server/plugins/builtin/index.js");
+  const client = new DaemonClient({
+    url: `ws://${listen}/ws`,
+    clientId: "packaged-builtin-smoke",
+    webSocketFactory: (url, options) =>
+      new WebSocket(url, options?.protocols, { headers: options?.headers }),
+  });
+  try {
+    await client.connect();
+    const catalog = await client.getPluginCatalog();
+    assert.deepEqual(
+      catalog.map(({ id }) => id).sort(),
+      [...builtinPlugins].sort(),
+      "Every built-in plugin must start in the packaged desktop daemon",
+    );
+  } finally {
+    await client.close();
+  }
 }
 
 function assertExecutable(filePath, label) {
@@ -1060,7 +1085,9 @@ async function smokePackagedDesktopApp({
       userData,
       deadline,
     });
-    console.log("Packaged desktop smoke: desktop-managed daemon reported running");
+    console.log("Packaged desktop smoke: renderer-started desktop daemon reported running");
+    await assertBuiltinPluginsStarted(listen);
+    console.log("Packaged desktop smoke: every built-in plugin started");
     await smokeCliShim({ appPath, env });
     await smokeCliTerminal({ appPath, env });
     if (expectedSandbox !== undefined) {

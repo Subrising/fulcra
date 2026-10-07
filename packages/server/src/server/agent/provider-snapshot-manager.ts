@@ -20,10 +20,7 @@ import {
   type FetchCatalogOptions,
   type ProviderSnapshotEntry,
 } from "./agent-sdk-types.js";
-import {
-  raceProviderRefreshAbort,
-  runProviderRefreshWithDeadline,
-} from "./provider-refresh-deadline.js";
+import { runProviderRefreshWithDeadline } from "./provider-refresh-deadline.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type { WorkspaceGitService } from "../workspace-git-service.js";
 import type { ManagedProcessRegistry } from "../managed-processes/managed-processes.js";
@@ -185,10 +182,7 @@ export interface AgentManagerProviderState {
   providerDefinitions: Partial<
     Record<
       AgentProvider,
-      Pick<
-        ProviderDefinition,
-        "enabled" | "derivedFromProviderId" | "validateOptions" | "applyOptions" | "applyToolPolicy"
-      >
+      Pick<ProviderDefinition, "enabled" | "derivedFromProviderId" | "applyToolPolicy">
     >
   >;
   clients: Partial<Record<AgentProvider, AgentClient>>;
@@ -211,8 +205,11 @@ interface CatalogBinding {
 
 interface ProviderCatalog {
   result?: ProviderSnapshotRecord;
+  lastGood?: ProviderSnapshotRecord;
   stale?: boolean;
+  /** Caller completion may precede cleanup; flight retains the discovery slot. */
   load?: Promise<void>;
+  flight?: Promise<void>;
 }
 
 interface RegistryGeneration {
@@ -256,6 +253,7 @@ export class ProviderSnapshotManager {
   private providerClients: Record<AgentProvider, AgentClient>;
   private readonly ownedClients = new Set<AgentClient>();
   private readonly pluginProviders: PluginAgentClientRegistry;
+  private pluginProvidersSettled = false;
 
   constructor(options: ProviderSnapshotManagerOptions) {
     this.logger = options.logger;
@@ -281,7 +279,6 @@ export class ProviderSnapshotManager {
     );
     this.providerClients = {
       ...this.extraClients,
-      ...this.pluginProviders.clients(),
     } as Record<AgentProvider, AgentClient>;
     for (const client of Object.values(this.providerClients)) this.ownedClients.add(client);
   }
@@ -311,7 +308,7 @@ export class ProviderSnapshotManager {
     for (const catalogs of this.catalogs.values()) {
       for (const provider of providersToRefresh) {
         const catalog = catalogs.get(provider);
-        if (catalog) catalogs.set(provider, { result: catalog.result, stale: true });
+        if (catalog) catalog.stale = true;
       }
     }
     // Refresh each known target: provider keys coalesce reads, while target-scoped
@@ -369,8 +366,6 @@ export class ProviderSnapshotManager {
       providerDefinitions[provider] = {
         enabled: definition.enabled,
         derivedFromProviderId: definition.derivedFromProviderId,
-        validateOptions: definition.validateOptions,
-        applyOptions: definition.applyOptions,
         applyToolPolicy: definition.applyToolPolicy,
       };
       if (definition.enabled) {
@@ -385,17 +380,28 @@ export class ProviderSnapshotManager {
     return { providerDefinitions, clients };
   }
 
+  /** Called after built-in and configured plugin startup has completed, including disabled plugins. */
+  settlePluginProviders(): void {
+    if (this.pluginProvidersSettled) return;
+    this.pluginProvidersSettled = true;
+    this.warnUnknownProviderOverrides();
+  }
+
+  private warnUnknownProviderOverrides(): void {
+    if (!this.pluginProvidersSettled) return;
+    for (const [provider, override] of Object.entries(this.providerOverrides ?? {})) {
+      if (!override.extends && !this.generation.definitions[provider]) {
+        this.logger.warn({ provider }, "Provider override matches no registered provider");
+      }
+    }
+  }
+
   replacePluginProviders(
     registrations: readonly ProviderRegistration[],
   ): AgentManagerProviderState {
     for (const registration of registrations) {
-      if (
-        (this.generation.definitions[registration.id] || this.extraClients[registration.id]) &&
-        !this.pluginProviders.has(registration.id)
-      ) {
-        throw new Error(
-          `Plugin provider '${registration.id}' conflicts with a configured provider`,
-        );
+      if (BUILTIN_PROVIDER_IDS.includes(registration.id) || this.extraClients[registration.id]) {
+        throw new Error(`Plugin provider '${registration.id}' conflicts with a built-in provider`);
       }
     }
     const previousPlugins = this.pluginProviders.definitions();
@@ -405,17 +411,30 @@ export class ProviderSnapshotManager {
     this.pluginProviders.replace(registrations);
     const plugins = this.pluginProviders.definitions();
     const retiredProviders = Object.keys(previousPlugins).filter(
-      (provider) => previousPlugins[provider] !== plugins[provider],
+      (provider) =>
+        previousPlugins[provider] !== plugins[provider] &&
+        !this.providerOverrides?.[provider]?.extends,
     );
-    const definitions = { ...this.generation.definitions };
+    const definitions = this.buildRegistry(this.runtimeSettings, this.providerOverrides);
     const changed = new Set<AgentProvider>();
-    for (const provider of new Set([...Object.keys(previousPlugins), ...Object.keys(plugins)])) {
-      if (previousPlugins[provider] !== plugins[provider]) changed.add(provider);
-      delete definitions[provider];
-      delete clients[provider];
+    for (const provider of new Set([...this.generation.order, ...Object.keys(definitions)])) {
+      const before = this.generation.definitions[provider];
+      const after = definitions[provider];
+      const registrationChanged =
+        previousPlugins[provider] !== plugins[provider] &&
+        !this.providerOverrides?.[provider]?.extends;
+      if (
+        registrationChanged ||
+        !before ||
+        !after ||
+        !isDeepStrictEqual(before.configuration, after.configuration)
+      ) {
+        changed.add(provider);
+        delete clients[provider];
+      } else {
+        definitions[provider] = before;
+      }
     }
-    Object.assign(definitions, plugins);
-    Object.assign(clients, this.pluginProviders.clients());
     for (const client of Object.values(clients)) this.ownedClients.add(client);
     const generation = this.createGeneration(definitions, this.providerOverrides);
     const state = this.createAgentManagerState(definitions, clients);
@@ -492,11 +511,9 @@ export class ProviderSnapshotManager {
       ];
     }
 
-    const definition = this.requireProvider(input.provider);
     return validateAgentConfigurationAgainstProvider({
       input,
       provider,
-      validateOptions: definition.validateOptions,
     });
   }
 
@@ -607,7 +624,7 @@ export class ProviderSnapshotManager {
         definitions[provider] = before;
       }
     }
-    Object.assign(clients, this.extraClients, this.pluginProviders.clients());
+    Object.assign(clients, this.extraClients);
     const generation = this.createGeneration(definitions, providerOverrides);
     const agentManagerState = this.createAgentManagerState(definitions, clients);
     return {
@@ -631,6 +648,7 @@ export class ProviderSnapshotManager {
     }
     this.generation = generation;
     this.providerClients = clients;
+    this.warnUnknownProviderOverrides();
     for (const [key, catalogs] of this.catalogs) {
       for (const provider of changed) catalogs.delete(provider);
       if (catalogs.size === 0) this.catalogs.delete(key);
@@ -689,18 +707,12 @@ export class ProviderSnapshotManager {
     const registry = buildProviderRegistry(this.logger, {
       runtimeSettings,
       providerOverrides,
+      pluginProviders: this.pluginProviders.definitions(),
       workspaceGitService: this.workspaceGitService,
       managedProcesses: this.managedProcesses,
       openCodeBridge: this.openCodeBridge,
       isDev: this.isDev,
     });
-
-    for (const [provider, definition] of Object.entries(this.pluginProviders.definitions())) {
-      if (registry[provider]) {
-        throw new Error(`Plugin provider '${provider}' conflicts with a configured provider`);
-      }
-      registry[provider] = definition;
-    }
 
     for (const [provider, client] of Object.entries(this.extraClients) as Array<
       [AgentProvider, AgentClient]
@@ -948,37 +960,77 @@ export class ProviderSnapshotManager {
       catalogs.set(provider, catalog);
     }
     this.publishTargets([snapshotCwd]);
-    if (!force && (catalog.load || (catalog.result && !catalog.stale))) return catalog.load;
+    // Force requests join the same identity too, including timed-out cleanup.
+    if (catalog.flight) {
+      catalog.stale = false;
+      return catalog.load;
+    }
+    if (!force && catalog.result && !catalog.stale) return;
     catalog.stale = false;
 
     const current = catalog;
     const isCurrent = (): boolean =>
-      !this.destroyed && this.catalogs.get(key)?.get(provider) === current && current.load === load;
-    const load = this.generation.providerStates
+      !this.destroyed &&
+      this.catalogs.get(key)?.get(provider) === current &&
+      current.flight === flight;
+    let finishLoad!: () => void;
+    const load = new Promise<void>((complete) => {
+      finishLoad = complete;
+    });
+    const flight = this.generation.providerStates
       .get(provider)!
-      .discoveryLimit(() => {
-        if (!isCurrent()) return;
-        return this.refreshProvider({
-          catalogOptions,
-          provider,
-          definition,
-          initial,
-          client,
-          publish: (entry) => {
-            if (!isCurrent()) return false;
-            current.result = identifyEntry(structuredClone(entry));
-            const boundTargets = [...this.targets].flatMap(([cwd, target]) =>
-              target.bindings.get(provider)?.key === key ? [cwd] : [],
-            );
-            this.publishTargets(boundTargets);
-            return true;
-          },
-        });
+      .discoveryLimit(async () => {
+        let cleanup: Promise<void> | undefined;
+        let cleanupDone = false;
+        try {
+          if (!isCurrent()) return;
+          await this.refreshProvider({
+            catalogOptions,
+            provider,
+            definition,
+            initial,
+            lastGood: current.lastGood?.entry,
+            client,
+            onPendingCleanup: (pending) => {
+              cleanup = pending.then(() => {
+                cleanupDone = true;
+                return undefined;
+              });
+            },
+            publish: (entry) => {
+              if (!isCurrent()) return false;
+              current.result = identifyEntry(structuredClone(entry));
+              if (entry.status === "ready") current.lastGood = current.result;
+              const boundTargets = [...this.targets].flatMap(([cwd, target]) =>
+                target.bindings.get(provider)?.key === key ? [cwd] : [],
+              );
+              this.publishTargets(boundTargets);
+              return true;
+            },
+          });
+        } finally {
+          if ((!cleanup || cleanupDone) && current.flight === flight) {
+            current.flight = undefined;
+            current.load = undefined;
+          }
+          finishLoad();
+          // Do not let another attempt acquire this key or concurrency slot until
+          // the original operation (including uncertain probe exit) actually settles.
+          await cleanup;
+        }
+      })
+      .catch((error) => {
+        if (isCurrent()) this.logger.debug({ err: error, provider }, "Catalog flight ended");
       })
       .finally(() => {
-        if (current.load === load) current.load = undefined;
+        finishLoad();
+        if (current.flight === flight) {
+          current.flight = undefined;
+          current.load = undefined;
+        }
       });
     current.load = load;
+    current.flight = flight;
     return load;
   }
 
@@ -987,7 +1039,9 @@ export class ProviderSnapshotManager {
     provider: AgentProvider;
     definition: ProviderDefinition;
     initial: ProviderSnapshotEntry;
+    lastGood?: ProviderSnapshotEntry;
     client: AgentClient;
+    onPendingCleanup: (cleanup: Promise<void>) => void;
     publish: (entry: ProviderSnapshotEntry) => boolean;
   }): Promise<void> {
     const {
@@ -995,7 +1049,9 @@ export class ProviderSnapshotManager {
       provider,
       definition,
       initial: base,
+      lastGood,
       client,
+      onPendingCleanup,
       publish: setEntry,
     } = options;
 
@@ -1003,12 +1059,10 @@ export class ProviderSnapshotManager {
       const catalog = await runProviderRefreshWithDeadline({
         label: definition.label,
         timeoutMs: this.refreshTimeoutMs,
+        onPendingCleanup,
         operation: async (context) => {
           const available = await context.runActivity("availability", () =>
-            raceProviderRefreshAbort(
-              context.signal,
-              client.isAvailable(context.signal, catalogOptions),
-            ),
+            client.isAvailable(context.signal, catalogOptions),
           );
           if (!available) {
             return null;
@@ -1041,7 +1095,9 @@ export class ProviderSnapshotManager {
       });
     } catch (error) {
       const emitted = setEntry({
-        ...base,
+        // Error status makes these rows explicitly stale, never fresh availability.
+        // The last good value belongs to this exact provider catalog identity.
+        ...(lastGood ?? base),
         status: "error",
         enabled: true,
         error: toErrorMessage(error),

@@ -22,6 +22,7 @@ interface BuildAgentAttentionNotificationPayloadInput {
   workspaceId: string;
   agentId: string;
   assistantMessage?: string | null;
+  agentTitle?: string | null;
   permissionRequest?: NotificationPermissionRequest | null;
 }
 
@@ -81,12 +82,43 @@ const stripMarkdownToText = (markdown: string): string => {
   return text;
 };
 
+// Push previews leave the machine. Once a field looks credential-bearing, omit the
+// whole field: parsing one value cannot safely bound shell/JSON/YAML quotes, escapes
+// or multiline continuations. These detectors are conservative heuristics, not a
+// guarantee that arbitrary unlabelled secrets can be identified.
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /\b[A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|auth|credential|cookie|private[_-]?key)[A-Za-z0-9_.-]*["'`]?\s*[=:]/i,
+  /\b[A-Z][A-Z0-9_]{2,}["'`]?\s*=/,
+  /--?(?:token|password|passwd|secret|api-?key|auth|key)(?:[=\s])/i,
+  /\b(?:authorization|bearer|basic)\b[:\s]+\S+/i,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@\S+/i,
+  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/,
+  /\b(?:gh[opsur]_|github_pat_|xox[abpr]-|AKIA|AIza)[A-Za-z0-9_-]{8,}/,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/,
+  /\b[A-Za-z0-9+/_=-]{32,}/,
+];
+
+export function redactNotificationSecrets(text: string): string {
+  // Inspect common escaped key spellings without decoding the outgoing prose.
+  const inspected = text
+    .replace(/\\u([a-f0-9]{4})|\\x([a-f0-9]{2})/gi, (_, unicode: string, hex: string) =>
+      String.fromCharCode(Number.parseInt(unicode ?? hex, 16)),
+    )
+    .replace(/\\(["'`\\])/g, "$1")
+    .replace(/\\\r?\n/g, "");
+  return SECRET_PATTERNS.some((pattern) => pattern.test(inspected)) ? "[redacted]" : text;
+}
+
 const buildNotificationPreview = (text: string | null | undefined): string | null => {
   if (!text) {
     return null;
   }
 
-  const normalized = normalizeNotificationText(stripMarkdownToText(text));
+  // Inspect raw text before markdown can erase a credential delimiter or key.
+  // Inspect the rendered text too, since markdown can split a key's spelling.
+  const normalized = normalizeNotificationText(
+    redactNotificationSecrets(stripMarkdownToText(redactNotificationSecrets(text))),
+  );
   if (!normalized) {
     return null;
   }
@@ -94,46 +126,26 @@ const buildNotificationPreview = (text: string | null | undefined): string | nul
   return truncateNotificationText(normalized, NOTIFICATION_PREVIEW_LIMIT);
 };
 
-const safeStringify = (value: unknown): string | null => {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return null;
-  }
-};
-
+// A tool permission's title, description and input are built from the raw command and can hold secrets, so the push
+// carries only the tool name: a bounded summary, never the command. Question
+// fields are checked separately so a safe title survives an omitted description.
 const buildPermissionDetails = (
   request: NotificationPermissionRequest | null | undefined,
 ): string | null => {
   if (!request) {
     return null;
   }
-
-  const title = request.title?.trim();
-  const description = request.description?.trim();
-  const details: string[] = [];
-
-  if (title) {
-    details.push(title);
+  if (request.kind === "question") {
+    const title = buildNotificationPreview(request.title);
+    // A description can continue a value introduced in the title.
+    if (title === "[redacted]") return title;
+    const details = [title, buildNotificationPreview(request.description)].filter(
+      (part, index, all): part is string => Boolean(part) && all.indexOf(part) === index,
+    );
+    if (details.length > 0) return details.join(" - ");
   }
-  if (description && description !== title) {
-    details.push(description);
-  }
-  if (details.length > 0) {
-    return details.join(" - ");
-  }
-
-  const inputPreview = request.input ? safeStringify(request.input) : null;
-  if (inputPreview) {
-    return inputPreview;
-  }
-
-  const metadataPreview = request.metadata ? safeStringify(request.metadata) : null;
-  if (metadataPreview) {
-    return metadataPreview;
-  }
-
-  return request.name?.trim() || request.kind;
+  const name = request.name?.trim();
+  return name ? `Wants to use ${name}` : `Needs your approval (${request.kind})`;
 };
 
 export function findLatestAssistantMessageFromTimeline(
@@ -196,7 +208,10 @@ function resolveAgentAttentionFallbackBody(reason: AgentAttentionReason): string
 export function buildAgentAttentionNotificationPayload(
   input: BuildAgentAttentionNotificationPayloadInput,
 ): AgentAttentionNotificationPayload {
-  const title = resolveAgentAttentionTitle(input.reason);
+  const sessionTitle = buildNotificationPreview(input.agentTitle);
+  const title = sessionTitle
+    ? truncateNotificationText(sessionTitle, 80)
+    : resolveAgentAttentionTitle(input.reason);
   const preview = resolveAgentAttentionPreview(input);
   const body = preview ?? resolveAgentAttentionFallbackBody(input.reason);
 

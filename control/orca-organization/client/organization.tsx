@@ -1,5 +1,5 @@
 import { CleanupSurface } from "./worktree-lifecycle";
-import { useState } from "react";
+import { Component, useState, type ReactNode } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { useQuery } from "@tanstack/react-query";
@@ -23,7 +23,9 @@ import {
   ORGANISATION_VIEWS,
   PILLARS,
   SETTINGS_VIEWS,
-  readyPillars,
+  primaryPillars,
+  extraPillars,
+  PRIMARY_PILLAR_KEYS,
   tabTestId,
   type OrganisationView,
   type PillarKey,
@@ -35,6 +37,39 @@ import { InboxSurface } from "./inbox";
 import { DevicesSurface } from "./devices";
 import { ChannelsSurface } from "./channels";
 import { TodaySurface } from "./today";
+import { WorkButton } from "./work-button";
+import { TeamTreeSection } from "./team-tree-view";
+
+class TabBoundary extends Component<
+  { children: ReactNode; theme: PluginSurfaceProps["theme"] },
+  { error: string | null }
+> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <View style={{ padding: 16, gap: 12 }}>
+        <Text
+          accessibilityLiveRegion="polite"
+          style={{ color: this.props.theme.colors.foreground }}
+        >
+          This view could not be displayed. You can retry or open another tab.
+        </Text>
+        <Text selectable style={{ color: this.props.theme.colors.foregroundMuted }}>
+          {this.state.error}
+        </Text>
+        <WorkButton
+          theme={this.props.theme}
+          label="Retry this view"
+          onPress={() => this.setState({ error: null })}
+        />
+      </View>
+    );
+  }
+}
 // J0-10: a date a person reads ("24 Sept, 20:50"), not an ISO timestamp. An unreadable value says so.
 export const plainDate = (iso: string | null | undefined) => {
   const t = Date.parse(iso ?? "");
@@ -48,7 +83,11 @@ export const plainDate = (iso: string | null | undefined) => {
     : "at an unknown time";
 };
 export function OrganizationSurface(
-  props: PluginSurfaceProps & { radiusScratchOwner?: RadiusScratchOwnerAdapter },
+  props: PluginSurfaceProps & {
+    radiusScratchOwner?: RadiusScratchOwnerAdapter;
+    initialPillar?: PillarKey;
+    initialView?: OrganisationView;
+  },
 ) {
   // The tabs come from one registry (tabs.ts): only ready pillars are shown. Organisation opens on J1's
   // Organisation view (primes, projects, orchestrators and live work, with the work map one tap away as "Map"),
@@ -56,11 +95,15 @@ export function OrganizationSurface(
   // Settings holds Devices and Channels. J4's Integrations is a host settings screen (index.client.tsx), also
   // reachable from the Trackers tab. The recovery banner sits above every tab: it reports on the whole
   // installation, not on one tab.
-  const [pillar, setPillar] = useState<PillarKey>("today"),
+  const [pillar, setPillar] = useState<PillarKey>(props.initialPillar ?? "today"),
     [focus, setFocus] = useState<string | null>(null);
-  const [view, setView] = useState<OrganisationView>("workmap"),
-    [settings, setSettings] = useState<SettingsView>("devices");
+  const [view, setView] = useState<OrganisationView>(props.initialView ?? "workmap"),
+    [settings, setSettings] = useState<SettingsView>("accounts");
+  const [moreOpen, setMoreOpen] = useState(
+    () => !PRIMARY_PILLAR_KEYS.includes(props.initialPillar ?? "today"),
+  );
   // J0-8: the sheet remembers the pillar it was opened from, so Back returns there (Sessions, not Organisation).
+  const [deployPlan, setDeployPlan] = useState<string | null>(null);
   const [sheetFrom, setSheetFrom] = useState<PillarKey | null>(null),
     sheet = sheetFrom !== null;
   const c = props.theme.colors;
@@ -105,10 +148,12 @@ export function OrganizationSurface(
   const go = {
     inbox: () => {
       setPillar("inbox");
+      setMoreOpen(true);
       setSheetFrom(null);
     },
     recovery: () => {
       setPillar("sessions");
+      setMoreOpen(true);
       setSheetFrom(null);
     },
     project: (id: string) => {
@@ -117,10 +162,18 @@ export function OrganizationSurface(
       setSheetFrom(null);
       setPillar("organisation");
     },
+    deploy: (planId: string) => {
+      setDeployPlan(planId);
+      setPillar("environments");
+      setMoreOpen(true);
+      setSheetFrom(null);
+    },
   };
   const body =
     pillar === "today" ? (
       <TodaySurface {...props} go={go} />
+    ) : pillar === "team" ? (
+      <TeamSurface {...props} onTask={onTask} />
     ) : pillar === "sessions" ? (
       <FleetSurface {...props} onTask={onTask} />
     ) : pillar === "trackers" ? (
@@ -128,13 +181,14 @@ export function OrganizationSurface(
     ) : pillar === "changes" ? (
       <ChangesSurface {...props} />
     ) : pillar === "inbox" ? (
-      <InboxSurface theme={props.theme} layout={props.layout} />
+      <InboxSurface theme={props.theme} layout={props.layout} host={props.host} />
     ) : pillar === "environments" ? (
       <EnvironmentsSurface
         theme={props.theme}
         layout={props.layout}
         host={props.host}
         radiusScratchOwner={props.radiusScratchOwner}
+        openPlanId={deployPlan}
       />
     ) : pillar === "settings" ? (
       settings === "accounts" ? (
@@ -153,7 +207,7 @@ export function OrganizationSurface(
     ) : view === "portfolio" ? (
       <PortfolioSurface {...props} onTask={onTask} />
     ) : (
-      <OrganisationSurface key={focus ?? "all"} {...props} initialProject={focus} />
+      <OrganisationSurface key={focus ?? "all"} {...props} initialProject={focus} onTask={onTask} />
     );
   const subStrip = {
     flexDirection: "row" as const,
@@ -170,11 +224,16 @@ export function OrganizationSurface(
       {/* Today says the same thing in plain words ("the computer restarted …") and links here. */}
       {pillar !== "today" && (
         <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
-          <RecoveryBanner theme={props.theme} navigation={props.navigation} host={props.host} />
+          <RecoveryBanner
+            theme={props.theme}
+            navigation={props.navigation}
+            host={props.host}
+            once
+          />
         </View>
       )}
       <View style={{ flexDirection: "row", flexWrap: "wrap", padding: 12, gap: 20 }}>
-        {readyPillars().map((p) =>
+        {primaryPillars().map((p) =>
           tab(
             p.key,
             p.label,
@@ -186,6 +245,30 @@ export function OrganizationSurface(
             p.legacyKey,
             17,
           ),
+        )}
+      </View>
+      <View style={{ paddingHorizontal: 12, gap: 10, paddingBottom: 10 }}>
+        <WorkButton
+          theme={props.theme}
+          label={moreOpen ? "Hide more views" : "More views"}
+          onPress={() => setMoreOpen((open) => !open)}
+        />
+        {moreOpen && (
+          <View style={subStrip}>
+            {extraPillars().map((p) =>
+              tab(
+                p.key,
+                p.label,
+                pillar === p.key,
+                () => {
+                  setPillar(p.key);
+                  setSheetFrom(null);
+                },
+                p.legacyKey,
+                15,
+              ),
+            )}
+          </View>
         )}
       </View>
       {pillar === "organisation" && (
@@ -229,15 +312,60 @@ export function OrganizationSurface(
       )}
       {pillar === "settings" && (
         <View style={subStrip}>
-          {SETTINGS_VIEWS.map((v) =>
+          {SETTINGS_VIEWS.filter((v) => v.key === "accounts").map((v) =>
             tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15),
           )}
+          <Details theme={props.theme} label="Advanced settings">
+            {SETTINGS_VIEWS.filter((v) => v.key !== "accounts").map((v) =>
+              tab(v.key, v.label, settings === v.key, () => setSettings(v.key), null, 15),
+            )}
+          </Details>
         </View>
       )}
-      {body}
+      <TabBoundary key={`${pillar}:${view}:${settings}:${sheet}`} theme={props.theme}>
+        {body}
+      </TabBoundary>
     </View>
   );
 }
+// The Team tab: who is in charge, in plain cards, first; the detailed work map is one tap away.
+function TeamSurface(props: PluginSurfaceProps & { onTask: (id: string) => void }) {
+  const [map, setMap] = useState(false);
+  if (map)
+    return (
+      <View style={{ flex: 1 }}>
+        <View style={{ paddingHorizontal: 12, paddingTop: 8, flexDirection: "row" }}>
+          <WorkButton
+            theme={props.theme}
+            label="Back to who is in charge"
+            onPress={() => setMap(false)}
+          />
+        </View>
+        <OrganisationSurface
+          key="team-workflow"
+          {...props}
+          initialMode="map"
+          onTask={props.onTask}
+        />
+      </View>
+    );
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: props.theme.colors.surface0 }}
+      contentContainerStyle={{ padding: props.layout.compact ? 16 : 28, gap: 16 }}
+    >
+      <TeamTreeSection theme={props.theme} host={props.host} navigation={props.navigation} />
+      <View style={{ flexDirection: "row" }}>
+        <WorkButton
+          theme={props.theme}
+          label="Show the detailed work map"
+          onPress={() => setMap(true)}
+        />
+      </View>
+    </ScrollView>
+  );
+}
+
 export function TaskSurface({ theme, layout, navigation, host }: PluginSurfaceProps) {
   const hostId = host?.id ?? "",
     web = layout.platform === "web";

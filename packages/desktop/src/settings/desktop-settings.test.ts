@@ -82,7 +82,7 @@ describe("desktop-settings", () => {
 
     expect(settings).toEqual({
       releaseChannel: "stable",
-      notifications: { playSound: true },
+      notifications: { playSound: true, delivery: "immediate", digestMinutes: 15 },
       daemon: {
         commandCentreEnabled: false,
         manageBuiltInDaemon: false,
@@ -105,7 +105,7 @@ describe("desktop-settings", () => {
 
     expect(next).toEqual({
       releaseChannel: "beta",
-      notifications: { playSound: true },
+      notifications: { playSound: true, delivery: "immediate", digestMinutes: 15 },
       daemon: {
         commandCentreEnabled: false,
         manageBuiltInDaemon: false,
@@ -139,6 +139,36 @@ describe("desktop-settings", () => {
     const settings = await createDesktopSettingsStore({ userDataPath }).get();
 
     expect(settings.notifications.playSound).toBe(true);
+  });
+
+  it("persists digest delivery without replacing the sound preference and rejects invalid values", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    const store = createDesktopSettingsStore({ userDataPath });
+    await store.patch({ notifications: { playSound: false, delivery: "digest" } });
+    expect((await store.patch({ notifications: { delivery: "invalid" } })).notifications).toEqual({
+      playSound: false,
+      delivery: "digest",
+      digestMinutes: 15,
+    });
+    expect((await createDesktopSettingsStore({ userDataPath }).get()).notifications).toEqual({
+      playSound: false,
+      delivery: "digest",
+      digestMinutes: 15,
+    });
+  });
+
+  it("persists how often the digest is shown and ignores unsupported intervals", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    const store = createDesktopSettingsStore({ userDataPath });
+    await store.patch({ notifications: { delivery: "digest", digestMinutes: 60 } });
+    expect(
+      (await store.patch({ notifications: { digestMinutes: 7 } })).notifications.digestMinutes,
+    ).toBe(60);
+    expect(
+      (await createDesktopSettingsStore({ userDataPath }).get()).notifications.digestMinutes,
+    ).toBe(60);
   });
 
   it("keeps an explicit notification sound choice across restarts", async () => {
@@ -273,7 +303,7 @@ describe("desktop-settings", () => {
 
     expect(migrated).toEqual({
       releaseChannel: "beta",
-      notifications: { playSound: true },
+      notifications: { playSound: true, delivery: "immediate", digestMinutes: 15 },
       daemon: {
         commandCentreEnabled: false,
         manageBuiltInDaemon: false,
@@ -319,7 +349,7 @@ describe("desktop-settings", () => {
     expect(persisted.settings.releaseChannel).toBe("beta");
     expect(next).toEqual({
       releaseChannel: "beta",
-      notifications: { playSound: false },
+      notifications: { playSound: false, delivery: "immediate", digestMinutes: 15 },
       daemon: {
         manageBuiltInDaemon: true,
         keepRunningAfterQuit: false,

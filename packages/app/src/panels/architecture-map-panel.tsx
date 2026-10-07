@@ -24,6 +24,7 @@ import {
 } from "@/architecture-map/change-view-request";
 import {
   ARCHITECTURE_MAP_DIRECTORY,
+  canOpenCodeArchitecture,
   type ArchitectureMapEntry,
   type ArchitectureMapListing,
 } from "@/architecture-map/discovery";
@@ -155,7 +156,8 @@ function ArchitectureMapPanel() {
   }
   const listed = list.data?.kind === "listed" ? list.data : null;
   const hasMaps = Boolean(listed && listed.maps.length > 0);
-  if (!hasMaps && !canGenerate && !canGraph) return <NoMaps listing={listed} />;
+  if (!canOpenCodeArchitecture({ hasMaps, canGenerate, canGraph }))
+    return <NoMaps listing={listed} />;
   return (
     <View style={styles.root}>
       <ViewToggle view={viewState.view} onChoose={setViewState} />
@@ -333,6 +335,8 @@ function CodeGraphBrowser(props: {
   onClearPullRequest: () => void;
 }) {
   const { t } = useTranslation();
+  const { openTab } = usePaneContext();
+  const openFile = useCallback((path: string) => openTab({ kind: "file", path }), [openTab]);
   const query = useArchitectureGraph({
     serverId: props.serverId,
     cwd: props.workspaceRoot,
@@ -362,6 +366,9 @@ function CodeGraphBrowser(props: {
       refLabel={payload.ref ?? ""}
       pullRequest={payload.pullRequest ?? null}
       onClearPullRequest={props.pullRequest !== null ? props.onClearPullRequest : null}
+      serverId={props.serverId}
+      cwd={props.workspaceRoot}
+      onOpenFile={openFile}
     />
   );
 }

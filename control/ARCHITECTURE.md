@@ -131,7 +131,7 @@ the owner clarified the default policy: vision, major design and cross-system im
 
 **Radius identity evaluated:** Radius project at `radapp.io` / `radius-project/radius`, not the RADIUS authentication protocol. Core Radius defines applications, environments and infrastructure recipes. Radius Canvas is a separate preview integration in the GitHub Copilot app, including graph/diff/deploy flows. Neither UI availability nor deployment transport is assumed installed here. [Core concepts](https://docs.radapp.io/concepts/), [Canvas](https://edge.docs.radapp.io/integrations/github-copilot-app/canvas-extension/).
 
-The traceability experiment binds a decision ID and reviewed definition digest to implementation/artifact identity, deployment execution ID, actual resource identities, and a behavioral observation. Radius status/graph output supplies part of that evidence; independent functional verification supplies the rest. Archify depicts the sourced before/proposed/observed states. Any adapter between these models remains a hypothesis. Keep NO LAUNCH/NO TEARDOWN until the existing authorized owner explicitly releases the relevant hold.
+The traceability experiment binds a decision ID and reviewed definition digest to implementation/artifact identity, deployment execution ID, actual resource identities, and a behavioral observation. Radius status/graph output supplies part of that evidence; independent functional verification supplies the rest. Archify depicts the sourced before/proposed/observed states. Any adapter between these models remains a hypothesis. The earlier NO LAUNCH/NO TEARDOWN hold was released by the owner on 7 Oct 2026. Deploys go through Fulcra's confirm step.
 
 ## Phased path
 

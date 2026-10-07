@@ -1,5 +1,6 @@
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, lstat, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { Logger } from "pino";
 
@@ -16,26 +17,43 @@ import {
 const SILERO_VAD_DIR = "silero-vad";
 const SILERO_VAD_FILE = "silero_vad.onnx";
 
-/**
- * Ensure the Silero VAD ONNX model exists in modelsDir where native code can
- * read it. The bundled asset lives inside Electron's app.asar which native C++
- * cannot open, so we copy it out on first run using Node.js fs (asar-aware).
- */
+export const SILERO_VAD_SIZE = 643854;
+export const SILERO_VAD_SHA256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6";
+export async function hasCompleteSileroVadModel(modelsDir: string): Promise<boolean> {
+  try {
+    const file = path.join(modelsDir, SILERO_VAD_DIR, SILERO_VAD_FILE);
+    const info = await lstat(file);
+    if (!info.isFile() || info.size !== SILERO_VAD_SIZE) return false;
+    return (
+      createHash("sha256")
+        .update(await readFile(file))
+        .digest("hex") === SILERO_VAD_SHA256
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Copy the verified bundled dependency out of ASAR before declaring speech ready. */
 export async function ensureSileroVadModel(modelsDir: string, logger: Logger): Promise<string> {
   const destDir = path.join(modelsDir, SILERO_VAD_DIR);
   const destPath = path.join(destDir, SILERO_VAD_FILE);
-
-  try {
-    const s = await stat(destPath);
-    if (s.isFile() && s.size > 0) return destPath;
-  } catch {
-    // not present yet
-  }
-
-  const bundledPath = resolveBundledSileroVadModelPath();
+  if (await hasCompleteSileroVadModel(modelsDir)) return destPath;
   await mkdir(destDir, { recursive: true });
-  await copyFile(bundledPath, destPath);
-  logger.info({ destPath }, "Copied Silero VAD model to models directory");
+  const temporaryDir = path.join(modelsDir, `.silero-${randomUUID()}`);
+  await mkdir(temporaryDir);
+  try {
+    const temporaryModelDir = path.join(temporaryDir, SILERO_VAD_DIR);
+    await mkdir(temporaryModelDir);
+    const temporaryFile = path.join(temporaryModelDir, SILERO_VAD_FILE);
+    await copyFile(resolveBundledSileroVadModelPath(), temporaryFile);
+    if (!(await hasCompleteSileroVadModel(temporaryDir)))
+      throw Error("Bundled Silero VAD model is incomplete");
+    await rename(temporaryFile, destPath);
+    logger.info("Provisioned verified Silero VAD model");
+  } finally {
+    await rm(temporaryDir, { recursive: true, force: true });
+  }
   return destPath;
 }
 

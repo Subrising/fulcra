@@ -265,14 +265,14 @@ holding several seats keeps its capability while any one of them remains. This i
 `manager_grants` and `event_credentials`; the delegation capability itself is
 never handed to a model, and the operator secret never reaches the tool process.
 
-| Tool                   | Calls              | For                                                                       |
-| ---------------------- | ------------------ | ------------------------------------------------------------------------- |
-| `role_status`          | `bindings-self`    | which seats I hold, which primes exist                                    |
-| `role_channels`        | `channels-list`    | approved channels, allowance, unread, what is waiting, why blocked        |
-| `role_thread`          | `channels-thread`  | the conversation with IDs, replies, receipts and how long anything waited |
-| `role_message`         | `channels-send`    | send one message, optionally `inReplyTo`                                  |
-| `role_mark_read`       | `channels-read`    | record consumption with a note                                            |
-| `role_request_channel` | `channels-request` | ask an operator for a channel to another seat                             |
+| Tool                   | Calls              | For                                                                                                               |
+| ---------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `role_status`          | `bindings-self`    | which seats I hold, which primes exist                                                                            |
+| `role_channels`        | `channels-list`    | approved channels, allowance, unread, what is waiting, why blocked                                                |
+| `role_thread`          | `channels-thread`  | the conversation with IDs, replies, receipts and how long anything waited                                         |
+| `role_message`         | `channels-send`    | send one message, optionally `inReplyTo`; `noWake: true` saves FYI in the thread without a prompt or notification |
+| `role_mark_read`       | `channels-read`    | record consumption with a note                                                                                    |
+| `role_request_channel` | `channels-request` | ask an operator for a channel to another seat                                                                     |
 
 A role grant reaches only `bindings-*` and `channels-*`. It is not the manager
 lane and not the inbox lane, and it cannot call `send`, `inspect` or any operator

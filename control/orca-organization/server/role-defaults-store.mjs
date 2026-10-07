@@ -1,4 +1,4 @@
-// Update-7: persisted model + effort defaults per role and provider, edited in Settings -> Accounts & Defaults.
+// Update-7: persisted model + effort defaults per role and provider, edited in Settings -> Accounts & models.
 // Its own file (<Command Centre home>/accounts/defaults.json, 0600): the shared config's defaults.roles is a CLOSED
 // object that older tool servers validate (L44), so new roles (review, research) and every edit live here. Readers take
 // this store first and the shared config's defaults.roles second, so an installation that never opened the screen keeps
@@ -25,37 +25,37 @@ export const SEED = Object.freeze({
   orchestration: {
     provider: "claude",
     claude: sel("claude/claude-opus-5-5", "medium"),
-    codex: sel(null, "medium"),
+    codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   planning: {
     provider: "claude",
     claude: sel("claude/claude-opus-5-5", "medium"),
-    codex: sel(null, "medium"),
+    codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   review: {
     provider: "claude",
     claude: sel("claude/claude-opus-5-5", "medium"),
-    codex: sel(null, "medium"),
+    codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   implementation: {
-    provider: "claude",
+    provider: "codex",
     claude: sel("claude/claude-sonnet-5-5", "medium"),
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   research: {
-    provider: "claude",
+    provider: "codex",
     claude: sel("claude/claude-sonnet-5-5", "medium"),
-    codex: sel(null, "medium"),
+    codex: sel("codex/gpt-6.1-sol", "medium"),
   },
 });
 // Update-7 W3 (owner, 01:29Z): the default permission mode for new sessions, per provider. Claude `auto` is the model
-// classifier (not bypassPermissions, which is never offered); Codex `full-access` runs without approval prompts. The
+// classifier (not bypassPermissions, which is never offered); Codex `auto-review` preserves its review policy. The
 // choices are what Settings offers and what a stored value may be.
 export const MODE_CHOICES = Object.freeze({
   claude: Object.freeze(["auto", "acceptEdits", "default", "plan"]),
   codex: Object.freeze(["full-access", "auto-review", "auto"]),
 });
-export const SEED_MODES = Object.freeze({ claude: "auto", codex: "full-access" });
+export const SEED_MODES = Object.freeze({ claude: "auto", codex: "auto-review" });
 const MODE_PROVIDERS = Object.freeze(["claude", "codex"]);
 const modeOf = (p, v) => (typeof v === "string" && MODE_CHOICES[p].includes(v) ? v : null);
 const file = (root) => path.join(accountsDir(root), "defaults.json");
@@ -102,6 +102,29 @@ export function readRoleDefaults(root, configRoles = null, configModes = null) {
     ]),
   );
   return { roles, orchestrationGuard: stored.orchestrationGuard === true, modes };
+}
+// Startup initializes only an absent installation table. An existing (including migrated)
+// Settings file is left byte-identical; an explicit config choice wins over the seed.
+export function initializeRoleDefaults(root, configRoles = null, configModes = null) {
+  const table = readRoleDefaults(root, configRoles, configModes);
+  const dir = accountsDir(root);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(dir, `.defaults-${randomUUID()}.json`);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, ...table }, null, 1) + "\n", {
+      mode: 0o600,
+      flag: "wx",
+      flush: true,
+    });
+    try {
+      fs.linkSync(tmp, file(root));
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+  } finally {
+    if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+  }
+  return readRoleDefaults(root, configRoles, configModes);
 }
 // The modes chosen in Settings only (no config, no seed): the controller places them above the shared config.
 export function chosenModes(root) {

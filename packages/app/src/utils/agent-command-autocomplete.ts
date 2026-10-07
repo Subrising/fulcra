@@ -84,6 +84,19 @@ export function filterInlineSkillCommandEntries<TEntry extends InlineSkillComman
 
 const INVALID_SLASH_COMMAND_QUERY_CHARS = /[/\s\n\r\t"']/;
 
+const ACCOUNT_COMMAND = "account";
+
+// /account comes from the host's Fulcra plugin. When that plugin is untrusted or a different
+// version, the command is missing and "No commands found" would wrongly suggest it never existed.
+export function isUnofferedAccountCommand(query: string, offeredNames: readonly string[]): boolean {
+  const typed = query.trim().toLowerCase();
+  return (
+    typed.length > 0 &&
+    ACCOUNT_COMMAND.startsWith(typed) &&
+    !offeredNames.some((name) => name.toLowerCase() === ACCOUNT_COMMAND)
+  );
+}
+
 export function findActiveSlashCommand(
   input: FindActiveSlashCommandInput,
 ): SlashCommandRange | null {

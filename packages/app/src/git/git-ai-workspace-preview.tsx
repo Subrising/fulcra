@@ -12,22 +12,43 @@ import { useCheckoutGitActionsStore } from "./actions-store";
 import { GitAiDraftPanel } from "./git-ai-draft-panel";
 import type { GitAiDraftKind, GitAiTextDraft } from "./git-ai-draft-model";
 
+export type GitAiStartKind = "commit-message" | "pull-request";
+
+const START_TITLE: Record<GitAiStartKind, string> = {
+  "commit-message": "Commit your changes",
+  "pull-request": "Open a pull request",
+};
+
 export function GitAiWorkspacePreview(props: {
   serverId: string;
   workspaceId: string;
   cwd: string;
+  /** Commit or Create PR asked for wording: open straight onto that draft. A new nonce reopens it. */
+  start?: { kind: GitAiStartKind; nonce: number } | null;
 }) {
   const supported = useHostFeatureAvailability(props.serverId, "gitAiDrafts");
-  const [open, setOpen] = useState(false);
-  const show = useCallback(() => setOpen(true), []);
-  const close = useCallback(() => setOpen(false), []);
+  const [open, setOpen] = useState<{ startWith?: GitAiStartKind } | null>(null);
+  const show = useCallback(() => setOpen({}), []);
+  const close = useCallback(() => setOpen(null), []);
+  const nonce = props.start?.nonce;
+  const startKind = props.start?.kind;
+  useEffect(() => {
+    if (nonce !== undefined && startKind) setOpen({ startWith: startKind });
+  }, [nonce, startKind]);
   if (supported !== true) return null;
   return (
     <>
       <Button size="sm" variant="outline" onPress={show}>
-        AI Git help
+        Write with AI
       </Button>
-      {open ? <GitAiWorkspacePreviewSession {...props} onClose={close} /> : null}
+      {open ? (
+        <GitAiWorkspacePreviewSession
+          key={nonce ?? "manual"}
+          {...props}
+          startWith={open.startWith}
+          onClose={close}
+        />
+      ) : null}
     </>
   );
 }
@@ -36,6 +57,7 @@ function GitAiWorkspacePreviewSession(props: {
   serverId: string;
   workspaceId: string;
   cwd: string;
+  startWith?: GitAiStartKind;
   onClose: () => void;
 }) {
   const client = useHostRuntimeClient(props.serverId);
@@ -130,7 +152,7 @@ function GitAiWorkspacePreviewSession(props: {
     const admitted = lifetime.current.epoch;
     const parsed = GitAiDraftSchema.safeParse(wording);
     if (!parsed.success || parsed.data.kind === "conflict-help") {
-      setError("Enter a nonempty subject/title and bounded wording before submitting.");
+      setError("Add a message first. A pull request also needs a title and a description.");
       return;
     }
     const draft = parsed.data;
@@ -154,18 +176,18 @@ function GitAiWorkspacePreviewSession(props: {
       .catch(() => {
         if (current() && admitted === lifetime.current.epoch)
           setError(
-            "The action did not return a success receipt. Check Git state before taking another action.",
+            "Fulcra couldn't confirm that it worked. Check your changes before trying again.",
           );
         // Unknown action outcome remains locked; never automatically replay.
       });
   }, [connection, current, props, submitted, wording]);
   const header = useMemo(
     () => ({
-      title: "AI Git help",
+      title: props.startWith ? START_TITLE[props.startWith] : "Write with AI",
       subtitle:
-        "Drafts use the host’s default Claude SDK without tools. Commit suggestions are subjects only.",
+        "Fulcra drafts the wording from your changes. Edit it, then confirm. Nothing changes until you do.",
     }),
-    [],
+    [props.startWith],
   );
   const key = JSON.stringify([props.serverId, props.workspaceId, generation, epoch]);
   const writeAllowed = connection?.permissions?.includes("workspace.write") === true;
@@ -176,6 +198,7 @@ function GitAiWorkspacePreviewSession(props: {
           checkoutKey={key}
           requestDraft={requestDraft}
           onUseDraft={useDraft}
+          startWith={props.startWith}
           disabled={!current() || submitted}
         />
         {wording?.kind === "commit-message" ? (
@@ -183,7 +206,7 @@ function GitAiWorkspacePreviewSession(props: {
             key={key + "subject"}
             initialValue={wording.message}
             onChangeText={editMessage}
-            accessibilityLabel="Reviewed commit subject"
+            accessibilityLabel="Commit message"
           />
         ) : null}
         {wording?.kind === "pull-request" ? (
@@ -192,22 +215,20 @@ function GitAiWorkspacePreviewSession(props: {
               key={key + "title"}
               initialValue={wording.title}
               onChangeText={editTitle}
-              accessibilityLabel="Reviewed PR title"
+              accessibilityLabel="Pull request title"
             />
             <EditingTextInput
               key={key + "body"}
               initialValue={wording.body}
               onChangeText={editBody}
               multiline
-              accessibilityLabel="Reviewed PR body"
+              accessibilityLabel="Pull request description"
             />
           </>
         ) : null}
         {wording ? (
           <Button onPress={performHumanAction} disabled={!writeAllowed || !current() || submitted}>
-            {wording.kind === "commit-message"
-              ? "Commit all changes with reviewed subject"
-              : "Create PR with reviewed wording"}
+            {wording.kind === "commit-message" ? "Commit all changes" : "Open the pull request"}
           </Button>
         ) : null}
         {error ? <Text accessibilityRole="alert">{error}</Text> : null}

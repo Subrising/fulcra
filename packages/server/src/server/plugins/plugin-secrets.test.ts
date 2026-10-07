@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { createMemoryCredentialBackend } from "../integrations/credential-backend.js";
 import {
   PluginOutputWithheldError,
   PluginSecretUnavailableError,
@@ -7,6 +8,7 @@ import {
   createPluginSecretStore,
   guardPluginOutput,
   pluginSecretService,
+  pluginStoreService,
   redactPluginError,
   type SecretCommandResult,
 } from "./plugin-secrets.js";
@@ -36,6 +38,7 @@ describe("plugin secrets", () => {
       "ai.fulcra.plugin.other-plugin/github.com:read": "other-plugin-secret-value",
     });
     const store = createPluginSecretStore({
+      backend: null,
       pluginId: "orca-organization",
       platform: "darwin",
       run: security.run,
@@ -60,7 +63,12 @@ describe("plugin secrets", () => {
 
   it("P2: rejects names that could leave the account space and never reads the value for exists", async () => {
     const security = fakeSecurity({ "ai.fulcra.plugin.p/github.com:read": CANARY });
-    const store = createPluginSecretStore({ pluginId: "p", platform: "darwin", run: security.run });
+    const store = createPluginSecretStore({
+      backend: null,
+      pluginId: "p",
+      platform: "darwin",
+      run: security.run,
+    });
     for (const name of ["", "Upper", "a b", "-s", "x".repeat(129), "../x"]) {
       await expect(store.secrets.read(name)).rejects.toThrow("Invalid plugin secret name");
     }
@@ -72,7 +80,12 @@ describe("plugin secrets", () => {
 
   it("P3: withholds any plugin output that contains a secret this plugin read", async () => {
     const security = fakeSecurity({ "ai.fulcra.plugin.p/github.com:read": CANARY });
-    const store = createPluginSecretStore({ pluginId: "p", platform: "darwin", run: security.run });
+    const store = createPluginSecretStore({
+      backend: null,
+      pluginId: "p",
+      platform: "darwin",
+      run: security.run,
+    });
     expect(guardPluginOutput(store, { ok: true })).toEqual({ ok: true });
     await store.secrets.read("github.com:read");
     expect(() => guardPluginOutput(store, { nested: [`Bearer ${CANARY}`] })).toThrow(
@@ -84,7 +97,12 @@ describe("plugin secrets", () => {
 
   it("P4: redacts a secret this plugin read from any error text sent to the host", async () => {
     const security = fakeSecurity({ "ai.fulcra.plugin.p/github.com:read": CANARY });
-    const store = createPluginSecretStore({ pluginId: "p", platform: "darwin", run: security.run });
+    const store = createPluginSecretStore({
+      backend: null,
+      pluginId: "p",
+      platform: "darwin",
+      run: security.run,
+    });
     await store.secrets.read("github.com:read");
     const message = redactPluginError(store, `request failed: Authorization: Bearer ${CANARY}`);
     expect(message).toBe("request failed: Authorization: Bearer [redacted]");
@@ -93,12 +111,14 @@ describe("plugin secrets", () => {
 
   it("P5: fails closed with fixed text off macOS, on keychain errors and on malformed values", async () => {
     const off = createPluginSecretStore({
+      backend: null,
       pluginId: "p",
       platform: "linux",
       run: async () => ({ exitCode: 0, stdout: CANARY }),
     });
     await expect(off.secrets.read("github.com:read")).rejects.toThrow(PluginSecretUnavailableError);
     const broken = createPluginSecretStore({
+      backend: null,
       pluginId: "p",
       platform: "darwin",
       run: async () => ({ exitCode: 36, stdout: CANARY }),
@@ -107,6 +127,7 @@ describe("plugin secrets", () => {
     expect(failure).toBeInstanceOf(PluginSecretUnavailableError);
     expect(String((failure as Error).message)).not.toContain(CANARY);
     const malformed = createPluginSecretStore({
+      backend: null,
       pluginId: "p",
       platform: "darwin",
       run: async () => ({ exitCode: 0, stdout: `two\nlines ${CANARY}\n` }),
@@ -128,8 +149,54 @@ describe("plugin secrets", () => {
     );
     expect(source).toContain(".then((output) => guardPluginOutput(secretStore, output))");
     expect(source).toContain("output: guardPluginOutput(secretStore, output),");
+    // Plugin code reaches secrets only through its contribution, which runs after the store exists.
     expect(source.indexOf("secretStore = createPluginSecretStore")).toBeLessThan(
-      source.indexOf("evaluateBundle(message.bundle);"),
+      source.indexOf("const contributedCleanup = contribute({"),
     );
+  });
+});
+
+describe("plugin-saved secrets", () => {
+  it("P8: save and remove write only the plugin's own store namespace, and read finds them first", async () => {
+    const backend = createMemoryCredentialBackend();
+    const security = fakeSecurity({
+      "ai.fulcra.plugin.orca-organization/cluster:kube": "legacy-value-0123",
+    });
+    const store = createPluginSecretStore({
+      pluginId: "orca-organization",
+      platform: "darwin",
+      run: security.run,
+      backend,
+    });
+    expect(pluginStoreService("orca-organization")).toBe(
+      "ai.fulcra.plugin-store.orca-organization",
+    );
+    await store.secrets.save!("cluster:kube", CANARY);
+    expect([...backend.items.keys()]).toEqual([
+      "ai.fulcra.plugin-store.orca-organization/cluster:kube",
+    ]);
+    await expect(store.secrets.read("cluster:kube")).resolves.toBe(CANARY);
+    expect(security.calls).toEqual([]);
+    expect(store.redact(`token ${CANARY}`)).toBe("token [redacted]");
+    await store.secrets.remove!("cluster:kube");
+    await expect(store.secrets.read("cluster:kube")).resolves.toBe("legacy-value-0123");
+    await expect(store.secrets.save!("bad name", "x")).rejects.toThrow(
+      "Invalid plugin secret name",
+    );
+    await expect(store.secrets.save!("ok", "two\nlines")).rejects.toThrow("one line");
+  });
+
+  it("P9: without a credential store, save refuses in plain words and reads fall back", async () => {
+    const security = fakeSecurity({});
+    const store = createPluginSecretStore({
+      pluginId: "p",
+      platform: "darwin",
+      run: security.run,
+      backend: null,
+    });
+    await expect(store.secrets.save!("a", "value-0123")).rejects.toBeInstanceOf(
+      PluginSecretUnavailableError,
+    );
+    await expect(store.secrets.read("a")).resolves.toBeNull();
   });
 });

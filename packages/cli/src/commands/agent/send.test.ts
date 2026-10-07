@@ -15,6 +15,9 @@ function fakeClient() {
       .fn()
       .mockResolvedValue({ messageId, state: "queued", pendingCount: 1 }),
     waitForFinish: vi.fn().mockResolvedValue({ status: "idle", final: { id: "resolved-target" } }),
+    fetchAgent: vi.fn().mockResolvedValue({ agent: { id: "resolved-target" } }),
+    listCommands: vi.fn().mockResolvedValue({ commands: [{ name: "compact" }] }),
+    invokePluginRpc: vi.fn().mockResolvedValue({ ok: true, message: "Continued on Personal." }),
   };
 }
 async function parsedSend(flags: string[]) {
@@ -31,6 +34,51 @@ beforeEach(() => {
   connection.mockResolvedValue(client);
 });
 afterEach(() => vi.clearAllMocks());
+
+describe("send slash commands", () => {
+  it.each(["/Volumes/x", "/Volumes/work/repo/foo.ts fix this", "/tmp/x.log why did this fail"])(
+    "sends leading absolute paths as ordinary prompts: %s",
+    async (prompt) => {
+      await parsedSend(["target", prompt, "--no-wait"]);
+      expect(client.sendAgentMessage).toHaveBeenCalledExactlyOnceWith("target", prompt, {
+        images: undefined,
+      });
+      expect(client.listCommands).not.toHaveBeenCalled();
+      expect(client.invokePluginRpc).not.toHaveBeenCalled();
+    },
+  );
+  it("switches accounts through the fenced plugin RPC without messaging the model", async () => {
+    const result = await parsedSend(["target", "/account Personal"]);
+    expect(client.invokePluginRpc).toHaveBeenCalledExactlyOnceWith(
+      "orca-organization-next",
+      "organization.accounts.switch",
+      { agentId: "resolved-target", account: "Personal" },
+    );
+    expect(client.sendAgentMessage).not.toHaveBeenCalled();
+    expect(client.waitForFinish).not.toHaveBeenCalled();
+    expect(result.data.message).toBe("Continued on Personal.");
+  });
+  it("lists accounts without changing the session or messaging the model", async () => {
+    client.invokePluginRpc.mockResolvedValue({
+      accounts: [{ id: "personal", name: "Personal", status: { state: "ok" } }],
+    });
+    const result = await parsedSend(["target", "/account list"]);
+    expect(client.invokePluginRpc).toHaveBeenCalledExactlyOnceWith(
+      "orca-organization-next",
+      "organization.accounts.session",
+      { agentId: "resolved-target" },
+    );
+    expect(result.data.message).toBe("Personal: ok");
+    expect(client.sendAgentMessage).not.toHaveBeenCalled();
+  });
+  it.each(["/foo", "/unknown"])(
+    "refuses an unknown slash command and never falls through to the model: %s",
+    async (prompt) => {
+      await expect(parsedSend(["target", prompt])).rejects.toMatchObject({ code: "SEND_FAILED" });
+      expect(client.sendAgentMessage).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe("send explicit native queue", () => {
   it.each([{ waitFlags: [] }, { waitFlags: ["--no-wait"] }])(

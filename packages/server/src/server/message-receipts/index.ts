@@ -364,6 +364,10 @@ export class MessageReceipts {
     }
   }
 
+  hasPendingForAgent(agentId: string): boolean {
+    return this.active().some((receipt) => receipt.agentId === agentId);
+  }
+
   /** Native lifecycle owner only; no public read/cancel authority is inferred from this method. */
   closeAgent(agentId: string): Promise<void> {
     return this.serial(() => this.cancelPending(agentId));

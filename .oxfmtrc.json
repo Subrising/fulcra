@@ -15,6 +15,7 @@
     "*.lock",
     "**/*.gen.ts",
     "**/*.gen.tsx",
+    "docs/fork-patches.md",
     "control/src/control/admission-guard.mjs",
     "control/src/control/admission-guard-bbc624cf9.fixture.mjs"
   ]

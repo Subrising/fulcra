@@ -26,6 +26,8 @@ const trackers = (control) => {
 // holds it equal to the literals below.
 export const RPC_METHODS = Object.freeze(
   new Set([
+    "worktree-lifecycle-settings",
+    "worktree-lifecycle-now",
     "worktree-lifecycle-preview",
     "worktree-lifecycle-apply",
     "worktree-lifecycle-retention",
@@ -174,6 +176,7 @@ export const RPC_METHODS = Object.freeze(
     "send",
     "session-takeover",
     "session-defaults",
+    "session-fresh-start",
     "session-interruption-dismiss",
     "session-resume",
     "session-resume-batch",
@@ -249,7 +252,7 @@ const environments = (control) => {
 // DESIGN-NEXT-BUILD A4 (C10): per role, what is configured, what a creation would actually launch on this host, and
 // whether the installed provider offers it ('offered' | 'falls-back' | 'unknown' when no capability check is reachable).
 async function roleDefaultsTable(control) {
-  // Update-7: the persisted table (Settings -> Accounts & Defaults) over the shared config's roles, all five roles.
+  // Update-7: the persisted table (Settings -> Accounts & models) over the shared config's roles, all five roles.
   const config = installationConfig(),
     roles = config?.home
       ? readRoleDefaults(config.home, configuredDefaults(config).roles ?? null).roles
@@ -312,8 +315,18 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
     if (request.method === "manager-inspect") return control.manager.inspect(a, request.capability);
     if (request.method === "manager-assign") return control.manager.assign(a, request.capability);
     if (request.method === "events-inbox") {
-      if (!a || Object.keys(a).join() !== "sessionId") throw Error("Invalid inbox input");
-      return control.events.inbox(a.sessionId, request.capability);
+      if (
+        !a ||
+        !Object.hasOwn(a, "sessionId") ||
+        Object.keys(a).some((k) => !["sessionId", "includeConsumed"].includes(k)) ||
+        (Object.hasOwn(a, "includeConsumed") && typeof a.includeConsumed !== "boolean")
+      )
+        throw Error("Invalid inbox input");
+      return control.events.inbox(
+        a.sessionId,
+        request.capability,
+        Object.hasOwn(a, "includeConsumed") ? a.includeConsumed : false,
+      );
     }
     if (request.method === "bindings-self") {
       if (!a || Object.keys(a).join() !== "sessionId") throw Error("Invalid role read");
@@ -541,6 +554,8 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
           usageLimits: control.usageLimits?.status() ?? null,
           wakes: control.wakes?.status() ?? null,
           providerRecovery: control.providerRecovery?.status() ?? null,
+          automaticRestarts: control.automaticRestarts?.status() ?? null,
+          compactionLoops: control.compactionLoops?.status() ?? null,
         }));
       // H7 items 1-2: owned-session wakes and the idle-seat heartbeat (wakes.mjs). Operator only.
       case "wakes-status":
@@ -556,6 +571,11 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
         return control.recovery.resumeBatch(a);
       case "session-interruption-dismiss":
         return control.recovery.dismiss(a);
+      // Fresh start from the app: operator-gated like resume; the rotation path keeps every ownership fence.
+      case "session-fresh-start":
+        if (!control.compactionLoops)
+          throw Error("Fresh start is not constructed in this controller");
+        return control.compactionLoops.freshStart(a);
       case "channels-open":
         return control.channels.open(a);
       case "channels-close":
@@ -566,6 +586,31 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
       case "channels-requests":
         if (a != null) throw Error("Requests takes no input");
         return control.channels.requests();
+      case "worktree-lifecycle-settings": {
+        if (
+          !a ||
+          Object.keys(a).some(
+            (k) => !["archiveFinished", "idleMinutes", "retentionDays"].includes(k),
+          )
+        )
+          throw Error("Invalid cleanup settings");
+        return Object.keys(a).length
+          ? control.worktreeLifecycle.settings.patch(a)
+          : control.worktreeLifecycle.settings.getAll();
+      }
+      case "worktree-lifecycle-now": {
+        // {requestId} previews; {requestId, previewId} acts on that preview; {operationId} polls.
+        const keys = a ? Object.keys(a).sort().join() : "";
+        if (
+          !(
+            (keys === "requestId" && uuid(a.requestId)) ||
+            (keys === "previewId,requestId" && uuid(a.requestId) && uuid(a.previewId)) ||
+            (keys === "operationId" && uuid(a.operationId))
+          )
+        )
+          throw Error("Invalid cleanup request");
+        return control.worktreeLifecycle.cleanupRequest(a);
+      }
       case "worktree-lifecycle-preview": {
         if (
           a &&

@@ -1,4 +1,4 @@
-// Update-7: Settings -> Accounts & Defaults. The account pool (server/accounts.mjs) and the persisted role defaults
+// Update-7: Settings -> Accounts & models. The account pool (server/accounts.mjs) and the persisted role defaults
 // (server/role-defaults-store.mjs), both in Fulcra's own files, never the shared config (L44). No read returns a
 // credential or a path; the only credential that crosses this contract is a Claude token being ADDED (write only).
 import { z } from "zod";
@@ -46,6 +46,8 @@ const roleDefaults = z
 export const accountsView = z
   .object({
     policy: z.enum(["priority", "spread"]),
+    // Off (absent on older hosts): a limited account's sessions wait for its reset.
+    rotateOnLimit: z.boolean().optional(),
     accounts: z.array(account).max(32),
     allLimited: z
       .object({
@@ -145,6 +147,7 @@ export const poolSettingsRpc = defineContract({
   input: z
     .object({
       policy: z.enum(["priority", "spread"]).optional(),
+      rotateOnLimit: z.boolean().optional(),
       role: z.enum(DEFAULT_ROLES).optional(),
       defaults: roleDefaults.optional(),
       orchestrationGuard: z.boolean().optional(),

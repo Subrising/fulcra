@@ -8,7 +8,7 @@ import {
   DEFAULT_ROLES,
   SEED,
 } from "../../orca-organization/server/role-defaults-store.mjs";
-// Update-7: the persisted role defaults (Settings -> Accounts & Defaults; their own file, L44) over the shared config's
+// Update-7: the persisted role defaults (Settings -> Accounts & models; their own file, L44) over the shared config's
 // defaults.roles. A role entry for one provider: { model?, thinkingOptionId? } with only the values set.
 function storedRoleEntry(config, role, provider, configuredRoles) {
   try {

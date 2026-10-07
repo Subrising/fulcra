@@ -1,3 +1,4 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { requireTrustedBundleHost } from "./trusted-platform.js";
 import { NativeQueuedMessageReceiptSchema } from "@getpaseo/protocol/native-intercom";
 import type { ControllerDistribution } from "./controller-distribution.js";
@@ -317,8 +318,12 @@ export class TrustedPlugins {
   private failed = false;
 
   readonly management: ManagementAuthority;
+  /** FULCRA(trusted-bundle): routing identity only; physical bundle and hook checks remain mandatory. */
+  get controllerPluginId(): string {
+    return this.management.controllerPluginId;
+  }
   requiresPackagedRuntime(id: string): boolean {
-    return id === "orca-organization-next" && distributions.has(this);
+    return id === this.controllerPluginId && distributions.has(this);
   }
   claimsBundle(id: string): boolean {
     return this.plugins.has(id) || this.v11.has(id);
@@ -904,10 +909,16 @@ export class TrustedPlugins {
     return requestId;
   }
 
-  mcpRefresh(agent: Agent): { allowed: boolean; revision: string } {
+  mcpRefresh(agent: Agent): {
+    allowed: boolean;
+    revision: string;
+    contextRotationAllowed?: boolean;
+  } {
     return admissionCheck(() => {
       this.assertHealthy();
       const revisions: Array<[string, string]> = [];
+      // Context rotation needs every deciding plugin to allow it; with no decider it stays absent (refused).
+      let rotation: boolean | undefined;
       for (const [id, hooks] of this.plugins) {
         if (!hooks.mcp) continue;
         const decision = hooks.mcp(this.agent(agent));
@@ -915,6 +926,7 @@ export class TrustedPlugins {
         if (decision?.allowed !== true || typeof decision.revision !== "string")
           throw new Error("Trusted plugin denied MCP refresh");
         revisions.push([id, decision.revision]);
+        rotation = rotation !== false && decision.contextRotationAllowed === true;
       }
       for (const [id, hooks] of this.v11) {
         if (!hooks.mcp) continue;
@@ -923,10 +935,12 @@ export class TrustedPlugins {
         if (decision?.allowed !== true || typeof decision.revision !== "string")
           throw new AdmissionDeniedError("Trusted plugin denied MCP refresh");
         revisions.push([id, decision.revision]);
+        rotation = rotation !== false && decision.contextRotationAllowed === true;
       }
       return {
         allowed: true,
         revision: revisions.length ? JSON.stringify(revisions) : "unmanaged",
+        ...(rotation !== undefined ? { contextRotationAllowed: rotation } : {}),
       };
     });
   }
@@ -1155,7 +1169,7 @@ function registerDistributionContribution(
   bundleDirectory: string,
 ) {
   if (module.hostContract === "1.1") {
-    if (id === "orca-organization-next" && typeof module.createDistribution === "function") {
+    if (id === authority.controllerPluginId && typeof module.createDistribution === "function") {
       const distribution: ControllerDistribution = module.createDistribution({
         home: path.join(home, "command-centre"),
         bundleDirectory,

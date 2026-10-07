@@ -15,7 +15,8 @@ globalThis.document = dom.window.document;
 Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
 globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-const { render, screen, fireEvent, waitFor, cleanup } = await import("@testing-library/react");
+const { render, screen, fireEvent, waitFor, cleanup, within } =
+  await import("@testing-library/react");
 const h = React.createElement;
 const theme = {
   colors: {
@@ -303,6 +304,7 @@ afterEach(() => {
 test("Today shows done, needs you (with the stuck reason), running and a generated story, in plain words", async () => {
   setHandler(reads());
   const r = mount();
+  fireEvent.click(await screen.findByRole("button", { name: "All activity and history" }));
   await screen.findByText("Command Centre project lead: hit its weekly usage limit, resets 8am", {
     exact: false,
   });
@@ -315,7 +317,21 @@ test("Today shows done, needs you (with the stuck reason), running and a generat
     screen.getByText("Adversarial security review of the channel"),
     "running, with the tracking code gone",
   );
-  assert(screen.getByText("How should a tired lead be refreshed?"));
+  assert.equal(
+    screen.getAllByText("How should a tired lead be refreshed?").length,
+    1,
+    "one confirmed personal obligation even when activity history is open",
+  );
+  assert(
+    within(screen.getByTestId("today-personal-actions")).getByText(
+      "How should a tired lead be refreshed?",
+    ),
+  );
+  assert.equal(
+    within(screen.getByTestId("today-needs")).queryByText("How should a tired lead be refreshed?"),
+    null,
+    "retained activity is not a duplicate personal inbox",
+  );
   await screen.findByText(/Summarised by Fulcra from live activity/);
   assert(
     calls.every(
@@ -348,7 +364,7 @@ test("Today shows done, needs you (with the stuck reason), running and a generat
 test("a decision is chosen from Today with one tap on the recommendation", async () => {
   setHandler(reads());
   mount(false);
-  fireEvent.click(await screen.findByTestId(`today-open-decision-decision-${DEC}`));
+  fireEvent.click(await screen.findByTestId(`today-open-human-decision-${DEC}`));
   fireEvent.click(await screen.findByTestId("decision-choose"));
   await waitFor(() =>
     assert.equal(calls.filter((c) => c.name === "organization.decision-choose").length, 1),
@@ -373,6 +389,7 @@ test("when the inbox cannot be read, Today says so and still counts held message
   );
   mount();
   await screen.findByText(/Decisions and held messages could not be read just now/);
+  fireEvent.click(screen.getByRole("button", { name: "All activity and history" }));
   await screen.findByText("33 messages waiting for you to read or pass on");
   fireEvent.click(screen.getAllByRole("button", { name: "Open in the Inbox" })[0]);
   assert.deepEqual(went, ["inbox"]);
@@ -384,5 +401,112 @@ test("nothing readable still gives a page that says so, not a blank", async () =
   setHandler(() => Promise.reject(Error("Management unavailable")));
   mount();
   await screen.findByText(/Your projects could not be read just now/);
-  assert(screen.getByText("Today"));
+  assert(screen.getByText("Home"));
+});
+
+for (const observation of ["missing", "stale"]) {
+  test(`zero confirmed actions still shows unknown coverage with a ${observation} permission observation`, async () => {
+    setHandler(
+      reads({
+        "organization.inbox": () => ({
+          ...inbox,
+          observedAt: iso(0),
+          items: [],
+          counts: { ...inbox.counts, now: 0, decisions: 0, total: 0 },
+        }),
+        "organization.fleet": () => ({
+          ...fleet,
+          observedAt: iso(0),
+          total: 1,
+          nodes: [
+            node(8, "running", iso(0), {
+              pending: 1,
+              serverId: "Book",
+              observedAt: observation === "missing" ? null : iso(60000),
+            }),
+          ],
+        }),
+      }),
+    );
+    mount();
+    await screen.findByText("Fulcra Command Centre · Has a project lead");
+    await waitFor(() =>
+      assert.equal(
+        clients.at(-1).getQueryState(["orca-fleet", `today-${clients.length}`, "project", P])
+          .status,
+        "success",
+      ),
+    );
+    const personal = within(screen.getByTestId("today-personal-actions"));
+    await waitFor(() =>
+      assert(
+        personal.getByText(
+          "Some observations are unavailable or incomplete. Additional actions may be unknown.",
+        ),
+      ),
+    );
+    assert(
+      personal.getByText("No confirmed unresolved human action in the available observations."),
+    );
+    assert(screen.getByText("0 confirmed actions"));
+    assert.equal(
+      personal.queryByRole("button"),
+      null,
+      "unknown permission records are not human action buttons",
+    );
+    assert(
+      calls.every((call) => !call.name.includes("choose") && !call.name.includes("release")),
+      "coverage rendering does not write",
+    );
+  });
+}
+
+test("Home exposes Inbox directly without discarding retained activity", async () => {
+  setHandler(reads());
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Open Inbox" }));
+  assert.deepEqual(went, ["inbox"]);
+  assert(screen.getByRole("button", { name: "All activity and history" }));
+});
+
+test("a session with a question shows it on Home as an answerable card, with the conversation one tap away", async () => {
+  setHandler(
+    reads({
+      "organization.fleet": () => ({
+        ...fleet,
+        observedAt: iso(0),
+        total: 2,
+        nodes: [
+          node(8, "running", iso(0), { pending: 1, serverId: "Book", title: "Docs lead" }),
+          node(9, "running", iso(0), { pending: 0, serverId: "Book", title: "Quiet worker" }),
+        ],
+      }),
+    }),
+  );
+  mount();
+  const section = within(await screen.findByTestId("today-questions"));
+  assert(section.getByText("Docs lead is waiting for you"));
+  const card = section.getByTestId(`agent-questions-${sid(8)}`);
+  assert.equal(card.getAttribute("data-server"), "Book");
+  assert.equal(section.queryByText(/Quiet worker/), null);
+});
+
+test("a question from a session on an unbound This Mac still shows, asked on the connected host", async () => {
+  // Installs leave the organisation's "This Mac" without a serverId, so the fleet sends none.
+  setHandler(
+    reads({
+      "organization.fleet": () => ({
+        ...fleet,
+        observedAt: iso(0),
+        total: 1,
+        nodes: [
+          node(8, "running", iso(0), { pending: 1, serverId: null, title: "Main assistant" }),
+        ],
+      }),
+    }),
+  );
+  mount();
+  const section = within(await screen.findByTestId("today-questions"));
+  const card = section.getByTestId(`agent-questions-${sid(8)}`);
+  assert.match(card.getAttribute("data-server"), /^today-\d+$/);
 });

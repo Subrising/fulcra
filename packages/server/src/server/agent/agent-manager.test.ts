@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { Session } from "../session.js";
 import { SessionAuthorization, OWNER_PERMISSIONS } from "../authorization/index.js";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -3047,7 +3047,7 @@ test("setAgentMode persists the selected mode across session reload", async () =
 async function quietMcpFixture(
   managerOptions: Pick<
     AgentManagerOptions,
-    "mcpRefreshAdmission" | "pluginLifecycle" | "trustedPlugins"
+    "mcpRefreshAdmission" | "pluginLifecycle" | "trustedPlugins" | "reportRegistryFile"
   > = {},
 ) {
   const workdir = mkdtempSync(join(tmpdir(), "agent-quiet-mcp-"));
@@ -3179,6 +3179,174 @@ async function quietMcpFixture(
     },
   };
 }
+
+test("context rotation proceeds for a session with no report registration", async () => {
+  const registryDir = mkdtempSync(join(tmpdir(), "rotation-registry-"));
+  const f = await quietMcpFixture({
+    mcpRefreshAdmission: () => ({
+      revision: "delegated",
+      allowed: true,
+      contextRotationAllowed: true,
+    }),
+    reportRegistryFile: join(registryDir, "reports.json"),
+  });
+  try {
+    const result = await f.manager.rotateAgentContext(
+      { agentId: f.created.id, rotationId: randomUUID(), expected: f.input.expected },
+      () => {},
+    );
+    expect(result.outcome).toBe("rotated");
+  } finally {
+    await f.cleanup();
+    rmSync(registryDir, { recursive: true, force: true });
+  }
+});
+
+test("controller context rotation keeps conversation/config/ownership/history and creates a fresh native context", async () => {
+  const f = await quietMcpFixture({
+    mcpRefreshAdmission: () => ({
+      revision: "delegated",
+      allowed: true,
+      contextRotationAllowed: true,
+    }),
+  });
+  try {
+    f.created.config.providerOptions = { custom: "preserved", model_context_window: 872000 };
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    f.input.expected.configRevision = state!.configRevision;
+    const before = f.manager.fetchTimeline(f.created.id, { limit: 100 });
+    const rotationId = randomUUID();
+    const result = await f.manager.rotateAgentContext(
+      { agentId: f.created.id, rotationId, expected: f.input.expected },
+      () => {},
+    );
+    expect(result).toMatchObject({
+      outcome: "rotated",
+      rotationId,
+      previousSessionId: f.input.expected.sessionId,
+    });
+    expect(result.sessionId).not.toBe(result.previousSessionId);
+    expect(f.client.sessions[0].closeCount).toBe(1);
+    expect(f.client.sessions[1].startCount).toBe(0);
+    expect(f.client.sessions[1].historyCount).toBe(0);
+    expect(f.client.resumeOverrides).toHaveLength(0);
+    const after = f.manager.fetchTimeline(f.created.id, { limit: 100 });
+    expect(after.rows).toEqual(before.rows);
+    expect(after.epoch).toBe(before.epoch);
+    const saved = await f.storage.get(f.created.id);
+    expect(saved?.owner).toEqual({
+      kind: "daemon",
+      daemonId: "test-daemon",
+      executionId: "test-execution",
+    });
+    expect(saved?.workspaceId).toBe("workspace-preserved");
+    expect(saved?.labels).toEqual({ keep: "yes" });
+    expect(saved?.config?.systemPrompt).toBe("Keep this system prompt");
+    expect(saved?.config?.providerOptions).toEqual({
+      custom: "preserved",
+      model_context_window: 872000,
+    });
+    const receipt = JSON.parse(
+      readFileSync(
+        join(f.created.cwd, "agents", "context-rotations", f.created.id, `${rotationId}.json`),
+        "utf8",
+      ),
+    );
+    expect(receipt.phase).toBe("rotated");
+    expect(receipt.previous.sessionId).toBe(result.previousSessionId);
+    expect(receipt.current.sessionId).toBe(result.sessionId);
+    expect(
+      await f.manager.rotateAgentContext(
+        { agentId: f.created.id, rotationId, expected: f.input.expected },
+        () => {},
+      ),
+    ).toMatchObject({ outcome: "refused", reason: "stale" });
+    expect(f.client.sessions).toHaveLength(2);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("context rotation pause budget stops without replacing the provider or sending a prompt", async () => {
+  const f = await quietMcpFixture({
+    mcpRefreshAdmission: () => ({
+      revision: "delegated",
+      allowed: true,
+      contextRotationAllowed: true,
+    }),
+  });
+  try {
+    const result = await f.manager.rotateAgentContext(
+      {
+        agentId: f.created.id,
+        rotationId: randomUUID(),
+        pauseOnly: true,
+        expected: f.input.expected,
+      },
+      () => {},
+    );
+    expect(result).toMatchObject({ outcome: "paused", sessionId: f.input.expected.sessionId });
+    expect(f.client.sessions).toHaveLength(1);
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    expect(f.client.sessions[0].startCount).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("context rotation refuses human/account-switch admission, stale revisions and expired controller lifetimes before effects", async () => {
+  const admission = { revision: "human-switch", allowed: true, contextRotationAllowed: false };
+  const f = await quietMcpFixture({ mcpRefreshAdmission: () => admission });
+  try {
+    const request = { agentId: f.created.id, rotationId: randomUUID(), expected: f.input.expected };
+    expect(await f.manager.rotateAgentContext(request, () => {})).toMatchObject({
+      outcome: "refused",
+      reason: "stale",
+    });
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    admission.contextRotationAllowed = true;
+    expect(await f.manager.rotateAgentContext(request, () => {})).toMatchObject({
+      outcome: "refused",
+      reason: "stale",
+    });
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    request.expected.configRevision = state!.configRevision;
+    expect(
+      await f.manager.rotateAgentContext(request, () => {
+        throw new Error("expired");
+      }),
+    ).toMatchObject({ outcome: "failed" });
+    expect(f.client.sessions[0].closeCount).toBe(0);
+    expect(f.client.sessions).toHaveLength(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("rotation refuses a revoked grant after old runtime close and retains old resume handle", async () => {
+  const admission = { revision: "live", allowed: true, contextRotationAllowed: true };
+  const f = await quietMcpFixture({ mcpRefreshAdmission: () => admission });
+  try {
+    const gate = deferred<void>();
+    f.client.sessions[0].closeGate = gate.promise;
+    const operation = f.manager.rotateAgentContext(
+      { agentId: f.created.id, rotationId: randomUUID(), expected: f.input.expected },
+      () => {},
+    );
+    await f.client.sessions[0].closeStarted.promise;
+    admission.revision = "human-input";
+    admission.contextRotationAllowed = false;
+    gate.resolve();
+    expect(await operation).toMatchObject({ outcome: "failed", reason: "stale" });
+    expect(f.client.sessions).toHaveLength(1);
+    expect((await f.storage.get(f.created.id))?.persistence?.sessionId).toBe(
+      f.input.expected.sessionId,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
 test("quiet MCP refresh preserves native identity, exact history, policy and unrelated configuration without a turn", async () => {
   const f = await quietMcpFixture();
@@ -6278,6 +6446,7 @@ test("setAgentThinkingOption surfaces a failed state read and keeps the previous
 
 test("session config drift events update state through the stream channel", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-session-config-events-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
   let capturedSession: TestAgentSession | null = null;
   class ConfigEventClient extends TestAgentClient {
     override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
@@ -6290,6 +6459,7 @@ test("session config drift events update state through the stream channel", asyn
     clients: {
       codex: new ConfigEventClient(),
     },
+    registry: storage,
     logger,
     idFactory: () => "00000000-0000-4000-8000-000000000133",
   });
@@ -6344,6 +6514,7 @@ test("session config drift events update state through the stream channel", asyn
 
   const agent = manager.getAgent(snapshot.id);
   expect(agent?.currentModeId).toBe("build");
+  expect(agent?.config.modeId).toBe("build");
   expect(agent?.config.thinkingOptionId).toBe("high");
   expect(agent?.availableModes).toEqual([
     { id: "plan", label: "Plan" },
@@ -6355,6 +6526,10 @@ test("session config drift events update state through the stream channel", asyn
     thinkingOptionId: "high",
   });
   expect(streams.map((event) => event.type)).toEqual([]);
+
+  const persisted = await storage.get(snapshot.id);
+  expect(persisted?.lastModeId).toBe("build");
+  expect(persisted?.config?.modeId).toBe("build");
 });
 
 test("setLabels merges and persists labels", async () => {
@@ -10531,6 +10706,7 @@ test("respondToPermission updates currentModeId after plan approval", async () =
   class PlanModeTestClient implements AgentClient {
     readonly provider = "codex" as const;
     readonly capabilities = TEST_CAPABILITIES;
+    resumedModeId: string | null | undefined;
 
     async isAvailable(): Promise<boolean> {
       return true;
@@ -10540,14 +10716,19 @@ test("respondToPermission updates currentModeId after plan approval", async () =
       return new PlanModeTestSession();
     }
 
-    async resumeSession(): Promise<AgentSession> {
+    async resumeSession(
+      _handle: AgentPersistenceHandle,
+      overrides?: Partial<AgentSessionConfig>,
+    ): Promise<AgentSession> {
+      this.resumedModeId = overrides?.modeId;
       return new PlanModeTestSession();
     }
   }
 
+  const client = new PlanModeTestClient();
   const manager = new AgentManager({
     clients: {
-      codex: new PlanModeTestClient(),
+      codex: client,
     },
     registry: storage,
     logger,
@@ -10591,6 +10772,13 @@ test("respondToPermission updates currentModeId after plan approval", async () =
   await manager.flush();
   const persisted = await storage.get(snapshot.id);
   expect(persisted?.lastModeId).toBe("acceptEdits");
+
+  // The provider-managed switch must also reach config.modeId — otherwise a
+  // reload resumes the session with the stale creation-time mode ("plan").
+  expect(persisted?.config?.modeId).toBe("acceptEdits");
+  const reloaded = await manager.reloadAgentSession(snapshot.id);
+  expect(reloaded.config.modeId).toBe("acceptEdits");
+  expect(client.resumedModeId).toBe("acceptEdits");
 });
 
 test("respondToPermission refreshes features and runtime info after provider-managed plan approval", async () => {
@@ -14264,4 +14452,480 @@ test("pooled usage enumeration excludes unqualified runtimes before reading cred
   ]);
   expect(read).toHaveBeenCalledTimes(2);
   expect(deniedRead).not.toHaveBeenCalled();
+});
+
+async function delayedAutomaticFailureFixture(emitResolution = true) {
+  const workdir = mkdtempSync(join(tmpdir(), "f15-auto-completion-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const entered = deferred<void>(),
+    released = deferred<void>(),
+    completed = deferred<void>();
+  const request = {
+    id: "perm-f15",
+    provider: "opencode",
+    kind: "tool" as const,
+    name: "mcp__docs__search",
+  };
+  let admitted = true,
+    unknown = false,
+    keepNative = false;
+  const responses: unknown[] = [];
+  const seen: AgentStreamEvent[] = [];
+  const published: number[] = [];
+  class DelayedSession extends TestAgentSession {
+    nativePending = new Map<string, typeof request>();
+    override getPendingPermissions() {
+      if (unknown) throw Error("fixture snapshot unavailable");
+      return [...this.nativePending.values()];
+    }
+    override async respondToPermission(id: string, response: unknown) {
+      responses.push([id, response]);
+      entered.resolve();
+      await released.promise;
+      if (!keepNative) this.nativePending.delete(id);
+      if (emitResolution)
+        this.pushEvent({
+          type: "permission_resolved",
+          provider: this.provider,
+          requestId: id,
+          resolution: { behavior: "allow" },
+        });
+      completed.resolve();
+    }
+    override describePersistence() {
+      return {
+        provider: this.provider,
+        sessionId: this.id,
+        metadata: { pending: [...this.nativePending.keys()] },
+      };
+    }
+  }
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig) {
+      return new DelayedSession(config);
+    }
+  })("opencode");
+  const manager = new AgentManager({ clients: { opencode: client }, registry: storage, logger });
+  manager.trustedPlugins.initializeKnownAgents([]);
+  manager.trustedPlugins.registerV11("f15-trusted", true, (server) => {
+    server.permissions.automatic(() => (admitted ? "allow" : "ask"));
+  });
+  const agent = await manager.createAgent({ provider: "opencode", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const session = agent.session as DelayedSession;
+  // Start without initial native pending state, then issue the real held request.
+  session.nativePending.clear();
+  manager.subscribe(
+    (event) => {
+      if (event.type === "agent_stream") seen.push(event.event);
+      if (event.type === "agent_state") published.push(event.agent.pendingPermissions.size);
+    },
+    { replayState: false },
+  );
+  return {
+    manager,
+    agent,
+    session,
+    request,
+    responses,
+    seen,
+    published,
+    storage,
+    entered,
+    released,
+    completed,
+    setAdmitted: (value: boolean) => {
+      admitted = value;
+    },
+    setUnknown: (value: boolean) => {
+      unknown = value;
+    },
+    setKeepNative: (value: boolean) => {
+      keepNative = value;
+    },
+    replace() {
+      const live = (manager as unknown as { agents: Map<string, ManagedAgent> }).agents.get(
+        agent.id,
+      )!;
+      const replacement = new DelayedSession({ provider: "opencode", cwd: workdir });
+      const replacementResponses: unknown[] = [];
+      replacement.respondToPermission = async (id, response) => {
+        replacementResponses.push([id, response]);
+      };
+      replacement.nativePending.set(request.id, { ...request, name: "replacement-request" });
+      live.session = replacement;
+      live.instanceId = randomUUID();
+      live.runtimeInfo = { provider: "opencode", sessionId: replacement.id };
+      live.pendingPermissions = new Map([
+        [request.id, { ...request, name: "replacement-request" }],
+      ]);
+      live.persistence = replacement.describePersistence();
+      return { replacement, replacementResponses };
+    },
+    ask() {
+      session.nativePending.set(request.id, request);
+      session.pushEvent({ type: "permission_requested", provider: "opencode", request });
+    },
+    fail() {
+      session.pushEvent({
+        type: "turn_failed",
+        provider: "opencode",
+        error: "fixture native failed",
+      });
+    },
+    async close() {
+      released.resolve();
+      await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    },
+  };
+}
+
+test.each([true, false])(
+  "F15 automatic response failure overlap clears projection with resolution event=%s",
+  async (emit) => {
+    const f = await delayedAutomaticFailureFixture(emit);
+    try {
+      f.ask();
+      await f.entered.promise;
+      f.fail();
+      await f.manager.flush();
+      f.released.resolve();
+      await f.completed.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await f.manager.flush();
+      expect(f.session.getPendingPermissions()).toEqual([]);
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(0);
+      expect(f.responses).toEqual([[f.request.id, { behavior: "allow" }]]);
+      expect(f.seen.filter((event) => event.type === "permission_resolved")).toEqual([]);
+      expect(f.manager.getAgent(f.agent.id)?.persistence?.metadata?.pending).toEqual([]);
+      expect((await f.storage.get(f.agent.id))?.persistence?.metadata?.pending).toEqual([]);
+      expect(f.published.at(-1)).toBe(0);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each([true, false])(
+  "F15 held automatic completion cannot clear replacement with native event=%s",
+  async (emit) => {
+    const f = await delayedAutomaticFailureFixture(emit);
+    try {
+      f.ask();
+      await f.entered.promise;
+      f.fail();
+      await f.manager.flush();
+      const replaced = f.replace();
+      f.released.resolve();
+      await f.completed.promise;
+      await new Promise<void>((r) => setImmediate(r));
+      await f.manager.flush();
+      // A late old-session event after completion must remain unable to mutate the new projection.
+      f.session.pushEvent({
+        type: "permission_resolved",
+        provider: "opencode",
+        requestId: f.request.id,
+        resolution: { behavior: "allow" },
+      });
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.get(f.request.id)?.name).toBe(
+        "replacement-request",
+      );
+      expect(replaced.replacement.getPendingPermissions()).toHaveLength(1);
+      expect(replaced.replacementResponses).toEqual([]);
+      expect(f.responses).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each(["unknown", "still-pending"] as const)(
+  "F15 successful automatic reply does not invent clearance when snapshot is %s",
+  async (state) => {
+    const f = await delayedAutomaticFailureFixture(false);
+    try {
+      f.setAdmitted(false);
+      f.ask();
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(1);
+      f.setAdmitted(true);
+      f.ask();
+      await f.entered.promise;
+      f.setUnknown(state === "unknown");
+      f.setKeepNative(state === "still-pending");
+      f.fail();
+      await f.manager.flush();
+      f.released.resolve();
+      await f.completed.promise;
+      await new Promise<void>((r) => setImmediate(r));
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(1);
+      expect(f.responses).toHaveLength(1);
+      f.setUnknown(false);
+      f.session.nativePending.delete(f.request.id);
+      f.session.pushEvent({
+        type: "permission_resolved",
+        provider: "opencode",
+        requestId: f.request.id,
+        resolution: { behavior: "allow" },
+      });
+      await f.manager.flush();
+      expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.size).toBe(0);
+      expect(f.responses).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test("F15 native-session change invalidates held completion even when SDK object is reused", async () => {
+  const f = await delayedAutomaticFailureFixture(false);
+  try {
+    f.ask();
+    await f.entered.promise;
+    f.fail();
+    await f.manager.flush();
+    const live = (f.manager as unknown as { agents: Map<string, ManagedAgent> }).agents.get(
+      f.agent.id,
+    )!;
+    live.runtimeInfo = { provider: "opencode", sessionId: "different-native-session" };
+    live.pendingPermissions.set(f.request.id, { ...f.request, name: "new-native-request" });
+    f.released.resolve();
+    await f.completed.promise;
+    await new Promise<void>((r) => setImmediate(r));
+    await f.manager.flush();
+    f.session.pushEvent({
+      type: "permission_resolved",
+      provider: "opencode",
+      requestId: f.request.id,
+      resolution: { behavior: "allow" },
+    });
+    await f.manager.flush();
+    expect(f.manager.getAgent(f.agent.id)?.pendingPermissions.get(f.request.id)?.name).toBe(
+      "new-native-request",
+    );
+    expect(f.responses).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("live context-only usage retains recorded counters without making them durable", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "usage-recorded-"));
+  const client = new TestAgentClient();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const session = agent.session as TestAgentSession;
+    const recorded = {
+      provider: "codex" as const,
+      source: "codex-app-server-token-usage" as const,
+      observedAt: "2026-10-04T00:00:00Z",
+      latest: { scope: "unknown" as const, tokens: { inputNew: 70, cacheRead: 30 } },
+    };
+    session.pushEvent({
+      type: "usage_updated",
+      provider: "codex",
+      usage: { recorded, inputTokens: 100 },
+    });
+    await manager.flush();
+    session.pushEvent({
+      type: "usage_updated",
+      provider: "codex",
+      usage: { contextWindowUsedTokens: 150 },
+    });
+    await manager.flush();
+    expect(manager.getAgent(agent.id)?.lastUsage).toMatchObject({
+      recorded,
+      contextWindowUsedTokens: 150,
+    });
+  } finally {
+    await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("usage session is a pure read of the live adapter and disappears on close", async () => {
+  const descriptor = {
+    provider: "claude",
+    model: "opus",
+    env: { HOME: "/fixture", CLAUDE_CONFIG_DIR: "/fixture/work" },
+    sessionKey: "launch-1",
+  };
+  const client = new (class extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new (class extends TestAgentSession {
+        usageSession() {
+          return descriptor;
+        }
+      })(config);
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, logger });
+  expect(manager.usageSession("missing")).toBeNull();
+  const agent = await manager.createAgent({ provider: "codex", cwd: tmpdir() }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    expect(manager.usageSession(agent.id)).toBe(descriptor);
+    expect(manager.usageSession(agent.id)).toBe(descriptor);
+  } finally {
+    await manager.closeAgent(agent.id);
+  }
+  expect(manager.usageSession(agent.id)).toBeNull();
+});
+
+async function idleCleanupFixture() {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-idle-cleanup-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const entered = deferred<void>(),
+    released = deferred<void>();
+  let hold = false,
+    fail = false,
+    closed = 0;
+  const session = new (class extends TestAgentSession {
+    override async close(): Promise<void> {
+      closed++;
+      entered.resolve();
+      if (hold) await released.promise;
+      if (fail) throw new Error("Native close failed");
+    }
+  })({ provider: "codex", cwd: workdir });
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      return session;
+    }
+  })();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+    labels: { owner: "orca-control", task: "fixture" },
+  });
+  const request = (archive = false) => {
+    const current = manager.getAgent(agent.id) ?? agent;
+    if (!current.instanceId) throw new Error("Expected owned runtime instance");
+    return {
+      agentId: agent.id,
+      runtimeInstanceId: current.instanceId,
+      updatedAt: current.updatedAt.toISOString(),
+      lastUserMessageAt: current.lastUserMessageAt?.toISOString() ?? null,
+      ...manager.trustedPlugins.sequence(agent.id),
+      archive,
+    };
+  };
+  return {
+    manager,
+    agent,
+    storage,
+    session,
+    request,
+    entered,
+    released,
+    hold: () => (hold = true),
+    fail: () => (fail = true),
+    closed: () => closed,
+    async close() {
+      fail = false;
+      released.resolve();
+      if (manager.getAgent(agent.id)?.session) await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    },
+  };
+}
+
+test.each([false, true])(
+  "idle cleanup keeps a closed session record (archive=%s)",
+  async (archive) => {
+    const f = await idleCleanupFixture();
+    try {
+      await f.manager.cleanupIdleAgent(f.request(archive));
+      expect(f.closed()).toBe(1);
+      const record = await f.storage.get(f.agent.id);
+      expect(record?.lastStatus).toBe("closed");
+      expect(Boolean(record?.archivedAt)).toBe(archive);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each(["runtime", "input", "activity", "queued-run", "child"] as const)(
+  "idle cleanup refuses changed %s before native close",
+  async (change) => {
+    const f = await idleCleanupFixture();
+    try {
+      const request = f.request();
+      if (change === "runtime") request.runtimeInstanceId = "old-instance";
+      if (change === "input") request.humanAt++;
+      if (change === "activity") request.updatedAt = "2020-01-01T00:00:00Z";
+      if (change === "queued-run") f.manager.streamAgent(f.agent.id, "new input");
+      if (change === "child")
+        await f.manager.createAgent({ provider: "codex", cwd: f.agent.cwd }, undefined, {
+          workspaceId: undefined,
+          labels: { [PARENT_AGENT_ID_LABEL]: f.agent.id },
+        });
+      await expect(f.manager.cleanupIdleAgent(request)).rejects.toThrow();
+      expect(f.closed()).toBe(0);
+    } finally {
+      for (const child of f.manager.listAgents().filter((a) => a.id !== f.agent.id))
+        await f.manager.closeAgent(child.id);
+      await f.close();
+    }
+  },
+);
+
+test("idle cleanup keeps a runtime whose provider subagent is still running", async () => {
+  const f = await idleCleanupFixture();
+  try {
+    f.session.pushEvent({
+      type: "provider_subagent",
+      provider: "codex",
+      event: {
+        type: "upsert",
+        id: "background-child",
+        title: "Background child",
+        status: "running",
+      },
+    });
+    await vi.waitFor(() => expect(f.manager.listProviderSubagents(f.agent.id)).toHaveLength(1));
+    await expect(f.manager.cleanupIdleAgent(f.request())).rejects.toThrow(/owned work/);
+    expect(f.closed()).toBe(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("idle cleanup reserves the runtime across native shutdown", async () => {
+  const f = await idleCleanupFixture();
+  try {
+    f.hold();
+    const cleanup = f.manager.cleanupIdleAgent(f.request());
+    await f.entered.promise;
+    expect(() => f.manager.streamAgent(f.agent.id, "input while closing")).toThrow(/cleanup/);
+    f.released.resolve();
+    await cleanup;
+    expect(f.closed()).toBe(1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("idle cleanup failure retains the runtime and releases its reservation", async () => {
+  const f = await idleCleanupFixture();
+  try {
+    f.fail();
+    await expect(f.manager.cleanupIdleAgent(f.request())).rejects.toThrow(/Native close failed/);
+    expect(f.manager.getAgent(f.agent.id)?.session).toBe(f.agent.session);
+    expect(() => f.manager.streamAgent(f.agent.id, "input after failed cleanup")).not.toThrow();
+  } finally {
+    await f.close();
+  }
 });

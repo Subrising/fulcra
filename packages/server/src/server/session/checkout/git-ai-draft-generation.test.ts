@@ -2,6 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { createToollessGitDraftGeneration } from "./git-ai-draft-generation.js";
 
+// The installed Claude Code the SDK must start; its own default is unstartable inside a packaged app.
+const claude = async () => "/opt/test/claude";
 const request = {
   cwd: "/selected",
   prompt: "untrusted diff",
@@ -43,6 +45,7 @@ describe("tool-less deliberate Git AI generation", () => {
         expect(input.options?.agents).toEqual({});
         expect(input.options?.plugins).toEqual([]);
         expect(input.options?.persistSession).toBe(false);
+        expect(input.options?.pathToClaudeCodeExecutable).toBe("/opt/test/claude");
         return stream(
           [
             {
@@ -57,6 +60,7 @@ describe("tool-less deliberate Git AI generation", () => {
       },
     );
     const driver = createToollessGitDraftGeneration({
+      resolveExecutable: claude,
       query,
       signal: new AbortController().signal,
       assertCurrent: () => {},
@@ -70,6 +74,7 @@ describe("tool-less deliberate Git AI generation", () => {
       stream([{ type: "result", subtype: "success", is_error: false, result: "not JSON" }]),
     );
     const driver = createToollessGitDraftGeneration({
+      resolveExecutable: claude,
       query,
       signal: new AbortController().signal,
       assertCurrent: () => {},
@@ -89,6 +94,7 @@ describe("tool-less deliberate Git AI generation", () => {
     const abort = new AbortController();
     const close = vi.fn();
     const driver = createToollessGitDraftGeneration({
+      resolveExecutable: claude,
       signal: abort.signal,
       assertCurrent: () => {},
       query: () => heldStream(entered, held, close),
@@ -114,6 +120,7 @@ describe("tool-less deliberate Git AI generation", () => {
       ]),
     );
     const driver = createToollessGitDraftGeneration({
+      resolveExecutable: claude,
       query,
       signal: new AbortController().signal,
       assertCurrent: () => {},

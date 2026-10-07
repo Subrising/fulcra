@@ -2,6 +2,12 @@ from pathlib import Path
 import importlib.util,tempfile,unittest,os,json
 spec=importlib.util.spec_from_file_location('install',Path(__file__).with_name('install-private-mac.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class DeliveryTests(unittest.TestCase):
+    def test_candidate_and_rollback_locations_require_noindex(self):
+        with tempfile.TemporaryDirectory() as d:
+            r=Path(d);hidden=r/'runtime.noindex';hidden.mkdir();m.unindexed(hidden/'mac-arm64')
+            with self.assertRaisesRegex(AssertionError,'noindex'):m.unindexed(r/'candidate')
+            alias=r/'alias.noindex';alias.symlink_to(r,target_is_directory=True)
+            with self.assertRaisesRegex(AssertionError,'noindex'):m.unindexed(alias)
     def test_symlink_inventory_never_follows_outside_target(self):
         with tempfile.TemporaryDirectory() as d:
             r=Path(d);(r/'source').mkdir();(r/'outside').mkdir();(r/'outside/private').write_text('not distributed');os.symlink(r/'outside',r/'source/link');x=m.inventory(r/'source');self.assertEqual(set(x),{'link'});self.assertEqual(x['link']['link'],str(r/'outside'))
@@ -39,8 +45,8 @@ class DeliveryTests(unittest.TestCase):
         finally:m.process,m.run,m.time.monotonic,m.time.sleep=original
     def test_private_install_rollback_reinstall_preserves_profiles_and_bundle(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d);e=root/'evidence';e.mkdir();home=root/'home';profile=home/'Library/Application Support/Orca';profile.mkdir(parents=True);(profile/'desktop-settings.json').write_text(json.dumps({'settings':{'daemon':{'manageBuiltInDaemon':False,'keepRunningAfterQuit':False}}}));(profile/'retained-note').write_text('old profile')
-            app=root/'candidate/Orca.app';app.mkdir(parents=True);(app/'reviewed-bytes').write_text('accepted app');target=root/'Applications/Orca.app';target.parent.mkdir()
+            root=Path(d);e=root/'evidence.noindex';e.mkdir();home=root/'home';profile=home/'Library/Application Support/Orca';profile.mkdir(parents=True);(profile/'desktop-settings.json').write_text(json.dumps({'settings':{'daemon':{'manageBuiltInDaemon':False,'keepRunningAfterQuit':False}}}));(profile/'retained-note').write_text('old profile')
+            app=root/'candidate.noindex/Orca.app';app.mkdir(parents=True);(app/'reviewed-bytes').write_text('accepted app');target=root/'Applications/Orca.app';target.parent.mkdir()
             inv=e/'inventory.json';inv.write_text(json.dumps({'files':m.inventory(app),'profileFiles':m.inventory(profile)}));owned=e/'owned.json';owned.write_text('[]');package=e/'package.json';package.write_text(json.dumps({'source':'a'*40,'bundle':str(app),'target':'/Applications/Orca.app','profile':str(profile),'inventory':str(inv),'ownedProcesses':str(owned),'pins':{str(inv):m.sha(inv),str(owned):m.sha(owned)}}))
             originalPath=m.Path;originalRun=m.run;originalInactive=m.inactive;originalQuit=m.quit_owned;originalArgs=m.sys.argv;calls=[]
             def mapped(p):return target if str(p)=='/Applications/Orca.app' else Path(p)
@@ -60,5 +66,6 @@ class DeliveryTests(unittest.TestCase):
                 invoke('reinstall');self.assertEqual((profile/'new-preference').read_text(),'new profile retained');self.assertEqual((profile/'retained-note').read_text(),'newer current profile');self.assertTrue(target.exists());self.assertEqual((e/'profile-before-restored/retained-note').read_text(),'newer current profile')
                 with self.assertRaises(FileExistsError):invoke('reinstall')
                 self.assertTrue(all(x[0] in ['/usr/bin/ditto','/usr/bin/codesign'] for x in calls))
+                stages=[Path(x[2]) for x in calls if x[0]=='/usr/bin/ditto' and 'installing-' in x[2]];self.assertEqual(len(stages),1);self.assertTrue(stages[0].parent.name.endswith('.noindex'));self.assertFalse(stages[0].parent.exists())
             finally:m.Path=originalPath;m.run=originalRun;m.inactive=originalInactive;m.quit_owned=originalQuit;m.sys.argv=originalArgs
 if __name__=='__main__':unittest.main()

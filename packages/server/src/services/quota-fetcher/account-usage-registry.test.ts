@@ -654,3 +654,38 @@ it("the returning rundown includes an account attached while an earlier roster p
   expect(rows.find((row) => row.accountId === work.id)?.inUse).toBe(false);
   expect(rows.find((row) => row.accountId === personal.id)?.inUse).toBe(true);
 });
+
+it("observation snapshots never enumerate roster or probe even cold/expired/refreshable entries", async () => {
+  const probe = vi.fn(async () => reading(30, 40, T0));
+  const roster = vi.fn(async () => [work]);
+  let now = T0;
+  let native: AccountUsageReading | null = null;
+  const registry = new AccountUsageRegistry({
+    logger: pino({ level: "silent" }),
+    readers: [{ provider: "claude", probe }],
+    roster: { list: roster },
+    now: () => now,
+    sessions: () => [
+      { agentId: "resident", runtimeInstanceId: "r1", account: work, observation: native },
+    ],
+  });
+  expect(registry.observe()).toMatchObject([
+    { accountId: work.id, status: "unavailable", fiveHour: null, weekly: null, sessionCount: 1 },
+  ]);
+  expect(registry.observeRowFor(work).fiveHour).toBeNull();
+  expect(roster).not.toHaveBeenCalled();
+  expect(probe).not.toHaveBeenCalled();
+  await registry.rowFor(work, { refresh: false });
+  expect(probe).toHaveBeenCalledTimes(1);
+  now += 11 * 60_000;
+  expect(registry.observeRowFor(work).fiveHour?.usedPct).toBe(30);
+  registry.observe();
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(roster).not.toHaveBeenCalled();
+  native = { ...reading(31, 41, now), source: "session" };
+  expect(registry.observeRowFor(work)).toMatchObject({
+    source: "session",
+    fiveHour: { usedPct: 31 },
+  });
+  expect(probe).toHaveBeenCalledTimes(1);
+});

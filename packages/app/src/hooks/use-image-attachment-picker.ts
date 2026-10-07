@@ -12,6 +12,7 @@ import { isWeb } from "@/constants/platform";
 
 interface UseImageAttachmentPickerResult {
   pickImages: () => Promise<PickedImageAttachmentInput[] | null>;
+  takePhoto: () => Promise<PickedImageAttachmentInput[] | null>;
 }
 
 export function useImageAttachmentPicker(): UseImageAttachmentPickerResult {
@@ -42,51 +43,75 @@ export function useImageAttachmentPicker(): UseImageAttachmentPickerResult {
     return true;
   }, [mediaPermission, requestMediaPermission, t]);
 
-  const pickImages = useCallback(async () => {
-    if (isPickingRef.current) {
-      return null;
-    }
+  const pick = useCallback(
+    async (source: "library" | "camera") => {
+      if (isPickingRef.current) {
+        return null;
+      }
 
-    isPickingRef.current = true;
+      isPickingRef.current = true;
 
-    try {
-      if (isWeb && isElectronRuntime()) {
-        const selectedImages = await pickImagesWithDesktopDialog(getDesktopHost()?.dialog);
-        if (selectedImages.length === 0) {
+      try {
+        if (source === "library" && isWeb && isElectronRuntime()) {
+          const selectedImages = await pickImagesWithDesktopDialog(getDesktopHost()?.dialog);
+          if (selectedImages.length === 0) {
+            return null;
+          }
+          return selectedImages;
+        }
+
+        let hasPermission;
+        if (source === "camera") {
+          const permission = await ImagePicker.requestCameraPermissionsAsync();
+          hasPermission = permission.granted;
+          if (!hasPermission) {
+            Alert.alert(
+              t("imageAttachmentPicker.permissionTitle"),
+              t("imageAttachmentPicker.cameraPermissionMessage"),
+            );
+          }
+        } else {
+          hasPermission = await ensurePermission();
+        }
+        if (!hasPermission) {
           return null;
         }
-        return selectedImages;
-      }
 
-      const hasPermission = await ensurePermission();
-      if (!hasPermission) {
+        const pendingResult = await ImagePicker.getPendingResultAsync();
+        if (pendingResult && "canceled" in pendingResult && !pendingResult.canceled) {
+          return await normalizePickedImageAssets(pendingResult.assets);
+        }
+
+        const options: ImagePicker.ImagePickerOptions = { mediaTypes: ["images"], quality: 0.8 };
+        const result =
+          source === "camera"
+            ? await ImagePicker.launchCameraAsync(options)
+            : await ImagePicker.launchImageLibraryAsync({
+                ...options,
+                allowsMultipleSelection: true,
+              });
+
+        if (result.canceled) {
+          return null;
+        }
+
+        return await normalizePickedImageAssets(result.assets);
+      } catch (error) {
+        console.error("[ImageAttachmentPicker] Failed to pick image:", error);
+        const message =
+          source === "camera"
+            ? "imageAttachmentPicker.failedToTakePhoto"
+            : "imageAttachmentPicker.failedToSelect";
+        Alert.alert(t("imageAttachmentPicker.errorTitle"), t(message));
         return null;
+      } finally {
+        isPickingRef.current = false;
       }
+    },
+    [ensurePermission, t],
+  );
 
-      const pendingResult = await ImagePicker.getPendingResultAsync();
-      if (pendingResult && "canceled" in pendingResult && !pendingResult.canceled) {
-        return await normalizePickedImageAssets(pendingResult.assets);
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"] as ImagePicker.MediaType[],
-        allowsMultipleSelection: true,
-        quality: 0.8,
-      });
-
-      if (result.canceled) {
-        return null;
-      }
-
-      return await normalizePickedImageAssets(result.assets);
-    } catch (error) {
-      console.error("[ImageAttachmentPicker] Failed to pick image:", error);
-      Alert.alert(t("imageAttachmentPicker.errorTitle"), t("imageAttachmentPicker.failedToSelect"));
-      return null;
-    } finally {
-      isPickingRef.current = false;
-    }
-  }, [ensurePermission, t]);
-
-  return { pickImages };
+  const pickImages = useCallback(() => pick("library"), [pick]);
+  const takePhoto = useCallback(() => pick("camera"), [pick]);
+  return { pickImages, takePhoto };
 }

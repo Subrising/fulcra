@@ -46,7 +46,11 @@ export function createGitAiDraftModel(deps: {
         update({ phase: "ready", draft, error: null });
       } catch {
         if (active && requestGeneration === generation) {
-          update({ phase: "error", draft: null, error: "Could not generate a draft. Try again." });
+          update({
+            phase: "error",
+            draft: null,
+            error: "Couldn't write a draft just now. Try again.",
+          });
         }
       }
     },

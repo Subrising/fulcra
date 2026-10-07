@@ -11,7 +11,7 @@ const git = (cwd, ...args) =>
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-async function fixture(t, state = "archived") {
+async function fixture(t, state = "archived", { keepDays = 7 } = {}) {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "wl-test-")));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home"),
@@ -49,6 +49,8 @@ async function fixture(t, state = "archived") {
     session: async () => session,
     pr: async () => pr,
   });
+  // An unset keep-time reads as "never", which removes nothing; these fixtures use seven days.
+  if (keepDays !== null) await service.settings.set(keepDays);
   return { base, home, dir, repo, wt, remote, db, service, session, pr };
 }
 test("clean pushed worktree and outputs removed; branch, reports, inputs and journal kept", async (t) => {
@@ -219,6 +221,46 @@ test("contained dependency executable links do not prevent safe worktree removal
   assert.equal(p.jobs[0].eligible, true);
   const r = await f.service.apply({ planId: p.planId, confirm: true });
   assert.equal(r.results[0].state, "complete");
+});
+test("keep-time never blocks every removal, manual included; Clean up now previews before acting", async (t) => {
+  const f = await fixture(t);
+  await f.service.settings.set("never");
+  const blocked = await f.service.dryRun();
+  assert.equal(blocked.jobs[0].eligible, false);
+  assert.match(blocked.jobs[0].blockers.join(), /never/);
+  await f.service.apply({ planId: blocked.planId, confirm: true });
+  assert.ok(await fs.stat(f.wt));
+
+  await f.service.settings.set(7);
+  const settle = async (out) => {
+    while (out.pending) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      out = f.service.cleanupRequest({ operationId: out.operationId });
+    }
+    return out.value;
+  };
+  const preview = await settle(f.service.cleanupRequest({ requestId: crypto.randomUUID() }));
+  assert.ok(preview.previewId);
+  assert.deepEqual(
+    preview.results.map((r) => [r.action, r.state]),
+    [["worktree", "planned"]],
+  );
+  assert.ok(await fs.stat(f.wt), "a preview removes nothing");
+  await assert.rejects(
+    async () =>
+      f.service.cleanupRequest({ requestId: crypto.randomUUID(), previewId: crypto.randomUUID() }),
+    /Preview expired/,
+  );
+  const done = await settle(
+    f.service.cleanupRequest({ requestId: crypto.randomUUID(), previewId: preview.previewId }),
+  );
+  assert.equal(done.results[0].action, "worktree");
+  await assert.rejects(fs.stat(f.wt));
+  await assert.rejects(
+    async () =>
+      f.service.cleanupRequest({ requestId: crypto.randomUUID(), previewId: preview.previewId }),
+    /Preview expired/,
+  );
 });
 test("turning automatic cleanup off after preview preserves the job", async (t) => {
   const f = await fixture(t);
@@ -418,7 +460,7 @@ test("loose dist signing key blocks the job", async (t) => {
   assert.match(p.jobs[0].blockers.join(), /Signing/);
 });
 test("automatic cleanup defaults off until an operator saves days", async (t) => {
-  const f = await fixture(t);
+  const f = await fixture(t, "archived", { keepDays: null });
   assert.equal(await f.service.settings.get(), "never");
   assert.equal(await f.service.automatic(), undefined);
   assert.ok(await fs.stat(f.wt));

@@ -1,3 +1,4 @@
+import { WorkspaceOrganizationSidebar } from "@/plugins/workspace-organization-sidebar";
 import { SidebarSessions } from "./sidebar/sidebar-sessions";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
@@ -48,7 +49,7 @@ import {
   type ToggleSidebarWorkspacePin,
 } from "@/hooks/use-sidebar-workspace-pin";
 import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
-import { useHostFeatureMap } from "@/runtime/host-features";
+import { useHostFeature, useHostFeatureMap } from "@/runtime/host-features";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useProjectIcons } from "@/projects/icons";
 import {
@@ -97,7 +98,11 @@ import {
   SidebarWorkspaceMenu,
 } from "@/components/sidebar/sidebar-workspace-menu";
 import { useLongPressDragInteraction } from "@/components/sidebar/use-long-press-drag-interaction";
-import { PinnedSectionHeader } from "@/components/sidebar/pinned-section-header";
+import { useWithoutSupersededHosts } from "@/hosts/use-superseded-hosts";
+import {
+  PinnedSectionHeader,
+  PinnedHostConnectionNotice,
+} from "@/components/sidebar/pinned-section-header";
 import { SidebarGroupToggleRow } from "@/components/sidebar/sidebar-group-toggle-row";
 import { useLimitedSidebarGroup } from "@/components/sidebar/use-limited-sidebar-group";
 import {
@@ -1882,7 +1887,56 @@ function areProjectBlockSelectionsEqual(
 
 const MemoProjectBlock = memo(ProjectBlock, areProjectBlockPropsEqual);
 
-export function SidebarWorkspaceList({
+export function SidebarWorkspaceList(props: SidebarWorkspaceListProps) {
+  const fallback = useMemo(() => <NativeExecutionSidebar {...props} />, [props]);
+  if (props.groupMode !== "project" || props.hasActiveProjectFilter) return fallback;
+  return (
+    <WorkspaceOrganizationSidebar
+      projects={props.projects}
+      entries={props.workspaceEntriesByKey}
+      header={props.listHeaderComponent}
+      footer={props.listFooterComponent}
+      beforeNavigate={props.onWorkspacePress}
+      fallback={fallback}
+    />
+  );
+}
+
+const organizationNoDrag = () => {};
+/** Reuse the native row's read/archive/pin/menu controls inside organizational grouping. */
+export function OrganizationExecutionRow({
+  workspace,
+  beforeNavigate,
+}: {
+  workspace: SidebarWorkspaceEntry;
+  beforeNavigate?: () => void;
+}) {
+  const route = parseHostWorkspaceRouteFromPathname(usePathname());
+  const selected =
+    route?.serverId === workspace.serverId && route.workspaceId === workspace.workspaceId;
+  const canPin = useHostFeature(workspace.serverId, "workspacePinning");
+  const togglePin = useSidebarWorkspacePinController();
+  const open = useCallback(() => {
+    beforeNavigate?.();
+    navigateToWorkspace({ serverId: workspace.serverId, workspaceId: workspace.workspaceId });
+  }, [beforeNavigate, workspace.serverId, workspace.workspaceId]);
+  return (
+    <WorkspaceRowWithMenu
+      workspace={workspace}
+      selected={selected}
+      shortcutNumber={null}
+      showShortcutBadge={false}
+      onPress={open}
+      drag={organizationNoDrag}
+      isDragging={false}
+      canCopyBranchName={!!workspace.currentBranch}
+      canPin={canPin}
+      onToggleWorkspacePin={togglePin}
+    />
+  );
+}
+
+function NativeExecutionSidebar({
   workspaceGroups,
   projectIconTargets,
   pinnedGroups,
@@ -2157,7 +2211,8 @@ function ProjectModeList({
   );
   const selectionEnabled = isWorkspaceRoute;
   const activeWorkspaceSelection = useActiveWorkspaceSelection();
-  const { pinnedChats, unpinnedProjects } = pinnedGroups;
+  const { unpinnedProjects } = pinnedGroups;
+  const pinnedChats = useWithoutSupersededHosts(pinnedGroups.pinnedChats);
   const {
     visibleItems: visiblePinnedChats,
     expanded: pinnedChatsExpanded,
@@ -2435,6 +2490,7 @@ function ProjectModeList({
       {pinnedChats.length > 0 ? (
         <View style={styles.pinnedSection} testID="sidebar-pinned-section">
           <PinnedSectionHeader collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} />
+          <PinnedHostConnectionNotice workspaces={pinnedChats} />
           {pinnedCollapsed ? null : (
             <>
               <DraggableList

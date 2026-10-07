@@ -1,4 +1,4 @@
-// Update-7 W3: Settings -> Accounts & Defaults shows the owner's rule before anything is chosen, edits it in the Fulcra-owned
+// Update-7 W3: Settings -> Accounts & models shows the owner's rule before anything is chosen, edits it in the Fulcra-owned
 // store, and refuses a model the installed provider does not list (plainly, and the store is left as it was).
 import test from "node:test";
 import assert from "node:assert/strict";

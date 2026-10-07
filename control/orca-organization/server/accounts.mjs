@@ -47,6 +47,8 @@ const empty = () => ({
   assignments: {},
   rotations: [],
   defaults: { claude: null, codex: null },
+  // The owner's choice: a session waits for its own account's reset unless he turns moving on (it spends another account).
+  rotateOnLimit: false,
 });
 
 // ---- store
@@ -66,6 +68,7 @@ export function readAccounts(root) {
     policy: POLICIES.includes(s.policy) ? s.policy : "priority",
     assignments: s.assignments ?? {},
     rotations: Array.isArray(s.rotations) ? s.rotations : [],
+    rotateOnLimit: s.rotateOnLimit === true,
     defaults: Object.fromEntries(
       PROVIDERS.map((p) => [p, typeof s.defaults?.[p] === "string" ? s.defaults[p] : null]),
     ),
@@ -288,6 +291,13 @@ export async function setDefaultAccount(root, provider, id) {
     return id;
   });
 }
+export async function setRotateOnLimit(root, value) {
+  if (typeof value !== "boolean") throw Error("Invalid limit setting");
+  return update(root, (s) => {
+    s.rotateOnLimit = value;
+    return value;
+  });
+}
 export async function setPolicy(root, policy) {
   if (!POLICIES.includes(policy)) throw Error("Unknown policy");
   return update(root, (s) => {
@@ -312,10 +322,15 @@ function assignInStore(s, sessionId, provider, now, except = []) {
     return { account: { ...held }, allLimited: false, takeover: true };
   }
   if (!poolFor(s, provider)) return null;
-  let a =
-    held && !except.includes(held.id) && accountStatus(held, now).state === "ok"
-      ? held
-      : choose(s, provider, now, except);
+  const heldState = held && !except.includes(held.id) ? accountStatus(held, now).state : null;
+  // Waiting is the default: a limited account keeps its session (the launch waits for that reset) unless moving is on.
+  // This holds even when the launch hook has already tried that account (`except`): it then refuses, rather than move.
+  if (held && accountStatus(held, now).state === "limited" && !s.rotateOnLimit) {
+    held.lastUsedAt = iso(now);
+    s.assignments[sessionId] = { accountId: held.id, provider, at: iso(now), ended: false };
+    return { account: { ...held }, allLimited: true, earliestReset: held.limitedUntil };
+  }
+  let a = heldState === "ok" ? held : choose(s, provider, now, except);
   let allLimited = false;
   if (!a) {
     a =
@@ -359,8 +374,9 @@ export async function sessionEnded(root, sessionId) {
     return null;
   });
 }
-// A usage limit on `sessionId`'s account: mark that account limited until `resetAt` (or DEFAULT_LIMIT_MS), and move the
-// session to the next available account. Returns { from, to, earliestReset } -- `to` null when every account is limited.
+// A usage limit on `sessionId`'s account: mark that account limited until `resetAt` (or DEFAULT_LIMIT_MS) and, only when
+// the pool's rotateOnLimit is on, move the session to the next available account. Off (the default), the rotation is
+// recorded as held and the session stays on its account; the usage-limit resume picks it up after the reset. Returns { from, to, earliestReset } -- `to` null when every account is limited.
 // `reassign: false` (a human-held session): the account is marked limited and the event recorded, but the session is
 // not moved -- its owner did not ask. Its next launch picks an account like any launch, and that move is recorded too.
 export async function rotate(
@@ -380,7 +396,9 @@ export async function rotate(
       from.limitedUntil = until;
       from.limitNote = note ? String(note).slice(0, 200) : null;
     }
-    const to = reassign ? choose(s, provider, now, [from.id]) : null;
+    // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
+    const move = reassign && s.rotateOnLimit === true;
+    const to = move ? choose(s, provider, now, [from.id]) : null;
     if (to) {
       s.assignments[sessionId] = { accountId: to.id, provider, at: iso(now), ended: false };
       to.lastUsedAt = iso(now);
@@ -397,7 +415,7 @@ export async function rotate(
       stopId,
       reason: "limit",
       earliestReset: to ? null : earliestReset(s, provider, now),
-      ...(reassign ? {} : { held: true }),
+      ...(move ? {} : { held: true }),
     };
     s.rotations.push(r);
     return r;
@@ -435,8 +453,8 @@ export async function switchSession(
       return {
         refused:
           provider === "claude"
-            ? `${to.name} is signed out. Add its token again in Settings › Accounts & Defaults.`
-            : `${to.name} is signed out. Sign in to it again in Settings › Accounts & Defaults.`,
+            ? `${to.name} is signed out. Add its token again in Settings › Accounts & models.`
+            : `${to.name} is signed out. Sign in to it again in Settings › Accounts & models.`,
       };
     if (st.state !== "ok") return { refused: `${to.name} is still signing in.` };
     const cur = s.assignments[sessionId] ?? null,
@@ -575,6 +593,7 @@ export function publicView(s, now = Date.now()) {
       ...(r.reason === "manual" ? { reason: "manual" } : {}),
     })),
     defaultAccounts: { ...s.defaults },
+    rotateOnLimit: s.rotateOnLimit === true,
   };
 }
 export function accountOf(s, sessionId) {
@@ -595,7 +614,11 @@ const run = (bin, args, input, env) =>
         // Interactive security can report refusal, then exit zero. Prompts alone
         // are normal; discard every other diagnostic and never retain raw errors.
         if (e || err.replace(/security>\s*/g, "").trim())
-          reject(Error("Account Keychain: operation-failed"));
+          reject(
+            Object.assign(Error("Account Keychain: operation-failed"), {
+              code: e?.code === 44 ? "ACCOUNT_ITEM_MISSING" : "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+            }),
+          );
         else resolve(out);
       },
     );
@@ -648,8 +671,13 @@ export function createKeychain({
       try {
         const v = await read(id);
         return TOKEN.test(v) ? v : null;
-      } catch {
-        return null;
+      } catch (error) {
+        if (error?.code === "ACCOUNT_ITEM_MISSING") return null;
+        // Timeout, locked Keychain and process/resource failures are not proof
+        // that a saved token expired. Preserve account state and permit retry.
+        throw Object.assign(Error("Account Keychain temporarily unavailable; retry"), {
+          code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+        });
       }
     },
     async remove(id) {
@@ -789,7 +817,30 @@ export function sessionOpenHook({
         const r = reservation.result;
         seen.push(r.account.id);
         // Credential preparation must not hold the store lock (it may outlive its stale timeout).
-        const token = provider === "claude" ? await keychain.get(r.account.id) : null;
+        let token = null;
+        if (provider === "claude") {
+          for (let readAttempt = 0; readAttempt < 2; readAttempt++) {
+            // A retry is still this exact reservation, never permission to select
+            // another account or revive a revoked one after awaiting Keychain.
+            const current = readAccounts(storeRoot);
+            const account = current.accounts.find(
+              (a) => a.id === r.account.id && a.provider === provider,
+            );
+            const state = account && accountStatus(account, now()).state;
+            if (
+              JSON.stringify(current.assignments[sessionId]) !== expected ||
+              (state !== "ok" && !(r.allLimited && state === "limited"))
+            )
+              throw refused();
+            try {
+              token = await keychain.get(r.account.id);
+            } catch (error) {
+              if (error?.code !== "ACCOUNT_KEYCHAIN_UNAVAILABLE" || readAttempt === 1)
+                throw refused();
+            }
+            if (token) break;
+          }
+        }
         const ready = provider === "claude" ? !!token : codexSignedIn(storeRoot, r.account.id);
         if (ready && r.allLimited) {
           try {
@@ -803,7 +854,9 @@ export function sessionOpenHook({
           if (state !== "ok" && !(r.allLimited && state === "limited")) throw refused();
           if (!ready) {
             if (r.takeover) throw refused();
-            account.auth = provider === "claude" ? "expired" : "signing-in";
+            // Missing/unreadable Keychain material is not a provider rejection.
+            // Keep Claude retryable on the next launch; never base-login fallback.
+            if (provider === "codex") account.auth = "signing-in";
             return null;
           }
           // The current assignment/one-use intent and account eligibility are checked together,

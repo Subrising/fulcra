@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inboxHeadline, type InboxData } from "./inbox-model";
+import { inboxHeadline, humanInboxItems, type InboxData } from "./inbox-model";
 
 const ALL_CLEAR = "Nothing is waiting for you.";
 const counts = (total = 0) => ({
@@ -116,4 +116,57 @@ test("the all-clear still appears when every source was read and nothing is wait
   assert.equal(h.failed, false);
   assert.equal(h.canRetry, false);
   assert.equal(inboxHeadline(undefined, true).text, "Checking what needs you…");
+});
+
+test("personal inbox surfaces only open human packets, retaining all held and FYI records", () => {
+  const packet = {
+    ...item(1, "decision", "now"),
+    ref: "decision:00000000-0000-4000-8000-000000000001",
+  };
+  const held = item(2, "held", "now");
+  const answered = {
+    ...item(3, "decision", "fyi"),
+    ref: "decision:00000000-0000-4000-8000-000000000002",
+  };
+  const data = base({
+    items: [held, packet, { ...packet, key: "same-packet-report" }, answered],
+    counts: counts(4),
+  });
+  const view = humanInboxItems(data);
+  assert.equal(view.confirmed.length, 1);
+  assert.equal(view.retained.length, 1);
+  assert.equal(view.other.length, 2);
+  assert.equal(data.items.length, 4, "classification does not consume any source record");
+  assert.equal(humanInboxItems({ ...data, stale: true }).confirmed.length, 0);
+  assert.equal(humanInboxItems({ ...data, stale: true }).unknown, true);
+});
+
+test("a current failed refetch labels cached coverage last-known and preserves observations until recovery", () => {
+  const now = Date.parse("2026-09-29T19:15:06.000Z");
+  const failure = new Error("Current inbox read refused");
+  const packet = {
+    ...item(1, "decision", "now"),
+    ref: "decision:00000000-0000-4000-8000-000000000001",
+  };
+  const held = item(2, "held", "now");
+  for (const listed of [[], [packet, held]]) {
+    const data = base({ items: listed, counts: counts(listed.length) });
+    const head = inboxHeadline(data, false, failure);
+    assert.equal(head.failed, true);
+    assert.equal(head.canRetry, true);
+    assert.match(head.text, /latest inbox read failed/i);
+    assert.match(head.text, /last inbox that could be read/i);
+    assert.match(head.text, /coverage is unknown/i);
+    assert.equal(head.problem, failure.message);
+    const attention = humanInboxItems(data, now, failure);
+    assert.equal(attention.unknown, true);
+    assert.deepEqual(attention.confirmed, listed.length ? [packet] : []);
+    assert.deepEqual(attention.retained, listed.length ? [held] : []);
+    assert.deepEqual(data.items, listed, "a failed read never consumes cached records");
+    assert.equal(inboxHeadline(data, false, null).failed, false);
+    assert.equal(humanInboxItems(data, now, null).unknown, false);
+  }
+  const partial = inboxHeadline(base({ partial: true, unreadable: { held: 1 } }), false, failure);
+  assert.match(partial.text, /at least 0 in all/);
+  assert.deepEqual(partial.missing, ["held messages"]);
 });

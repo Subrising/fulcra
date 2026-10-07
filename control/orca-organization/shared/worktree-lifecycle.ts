@@ -83,3 +83,54 @@ export const cleanupApplyRpc = defineContract({
     z.object({ pending: z.literal(false), operationId: z.string().uuid(), value: result }).strict(),
   ]),
 });
+
+const cleanupSettings = z
+  .object({
+    archiveFinished: z.boolean(),
+    idleMinutes: z.union([z.number().int().min(1).max(10080), z.literal("never")]),
+    retentionDays: retention,
+  })
+  .strict();
+export const cleanupSettingsRpc = defineContract({
+  name: "organization.cleanup-settings",
+  input: cleanupSettings.partial(),
+  output: cleanupSettings,
+});
+export const cleanupNowRpc = defineContract({
+  name: "organization.cleanup-now",
+  // { requestId } returns a preview (state "planned", nothing changed) with a previewId;
+  // { requestId, previewId } acts only on what that preview showed.
+  input: z.union([
+    z.object({ requestId: z.string().uuid() }).strict(),
+    z.object({ requestId: z.string().uuid(), previewId: z.string().uuid() }).strict(),
+    z.object({ operationId: z.string().uuid() }).strict(),
+  ]),
+  output: z.union([
+    pending,
+    z
+      .object({
+        pending: z.literal(false),
+        operationId: z.string().uuid(),
+        value: z
+          .object({
+            version: z.literal(1),
+            observedAt: z.string(),
+            partial: z.boolean(),
+            previewId: z.string().uuid().optional(),
+            results: z.array(
+              z
+                .object({
+                  id: z.string(),
+                  action: z.enum(["archive", "reap", "worktree"]),
+                  state: z.enum(["planned", "complete", "skipped", "needs-attention"]),
+                  reason: z.string(),
+                  bytes: z.number(),
+                })
+                .strict(),
+            ),
+          })
+          .strict(),
+      })
+      .strict(),
+  ]),
+});

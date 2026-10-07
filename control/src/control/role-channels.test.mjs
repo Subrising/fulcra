@@ -525,7 +525,8 @@ test("approval bounds are real: allowance, expiry, closure, duplicate identity a
   assert.equal(again.resend, true);
   await assert.rejects(
     send(first, "Different text under the same identity"),
-    /Message identity already used/,
+    // The intercom rate ledger sees the reused identity first since 0.2.3; either refusal is correct.
+    /Message identity already used|Intercom rate identity conflict/,
   );
   assert.equal((await send(randomUUID())).state, "delivered");
   await assert.rejects(send(randomUUID()), /allowance reached/);
@@ -618,4 +619,43 @@ test("intercom rolling channel budget expires history without renewing seat auth
   f.setNow(clock);
   await assert.rejects(send(), /delegat|current|capability|authority/i);
   assert.equal(f.sends(), 2);
+});
+
+test("FYI is durable, readable and idempotent without native send or human notification", async (t) => {
+  const f = await seated(t);
+  const channel = f.control.channels.open(opening());
+  const message = {
+    sessionId: f.project,
+    channelId: channel.channelId,
+    messageId: randomUUID(),
+    text: "Build artifact is ready; FYI only.",
+    noWake: true,
+  };
+  const before = f.sends();
+  const result = await f.control.channels.send(message, f.projectGrant.capability);
+  assert.equal(result.noWake, true);
+  assert.equal(result.state, "delivered");
+  assert.equal(f.sends(), before);
+  assert.equal(f.store.delivery(message.messageId), null);
+  const thread = f.control.channels.thread(
+    { sessionId: f.prime, channelId: channel.channelId },
+    f.primeGrant.capability,
+  );
+  assert.equal(thread.messages.at(-1).noWake, true);
+  const resend = await f.control.channels.send(message, f.projectGrant.capability);
+  assert.equal(resend.resend, true);
+  assert.equal(f.sends(), before);
+  await assert.rejects(
+    f.control.channels.send({ ...message, noWake: false }, f.projectGrant.capability),
+  );
+  const receipt = f.control.channels.read(
+    {
+      sessionId: f.prime,
+      channelId: channel.channelId,
+      messageId: message.messageId,
+      note: "Read this FYI update",
+    },
+    f.primeGrant.capability,
+  );
+  assert.ok(receipt.readAt);
 });

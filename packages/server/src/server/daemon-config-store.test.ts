@@ -5,8 +5,17 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { DaemonConfigStore, applyMutableProviderConfigToOverrides } from "./daemon-config-store.js";
 import { loadPersistedConfig } from "./persisted-config.js";
+import { writeNotificationSetting } from "./notification-settings.js";
 import type { PersistedConfig } from "./persisted-config.js";
 import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
+
+function autoResumeOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
+  return { autoResumeOnLimit: daemon.autoResumeOnLimit ?? true };
+}
+
+function notificationModeOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
+  return { notificationMode: daemon.notificationMode ?? ("primes" as const) };
+}
 
 function reloadableConfig(
   persisted: PersistedConfig,
@@ -25,7 +34,9 @@ function reloadableConfig(
     providers: (agents.providers ?? {}) as MutableDaemonConfig["providers"],
     metadataGeneration: { providers: agents.metadataGeneration?.providers ?? [] },
     autoArchiveAfterMerge: daemon.autoArchiveAfterMerge ?? false,
+    ...notificationModeOf(daemon),
     enableTerminalAgentHooks: daemon.enableTerminalAgentHooks ?? false,
+    ...autoResumeOf(daemon),
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
     terminalProfiles: daemon.terminalProfiles,
     agentProfiles: daemon.agentProfiles,
@@ -108,7 +119,9 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
     });
     const changes: unknown[] = [];
@@ -130,7 +143,9 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
     });
 
@@ -176,7 +191,9 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
       agentProfiles: [
         { id: "a", name: "Keep", provider: "claude" },
@@ -200,7 +217,9 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
     });
     store.onFieldChange("relay.enabled", (enabled) => {
@@ -226,7 +245,9 @@ describe("DaemonConfigStore", () => {
       providers: {},
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
     });
     let browserToolsEnabled = false;
@@ -260,7 +281,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -292,7 +315,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -323,7 +348,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -379,7 +406,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -413,7 +442,9 @@ describe("DaemonConfigStore", () => {
       providers: { claude: { enabled: false } },
       metadataGeneration: { providers: [] },
       autoArchiveAfterMerge: false,
+      notificationMode: "primes",
       enableTerminalAgentHooks: false,
+      autoResumeOnLimit: true,
       appendSystemPrompt: "",
     });
 
@@ -481,7 +512,9 @@ describe("DaemonConfigStore", () => {
         },
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -529,7 +562,9 @@ describe("DaemonConfigStore", () => {
         providers: { gemini: {} },
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -591,7 +626,9 @@ describe("DaemonConfigStore", () => {
           ],
         },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -642,7 +679,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -668,7 +707,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -694,6 +735,7 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         appendSystemPrompt: "",
       },
       undefined,
@@ -717,7 +759,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -759,7 +803,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -784,7 +830,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -794,6 +842,30 @@ describe("DaemonConfigStore", () => {
 
     const persisted = loadPersistedConfig(paseoHome);
     expect(persisted.daemon?.enableTerminalAgentHooks).toBe(true);
+  });
+
+  test("patch persists the daily explanation cap into config.json and the live config", () => {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
+    tempDirs.push(paseoHome);
+
+    const store = new DaemonConfigStore(
+      paseoHome,
+      {
+        mcp: { injectIntoAgents: false },
+        providers: {},
+        metadataGeneration: { providers: [] },
+        autoArchiveAfterMerge: false,
+        notificationMode: "primes",
+        enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
+        appendSystemPrompt: "",
+      },
+      undefined,
+    );
+
+    expect(store.patch({ explainDailyLimit: 12 }).explainDailyLimit).toBe(12);
+    expect(store.get().explainDailyLimit).toBe(12);
+    expect(loadPersistedConfig(paseoHome).daemon?.explainDailyLimit).toBe(12);
   });
 
   test("patch persists metadata generation providers into config.json", () => {
@@ -808,7 +880,9 @@ describe("DaemonConfigStore", () => {
         providers: {},
         metadataGeneration: { providers: [] },
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
       },
       undefined,
@@ -860,7 +934,9 @@ describe("DaemonConfigStore", () => {
         browserTools: { enabled: false },
         providers: {},
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
         metadataGeneration: { providers: [{ provider: "claude", model: "haiku" }] },
       },
@@ -884,7 +960,9 @@ describe("DaemonConfigStore", () => {
         browserTools: { enabled: false },
         providers: {},
         autoArchiveAfterMerge: false,
+        notificationMode: "primes",
         enableTerminalAgentHooks: false,
+        autoResumeOnLimit: true,
         appendSystemPrompt: "",
         metadataGeneration: { providers: [] },
       },
@@ -958,6 +1036,83 @@ describe("DaemonConfigStore reload", () => {
   function writeConfig(paseoHome: string, config: unknown): void {
     writeFileSync(path.join(paseoHome, "config.json"), `${JSON.stringify(config, null, 2)}\n`);
   }
+
+  test("combined notification and auto-resume edits retain independent persisted preferences", () => {
+    const { paseoHome, store } = createReloadableStore();
+
+    store.patch({ notificationMode: "off", autoResumeOnLimit: false });
+    expect(store.get().notificationMode).toBe("off");
+    expect(store.get().autoResumeOnLimit).toBe(false);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("off");
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(false);
+
+    store.patch({ notificationMode: "all" });
+    expect(store.get().notificationMode).toBe("all");
+    expect(store.get().autoResumeOnLimit).toBe(false);
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(false);
+
+    store.patch({ autoResumeOnLimit: true });
+    expect(store.get().notificationMode).toBe("all");
+    expect(store.get().autoResumeOnLimit).toBe(true);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("all");
+    expect(store.reload().appliedPaths).toEqual([]);
+  });
+
+  test("reload applies external sidecar policy without a main-file change", () => {
+    const { paseoHome, store } = createReloadableStore();
+    writeNotificationSetting(paseoHome, "off");
+    expect(store.reload().appliedPaths).toEqual(["daemon.notificationMode"]);
+    expect(store.get().notificationMode).toBe("off");
+    expect(store.reload().appliedPaths).toEqual([]);
+  });
+
+  test("a failed notification transition rolls back both combined settings", () => {
+    const { paseoHome, store } = createReloadableStore();
+    const transitions: unknown[] = [];
+    store.onFieldChange("notificationMode", (next) => {
+      transitions.push(next);
+      if (next === "off") throw new Error("Notification transition refused");
+    });
+
+    expect(() => store.patch({ notificationMode: "off", autoResumeOnLimit: false })).toThrow(
+      "Notification transition refused",
+    );
+    expect(transitions).toEqual(["off", "primes"]);
+    expect(store.get().notificationMode).toBe("primes");
+    expect(store.get().autoResumeOnLimit).toBe(true);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("primes");
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(true);
+  });
+
+  test("a failed live notification rollback remains an aggregate failure", () => {
+    const { paseoHome, store } = createReloadableStore();
+    const applyError = new Error("Notification transition refused");
+    const rollbackError = new Error("Notification owner could not restore");
+    let ownerMode: MutableDaemonConfig["notificationMode"] = "primes";
+    store.onFieldChange("notificationMode", (next) => {
+      if (next === "off") {
+        ownerMode = next;
+        throw applyError;
+      }
+      throw rollbackError;
+    });
+    let failure: unknown;
+    try {
+      store.patch({ notificationMode: "off", autoResumeOnLimit: false });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      message: "Daemon config apply failed and one or more live owners could not roll back",
+      cause: applyError,
+      rollbackErrors: [rollbackError],
+    });
+    expect(ownerMode).toBe("off");
+    expect(store.get().notificationMode).toBe("primes");
+    expect(store.get().autoResumeOnLimit).toBe(true);
+    expect(loadPersistedConfig(paseoHome).daemon?.notificationMode).toBe("primes");
+    expect(loadPersistedConfig(paseoHome).daemon?.autoResumeOnLimit).toBe(true);
+  });
 
   test("applies mutable edits and reports startup-only edits", () => {
     const { paseoHome, store, persisted } = createReloadableStore();

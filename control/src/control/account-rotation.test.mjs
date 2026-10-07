@@ -20,6 +20,7 @@ import {
   readAccounts,
   accountOf,
   setAccount,
+  setRotateOnLimit,
   update,
   publicView,
 } from "../../orca-organization/server/accounts.mjs";
@@ -137,6 +138,7 @@ test("Claude: a stop at the limit moves the session to the next account now, rel
   const w = world(t);
   const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now),
     b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  await setRotateOnLimit(w.root, true);
   const id = await w.enrol();
   w.tails.set(id, tail());
   assert.equal((await assign(w.root, id, "claude", w.clock.now)).account.id, a.id);
@@ -225,6 +227,7 @@ test("Codex: a usage-limit stop moves to the next account and restarts without w
   const a = await addAccount(w.root, { provider: "codex", name: "A" }, w.clock.now),
     b = await addAccount(w.root, { provider: "codex", name: "B" }, w.clock.now + 1);
   for (const x of [a, b]) await setAccount(w.root, x.id, { auth: "ok" });
+  await setRotateOnLimit(w.root, true);
   const id = await w.enrol();
   await assign(w.root, id, "codex", w.clock.now);
   const m = randomUUID();
@@ -462,6 +465,7 @@ test("limit reconnect records one canonical switch with reason limit", async (t)
 
 test("limit due refuses when delegation becomes human before entering the exclusive fence", async (t) => {
   const w = await manualWorld(t);
+  await setRotateOnLimit(w.root, true);
   w.tails.set(w.id, tail());
   await w.control.usageLimits.onAgent({
     id: w.id,

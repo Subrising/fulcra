@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
@@ -15,7 +15,11 @@ const size = (n: number) =>
     : n >= 1073741824
       ? `${(n / 1073741824).toFixed(1)} GB`
       : `${(n / 1048576).toFixed(1)} MB`;
-export function CleanupSurface({ theme, layout }: Pick<PluginSurfaceProps, "theme" | "layout">) {
+export function CleanupSurface({
+  theme,
+  layout,
+  header,
+}: Pick<PluginSurfaceProps, "theme" | "layout"> & { header?: ReactNode }) {
   const preview = useContract(cleanupPreviewRpc),
     apply = useContract(cleanupApplyRpc),
     setting = useContract(cleanupRetentionRpc);
@@ -58,6 +62,7 @@ export function CleanupSurface({ theme, layout }: Pick<PluginSurfaceProps, "them
         Free space after work is finished. Branches, pull requests, reports and evidence are kept.
         Running sessions and unsaved work are protected.
       </Text>
+      {header}
       <View
         style={{ padding: 16, gap: 12, borderRadius: 12, borderWidth: 1, borderColor: c.border }}
       >

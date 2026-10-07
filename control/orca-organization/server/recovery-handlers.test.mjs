@@ -127,3 +127,63 @@ test("team resume, dismiss and reconcile map to their operator RPCs; reconcile n
   );
   assert.equal(d.calls[2].input, U(7));
 });
+
+test("fresh start maps to one operator session-fresh-start and says plainly what happened", async () => {
+  const replies = [
+    { state: "rotated" },
+    { state: "held", outcome: "Stopped for review: Human input; rotation refused" },
+    { state: "refused", error: "Fresh start limit reached for today (2)." },
+  ];
+  const d = double(() => replies.shift());
+  const r = createRecovery(d.call);
+  const reason = "Fresh start requested by you from Fulcra";
+  const ok = await r.act({ action: "fresh-start", messageId: U(1), sessionId: U(2), reason });
+  assert.equal(ok.status, "rotated");
+  assert.match(ok.message, /^Started fresh\. The handoff is saved/);
+  assert.equal(
+    (await r.act({ action: "fresh-start", messageId: U(3), sessionId: U(2), reason })).message,
+    "Fresh start stopped for review: Human input; rotation refused.",
+  );
+  assert.equal(
+    (await r.act({ action: "fresh-start", messageId: U(4), sessionId: U(2), reason })).message,
+    "Fresh start was not applied: Fresh start limit reached for today (2).",
+  );
+  assert.deepEqual(d.calls[0], {
+    method: "session-fresh-start",
+    input: { messageId: U(1), sessionId: U(2), reason },
+  });
+  const bad = await r.act({ action: "fresh-start", messageId: "x", sessionId: U(2), reason });
+  assert.equal(bad.status, "error");
+  assert.equal(d.calls.length, 3);
+});
+
+test("fresh start says the idle race and held-for-review refusals plainly, with one full stop", async () => {
+  const replies = [
+    { state: "refused", error: "Session is no longer idle below its context check; not rotated" },
+    {
+      state: "refused",
+      error: "An earlier fresh start has no confirmed result yet; it is held for review.",
+    },
+    { state: "refused", error: "Human input or changed native identity; rotation refused" },
+  ];
+  const r = createRecovery(double(() => replies.shift()).call);
+  const act = (n) =>
+    r.act({
+      action: "fresh-start",
+      messageId: U(n),
+      sessionId: U(9),
+      reason: "Fresh start requested by you from Fulcra",
+    });
+  assert.equal(
+    (await act(1)).message,
+    "Fresh start was not applied: It started working just before the fresh start, so nothing changed. Try again when it is idle.",
+  );
+  assert.equal(
+    (await act(2)).message,
+    "Fresh start was not applied: An earlier fresh start has no confirmed result yet; it is held for review.",
+  );
+  assert.equal(
+    (await act(3)).message,
+    "Fresh start was not applied: Someone used this chat directly since it was handed to Fulcra, or it was restarted another way, so nothing changed. Hand it back to Fulcra, then try again.",
+  );
+});

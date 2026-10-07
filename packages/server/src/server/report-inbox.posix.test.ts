@@ -1476,3 +1476,33 @@ test("multi-prime R25-L1: same fact cannot return to same recipient through a ne
     await f.cleanup();
   }
 });
+
+test("native context rotation retains explicit scope/parent on a changed native ID and refuses revoked intent", async () => {
+  const f = await fixture();
+  try {
+    const permit = f.registry.captureContextRotation(
+      f.prime,
+      "original-controller-rotation-revision",
+    );
+    const next = { ...f.prime, instanceId: randomUUID(), sessionId: randomUUID() };
+    f.identities.set(f.prime.agentId, next);
+    const receipt = await permit(next, () => {});
+    expect(receipt.current).toBe(true);
+    expect(f.registry.requireParent(f.child, f.scope).parent).toEqual(next);
+    await expect(f.request()).rejects.toThrow("credential");
+    await expect(permit(next, () => {})).rejects.toThrow("already attempted");
+    const rejected = f.registry.captureContextRotation(next, "second-approved-revision");
+    const sameContext = { ...next, instanceId: randomUUID() };
+    await expect(rejected(sameContext, () => {})).rejects.toThrow("Exact old/new");
+    const revoked = f.registry.captureContextRotation(next, "third-approved-revision");
+    const another = { ...next, instanceId: randomUUID(), sessionId: randomUUID() };
+    f.identities.set(next.agentId, another);
+    await expect(
+      revoked(another, () => {
+        throw new Error("human takeover");
+      }),
+    ).rejects.toThrow("human takeover");
+  } finally {
+    await f.cleanup();
+  }
+});

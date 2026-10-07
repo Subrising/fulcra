@@ -51,6 +51,7 @@ function fixture(t) {
   const clock = { now: at("2026-09-26T09:41:00Z") };
   const native = {
     route: () => undefined,
+    automaticResumeEnabled: async () => true,
     inspect: async (id) => ({
       boot: "boot-1",
       fenceProtocol: FENCE_PROTOCOL,
@@ -356,11 +357,58 @@ test("wired: agent updates, the watchdog, recovery-status; a failed tool refresh
   const tr = fs.readFileSync(new URL("./tool-refresh.mjs", import.meta.url), "utf8");
   assert.match(
     tr,
-    /this\.record\(id, s\.generation, 'failed', `\$\{cause\}: \$\{e\.message\}`, null\);[\s\S]{0,400}void this\.control\.providerRecovery\?\.observe\(id\);\s*throw e;/,
+    /this\.record\(id, s\.generation, ["']failed["'], `\$\{cause\}: \$\{e\.message\}`, null\);[\s\S]{0,400}void this\.control\.providerRecovery\?\.observe\(id\);\s*throw e;/,
   );
   const native = fs.readFileSync(new URL("./native.mjs", import.meta.url), "utf8");
   assert.match(
     native,
-    /refreshAgentMcp\(\{ agentId: id, expected: \{ provider: s\.provider, sessionId: s\.sessionId, configRevision: s\.configRevision \}, changes: \{\}, reconnect: true \}\)/,
+    /refreshAgentMcp\(\{\s*agentId: id,\s*expected: \{\s*provider: s\.provider,\s*sessionId: s\.sessionId,\s*configRevision: s\.configRevision,?\s*\},\s*changes: \{\},\s*reconnect: true,?\s*\}\)/,
   );
+});
+
+test("network failure uses the existing recovery journal, resumes once and survives a service restart", async (t) => {
+  const f = fixture(t),
+    { id } = await f.failing("API Error: Can't reach the API server (ENOTFOUND)", "claude");
+  await f.pr.observe(id);
+  assert.equal(f.rows(id)[0].kind, "network");
+  assert.equal(Date.parse(f.rows(id)[0].nextAt) - f.clock.now, 30_000);
+  f.control.providerRecovery = new ProviderRecovery(f.control, { now: () => f.clock.now });
+  f.clock.now += 30_000;
+  await f.control.providerRecovery.tick();
+  assert.deepEqual(f.recovers, [id]);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].text, /temporary network failure/);
+  await f.control.providerRecovery.tick();
+  assert.equal(f.sent.length, 1);
+});
+test("network recovery honors the per-session opt-out label at observe and before send", async (t) => {
+  const f = fixture(t),
+    { id: optedOut } = await f.failing("API Error: ECONNRESET", "claude");
+  f.snaps.set(optedOut, { ...f.snaps.get(optedOut), labels: { "fulcra.limit-resume": "off" } });
+  assert.equal(await f.pr.observe(optedOut), null);
+  const { id } = await f.failing("API Error: ECONNRESET", "claude");
+  await f.pr.observe(id);
+  assert.equal(f.rows(id)[0].kind, "network");
+  f.snaps.set(id, { ...f.snaps.get(id), labels: { "fulcra.limit-resume": "off" } });
+  await later(f, 30_000);
+  assert.deepEqual(f.recovers, []);
+  assert.deepEqual(f.sent, []);
+});
+test("network recovery honors opt-out and never acts after a newer instruction or pending permission", async (t) => {
+  const f = fixture(t),
+    { id } = await f.failing("ECONNRESET", "claude");
+  await f.pr.observe(id);
+  f.native.automaticResumeEnabled = async () => false;
+  await later(f, 30_000);
+  assert.deepEqual(f.recovers, []);
+  assert.deepEqual(f.sent, []);
+  assert.equal(f.rows(id)[0].state, "held");
+  for (const error of [
+    "Permission denied ETIMEDOUT",
+    "401 Unauthorized ECONNRESET",
+    "content policy HTTP503",
+  ]) {
+    const { id: permanent } = await f.failing(error, "claude");
+    assert.equal(await f.pr.observe(permanent), null);
+  }
 });

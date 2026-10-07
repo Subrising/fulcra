@@ -1,11 +1,11 @@
 import { router, usePathname } from "expo-router";
 import { CalendarClock, ChartColumn, History, Plus, Search, Workflow } from "lucide-react-native";
-import { memo, useCallback, useMemo, type ComponentType } from "react";
+import { memo, useCallback, useMemo, useRef, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import { View, type StyleProp, type ViewStyle } from "react-native";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
-import { PluginSidebarItemRow } from "@/plugins/sidebar-items";
+import { PluginSidebarItem } from "@/plugins/sidebar-items";
 import { canCreateWorktreeForProjectKind } from "@/projects/host-projects";
 import { useHostFeature } from "@/runtime/host-features";
 import {
@@ -16,6 +16,7 @@ import {
 import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
+import { SidebarNewChatRow } from "./sidebar-new-chat-row";
 import { useWorkspace } from "@/stores/session-store-hooks";
 import {
   buildNewWorkspaceRoute,
@@ -40,19 +41,23 @@ interface SidebarNavRowsProps extends SidebarNavRowProps {
  * wrapper — when every item is hidden.
  */
 export function SidebarNavRows({ style, onBeforeNavigate }: SidebarNavRowsProps) {
-  const { items } = useSidebarNavItems();
+  const { items } = useSidebarNavItems("header");
   const visibleItems = useMemo(() => items.filter((item) => item.visible), [items]);
+  const groupRef = useRef<View | null>(null);
 
   if (visibleItems.length === 0) return null;
 
   return (
-    <View style={style}>
+    <View ref={groupRef} collapsable={false} style={style}>
+      <SidebarNewChatRow onBeforeNavigate={onBeforeNavigate} />
       {visibleItems.map((item) => {
         if (item.kind === "plugin") {
           return (
-            <PluginSidebarItemRow
+            <PluginSidebarItem
               key={item.key}
               group={item.group}
+              section="header"
+              fallbackAnchorRef={groupRef}
               onBeforeNavigate={onBeforeNavigate}
             />
           );

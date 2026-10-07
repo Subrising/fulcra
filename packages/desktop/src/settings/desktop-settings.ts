@@ -6,10 +6,16 @@ import { z } from "zod";
 
 import type { AppReleaseChannel } from "../features/auto-updater.js";
 
+export const DIGEST_MINUTES = [5, 15, 30, 60] as const;
+export type DigestMinutes = (typeof DIGEST_MINUTES)[number];
+
 export interface DesktopSettings {
   releaseChannel: AppReleaseChannel;
   notifications: {
     playSound: boolean;
+    delivery: "immediate" | "digest";
+    /** How often a digest of finished sessions is shown. */
+    digestMinutes: DigestMinutes;
   };
   daemon: {
     manageBuiltInDaemon: boolean;
@@ -34,6 +40,8 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   releaseChannel: "stable",
   notifications: {
     playSound: true,
+    delivery: "immediate",
+    digestMinutes: 15,
   },
   daemon: {
     // Orca connects to its existing controller; opening the app must not start Paseo.
@@ -50,6 +58,12 @@ const ReleaseChannelSchema = z.enum(["stable", "beta"]);
 const NotificationsSchema = z
   .looseObject({
     playSound: z.boolean().catch(DEFAULT_DESKTOP_SETTINGS.notifications.playSound),
+    delivery: z
+      .enum(["immediate", "digest"])
+      .catch(DEFAULT_DESKTOP_SETTINGS.notifications.delivery),
+    digestMinutes: z
+      .union([z.literal(5), z.literal(15), z.literal(30), z.literal(60)])
+      .catch(DEFAULT_DESKTOP_SETTINGS.notifications.digestMinutes),
   })
   .catch(() => ({ ...DEFAULT_DESKTOP_SETTINGS.notifications }));
 
@@ -129,7 +143,11 @@ function buildDefaultDocument(): PersistedDesktopSettingsDocument {
 function toDesktopSettings(stored: StoredDesktopSettings): DesktopSettings {
   return {
     releaseChannel: stored.releaseChannel,
-    notifications: { playSound: stored.notifications.playSound },
+    notifications: {
+      playSound: stored.notifications.playSound,
+      delivery: stored.notifications.delivery,
+      digestMinutes: stored.notifications.digestMinutes,
+    },
     daemon: {
       manageBuiltInDaemon: stored.daemon.commandCentreEnabled || stored.daemon.manageBuiltInDaemon,
       keepRunningAfterQuit:
@@ -151,10 +169,17 @@ function coerceDesktopSettingsPatch(input: unknown): DesktopSettingsPatch {
   }
 
   if (isRecord(input.notifications)) {
+    const notificationPatch: Partial<DesktopSettings["notifications"]> = {};
+    const delivery = input.notifications.delivery;
+    if (delivery === "immediate" || delivery === "digest") notificationPatch.delivery = delivery;
+    const digestMinutes = input.notifications.digestMinutes;
+    if (DIGEST_MINUTES.includes(digestMinutes as DigestMinutes))
+      notificationPatch.digestMinutes = digestMinutes as DigestMinutes;
     const playSound = coerceBoolean(input.notifications.playSound);
     if (playSound !== null) {
-      patch.notifications = { playSound };
+      notificationPatch.playSound = playSound;
     }
+    if (Object.keys(notificationPatch).length > 0) patch.notifications = notificationPatch;
   }
 
   if (isRecord(input.daemon)) {

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { hostDisplayName } from "@/hosts/host-display-name";
+import { describeHostEndpoint } from "@/types/host-connection";
 import { getHostRuntimeStore, useHosts } from "@/runtime/host-runtime";
 import {
   evaluateHostAvailability,
   parseHostAvailability,
+  selectOfflineDuplicateIds,
   serializeHostAvailability,
   type OfflineHostSummary,
 } from "./sidebar-offline-hosts";
@@ -64,6 +66,17 @@ export function useOfflineHosts(): ReadonlyMap<string, OfflineHostSummary> {
         name: hostDisplayName(host),
         since: since === null ? null : new Date(since),
       });
+    }
+    const identities = hosts.map((host) => {
+      const endpoint = host.connections ? describeHostEndpoint(host) : null;
+      return {
+        serverId: host.serverId,
+        identity: endpoint ? `${hostDisplayName(host)}\n${endpoint}` : null,
+      };
+    });
+    for (const id of selectOfflineDuplicateIds(identities, summaries)) {
+      const summary = summaries.get(id);
+      if (summary) summaries.set(id, { ...summary, duplicate: true });
     }
     return summaries;
   }, [hosts, offlineKey, store]);

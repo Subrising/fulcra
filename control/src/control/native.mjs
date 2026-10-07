@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { catalogActivation } from "./catalog-activation.mjs";
 import { boundNativeInputs } from "./trusted-native-input.mjs";
+import { payloadDigest } from "./trusted-contribution.mjs";
 import { receiptFor } from "./receipt.mjs";
 import { completionFor } from "./completion.mjs";
 import { permissionResultFor } from "./permission-result.mjs";
@@ -172,6 +173,41 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       if (!value) throw Error("Native snapshot unavailable");
       return value;
     },
+    cleanupIdle: async (id, observed, archive, intent) => {
+      verifyActivation();
+      const kind = archive ? "archive" : "close",
+        messageId = "orca-cleanup:" + intent;
+      const inputProvenance = await issueProvenance({
+        agentId: id,
+        kind,
+        messageId,
+        attemptId: intent,
+        payloadDigest: payloadDigest(id, kind, messageId, {
+          type: "command",
+          command: kind,
+          arguments: {},
+        }),
+      });
+      verifyActivation();
+      await daemon.cleanupIdleAgent({
+        agentId: id,
+        archive,
+        messageId,
+        inputProvenance,
+        runtimeInstanceId: observed.runtimeInstanceId,
+        updatedAt: observed.updatedAt,
+        lastUserMessageAt: observed.lastUserMessageAt ?? null,
+        boot: observed.inputSequence.boot,
+        humanAt: observed.inputSequence.humanAt,
+      });
+      verifyActivation();
+    },
+    automaticResumeEnabled: async () => {
+      verifyActivation();
+      const { config } = await daemon.getDaemonConfig();
+      verifyActivation();
+      return config.autoResumeOnLimit !== false;
+    },
     quota: async (id) => {
       verifyActivation();
       const quota = await readNativeQuota(client, daemon, id);
@@ -226,6 +262,42 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       });
       verifyActivation();
       return { outcome: r.outcome, reason: r.reason ?? null };
+    },
+    contextRotationState: (id) => daemon.getAgentMcpRefreshState(id),
+    rotateContext: (request) => daemon.rotateAgentContext(request),
+    compactionTail: async (id, cursor) => {
+      verifyActivation();
+      const agent = client.agents.ref(id);
+      await agent.refresh();
+      if (agent.current()?.status !== "running") return null;
+      const page = await agent.timeline.refetch({
+        limit: 128,
+        projection: "canonical",
+        ...(cursor ? { direction: "after", cursor } : {}),
+      });
+      verifyActivation();
+      return {
+        ...page,
+        status: page.agent?.status ?? agent.current()?.status,
+        maxSeq: page.window?.maxSeq,
+      };
+    },
+    // Fresh start: the provider-reported context usage and whether the session is busy. Read-only.
+    contextUsage: async (id) => {
+      verifyActivation();
+      const agent = client.agents.ref(id);
+      await agent.refresh();
+      const snapshot = agent.current();
+      if (!snapshot) return null;
+      const work = snapshot.backgroundWork?.count;
+      return {
+        status: snapshot.status,
+        used: snapshot.lastUsage?.contextWindowUsedTokens ?? null,
+        limit: snapshot.lastUsage?.contextWindowMaxTokens ?? null,
+        background: Number.isInteger(work) && work > 0 ? work : 0,
+        pending: snapshot.pendingPermissions?.length ?? 0,
+        lastUserMessageAt: snapshot.lastUserMessageAt ?? null,
+      };
     },
     // H6 item 6: the session's state and the newest timeline entries, for usage-limit detection. Read-only.
     limitTail: async (id) => {
@@ -407,6 +479,7 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
         lastUserAt: snapshot.lastUserMessageAt ?? null,
         observedAt: new Date().toISOString(),
         lastError: snapshot.lastError ?? null,
+        interruptedTurn: snapshot.interruptedTurn ?? null,
       };
     },
     send: inputs.send,

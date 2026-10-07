@@ -24,6 +24,7 @@ const welcome = {
 async function fixture(
   ownedSubscriptions = true,
   plugins: Array<{ id: string; clientBundle: string }> = [],
+  pluginId = "orca-organization-next",
 ) {
   let socket!: PluginSessionSocket;
   const inbound: Record<string, unknown>[] = [];
@@ -33,7 +34,7 @@ async function fixture(
   const service = await createControllerService(
     {
       async attachPluginSocket(id, peer) {
-        expect(id).toBe("orca-organization-next");
+        expect(id).toBe(pluginId);
         socket = peer;
         peer.on("message", (data) => {
           const frame = JSON.parse(String(data));
@@ -81,6 +82,7 @@ async function fixture(
       },
     },
     {
+      pluginId,
       epoch,
       emit: (frame) => {
         output.push(frame);
@@ -327,3 +329,16 @@ test.skipIf(!catalogReplyPath)(
     await f.client.close();
   },
 );
+
+test("configured identity keeps the real SDK service on its selected plugin and epoch", async () => {
+  const f = await fixture(true, [], "qualified-controller");
+  try {
+    await f.client.connect();
+    expect((await f.client.getPluginCatalog()).plugins).toEqual([]);
+    const hello = f.inbound.find((frame) => frame.type === "hello");
+    expect(hello?.clientId).toContain("qualified-controller");
+  } finally {
+    await f.client.close();
+    f.service.close();
+  }
+});

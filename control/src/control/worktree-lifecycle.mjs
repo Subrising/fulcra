@@ -117,6 +117,7 @@ export class WorktreeLifecycle {
     this.root = path.join(this.home, "tasks");
     this.plans = new Map();
     this.requests = new Map();
+    this.cleanupPreviews = new Map();
     this.busy = false;
     db.exec(
       `CREATE TABLE IF NOT EXISTS cc_job_cleanup(id TEXT PRIMARY KEY,job TEXT NOT NULL,paths TEXT NOT NULL,bytes INTEGER NOT NULL,reason TEXT NOT NULL,at TEXT NOT NULL,state TEXT NOT NULL)`,
@@ -167,7 +168,7 @@ export class WorktreeLifecycle {
   applyRequest(input) {
     const existing = this.requests.get(input.planId);
     if (existing && existing.kind !== "apply") throw Error("Invalid apply token");
-    if (!existing && this.busy) throw Error("Clean-up is already running");
+    if (!existing && (this.busy || this.cleaning)) throw Error("Clean-up is already running");
     const out = this.request(input.planId, () => this.apply(input));
     this.requests.get(input.planId).kind = "apply";
     return out;
@@ -231,7 +232,8 @@ export class WorktreeLifecycle {
           job.state === "live" ? "Session is live or running" : "Session state is unknown",
         );
       if (!finished.length) job.blockers.push("No dated merged pull request or archived session");
-      else if (this.now() - Math.max(...finished) < (days === "never" ? 7 : days) * 86400000)
+      else if (days === "never") job.blockers.push("Keep-time is set to never");
+      else if (this.now() - Math.max(...finished) < days * 86400000)
         job.blockers.push("Retention period has not passed");
       const files = [],
         roots = [];
@@ -484,10 +486,10 @@ export class WorktreeLifecycle {
       candidates,
     };
   }
-  async apply({ planId, confirm }, { automatic = false } = {}) {
+  async apply({ planId, confirm }, { automatic = false, insideCleanup = false } = {}) {
     if (confirm !== true || !this.plans.has(planId))
       throw Error("Preview the clean-up again before confirming");
-    if (this.busy) throw Error("Clean-up is already running");
+    if (this.busy || (this.cleaning && !insideCleanup)) throw Error("Clean-up is already running");
     const plan = this.plans.get(planId);
     this.plans.delete(planId);
     if (this.now() - plan.at > 900000) throw Error("Preview expired; refresh before confirming");
@@ -604,7 +606,121 @@ export class WorktreeLifecycle {
       this.busy = false;
     }
   }
+  // Clean up now is two steps: a preview that changes nothing, then a confirm that acts only on what
+  // that preview showed (each item is re-checked at the moment it is acted on).
+  cleanupRequest(input) {
+    if (input.operationId) {
+      if (this.requests.get(input.operationId)?.kind !== "cleanup")
+        throw Error("Cleanup expired; start again");
+      return this.request(input.operationId);
+    }
+    const key = input.requestId;
+    const existing = this.requests.get(key);
+    if (existing && existing.kind !== "cleanup") throw Error("Cleanup request identity conflict");
+    if (!existing && input.previewId && !this.cleanupPreviews.has(input.previewId))
+      throw Error("Preview expired; start again");
+    const out = this.request(key, () =>
+      input.previewId ? this.cleanNow({ previewId: input.previewId }) : this.previewCleanup(),
+    );
+    this.requests.get(key).kind = "cleanup";
+    return out;
+  }
+  async allSettings() {
+    if (this.settings.getAll) return this.settings.getAll();
+    return {
+      archiveFinished: false,
+      idleMinutes: "never",
+      retentionDays: await this.settings.get(),
+    };
+  }
+  async previewCleanup() {
+    if (this.cleaning || this.busy) throw Error("Clean-up is already running");
+    this.cleaning = true;
+    try {
+      const settings = await this.allSettings();
+      const owned = this.sessions
+        ? await this.sessions.run(settings, { manual: true, preview: true })
+        : { results: [], partial: false };
+      const plan = settings.retentionDays === "never" ? null : await this.dryRun();
+      const removable = (plan?.jobs ?? []).filter((job) => job.eligible);
+      for (const [id, saved] of this.cleanupPreviews)
+        if (saved.at < this.now() - 600000) this.cleanupPreviews.delete(id);
+      const previewId = randomUUID();
+      this.cleanupPreviews.set(previewId, {
+        at: this.now(),
+        sessions: new Set(owned.results.map((r) => r.id)),
+        planId: removable.length ? plan.planId : null,
+      });
+      return {
+        version: 1,
+        observedAt: new Date(this.now()).toISOString(),
+        partial: owned.partial || Boolean(plan?.partial),
+        previewId,
+        results: [
+          ...owned.results,
+          ...removable.map((job) => ({
+            id: job.id,
+            action: "worktree",
+            state: "planned",
+            reason: `${job.label}: worktree and build output will be removed`,
+            bytes: job.bytes,
+          })),
+        ],
+      };
+    } finally {
+      this.cleaning = false;
+    }
+  }
+  async cleanNow({ automatic = false, previewId = null } = {}) {
+    if (this.cleaning || this.busy) throw Error("Clean-up is already running");
+    const preview = previewId ? this.cleanupPreviews.get(previewId) : null;
+    if (!automatic && !preview) throw Error("Preview expired; start again");
+    if (preview) this.cleanupPreviews.delete(previewId);
+    this.cleaning = true;
+    try {
+      const settings = await this.allSettings();
+      const owned = this.sessions
+        ? await this.sessions.run(
+            settings,
+            automatic ? {} : { manual: true, only: preview.sessions },
+          )
+        : { results: [], partial: false };
+      let worktrees = { results: [] };
+      if (settings.retentionDays !== "never") {
+        if (
+          automatic &&
+          (!this.lastWorktreePass || this.now() - this.lastWorktreePass >= 3600000)
+        ) {
+          this.lastWorktreePass = this.now();
+          const plan = await this.dryRun();
+          worktrees = await this.apply(
+            { planId: plan.planId, confirm: true },
+            { automatic, insideCleanup: true },
+          );
+        } else if (!automatic && preview.planId)
+          worktrees = await this.apply(
+            { planId: preview.planId, confirm: true },
+            { insideCleanup: true },
+          );
+      }
+      return {
+        version: 1,
+        observedAt: new Date(this.now()).toISOString(),
+        partial: owned.partial,
+        results: [
+          ...owned.results,
+          ...worktrees.results.map((r) => ({ ...r, action: "worktree" })),
+        ],
+      };
+    } finally {
+      this.cleaning = false;
+    }
+  }
   async automatic() {
+    if (this.sessions) {
+      if (this.cleaning || this.busy) return;
+      return this.cleanNow({ automatic: true });
+    }
     if (this.busy || (await this.settings.get()) === "never") return;
     const plan = await this.dryRun();
     return this.apply({ planId: plan.planId, confirm: true }, { automatic: true });

@@ -1,5 +1,5 @@
-import { useRef, useState, type ReactNode } from "react";
-import { inboxHeadline } from "./inbox-model";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { inboxHeadline, humanInboxItems } from "./inbox-model";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
@@ -227,7 +227,11 @@ export function heldSender(item: InboxItem): string {
   return item.ref ?? item.projectId ?? item.key.slice(5, 41);
 }
 
-export function InboxSurface({ theme, layout }: Pick<PluginSurfaceProps, "theme" | "layout">) {
+export function InboxSurface({
+  theme,
+  layout,
+  host,
+}: Pick<PluginSurfaceProps, "theme" | "layout" | "host">) {
   const read = useContract(inboxRpc),
     c = theme.colors;
   const query = useQuery({
@@ -237,10 +241,17 @@ export function InboxSurface({ theme, layout }: Pick<PluginSurfaceProps, "theme"
     refetchIntervalInBackground: false,
     retry: false,
   });
+  const [allActivity, setAllActivity] = useState(false);
   const [senders, setSenders] = useState<Record<string, boolean>>({});
   const [open, setOpen] = useState<string | null>(null);
   const d = query.data,
     items = d?.items ?? [];
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+  const attention = humanInboxItems(d, now, query.error);
   const pad = layout.compact ? 12 : 24;
   const head = inboxHeadline(d, query.isPending, query.error);
   const renderItem = (item: InboxItem) => (
@@ -328,14 +339,25 @@ export function InboxSurface({ theme, layout }: Pick<PluginSurfaceProps, "theme"
             fontWeight: head.failed ? "600" : "400",
           }}
         >
-          {head.text}
+          {query.isPending || head.failed
+            ? head.text
+            : attention.confirmed.length
+              ? `${attention.confirmed.length} open ${attention.confirmed.length === 1 ? "decision is" : "decisions are"} addressed to you`
+              : "No confirmed unresolved decision is addressed to you in this observation."}
+        </Text>
+        <Text style={{ color: c.foregroundMuted }}>
+          Source: {host?.label ?? "Selected company organisation"}. This shows Inbox items only;
+          Home also shows role and permission needs.
+          {d
+            ? ` ${d.counts.held} held messages are kept for you; reading them does not release them.`
+            : ""}
         </Text>
       </View>
       {head.failed && (
         <Notice colors={c} tone="warning">
           {head.problem ? `${head.problem} ` : ""}
           {head.missing.length ? `Could not be read: ${head.missing.join(", ")}. ` : ""}
-          {d?.stale && d.items.length ? `Last read ${ago(d.observedAt)}. ` : ""}
+          {d && (d.stale || query.isError) ? `Last read ${ago(d.observedAt)}. ` : ""}
           {head.canRetry && (
             <Text
               testID="inbox-retry"
@@ -350,58 +372,91 @@ export function InboxSurface({ theme, layout }: Pick<PluginSurfaceProps, "theme"
           )}
         </Notice>
       )}
-      {GROUPS.map((g) => {
-        const rows = items.filter(g.match);
-        if (g.id === "held") rows.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-        if (!rows.length) return null;
-        return (
-          <View key={g.id} style={{ gap: 8 }}>
-            <Text
-              accessibilityRole="header"
-              style={{
-                color: c.foregroundMuted,
-                fontSize: 13,
-                fontWeight: "700",
-                letterSpacing: 0.6,
-                textTransform: "uppercase",
-              }}
-            >
-              {g.title} · {rows.length}
-            </Text>
-            {g.id === "held"
-              ? [...new Set(rows.map(heldSender))].map((sender) => {
-                  const group = rows.filter((item) => heldSender(item) === sender),
-                    expanded = !!senders[sender];
-                  const name =
-                    /^From (.+?)\. Sent /.exec(group[0].summary)?.[1] ?? "a project lead";
-                  return (
-                    <View key={sender} style={{ gap: 8 }}>
-                      <Pressable
-                        testID={`inbox-sender-${sender}`}
-                        accessibilityRole="button"
-                        accessibilityState={{ expanded }}
-                        accessibilityLabel={`${expanded ? "Hide" : "Show"} ${group.length} held messages from ${name}`}
-                        onPress={() => setSenders({ ...senders, [sender]: !expanded })}
-                        style={{
-                          minHeight: 44,
-                          padding: 12,
-                          borderWidth: 1,
-                          borderColor: c.border,
-                          borderRadius: 12,
-                        }}
-                      >
-                        <Text style={{ color: c.foreground, fontWeight: "600" }}>
-                          {expanded ? "▾" : "▸"} {name} · {group.length} held messages
-                        </Text>
-                      </Pressable>
-                      {expanded && group.map(renderItem)}
-                    </View>
-                  );
-                })
-              : rows.map(renderItem)}
-          </View>
-        );
-      })}
+      <View style={{ gap: 10 }} testID="inbox-personal-decisions">
+        {query.isError && attention.confirmed.length > 0 && (
+          <Text style={{ color: c.foregroundMuted }}>
+            Last-known open decisions; current status could not be checked.
+          </Text>
+        )}
+        {(allActivity ? attention.confirmed : attention.confirmed.slice(0, 3)).map(renderItem)}
+        {!allActivity && attention.confirmed.length > 3 && (
+          <Text style={{ color: c.foregroundMuted }}>
+            More open decisions are available in All activity.
+          </Text>
+        )}
+        {attention.unknown && (
+          <Text style={{ color: c.foregroundMuted }}>
+            Some sources are unavailable or incomplete; other personal actions cannot be ruled out.
+          </Text>
+        )}
+      </View>
+      <Button
+        theme={theme}
+        label={
+          allActivity
+            ? "Hide all activity and history"
+            : `All activity and history (${attention.total} records)`
+        }
+        onPress={() => setAllActivity((value) => !value)}
+      />
+      <Text style={{ color: c.foregroundMuted }}>
+        {attention.retained.length} held updates are retained separately. A held report is not
+        automatically a decision for you.
+      </Text>
+      {allActivity &&
+        GROUPS.map((g) => {
+          const rows = attention.other.filter(g.match);
+          if (g.id === "held")
+            rows.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+          if (!rows.length) return null;
+          return (
+            <View key={g.id} style={{ gap: 8 }}>
+              <Text
+                accessibilityRole="header"
+                style={{
+                  color: c.foregroundMuted,
+                  fontSize: 13,
+                  fontWeight: "700",
+                  letterSpacing: 0.6,
+                  textTransform: "uppercase",
+                }}
+              >
+                {g.title} · {rows.length}
+              </Text>
+              {g.id === "held"
+                ? [...new Set(rows.map(heldSender))].map((sender) => {
+                    const group = rows.filter((item) => heldSender(item) === sender),
+                      expanded = !!senders[sender];
+                    const name =
+                      /^From (.+?)\. Sent /.exec(group[0].summary)?.[1] ?? "a project lead";
+                    return (
+                      <View key={sender} style={{ gap: 8 }}>
+                        <Pressable
+                          testID={`inbox-sender-${sender}`}
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded }}
+                          accessibilityLabel={`${expanded ? "Hide" : "Show"} ${group.length} held messages from ${name}`}
+                          onPress={() => setSenders({ ...senders, [sender]: !expanded })}
+                          style={{
+                            minHeight: 44,
+                            padding: 12,
+                            borderWidth: 1,
+                            borderColor: c.border,
+                            borderRadius: 12,
+                          }}
+                        >
+                          <Text style={{ color: c.foreground, fontWeight: "600" }}>
+                            {expanded ? "▾" : "▸"} {name} · {group.length} held messages
+                          </Text>
+                        </Pressable>
+                        {expanded && group.map(renderItem)}
+                      </View>
+                    );
+                  })
+                : rows.map(renderItem)}
+            </View>
+          );
+        })}
       {d && !items.length && (
         <Text style={{ color: c.foregroundMuted }}>
           When a project needs a decision from you, it appears here.
@@ -614,8 +669,8 @@ export function DecisionCard({
       })}
       {p.state === "open" && bound && (
         <Notice colors={c} tone="warning">
-          Confirm this on your paired device. Pairing arrives with the next Fulcra update; until
-          then this approval waits.
+          This approval needs a paired device. Device pairing isn't available in this version of
+          Fulcra yet, so it waits.
         </Notice>
       )}
       {p.state === "open" && !bound && (
