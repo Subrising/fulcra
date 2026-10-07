@@ -145,6 +145,9 @@ function runtimeServiceTier(agent: {
   features?: readonly { id: string; type: string; value?: unknown }[];
 }): string | null {
   if (agent.provider !== "codex") return null;
+  // Paseo v0.11 selects a speed tier by id; "default" is the standard tier (null here).
+  const tier = agent.features?.find((f) => f.id === "service_tier");
+  if (tier) return typeof tier.value === "string" && tier.value !== "default" ? tier.value : null;
   const feature = agent.features?.find((f) => f.id === "fast_mode" && f.type === "toggle");
   return resolvedServiceTier((feature?.value ?? false) as boolean);
 }

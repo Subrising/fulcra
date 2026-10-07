@@ -19,6 +19,7 @@ export function AgentStepThroughPanel(props: PluginAgentPanelProps) {
           theme={props.theme}
           layout={{ ...props.layout, compact: true }}
           host={props.host}
+          startAtLatest
         />
       )}
     </ScrollView>

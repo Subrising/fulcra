@@ -39,6 +39,14 @@ export class ProviderUsageService {
     this.now = options.now ?? Date.now;
   }
 
+  /** Snapshot only: no fetcher, TTL refresh, credentials, or joining an in-flight request. */
+  observeUsage(): ProviderUsageListResult {
+    return {
+      fetchedAt: new Date(this.now()).toISOString(),
+      providers: structuredClone(this.cached?.result.providers ?? []),
+    };
+  }
+
   async listUsage(options?: { forceRefresh?: boolean }): Promise<ProviderUsageListResult> {
     const nowMs = this.now();
     if (

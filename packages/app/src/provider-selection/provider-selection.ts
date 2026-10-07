@@ -5,7 +5,7 @@ import type {
   ProviderSnapshotEntry,
 } from "@getpaseo/protocol/agent-types";
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
-import type { DraftCommandConfig } from "@/hooks/use-agent-commands-query";
+import type { DraftCommandTarget } from "@/hooks/use-agent-commands-query";
 import { i18n } from "@/i18n/i18next";
 import { compareMatchScores, scoreTextFields } from "@getpaseo/protocol/search/text-match";
 import { filterSelectableModels } from "./model-catalog";
@@ -29,8 +29,13 @@ function buildModelRowKey(provider: string, modelId: string): string {
   return `${provider}:${modelId}`;
 }
 
+export interface ProviderModelSelectionWarning {
+  message: string;
+  fetchedAt?: string;
+}
+
 export type ProviderModelSelection =
-  | { kind: "models"; rows: ProviderSelectionModelRow[] }
+  | { kind: "models"; rows: ProviderSelectionModelRow[]; warning?: ProviderModelSelectionWarning }
   | { kind: "loading" }
   // The host reported the provider's CLI as not available (not installed) — distinct from a CLI that
   // is installed and failed, which stays an error.
@@ -107,6 +112,21 @@ function buildEntryModelSelection(
   entry: ProviderSnapshotEntry,
   label: string,
 ): ProviderModelSelection {
+  const failed = entry.status === "error" || (entry.status === "unavailable" && !!entry.error);
+  if (failed) {
+    const message = entry.error ?? i18n.t("providerSelection.unknownError");
+    const rows = buildModelRows(
+      entry.provider,
+      label,
+      filterSelectableModels(entry.models ?? []) ?? [],
+    );
+    if (rows.length > 0) {
+      const warning: ProviderModelSelectionWarning = { message };
+      if (entry.fetchedAt !== undefined) warning.fetchedAt = entry.fetchedAt;
+      return { kind: "models", rows, warning };
+    }
+    return { kind: "error", message };
+  }
   if ((entry.models?.length ?? 0) > 0) {
     return buildModelSelection(entry.provider, label, entry.models ?? null);
   }
@@ -300,19 +320,22 @@ export function resolveEffectiveComposerThinkingOptionId(
   return selectedModelDefinition?.defaultThinkingOptionId ?? "";
 }
 
-export function buildDraftCommandConfig(input: {
+export function buildDraftCommandTarget(input: {
   selection: ProviderSelectionState;
   cwd: string;
   effectiveModelId: string;
   effectiveThinkingOptionId: string;
   featureValues?: Record<string, unknown>;
-}): DraftCommandConfig | undefined {
+}): DraftCommandTarget {
   const cwd = input.cwd.trim();
-  if (!input.selection.provider || !cwd) {
-    return undefined;
+  if (!cwd) {
+    return { status: "needs-project" };
+  }
+  if (!input.selection.provider) {
+    return { status: "needs-provider" };
   }
 
-  return {
+  const config = {
     provider: input.selection.provider,
     cwd,
     ...(input.selection.modeOptions.length > 0 && input.selection.modeId !== ""
@@ -324,6 +347,7 @@ export function buildDraftCommandConfig(input: {
       : {}),
     ...(input.featureValues ? { featureValues: input.featureValues } : {}),
   };
+  return { status: "ready", config };
 }
 
 export function resolveSubmissionReadiness(input: {

@@ -39,10 +39,16 @@ export interface OrgTree {
 }
 const UNASSIGNED: Owner = { kind: "unassigned", primeSeat: null, remitId: null };
 
-/** "delivery" → "Delivery prime"; "north-america" → "North america prime". A seat slug is not a person. */
+/** "delivery" → "Delivery main assistant"; "north-america" → "North america main assistant". A seat slug is not a person. */
+/** "delivery" reads "Delivery main assistant"; a seat already named main or prime reads "Main assistant". */
 export function primeName(seat: string) {
-  const words = seat.replace(/-/g, " ");
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)} prime`;
+  const words = seat
+    .replace(/-/g, " ")
+    .replace(/\b(main|prime|assistant)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!words) return "Main assistant";
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)} main assistant`;
 }
 
 function list(names: string[]) {

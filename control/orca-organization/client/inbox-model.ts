@@ -49,6 +49,15 @@ export function inboxHeadline(
     .map(([k]) => SECTION_NAMES[k] ?? k);
   const total = d.counts.total;
   const urgent = d.items.filter((i) => i.source !== "held" && i.urgency === "now").length;
+  if (readError !== undefined && readError !== null) {
+    return {
+      text: `The latest inbox read failed. Showing the last inbox that could be read: ${d.partial ? "at least " : ""}${total} in all. Current coverage is unknown.`,
+      failed: true,
+      problem: plain(readError),
+      missing,
+      canRetry: true,
+    };
+  }
   if (d.stale) {
     const never = total === 0 && d.items.length === 0;
     return {
@@ -91,4 +100,35 @@ function plain(e: unknown): string {
   return TECHNICAL.test(m)
     ? `Fulcra could not reach the service that keeps the inbox (${m.slice(0, 80)}).`
     : m.slice(0, 160);
+}
+
+/** Controller inbox only emits open human packets as now/today; closed packets are FYI. Held age is not a personal obligation. */
+export function humanInboxItems(data: InboxData | undefined, now?: number, readError?: unknown) {
+  const listed = data?.items ?? [];
+  const packets = listed.filter(
+    (item) =>
+      item.source === "decision" &&
+      item.urgency !== "fyi" &&
+      /^decision:[a-f\d-]{36}$/i.test(item.ref ?? ""),
+  );
+  const unique = [...new Map(packets.map((item) => [item.ref, item])).values()];
+  const age = now === undefined ? 0 : now - Date.parse(data?.observedAt ?? "");
+  const fresh = Number.isFinite(age) && age >= -5000 && age <= 45000;
+  const confirmed =
+    data && !data.stale && fresh
+      ? unique.sort(
+          (a, b) =>
+            Number(b.urgency === "now") - Number(a.urgency === "now") ||
+            (a.projectId ?? "").localeCompare(b.projectId ?? "") ||
+            a.key.localeCompare(b.key),
+        )
+      : [];
+  const refs = new Set(confirmed.map((item) => item.ref));
+  return {
+    confirmed,
+    other: listed.filter((item) => !refs.has(item.ref)),
+    unknown: !data || data.stale || data.partial || !fresh || readError != null,
+    retained: listed.filter((item) => item.source === "held"),
+    total: data?.counts.total ?? 0,
+  };
 }

@@ -1120,6 +1120,27 @@ export class NativeReportRegistry {
 
   /** One-use exact native self-relaunch. The host supplies the authenticated admission revision, never a wire exemption. */
   captureRelaunch(source: NativeReportIdentity, revision: string) {
+    return this.captureReplacement(source, revision, false);
+  }
+  /** Original host-owned intent permits one fresh native context under the same managed identity. */
+  /** Whether this agent has a report registration to move; "unknown" while the registry cannot be read. */
+  async registrationOf(agentId: string): Promise<"registered" | "unregistered" | "unknown"> {
+    try {
+      await this.initialize(() => {});
+    } catch {
+      return "unknown";
+    }
+    if (!this.state || this.unhealthy || this.updating) return "unknown";
+    return this.find(this.state, agentId) ? "registered" : "unregistered";
+  }
+  captureContextRotation(source: NativeReportIdentity, revision: string) {
+    return this.captureReplacement(source, revision, true);
+  }
+  private captureReplacement(
+    source: NativeReportIdentity,
+    revision: string,
+    contextRotation: boolean,
+  ) {
     if (
       !this.state ||
       this.unhealthy ||
@@ -1138,7 +1159,9 @@ export class NativeReportRegistry {
       attempted = true;
       if (
         nextIdentity.agentId !== source.agentId ||
-        nextIdentity.sessionId !== source.sessionId ||
+        (contextRotation
+          ? nextIdentity.sessionId === source.sessionId
+          : nextIdentity.sessionId !== source.sessionId) ||
         nextIdentity.boot !== source.boot ||
         nextIdentity.instanceId === source.instanceId
       )
@@ -1155,7 +1178,12 @@ export class NativeReportRegistry {
       };
       const receipt = await this.mutate(
         id,
-        { method: "self-relaunch", old: source, next: nextIdentity, revision },
+        {
+          method: contextRotation ? "context-rotation" : "self-relaunch",
+          old: source,
+          next: nextIdentity,
+          revision,
+        },
         { creator: source.agentId, requireAuthority: guard },
         () => guard(),
         (state, epoch) => {

@@ -9,19 +9,19 @@ import { createStub } from "../test-utils/class-mocks.js";
 import { OWNER_PERMISSIONS } from "../authorization/index.js";
 
 // POSIX ownership admission; the paired Win32 case below asserts host refusal.
-test.runIf(process.platform !== "win32")(
-  "M1 distribution provenance pins the runtime instance and refuses ordinary installs, enables and overrides",
-  async () => {
+test.runIf(process.platform !== "win32").each(["orca-organization-next", "qualified-controller"])(
+  "M1 %s distribution provenance pins the runtime instance and refuses ordinary installs, enables and overrides",
+  async (pluginId) => {
     const root = await mkdtemp(path.join(process.cwd(), ".cc-management-fixture-"));
     const bundles = path.join(root, "bundles"),
-      directory = path.join(bundles, "orca-organization-next"),
+      directory = path.join(bundles, pluginId),
       impostor = path.join(root, "user-plugin");
     await mkdir(directory, { recursive: true });
     await mkdir(impostor);
     for (const dir of [directory, impostor]) {
       await writeFile(
         path.join(dir, "paseo-plugin.json"),
-        JSON.stringify({ id: "orca-organization-next", requirements: { paseo: ">=0.8.0" } }),
+        JSON.stringify({ id: pluginId, requirements: { paseo: ">=0.8.0" } }),
       );
       await writeFile(path.join(dir, "index.client.ts"), "export default function setup() {}");
     }
@@ -31,6 +31,7 @@ test.runIf(process.platform !== "win32")(
     );
     const enabledTargets: unknown[] = [];
     const host = await loadTrustedPlugins(bundles, path.join(root, "home"), [], {
+      controllerPluginId: pluginId,
       enabled: (target) => {
         enabledTargets.push(target);
         return true;
@@ -39,9 +40,7 @@ test.runIf(process.platform !== "win32")(
     });
     const runtime = new PluginRuntime(pino({ level: "silent" }), "0.9.1", { trustedBundles: host });
     try {
-      await expect(runtime.startPlugin("orca-organization-next", impostor)).rejects.toThrow(
-        "distribution bundle",
-      );
+      await expect(runtime.startPlugin(pluginId, impostor)).rejects.toThrow("distribution bundle");
       const service = new PluginService(
         pino({ level: "silent" }),
         createStub({
@@ -60,11 +59,9 @@ test.runIf(process.platform !== "win32")(
       await expect(service.installDirectory({ path: impostor, id: "override" })).rejects.toThrow(
         "distribution-owned",
       );
-      await expect(service.enablePlugin("orca-organization-next")).rejects.toThrow(
-        "distribution-owned",
-      );
-      await runtime.startPlugin("orca-organization-next", directory);
-      const target = runtime.managementTarget("orca-organization-next")!;
+      await expect(service.enablePlugin(pluginId)).rejects.toThrow("distribution-owned");
+      await runtime.startPlugin(pluginId, directory);
+      const target = runtime.managementTarget(pluginId)!;
       const invocation = host.management.open(target, () => ({
         id: "owner",
         authentication: "daemon-password",
@@ -75,8 +72,8 @@ test.runIf(process.platform !== "win32")(
       expect(enabledTargets).toContain(target);
       await invocation.invoke("before-swap", { method: "list", input: null });
       await runtime.stopAll();
-      await runtime.startPlugin("orca-organization-next", directory);
-      expect(runtime.managementTarget("orca-organization-next")).not.toBe(target);
+      await runtime.startPlugin(pluginId, directory);
+      expect(runtime.managementTarget(pluginId)).not.toBe(target);
       await expect(
         invocation.invoke("after-swap", { method: "list", input: null }),
       ).rejects.toThrow();
@@ -86,9 +83,7 @@ test.runIf(process.platform !== "win32")(
         path.join(impostor, "index.client.ts"),
         path.join(directory, "index.client.ts"),
       );
-      await expect(runtime.startPlugin("orca-organization-next", directory)).rejects.toThrow(
-        "escaped bundle",
-      );
+      await expect(runtime.startPlugin(pluginId, directory)).rejects.toThrow("escaped bundle");
     } finally {
       await runtime.stopAll();
       host.close();

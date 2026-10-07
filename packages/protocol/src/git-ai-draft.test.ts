@@ -35,3 +35,25 @@ test("Git draft output preserves subject and text limits and truthful refusal", 
     }).success,
   ).toBe(true);
 });
+test("Git draft request and reply accept the registry's real workspace ids", () => {
+  const workspaceId = "wks_16b3cce2fb0fff45";
+  expect(
+    GitAiDraftRequestSchema.safeParse({
+      type: "checkout.git_ai.draft.request",
+      requestId: id,
+      workspaceId,
+      kind: "commit-message",
+    }).success,
+  ).toBe(true);
+  expect(
+    GitAiDraftResponseSchema.safeParse({
+      type: "checkout.git_ai.draft.response",
+      payload: {
+        requestId: id,
+        workspaceId,
+        kind: "commit-message",
+        result: { status: "ok", draft: { kind: "commit-message", message: "Add a glossary note" } },
+      },
+    }).success,
+  ).toBe(true);
+});

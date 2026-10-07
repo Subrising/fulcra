@@ -4,19 +4,27 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { commandCentrePackageOutput } from "./command-centre-output.mjs";
 const url = new URL("./package-command-centre.mjs", import.meta.url);
 const source = fs
   .readFileSync(url, "utf8")
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", JSON.stringify(url.href));
-function calls(env) {
+function calls(env, platform = "linux") {
   const result = [];
   vm.runInNewContext(source, {
     path,
     URL,
     fileURLToPath,
-    process: { argv: ["node", "script", "/reviewed/control"], execPath: "/node", env },
+    process: {
+      argv: ["node", "script", "/reviewed/control"],
+      execPath: "/node",
+      env,
+      platform,
+      arch: "arm64",
+    },
     execFileSync: (...args) => result.push(args),
+    commandCentrePackageOutput,
   });
   return result;
 }
@@ -28,6 +36,30 @@ test("default package location and build scratch stay unchanged", () => {
     false,
   );
   for (const call of result) assert.equal(call[2].env.TMPDIR, "/external/scratch");
+});
+
+test("macOS packaging always gates its own CLI, daemon and cached speech models before delivery", () => {
+  const result = calls(
+    {
+      FULCRA_PACKAGE_OUTPUT: "/scratch/runtime.noindex/output",
+      FULCRA_SPEECH_MODELS: "/cached/models",
+    },
+    "darwin",
+  );
+  assert.deepEqual(
+    [...result.at(-1)[1]],
+    [
+      "scripts/packaged-runtime-gate.mjs",
+      "/scratch/runtime.noindex/output/mac-arm64/Fulcra.app",
+      "/cached/models",
+    ],
+  );
+});
+test("Mac default and override staging exclude candidate apps before builds begin", () => {
+  const result = calls({ HOME: "/private/test" }, "darwin");
+  assert.ok(result.at(-2)[1].some((arg) => arg.endsWith("/packages/desktop/release.noindex")));
+  assert.match(result.at(-1)[1][1], /release\.noindex\/mac-arm64\/Fulcra\.app$/);
+  assert.throws(() => calls({ FULCRA_PACKAGE_OUTPUT: "/scratch/output" }, "darwin"), /\.noindex/);
 });
 test("run-only output and temp overrides apply only to electron-builder", () => {
   const result = calls({

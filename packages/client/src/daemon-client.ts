@@ -1,3 +1,5 @@
+// FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { configuredControllerPluginId } from "@getpaseo/protocol/bundled-controller";
 import { readPagedPluginCatalog } from "./plugin-catalog-paging.js";
 import {
   PluginCatalogPageRequestSchema,
@@ -15,9 +17,12 @@ import {
 } from "@getpaseo/protocol/git-ai-draft";
 import type {
   AgentMcpRefreshInput,
+  AgentContextRotateInput,
+  AgentContextRotateResult,
   AgentMcpRefreshResult,
   AgentMcpRefreshState,
 } from "@getpaseo/protocol/messages";
+import { legacyUsageIcon } from "./legacy-usage-icons.js";
 import { subscribeTimeline, type TimelineMessage } from "./timeline-subscription/index.js";
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
 import {
@@ -123,6 +128,7 @@ import type {
   ProviderDiagnosticResponseMessage,
   ProviderUsageListResponseMessage,
   AgentQuotaReadResponseMessage,
+  UsageReportEntry,
   DaemonGetStatusResponse,
   DaemonGetPairingOfferResponse,
   DaemonConfigReloadResponse,
@@ -152,8 +158,10 @@ import type {
   CheckoutArchitectureGraphGetResponse,
   CheckoutPullRequestReviewDecideResponse,
   CheckoutPullRequestReviewFileDiffResponse,
+  CheckoutPullRequestReviewExplainResponse,
   CheckoutPullRequestReviewGetResponse,
   PullRequestReviewDecisionKind,
+  PullRequestReviewExplainKind,
   InsightsGetResponse,
   AutomationInput,
   AutomationResponse,
@@ -500,6 +508,7 @@ export interface DaemonClientTrace {
 
 export interface SendMessageOptions {
   messageId?: string;
+  /** What happens when the agent is mid-turn. The daemon interrupts the turn when omitted. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: SendAgentMessageRequest["attachments"];
@@ -700,6 +709,10 @@ type GetProvidersSnapshotPayload = GetProvidersSnapshotResponseMessage["payload"
 type RefreshProvidersSnapshotPayload = RefreshProvidersSnapshotResponseMessage["payload"];
 type ProviderDiagnosticPayload = ProviderDiagnosticResponseMessage["payload"];
 type ProviderUsageListPayload = ProviderUsageListResponseMessage["payload"];
+interface UsageListReportsPayload {
+  requestId: string;
+  reports: UsageReportEntry[];
+}
 type DaemonStatusPayload = DaemonGetStatusResponse["payload"];
 type DaemonPairingOfferPayload = DaemonGetPairingOfferResponse["payload"];
 type DiagnosticsPayload = DiagnosticsResponse["payload"];
@@ -1329,7 +1342,7 @@ function toReasonCode(reason: string | null | undefined): string | null {
 }
 
 interface PendingSend {
-  message: SessionInboundMessage;
+  send: () => void;
   resolve: () => void;
   reject: (error: Error) => void;
   timeoutHandle: ReturnType<typeof setTimeout>;
@@ -1375,6 +1388,11 @@ function assertManagedContentOutput(
   ) {
     throw new Error("Managed artifact content encoding does not match its byte length");
   }
+}
+
+// COMPAT(providerUsageList): added in v0.1.98, remove after 2027-03-26.
+export function supportsUsageReports(features: ServerInfoStatusPayload["features"]): boolean {
+  return features?.usageSources === true || features?.providerUsageList === true;
 }
 
 export class DaemonClient {
@@ -2028,12 +2046,23 @@ export class DaemonClient {
    * This prevents waiters from hanging forever when called during connection.
    */
   private sendSessionMessageOrThrow(message: SessionInboundMessage): Promise<void> {
+    return this.sendWhenConnected(() => {
+      const payload = SessionInboundMessageSchema.parse(message);
+      this.sendJsonMessage("session", payload.type, { type: "session", message: payload });
+    });
+  }
+
+  /** Resolves once connected, waiting out a connection that is still being established. */
+  private whenConnected(): Promise<void> {
+    return this.sendWhenConnected(() => undefined);
+  }
+
+  private sendWhenConnected(send: () => void): Promise<void> {
     const status = this.connectionState.status;
 
     // If connected, send immediately
     if (this.transport && status === "connected") {
-      const payload = SessionInboundMessageSchema.parse(message);
-      this.sendJsonMessage("session", payload.type, { type: "session", message: payload });
+      send();
       return Promise.resolve();
     }
 
@@ -2054,7 +2083,7 @@ export class DaemonClient {
           );
         }, DEFAULT_SEND_QUEUE_TIMEOUT_MS);
 
-        this.pendingSendQueue.push({ message, resolve, reject, timeoutHandle });
+        this.pendingSendQueue.push({ send, resolve, reject, timeoutHandle });
       });
     }
 
@@ -2073,8 +2102,7 @@ export class DaemonClient {
       clearTimeout(pending.timeoutHandle);
       try {
         if (this.transport && this.connectionState.status === "connected") {
-          const payload = SessionInboundMessageSchema.parse(pending.message);
-          this.sendJsonMessage("session", payload.type, { type: "session", message: payload });
+          pending.send();
           pending.resolve();
         } else {
           pending.reject(new DaemonConnectionError("Connection lost before message could be sent"));
@@ -2104,6 +2132,8 @@ export class DaemonClient {
     timeout?: number;
     select: (msg: SessionOutboundMessage) => T | null;
     options?: { skipQueue?: boolean };
+    /** An admitted observation must dispatch on this connection, never enter the reconnect queue. */
+    dispatchGuard?: () => void;
   }): Promise<T> {
     const wire = this.owned.prepareRequest(params.message);
     const timeout = params.timeout ?? DEFAULT_SESSION_RPC_TIMEOUT_MS;
@@ -2132,7 +2162,12 @@ export class DaemonClient {
     );
 
     try {
-      await this.sendSessionMessageOrThrow(wire.message);
+      if (params.dispatchGuard) {
+        params.dispatchGuard();
+        this.sendSessionMessageStrict(wire.message);
+      } else {
+        await this.sendSessionMessageOrThrow(wire.message);
+      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       cancel(err);
@@ -3169,6 +3204,21 @@ export class DaemonClient {
     });
   }
 
+  async cleanupIdleAgent(
+    input: Omit<
+      Extract<SessionInboundMessage, { type: "agent.lifecycle.cleanup_idle.request" }>,
+      "type" | "requestId"
+    >,
+  ): Promise<void> {
+    if (this.lastServerInfoMessage?.features?.agentIdleCleanup !== true)
+      throw new Error("Update the host to use idle cleanup");
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.lifecycle.cleanup_idle.response">({
+        message: { type: "agent.lifecycle.cleanup_idle.request", ...input },
+      });
+    if (!payload.accepted) throw new Error(payload.error ?? "Idle cleanup refused");
+  }
+
   async archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
@@ -3497,6 +3547,26 @@ export class DaemonClient {
       options: { skipQueue: true },
       select: (msg) =>
         msg.type === "agent.mcp.refresh.response" && msg.payload.requestId === requestId
+          ? msg.payload
+          : null,
+    });
+  }
+
+  /** Controller-only native rotation; never replay automatically after a timeout. */
+  async rotateAgentContext(input: AgentContextRotateInput): Promise<AgentContextRotateResult> {
+    if (this.lastServerInfoMessage?.features?.agentContextRotation !== true)
+      throw new Error("This host cannot rotate provider contexts; update the host first");
+    const requestId = this.createRequestId();
+    return this.sendRequest({
+      requestId,
+      message: SessionInboundMessageSchema.parse({
+        ...input,
+        type: "agent.context.rotate.request",
+        requestId,
+      }),
+      options: { skipQueue: true },
+      select: (msg) =>
+        msg.type === "agent.context.rotate.response" && msg.payload.requestId === requestId
           ? msg.payload
           : null,
     });
@@ -5574,6 +5644,8 @@ export class DaemonClient {
     if (!bytes) {
       throw new Error("File bytes are required.");
     }
+    // The file frames bypass the send queue, so start only on an open connection.
+    await this.whenConnected();
     const uploadTransport = this.transport;
     const resolvedRequestId = this.createRequestId(input.requestId);
     const modifiedAt = input.modifiedAt ?? new Date().toISOString();
@@ -6061,7 +6133,47 @@ export class DaemonClient {
     accounts?: boolean;
     /** update-7c: the on-demand button; the host still probes an account at most once a minute. */
     refresh?: boolean;
+    /** Read only existing native/cache observations on supporting hosts; never probes. */
+    observationOnly?: boolean;
   }): Promise<ProviderUsageListPayload> {
+    if (options?.observationOnly === true) {
+      if (options.refresh === true)
+        throw new Error("Observation-only usage cannot request a generating refresh");
+      const requestId = this.createRequestId(options.requestId);
+      const message = SessionInboundMessageSchema.parse({
+        type: "provider.usage.list.request",
+        requestId,
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        ...(options.accounts ? { accounts: true } : {}),
+        observationOnly: true,
+      });
+      const host = this.lastServerInfoMessage;
+      const connection = this.connectionState;
+      const assertCurrent = () => {
+        if (
+          this.connectionState !== connection ||
+          connection.status !== "connected" ||
+          this.lastServerInfoMessage !== host ||
+          host?.features?.pooledAccountUsageObservation !== true
+        )
+          throw new Error("Update or reconnect the host for observation-only usage");
+      };
+      assertCurrent();
+      const payload = await this.sendRequest({
+        requestId,
+        message,
+        options: { skipQueue: true },
+        dispatchGuard: assertCurrent,
+        select: (reply) =>
+          reply.type === "provider.usage.list.response" && reply.payload.requestId === requestId
+            ? reply.payload
+            : null,
+      });
+      assertCurrent();
+      if (payload.observationOnly !== true)
+        throw new Error("Host did not return an observation-only usage reply");
+      return payload;
+    }
     return this.sendNamespacedCorrelatedSessionRequest({
       requestId: options?.requestId,
       message: {
@@ -6086,6 +6198,107 @@ export class DaemonClient {
       message: { type: "agent.quota.read.request", agentId },
       timeout: 20_000,
     });
+  }
+
+  async listUsageReports(
+    options?: {
+      agentId?: string;
+      requestId?: string;
+      forceRefresh?: boolean;
+      reportIds?: string[];
+    },
+    onReport?: (report: UsageReportEntry) => void,
+  ): Promise<UsageListReportsPayload> {
+    const features = this.getLastServerInfoMessage()?.features;
+    if (!supportsUsageReports(features)) {
+      throw new Error("Update the host to see usage.");
+    }
+    if (options?.agentId !== undefined && options.reportIds !== undefined)
+      throw new Error("agentId and reportIds cannot be combined");
+    // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-03-26.
+    if (features?.usageSources !== true) {
+      if (options?.agentId !== undefined)
+        return { requestId: this.createRequestId(options.requestId), reports: [] };
+      // Released hosts serve a five-minute cache and have no forceRefresh option.
+      const payload = await this.listProviderUsage({ requestId: options?.requestId });
+      return {
+        requestId: payload.requestId,
+        reports: payload.providers
+          .filter(
+            (provider) => !options?.reportIds || options.reportIds.includes(provider.providerId),
+          )
+          .map((provider) => {
+            // COMPAT(providerUsageList): added in v0.1.98, remove after 2027-03-26.
+            // 0.10 reports have no typed problems; preserve their unavailable badge and error text.
+            let report: UsageListReportsPayload["reports"][number]["report"];
+            if (provider.status === "available") {
+              report = {
+                status: "available",
+                windows: provider.windows,
+                balances: provider.balances ?? undefined,
+                details: provider.details ?? undefined,
+                planLabel: provider.planLabel ?? undefined,
+              };
+            } else if (provider.status === "error") {
+              report = { status: "error", error: provider.error ?? "" };
+            } else {
+              report = {
+                status: "unavailable",
+                problem: { kind: "no_quota", detail: provider.error ?? "" },
+              };
+            }
+            return {
+              id: provider.providerId,
+              sourceId: provider.providerId,
+              sourceLabel: provider.displayName,
+              icon: legacyUsageIcon(provider.providerId),
+              account: {},
+              fetchedAt: provider.fetchedAt ?? payload.fetchedAt,
+              report,
+            };
+          }),
+      };
+    }
+    const requestId = this.createRequestId(options?.requestId);
+    const reports: UsageReportEntry[] = [];
+    let active = true;
+    const unsubscribe = this.subscribeRawMessages((message) => {
+      if (
+        !active ||
+        !("payload" in message) ||
+        !("requestId" in message.payload) ||
+        message.payload.requestId !== requestId
+      )
+        return;
+      if (message.type === "usage.list_reports.response" || message.type === "rpc_error") {
+        active = false;
+        return;
+      }
+      if (message.type !== "usage.list_reports.update") return;
+      reports.push(message.payload.report);
+      onReport?.(message.payload.report);
+    });
+    try {
+      const response = await this.sendRequest({
+        requestId,
+        message: {
+          type: "usage.list_reports.request",
+          requestId,
+          forceRefresh: options?.forceRefresh,
+          reportIds: options?.reportIds,
+          agentId: options?.agentId,
+        },
+        select: (message) =>
+          message.type === "usage.list_reports.response" && message.payload.requestId === requestId
+            ? message.payload
+            : null,
+      });
+      if (response.error !== null) throw new Error(response.error);
+      return { requestId, reports };
+    } finally {
+      active = false;
+      unsubscribe();
+    }
   }
 
   async listCommands(options: ListCommandsOptions): Promise<ListCommandsPayload>;
@@ -6475,6 +6688,26 @@ export class DaemonClient {
     });
   }
 
+  // "In plain words" or pseudocode for one file of a review: model-written on first request, cached on the host, and
+  // capped per day. Hosts without `features.pullRequestReviewExplain` refuse before sending.
+  async explainPullRequestReviewFile(input: {
+    cwd: string;
+    base: string;
+    head: string;
+    path: string;
+    kind: PullRequestReviewExplainKind;
+  }): Promise<CheckoutPullRequestReviewExplainResponse["payload"]> {
+    if (this.getLastServerInfoMessage()?.features?.pullRequestReviewExplain !== true)
+      throw new Error("This host can't explain review files yet. Update Fulcra on that computer.");
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "checkout.pull-request-review.explain.request", requestId, ...input },
+      responseType: "checkout.pull-request-review.explain.response",
+      timeout: 120000,
+    });
+  }
+
   // Records the operator's review decision on the host; posts it to GitHub only when postToGithub is true.
   async decidePullRequestReview(input: {
     cwd: string;
@@ -6856,10 +7089,11 @@ export class DaemonClient {
   /** One explicit owner scratch attempt. A confirmation selects purpose; only the host authenticates it. */
   async simulateRadiusScratch(
     input: RadiusScratchInput | (RadiusScratchInput & { confirmDestructive: true }),
-    options: { signal: AbortSignal; checkOriginalLifetime: () => void },
+    options: { signal: AbortSignal; checkOriginalLifetime: () => void; pluginId?: string },
   ): Promise<RadiusScratchOutput> {
     const host = this.lastServerInfoMessage;
     const { signal, checkOriginalLifetime } = options;
+    const pluginId = configuredControllerPluginId(options.pluginId);
     const check = () => {
       checkOriginalLifetime();
       if (
@@ -6887,7 +7121,7 @@ export class DaemonClient {
       message: {
         type: "plugin.rpc.invoke.request",
         requestId,
-        pluginId: "orca-organization-next",
+        pluginId,
         method: destructive
           ? "organization.radius.scratch.prune-simulate"
           : "organization.radius.scratch.simulate",

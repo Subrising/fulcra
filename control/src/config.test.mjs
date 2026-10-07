@@ -142,3 +142,27 @@ test("lifecycle retention uses V2 config, defaults off and preserves other setti
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("cleanup settings default off, preserve retention and reject invalid limits", async (t) => {
+  const home = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "cc-cleanup-settings-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const env = { ORCA_HOME: home };
+  firstRun(env);
+  const settings = worktreeLifecycleSettings(env);
+  assert.deepEqual(await settings.getAll(), {
+    archiveFinished: false,
+    idleMinutes: "never",
+    retentionDays: "never",
+  });
+  await settings.patch({ archiveFinished: true, idleMinutes: 15 });
+  await settings.set(7);
+  assert.deepEqual(await settings.getAll(), {
+    archiveFinished: true,
+    idleMinutes: 15,
+    retentionDays: 7,
+  });
+  for (const value of [0, -1, 1.2, 10081, "15", null])
+    await assert.rejects(settings.patch({ idleMinutes: value }), /idleMinutes/);
+  await assert.rejects(settings.patch({ archiveFinished: 1 }), /archiveFinished/);
+  await assert.rejects(settings.patch({ path: "outside" }), /settings/);
+});

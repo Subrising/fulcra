@@ -73,7 +73,12 @@ const serve = (
           ? Promise.resolve(created)
           : Promise.reject(new Error(`unexpected ${name}`)),
   );
-const READS = ["organization.projects", "organization.environments"];
+// Deploy, at the top of the tab, reads its own overview; it never runs anything without a confirmed plan.
+const READS = [
+  "organization.projects",
+  "organization.environments",
+  "organization.deploy-overview",
+];
 
 test("the fixture is exactly what organization.environments returns", () => {
   environmentsRpc.output.parse(view());

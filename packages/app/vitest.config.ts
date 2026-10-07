@@ -52,7 +52,10 @@ export default defineConfig({
       },
       {
         extends: true,
+        // Match Expo's automatic JSX runtime throughout the real browser renderer graph.
+        esbuild: { jsx: "automatic", jsxImportSource: "react" },
         optimizeDeps: {
+          esbuildOptions: { jsx: "automatic", jsxImportSource: "react" },
           // Pairing mocks host-runtime, but discovery still scans its dependencies.
           // Keep web dependencies discoverable; these native graphs are unused here.
           exclude: ["expo-router", "expo-modules-core"],

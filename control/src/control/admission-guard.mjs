@@ -234,7 +234,7 @@ export function mcpRefreshAdmissionInStore(db, agent) {
   const authorized = live(session) && management && (!ownGrant || ownGrant.generation === session.generation) || session?.mode === 'human' && switching;
   const allowed = Boolean(!saturated && authorized && session.cwd === agent.cwd && (!pending.length || switching));
   const state = {session,link,owned,parent,grant,ownGrant,permissions,permissionRoot,pending,input:observation(agent.id),parentInput:parent && observation(parent.id),allowed};
-  return {revision:createHash('sha256').update(JSON.stringify(state)).digest('hex'),allowed};
+  return {revision:createHash('sha256').update(JSON.stringify(state)).digest('hex'),allowed,contextRotationAllowed:Boolean(allowed && live(session) && !pending.length)};
 }
 export function mcpRefreshAdmission(agent) {
   let db;

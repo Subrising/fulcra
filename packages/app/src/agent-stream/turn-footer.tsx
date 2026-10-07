@@ -1,7 +1,6 @@
 import React, { memo, useCallback, useMemo, type ReactNode } from "react";
 import { View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { SPACING, type Theme } from "@/styles/theme";
 import type { TurnTiming } from "@/timeline/turn-time";
 import type { StreamItem } from "@/types/stream";
@@ -20,6 +19,14 @@ import type { TurnFooterHost } from "./layout";
 import { AssistantForkMenu } from "@/components/assistant-fork-menu";
 import { SyncedLoader } from "@/components/synced-loader";
 import { useRetainedPanelActive } from "@/components/retained-panel";
+import { PluginTurnFooters } from "@/plugins/timeline/turn-footer";
+import { collectTurnToolCalls } from "./turn-tool-calls";
+
+/** FULCRA(plugin-host): turn-footer seam. Which chat a completed turn belongs to, for plugin turn footers. */
+export interface PluginTurnFooterTarget {
+  serverId: string;
+  agentId: string;
+}
 
 const ThemedSyncedLoader = withUnistyles(SyncedLoader);
 const workingIndicatorColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
@@ -50,6 +57,7 @@ export const TurnFooter = memo(function TurnFooter({
   supportsTimelineCursor,
   onForkAssistantTurn,
   onForkInFlightTurn,
+  pluginTarget,
 }: {
   isRunning: boolean;
   inFlightTurnStartedAt: Date | null;
@@ -58,6 +66,7 @@ export const TurnFooter = memo(function TurnFooter({
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
   onForkInFlightTurn?: InFlightTurnForkHandler;
+  pluginTarget?: PluginTurnFooterTarget;
 }) {
   if (isRunning) {
     return (
@@ -80,6 +89,7 @@ export const TurnFooter = memo(function TurnFooter({
       startIndex={host.startIndex}
       supportsTimelineCursor={supportsTimelineCursor}
       onForkAssistantTurn={onForkAssistantTurn}
+      pluginTarget={pluginTarget}
     />
   );
 });
@@ -91,6 +101,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   startIndex,
   supportsTimelineCursor,
   onForkAssistantTurn,
+  pluginTarget,
 }: {
   strategy: TurnContentStrategy;
   items: StreamItem[];
@@ -98,6 +109,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   startIndex: number;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
+  pluginTarget?: PluginTurnFooterTarget;
 }) {
   return (
     <TurnFooterRow>
@@ -109,6 +121,15 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
         supportsTimelineCursor={supportsTimelineCursor}
         onForkAssistantTurn={onForkAssistantTurn}
       />
+      {pluginTarget ? (
+        <CompletedTurnPluginFooters
+          target={pluginTarget}
+          strategy={strategy}
+          items={items}
+          startIndex={startIndex}
+          durationMs={timing?.durationMs ?? null}
+        />
+      ) : null}
     </TurnFooterRow>
   );
 });
@@ -207,6 +228,33 @@ function CompletedTurnFooter({
   );
 }
 
+function CompletedTurnPluginFooters({
+  target,
+  strategy,
+  items,
+  startIndex,
+  durationMs,
+}: {
+  target: PluginTurnFooterTarget;
+  strategy: TurnContentStrategy;
+  items: StreamItem[];
+  startIndex: number;
+  durationMs: number | null;
+}) {
+  const toolCalls = useMemo(
+    () => collectTurnToolCalls({ strategy, items, startIndex }),
+    [strategy, items, startIndex],
+  );
+  return (
+    <PluginTurnFooters
+      serverId={target.serverId}
+      agentId={target.agentId}
+      toolCalls={toolCalls}
+      durationMs={durationMs}
+    />
+  );
+}
+
 function TurnFooterRow({ children }: { children: ReactNode }) {
   const rowStyle = useMemo(() => [stylesheet.streamItemWrapper, stylesheet.turnFooterRow], []);
   return <View style={rowStyle}>{children}</View>;
@@ -215,7 +263,7 @@ function TurnFooterRow({ children }: { children: ReactNode }) {
 const stylesheet = StyleSheet.create((theme) => ({
   streamItemWrapper: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: theme.contentMaxWidth,
     alignSelf: "center",
     paddingHorizontal: theme.spacing[2],
   },

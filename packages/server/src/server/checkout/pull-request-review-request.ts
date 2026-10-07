@@ -1,4 +1,3 @@
-import path from "node:path";
 import type {
   CheckoutPullRequestReviewDecideRequest,
   CheckoutPullRequestReviewDecideResponse,
@@ -9,8 +8,8 @@ import type {
 } from "@getpaseo/protocol/messages";
 import { getForgeRemoteUrl, getRangeFileDiff } from "../../utils/checkout-git.js";
 import { assertRepoPath } from "../../utils/git-file-at-commit.js";
-import { expandTilde } from "../../utils/path.js";
 import type { PullRequestCommits } from "./architecture-change-request.js";
+import { NOT_SERVED, SHA40, servedCwd } from "./pull-request-review-scope.js";
 import {
   latestDecision,
   readAdwReview,
@@ -27,8 +26,6 @@ type GetPayload = CheckoutPullRequestReviewGetResponse["payload"];
 type DiffPayload = CheckoutPullRequestReviewFileDiffResponse["payload"];
 type DecidePayload = CheckoutPullRequestReviewDecideResponse["payload"];
 
-const SHA40 = /^[0-9a-f]{40}$/;
-
 const GITHUB_REVIEW_EVENT: Record<ReviewDecision["decision"], string> = {
   approve: "APPROVE",
   request_changes: "REQUEST_CHANGES",
@@ -42,18 +39,6 @@ export interface PullRequestReviewDeps {
   paseoHome: string;
   adwHome?: string;
 }
-
-async function servedCwd(cwd: string, deps: PullRequestReviewDeps): Promise<string | null> {
-  const requested = cwd.trim();
-  if (!requested) return null;
-  const resolved = path.resolve(expandTilde(requested));
-  const served = (await deps.listWorkspaceCwds()).some(
-    (known) => path.resolve(expandTilde(known)) === resolved,
-  );
-  return served ? resolved : null;
-}
-
-const NOT_SERVED = "This folder is not a workspace this host serves";
 
 interface ForgeFacts {
   author?: string;

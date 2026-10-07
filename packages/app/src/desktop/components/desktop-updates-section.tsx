@@ -1,4 +1,6 @@
 import { getDaemonStartService } from "@/runtime/daemon-start-service";
+import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
+import { ExplainBudgetCard } from "@/screens/settings/explain-budget-card";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, { type ReactElement, useCallback, useMemo, useState } from "react";
@@ -326,6 +328,7 @@ export function CommandCentreSection() {
 
 function DesktopCommandCentreSection() {
   const { settings, updateSettings, isLoading } = useDesktopSettings();
+  const localServerId = useLocalDaemonServerId();
   const daemonSettings = settings.daemon;
   const [isUpdatingCommandCentre, setIsUpdatingCommandCentre] = useState(false);
   const updateDaemonSettings = useCallback(
@@ -373,6 +376,7 @@ function DesktopCommandCentreSection() {
           />
         </View>
       </View>
+      {localServerId ? <ExplainBudgetCard serverId={localServerId} /> : null}
     </SettingsSection>
   );
 }

@@ -123,6 +123,32 @@ state the situation, concrete options and your recommendation. An answer or
 approval must come from its authorized owner route; do not choose for the user
 or treat a worker's request as approval.
 
+## Deliver changes with ADW's verification loop
+
+Software changes run through ADW's loop by default (`adw` skill; one page:
+`control/docs/adw-verification-loop.md`). The loop is: define the acceptance
+targets, build, verify on the real target, fix, re-verify, until every check
+passes or the iteration cap escalates with the diff to target.
+
+- **Worker:** builds in its own worktree, self-verifies against the acceptance
+  matrix on the real target and records each result with `adw accept record`.
+  It may fix build, compile and test breakage without asking. Its own review
+  loops (Superpowers per-task review, `/complete-work`, GSD code-review) are
+  self-checks, not the independent review.
+- **Lead:** owns the contract and acceptance matrix before work starts, runs ONE
+  whole-candidate review of the integrated candidate, folds every finding and
+  acceptance failure into one repair batch, then runs ONE cumulative-delta
+  review. Never review per fix, slice or commit. Runs `adw gate`.
+- **Prime:** sees the outcome — gate verdict, evidence index, ESCALATE items and
+  owner decisions — and does not re-review or re-sign evidence.
+
+When writing a brief, name the outcome, worktree, files and the acceptance items
+to verify. Do not ask for hand-built receipts, pins, seals, hash packets, intake
+files, ledgers or boards: the ADW ledger, git, CI and test output are the record.
+An ACK means "received, proceeding" and never gates work. Fold every item for a
+worker into one message. Put owner process decisions into the ADW contract or
+policy rather than only into an inbox.
+
 ## Accounts, defaults and usage
 
 Use **Settings → Accounts & Defaults** for the configured provider pool and role

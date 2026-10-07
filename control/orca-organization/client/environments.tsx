@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
-import { RadiusWorkflow } from "./radius-workflow";
+import { DeploySection } from "./deploy";
 import type { RadiusScratchOwnerAdapter } from "../shared/radius-scratch";
 import { projectsRpc } from "../shared/projects";
 import {
@@ -81,9 +81,11 @@ export function EnvironmentsSurface({
   theme,
   layout,
   host,
-  radiusScratchOwner,
+  openPlanId = null,
 }: Pick<PluginSurfaceProps, "theme" | "layout" | "host"> & {
+  // The local-only Radius scratch simulation is superseded by Deploy; the owner adapter is no longer read here.
   radiusScratchOwner?: RadiusScratchOwnerAdapter;
+  openPlanId?: string | null;
 }) {
   const c = theme.colors,
     text = { color: c.foreground },
@@ -190,6 +192,10 @@ export function EnvironmentsSurface({
         Where each version of your work is running. Changes move one step at a time, and only when
         you approve.
       </Text>
+      <DeploySection theme={theme} layout={layout} host={host} openPlanId={openPlanId} />
+      <Text accessibilityRole="header" style={{ ...text, fontSize: 20, fontWeight: "700" }}>
+        Promotion paths
+      </Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
         {list.map((p) => (
           <WorkButton
@@ -220,16 +226,6 @@ export function EnvironmentsSurface({
           No environments are set up for this project yet. Ask its orchestrator to propose them; you
           approve each one.
         </Text>
-      )}
-
-      {d && !d.stale && d.projectId === projectId && (
-        <RadiusWorkflow
-          key={`radius:${host?.id}:${projectId}`}
-          theme={theme}
-          simulate={radiusScratchOwner?.simulate}
-          pruneAndSimulate={radiusScratchOwner?.pruneAndSimulate}
-          checkOriginalLifetime={radiusScratchOwner?.checkOriginalLifetime}
-        />
       )}
 
       {!!envs.length && (

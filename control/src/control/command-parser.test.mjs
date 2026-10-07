@@ -12,7 +12,7 @@ const id = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
 test("parser covers every operator dispatcher case and excludes delegated capability lanes", () => {
   const source = fs.readFileSync(new URL("./rpc.mjs", import.meta.url), "utf8");
   const cases = [
-    ...source.slice(source.indexOf("switch (request.method)")).matchAll(/case '([^']+)'/g),
+    ...source.slice(source.indexOf("switch (request.method)")).matchAll(/case ['"]([^'"]+)['"]/g),
   ].map((m) => m[1]);
   assert.deepEqual(
     [...MANAGEMENT_METHODS].sort(),
@@ -343,4 +343,31 @@ test("content purpose strict owner routes refuse flags, paths and invalid chunk 
         input: { ...read, ...patch },
       }),
     );
+});
+
+test("cleanup settings and now accept no caller paths or runtime identities", () => {
+  assert.deepEqual(
+    parseControllerCommand({ method: "worktree-lifecycle-settings", input: {} }).input,
+    {},
+  );
+  assert.deepEqual(
+    parseControllerCommand({ method: "worktree-lifecycle-now", input: { requestId: id } }).input,
+    { requestId: id },
+  );
+  assert.throws(() =>
+    parseControllerCommand({
+      method: "worktree-lifecycle-now",
+      input: { requestId: id, path: ".." },
+    }),
+  );
+  assert.deepEqual(
+    parseControllerCommand({
+      method: "worktree-lifecycle-now",
+      input: { requestId: id, previewId: id },
+    }).input,
+    { requestId: id, previewId: id },
+  );
+  assert.throws(() =>
+    parseControllerCommand({ method: "worktree-lifecycle-settings", input: { idleMinutes: 0 } }),
+  );
 });

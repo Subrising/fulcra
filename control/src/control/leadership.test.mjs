@@ -208,6 +208,15 @@ test("A to B to A preserves worker identity, origin and allowance, and old inbox
   assert.equal(inbox.handoffs[0].id, a.messageId);
   assert.equal(inbox.handoffs[0].deliveryState, "delivered");
   assert.deepEqual(await f.consume(a), { consumed: true, accepted: false, handoffId: a.messageId });
+  assert.deepEqual(f.c.events.inbox(f.destination, f.token(f.destination, "inbox")).handoffs, []);
+  const history = f.c.events.inbox(f.destination, f.token(f.destination, "inbox"), true).handoffs;
+  assert.equal(history[0].id, a.messageId);
+  assert.equal(history[0].context, a.context);
+  assert.deepEqual(
+    f.c.leadership.summary(f.destination),
+    history,
+    "operator history keeps its existing default",
+  );
   const back = f.input(f.destination, f.source);
   assert.equal((await f.c.leadership.transfer(back)).state, "delivered");
   await f.c.leadership.pump();

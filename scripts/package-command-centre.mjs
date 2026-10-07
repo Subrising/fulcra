@@ -2,7 +2,9 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { commandCentrePackageOutput } from "./command-centre-output.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
+const packageOutput = commandCentrePackageOutput(root, process.env, process.platform);
 const controller = path.resolve(
   process.argv[2] ?? process.env.FULCRA_CONTROL_ROOT ?? path.join(root, "control"),
 );
@@ -33,8 +35,8 @@ run(
     "--config",
     process.env.FULCRA_PACKAGE_CONFIG || "electron-builder.yml",
     "--dir",
-    ...(process.env.FULCRA_PACKAGE_OUTPUT
-      ? [`-c.directories.output=${path.resolve(process.env.FULCRA_PACKAGE_OUTPUT)}`]
+    ...(process.env.FULCRA_PACKAGE_OUTPUT || process.platform === "darwin"
+      ? [`-c.directories.output=${packageOutput}`]
       : []),
     "-c.mac.identity=null",
     "-c.mac.notarize=false",
@@ -49,3 +51,10 @@ run(
       }
     : {},
 );
+if (process.platform === "darwin") {
+  run(process.execPath, [
+    "scripts/packaged-runtime-gate.mjs",
+    path.join(packageOutput, `mac-${process.arch}`, "Fulcra.app"),
+    process.env.FULCRA_SPEECH_MODELS ?? path.join(process.env.HOME, ".paseo/models/local-speech"),
+  ]);
+}

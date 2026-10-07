@@ -465,7 +465,11 @@ export function journalPolicy(observations, { rateSettingsFile = () => undefined
       parentInput: parent && observation(parent.id),
       allowed,
     };
-    return { revision: createHash("sha256").update(JSON.stringify(state)).digest("hex"), allowed };
+    return {
+      revision: createHash("sha256").update(JSON.stringify(state)).digest("hex"),
+      allowed,
+      contextRotationAllowed: Boolean(allowed && live(session) && !pending.length),
+    };
   }
 
   const canonicalPermission = (x) => JSON.stringify(orderPermission(x));

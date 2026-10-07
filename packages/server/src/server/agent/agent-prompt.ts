@@ -84,10 +84,13 @@ async function startOrReplaceRun(
   iterator: AsyncGenerator<import("./agent-sdk-types.js").AgentStreamEvent>;
   replaced: boolean;
 }> {
+  const runOptions = options?.clearPendingPermissions
+    ? { ...options.runOptions, clearPendingQuestions: true }
+    : options?.runOptions;
   const replaced = Boolean(options?.replaceRunning && agentManager.hasInFlightRun(agentId));
   const iterator = replaced
-    ? await agentManager.replaceAgentRun(agentId, prompt, options?.runOptions)
-    : agentManager.streamAgent(agentId, prompt, options?.runOptions);
+    ? await agentManager.replaceAgentRun(agentId, prompt, runOptions)
+    : agentManager.streamAgent(agentId, prompt, runOptions);
   return { iterator, replaced };
 }
 

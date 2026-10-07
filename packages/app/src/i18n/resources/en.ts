@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 export const en = {
   plugins: {
     commandCentreRelay: {
@@ -38,6 +39,7 @@ export const en = {
     total: "{{total}} matches",
   },
   common: {
+    bottomSheetBackdrop: "Bottom sheet backdrop",
     back: "Back",
     loading: "Loading...",
     actions: {
@@ -163,6 +165,8 @@ export const en = {
     },
     attachments: {
       addImage: "Add image",
+      choosePhoto: "Choose photo",
+      takePhoto: "Take photo",
       pasteImage: "Paste image",
       addFile: "Upload file",
       addIssueOrPr: "Add issue or PR",
@@ -452,7 +456,9 @@ export const en = {
       recovery: {
         archivedTitle: "Workspace archived",
         restoreDescription:
-          "{{workspaceName}} was archived and its worktree was removed. Restore branch {{branch}} to open it again.",
+          "Restore {{workspaceName}} to return to its agents. Its worktree will use branch {{branch}}.",
+        restoreWithoutBranchDescription:
+          "Restore {{workspaceName}} to return to its agents. A new branch will start from the saved base or the repository default.",
         unarchiveDescription: "{{workspaceName}} is archived. Unarchive it to open it again.",
         restoreAction: "Restore",
         unarchiveAction: "Unarchive",
@@ -1390,6 +1396,9 @@ export const en = {
       settings: "Settings",
       closeSidebar: "Close sidebar",
     },
+    footer: {
+      usage: "Usage",
+    },
     help: {
       trigger: "Help and support",
       sectionHelp: "Help",
@@ -1785,7 +1794,12 @@ export const en = {
     loadingCommands: "Loading commands...",
     noFiles: "No files or directories found",
     noCommands: "No commands found",
+    accountUnavailable:
+      "Account commands aren't available for this computer yet. Update Fulcra on {{host}}.",
+    thisComputer: "this computer",
     failedToLoad: "Failed to load",
+    chooseProjectForCommands: "Choose a project to see commands",
+    chooseModelForCommands: "Select a model to see commands",
   },
   loadOlderHistory: {
     failed: "Couldn't load older history",
@@ -1795,6 +1809,8 @@ export const en = {
     permissionMessage: "Please allow access to your photo library to attach images.",
     errorTitle: "Error",
     failedToSelect: "Failed to select image",
+    cameraPermissionMessage: "Please allow camera access to take photos.",
+    failedToTakePhoto: "Failed to take photo",
     dialogTitle: "Attach images",
     dialogFilterName: "Images",
   },
@@ -1849,6 +1865,7 @@ export const en = {
     modelCountPlural: "{{count}} models",
     retry: "Retry",
     retrying: "Retrying...",
+    savedModels: "Showing previously loaded {{provider}} models.",
     noMatches: "No models match your search",
     noMatchesForQuery: 'No models match "{{query}}"',
     searchAllPlaceholder: "Search all models...",
@@ -1891,6 +1908,17 @@ export const en = {
     hostPassword: {
       title: "Password for {{host}}",
       label: "Host password",
+    },
+    hostConfirmation: {
+      title: "Connect to this host?",
+      description:
+        "This host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      descriptionChanged:
+        "This link changes how you connect to this host. The host will be able to run code in this app and reach your other connected hosts. Only connect if you recognize it.",
+      hostLabel: "Host",
+      fingerprintLabel: "Key fingerprint",
+      relayLabel: "Relay",
+      connect: "Connect",
     },
     connectionMethods: {
       title: "Add connection",
@@ -1963,6 +1991,12 @@ export const en = {
       helper: "Connect to a Fulcra daemon running on the remote host.",
       fields: {
         target: "SSH host",
+        password: "Daemon password",
+        optional: "Optional",
+      },
+      passwordVisibility: {
+        show: "Show password",
+        hide: "Hide password",
       },
       actions: {
         cancel: "Cancel",
@@ -2184,11 +2218,15 @@ export const en = {
       emptyDescription: "Create a pull request for this checkout to see its details here.",
     },
     architectureMap: {
-      label: "Architecture map",
-      subtitle: "Project architecture",
-      tooltip: "Show the project's architecture map",
+      mainOnly: "Code architecture is a main workspace view. Open it from the + tab menu.",
+      entryUnavailable:
+        "Add a saved code map or connect a host that advertises code graph or change generation.",
+      label: "Code architecture",
+      subtitle: "Code structure & change impact",
+      tooltip: "Show code architecture and change impact",
       emptyTitle: "No architecture map in this project",
-      emptyDescription: "Fulcra shows maps stored in {{directory}}.",
+      emptyDescription:
+        "Add a saved code map under {{directory}}, or connect a host that can generate one. This shows code structure; the Team tab shows project leads and working sessions.",
       oversized: "Too large to show (over 1 MiB): {{names}}",
       truncated: "Only the first 20 maps are listed.",
       listFailed: "Couldn't list architecture maps",
@@ -2201,6 +2239,7 @@ export const en = {
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",
       fit: "Fit",
+      gestureHint: "Pinch or Cmd/Ctrl-scroll to zoom, drag to move, click a part for details.",
       actualSize: "Actual size",
       components: "Components",
       boundaries: "Boundaries",
@@ -2253,6 +2292,32 @@ export const en = {
         packageHint: "Select a package to open its modules.",
         allLevels: "Show all levels",
         showInMap: "Show in map",
+        // What each kind of part is for, as the one line under a box's name.
+        does: {
+          frontend: "Screens people see and use",
+          backend: "Does the work behind the scenes",
+          messagebus: "Passes messages between parts",
+          security: "Guards sign-in and access",
+          database: "Stores and reads data",
+          service: "Shared code other parts use",
+          external: "Code from outside this project",
+        },
+        panel: {
+          whatItDoes: "What it does",
+          connectedTo: "Connected to",
+          inside: "Inside",
+          openCode: "Open code",
+          showCallers: "Show what calls this",
+          showAll: "Show everything again",
+          moreFiles: "and {{count}} more",
+          edgeUses: "uses · {{count}}",
+          edgeVerb: "uses",
+          changedHere: "Changed in this pull request",
+          limitReached: "Today's limit for written explanations is used up.",
+          unavailable: "No written explanation right now.",
+          noResults: "No part has that name.",
+          closeGroup: "Close",
+        },
       },
       review: {
         open: "Review",
@@ -2282,6 +2347,30 @@ export const en = {
           LOW: "Low risk: tests, docs or configuration.",
           NORMAL: "Normal risk: code that {{tests}} tests reach.",
           HIGH: "High risk: code no test reaches, or code this change removes.",
+        },
+        plain: {
+          startHere: "Start here",
+          addedTest: "New test file",
+          addedCode: "New code",
+          addedOther: "New file",
+          deleted: "Removes this file",
+          changedTest: "Changes tests",
+          changedCodeUntested: "Changes code no test reaches",
+          changedCodeTested: "Changes code that {{tests}} tests reach",
+          changedOther: "Changes docs or settings",
+          lookHere: "Look here",
+          nothingFlagged: "Nothing here matches the look-here rules.",
+          beforeApprove: "Before you approve",
+          line: "Line {{line}}",
+          inPlainWords: "In plain words",
+          pseudocode: "Pseudocode of the change",
+          showPseudocode: "Show pseudocode of the change",
+          explainFile: "Explain this file",
+          writing: "Writing…",
+          limitReached:
+            "Today's limit for written explanations is used up. The flags below still apply.",
+          unavailable: "No written explanation right now. The flags below still apply.",
+          usedToday: "{{used}} of {{limit}} written explanations used today",
         },
         loadingDiff: "Loading the changes…",
         noDiff: "No text changes to show for this file.",
@@ -2366,7 +2455,7 @@ export const en = {
         },
         viewMap: "Map",
         viewChange: "Change",
-        openFromPullRequest: "Architecture change",
+        openFromPullRequest: "Code change impact",
         openFromPullRequestHint: "Shows what this pull request changes in the system map",
         title: "What this change does to the system",
         comparedWith: "Compared with {{base}}",
@@ -2489,7 +2578,10 @@ export const en = {
   sidebarCallout: {
     dismiss: "Dismiss",
   },
+  usagePanel: usagePanelCopy["en"],
   contextWindow: {
+    noData: "No context data",
+    accessibilityNoData: "Context window: No context data",
     title: "Context window",
     used: "{{percentage}}% used",
     tokens: "{{used}} / {{max}} tokens",
@@ -2515,6 +2607,69 @@ export const en = {
     groups: {
       app: "App",
       host: "Host",
+    },
+    menu: {
+      everyday: "Settings",
+      advanced: "Advanced",
+      showAdvanced: "Show advanced settings",
+      hideAdvanced: "Hide advanced settings",
+      groups: {
+        chats: "Chats",
+        tools: "Tools",
+        team: "Fulcra team",
+        computer: "This computer",
+        help: "Help",
+      },
+      labels: {
+        accounts: "Accounts & models",
+        general: "Appearance & language",
+        behaviour: "Sending & opening",
+        service: "Background service",
+        chat: "Chat display",
+        browser: "Built-in browser",
+        shortcuts: "Keyboard shortcuts",
+        integrations: "Command line",
+        permissions: "Mac permissions",
+        diagnostics: "Troubleshooting",
+        pairDevice: "Pair a phone",
+        agents: "Agent tools",
+        metadata: "Auto titles & messages",
+        providers: "AI providers",
+        terminals: "Terminal profiles",
+      },
+      descriptions: {
+        accounts: "Sign in to Claude and Codex, and pick each role's model and effort.",
+        general: "Theme, text size and the app's language.",
+        notifications: "When Fulcra alerts you and how.",
+        behaviour: "What Enter does while an agent works, and where clicked files open.",
+        service: "Keep Fulcra's team features running when the window is closed.",
+        chat: "How agent messages and tool steps are shown.",
+        sidebar: "Which shortcuts appear in the left sidebar.",
+        terminal: "Font, size and scrollback for terminals.",
+        browser: "Clear the built-in browser's cookies and saved data.",
+        editor: "Which code editor opens your files.",
+        shortcuts: "See and change keyboard shortcuts.",
+        integrations: "Install the fulcra command for your terminal.",
+        permissions: "Microphone and other access this Mac has granted Fulcra.",
+        diagnostics: "Collect a report or test sound when something isn't working.",
+        about: "Version, updates and licences.",
+        licenses: "Open-source licences used by Fulcra.",
+        host: "Name, status and removal of this computer.",
+        projects: "The folders Fulcra works in on this computer.",
+        connections: "How this device reaches the computer.",
+        pairDevice: "Show a code to connect your phone.",
+        agents: "Extra tools and standing instructions given to every agent.",
+        metadata: "The model that writes titles, branch names and commit messages.",
+        workspaces: "Where new workspaces are created and how they're set up.",
+        providers: "Turn agent apps on or off and check they're installed.",
+        usage: "How much of each plan has been used.",
+        terminals: "Saved shells and start-up commands for terminals.",
+        plugins: "Add-ons installed on this computer.",
+        trackers: "Connect GitHub, Linear and other issue trackers.",
+        cleanup: "Tidy away finished work and unused worktrees.",
+        devices: "Phones and computers that can confirm answers are yours.",
+        channels: "Chat apps that can send you updates and take replies.",
+      },
     },
     hostPicker: {
       switchHost: "Switch host",
@@ -2595,6 +2750,11 @@ export const en = {
       refreshAccessibility: "Refresh notification permission",
       playSound: "Play sound",
       playSoundHint: "Play a sound when a desktop notification arrives",
+      digest: "Group finished sessions",
+      digestHint:
+        "Show one summary of finished sessions instead of an alert for each. Approvals and errors still alert right away.",
+      digestFrequency: "How often",
+      digestEvery: "{{count}} min",
       test: "Test notification",
       testHint: "Send a notification using these settings",
       permissionRequired: "Allow notification access before testing",
@@ -2623,6 +2783,7 @@ export const en = {
         offline: "Connect to this host to open plugin settings.",
         update: "Update this host to use plugin settings.",
         unavailable: "This plugin settings screen is unavailable.",
+        backToPlugins: "Back to plugins",
       },
       trustedTitle: "Plugins are trusted code",
       trustedDescription:
@@ -2849,8 +3010,15 @@ export const en = {
         description: "Show an outline for jumping between prompts",
       },
       sidebar: {
-        title: "Sidebar",
-        description: "Choose which items appear at the top of the sidebar and in what order",
+        header: {
+          title: "Header",
+          description: "Choose which items appear at the top of the sidebar and in what order",
+        },
+        footer: {
+          title: "Footer",
+          description:
+            "Choose which rows appear at the bottom of the sidebar and in what order. Add project and the icon row always show",
+        },
         moveUp: "Move up",
         moveDown: "Move down",
       },
@@ -2873,6 +3041,14 @@ export const en = {
         codeSize: "Code size",
         codeSizeHint: "Used for code, diffs, and terminal output",
         codeSizeAccessibility: "Code font size",
+      },
+      layout: {
+        title: "Layout",
+        contentWidth: "Content width",
+        contentWidthHint: "Max width of chat and Markdown files on wide screens",
+        contentWidthAccessibility: "Content width in pixels",
+        reset: "Reset",
+        resetAccessibility: "Reset content width to default",
       },
       syntax: {
         title: "Syntax",

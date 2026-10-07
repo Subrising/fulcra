@@ -721,3 +721,19 @@ test("W1-2: a verified plugin input admitted inside shutdownClosure carries no c
   expect(seen[0]?.source).toBe("plugin");
   expect("cause" in (seen[0] ?? {})).toBe(false);
 });
+
+test("the plugin's context-rotation answer reaches the manager; absent or false refuses", () => {
+  let rotate: boolean | undefined = true;
+  const f = fixture((server) =>
+    server.admission.mcpRefresh(() => ({
+      allowed: true,
+      revision: "one",
+      ...(rotate === undefined ? {} : { contextRotationAllowed: rotate }),
+    })),
+  );
+  expect(f.host.mcpRefresh(f.live).contextRotationAllowed).toBe(true);
+  rotate = false;
+  expect(f.host.mcpRefresh(f.live).contextRotationAllowed).toBe(false);
+  rotate = undefined;
+  expect(f.host.mcpRefresh(f.live).contextRotationAllowed).toBe(false);
+});

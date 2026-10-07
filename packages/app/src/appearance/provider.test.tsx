@@ -55,6 +55,7 @@ vi.mock("react-native", () => ({
 vi.mock("react-native-unistyles", () => ({ UnistylesRuntime: bridge.runtime }));
 vi.mock("@/hooks/use-settings", () => ({
   DEFAULT_THEME_PREFERENCE: "auto",
+  resolveContentMaxWidth: () => 820,
   useAppSettings: () => ({
     settings: bridge.settings,
     isLoading: bridge.isLoading,

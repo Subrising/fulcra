@@ -32,16 +32,50 @@ export interface CodexQuotaBinding {
   revision: number;
 }
 
+type CodexQuotaErrorCode =
+  | "unavailable"
+  | "session_changed"
+  | "account_changed"
+  | "read_failed"
+  | "invalid_reply"
+  | "admission_refused";
+
+// Messages reach users ("Failed to create agent: ..."); callers branch on `code`.
+const CODEX_QUOTA_ERROR_MESSAGES: Record<CodexQuotaErrorCode, string> = {
+  unavailable: "Couldn't verify the Codex account: the session isn't ready. Try again.",
+  session_changed:
+    "The Codex session kept changing while its account was checked, so the turn wasn't sent. Try again.",
+  account_changed:
+    "The Codex account changed while the turn was starting, so the turn wasn't sent. Check the signed-in account and try again.",
+  read_failed: "Couldn't verify the Codex account: the usage check failed. Try again.",
+  invalid_reply: "Couldn't verify the Codex account: Codex returned an unreadable usage reply.",
+  admission_refused: "The Codex turn wasn't admitted, so it wasn't sent.",
+};
+
+type CodexQuotaReadFailureCode = "unavailable" | "read_failed" | "invalid_reply";
+
+// A failed pre-turn quota read still refuses as `admission_refused` (definite no-dispatch),
+// but the message names the read that failed instead of implying a policy or capacity refusal.
+const CODEX_QUOTA_READ_REFUSAL_MESSAGES: Record<CodexQuotaReadFailureCode, string> = {
+  unavailable:
+    "The Codex turn wasn't sent: the session wasn't ready for its account check. Try again.",
+  read_failed: "The Codex turn wasn't sent: the Codex account usage check failed. Try again.",
+  invalid_reply: "The Codex turn wasn't sent: Codex returned an unreadable usage reply.",
+};
+
 export class CodexQuotaError extends Error {
   constructor(
-    readonly code:
-      | "unavailable"
-      | "session_changed"
-      | "read_failed"
-      | "invalid_reply"
-      | "admission_refused",
+    readonly code: CodexQuotaErrorCode,
+    /** Account observed by a read that went stale; set only on `session_changed`. */
+    readonly staleAccountScope?: string | null,
+    /** The quota read failure behind an `admission_refused`; diagnostic only, never authority. */
+    readonly readFailure?: CodexQuotaReadFailureCode,
   ) {
-    super(`Codex session quota ${code}`);
+    super(
+      code === "admission_refused" && readFailure
+        ? CODEX_QUOTA_READ_REFUSAL_MESSAGES[readFailure]
+        : CODEX_QUOTA_ERROR_MESSAGES[code],
+    );
     this.name = "CodexQuotaError";
   }
 }
@@ -70,13 +104,14 @@ export async function readCodexQuota(
     after?.model === before.model &&
     after?.serviceTier === before.serviceTier &&
     after?.revision === before.revision;
-  if (!unchanged) throw new CodexQuotaError("session_changed");
   const parsed = ResponseSchema.safeParse(raw);
+  if (!unchanged) {
+    const staleScope = parsed.success ? hashAccountScope(parsed.data.accountId) : undefined;
+    throw new CodexQuotaError("session_changed", staleScope);
+  }
   if (!parsed.success) throw new CodexQuotaError("invalid_reply");
   const response = parsed.data;
-  const accountScope = response.accountId
-    ? `codex:${createHash("sha256").update(response.accountId).digest("hex")}`
-    : null;
+  const accountScope = hashAccountScope(response.accountId);
   // The native response binds ordinary permission to the active account. It does not
   // grant model-specific capacity or authorize credits, reserve usage or a model switch.
   const ordinaryUsageAllowed = accountScope ? (response.ordinaryUsageAllowed ?? null) : null;
@@ -102,6 +137,10 @@ export async function readCodexQuota(
   };
 }
 
+function hashAccountScope(accountId: string | null | undefined): string | null {
+  return accountId ? `codex:${createHash("sha256").update(accountId).digest("hex")}` : null;
+}
+
 interface CodexTurnAdmission {
   check: ((quota: AgentQuotaSnapshot) => true) | CapturedCodexAdmission;
   turn?: TrustedCodexTurnV11 | null;
@@ -123,7 +162,8 @@ export function assertCodexTurnAdmission({
   const preparedQuotaMatches =
     parameters.threadId === quota.sessionId &&
     (parameters.model ?? null) === quota.model &&
-    (parameters.serviceTier ?? null) === quota.serviceTier;
+    // Paseo sends "default" for the standard tier where the snapshot records none.
+    (parameters.serviceTier ?? "default") === (quota.serviceTier ?? "default");
   if (!preparedQuotaMatches) throw new CodexQuotaError("admission_refused");
   const verdict: unknown =
     typeof check === "function" ? check(quota) : checkCapturedAdmission(check, turn, quota);
@@ -168,12 +208,10 @@ export async function readCodexTurnQuota(options: {
         // The failed callback cannot establish a durable retry receipt or permit dispatch.
       }
     }
-    throw new CodexQuotaError("admission_refused");
+    throw new CodexQuotaError("admission_refused", undefined, error.code);
   }
 }
-function isQuotaReadFailure(
-  code: CodexQuotaError["code"],
-): code is "unavailable" | "read_failed" | "invalid_reply" {
+function isQuotaReadFailure(code: CodexQuotaError["code"]): code is CodexQuotaReadFailureCode {
   return code === "unavailable" || code === "read_failed" || code === "invalid_reply";
 }
 
@@ -196,6 +234,10 @@ export function capturedCodexTurn(
     instanceId: admission.instanceId,
     nativeSessionId,
     model: typeof parameters.model === "string" ? parameters.model : null,
-    serviceTier: typeof parameters.serviceTier === "string" ? parameters.serviceTier : null,
+    // Paseo sends "default" for the standard tier; Fulcra's turn identity records it as null.
+    serviceTier:
+      typeof parameters.serviceTier === "string" && parameters.serviceTier !== "default"
+        ? parameters.serviceTier
+        : null,
   });
 }

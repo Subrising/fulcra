@@ -53,7 +53,7 @@ export class ProofRefused extends Error {}
 // Owner-capable chat channels (opened with a device proof) are gated the same way.
 export const FIRST_DEVICE_PAIRING = false;
 export const HOST_DEVICE_FEATURE = "devicePairing";
-export const PAIRING_OFF = "Pairing arrives with the next Fulcra update";
+export const PAIRING_OFF = "Device pairing isn't available in this version of Fulcra yet";
 
 // ES256 over canonical JSON. The signature is base64 of either the raw 64-byte r||s form (WebCrypto) or DER (Apple's
 // Security framework); both are accepted, nothing else. The key must be a P-256 SPKI.

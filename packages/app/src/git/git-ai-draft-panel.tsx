@@ -15,6 +15,8 @@ export interface GitAiDraftPanelProps {
   disabled?: boolean;
   requestDraft: (kind: GitAiDraftKind) => Promise<GitAiDraft>;
   onUseDraft: (draft: GitAiTextDraft) => void;
+  /** Opened from Commit or Create PR: write that draft at once and hand it straight to the editor below. */
+  startWith?: "commit-message" | "pull-request";
 }
 
 export function GitAiDraftPanel(props: GitAiDraftPanelProps) {
@@ -37,9 +39,9 @@ function GitAiDraftPanelSession(props: GitAiDraftPanelProps) {
     () =>
       (
         [
-          ["commit-message", "Draft commit message"],
-          ["pull-request", "Draft PR description"],
-          ["conflict-help", "Explain conflicts"],
+          ["commit-message", "Draft a commit message"],
+          ["pull-request", "Draft a pull request"],
+          ["conflict-help", "Explain the conflicts"],
         ] as const
       ).map(([kind, label]) => ({
         kind,
@@ -58,20 +60,43 @@ function GitAiDraftPanelSession(props: GitAiDraftPanelProps) {
     }),
     [model],
   );
+  const startWith = props.startWith;
+  const start = useMemo(
+    () => (startWith ? () => void model.request(startWith).then(() => model.useDraft()) : null),
+    [model, startWith],
+  );
   useEffect(() => {
     model.activate();
+    start?.();
     return () => model.dispose();
-  }, [model]);
+  }, [model, start]);
   const pending = state.phase === "pending";
   const draft = state.draft;
 
+  if (start)
+    return (
+      <View style={styles.root} testID="git-ai-draft-panel">
+        {pending ? (
+          <Text accessibilityRole="text" style={styles.hint}>
+            Writing a draft from your changes…
+          </Text>
+        ) : null}
+        {state.error ? (
+          <>
+            <Text accessibilityRole="alert" style={styles.error}>
+              {state.error}
+            </Text>
+            <Button variant="outline" size="sm" disabled={props.disabled} onPress={start}>
+              Try again
+            </Button>
+          </>
+        ) : null}
+      </View>
+    );
+
   return (
     <View style={styles.root} testID="git-ai-draft-panel">
-      <Text style={styles.label}>AI Git help</Text>
-      <Text style={styles.hint}>
-        Generate a suggestion, review it and edit it. Nothing is committed, published or resolved
-        here.
-      </Text>
+      {/* The sheet around this panel carries the title and the one-line explanation. */}
       <View style={styles.actions}>
         {actions.map(({ kind, label, onPress }) => (
           <Button
@@ -87,7 +112,7 @@ function GitAiDraftPanelSession(props: GitAiDraftPanelProps) {
       </View>
       {pending ? (
         <Text accessibilityRole="text" style={styles.hint}>
-          Generating draft…
+          Writing a draft from your changes…
         </Text>
       ) : null}
       {state.error ? (
@@ -128,7 +153,7 @@ function GitAiDraftPanelSession(props: GitAiDraftPanelProps) {
       ) : null}
       {draft && draft.kind !== "conflict-help" ? (
         <Button variant="secondary" size="sm" disabled={props.disabled} onPress={model.useDraft}>
-          Use draft in editor
+          Use this draft
         </Button>
       ) : null}
     </View>
@@ -138,7 +163,6 @@ function GitAiDraftPanelSession(props: GitAiDraftPanelProps) {
 const styles = StyleSheet.create((theme) => ({
   root: { gap: theme.spacing[2] },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: theme.spacing[2] },
-  label: { color: theme.colors.foreground, fontSize: theme.fontSize.base, fontWeight: "500" },
   hint: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
   advice: { color: theme.colors.foreground, fontSize: theme.fontSize.content },

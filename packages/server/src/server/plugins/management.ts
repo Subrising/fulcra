@@ -1,3 +1,4 @@
+import { configuredControllerPluginId } from "@getpaseo/protocol/bundled-controller";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { boundedJson } from "./controller-frames.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -28,6 +29,8 @@ export interface ManagementTarget {
   isCurrent(): boolean;
 }
 export interface ManagementStartup {
+  /** FULCRA(trusted-bundle): immutable embedding-host selector, never a wire label or grant. */
+  readonly controllerPluginId?: string;
   enabled(target: ManagementTarget): boolean;
   validate(command: ControllerManagementCommandV11): ControllerManagementCommandV11;
   /** D13: whether a validated command is a controller READ. Absent (an older distribution): no read-only management. */
@@ -57,7 +60,6 @@ interface Invocation {
   /** D13: opened for a read-only principal; every command must be a read. */
   readOnly: boolean;
 }
-const CONTROLLER = "orca-organization-next";
 
 const dispatchScope = new AsyncLocalStorage<
   (command: ControllerManagementCommandV11, principal: ManagementPrincipalV11) => void
@@ -74,6 +76,7 @@ export function consumeManagementDispatch(
 
 /** Host-only authority. Configuration and registration are never reachable over plugin RPC. */
 export class ManagementAuthority {
+  readonly controllerPluginId: string;
   private bridge?: Bridge;
   private handoffObserver?: (sourceId: string, operationId: string) => (() => void) | undefined;
 
@@ -93,6 +96,12 @@ export class ManagementAuthority {
   private readonly accountActions?: AccountActionSink;
 
   constructor(config?: ManagementStartup, options?: { accountActions?: AccountActionSink }) {
+    this.controllerPluginId = configuredControllerPluginId(config?.controllerPluginId);
+    Object.defineProperty(this, "controllerPluginId", {
+      value: this.controllerPluginId,
+      writable: false,
+      configurable: false,
+    });
     this.config = config && Object.freeze({ ...config });
     this.accountActions = options?.accountActions;
   }
@@ -100,7 +109,7 @@ export class ManagementAuthority {
     try {
       return (
         !!target &&
-        target.pluginId === CONTROLLER &&
+        target.pluginId === this.controllerPluginId &&
         !!target.bundleDirectory &&
         target.isCurrent() &&
         this.config?.enabled(target) === true
@@ -110,7 +119,12 @@ export class ManagementAuthority {
     }
   }
   register(pluginId: string, bridge: Bridge): void {
-    if (pluginId !== CONTROLLER || this.bridge || this.stopped || typeof bridge !== "function")
+    if (
+      pluginId !== this.controllerPluginId ||
+      this.bridge ||
+      this.stopped ||
+      typeof bridge !== "function"
+    )
       throw new Error("Invalid management bridge");
     this.bridge = bridge;
   }
@@ -169,7 +183,7 @@ export class ManagementAuthority {
     const readOnly = mode?.readOnly === true;
     if (
       this.stopped ||
-      pluginId !== CONTROLLER ||
+      pluginId !== this.controllerPluginId ||
       !this.bridge ||
       !this.enabled(target) ||
       !principal ||

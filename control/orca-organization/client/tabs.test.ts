@@ -6,6 +6,9 @@ import {
   PILLARS,
   SETTINGS_VIEWS,
   readyPillars,
+  primaryPillars,
+  extraPillars,
+  setSettingsInApp,
   tabTestId,
 } from "./tabs";
 
@@ -13,10 +16,11 @@ test("the Command Centre tabs are in the agreed order, and only ready ones are s
   assert.deepEqual(
     PILLARS.map((p) => p.label),
     [
-      "Today",
-      "Organisation",
+      "Home",
+      "Projects",
+      "Team",
       "Inbox",
-      "Changes",
+      "Changes & impact",
       "Environments",
       "Sessions",
       "Trackers",
@@ -30,6 +34,7 @@ test("the Command Centre tabs are in the agreed order, and only ready ones are s
     [
       "today",
       "organisation",
+      "team",
       "inbox",
       "changes",
       "environments",
@@ -40,8 +45,8 @@ test("the Command Centre tabs are in the agreed order, and only ready ones are s
   );
   assert.deepEqual(
     SETTINGS_VIEWS.map((v) => v.key),
-    ["cleanup", "accounts", "devices", "channels"],
-  ); // update-7: Accounts & Defaults
+    ["accounts", "cleanup", "devices", "channels"],
+  ); // update-7: Accounts & models
   assert.deepEqual(
     readyPillars([{ key: "inbox", label: "Inbox", ready: false, legacyKey: null }]),
     [],
@@ -74,4 +79,36 @@ test("every earlier tab id survives the regroup, and the new ones follow the sam
   for (const added of ["today", "organisation", "changes", "environments", "sessions", "settings"])
     assert.ok(ids.includes(`organization-tab-${added}`), added);
   assert.equal(new Set(ids).size, ids.length, "no id is used twice");
+});
+
+test("task-first primary navigation preserves every extra route behind More", () => {
+  assert.deepEqual(
+    primaryPillars().map((p) => p.label),
+    ["Home", "Projects", "Team", "Changes & impact", "Settings"],
+  );
+  assert.deepEqual(
+    extraPillars().map((p) => p.key),
+    ["inbox", "environments", "sessions", "trackers"],
+  );
+  assert.deepEqual(
+    new Set([...primaryPillars(), ...extraPillars()].map((p) => p.key)),
+    new Set(readyPillars().map((p) => p.key)),
+  );
+});
+
+test("the Settings tab steps aside when the app shows Fulcra's settings pages", () => {
+  setSettingsInApp(true);
+  try {
+    assert.deepEqual(
+      primaryPillars().map((p) => p.key),
+      ["today", "organisation", "team", "changes"],
+    );
+    assert.equal(
+      extraPillars().some((p) => p.key === "settings"),
+      false,
+    );
+  } finally {
+    setSettingsInApp(false);
+  }
+  assert.equal(primaryPillars().at(-1)?.key, "settings");
 });

@@ -54,6 +54,8 @@ export class RoleChannels {
       CREATE TABLE IF NOT EXISTS role_held_notices(messageId TEXT PRIMARY KEY,seat TEXT NOT NULL,fromSeat TEXT NOT NULL,at TEXT NOT NULL,outcome TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS seat_operator_acts(id TEXT PRIMARY KEY,kind TEXT NOT NULL,channel TEXT NOT NULL,seat TEXT NOT NULL,seatRevision INTEGER NOT NULL,holderSession TEXT NOT NULL,holderGeneration INTEGER NOT NULL,parent TEXT NOT NULL,toSession TEXT,toGeneration INTEGER,text TEXT NOT NULL,state TEXT NOT NULL,failure TEXT,readAt TEXT,readNote TEXT,at TEXT NOT NULL);
       `);
+    this.db.exec("CREATE TABLE IF NOT EXISTS role_channel_passive(messageId TEXT PRIMARY KEY)");
+    assertColumns(this.db, "role_channel_passive", "messageId");
     // One live reply and one receipt per parent. PARTIAL, so a reply that admitted nothing ('void-reply', F4)
     // frees its parent instead of burning it. 0ad8104c8 created this index without the WHERE clause; that
     // commit was never released, but a journal it touched is migrated here rather than refused.
@@ -164,6 +166,11 @@ export class RoleChannels {
   }
   row(id) {
     return this.db.prepare("SELECT * FROM role_channels WHERE id=?").get(id) ?? null;
+  }
+  passive(messageId) {
+    return Boolean(
+      this.db.prepare("SELECT 1 FROM role_channel_passive WHERE messageId=?").get(messageId),
+    );
   }
   message(channelId, messageId) {
     return (
@@ -581,6 +588,7 @@ export class RoleChannels {
         return {
           messageId: m.messageId,
           origin: DELEGATED_ORIGIN,
+          ...(this.passive(m.messageId) ? { noWake: true } : {}),
           fromSeat: m.fromSeat,
           toSeat: m.toSeat,
           mine: m.fromSession === row.id,
@@ -713,6 +721,10 @@ export class RoleChannels {
   }
   async send(a, capability) {
     a = { ...a };
+    const noWake = a.noWake === true;
+    if (a.noWake !== undefined && typeof a.noWake !== "boolean")
+      throw Error("Invalid no-wake flag");
+    delete a.noWake;
     if (
       !(
         keys(a, "channelId,messageId,sessionId,text") ||
@@ -743,6 +755,7 @@ export class RoleChannels {
       prior &&
       prior.fromSession === sender.id &&
       prior.text === a.text &&
+      this.passive(prior.messageId) === noWake &&
       (prior.inReplyTo ?? null) === (a.inReplyTo ?? null)
     ) {
       return {
@@ -755,6 +768,7 @@ export class RoleChannels {
         remaining: Math.max(0, record ? this.windowLimit(record) - this.windowUsed(record.id) : 0),
         accepted: false,
         resend: true,
+        ...(noWake ? { noWake: true } : {}),
         failure: prior.failure,
         note: "This message identity was already accepted on this channel with this content, so nothing was sent again and no allowance was spent. The state above is its current one.",
       };
@@ -770,10 +784,10 @@ export class RoleChannels {
       recipient && recipient.mode !== "delegated" && outgoing.toSeat === record.primeSeat
         ? this.heldFor(record.primeSeat, recipient.id)
         : null;
-    if (!recipient || (recipient.mode !== "delegated" && !held))
+    if (!recipient || (recipient.mode !== "delegated" && !held && !noWake))
       throw Error("The receiving seat is under human control; a delegated send would be refused");
     // A held message reaches no host, so host reachability is not a fact it rests on.
-    if (!held) {
+    if (!held && !noWake) {
       const reach = this.control.bindings.dispatch(recipient.id);
       if (!reach.supported) throw Error(reach.reason);
     }
@@ -807,6 +821,7 @@ export class RoleChannels {
         target: recipient.id,
         generation: recipient.generation,
         text: a.text,
+        ...(noWake ? { noWake: true } : {}),
       },
       () => {
         this.control.bindings.checkRole(a.sessionId, capability);
@@ -853,10 +868,24 @@ export class RoleChannels {
           recipient.generation,
           a.inReplyTo ?? null,
           a.text,
-          held ? "held" : "reserved",
+          noWake ? "delivered" : held ? "held" : "reserved",
           new Date(this.control.rates.clock()).toISOString(),
         );
+      if (noWake) this.db.prepare("INSERT INTO role_channel_passive VALUES (?)").run(a.messageId);
     });
+    if (noWake)
+      return {
+        channelId: a.channelId,
+        messageId: a.messageId,
+        fromSeat: outgoing.fromSeat,
+        toSeat: outgoing.toSeat,
+        inReplyTo: a.inReplyTo ?? null,
+        state: "delivered",
+        noWake: true,
+        remaining,
+        accepted: false,
+        note: "Saved as FYI in the channel thread. No prompt, runtime wake or notification was sent.",
+      };
     if (held) {
       // REVIEW-G G-6: the notice no longer runs inside the sender's call (osascript can take up to 10 s). noticeHeld
       // writes this message's notice row synchronously, before its first await, so the reply already carries the

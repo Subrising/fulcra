@@ -16,8 +16,10 @@ import { journalPolicy } from "./hook-journal-policy.mjs";
 import { queuedJournalPolicy } from "./queued-journal-policy.mjs";
 import { quotaDecision } from "./quota-observation.mjs";
 import { socketLocation } from "./socket-location.mjs";
+import { admitOwnedCleanup } from "./owned-cleanup-admission.mjs";
 import { automaticPermissionProof, permissionMode } from "./automatic-permission.mjs";
-export const OWN_ID = "orca-organization-next";
+export { PLUGIN_ID as OWN_ID } from "./plugin-identity.mjs";
+import { PLUGIN_ID as OWN_ID } from "./plugin-identity.mjs";
 export const hostContract = "1.1";
 const fail = (reason) => {
   throw Error("Orca native admission refused: " + reason);
@@ -103,6 +105,7 @@ export function createTrustedContribution({
   now = Date.now,
   managementBridge,
   rateSettingsFile = () => undefined,
+  automaticResumeEnabled = () => false,
 } = {}) {
   return (server) => {
     if (managementBridge !== undefined) {
@@ -194,6 +197,36 @@ export function createTrustedContribution({
       if (!id || agent.archivedAt) fail("Missing send identity or archived session");
       const delivery = db.prepare("SELECT * FROM deliveries WHERE id=?").get(id);
       if (!delivery) fail("Missing journal delivery");
+      if (
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='provider_recoveries'",
+          )
+          .get() &&
+        db
+          .prepare(
+            "SELECT 1 FROM provider_recoveries WHERE session=? AND kind='network' AND continuation=?",
+          )
+          .get(agent.id, id) &&
+        automaticResumeEnabled() !== true
+      )
+        fail("Automatic network resume is off");
+      if (
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='automatic_restart_resumes'",
+          )
+          .get()
+      ) {
+        const restart = db
+          .prepare("SELECT * FROM automatic_restart_resumes WHERE session=? AND continuation=?")
+          .get(agent.id, id);
+        if (
+          restart &&
+          (automaticResumeEnabled() !== true || !["ready", "inflight"].includes(restart.state))
+        )
+          fail("Automatic restart resume is off or no longer current");
+      }
       const intent = JSON.parse(delivery.result),
         body = JSON.parse(delivery.body);
       exact(
@@ -302,6 +335,23 @@ export function createTrustedContribution({
         return "allow";
       }
       if (input.provenance?.pluginId !== OWN_ID) fail("Missing own provenance");
+      if (
+        ["archive", "close"].includes(operation.kind) &&
+        operation.messageId?.startsWith("orca-cleanup:")
+      ) {
+        read(false, (db) =>
+          admitOwnedCleanup(db, agent, operation, {
+            now: now(),
+            pluginId: OWN_ID,
+            digest: payloadDigest(agent.id, operation.kind, operation.messageId, {
+              type: "command",
+              command: operation.kind,
+              arguments: {},
+            }),
+          }),
+        );
+        return "allow";
+      }
       if (operation.kind === "permission") {
         if (!operation.messageId?.startsWith("orca-permission:")) fail("Missing permission intent");
         return "allow"; // The permission hook checks its canonical request and response.

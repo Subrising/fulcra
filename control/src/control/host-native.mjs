@@ -109,6 +109,10 @@ export class HostNative {
   route(id) {
     return this.db.prepare("SELECT * FROM host_routes WHERE id=?").get(id);
   }
+  cleanupIdle(id, observed, archive, intent) {
+    this.assertLocal(id);
+    return this.local.cleanupIdle(id, observed, archive, intent);
+  }
   quota(id) {
     return this.route(id)
       ? Promise.resolve(null)
@@ -760,6 +764,27 @@ export class HostNative {
     if (typeof this.local.recover !== "function")
       throw Error("This native adapter cannot restart a session");
     return this.local.recover(id);
+  }
+  async compactionTail(id, cursor) {
+    if (this.route(id)) return null;
+    return this.local.compactionTail?.(id, cursor) ?? null;
+  }
+  contextRotationState(id) {
+    if (this.route(id)) throw Error("Remote contexts rotate on their own host");
+    return this.local.contextRotationState(id);
+  }
+  rotateContext(request) {
+    if (this.route(request.agentId)) throw Error("Remote contexts rotate on their own host");
+    return this.local.rotateContext(request);
+  }
+  async automaticResumeEnabled(id) {
+    if (this.route(id)) return false;
+    return (await this.local.automaticResumeEnabled?.(id)) === true;
+  }
+  // Fresh start and the context check read usage of local sessions only.
+  async contextUsage(id) {
+    if (this.route(id) || typeof this.local.contextUsage !== "function") return null;
+    return this.local.contextUsage(id);
   }
   async limitTail(id) {
     if (this.route(id) || typeof this.local.limitTail !== "function") return null;

@@ -10,7 +10,7 @@ import { MessageReceipts } from "./message-receipts/index.js";
 import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
 import { join } from "path";
-import { hostname as getHostname } from "node:os";
+import { getHostName } from "./host-name.js";
 import { randomUUID } from "node:crypto";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { AgentManager, AgentMetricsSnapshot } from "./agent/agent-manager.js";
@@ -25,6 +25,7 @@ import type { CheckoutDiffManager, CheckoutDiffMetrics } from "./checkout-diff-m
 import type { DaemonConfigStore, MutableDaemonConfig } from "./daemon-config-store.js";
 import {
   type ServerInfoStatusPayload,
+  type ScriptStatusUpdateMessage,
   type SessionOutboundMessage,
   type WorkspaceSetupSnapshot,
   type WSHelloMessage,
@@ -73,15 +74,13 @@ import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
 import type { SpeechReadinessSnapshot, SpeechService } from "./speech/speech-runtime.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "./voice-types.js";
-import {
-  computeNotificationPlan,
-  isPushEligibleAttentionReason,
-  type ClientPresenceState,
-} from "./agent-attention-policy.js";
+import { computeNotificationPlan, type ClientPresenceState } from "./agent-attention-policy.js";
 import {
   buildAgentAttentionNotificationPayload,
   findLatestPermissionRequest,
 } from "@getpaseo/protocol/agent-attention-notification";
+import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
+import { shouldNotifyForSession } from "@getpaseo/protocol/notification-policy";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import {
@@ -1097,6 +1096,12 @@ export class VoiceAssistantWebSocketServer {
     }
   }
 
+  public publishScriptStatusUpdate(message: ScriptStatusUpdateMessage): void {
+    for (const session of this.listSessions()) {
+      session.emitServerMessage(message);
+    }
+  }
+
   public publishSpeechReadiness(readiness: SpeechReadinessSnapshot | null): void {
     this.updateServerCapabilities(buildServerCapabilities({ readiness }));
   }
@@ -1676,6 +1681,7 @@ export class VoiceAssistantWebSocketServer {
           ),
         );
       },
+      publishScriptStatusUpdate: (message) => this.publishScriptStatusUpdate(message),
       downloadTokenStore: this.downloadTokenStore,
       pushNotifications: this.pushNotifications,
       paseoHome: this.paseoHome,
@@ -2008,21 +2014,26 @@ export class VoiceAssistantWebSocketServer {
       status: "server_info",
       protocolVersion: WS_PROTOCOL_VERSION,
       serverId: this.serverId,
-      hostname: getHostname(),
+      hostname: getHostName(),
       version: this.daemonVersion,
       permissions: permissionsForWire(session.getPermissions(), capable),
       // COMPAT(desktopManaged): added in v0.1.X, remove optional parsing after 2027-01-16.
       desktopManaged: this.daemonRuntimeConfig?.desktopManaged === true,
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
+        usageSources: true,
         ownedSubscriptions: true,
         agentRequestReceipts: true,
         // Schema availability only; the draft still requires current workspace.write.
         gitAiDrafts: true,
+        pullRequestReviewExplain: true,
         // Legacy injected runtimes without the concrete guarded pager remain unavailable.
         ...(this.pluginRuntime?.catalogPaging?.() ? { pluginCatalogPaging: true } : {}),
         // Explicit authenticated delegated queue; not ordinary human/Claude conversion.
         nativeQueuedMessages: true,
+        autoResumeOnLimit: true,
+        notificationPolicy: true,
+        pooledAccountUsageObservation: true,
         nativeOwnerReportInbox: true,
         nativeEvidenceIndex: true,
         managedArtifactContent: true,
@@ -2135,9 +2146,11 @@ export class VoiceAssistantWebSocketServer {
         agentQuotaRead: true,
         agentMcpRefresh: true,
         agentMcpReconnect: true,
+        agentContextRotation: true,
         // COMPAT(agentDetach): added in v0.1.98, remove gate after 2026-12-19 once daemon floor >= v0.1.98.
         agentDetach: true,
         agentParentAdopt: true,
+        agentIdleCleanup: true,
         // COMPAT(agentThinkingUpdate): added in v0.2.4, remove gate after 2027-01-28.
         agentThinkingUpdate: true,
         // COMPAT(daemonDiagnostics): added in v0.1.100, remove gate after 2026-12-25 once daemon floor >= v0.1.100.
@@ -3180,24 +3193,33 @@ export class VoiceAssistantWebSocketServer {
       workspaceId: agent.workspaceId,
       agentId: params.agentId,
       assistantMessage,
+      agentTitle: agent.config.title,
       permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
+    });
+
+    // Notification policy: workers stay quiet unless the host or the session opts in. Attention
+    // events still flow to clients (unread state); only the push and the in-app alert are gated.
+    const workspace = await this.workspaceRegistry.get(agent.workspaceId);
+    const notifyAllowed = shouldNotifyForSession({
+      mode: this.daemonConfigStore.get().notificationMode,
+      labels: agent.labels,
+      pinned: workspace?.pinnedAt != null,
+      hasChildren: this.agentManager
+        .listAgents()
+        .some((candidate) => candidate.labels[PARENT_AGENT_ID_LABEL] === params.agentId),
     });
 
     const plan = computeNotificationPlan({
       allStates,
       focusTarget: { kind: "agent", id: params.agentId },
-      pushEligible: isPushEligibleAttentionReason(params.reason),
+      // Agent attention is delivered by desktop clients, never mobile push.
+      pushEligible: false,
       nowMs,
     });
 
-    if (plan.shouldPush) {
-      void this.pushNotificationSender.send(notification).catch((err) => {
-        this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
-      });
-    }
-
     for (const { ws } of clientEntries) {
       const shouldNotify =
+        notifyAllowed &&
         plan.inAppRecipientIndex !== null &&
         notificationEntries[plan.inAppRecipientIndex]?.ws === ws;
       const timestamp = new Date().toISOString();

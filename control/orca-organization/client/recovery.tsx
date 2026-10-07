@@ -1,10 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { recoveryRpc, recoveryActionRpc, type RecoveryActionInput } from "../shared/recovery";
 import { lastGood } from "./last-good";
+import { bannerSeen, markBannerSeen } from "./recovery-seen";
 import {
   bannerSummary,
   orderItems,
@@ -28,9 +29,12 @@ export function RecoveryBanner({
   navigation,
   host,
   titles = {},
+  once = false,
 }: Pick<PluginSurfaceProps, "theme" | "navigation"> & {
   host?: PluginSurfaceProps["host"];
   titles?: Record<string, string>;
+  /** Top-of-page placement: show a restart the first time only; Home's activity keeps it after that. */
+  once?: boolean;
 }) {
   const read = useRpc(recoveryRpc),
     act = useRpc(recoveryActionRpc),
@@ -66,6 +70,16 @@ export function RecoveryBanner({
     query.data.status === "observed" &&
     Date.now() - Date.parse(query.data.observedAt) < 60000;
   const banner = bannerSummary(status);
+  // Decided once per mount, so the banner stays put while this page is open and is gone the next time.
+  const seenAtMount = useRef<Map<string, boolean>>(new Map());
+  const signature = banner?.text ?? "";
+  const seenKey = host?.id ?? "local";
+  if (once && signature && !seenAtMount.current.has(signature))
+    seenAtMount.current.set(signature, bannerSeen(seenKey, signature));
+  useEffect(() => {
+    if (once && signature) markBannerSeen(seenKey, signature);
+  }, [once, seenKey, signature]);
+  if (once && banner && seenAtMount.current.get(signature) && !open) return null;
   if (!banner)
     return query.data?.status === "error" && !last.fromMemory ? (
       <Text style={{ color: c.foregroundMuted }}>

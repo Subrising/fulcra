@@ -35,6 +35,12 @@ export function promptPayload(
   const normalized: Record<string, unknown> = {};
   for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(options ?? {}))) {
     if (!("value" in descriptor)) throw new TypeError("Run option accessors forbidden");
+    // Dismissing question cards grants nothing, so it stays outside the trusted payload.
+    if (key === "clearPendingQuestions") {
+      if (descriptor.value !== undefined && typeof descriptor.value !== "boolean")
+        throw new TypeError("Invalid clearPendingQuestions");
+      continue;
+    }
     if (
       ![
         "clientMessageId",

@@ -20,8 +20,10 @@ import {
   msUntilUnreachable,
   offlineGroupLabel,
   parseHostAvailability,
+  selectOfflineDuplicateIds,
   selectOfflineServerIds,
   serializeHostAvailability,
+  withoutDuplicateHosts,
   type OfflineHostSummary,
 } from "./sidebar-offline-hosts";
 
@@ -154,6 +156,46 @@ describe("one sidebar across hosts", () => {
     expect(groups.map((group) => group.key)).toEqual([OFFLINE_HOSTS_GROUP_KEY]);
     expect(groups[0]?.label).toBe("Offline hosts");
     expect(groups[0]?.rows.map((r) => r.serverId)).toEqual([LAPTOP, STUDIO, STUDIO]);
+  });
+
+  it("shows one entry per computer: a stale offline copy of a reachable host is hidden", () => {
+    const OLD_STUDIO = "srv_fixture_studio_old";
+    const lost = (iso: string) => ({ since: new Date(iso) });
+    const named = [
+      { serverId: STUDIO, identity: "Studio\nstudio.local:6767" },
+      { serverId: OLD_STUDIO, identity: "Studio\nstudio.local:6767" },
+      { serverId: LAPTOP, identity: "Laptop\nlaptop.local:6767" },
+    ];
+    // A portable daemon on the same computer has its own endpoint and is never hidden.
+    expect([
+      ...selectOfflineDuplicateIds(
+        [...named, { serverId: "srv_fixture_portable", identity: "Studio\nstudio.local:7777" }],
+        new Map([["srv_fixture_portable", lost("2026-09-27T09:00:00Z")]]),
+      ),
+    ]).toEqual([]);
+    expect([
+      ...selectOfflineDuplicateIds(named, new Map([[OLD_STUDIO, lost("2026-09-01T00:00:00Z")]])),
+    ]).toEqual([OLD_STUDIO]);
+    // All copies offline: keep the one lost most recently.
+    expect([
+      ...selectOfflineDuplicateIds(
+        named,
+        new Map([
+          [STUDIO, lost("2026-09-27T09:00:00Z")],
+          [OLD_STUDIO, lost("2026-09-01T00:00:00Z")],
+          [LAPTOP, lost("2026-09-01T00:00:00Z")],
+        ]),
+      ),
+    ]).toEqual([OLD_STUDIO]);
+    const staleRow = row(OLD_STUDIO, "studio-build", "running");
+    const offline = new Map<string, OfflineHostSummary>([
+      [OLD_STUDIO, { name: "Studio", since: null, duplicate: true }],
+    ]);
+    const entries = entriesOf([...rows, staleRow]);
+    expect([...withoutDuplicateHosts(entries, offline).keys()]).toEqual(
+      rows.map((r) => r.entry.workspaceKey),
+    );
+    expect(withoutDuplicateHosts(entries, new Map())).toBe(entries);
   });
 
   it("leaves the entries untouched when every host is reachable", () => {

@@ -91,3 +91,12 @@ export function reconcileBootstrap(db, observed) {
     observed.id,
   );
 }
+// A clean restart during the first turn ends the runtime before that observation can happen, and the new boot has
+// a new runtime instance. The automatic restart proof (automatic-restart.mjs) has already shown the native id is
+// the one the boot recorded and that this exact first delivery was acknowledged in the previous boot.
+export function bindBootstrapAfterRestart(db, { session, delivery, previousBoot, nativeId }) {
+  if (!nativeId) return;
+  db.prepare(
+    "UPDATE native_bootstrap SET nativeId=? WHERE session=? AND nativeId IS NULL AND delivery=? AND boot=?",
+  ).run(nativeId, session, delivery, previousBoot);
+}

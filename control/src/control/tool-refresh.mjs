@@ -3,13 +3,13 @@
 // A session's surface is recorded at creation (the create result's toolSurface) and replaced by every successful
 // refresh here. A session with neither -- every session created before H6 -- is 'unrecorded' and treated as stale.
 //
-// Three ways a surface is refreshed, all through native.refreshTools (the daemon's fenced agent.mcp.refresh):
+// Surfaces refresh through native.refreshTools (the daemon's fenced agent.mcp.refresh):
 //   - an operator asks: sessions-refresh-tools {sessionId, expectedGeneration};
 //   - an operator reaffirms a seat whose holder is delegated (bindings.assign awaits it and reports it);
 //   - a seat holder or manager is handed back (Controller.handback starts it after its lock is released).
-// The automatic two are best-effort: an outcome is recorded and reported, and a failure never fails the reaffirm or
-// the handback. Only sessions that hold a role seat or a manager grant are refreshed automatically -- the surface
-// is theirs to use; an ordinary worker's tools are the same as at its creation and it needs none of these.
+//   - startup and idle events bring delegated sessions onto the current runtime after an upgrade.
+// Automatic refreshes are best-effort: outcomes are recorded and reported. Handback/reaffirmation refresh seat
+// holders and managers; runtime reconciliation also updates workers whose helper paths belong to an older build.
 // The refresh runs under the session's exclusive lock, so no controller send interleaves with it, and it needs the
 // session delegated and idle (the daemon's own admission refuses otherwise); nothing here grants anything.
 import path from "node:path";
@@ -152,5 +152,36 @@ export class ToolSurfaces {
   afterDelegation(id) {
     if (!this.eligible(id)) return null;
     return (this.pending = this.automatic(id, "handback"));
+  }
+  // Existing event reconciliation supplies retries; never reload a human-held or busy session.
+  // A refusal is visible, and is retried at most once per watchdog interval.
+  async reconcile() {
+    const candidates = this.store
+      .list()
+      .filter((session) => session.mode === "delegated")
+      .map((session) => ({ session, surface: this.describe(session.id) }))
+      .filter(
+        ({ surface }) =>
+          surface.state !== "current" &&
+          (!surface.lastAttempt || Date.now() - Date.parse(surface.lastAttempt.at) >= 30000),
+      )
+      .sort(
+        (a, b) =>
+          (Date.parse(a.surface.lastAttempt?.at) || 0) -
+          (Date.parse(b.surface.lastAttempt?.at) || 0),
+      )
+      .slice(0, 8);
+    for (const { session } of candidates) {
+      try {
+        await this.refresh(session.id, {
+          expectedGeneration: session.generation,
+          cause: "runtime",
+        });
+      } catch (error) {
+        if (this.store.get(session.id)?.generation === session.generation)
+          this.record(session.id, session.generation, "failed", `runtime: ${error.message}`, null);
+        this.lastError = { message: error.message, at: new Date().toISOString() };
+      }
+    }
   }
 }

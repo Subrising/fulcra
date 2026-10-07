@@ -8,6 +8,7 @@ import {
   addAccount,
   setAccount,
   setPolicy,
+  setRotateOnLimit,
   assign,
   rotate,
   readAccounts,
@@ -62,6 +63,7 @@ test("spread policy balances live sessions across accounts", async () => {
 });
 test("a usage limit marks the account limited until its reset, moves the session, and new sessions avoid it; all limited -> the earliest reset", async () => {
   const root = scratch();
+  await setRotateOnLimit(root, true); // moving between accounts is the owner's opt-in
   const a = await addAccount(root, { provider: "claude", name: "A" }, T0),
     _b = await addAccount(root, { provider: "claude", name: "B" }, T0 + 1);
   assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
@@ -93,6 +95,32 @@ test("a usage limit marks the account limited until its reset, moves the session
   assert.equal(again.allLimited, true);
   assert.equal(again.account.name, "A"); // earliest reset
   assert.equal((await assign(root, S(4), "claude", T0 + 3600001 + 1)).account.name, "A"); // after A's reset it is back
+});
+test("by default a usage limit holds the session on its account until the reset; old stores read as off", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "A" }, T0);
+  await addAccount(root, { provider: "claude", name: "B" }, T0 + 1);
+  assert.equal(readAccounts(root).rotateOnLimit, false);
+  assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
+  const reset = new Date(T0 + 3600000).toISOString();
+  const r = await rotate(root, S(1), "claude", { resetAt: reset }, T0 + 10);
+  assert.equal(r.to, null);
+  assert.equal(r.held, true);
+  assert.equal(accountOf(readAccounts(root), S(1)).id, a.id);
+  // Its relaunch before the reset stays on A and waits, instead of quietly spending B.
+  const relaunch = await assign(root, S(1), "claude", T0 + 20);
+  assert.equal(relaunch.account.id, a.id);
+  assert.equal(relaunch.allLimited, true);
+  assert.equal(relaunch.earliestReset, reset);
+  // A new session still avoids the limited account.
+  assert.equal((await assign(root, S(2), "claude", T0 + 30)).account.name, "B");
+  // A store written before the setting existed reads as off.
+  const file = path.join(root, "accounts", "accounts.json");
+  const stored = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete stored.rotateOnLimit;
+  fs.writeFileSync(file, JSON.stringify(stored));
+  assert.equal(readAccounts(root).rotateOnLimit, false);
+  assert.equal(publicView(readAccounts(root), T0).rotateOnLimit, false);
 });
 test("the public view carries no credential and no path", async () => {
   const root = scratch();
@@ -144,7 +172,11 @@ test("the launch hook: a pooled Claude launch gets the token for this launch onl
   assert.equal(out.env.KEEP, "1");
   assert.equal(out.env.FULCRA_ACCOUNT_ID, b.id);
   assert.equal(out.env.FULCRA_ACCOUNT_NAME, "B");
-  assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).auth, "expired");
+  assert.equal(
+    readAccounts(root).accounts.find((x) => x.id === a.id).auth,
+    "ok",
+    "missing Keychain material is not token expiry",
+  );
   assert.equal(JSON.stringify(readAccounts(root)).includes(tokens.get(b.id)), false); // never stored in the account store
   assert.deepEqual((await hook(req(S(3), "claude", "history"))).env, { KEEP: "1" }); // a history read is not a launch
 });
@@ -263,6 +295,7 @@ test("keychain verified put: interactive prompts alone permit exact fixture read
 });
 test("B4: a human-held session is not moved at the limit (the account is still marked limited); its next launch moves and is recorded", async () => {
   const root = scratch();
+  await setRotateOnLimit(root, true); // moving between accounts is the owner's opt-in
   const a = await addAccount(root, { provider: "claude", name: "A" }, T0),
     b = await addAccount(root, { provider: "claude", name: "B" }, T0 + 1);
   await assign(root, S(20), "claude", T0);
@@ -350,7 +383,7 @@ test("a switch refuses plainly: a limited, turned-off, signed-out, unknown or ot
   await setAccount(root, a.id, { enabled: true, auth: "expired" });
   assert.equal(
     (await sw("Work")).message,
-    "Work is signed out. Add its token again in Settings › Accounts & Defaults.",
+    "Work is signed out. Add its token again in Settings › Accounts & models.",
   );
   const none = "No Claude account has that name. Type /account to list them.";
   assert.equal((await sw("Nope")).message, none);
@@ -542,6 +575,19 @@ async function admissionFixture(t, provider, count, good = []) {
   });
   return { root, accounts, reads, request, hook, keychain };
 }
+test("with moving off, a limited account whose credential is missing refuses the launch instead of moving", async (t) => {
+  const f = await admissionFixture(t, "claude", 2, [1]);
+  await assign(f.root, f.request.agentId, "claude", T0);
+  await rotate(
+    f.root,
+    f.request.agentId,
+    "claude",
+    { resetAt: new Date(T0 + 3600000).toISOString() },
+    T0 + 1,
+  );
+  await assert.rejects(f.hook({ request: f.request }), admissionFailure);
+  assert.equal(accountOf(readAccounts(f.root), f.request.agentId).id, f.accounts[0].id);
+});
 for (const provider of ["claude", "codex"]) {
   test(`admission ${provider}: eight unavailable credentials do not hide the ninth usable account`, async (t) => {
     const f = await admissionFixture(t, provider, 9, [8]);
@@ -742,4 +788,54 @@ test("Book local: unavailable enabled Work refuses ambient login before provider
   assert.deepEqual(f.reads, [work.id]);
   assert.equal(readAccounts(f.root).accounts.find((a) => a.id === personal.id).enabled, false);
   for (const key of Object.keys(inputEnv)) assert.equal(f.request.env[key] === inputEnv[key], true);
+});
+
+for (const outcome of ["recovered", "unavailable", "missing", "revoked"]) {
+  test(`Keychain launch revalidation: ${outcome} preserves expiry and admission semantics`, async (t) => {
+    const f = await admissionFixture(t, "claude", 1, [0]);
+    let reads = 0;
+    f.keychain.get = async () => {
+      reads++;
+      if (reads === 1) {
+        if (outcome === "revoked") await setAccount(f.root, f.accounts[0].id, { enabled: false });
+        if (outcome === "missing") return null;
+        throw Object.assign(Error("private fixture diagnostic"), {
+          code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+        });
+      }
+      if (outcome === "unavailable")
+        throw Object.assign(Error("private fixture diagnostic"), {
+          code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+        });
+      if (outcome === "missing") return null;
+      return "fixture-credential";
+    };
+    if (outcome === "recovered") {
+      const out = await f.hook({ request: f.request });
+      assert.equal(out.env.FULCRA_ACCOUNT_ID, f.accounts[0].id);
+    } else await assert.rejects(f.hook({ request: f.request }), admissionFailure);
+    assert.equal(reads, outcome === "revoked" ? 1 : 2);
+    assert.equal(readAccounts(f.root).accounts[0].auth, "ok");
+    assert.equal(JSON.stringify(readAccounts(f.root)).includes("fixture-credential"), false);
+  });
+}
+test("Keychain lookup distinguishes missing item from transient refusal without raw diagnostics", async () => {
+  const dir = scratch(),
+    bin = path.join(dir, "security");
+  for (const code of [44, 1]) {
+    fs.writeFileSync(bin, `#!/bin/sh\nprintf 'private fixture diagnostic' >&2\nexit ${code}\n`, {
+      mode: 0o700,
+    });
+    const k = createKeychain({ keychain: path.join(dir, "kc"), security: bin });
+    if (code === 44) assert.equal(await k.get(S(999)), null);
+    else
+      await assert.rejects(
+        k.get(S(999)),
+        (error) =>
+          error.code === "ACCOUNT_KEYCHAIN_UNAVAILABLE" &&
+          !JSON.stringify(error, Object.getOwnPropertyNames(error)).includes(
+            "private fixture diagnostic",
+          ),
+      );
+  }
 });

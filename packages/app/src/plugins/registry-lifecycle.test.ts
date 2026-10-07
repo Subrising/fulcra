@@ -1,7 +1,6 @@
 import { createPluginHosts } from "./hosts";
 import { expect, test } from "vitest";
 import { QueryObserver, skipToken } from "@tanstack/react-query";
-import { createPaseoApi } from "@getpaseo/client";
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { PluginRegistry } from "./registry";
 
@@ -11,7 +10,16 @@ function registry() {
   const plugins = new PluginRegistry({
     version: "0.8.0",
     createRuntime: (installation) => {
-      const api = createPaseoApi(client);
+      // The registry owns each installation's API scope; record when it is released.
+      const api = installation.paseo;
+      const dispose = api.dispose.bind(api);
+      installation.paseo = {
+        ...api,
+        dispose: async () => {
+          released.push(installation.id);
+          await dispose();
+        },
+      };
       return {
         hosts: createPluginHosts(
           {
@@ -22,21 +30,17 @@ function registry() {
           },
           installation.lifetime.signal,
         ),
-        paseo: {
-          ...api,
-          dispose: async () => {
-            released.push(installation.id);
-            await api.dispose();
-          },
-        },
+        paseo: installation.paseo,
         rpc: async () => {
           throw new Error("Unexpected plugin RPC");
         },
         openSurface: () => {},
+        openScreen: () => {},
         openSettings: () => {},
         openPanel: () => {},
         addComposerPill: () => ({ update() {}, remove() {} }),
         addHeaderButton: () => ({ update() {}, remove() {} }),
+        playAudio: async () => {},
       };
     },
   });

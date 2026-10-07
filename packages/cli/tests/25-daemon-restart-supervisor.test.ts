@@ -21,6 +21,7 @@ import { runLocalPaseo } from "./helpers/local-cli.ts";
 import { getAvailablePort } from "./helpers/network.ts";
 
 const pollIntervalMs = 100;
+const daemonReadyTimeoutMs = 120_000;
 const testEnv = {
   PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: process.env.PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD ?? "0",
   PASEO_DICTATION_ENABLED: process.env.PASEO_DICTATION_ENABLED ?? "0",
@@ -135,7 +136,7 @@ import('node:fs').then(({appendFileSync}) => {
       supervisor = await readDaemonInstance(paseoHome);
       return supervisor?.pid === supervisorProcess?.pid && Boolean(supervisor?.listen);
     },
-    120000,
+    daemonReadyTimeoutMs,
     "daemon did not publish its bound endpoint in time",
   );
   assert(supervisor?.listen, "owned supervisor should publish its bound endpoint");
@@ -176,13 +177,8 @@ import('node:fs').then(({appendFileSync}) => {
     "restart request should be acknowledged",
   );
 
-  // A restart is the startup path plus a graceful shutdown in front of it, so it cannot be
-  // quicker than the bind this file already allows 120s for above. It had 20s, which is
-  // enough on an idle machine and not on a loaded runner — four suites in parallel, each
-  // 100-220s. Same budget for both waits: the status call blocks across the restart window
-  // and must not outlive the loop that is waiting on it.
-  const restartTimeoutMs = 120000;
-  const deadline = Date.now() + restartTimeoutMs;
+  // A restart includes worker startup and client reconnection, as initial readiness does.
+  const deadline = Date.now() + daemonReadyTimeoutMs;
   let statusAfterRestart = statusBeforeRestart;
   await waitFor(
     async () => {
@@ -199,7 +195,7 @@ import('node:fs').then(({appendFileSync}) => {
         throw error;
       }
     },
-    restartTimeoutMs,
+    daemonReadyTimeoutMs,
     "worker pid did not change after restart request",
   );
   assert.notStrictEqual(

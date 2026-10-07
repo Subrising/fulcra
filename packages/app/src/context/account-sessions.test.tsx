@@ -95,9 +95,7 @@ vi.mock("react-native-unistyles", () => ({
 }));
 vi.mock("@/sessions/session-account-info", () => ({
   SessionAccountInfo: ({ account }: { account: { name: string | null } | null }) =>
-    account ? (
-      <span>{account.name ? `Account: ${account.name}` : "Account unavailable"}</span>
-    ) : null,
+    account?.name ? <span>{`Account: ${account.name}`}</span> : null,
 }));
 vi.mock("@/provider-usage/account-rundown", () => ({
   AccountRundown: ({ accounts }: { accounts: AccountUsageRow[] }) => (
@@ -243,7 +241,7 @@ describe("Context account surface lifecycle", () => {
     const unidentified = agent();
     unidentified.labels = {};
     view.rerender(<ContextSessionMetadata agent={unidentified} />);
-    expect(screen.getByText("Account unavailable")).toBeTruthy();
+    expect(screen.queryByText(/^Account/)).toBeNull();
   });
 
   it("uses explicit public counts and describes their host-wide scope", async () => {

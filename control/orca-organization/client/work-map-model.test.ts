@@ -13,6 +13,10 @@ import {
   toggleExpanded,
   type Row,
 } from "./work-map-model";
+import { liveMapRows } from "./live-map-model";
+import type { PluginObservedAgent } from "@getpaseo/plugin/client";
+import type { Fleet } from "../shared/fleet";
+import type { RemitsView } from "../shared/cc/remit";
 import type { MapSeat, MapSession, WorkMapOverview, WorkMapProject } from "../shared/work-map";
 import { plainLanguageCheck } from "../shared/cc/refs";
 
@@ -446,7 +450,7 @@ test("T5 layout is deterministic and a status change moves no node", () => {
   assert.equal(changeAnnouncement(buildOutline(input).rows, buildOutline(input).rows), null);
 });
 
-test("T5 graph links: channel vs escalation from primes, membership, recorded parent, adoption", () => {
+test("T5 graph links: recorded channel only, never a fabricated all-prime escalation, membership, recorded parent, adoption", () => {
   const ov = overview(2);
   ov.projects[0].channels = [{ primeSeat: "delivery", state: "open", open: true }];
   const lead = session(1, W1),
@@ -461,7 +465,7 @@ test("T5 graph links: channel vs escalation from primes, membership, recorded pa
   );
   const kinds = (to: string) => g.edges.filter((e) => e.to === to).map((e) => e.kind);
   assert.deepEqual(kinds(`project:${P0}`), ["channel"]);
-  assert.deepEqual(kinds(`project:${uuid(1001)}`), ["escalation"]);
+  assert.deepEqual(kinds(`project:${uuid(1001)}`), []);
   assert.deepEqual(kinds(`workstream:${P0}:${W1}`), ["membership"]);
   assert.deepEqual(kinds(`session:${W1}:${uuid(2)}`), ["parent"]);
   assert.deepEqual(kinds(`session:${W1}:${uuid(3)}`), ["adopted"]);
@@ -574,4 +578,210 @@ test("FR-2 work map keeps validated management readable when the leader is outsi
   const row = o.rows.find((r) => r.target.sessionId === uuid(2))!;
   assert.match(row.detail, /Managed by Current manager \(name unavailable\); role-session: n\/a/);
   assert.doesNotMatch(row.detail, new RegExp(uuid(99)));
+});
+
+const nativeEntry = (
+  serverId: string,
+  extra: Partial<PluginObservedAgent> = {},
+): PluginObservedAgent => ({
+  serverId,
+  agentId: uuid(800),
+  hostName: serverId,
+  connection: "online",
+  title: `${serverId} worker`,
+  provider: "codex",
+  model: "gpt-6.1-sol",
+  status: "running",
+  activity: "working",
+  observedAt: at,
+  creatorAgentId: null,
+  workspace: {
+    id: uuid(810),
+    projectId: uuid(811),
+    projectName: "Game",
+    kind: "worktree",
+    changesAvailable: true,
+  },
+  ...extra,
+});
+const liveInput = (rows: Row[], entries: PluginObservedAgent[]) => ({
+  rows,
+  native: { entries, total: entries.length, truncated: 0, source: "native-cache" as const },
+  activity: "all" as const,
+  host: "",
+  project: "",
+  search: "",
+  now: T0,
+});
+
+test("live map links only the recorded responsible prime and explicitly opened channel", () => {
+  const ov = overview(2);
+  ov.primes.push(seat({ seat: "research", sessionId: uuid(903) }));
+  ov.projects[0].channels = [{ primeSeat: "research", open: true, state: "open" }];
+  const base = buildOutline({ overview: ov, projects: {}, expanded: [] });
+  const remits: RemitsView = {
+    version: 1,
+    observedAt: at,
+    partial: false,
+    stale: false,
+    error: null,
+    primes: [],
+    remits: [],
+    domains: [],
+    history: [],
+    projects: [
+      {
+        projectId: ov.projects[0].projectId,
+        name: "P",
+        domain: null,
+        domainRevision: 0,
+        owner: { kind: "project", primeSeat: "delivery", remitId: uuid(70) },
+      },
+    ],
+  };
+  const result = liveMapRows({ ...liveInput(base.rows, []), remits });
+  const edges = layoutMap(result.rows).edges.filter(
+    (edge) => edge.to === `project:${ov.projects[0].projectId}`,
+  );
+  assert.deepEqual(
+    edges.map((edge) => [edge.from, edge.kind]),
+    [
+      ["prime:research", "channel"],
+      ["prime:delivery", "ownership"],
+    ],
+  );
+  assert.equal(
+    layoutMap(result.rows).edges.filter((edge) => edge.to === `project:${ov.projects[1].projectId}`)
+      .length,
+    0,
+  );
+  assert.equal(
+    layoutMap(
+      liveMapRows({ ...liveInput(base.rows, []), remits: { ...remits, stale: true } }).rows,
+    ).edges.filter((edge) => edge.kind === "ownership").length,
+    0,
+  );
+});
+
+test("same native agent ID on two hosts remains two exact identities; ambiguous controller rows do not guess", () => {
+  const native = [nativeEntry("mini"), nativeEntry("book")];
+  const result = liveMapRows(liveInput([], native));
+  const sessions = result.rows.filter((row) => row.kind === "session");
+  assert.equal(sessions.length, 2);
+  assert.notEqual(sessions[0].id, sessions[1].id);
+  assert.deepEqual(
+    sessions.map((row) => row.target.serverId),
+    ["mini", "book"],
+  );
+  const controllerRow: Row = { ...sessions[0], id: "controller", target: { sessionId: uuid(100) } };
+  const nodes = native.map((entry) => ({
+    id: uuid(100),
+    task: uuid(20),
+    host: entry.hostName,
+    serverId: entry.serverId,
+    agentId: entry.agentId,
+    title: entry.title,
+    provider: "codex",
+    model: "gpt-6.1-sol",
+    mode: "human",
+    status: "running",
+    pending: 0,
+    observedAt: at,
+    updatedAt: at,
+    error: null,
+  }));
+  const fleet: Fleet = {
+    observedAt: at,
+    total: 2,
+    partial: false,
+    note: "",
+    nodes,
+    tasks: [],
+    edges: [],
+  };
+  const ambiguous = liveMapRows({ ...liveInput([controllerRow], native), fleet });
+  assert.equal(ambiguous.rows[0].target.serverId, undefined);
+  assert.equal(ambiguous.rows[0].changesAvailable, false);
+});
+
+test("native turn events update activity; process-only and stale/disconnected work never pass a model-turn filter", () => {
+  const runningProcess = nativeEntry("mini", { activity: "idle" });
+  assert.equal(
+    liveMapRows({ ...liveInput([], [runningProcess]), activity: "working" }).rows.length,
+    0,
+  );
+  const active = nativeEntry("book");
+  assert.equal(
+    liveMapRows({ ...liveInput([], [active]), activity: "working" }).rows.filter(
+      (row) => row.kind === "session",
+    ).length,
+    1,
+  );
+  assert.equal(
+    liveMapRows({ ...liveInput([], [active]), activity: "working", now: T0 + 60000 }).rows.length,
+    0,
+  );
+  const offline = nativeEntry("book", { connection: "offline", activity: "unavailable" });
+  assert.equal(liveMapRows(liveInput([], [offline])).rows.at(-1)?.changesAvailable, false);
+  assert.equal(liveMapRows({ ...liveInput([], [active]), host: "mini" }).hidden, 1);
+  assert.equal(liveMapRows({ ...liveInput([], [active]), project: "other" }).hidden, 1);
+});
+
+test("active enrolled native work remains visible outside collapsed branches and is deduplicated once expanded", () => {
+  const entry = nativeEntry("book");
+  const fleet: Fleet = {
+    observedAt: at,
+    total: 1,
+    partial: false,
+    note: "",
+    tasks: [],
+    edges: [],
+    nodes: [
+      {
+        id: uuid(100),
+        task: uuid(20),
+        host: "book",
+        serverId: "book",
+        agentId: entry.agentId,
+        project: uuid(1000),
+        title: "Book",
+        provider: "codex",
+        model: null,
+        mode: "human",
+        status: "running",
+        pending: 0,
+        observedAt: at,
+        updatedAt: at,
+        error: null,
+      },
+    ],
+  };
+  const collapsed = liveMapRows({ ...liveInput([], [entry]), fleet });
+  assert.equal(collapsed.rows.filter((row) => row.kind === "session").length, 1);
+  assert.equal(collapsed.rows[0].id, "observed-branches");
+  const expanded = liveMapRows({
+    ...liveInput(
+      [{ ...collapsed.rows[1], id: "controller", target: { sessionId: uuid(100) } }],
+      [entry],
+    ),
+    fleet,
+  });
+  assert.equal(expanded.rows.length, 1);
+  assert.equal(expanded.rows[0].target.serverId, "book");
+});
+
+test("active default keeps top-level organisation but excludes idle/unknown history until requested", () => {
+  const entry = nativeEntry("book", { activity: "unknown" });
+  const org = buildOutline({ overview: overview(2), projects: {}, expanded: [] }).rows;
+  const active = liveMapRows({ ...liveInput(org, [entry]), activity: "active" });
+  assert.equal(active.rows.filter((row) => row.kind === "prime").length, 1);
+  assert.equal(active.rows.filter((row) => row.kind === "project").length, 2);
+  assert.equal(active.rows.filter((row) => row.kind === "session").length, 0);
+  assert.equal(active.hidden, 1);
+  assert.equal(
+    liveMapRows({ ...liveInput(org, [entry]), activity: "unknown" }).rows.filter(
+      (row) => row.kind === "session",
+    ).length,
+    1,
+  );
 });

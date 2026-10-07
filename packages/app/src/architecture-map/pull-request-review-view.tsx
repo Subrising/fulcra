@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
@@ -11,8 +11,15 @@ import { Switch } from "@/components/ui/switch";
 import { DiffDocument } from "@/git/diff-document";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useSessionStore } from "@/stores/session-store";
-import { usePullRequestReview, useReviewFileDiff } from "./use-generated-change";
+import {
+  usePullRequestReview,
+  useReviewExplanation,
+  useReviewFileDiff,
+} from "./use-generated-change";
+import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { recordReviewInInbox } from "./review-inbox";
+import { groupReviewFiles, plainFileKey, startHerePath } from "./review-file-order";
+import { beforeYouApprove, FLAG_LABEL, reviewFlags, type ReviewFlag } from "./review-flags";
 
 // The PR review screen (Code Review): the changed files grouped by module with size and risk, one file's diff with
 // the automated review's findings beside it, the pull request's summary and the ADW verdict, and a decision bar.
@@ -23,6 +30,7 @@ const WIDE = 900;
 const SELECTED_STATE = { selected: true } as const;
 const UNSELECTED_STATE = { selected: false } as const;
 const COMMIT_MODE = { kind: "commit" as const };
+const AUTO_SUMMARY_LIMIT = 30;
 
 type Payload = CheckoutPullRequestReviewGetResponse["payload"];
 type ReviewFile = NonNullable<Payload["files"]>[number];
@@ -39,7 +47,6 @@ const DECISION_KEY: Record<PullRequestReviewDecisionKind, string> = {
   request_changes: "requestChanges",
   comment: "comment",
 };
-const RISK_ORDER: Record<ReviewFile["risk"], number> = { HIGH: 0, NORMAL: 1, LOW: 2 };
 
 export interface PullRequestReviewViewProps {
   serverId: string;
@@ -76,12 +83,32 @@ function ReviewReady(
   const [width, setWidth] = useState(0);
   const onLayout = useCallback((e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width), []);
   const firstPath = useMemo(
-    () => [...files].sort((a, b) => RISK_ORDER[a.risk] - RISK_ORDER[b.risk])[0]?.path ?? null,
+    () => startHerePath(files) ?? groupReviewFiles(files)[0]?.[1][0]?.path ?? null,
     [files],
   );
   const [chosen, setChosen] = useState<string | null>(null);
   const selected = chosen ?? firstPath;
   const [recorded, setRecorded] = useState<Decision | null>(payload.decision ?? null);
+  // Each file's flags, recorded as its diff is opened; the checklist counts only what has been looked at.
+  const [flagsByPath, setFlagsByPath] = useState<ReadonlyMap<string, readonly ReviewFlag[]>>(
+    () => new Map(),
+  );
+  const onFlags = useCallback((path: string, flags: readonly ReviewFlag[]) => {
+    setFlagsByPath((prev) => {
+      const old = prev.get(path);
+      // Compared by value: a re-read diff yields equal flags in new objects, and must not re-render forever.
+      if (old && sameFlags(old, flags)) return prev;
+      return new Map(prev).set(path, flags);
+    });
+  }, []);
+  // Summaries are asked for automatically on the first 30 files opened in this review; after that, on request.
+  const [autoExplained, setAutoExplained] = useState<ReadonlySet<string>>(() => new Set());
+  const autoSummary =
+    selected !== null && (autoExplained.has(selected) || autoExplained.size < AUTO_SUMMARY_LIMIT);
+  useEffect(() => {
+    if (selected && autoSummary && !autoExplained.has(selected))
+      setAutoExplained((prev) => new Set(prev).add(selected));
+  }, [autoExplained, autoSummary, selected]);
   const wide = width >= WIDE;
   return (
     <ScrollView
@@ -102,9 +129,12 @@ function ReviewReady(
             payload={payload}
             path={selected}
             file={files.find((f) => f.path === selected) ?? null}
+            onFlags={onFlags}
+            autoSummary={autoSummary}
           />
         </View>
       </View>
+      <BeforeYouApprove files={files} flagsByPath={flagsByPath} />
       <DecisionBar
         serverId={props.serverId}
         cwd={props.cwd}
@@ -250,12 +280,8 @@ function FileList(props: {
   onSelect: (path: string) => void;
 }) {
   const { t } = useTranslation();
-  const groups = useMemo(() => {
-    const map = new Map<string, ReviewFile[]>();
-    for (const file of props.files)
-      map.set(file.partLabel, [...(map.get(file.partLabel) ?? []), file]);
-    return [...map].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
-  }, [props.files]);
+  const groups = useMemo(() => groupReviewFiles(props.files), [props.files]);
+  const startHere = useMemo(() => startHerePath(props.files), [props.files]);
   const totals = props.files.reduce(
     (n, f) => ({ add: n.add + f.additions, del: n.del + f.deletions }),
     { add: 0, del: 0 },
@@ -276,6 +302,7 @@ function FileList(props: {
             <FileRow
               key={file.path}
               file={file}
+              startHere={file.path === startHere}
               selected={file.path === props.selected}
               onSelect={props.onSelect}
             />
@@ -286,25 +313,36 @@ function FileList(props: {
   );
 }
 
-function FileRow(props: { file: ReviewFile; selected: boolean; onSelect: (path: string) => void }) {
+function FileRow(props: {
+  file: ReviewFile;
+  startHere: boolean;
+  selected: boolean;
+  onSelect: (path: string) => void;
+}) {
   const { t } = useTranslation();
   const { file, onSelect } = props;
   const onPress = useCallback(() => onSelect(file.path), [file.path, onSelect]);
   const name = file.path.slice(file.path.lastIndexOf("/") + 1);
+  const folder = file.path.slice(0, Math.max(0, file.path.lastIndexOf("/")));
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={props.selected ? SELECTED_STATE : UNSELECTED_STATE}
       onPress={onPress}
+      accessibilityHint={file.path}
       style={[styles.fileRow, props.selected && styles.fileRowSelected]}
       testID="pull-request-review-file"
     >
       <View style={styles.fileName}>
         <Text style={styles.body} numberOfLines={1}>
           {name}
+          {props.startHere ? (
+            <Text style={styles.startHere}>{`  ${t(`${K}.plain.startHere`)}`}</Text>
+          ) : null}
         </Text>
         <Text style={styles.muted} numberOfLines={1}>
-          {file.path}
+          {t(`${K}.plain.${plainFileKey(file)}`, { tests: file.tests })}
+          {folder ? ` · ${folder}` : ""}
         </Text>
       </View>
       <Text style={styles.plus}>{`+${file.additions}`}</Text>
@@ -328,6 +366,9 @@ function FilePane(props: {
   payload: Payload;
   path: string | null;
   file: ReviewFile | null;
+  onFlags: (path: string, flags: readonly ReviewFlag[]) => void;
+  /** False once this review has asked for 30 summaries; later files get theirs on request. */
+  autoSummary: boolean;
 }) {
   const { t } = useTranslation();
   const { settings } = useAppSettings();
@@ -348,9 +389,19 @@ function FilePane(props: {
     [settings.codeFontSize, settings.monoFontFamily],
   );
   const files = useMemo(() => (diff.data?.file ? [diff.data.file] : []), [diff.data]);
-  const findings = (props.payload.adw?.findings ?? []).filter(
-    (f) => f.file && f.file === props.path,
+  const findings = useMemo(
+    () => (props.payload.adw?.findings ?? []).filter((f) => f.file && f.file === props.path),
+    [props.payload.adw, props.path],
   );
+  const file = props.file;
+  const flags = useMemo(
+    () => (file && diff.data ? reviewFlags(diff.data.file ?? null, file, findings) : null),
+    [diff.data, file, findings],
+  );
+  const { onFlags } = props;
+  useEffect(() => {
+    if (file && flags) onFlags(file.path, flags);
+  }, [file, flags, onFlags]);
   if (!props.file) return null;
   return (
     <View style={styles.pane} testID="pull-request-review-diff">
@@ -358,7 +409,16 @@ function FilePane(props: {
       <Text style={styles.muted}>
         {t(`${K}.riskExplain.${props.file.risk}`, { tests: props.file.tests })}
       </Text>
+      <PlainWords
+        serverId={props.serverId}
+        cwd={props.cwd}
+        base={props.payload.base ?? null}
+        head={props.payload.head ?? null}
+        path={props.file.path}
+        autoSummary={props.autoSummary}
+      />
       <FileFindings findings={findings} hasReview={Boolean(props.payload.adw)} />
+      {flags ? <LookHere flags={flags} /> : null}
       {diff.isLoading ? <Text style={styles.muted}>{t(`${K}.loadingDiff`)}</Text> : null}
       {!diff.isLoading && files.length === 0 ? (
         <Text style={styles.muted}>{t(`${K}.noDiff`)}</Text>
@@ -370,6 +430,142 @@ function FilePane(props: {
         </View>
       ) : null}
     </View>
+  );
+}
+
+/** The rule-based places to look in this file; automated findings are listed just above, so they are not repeated. */
+function LookHere(props: { flags: readonly ReviewFlag[] }) {
+  const { t } = useTranslation();
+  const own = props.flags.filter((flag) => flag.kind !== "finding");
+  return (
+    <View style={styles.findings} testID="pull-request-review-look-here">
+      <Text style={styles.sectionTitle}>{t(`${K}.plain.lookHere`)}</Text>
+      {own.length === 0 ? <Text style={styles.muted}>{t(`${K}.plain.nothingFlagged`)}</Text> : null}
+      {own.map((flag) => (
+        <View key={`${flag.kind}-${flag.line ?? 0}-${flag.text}`} style={styles.finding}>
+          <Text style={styles.flagTitle}>
+            {flag.line === null
+              ? FLAG_LABEL[flag.kind]
+              : `${t(`${K}.plain.line`, { line: flag.line })} · ${FLAG_LABEL[flag.kind]}`}
+          </Text>
+          <Text style={styles.code}>{flag.text}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * "In plain words" (2–3 sentences, asked when the file opens) and "Pseudocode of the change" (only when asked),
+ * written by a cheap model on the host and cached there. Hidden on hosts that can't explain files.
+ */
+function PlainWords(props: {
+  serverId: string;
+  cwd: string;
+  base: string | null;
+  head: string | null;
+  path: string;
+  autoSummary: boolean;
+}) {
+  const { t } = useTranslation();
+  const supported = useHostFeatureAvailability(props.serverId, "pullRequestReviewExplain") === true;
+  const [askedSummary, setAskedSummary] = useState(false);
+  const [askedPseudo, setAskedPseudo] = useState(false);
+  const target = {
+    serverId: props.serverId,
+    cwd: props.cwd,
+    base: props.base,
+    head: props.head,
+    path: props.path,
+  };
+  const summary = useReviewExplanation({
+    ...target,
+    kind: "summary",
+    enabled: supported && (props.autoSummary || askedSummary),
+  });
+  const pseudo = useReviewExplanation({
+    ...target,
+    kind: "pseudocode",
+    enabled: supported && askedPseudo,
+  });
+  const askSummary = useCallback(() => setAskedSummary(true), []);
+  const askPseudo = useCallback(() => setAskedPseudo(true), []);
+  if (!supported) return null;
+  const used = pseudo.data?.usedToday ?? summary.data?.usedToday;
+  const limit = pseudo.data?.dailyLimit ?? summary.data?.dailyLimit;
+  return (
+    <View style={styles.findings} testID="pull-request-review-plain-words">
+      <Text style={styles.sectionTitle}>{t(`${K}.plain.inPlainWords`)}</Text>
+      {props.autoSummary || askedSummary ? (
+        <ExplanationText query={summary} />
+      ) : (
+        <Pressable accessibilityRole="button" onPress={askSummary} style={styles.button}>
+          <Text style={styles.buttonText}>{t(`${K}.plain.explainFile`)}</Text>
+        </Pressable>
+      )}
+      {askedPseudo ? (
+        <>
+          <Text style={styles.sectionTitle}>{t(`${K}.plain.pseudocode`)}</Text>
+          <ExplanationText query={pseudo} mono />
+        </>
+      ) : (
+        <Pressable
+          accessibilityRole="button"
+          onPress={askPseudo}
+          style={styles.button}
+          testID="pull-request-review-ask-pseudocode"
+        >
+          <Text style={styles.buttonText}>{t(`${K}.plain.showPseudocode`)}</Text>
+        </Pressable>
+      )}
+      {used !== undefined && limit !== undefined ? (
+        <Text style={styles.muted}>{t(`${K}.plain.usedToday`, { used, limit })}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function ExplanationText(props: {
+  query: ReturnType<typeof useReviewExplanation>;
+  mono?: boolean;
+}) {
+  const { t } = useTranslation();
+  const { query } = props;
+  if (query.isLoading) return <Text style={styles.muted}>{t(`${K}.plain.writing`)}</Text>;
+  const data = query.data;
+  if (data?.status === "ok" && data.text)
+    return <Text style={props.mono ? styles.code : styles.body}>{data.text}</Text>;
+  if (data?.status === "limit")
+    return <Text style={styles.muted}>{t(`${K}.plain.limitReached`)}</Text>;
+  return <Text style={styles.muted}>{t(`${K}.plain.unavailable`)}</Text>;
+}
+
+function BeforeYouApprove(props: {
+  files: readonly ReviewFile[];
+  flagsByPath: ReadonlyMap<string, readonly ReviewFlag[]>;
+}) {
+  const { t } = useTranslation();
+  const items = useMemo(
+    () => beforeYouApprove({ files: props.files, flagsByPath: props.flagsByPath }),
+    [props.files, props.flagsByPath],
+  );
+  return (
+    <View style={styles.findings} testID="pull-request-review-checklist">
+      <Text style={styles.sectionTitle}>{t(`${K}.plain.beforeApprove`)}</Text>
+      {items.map((item) => (
+        <Text key={item.key} style={item.state === "look" ? styles.textWarn : styles.body}>
+          {`${CHECK_MARK[item.state]}  ${item.text}`}
+        </Text>
+      ))}
+    </View>
+  );
+}
+const CHECK_MARK = { ok: "✓", look: "!", unknown: "·" } as const;
+
+function sameFlags(a: readonly ReviewFlag[], b: readonly ReviewFlag[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((f, i) => f.kind === b[i]?.kind && f.line === b[i]?.line && f.text === b[i]?.text)
   );
 }
 
@@ -632,6 +828,11 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: 1,
   },
   riskText: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
+  startHere: {
+    color: theme.colors.palette.amber[500],
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+  },
   pane: { gap: theme.spacing[2] },
   diffFrame: {
     height: 560,
@@ -653,6 +854,16 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "baseline",
   },
   severity: { fontWeight: theme.fontWeight.semibold, textTransform: "uppercase" },
+  flagTitle: {
+    color: theme.colors.statusWarning,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  code: {
+    color: theme.colors.foreground,
+    fontFamily: theme.fontFamily.mono,
+    fontSize: theme.fontSize.sm,
+  },
   notice: {
     padding: theme.spacing[3],
     borderRadius: theme.borderRadius.lg,

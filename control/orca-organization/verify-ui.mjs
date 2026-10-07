@@ -26,6 +26,8 @@ if (
     "environments.ui.test.mjs",
     "today.ui.test.mjs",
     "launchpad.ui.test.mjs",
+    "team-tree.ui.test.mjs",
+    "cleanup-now.ui.test.mjs",
   ].includes(testFile)
 )
   throw Error("Unknown component test file");
@@ -42,7 +44,7 @@ const plugins = [
         (args) => ({ path: uiRequire.resolve(args.path), external: true }),
       );
       build.onResolve(
-        { filter: /^(react-native|@getpaseo\/plugin\/client(?:\/react-native)?)$/ },
+        { filter: /^(react-native|@getpaseo\/plugin\/client(?:\/(?:react-native|ui))?)$/ },
         () => ({ path: adapter }),
       );
     },

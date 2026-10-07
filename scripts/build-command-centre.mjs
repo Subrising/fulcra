@@ -13,9 +13,13 @@ const control = path.resolve(
 const require = createRequire(path.join(product, "package.json"));
 const { build } = require("esbuild");
 const { compilePlugin } = await import("../packages/server/dist/server/server/plugins/compiler.js");
+// The bundled folder is named by the plugin's manifest ID, which the host verifies on load.
+const pluginManifest = await fs.readFile(path.join(control, "orca-organization/paseo-plugin.json"));
+const pluginId = JSON.parse(pluginManifest.toString("utf8")).id;
+if (!/^[a-z0-9][a-z0-9-]*$/.test(pluginId)) throw Error("Invalid bundled plugin ID in manifest");
 const output = process.env.FULCRA_PLUGIN_OUTPUT
-  ? path.resolve(process.env.FULCRA_PLUGIN_OUTPUT, "orca-organization-next")
-  : path.join(product, "packages/desktop/bundled-plugins/orca-organization-next");
+  ? path.resolve(process.env.FULCRA_PLUGIN_OUTPUT, pluginId)
+  : path.join(product, "packages/desktop/bundled-plugins", pluginId);
 await fs.mkdir(output, { recursive: true });
 const version = JSON.parse(
   await fs.readFile(path.join(product, "packages/server/package.json"), "utf8"),
@@ -28,10 +32,13 @@ try {
     recursive: true,
     filter: (file) => !file.split(path.sep).includes("node_modules"),
   });
-  compiled = await compilePlugin({
-    client: path.join(staging, "index.client.tsx"),
-    server: path.join(staging, "index.server.ts"),
-  });
+  compiled = await compilePlugin(
+    {
+      client: path.join(staging, "index.client.tsx"),
+      server: path.join(staging, "index.server.ts"),
+    },
+    { minifyWhitespace: true },
+  );
 } finally {
   await fs.rm(staging, { recursive: true, force: true });
 }
@@ -47,7 +54,6 @@ for (const target of ["client", "server"]) {
   manifest[target] = createHash("sha256").update(source).digest("hex");
 }
 await fs.writeFile(path.join(output, "runtime-manifest.json"), JSON.stringify(manifest));
-const pluginManifest = await fs.readFile(path.join(control, "orca-organization/paseo-plugin.json"));
 await fs.writeFile(path.join(output, "paseo-plugin.json"), pluginManifest);
 await fs.mkdir(path.join(output, "orca-organization"), { recursive: true });
 await fs.writeFile(path.join(output, "orca-organization/paseo-plugin.json"), pluginManifest);
@@ -64,6 +70,8 @@ const sources = [
   ["src/control/inbox.mjs", "src/control/inbox.mjs"],
   ["src/control/delegated.mjs", "src/control/delegated.mjs"],
   ["src/portable-memory/entry.mjs", "src/portable-memory/entry.mjs"],
+  // Lets a session prepare (never run) a deploy plan; see orca-organization/server/deploy/cli.mjs.
+  ["orca-organization/server/deploy/cli.mjs", "deploy-plan.mjs"],
 ];
 for (const [entry, filename] of sources) {
   const result = await build({

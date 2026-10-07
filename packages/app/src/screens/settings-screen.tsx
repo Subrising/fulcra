@@ -18,7 +18,6 @@ import type { TFunction } from "i18next";
 import { Buffer } from "buffer";
 import {
   ArrowLeft,
-  Settings,
   Palette,
   Server,
   Network,
@@ -42,6 +41,9 @@ import {
   Sparkles,
   Blocks,
   ChevronRight,
+  ChevronDown,
+  SendHorizontal,
+  Users,
 } from "lucide-react-native";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
@@ -49,8 +51,6 @@ import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
 import { HostPicker as SharedHostPicker } from "@/components/hosts/host-picker";
 import { HostStatusDot } from "@/components/host-status-dot";
-import { ScreenTitle } from "@/components/headers/screen-title";
-import { HeaderIconBadge } from "@/components/headers/header-icon-badge";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { AppearanceSection } from "@/screens/settings/appearance/appearance-section";
 import { OpenLocationSection } from "@/screens/settings/open-location/open-location-section";
@@ -75,7 +75,7 @@ import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { WindowChromeRegion, WindowChromeSafeArea } from "@/utils/desktop-window";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { BackHeader } from "@/components/headers/back-header";
-import { ScreenHeader } from "@/components/headers/screen-header";
+import { PageLayout } from "@/components/page-layout";
 import { AddHostMethodModal } from "@/components/add-host-method-modal";
 import { AddHostModal } from "@/components/add-host-modal";
 import { AddRemoteSshHostModal } from "@/components/add-remote-ssh-host-modal";
@@ -116,9 +116,25 @@ import {
   HostWorkspacesPage,
   HostTerminalsPage,
 } from "@/screens/settings/host-page";
-import { resolvePluginIcon } from "@/plugins/icons";
 import { PluginSettingsContent } from "@/plugins/settings";
 import { useInstalledPlugins } from "@/plugins/registry";
+import { resolvePluginIcon } from "@/plugins/icons";
+import { buildPluginSettingsRoute } from "@/plugins/settings/routes";
+import { useHostFeature } from "@/runtime/host-features";
+import {
+  ACCOUNTS_PLUGIN_SCREEN_ID,
+  ADVANCED_GROUP_ORDER,
+  ADVANCED_SECTIONS,
+  EVERYDAY_SECTIONS,
+  HOST_SECTION_DESCRIPTION_KEYS,
+  HOST_SECTION_LABEL_KEYS,
+  PLUGIN_SCREEN_DESCRIPTION_KEYS,
+  SECTION_DESCRIPTION_KEYS,
+  SECTION_LABEL_KEYS,
+  menuSectionFor,
+  shouldOpenAdvanced,
+  type AdvancedGroupId,
+} from "@/screens/settings/settings-menu";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import { MetadataGenerationPage } from "@/screens/settings/metadata-generation-page";
 import ProjectsScreen from "@/screens/projects-screen";
@@ -154,70 +170,77 @@ interface SidebarSectionItem {
 }
 
 const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
-  { id: "general", labelKey: "settings.sections.general", icon: Settings },
+  { id: "general", labelKey: SECTION_LABEL_KEYS.general, icon: Palette },
   {
-    id: "appearance",
-    labelKey: "settings.sections.appearance",
-    icon: Palette,
-    Content: AppearanceSection,
+    id: "notifications",
+    labelKey: SECTION_LABEL_KEYS.notifications,
+    icon: Bell,
+    desktopOnly: true,
+    Content: DesktopNotificationsSection,
+  },
+  { id: "behaviour", labelKey: SECTION_LABEL_KEYS.behaviour, icon: SendHorizontal },
+  {
+    id: "chat",
+    labelKey: SECTION_LABEL_KEYS.chat,
+    icon: MessageSquare,
+    Content: ChatSection,
   },
   {
     id: "sidebar",
-    labelKey: "settings.sections.sidebar",
+    labelKey: SECTION_LABEL_KEYS.sidebar,
     icon: PanelLeft,
     Content: SidebarNavSection,
   },
-  { id: "chat", labelKey: "settings.sections.chat", icon: MessageSquare, Content: ChatSection },
   {
     id: "terminal",
-    labelKey: "settings.sections.terminal",
+    labelKey: SECTION_LABEL_KEYS.terminal,
     icon: SquareTerminal,
     Content: TerminalSection,
   },
   {
     id: "browser",
-    labelKey: "settings.sections.browser",
+    labelKey: SECTION_LABEL_KEYS.browser,
     icon: Globe,
     desktopOnly: true,
     Content: BrowserDataSection,
   },
   {
     id: "editor",
-    labelKey: "settings.sections.editor",
+    labelKey: SECTION_LABEL_KEYS.editor,
     icon: Code2,
     webOnly: true,
     Content: EditorSection,
   },
   {
     id: "shortcuts",
-    labelKey: "settings.sections.shortcuts",
+    labelKey: SECTION_LABEL_KEYS.shortcuts,
     icon: Keyboard,
     desktopOnly: true,
     Content: KeyboardShortcutsSection,
   },
   {
     id: "integrations",
-    labelKey: "settings.sections.integrations",
+    labelKey: SECTION_LABEL_KEYS.integrations,
     icon: Puzzle,
     desktopOnly: true,
     Content: IntegrationsSection,
   },
   {
-    id: "notifications",
-    labelKey: "settings.sections.notifications",
-    icon: Bell,
+    id: "service",
+    labelKey: SECTION_LABEL_KEYS.service,
+    icon: Server,
     desktopOnly: true,
-    Content: DesktopNotificationsSection,
+    Content: CommandCentreSection,
   },
   {
     id: "permissions",
-    labelKey: "settings.sections.permissions",
+    labelKey: SECTION_LABEL_KEYS.permissions,
     icon: Shield,
     desktopOnly: true,
     Content: DesktopPermissionsSection,
   },
-  { id: "diagnostics", labelKey: "settings.sections.diagnostics", icon: Stethoscope },
-  { id: "about", labelKey: "settings.sections.about", icon: Info },
+  { id: "diagnostics", labelKey: SECTION_LABEL_KEYS.diagnostics, icon: Stethoscope },
+  { id: "about", labelKey: SECTION_LABEL_KEYS.about, icon: Info },
 ];
 
 interface HostSectionItem {
@@ -227,17 +250,17 @@ interface HostSectionItem {
 }
 
 const HOST_SECTION_ITEMS: HostSectionItem[] = [
-  { id: "host", labelKey: "settings.hostSections.host", icon: Server },
-  { id: "projects", labelKey: "settings.hostSections.projects", icon: FolderGit2 },
-  { id: "connections", labelKey: "settings.hostSections.connections", icon: Network },
-  { id: "pair-device", labelKey: "openProject.tiles.pairDevice.title", icon: Smartphone },
-  { id: "agents", labelKey: "settings.hostSections.agents", icon: Bot },
-  { id: "metadata", labelKey: "settings.hostSections.metadata", icon: Sparkles },
-  { id: "workspaces", labelKey: "settings.hostSections.workspaces", icon: FolderGit2 },
-  { id: "providers", labelKey: "settings.hostSections.providers", icon: Boxes },
-  { id: "usage", labelKey: "settings.hostSections.usage", icon: Gauge },
-  { id: "terminals", labelKey: "settings.hostSections.terminals", icon: SquareTerminal },
-  { id: "plugins", labelKey: "settings.hostSections.plugins", icon: Blocks },
+  { id: "host", labelKey: HOST_SECTION_LABEL_KEYS.host, icon: Server },
+  { id: "projects", labelKey: HOST_SECTION_LABEL_KEYS.projects, icon: FolderGit2 },
+  { id: "connections", labelKey: HOST_SECTION_LABEL_KEYS.connections, icon: Network },
+  { id: "pair-device", labelKey: HOST_SECTION_LABEL_KEYS["pair-device"], icon: Smartphone },
+  { id: "providers", labelKey: HOST_SECTION_LABEL_KEYS.providers, icon: Boxes },
+  { id: "usage", labelKey: HOST_SECTION_LABEL_KEYS.usage, icon: Gauge },
+  { id: "agents", labelKey: HOST_SECTION_LABEL_KEYS.agents, icon: Bot },
+  { id: "metadata", labelKey: HOST_SECTION_LABEL_KEYS.metadata, icon: Sparkles },
+  { id: "workspaces", labelKey: HOST_SECTION_LABEL_KEYS.workspaces, icon: FolderGit2 },
+  { id: "terminals", labelKey: HOST_SECTION_LABEL_KEYS.terminals, icon: SquareTerminal },
+  { id: "plugins", labelKey: HOST_SECTION_LABEL_KEYS.plugins, icon: Blocks },
 ];
 
 // Sections that render without screen state. Kept out of the switch below, which is at the
@@ -248,6 +271,34 @@ const PROP_FREE_SECTIONS: Partial<Record<SettingsSectionSlug, ComponentType>> = 
   ),
   licenses: LicensesSection,
 };
+
+// Pages that combine several sections. Kept out of the switch below, which is at the
+// complexity limit.
+function renderCombinedSection(
+  section: SettingsSectionSlug,
+  props: GeneralSectionProps & { isDesktopApp: boolean },
+): ReactNode {
+  if (section === "general" || section === "appearance") {
+    return (
+      <>
+        <GeneralSection
+          settings={props.settings}
+          handleLanguageChange={props.handleLanguageChange}
+        />
+        <AppearanceSection />
+      </>
+    );
+  }
+  if (section === "behaviour") {
+    return (
+      <>
+        <SendingSection />
+        {props.isDesktopApp ? <OpenLocationSection /> : null}
+      </>
+    );
+  }
+  return null;
+}
 
 function renderHostSettingsContent(
   view: Extract<SettingsView, { kind: "host" }>,
@@ -347,7 +398,7 @@ function GeneralSection({ settings, handleLanguageChange }: GeneralSectionProps)
       )
     : settings.language;
   return (
-    <SettingsSection title={t("settings.general.title")}>
+    <SettingsSection title={t("settings.general.language.label")}>
       <View style={settingsStyles.card}>
         <View style={settingsStyles.row}>
           <View style={settingsStyles.rowContent}>
@@ -750,88 +801,163 @@ function useSortedHosts(hosts: HostProfile[], localServerId: string | null): Hos
   return useMemo(() => orderHostsLocalFirst(hosts, localServerId), [hosts, localServerId]);
 }
 
-interface SidebarSectionButtonProps {
-  itemId: SettingsSectionSlug;
+interface MenuRowProps {
   label: string;
+  description?: string;
   icon: ComponentType<{ size: number; color: string }>;
   isSelected: boolean;
-  onSelect: (section: SettingsSectionSlug) => void;
+  onPress: () => void;
+  testID?: string;
+}
+
+function MenuRow({
+  label,
+  description,
+  icon: IconComponent,
+  isSelected,
+  onPress,
+  testID,
+}: MenuRowProps) {
+  const { theme } = useUnistyles();
+  const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
+  const labelStyle = useMemo(
+    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
+    [isSelected, theme.colors.foreground],
+  );
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={accessibilityState}
+      accessibilityHint={description}
+      onPress={onPress}
+      testID={testID}
+      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
+    >
+      <IconComponent
+        size={theme.iconSize.md}
+        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
+      />
+      <View style={sidebarStyles.labelColumn}>
+        <Text style={labelStyle} numberOfLines={1}>
+          {label}
+        </Text>
+        {description ? (
+          <Text style={sidebarStyles.description} numberOfLines={2}>
+            {description}
+          </Text>
+        ) : null}
+      </View>
+    </Pressable>
+  );
 }
 
 function SidebarSectionButton({
-  itemId,
-  label,
-  icon: IconComponent,
+  item,
   isSelected,
+  showDescription,
   onSelect,
-}: SidebarSectionButtonProps) {
-  const { theme } = useUnistyles();
-  const handlePress = useCallback(() => {
-    onSelect(itemId);
-  }, [onSelect, itemId]);
-  const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
-  const labelStyle = useMemo(
-    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
-    [isSelected, theme.colors.foreground],
-  );
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={accessibilityState}
-      onPress={handlePress}
-      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
-    >
-      <IconComponent
-        size={theme.iconSize.md}
-        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
-      />
-      <Text style={labelStyle} numberOfLines={1}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-interface SidebarHostSectionButtonProps {
-  itemId: HostSectionSlug;
-  label: string;
-  icon: ComponentType<{ size: number; color: string }>;
+}: {
+  item: SidebarSectionItem;
   isSelected: boolean;
-  onSelect: (section: HostSectionSlug) => void;
+  showDescription: boolean;
+  onSelect: (section: SettingsSectionSlug) => void;
+}) {
+  const { t } = useTranslation();
+  const handlePress = useCallback(() => onSelect(item.id), [onSelect, item.id]);
+  return (
+    <MenuRow
+      label={t(item.labelKey)}
+      description={showDescription ? t(SECTION_DESCRIPTION_KEYS[item.id]) : undefined}
+      icon={item.icon}
+      isSelected={isSelected}
+      onPress={handlePress}
+      testID={`settings-section-${item.id}`}
+    />
+  );
 }
 
 function SidebarHostSectionButton({
-  itemId,
-  label,
-  icon: IconComponent,
+  item,
   isSelected,
+  showDescription,
   onSelect,
-}: SidebarHostSectionButtonProps) {
-  const { theme } = useUnistyles();
-  const handlePress = useCallback(() => {
-    onSelect(itemId);
-  }, [onSelect, itemId]);
-  const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
-  const labelStyle = useMemo(
-    () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
-    [isSelected, theme.colors.foreground],
-  );
+}: {
+  item: HostSectionItem;
+  isSelected: boolean;
+  showDescription: boolean;
+  onSelect: (section: HostSectionSlug) => void;
+}) {
+  const { t } = useTranslation();
+  const handlePress = useCallback(() => onSelect(item.id), [onSelect, item.id]);
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={accessibilityState}
+    <MenuRow
+      label={t(item.labelKey)}
+      description={showDescription ? t(HOST_SECTION_DESCRIPTION_KEYS[item.id]) : undefined}
+      icon={item.icon}
+      isSelected={isSelected}
       onPress={handlePress}
-      testID={`settings-host-section-${itemId}`}
-      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
-    >
-      <IconComponent
-        size={theme.iconSize.md}
-        color={isSelected ? theme.colors.foreground : theme.colors.foregroundMuted}
-      />
-      <Text style={labelStyle} numberOfLines={1}>
-        {label}
-      </Text>
-    </Pressable>
+      testID={`settings-host-section-${item.id}`}
+    />
+  );
+}
+
+interface PluginScreenEntry {
+  serverId: string;
+  pluginId: string;
+  screenId: string;
+  title: string;
+  icon: string;
+}
+
+/** Settings pages that plugins on the chosen host add, in registration order. */
+function usePluginScreenEntries(serverId: string | null): PluginScreenEntry[] {
+  const plugins = useInstalledPlugins();
+  const supported = useHostFeature(serverId ?? "", "pluginSettings");
+  return useMemo(() => {
+    if (!serverId || !supported) return [];
+    return plugins
+      .filter((plugin) => plugin.serverId === serverId)
+      .flatMap((plugin) =>
+        plugin.settingsScreens.map((screen) => ({
+          serverId,
+          pluginId: plugin.id,
+          screenId: screen.id,
+          title: screen.title,
+          icon: screen.icon,
+        })),
+      );
+  }, [plugins, serverId, supported]);
+}
+
+function PluginScreenRow({
+  entry,
+  label,
+  isSelected,
+  showDescription,
+}: {
+  entry: PluginScreenEntry;
+  label?: string;
+  isSelected: boolean;
+  showDescription: boolean;
+}) {
+  const { t } = useTranslation();
+  const router = useRouter();
+  const isCompactLayout = useIsCompactFormFactor();
+  const handlePress = useCallback(() => {
+    const target = buildPluginSettingsRoute(entry.serverId, entry.pluginId, entry.screenId);
+    if (isCompactLayout) router.push(target);
+    else router.replace(target);
+  }, [entry, isCompactLayout, router]);
+  const descriptionKey = PLUGIN_SCREEN_DESCRIPTION_KEYS[entry.screenId];
+  return (
+    <MenuRow
+      label={label ?? entry.title}
+      description={showDescription && descriptionKey ? t(descriptionKey) : undefined}
+      icon={entry.screenId === ACCOUNTS_PLUGIN_SCREEN_ID ? Users : resolvePluginIcon(entry.icon)}
+      isSelected={isSelected}
+      onPress={handlePress}
+      testID={`settings-plugin-screen-${entry.screenId}`}
+    />
   );
 }
 
@@ -960,79 +1086,156 @@ function SettingsSidebar({
     () => [{ flex: 1 }, isDesktop ? { paddingTop: insets.top } : null],
     [insets.top, isDesktop],
   );
-  const selectedSectionId = view.kind === "section" ? view.section : null;
+  const selectedSectionId = view.kind === "section" ? menuSectionFor(view.section) : null;
   let selectedHostSection: HostSectionSlug | null = null;
   if (view.kind === "host") selectedHostSection = view.section;
   if (view.kind === "project") selectedHostSection = "projects";
-  if (view.kind === "plugin") selectedHostSection = "plugins";
+  const selectedPluginScreen =
+    view.kind === "plugin" ? `${view.serverId}/${view.pluginId}/${view.screenId}` : null;
+  const isPluginScreenSelected = (entry: PluginScreenEntry) =>
+    selectedPluginScreen === `${entry.serverId}/${entry.pluginId}/${entry.screenId}`;
+
+  const pluginScreens = usePluginScreenEntries(activeHostServerId);
+  const accountsScreen = pluginScreens.find(
+    (entry) => entry.screenId === ACCOUNTS_PLUGIN_SCREEN_ID,
+  );
+  const teamScreens = pluginScreens.filter((entry) => entry !== accountsScreen);
+  const location = view.kind === "plugin" ? { kind: view.kind, screenId: view.screenId } : view;
+  const [advancedOpen, setAdvancedOpen] = useState(() => shouldOpenAdvanced(location));
+  const advancedWanted = shouldOpenAdvanced(location);
+  useEffect(() => {
+    if (advancedWanted) setAdvancedOpen(true);
+  }, [advancedWanted]);
+  const advancedAccessibilityState = useMemo(() => ({ expanded: advancedOpen }), [advancedOpen]);
+  const toggleAdvanced = useCallback(() => setAdvancedOpen((open) => !open), []);
+  const openProviders = useCallback(() => onSelectHostSection("providers"), [onSelectHostSection]);
+
+  const itemsFor = (ids: readonly SettingsSectionSlug[]) =>
+    ids.flatMap((id) => items.filter((item) => item.id === id));
+  const renderSection = (item: SidebarSectionItem, showDescription: boolean) => (
+    <SidebarSectionButton
+      key={item.id}
+      item={item}
+      isSelected={selectedSectionId === item.id}
+      showDescription={showDescription}
+      onSelect={onSelectSection}
+    />
+  );
+  // Long descriptions sit under the everyday entries everywhere; the advanced list keeps them on
+  // phones, where it is a full-screen list, and shows them as the page intro on desktop.
+  const describeAdvanced = !isDesktop;
+
+  const accountsRow = accountsScreen ? (
+    <PluginScreenRow
+      entry={accountsScreen}
+      label={t("settings.menu.labels.accounts")}
+      isSelected={isPluginScreenSelected(accountsScreen)}
+      showDescription
+    />
+  ) : (
+    <MenuRow
+      label={t("settings.menu.labels.accounts")}
+      description={t("settings.menu.descriptions.accounts")}
+      icon={Users}
+      isSelected={false}
+      onPress={openProviders}
+      testID="settings-accounts"
+    />
+  );
+
+  const hostRows = hasHosts ? (
+    <>
+      <HostPicker
+        activeServerId={activeHostServerId}
+        sortedHosts={sortedHosts}
+        onSelectHost={onSelectHost}
+        onAddHost={onAddHost}
+        enableBuiltInDaemonOption={enableBuiltInDaemonOption}
+      />
+      {HOST_SECTION_ITEMS.map((item) => (
+        <SidebarHostSectionButton
+          key={item.id}
+          item={item}
+          isSelected={selectedHostSection === item.id}
+          showDescription={describeAdvanced}
+          onSelect={onSelectHostSection}
+        />
+      ))}
+    </>
+  ) : (
+    <>
+      <MenuRow
+        label={t("settings.addHost")}
+        icon={Plus}
+        isSelected={false}
+        onPress={onAddHost}
+        testID="settings-add-host"
+      />
+      {enableBuiltInDaemonOption.visible ? (
+        <MenuRow
+          label={t("settings.enableBuiltInDaemon")}
+          icon={Server}
+          isSelected={false}
+          onPress={enableBuiltInDaemonOption.onPress}
+          testID="settings-enable-built-in-daemon"
+        />
+      ) : null}
+    </>
+  );
+
+  const renderGroup = (group: AdvancedGroupId) => {
+    const sections = itemsFor(ADVANCED_SECTIONS[group]);
+    const extra =
+      group === "team"
+        ? teamScreens.map((entry) => (
+            <PluginScreenRow
+              key={`${entry.pluginId}/${entry.screenId}`}
+              entry={entry}
+              isSelected={isPluginScreenSelected(entry)}
+              showDescription={describeAdvanced}
+            />
+          ))
+        : null;
+    if (group !== "computer" && sections.length === 0 && !extra?.length) return null;
+    return (
+      <View key={group} style={sidebarStyles.group}>
+        <Text style={sidebarStyles.subgroupLabel}>{t(`settings.menu.groups.${group}`)}</Text>
+        {extra}
+        {sections.map((item) => renderSection(item, describeAdvanced))}
+        {group === "computer" ? hostRows : null}
+      </View>
+    );
+  };
 
   const sidebarBody = (
     <>
       <View style={sidebarStyles.list}>
-        <Text style={sidebarStyles.groupLabel}>{t("settings.groups.app")}</Text>
-        {items.map((item) => (
-          <SidebarSectionButton
-            key={item.id}
-            itemId={item.id}
-            label={t(item.labelKey)}
-            icon={item.icon}
-            isSelected={selectedSectionId === item.id}
-            onSelect={onSelectSection}
-          />
-        ))}
+        {accountsRow}
+        {itemsFor(EVERYDAY_SECTIONS).map((item) => renderSection(item, true))}
       </View>
       <SidebarSeparator />
-      {hasHosts ? (
-        <View style={sidebarStyles.list}>
-          <Text style={sidebarStyles.groupLabel}>{t("settings.groups.host")}</Text>
-          <HostPicker
-            activeServerId={activeHostServerId}
-            sortedHosts={sortedHosts}
-            onSelectHost={onSelectHost}
-            onAddHost={onAddHost}
-            enableBuiltInDaemonOption={enableBuiltInDaemonOption}
-          />
-          {HOST_SECTION_ITEMS.map((item) => (
-            <SidebarHostSectionButton
-              key={item.id}
-              itemId={item.id}
-              label={t(item.labelKey)}
-              icon={item.icon}
-              isSelected={selectedHostSection === item.id}
-              onSelect={onSelectHostSection}
-            />
-          ))}
-        </View>
-      ) : (
-        <View style={sidebarStyles.list}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t("settings.addHost")}
-            onPress={onAddHost}
-            testID="settings-add-host"
-            style={sidebarItemStyle}
-          >
-            <Plus size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
-            <Text style={sidebarStyles.label} numberOfLines={1}>
-              {t("settings.addHost")}
-            </Text>
-          </Pressable>
-          {enableBuiltInDaemonOption.visible ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t("settings.enableBuiltInDaemon")}
-              onPress={enableBuiltInDaemonOption.onPress}
-              testID="settings-enable-built-in-daemon"
-              style={sidebarItemStyle}
-            >
-              <Server size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
-              <Text style={sidebarStyles.label} numberOfLines={1}>
-                {t("settings.enableBuiltInDaemon")}
-              </Text>
-            </Pressable>
-          ) : null}
-        </View>
-      )}
+      <View style={sidebarStyles.list}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={advancedAccessibilityState}
+          accessibilityLabel={
+            advancedOpen ? t("settings.menu.hideAdvanced") : t("settings.menu.showAdvanced")
+          }
+          onPress={toggleAdvanced}
+          testID="settings-advanced-toggle"
+          style={sidebarItemStyle}
+        >
+          {advancedOpen ? (
+            <ChevronDown size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+          ) : (
+            <ChevronRight size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
+          )}
+          <Text style={sidebarStyles.label} numberOfLines={1}>
+            {t("settings.menu.advanced")}
+          </Text>
+        </Pressable>
+        {advancedOpen ? ADVANCED_GROUP_ORDER.map(renderGroup) : null}
+      </View>
     </>
   );
 
@@ -1081,7 +1284,6 @@ export interface SettingsScreenProps {
 
 export default function SettingsScreen({ view, openAddHostIntent = null }: SettingsScreenProps) {
   const router = useRouter();
-  const { theme } = useUnistyles();
   const { t } = useTranslation();
   const voiceAudioEngine = useVoiceAudioEngineOptional();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
@@ -1309,30 +1511,34 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const installedPlugins = useInstalledPlugins();
   const detailHeader = ((): {
     title: string;
-    Icon: ComponentType<{ size: number; color: string }>;
-    titleAccessory?: ReactNode;
+    description?: string;
   } | null => {
     if (view.kind === "plugin") {
       const screen = installedPlugins
         .find((plugin) => plugin.serverId === view.serverId && plugin.id === view.pluginId)
         ?.settingsScreens.find((candidate) => candidate.id === view.screenId);
+      const descriptionKey = PLUGIN_SCREEN_DESCRIPTION_KEYS[view.screenId];
       return {
-        title: `${view.pluginId} · ${screen?.title ?? t("settings.title")}`,
-        Icon: screen ? resolvePluginIcon(screen.icon) : Blocks,
+        title: screen?.title ?? t("settings.title"),
+        description: descriptionKey ? t(descriptionKey) : undefined,
       };
     }
     if (view.kind === "host") {
       const item = HOST_SECTION_ITEMS.find((s) => s.id === view.section);
       if (!item) return null;
-      return { title: t(item.labelKey), Icon: item.icon };
+      return {
+        title: t(item.labelKey),
+        description: t(HOST_SECTION_DESCRIPTION_KEYS[item.id]),
+      };
     }
     if (view.kind === "section") {
-      const item = SIDEBAR_SECTION_ITEMS.find((s) => s.id === view.section);
-      if (!item) return null;
-      return { title: t(item.labelKey), Icon: item.icon };
+      return {
+        title: t(SECTION_LABEL_KEYS[view.section]),
+        description: t(SECTION_DESCRIPTION_KEYS[view.section]),
+      };
     }
     if (view.kind === "project") {
-      return { title: t("settings.projects"), Icon: FolderGit2 };
+      return { title: t("settings.projects") };
     }
     return null;
   })();
@@ -1344,6 +1550,9 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
           serverId={view.serverId}
           pluginId={view.pluginId}
           screenId={view.screenId}
+          onBackToPlugins={handleBackFromDetail}
+          // Accounts & models is an everyday entry, not a page under Plugins.
+          showBackToPlugins={!isCompactLayout && view.screenId !== ACCOUNTS_PLUGIN_SCREEN_ID}
         />
       );
     if (view.kind === "host") {
@@ -1362,20 +1571,13 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     if (view.kind === "section") {
       const PropFreeSection = PROP_FREE_SECTIONS[view.section];
       if (PropFreeSection) return <PropFreeSection />;
+      const menuPage = renderCombinedSection(view.section, {
+        settings,
+        handleLanguageChange,
+        isDesktopApp,
+      });
+      if (menuPage) return menuPage;
       switch (view.section) {
-        case "general":
-          return (
-            <>
-              <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
-              <SendingSection />
-              {isDesktopApp ? (
-                <>
-                  <OpenLocationSection />
-                  <CommandCentreSection />
-                </>
-              ) : null}
-            </>
-          );
         case "editor":
           return isWeb ? <EditorSection /> : null;
         case "shortcuts":
@@ -1417,16 +1619,6 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
       </View>
     );
   }
-
-  const desktopDetailHeaderLeft = detailHeader ? (
-    <>
-      <HeaderIconBadge>
-        <detailHeader.Icon size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
-      </HeaderIconBadge>
-      <ScreenTitle testID="settings-detail-header-title">{detailHeader.title}</ScreenTitle>
-      {detailHeader.titleAccessory}
-    </>
-  ) : null;
 
   const addHostModals = (
     <>
@@ -1484,14 +1676,12 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   if (isCompactLayout) {
     return (
       <View style={styles.container}>
-        <BackHeader
-          title={detailHeader?.title}
-          titleAccessory={detailHeader?.titleAccessory}
-          onBack={handleBackFromDetail}
-        />
-        <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
-          <View style={styles.content}>{content}</View>
-        </ScrollView>
+        <PageLayout title={detailHeader?.title} onBack={handleBackFromDetail}>
+          {detailHeader?.description ? (
+            <Text style={styles.pageIntro}>{detailHeader.description}</Text>
+          ) : null}
+          {content}
+        </PageLayout>
         {addHostModals}
       </View>
     );
@@ -1517,14 +1707,12 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         </WindowChromeRegion>
         <WindowChromeRegion corners="top-right">
           <View style={desktopStyles.contentPane} testID="settings-detail-pane">
-            <ScreenHeader
-              borderless={!detailHeader}
-              left={desktopDetailHeaderLeft}
-              leftStyle={desktopStyles.detailLeft}
-            />
-            <ScrollView style={styles.scrollView} contentContainerStyle={insetBottomStyle}>
-              <View style={styles.content}>{content}</View>
-            </ScrollView>
+            <PageLayout title={detailHeader?.title} titleTestID="settings-detail-header-title">
+              {detailHeader?.description ? (
+                <Text style={styles.pageIntro}>{detailHeader.description}</Text>
+              ) : null}
+              {content}
+            </PageLayout>
           </View>
         </WindowChromeRegion>
       </View>
@@ -1555,12 +1743,10 @@ const styles = StyleSheet.create((theme) => ({
   scrollView: {
     flex: 1,
   },
-  content: {
-    padding: theme.spacing[4],
-    paddingTop: theme.spacing[6],
-    width: "100%",
-    maxWidth: 720,
-    alignSelf: "center",
+  pageIntro: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+    marginBottom: theme.spacing[4],
   },
   aboutValue: {
     color: theme.colors.foregroundMuted,
@@ -1680,6 +1866,29 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.normal,
     flex: 1,
+  },
+  labelColumn: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  description: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+    opacity: 0.8,
+  },
+  group: {
+    gap: theme.spacing[1],
+    paddingTop: theme.spacing[2],
+  },
+  subgroupLabel: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+    color: theme.colors.foregroundMuted,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   pickerTrigger: {
     flexDirection: "row",

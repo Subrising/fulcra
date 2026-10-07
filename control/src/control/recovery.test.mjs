@@ -31,6 +31,8 @@ import {
 import { repoState, parseStatus, GIT_ENV } from "./repo-state.mjs";
 import { rpc } from "./rpc.mjs";
 import { requireUnpinnedAdmissionGuard } from "./admission-guard-precondition.mjs";
+import { AutomaticRestarts, RESTART_SETTLE_MS, RESTART_STAGGER_MS } from "./automatic-restart.mjs";
+import { recordBootStart, sealBoot, bootChainDir } from "./boot-chain.mjs";
 requireUnpinnedAdmissionGuard();
 
 const OP = "test-operator";
@@ -40,8 +42,10 @@ const OP = "test-operator";
 // P1 host release (prime S-2, CONTRACTS §3.6 rule 3): the guard gains the controller-home deny, so this
 // tripwire moves from 95ded800… to exactly the P1 guard (c3f23a52…, R-F-A1: deny at the Claude launch choke
 // point, replacing 66109873…). H7 item 5 then adds exactly one branch, admitQuestionAnswer (a seat's journaled answer to a
-// pending question), so it moves again, from c3f23a52… to c06c0b45…. Any other edit still fails.
-const GUARD_AT_BASE = "c06c0b45bc22d87cc94a3b48fdb2ba0ed4c56f31fa9523fbd5f2c3c0573e2f35";
+// pending question), so it moves again, from c3f23a52… to c06c0b45…. 0.2.3 shipped further reviewed guard edits
+// (80a2faae…), and 0.2.4 adds exactly one return field, contextRotationAllowed (compaction-loop rotation), so it
+// moves to 0c3d2bbe…. Any other edit still fails.
+const GUARD_AT_BASE = "0c3d2bbef1345eab35212ef2d9a617290bc096fdfc610d4b445a43902d593587";
 const BRIEF = "Implement the importer and push branch feat/importer when the tests pass";
 
 async function fixture(t) {
@@ -81,6 +85,7 @@ async function fixture(t) {
       status: states.get(id)?.status ?? "idle",
       labels: {},
       pendingPermissions: [],
+      interruptedTurn: states.get(id)?.interruptedTurn ?? null,
     }),
     send: async (id, text, messageId) => {
       sends.set(id, (sends.get(id) ?? 0) + 1);
@@ -209,6 +214,195 @@ async function fixture(t) {
     },
   };
 }
+
+async function automaticFixture(t, { sealed = true } = {}) {
+  const f = await fixture(t),
+    x = await f.worker();
+  const previousBoot = randomUUID(),
+    boot = observation(x.id).boot;
+  const original = f.store.delivery(x.sent.id),
+    row = f.store.get(x.id);
+  f.store.db.prepare("UPDATE sessions SET boot=? WHERE id=?").run(previousBoot, x.id);
+  f.store.finish(original.id, "delivered", {
+    ...original.result,
+    outputContext: { ...original.result.outputContext, boot: previousBoot },
+  });
+  const marker = {
+    previousStatus: "running",
+    detectedAt: new Date().toISOString(),
+    bootId: boot,
+    lastUserMessageAt: row.expectedAt,
+  };
+  f.states.set(x.id, { ...f.states.get(x.id), nativeId: randomUUID(), interruptedTurn: marker });
+  recordBootStart(f.base, previousBoot, null);
+  if (sealed) sealBoot(f.base, previousBoot, { [x.id]: 0 });
+  recordBootStart(f.base, boot, previousBoot);
+  f.control.bootChainDir = bootChainDir(f.base);
+  let now = Date.now(),
+    enabled = true;
+  f.control.recovery.now = () => now;
+  f.native.automaticResumeEnabled = async () => enabled;
+  const queue = new AutomaticRestarts(f.control, {
+    now: () => now,
+    currentBoot: () => boot,
+    timers: false,
+  });
+  f.control.automaticRestarts = queue;
+  t.after(() => queue.stop());
+  return {
+    ...f,
+    x,
+    queue,
+    marker,
+    boot,
+    previousBoot,
+    advance: (ms) => (now += ms),
+    enabled: (value) => (enabled = value),
+  };
+}
+
+test("automatic restart resumes only a clean-sealed interrupted original delegation after settling, once", async (t) => {
+  const f = await automaticFixture(t);
+  await f.queue.tick();
+  assert.equal(f.store.get(f.x.id).mode, "human", "boot revocation happens before recovery");
+  assert.equal(f.sends(f.x.id), 1);
+  f.advance(RESTART_SETTLE_MS - 1);
+  await f.queue.tick();
+  assert.equal(f.sends(f.x.id), 1);
+  f.advance(1);
+  await f.queue.tick();
+  const [operation] = f.queue.status().items;
+  assert.equal(operation.state, "resumed");
+  assert.equal(f.sends(f.x.id), 2);
+  assert.equal(
+    f.control.recovery.row(f.interruption(f.x.id).id).resolution.by,
+    "automatic-restart",
+  );
+  assert.equal(f.store.delivery(operation.id).result.automaticRestartProof.state, "clean");
+  const continuation = f.store.delivery(operation.continuation);
+  assert.match(JSON.parse(continuation.body).text, /Do NOT repeat an external action/);
+  f.advance(RESTART_STAGGER_MS);
+  await f.queue.tick();
+  const restarted = new AutomaticRestarts(f.control, { currentBoot: () => f.boot, timers: false });
+  await restarted.tick();
+  await restarted.stop();
+  assert.equal(f.sends(f.x.id), 2, "controller replacement never duplicates the continuation");
+});
+
+test("automatic restart holds an unsealed crash visibly without regrant or replay", async (t) => {
+  const f = await automaticFixture(t, { sealed: false });
+  await f.queue.tick();
+  f.advance(RESTART_SETTLE_MS);
+  await f.queue.tick();
+  assert.equal(f.queue.status().items[0].state, "held");
+  assert.match(f.queue.status().items[0].outcome, /seal|cleanly/);
+  assert.equal(f.store.get(f.x.id).mode, "human");
+  assert.equal(f.sends(f.x.id), 1);
+});
+
+test("a restart during the first turn completes the first-delivery binding with the recorded native id", async (t) => {
+  const f = await automaticFixture(t);
+  f.store.db
+    .prepare("INSERT INTO native_bootstrap VALUES (?,?,?,?,?,?,?,NULL)")
+    .run(
+      f.x.id,
+      randomUUID(),
+      randomUUID(),
+      f.x.sent.id,
+      randomUUID(),
+      randomUUID(),
+      f.previousBoot,
+    );
+  await f.queue.tick();
+  f.advance(RESTART_SETTLE_MS);
+  await f.queue.tick();
+  assert.equal(f.queue.status().items[0].state, "resumed");
+  assert.equal(
+    f.store.db.prepare("SELECT nativeId FROM native_bootstrap WHERE session=?").get(f.x.id)
+      .nativeId,
+    f.states.get(f.x.id).nativeId,
+  );
+});
+
+test("automatic restart respects host toggle and per-session opt-out", async (t) => {
+  const f = await automaticFixture(t);
+  await f.queue.tick();
+  f.enabled(false);
+  f.advance(RESTART_SETTLE_MS);
+  await f.queue.tick();
+  assert.equal(f.queue.status().items[0].state, "declined");
+  assert.match(f.queue.status().items[0].outcome, /was off/);
+  // Turning the toggle on later never revives an old restart's continuation.
+  f.enabled(true);
+  f.advance(RESTART_SETTLE_MS);
+  await f.queue.tick();
+  assert.equal(f.queue.status().items[0].state, "declined");
+  assert.equal(f.sends(f.x.id), 1);
+  const g = await automaticFixture(t);
+  const snapshot = g.native.snapshot;
+  g.native.snapshot = async (id) => ({
+    ...(await snapshot(id)),
+    labels: { "fulcra.limit-resume": "off" },
+  });
+  await g.queue.tick();
+  g.advance(RESTART_SETTLE_MS);
+  await g.queue.tick();
+  assert.match(g.queue.status().items[0].outcome, /opted out/);
+  assert.equal(g.sends(g.x.id), 1);
+});
+
+test("automatic restart excludes ended, uncertain, permission-waiting and changed-input sessions", async (t) => {
+  for (const variant of [
+    "ended",
+    "uncertain",
+    "permission",
+    "permission-at-interruption",
+    "human",
+    "takeover",
+    "identity",
+    "authority",
+  ]) {
+    const f = await automaticFixture(t);
+    if (variant === "ended")
+      f.states.set(f.x.id, { ...f.states.get(f.x.id), interruptedTurn: null });
+    if (variant === "uncertain")
+      f.store.finish(f.x.sent.id, "uncertain", f.store.delivery(f.x.sent.id).result);
+    if (variant === "permission-at-interruption")
+      f.states.set(f.x.id, { ...f.states.get(f.x.id), pending: 1 });
+    await f.queue.tick();
+    if (variant === "permission-at-interruption")
+      f.states.set(f.x.id, { ...f.states.get(f.x.id), pending: 0 });
+    if (variant === "permission") f.states.set(f.x.id, { ...f.states.get(f.x.id), pending: 1 });
+    if (variant === "human") guard({ id: f.x.id }, "Human input", {});
+    if (variant === "takeover")
+      f.control.takeover(f.x.id, "Explicit human takeover after the interruption");
+    if (variant === "identity")
+      f.states.set(f.x.id, { ...f.states.get(f.x.id), nativeId: randomUUID() });
+    if (variant === "authority") f.reassign(true);
+    f.advance(RESTART_SETTLE_MS);
+    await f.queue.tick();
+    assert.equal(f.sends(f.x.id), 1, variant + " must not receive a continuation");
+  }
+});
+
+test("automatic restart joins shutdown and refuses a delayed proof after closing", async (t) => {
+  const f = await automaticFixture(t);
+  await f.queue.tick();
+  f.advance(RESTART_SETTLE_MS);
+  let release;
+  const waiting = new Promise((resolve) => {
+    release = resolve;
+  });
+  f.native.automaticResumeEnabled = async () => {
+    await waiting;
+    return true;
+  };
+  const ticking = f.queue.tick();
+  const stopping = f.queue.stop();
+  release();
+  await Promise.all([ticking, stopping]);
+  assert.equal(f.sends(f.x.id), 1);
+});
 
 test("R-M1 R-M3: a reboot still takes the session over, and the interruption keeps the evidence the takeover erases", async (t) => {
   const f = await fixture(t),

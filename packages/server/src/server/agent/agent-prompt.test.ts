@@ -939,3 +939,32 @@ test.each(["identity", "native-link"] as const)(
     expect(scenario.parentPrompts()).toHaveLength(0);
   },
 );
+
+test("human prompts dismiss question cards without changing the trusted payload", async () => {
+  const { promptPayload } = await import("./trusted-operation.js");
+  const seen: Array<AgentRunOptions | undefined> = [];
+  const controller = {
+    withInput: async (
+      _id: string,
+      _kind: string,
+      _message: unknown,
+      run: (h: TrustedOperationHandle) => Promise<unknown>,
+    ) => run(Object.freeze({}) as TrustedOperationHandle),
+    trustedPlugins: { daemon: (run: () => unknown) => run() },
+    getAgent: () => null,
+    tryRunOutOfBand: () => false,
+    hasInFlightRun: () => false,
+    // The real manager builds the trusted payload from these options before admission.
+    streamAgent: (_id: string, prompt: string, options?: AgentRunOptions) => {
+      promptPayload(prompt, options);
+      seen.push(options);
+      return (async function* () {})();
+    },
+  } as unknown as AgentRunController;
+  await startAgentRun(controller, "worker", "answer", createTestLogger(), {
+    clearPendingPermissions: true,
+  });
+  await vi.waitFor(() => expect(seen).toHaveLength(1));
+  expect(seen[0]?.clearPendingQuestions).toBe(true);
+  expect(promptPayload("answer", { clearPendingQuestions: true })).toEqual(promptPayload("answer"));
+});

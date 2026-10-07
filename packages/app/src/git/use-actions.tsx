@@ -199,6 +199,11 @@ interface UseGitActionsInput {
     mergeFromBase: ReactElement;
     archive: ReactElement;
   };
+  /**
+   * When set, Commit and Create PR open a drafted, editable wording first (Git AI) instead of acting at once;
+   * that sheet makes the commit or pull request after the person confirms.
+   */
+  reviewWording?: (kind: "commit-message" | "pull-request") => void;
 }
 
 interface UseGitActionsResult {
@@ -312,7 +317,12 @@ function useWorkspaceScreenArchiveController({
   };
 }
 
-export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): UseGitActionsResult {
+export function useGitActions({
+  serverId,
+  cwd,
+  icons,
+  reviewWording,
+}: UseGitActionsInput): UseGitActionsResult {
   const { t } = useTranslation();
   const toast = useToast();
   const activeWorkspaceSelection = useActiveWorkspaceSelection();
@@ -476,6 +486,10 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
 
   // Handlers
   const handleCommit = useCallback(() => {
+    if (reviewWording) {
+      reviewWording("commit-message");
+      return;
+    }
     void runCommit({ serverId, cwd })
       .then(() => {
         toastActionSuccess(t("workspace.git.actions.commit.success"));
@@ -484,7 +498,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
       .catch((err) => {
         toastActionError(err, t("workspace.git.actions.toasts.failedCommit"));
       });
-  }, [cwd, runCommit, serverId, t, toastActionError, toastActionSuccess]);
+  }, [cwd, reviewWording, runCommit, serverId, t, toastActionError, toastActionSuccess]);
 
   const handlePull = useCallback(() => {
     void runPull({ serverId, cwd })
@@ -521,6 +535,10 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
 
   const handleCreatePr = useCallback(() => {
     void persistShipDefault("pr");
+    if (reviewWording) {
+      reviewWording("pull-request");
+      return;
+    }
     void runCreatePr({ serverId, cwd })
       .then(() => {
         toastActionSuccess(t("workspace.git.actions.createPr.success", forgeVocabulary(forge)));
@@ -533,6 +551,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     cwd,
     forge,
     persistShipDefault,
+    reviewWording,
     runCreatePr,
     serverId,
     t,

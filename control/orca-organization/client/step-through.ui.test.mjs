@@ -4,6 +4,7 @@
 // Private test configuration first: the server shaping names `mini` as this Mac, as the fixture sessions do.
 import "../server/portable.fixture";
 import { StepThrough } from "./step-through";
+import { WhatItDidFooterView } from "./what-it-did-card";
 import { createSessionSteps } from "../server/session-steps";
 import {
   CLAUDE_ENTRIES,
@@ -53,6 +54,7 @@ afterEach(() => {
   layoutHandlers.clear();
 });
 
+let recoveryStatus = { compactionLoops: null };
 function serve({ supported = true, codexEntries = CODEX_ENTRIES } = {}) {
   const hosts = {
     [CLAUDE_SESSION]: fakeHost({ entries: CLAUDE_ENTRIES, supported }),
@@ -70,10 +72,12 @@ function serve({ supported = true, codexEntries = CODEX_ENTRIES } = {}) {
     if (name === "organization.session-step") return steps.step(input, paseo);
     if (name === "organization.session-file-history") return steps.fileHistory(input, paseo);
     if (name === "organization.trackers") return { items: [], links: [] };
+    if (name === "organization.recovery")
+      return { status: "observed", observedAt: new Date().toISOString(), recovery: recoveryStatus };
     throw Error(`unexpected read ${name}`);
   });
 }
-function mount(sessionId, layout = { compact: false, platform: "web" }) {
+function mount(sessionId, layout = { compact: false, platform: "web" }, extra = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
   return render(
@@ -87,6 +91,7 @@ function mount(sessionId, layout = { compact: false, platform: "web" }) {
         host: { id: "mini", label: "This Mac" },
         provider: sessionId === CLAUDE_SESSION ? "claude" : "codex",
         taskTitle: "Monthly report totals",
+        ...extra,
       }),
     ),
   );
@@ -303,4 +308,89 @@ test("U5-D08: desktop turn buttons are readable numbers (the summary is their la
   assert.equal(first.textContent, "1");
   assert.match(first.getAttribute("aria-label"), /^Turn 1: .+/);
   assert.match(screen.getByTestId("sessions-step-time").textContent, /^Recorded .*\d{1,2}:\d{2}/);
+});
+
+test("V9: each turn opens with a plain What it did card; raw commands are one tap away", async () => {
+  serve();
+  mount(CLAUDE_SESSION);
+  const card = () => screen.getByTestId("sessions-what-it-did");
+  await waitFor(() => assert.match(card().textContent, /Ran tests: 12 passed/));
+  const lines = screen.getAllByTestId("sessions-what-it-did-line").map((line) => line.textContent);
+  assert.match(lines[0], /^1\. Read /);
+  assert.ok(
+    lines.some((line) => /^\d\. Changed .+ \(\+\d+ −\d+\)$/.test(line)),
+    lines.join(" | "),
+  );
+  assert.equal(screen.getByTestId("sessions-what-it-did-tests").textContent, "Tests passed");
+  assert.equal(screen.queryAllByTestId("sessions-what-it-did-command").length, 0);
+  press("Show raw commands");
+  assert.ok(
+    screen
+      .getAllByTestId("sessions-what-it-did-command")
+      .some((c) => c.textContent === "$ npm test"),
+  );
+});
+
+test("V10: beside a chat the view is named What it did and opens on the latest turn", async () => {
+  serve();
+  mount(CLAUDE_SESSION, { compact: true, platform: "web" }, { startAtLatest: true });
+  await waitFor(() =>
+    assert.match(screen.getByTestId("sessions-header").textContent, /WHAT IT DID/),
+  );
+  await waitFor(() => assert.ok(screen.getByText(/^Turn 3 of 3/)));
+  await waitFor(() => assert.ok(screen.getByTestId("sessions-what-it-did")));
+});
+
+test("V11: under a chat turn the card folds to one line and opens on tap; a turn without tools shows nothing", async () => {
+  const toolCalls = [
+    {
+      name: "Read",
+      status: "completed",
+      detail: { type: "read", filePath: "/work/app/report.ts" },
+    },
+    {
+      name: "Bash",
+      status: "completed",
+      detail: { type: "shell", command: "npm test", output: "12 passed", exitCode: 0 },
+    },
+  ];
+  render(h(WhatItDidFooterView, { toolCalls, durationMs: 19400, cwd: "/work/app", theme }));
+  const line = screen.getByRole("button", { name: "Show what it did" });
+  assert.equal(line.textContent, "▸ What it did · 2 steps · 19 s · Tests passed");
+  assert.equal(screen.queryByTestId("sessions-what-it-did"), null);
+  fireEvent.click(line);
+  const lines = screen.getAllByTestId("sessions-what-it-did-line").map((node) => node.textContent);
+  assert.deepEqual(lines, ["1. Read report.ts", "2. Ran tests: 12 passed"]);
+  cleanup();
+  const empty = render(
+    h(WhatItDidFooterView, { toolCalls: [], durationMs: null, cwd: null, theme }),
+  );
+  assert.equal(empty.container.textContent, "");
+});
+
+test("V12: the step-through shows each fresh start in plain words, never the private handoff path", async () => {
+  recoveryStatus = {
+    compactionLoops: {
+      freshStart: true,
+      rotations: [
+        {
+          id: "r1",
+          sessionId: CLAUDE_SESSION,
+          state: "rotated",
+          handoff: "/private/home/context-handoffs/r1.json",
+          outcome: "rotated",
+          at: Date.parse("2026-10-07T04:02:00.000Z"),
+        },
+      ],
+    },
+  };
+  try {
+    serve();
+    mount(CLAUDE_SESSION);
+    const history = await waitFor(() => screen.getByTestId("fresh-start-history"));
+    assert.match(history.textContent, /^Fresh start at .+ · handoff$/);
+    assert.ok(!history.textContent.includes("/private/"));
+  } finally {
+    recoveryStatus = { compactionLoops: null };
+  }
 });

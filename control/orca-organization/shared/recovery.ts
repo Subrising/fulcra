@@ -50,6 +50,9 @@ export const recoveryActionInput = z.discriminatedUnion("action", [
     .strict(),
   z.object({ action: z.literal("dismiss"), interruptionId: id, reason }).strict(),
   z.object({ action: z.literal("reconcile"), messageId: id }).strict(),
+  // Fresh start: the controller writes a handoff and continues the same session in a new provider context, through
+  // the compaction-rotation path and its fences. Offered only when the status read says the controller supports it.
+  z.object({ action: z.literal("fresh-start"), messageId: id, sessionId: id, reason }).strict(),
 ]);
 export type RecoveryActionInput = z.infer<typeof recoveryActionInput>;
 export const recoveryActionRpc = defineRpc({

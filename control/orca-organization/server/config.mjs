@@ -231,8 +231,14 @@ export function validateConfig(c) {
     )
       throw Error("Invalid setting artifacts");
   if (c.worktreeLifecycle !== undefined) {
-    object(c.worktreeLifecycle, ["retentionDays"], "worktreeLifecycle", ["retentionDays"]);
+    object(
+      c.worktreeLifecycle,
+      ["retentionDays", "archiveFinished", "idleMinutes"],
+      "worktreeLifecycle",
+      ["retentionDays"],
+    );
     validateRetention(c.worktreeLifecycle.retentionDays);
+    validateCleanup(c.worktreeLifecycle);
   }
   // Cutover: the published-outcome folder may be kept where the live installation had it (ORCA_OUTCOMES_DIR). Only outcome
   // reads use it. The reader still requires a canonical folder and regular files.
@@ -315,17 +321,47 @@ function validateRetention(value) {
 }
 // Only this setting changes. Re-read the private config before the atomic write so
 // provider settings, identity and all other V2 fields are preserved.
+function validateCleanup(value) {
+  if (value.archiveFinished !== undefined && typeof value.archiveFinished !== "boolean")
+    throw Error("Invalid setting worktreeLifecycle.archiveFinished");
+  if (
+    value.idleMinutes !== undefined &&
+    value.idleMinutes !== "never" &&
+    (!Number.isSafeInteger(value.idleMinutes) || value.idleMinutes < 1 || value.idleMinutes > 10080)
+  )
+    throw Error("Invalid setting worktreeLifecycle.idleMinutes");
+}
 export function worktreeLifecycleSettings(env = process.env) {
   return {
     async get() {
       return loadConfig(env).worktreeLifecycle?.retentionDays ?? "never";
     },
+    async getAll() {
+      const value = loadConfig(env).worktreeLifecycle;
+      return {
+        retentionDays: value?.retentionDays ?? "never",
+        archiveFinished: value?.archiveFinished ?? false,
+        idleMinutes: value?.idleMinutes ?? "never",
+      };
+    },
     async set(value) {
-      validateRetention(value);
+      await this.patch({ retentionDays: validateRetention(value) });
+      return value;
+    },
+    async patch(value) {
+      if (
+        !value ||
+        Object.keys(value).some(
+          (k) => !["retentionDays", "archiveFinished", "idleMinutes"].includes(k),
+        )
+      )
+        throw Error("Invalid cleanup settings");
+      if (value.retentionDays !== undefined) validateRetention(value.retentionDays);
+      validateCleanup(value);
       const { home } = loadConfig(env),
         file = path.join(home, "config.json");
       const config = validateConfig(privateJson(file, 32768));
-      config.worktreeLifecycle = { retentionDays: value };
+      config.worktreeLifecycle = { retentionDays: "never", ...config.worktreeLifecycle, ...value };
       const temporary = path.join(home, `.config-${randomUUID()}`);
       try {
         fs.writeFileSync(temporary, JSON.stringify(config, null, 2) + "\n", {
@@ -343,7 +379,7 @@ export function worktreeLifecycleSettings(env = process.env) {
       } finally {
         if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
       }
-      return value;
+      return this.getAll();
     },
   };
 }

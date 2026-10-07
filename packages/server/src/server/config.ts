@@ -1,3 +1,4 @@
+import { readLimitResumeSetting } from "./limit-resume-settings.js";
 import { configurationEnvironment } from "./config-environment.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -536,6 +537,7 @@ function resolveStaticLoadConfigSettings(
       cli?.mcpInjectIntoAgents ?? persisted.daemon?.mcp?.injectIntoAgents ?? false,
     browserToolsEnabled: resolveBrowserToolsEnabled(persisted),
     autoArchiveAfterMerge: persisted.daemon?.autoArchiveAfterMerge ?? false,
+    explainDailyLimit: persisted.daemon?.explainDailyLimit,
     appendSystemPrompt: resolveAppendSystemPrompt(persisted),
     ...resolveProfileLists(persisted),
     hostnames: mergeHostnames([
@@ -571,6 +573,7 @@ export function resolveConfigFromPersisted(
     mcpInjectIntoAgents,
     browserToolsEnabled,
     autoArchiveAfterMerge,
+    explainDailyLimit,
     appendSystemPrompt,
     terminalProfiles,
     agentProfiles,
@@ -601,7 +604,7 @@ export function resolveConfigFromPersisted(
   );
 
   const overrideControlledPaths = resolveOverrideControlledPaths(env, cli, speech.providers);
-  const persistedSettings = resolvePersistedPassThroughSettings(persisted);
+  const persistedSettings = resolvePersistedPassThroughSettings(paseoHome, persisted);
 
   return {
     listen,
@@ -616,7 +619,10 @@ export function resolveConfigFromPersisted(
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
+    explainDailyLimit,
+    notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
+    autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
     terminalProfiles,
     agentProfiles,
@@ -624,6 +630,12 @@ export function resolveConfigFromPersisted(
     pluginsEnabled: persistedSettings.pluginsEnabled,
     plugins: persisted.plugins,
     oauthClientIds: persistedSettings.oauthClientIds,
+    pluginRegistries: persisted.pluginRegistries,
+    pluginRegistryUrl: env.PASEO_PLUGIN_REGISTRY,
+    pluginRegistryEnabled:
+      parseBooleanEnv(env.PASEO_PLUGIN_REGISTRY_ENABLED) ??
+      persisted.pluginRegistryEnabled ??
+      false,
     mcpDebug: env.MCP_DEBUG === "1",
     isDev: resolvePaseoNodeEnv(env) === "development",
     agentStoragePath: path.join(paseoHome, "agents"),
@@ -662,9 +674,12 @@ export function resolveConfigFromPersisted(
 }
 
 /** Settings read straight from the persisted file, with their defaults. */
-function resolvePersistedPassThroughSettings(persisted: PersistedConfig) {
+function resolvePersistedPassThroughSettings(paseoHome: string, persisted: PersistedConfig) {
   return {
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    autoResumeOnLimit:
+      readLimitResumeSetting(paseoHome) ?? persisted.daemon?.autoResumeOnLimit ?? true,
+    notificationMode: persisted.daemon?.notificationMode ?? ("primes" as const),
     skillSelection: persisted.agents?.skills?.selection,
     pluginsEnabled: persisted.pluginsEnabled ?? false,
     oauthClientIds: persisted.integrations?.oauthClientIds ?? {},

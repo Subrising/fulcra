@@ -136,6 +136,18 @@ export function markOfflineHostEntries(
   return changed ? next : entries;
 }
 
+/** Drops rows that belong to a stale duplicate host. Returns the input map when nothing is hidden. */
+export function withoutDuplicateHosts(
+  entries: ReadonlyMap<string, SidebarWorkspaceEntry>,
+  offlineHosts: ReadonlyMap<string, OfflineHostSummary>,
+): ReadonlyMap<string, SidebarWorkspaceEntry> {
+  if (![...offlineHosts.values()].some((host) => host.duplicate)) return entries;
+  const next = new Map<string, SidebarWorkspaceEntry>();
+  for (const [key, entry] of entries)
+    if (!offlineHosts.get(entry.serverId)?.duplicate) next.set(key, entry);
+  return next;
+}
+
 export const OFFLINE_HOSTS_GROUP_KEY = "offline-hosts";
 
 export interface OfflineHostSummary {
@@ -143,6 +155,41 @@ export interface OfflineHostSummary {
   name: string;
   /** When the app last lost the host, if known. */
   since: Date | null;
+  /** A stale copy of a computer that another saved host also names; hidden outside Settings. */
+  duplicate?: boolean;
+}
+
+/**
+ * Re-pairing a computer saves it again under a new server id, and the old entry stays offline for
+ * good. Among saved hosts with the same identity (name plus endpoint, so a portable daemon beside
+ * the main one on another port stays separate), hide the unreachable ones when a copy is reachable,
+ * or keep only the most recently lost one when all are offline. Settings still lists every host so
+ * the stale entry can be removed.
+ */
+export function selectOfflineDuplicateIds(
+  hosts: readonly { serverId: string; identity: string | null }[],
+  offline: ReadonlyMap<string, { since: Date | null }>,
+): ReadonlySet<string> {
+  const byIdentity = new Map<string, string[]>();
+  for (const host of hosts)
+    if (host.identity !== null)
+      byIdentity.set(host.identity, [...(byIdentity.get(host.identity) ?? []), host.serverId]);
+  const hidden = new Set<string>();
+  for (const ids of byIdentity.values()) {
+    if (ids.length < 2) continue;
+    const down = ids.filter((id) => offline.has(id));
+    if (down.length === 0) continue;
+    const keep =
+      down.length < ids.length
+        ? null
+        : down.reduce((best, id) =>
+            (offline.get(id)?.since?.getTime() ?? 0) > (offline.get(best)?.since?.getTime() ?? 0)
+              ? id
+              : best,
+          );
+    for (const id of down) if (id !== keep) hidden.add(id);
+  }
+  return hidden;
 }
 
 /**

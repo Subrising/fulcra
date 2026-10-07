@@ -34,6 +34,8 @@ const DEFAULT_DESKTOP: DesktopSettings = {
   releaseChannel: "stable",
   notifications: {
     playSound: true,
+    delivery: "immediate",
+    digestMinutes: 15,
   },
   daemon: {
     manageBuiltInDaemon: true,

@@ -38,7 +38,9 @@ async function host(version = "0.8.0", pluginPath?: string) {
     providers: {},
     metadataGeneration: { providers: [] },
     autoArchiveAfterMerge: false,
+    notificationMode: "primes",
     enableTerminalAgentHooks: false,
+    autoResumeOnLimit: true,
     appendSystemPrompt: "",
     pluginsEnabled: true,
     plugins: pluginPath

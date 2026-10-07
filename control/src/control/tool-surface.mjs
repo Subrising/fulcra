@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 // tools -- so "is this session current" is an exact comparison, not a version someone must remember to bump.
 import { createHash } from "node:crypto";
 import { portable } from "../portable-config.mjs";
+import { canonicalMemoryConfig, CANONICAL_MEMORY_ENTRY } from "../canonical-memory-route.mjs";
 import { ROLE_TOOLS } from "./grant-file.mjs";
 import { CONTROLLER_HOME as HOME } from "./installation-settings.mjs";
 
@@ -57,13 +58,20 @@ export function toolPolicy({ memory = true } = {}) {
   };
 }
 export const TOOL_SURFACE = createHash("sha256")
-  .update(JSON.stringify({ command: COMMAND, inbox: INBOX, preapproved: toolPolicy().preapproved }))
+  .update(
+    JSON.stringify({
+      command: COMMAND,
+      inbox: INBOX,
+      memory: CANONICAL_MEMORY_ENTRY,
+      preapproved: toolPolicy().preapproved,
+    }),
+  )
   .digest("hex")
   .slice(0, 16);
 
 // H6 item 5. Brings an existing session's Orca tool surface to this release's (tool-surface.mjs) through the daemon's
 // fenced agent.mcp.refresh: expected {provider, sessionId, configRevision} from the daemon's own state, only the
-// orca-supervisor entry replaced (every other server preserved), and the tool policy replaced in the same refresh.
+// owned supervisor and memory entries replaced (other servers preserved), and the tool policy replaced in the same refresh.
 // The daemon refuses a busy, stale or unsupported session, and its admission guard (mcpRefreshAdmission) refuses one
 // that is not a live, delegated, quiescent session. History is kept: the provider session is resumed, not replaced.
 export class ToolRefreshUnsupported extends Error {}
@@ -80,13 +88,19 @@ export async function refreshToolsFor(agent, messageId, verify) {
     throw Error(
       `This session cannot refresh its MCP servers in place (lifecycle ${state.lifecycle})`,
     );
+  if (state.lifecycle !== "idle") throw Error("Tool refresh waits for an idle session");
   const result = await agent.refreshMcp({
     expected: {
       provider: state.provider,
       sessionId: state.sessionId,
       configRevision: state.configRevision,
     },
-    changes: { [SUPERVISOR_SERVER]: supervisorServer(messageId) },
+    changes: {
+      [SUPERVISOR_SERVER]: supervisorServer(messageId),
+      ...(state.mcpServerNames.includes(MEMORY_SERVER)
+        ? { [MEMORY_SERVER]: canonicalMemoryConfig(state.provider) }
+        : {}),
+    },
     toolPolicy: toolPolicy({ memory: state.mcpServerNames.includes(MEMORY_SERVER) }),
   });
   verify();

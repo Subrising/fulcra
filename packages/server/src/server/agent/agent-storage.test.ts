@@ -148,6 +148,27 @@ describe("AgentStorage", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test("actual snapshot persistence omits live recorded usage across restart", async () => {
+    await storage.applySnapshot(
+      createManagedAgent({
+        id: "usage-wire-only",
+        lastUsage: {
+          inputTokens: 100,
+          recorded: {
+            provider: "codex",
+            source: "codex-app-server-token-usage",
+            observedAt: "2026-10-04T00:00:00Z",
+            latest: { scope: "unknown", tokens: { inputNew: 70, cacheRead: 30 } },
+          },
+        },
+      }),
+    );
+    const fresh = new AgentStorage(storagePath, logger);
+    const record = await fresh.get("usage-wire-only");
+    expect(record).not.toHaveProperty("lastUsage");
+    expect(JSON.stringify(record)).not.toContain("recorded");
+  });
+
   test("applySnapshot persists configs and snapshot metadata", async () => {
     await storage.applySnapshot(
       createManagedAgent({
@@ -670,6 +691,29 @@ describe("interrupted-turn normalisation", () => {
     const next = await storage.get("agent-1");
     expect(next?.interruptedTurn).toBeUndefined();
     expect(next?.lastStatus).toBe("running");
+  });
+
+  test("a turn running at daemon shutdown keeps its interruption marker through the closed write", async () => {
+    const storage = new AgentStorage(dir, logger);
+    await storage.upsert(seed("agent-3", {}) as never);
+    const shutdown = {
+      previousStatus: "running" as const,
+      detectedAt: marker.detectedAt,
+      bootId: "shutdown-1",
+      lastUserMessageAt: userAt,
+    };
+    await storage.markShutdownInterruption("agent-3", shutdown);
+    await storage.applySnapshot(
+      createManagedAgent({
+        id: "agent-3",
+        cwd: "/tmp/project",
+        lifecycle: "closed",
+        lastUserMessageAt: new Date(userAt),
+      }),
+    );
+    const stored = await new AgentStorage(dir, logger).get("agent-3");
+    expect(stored?.lastStatus).toBe("closed");
+    expect(stored?.interruptedTurn).toEqual(shutdown);
   });
 
   test("single-agent normalisation never touches an agent that was loaded in the meantime", async () => {

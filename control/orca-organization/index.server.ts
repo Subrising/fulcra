@@ -1,3 +1,4 @@
+import { contributeWorkspaceOrganization } from "./server/organization/index";
 import { radiusScratchSimulateRpc, radiusScratchPruneSimulateRpc } from "./shared/radius-scratch";
 import {
   withManagementInvocation,
@@ -23,6 +24,8 @@ import {
   cleanupPreviewRpc,
   cleanupApplyRpc,
   cleanupRetentionRpc,
+  cleanupSettingsRpc,
+  cleanupNowRpc,
 } from "./shared/worktree-lifecycle";
 import { historyRpc } from "./shared/history";
 import { readHistory } from "./server/history";
@@ -61,6 +64,21 @@ import {
   promotionCancelRpc,
 } from "./shared/cc/environment";
 import { createEnvironments } from "./server/environments";
+import {
+  deployOverviewRpc,
+  deploySourcesRpc,
+  deployConnectLocalRpc,
+  deployConnectClusterRpc,
+  deployDisconnectRpc,
+  deployPlanRpc,
+  deployRollbackPlanRpc,
+  deployPlanViewRpc,
+  deployDiscardRpc,
+  deployConfirmRpc,
+  deployJobRpc,
+} from "./shared/cc/deploy";
+import { createDeployHandlers } from "./server/deploy/rpc";
+import { runTool, toolEnvironment } from "./server/deploy/run.mjs";
 import {
   devicesRpc,
   devicePairOpenRpc,
@@ -272,6 +290,14 @@ export default function contribute(
   handle(cleanupApplyRpc, (input) => {
     if (authError) throw new Error(authError);
     return localCall("worktree-lifecycle-apply", input);
+  });
+  handle(cleanupSettingsRpc, (input) => {
+    if (authError) throw new Error(authError);
+    return localCall("worktree-lifecycle-settings", input);
+  });
+  handle(cleanupNowRpc, (input) => {
+    if (authError) throw new Error(authError);
+    return localCall("worktree-lifecycle-now", input);
   });
   handle(cleanupRetentionRpc, (input) => {
     if (authError) throw new Error(authError);
@@ -762,6 +788,23 @@ export default function contribute(
   // Fulcra J8 Environments (CONTRACTS §6). Read, propose, prepare and cancel. Nothing here runs a promotion.
   const environments = createEnvironments({ call: localCall });
   handleRead(environmentsRpc, (input) => gated(() => environments.view(input)));
+  // Deploy from Fulcra. Only deploy-confirm touches an environment; it is a mutation, so a read-only device can't
+  // call it, and no agent route reaches it. Sessions prepare plans with server/deploy/cli.mjs instead.
+  const deploy = createDeployHandlers({
+    secrets: secrets === noSecrets ? null : (secrets as never),
+    run: (file, args, options) => runTool(file, args, { ...options, env: toolEnvironment() }),
+  });
+  handleRead(deployOverviewRpc, () => gated(() => deploy.overview()));
+  handleRead(deploySourcesRpc, (_input, { paseo }) => gated(() => deploy.sources(paseo)));
+  handleRead(deployPlanViewRpc, (input) => gated(() => deploy.planView(input)));
+  handleRead(deployJobRpc, (input) => gated(() => deploy.job(input)));
+  handle(deployConnectLocalRpc, (input) => gated(() => deploy.connectLocal(input)));
+  handle(deployConnectClusterRpc, (input) => gated(() => deploy.connectCluster(input)));
+  handle(deployDisconnectRpc, (input) => gated(() => deploy.disconnect(input)));
+  handle(deployPlanRpc, (input, { paseo }) => gated(() => deploy.plan(input, paseo)));
+  handle(deployRollbackPlanRpc, (input) => gated(() => deploy.rollbackPlan(input)));
+  handle(deployDiscardRpc, (input) => gated(() => deploy.discard(input)));
+  handle(deployConfirmRpc, (input) => gated(() => deploy.confirm(input)));
   handle(environmentProposeRpc, (input) => gated(() => environments.propose(input)));
   handle(promotionCreateRpc, (input) => gated(() => environments.create(input)));
   handle(promotionCancelRpc, (input) => gated(() => environments.cancel(input)));
@@ -844,6 +887,7 @@ export default function contribute(
     }
     return readers.get(key)!();
   });
+  const stopWorkspaceOrganization = contributeWorkspaceOrganization(handle);
   // Non-UI startup signal. A caller using a method this plugin does not register never reaches
   // any handler here, so that mismatch is invisible from inside this tree - printing the exact
   // registered names is the only way it becomes checkable against a caller's literal.
@@ -851,6 +895,7 @@ export default function contribute(
     `[orca-organization] registered ${registered.length} RPC methods: ${registered.join(", ")}`,
   );
   return () => {
+    stopWorkspaceOrganization();
     stopPush();
     recovery();
     if (typeof stopRoleDefaults === "function") stopRoleDefaults();

@@ -148,6 +148,11 @@ export function ChannelsSurface({ theme, layout }: Pick<PluginSurfaceProps, "the
           Use your inbox from Discord, a terminal or a Claude or Codex session. Answer in one place
           and every other copy says it was answered.
         </Text>
+        {/* A plugin can only open its own settings pages, so this names the desktop setting in words. */}
+        <Text style={{ color: c.foregroundMuted }}>
+          To get one alert for several finished sessions on this computer, turn on Group finished
+          sessions in Settings › Notifications in the desktop app.
+        </Text>
       </View>
       {query.data?.stale && (
         <Text style={{ color: c.statusWarning }}>May be out of date. {query.data.error}</Text>
@@ -220,10 +225,10 @@ export function ChannelsSurface({ theme, layout }: Pick<PluginSurfaceProps, "the
             </View>
           )}
           <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>
-            Answers from Discord count as yours only when you pair from a device you have confirmed,
-            which comes with the next Fulcra update. Until then, and always from a terminal or
-            session, answers are marked as answered by the operator, and approvals that start work
-            wait for your paired device.
+            Answers from Discord count as yours only when you pair from a device you have confirmed.
+            Device pairing isn't available in this version of Fulcra yet, so for now, and always
+            from a terminal or session, answers are marked as answered by the operator, and
+            approvals that start work wait for a paired device.
           </Text>
         </>,
       )}

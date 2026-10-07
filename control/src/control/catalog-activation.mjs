@@ -1,5 +1,5 @@
 import { isTrustedCatalogV11 } from "@getpaseo/protocol/trusted-input";
-const OWN_ID = "orca-organization-next";
+import { PLUGIN_ID as OWN_ID } from "./plugin-identity.mjs";
 // Called only by the distribution's authenticated transport adapter. An ordinary
 // PaseoApi or caller-provided authentication flag is not that adapter.
 export function catalogActivation(connection, { getHandshakeBoot } = {}) {

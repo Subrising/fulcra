@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { getStructuredAgentResponse } from "../../agent/agent-response-loop.js";
+import {
+  checkProviderLaunchAvailable,
+  resolveProviderLaunch,
+} from "../../agent/provider-launch-config.js";
 import type { StructuredTextGeneration } from "./git-metadata-generator.js";
 
 type GitDraftQuery = (
@@ -23,11 +27,27 @@ const success = z
   })
   .passthrough();
 
+/**
+ * The installed Claude Code, as the Claude provider finds it. The SDK's own default is a script inside its package,
+ * which a packaged app keeps in app.asar where it cannot be started ("spawn ENOTDIR"), so every draft and review
+ * explanation failed in the signed build.
+ */
+async function resolveClaudeExecutable(): Promise<string> {
+  const launch = await resolveProviderLaunch({ defaultBinary: "claude" });
+  const availability = await checkProviderLaunchAvailable(launch);
+  if (!availability.available) throw new Error("Claude Code is not installed on this computer");
+  return availability.resolvedPath ?? launch.command;
+}
+
 /** Locked SDK default Claude only. No agent-manager tools, hooks, MCP or provider fallback. */
 export function createToollessGitDraftGeneration(deps: {
   assertCurrent: () => void;
   signal: AbortSignal;
   query?: GitDraftQuery;
+  /** A specific model, such as a cheap one for review explanations; the SDK default otherwise. */
+  model?: string;
+  /** Where Claude Code is (tests); the installed one otherwise. */
+  resolveExecutable?: () => Promise<string>;
 }): StructuredTextGeneration {
   return {
     async generate(request) {
@@ -47,10 +67,14 @@ export function createToollessGitDraftGeneration(deps: {
           prompt: request.prompt,
           caller: async (prompt) => {
             check();
+            const executable = await (deps.resolveExecutable ?? resolveClaudeExecutable)();
+            check();
             const response = (deps.query ?? query)({
               prompt,
               options: {
                 cwd: request.cwd,
+                pathToClaudeCodeExecutable: executable,
+                ...(deps.model ? { model: deps.model } : {}),
                 abortController: abort,
                 tools: [],
                 allowedTools: [],

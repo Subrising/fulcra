@@ -1,6 +1,6 @@
 # Fulcra implementation contract
 
-The active goal is to complete the full orchestration vision, including usable memory across providers, machines and entry points. The earlier research-only assignment has advanced to execution under the owner subsequent full-goal instruction. Existing repair ownership and explicit Radius NO LAUNCH/NO TEARDOWN holds remain.
+The active goal is to complete the full orchestration vision, including usable memory across providers, machines and entry points. The earlier research-only assignment has advanced to execution under the owner subsequent full-goal instruction. Existing repair ownership remains. Radius deploy hold: released by David on 7 Oct 2026. Deploys go through Fulcra's confirm step.
 
 ## Owned first delivery
 

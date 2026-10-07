@@ -1,4 +1,5 @@
 import path from "node:path";
+import { NotificationDigest, type DesktopNotificationPayload } from "./notification-digest.js";
 import { existsSync } from "node:fs";
 import { BrowserWindow, Notification, ipcMain, nativeImage } from "electron";
 import { getDesktopSettingsStore } from "../settings/desktop-settings-electron.js";
@@ -79,6 +80,39 @@ export function ensureNotificationCenterRegistration(): void {
   probe.show();
 }
 
+function showNotification(
+  payload: DesktopNotificationPayload,
+  { sender, playSound }: { sender: Electron.WebContents; playSound: boolean },
+): void {
+  if (sender.isDestroyed()) return;
+  const icon = getNotificationIcon();
+  const notification = new Notification({
+    title: payload.title,
+    ...(payload.body ? { body: payload.body } : {}),
+    ...(icon ? { icon } : {}),
+    silent: !playSound,
+  });
+
+  activeNotifications.add(notification);
+
+  notification.on("click", () => {
+    const win = focusSenderWindow(sender);
+    if (win && payload.data && Object.keys(payload.data).length > 0) {
+      const clickPayload: NotificationClickPayload = { data: payload.data };
+      win.webContents.send("paseo:event:notification-click", clickPayload);
+    }
+    activeNotifications.delete(notification);
+  });
+
+  notification.on("close", () => {
+    activeNotifications.delete(notification);
+  });
+
+  notification.show();
+}
+
+const digest = new NotificationDigest(showNotification);
+
 export function registerNotificationHandlers(): void {
   ipcMain.handle("paseo:notification:isSupported", () => {
     return Notification.isSupported();
@@ -96,31 +130,13 @@ export function registerNotificationHandlers(): void {
 
     const body = toTrimmedString(rawInput?.body) ?? undefined;
     const data = toRecord(rawInput?.data);
-    const icon = getNotificationIcon();
     const settings = await getDesktopSettingsStore().get();
-    const notification = new Notification({
-      title,
-      ...(body ? { body } : {}),
-      ...(icon ? { icon } : {}),
-      silent: !settings.notifications.playSound,
-    });
-
-    activeNotifications.add(notification);
-
-    notification.on("click", () => {
-      const win = focusSenderWindow(event.sender);
-      if (win && data && Object.keys(data).length > 0) {
-        const payload: NotificationClickPayload = { data };
-        win.webContents.send("paseo:event:notification-click", payload);
-      }
-      activeNotifications.delete(notification);
-    });
-
-    notification.on("close", () => {
-      activeNotifications.delete(notification);
-    });
-
-    notification.show();
+    digest.send(
+      { title, body, data },
+      { sender: event.sender, playSound: settings.notifications.playSound },
+      settings.notifications.delivery,
+      settings.notifications.digestMinutes * 60_000,
+    );
     return true;
   });
 }

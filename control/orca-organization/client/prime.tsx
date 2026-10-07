@@ -153,11 +153,11 @@ function NewPrimeSeat({
     <View style={{ gap: 8 }}>
       <Text style={{ color: c.foregroundMuted }}>
         {first
-          ? "Name the prime seat: short, lowercase, for example delivery."
-          : "Another prime can own a different set of projects."}
+          ? "Name the main assistant: short, lowercase, for example delivery."
+          : "Another main assistant can own a different set of projects."}
       </Text>
       <TextInput
-        accessibilityLabel="Name for the new prime seat"
+        accessibilityLabel="Name for the new main assistant"
         value={name}
         onChangeText={setName}
         autoCapitalize="none"
@@ -176,16 +176,14 @@ function NewPrimeSeat({
       {slug && !valid && (
         <Text style={{ color: c.foreground }}>
           {existing.includes(slug)
-            ? "That prime seat already exists."
+            ? "A main assistant with that name already exists."
             : "Use lowercase letters, numbers and dashes, up to 32 characters."}
         </Text>
       )}
       <WorkButton
         theme={props.theme}
         label={
-          first
-            ? "Record a prime orchestrator for this programme"
-            : "Record another prime orchestrator"
+          first ? "Record a main assistant for this programme" : "Record another main assistant"
         }
         disabled={!valid}
         onPress={() =>
@@ -207,14 +205,14 @@ function NewPrimeSeat({
               sessionTaskMatches: false,
               dispatch: null,
             },
-            label: `the ${slug} prime seat`,
+            label: `the ${slug} main assistant seat`,
             candidateTaskIds: [programme],
             scope:
-              "A prime seat is held by a session enrolled on the programme root. Pick one of its saved sessions.",
+              "A main assistant is a session enrolled on the programme root. Pick one of its saved sessions.",
           })
         }
       >
-        {first ? "Record a prime orchestrator" : "Record another prime"}
+        {first ? "Record a main assistant" : "Record another main assistant"}
       </WorkButton>
     </View>
   );
@@ -678,7 +676,7 @@ export function PrimeSurface(props: Props) {
       contentContainerStyle={{ ...pad, gap: 22, maxWidth: props.layout.compact ? undefined : 860 }}
     >
       <View style={{ gap: 8 }}>
-        <Text style={{ ...muted, letterSpacing: 1, fontSize: 12 }}>FULCRA / PRIME LEADERSHIP</Text>
+        <Text style={{ ...muted, letterSpacing: 1, fontSize: 12 }}>FULCRA / LEADS</Text>
         <Text
           accessibilityRole="header"
           style={{
@@ -688,10 +686,10 @@ export function PrimeSurface(props: Props) {
             fontWeight: "600",
           }}
         >
-          Who leads your leaders
+          Who leads your work
         </Text>
         <Text style={{ ...muted, fontSize: 16, lineHeight: 24 }}>
-          Prime orchestrators first, then a project, then the individual conversations.
+          Main assistants first, then each project's lead, then the individual chats.
         </Text>
       </View>
       {session && !node && (
@@ -715,23 +713,21 @@ export function PrimeSurface(props: Props) {
         </Text>
       )}
       <Text accessibilityRole="header" style={{ ...text, fontSize: 20, fontWeight: "600" }}>
-        Prime orchestrators
+        Main assistants
       </Text>
       {/* An explicit prime seat is what a prime *is*. Supervision shape is shown separately below as
         supporting evidence, never promoted into the role once real seats can be read. */}
       {!h.rolesAvailable ? (
         <Text accessibilityLiveRegion="polite" style={text}>
-          Recorded leadership roles could not be read, so no prime orchestrator can be named or
-          ruled out.{h.rolesUnavailable ? ` Controller reported: ${h.rolesUnavailable}` : ""}
+          Fulcra could not read who leads what, so it cannot say whether a main assistant is set.
+          {h.rolesUnavailable ? ` Controller reported: ${h.rolesUnavailable}` : ""}
         </Text>
       ) : !h.primeSeats.length ? (
         <>
-          <Text style={text}>
-            No prime seat is filled, so this deployment records no escalation address.
-          </Text>
+          <Text style={text}>No main assistant is set yet.</Text>
           <Text style={muted}>
-            A prime orchestrator is accountable for the whole programme. Naming one does not start
-            any session or give it new powers.
+            A main assistant looks after all your projects. Naming one does not start a chat or give
+            it new powers.
           </Text>
           {/* The operator names the seat and chooses who holds it; no seat name is built in. */}
           {roles.data?.programme && (
@@ -747,9 +743,7 @@ export function PrimeSurface(props: Props) {
       ) : (
         h.primeSeats.map((seat) => {
           const node = fleet.data?.nodes.find((n) => n.id === seat.sessionId);
-          const name = node
-            ? sessionName(node, fleet.data)
-            : "Accountable session not in this observation";
+          const name = node ? sessionName(node, fleet.data) : "Its chat is not in this view";
           return (
             <View
               key={`${seat.role}:${seat.seat}`}
@@ -763,7 +757,7 @@ export function PrimeSurface(props: Props) {
               }}
             >
               <Text style={{ ...muted, fontSize: 12, letterSpacing: 1 }}>
-                PRIME ORCHESTRATOR · {seat.seat}
+                MAIN ASSISTANT · {seat.seat}
               </Text>
               <Text style={{ ...text, fontSize: 20, lineHeight: 27, fontWeight: "600" }}>
                 {name}
@@ -772,8 +766,8 @@ export function PrimeSurface(props: Props) {
                 <Text style={text}>{sessionStatus(node, fleet.stale)}</Text>
               ) : (
                 <Text style={text}>
-                  This seat names an accountable session that is not in the current observation. Its
-                  history has not been deleted.
+                  This main assistant's chat is not in the current view. Its history has not been
+                  deleted.
                 </Text>
               )}
               {!seat.sessionPresent && (
@@ -783,15 +777,15 @@ export function PrimeSurface(props: Props) {
                 <Text style={muted}>{seat.dispatch.reason}</Text>
               )}
               {/* Remit: the seat's own recorded words, and what the programme looks like from it. */}
-              <Text style={{ ...muted, fontSize: 12, letterSpacing: 1 }}>REMIT</Text>
-              <Text style={text}>{seat.note ?? "No remit is recorded on this seat."}</Text>
+              <Text style={{ ...muted, fontSize: 12, letterSpacing: 1 }}>WHAT IT LOOKS AFTER</Text>
+              <Text style={text}>{seat.note ?? "Nothing is written down for it yet."}</Text>
               {(() => {
                 const x = crossProject(h, seat.seat, remits.data);
                 if (!x.projects.length)
                   return (
                     <Text style={muted}>
                       {x.byRemit
-                        ? "This prime owns no project yet. Give it one from a project's story in Organisation."
+                        ? "This main assistant owns no project yet. Give it one from a project's story in Organisation."
                         : "No recorded project is grouped under this programme yet."}
                     </Text>
                   );
@@ -854,13 +848,13 @@ export function PrimeSurface(props: Props) {
                   targetHost={node.host}
                   targetServerId={node.serverId}
                   agentId={node.agentId}
-                  label={`Talk to ${name}, prime seat ${seat.seat}`}
+                  label={`Talk to ${name}, main assistant ${seat.seat}`}
                 />
               )}
               {node && (
                 <WorkButton
                   theme={props.theme}
-                  label={`Read retained updates from ${name}, prime seat ${seat.seat}`}
+                  label={`Read retained updates from ${name}, main assistant ${seat.seat}`}
                   onPress={() => setSession(node.id)}
                 >
                   Read retained updates

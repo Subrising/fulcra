@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
 import Svg, { G, Line, Polygon, Rect, Text as SvgText } from "react-native-svg";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { isWeb } from "@/constants/platform";
 import type { Theme } from "@/styles/theme";
+import { useCanvasGestures } from "./use-canvas-gestures";
 import type { ArchitectureMapModel, ArchitectureMapNode, CardTone, NodeTone } from "./ir-model";
 import {
   computeViewBox,
@@ -221,6 +222,14 @@ export function ArchitectureMapView({ model }: ArchitectureMapViewProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [clearSelection]);
 
+  const canvasFrame = useRef<View | null>(null);
+  useCanvasGestures(canvasFrame, {
+    zoom: effectiveZoom,
+    minZoom: MIN_ZOOM,
+    maxZoom: MAX_ZOOM,
+    onZoom: setZoom,
+  });
+
   const onCanvasLayout = useCallback((event: LayoutChangeEvent) => {
     setAvailableWidth(event.nativeEvent.layout.width);
   }, []);
@@ -280,7 +289,17 @@ export function ArchitectureMapView({ model }: ArchitectureMapViewProps) {
         </ZoomButton>
       </View>
 
-      <View style={styles.canvasFrame} onLayout={onCanvasLayout}>
+      {isWeb ? (
+        <Text style={styles.subtitle} testID="architecture-map-gesture-hint">
+          {t("panels.architectureMap.gestureHint")}
+        </Text>
+      ) : null}
+      <View
+        ref={canvasFrame}
+        style={styles.canvasFrame}
+        onLayout={onCanvasLayout}
+        testID="architecture-map-canvas"
+      >
         <ScrollView horizontal>
           <ThemedMapCanvas
             uniProps={paletteProps}

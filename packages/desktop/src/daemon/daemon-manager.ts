@@ -253,6 +253,12 @@ export async function resolveDesktopDaemonStatus(): Promise<DesktopDaemonStatus>
   const home = getPaseoHome();
 
   try {
+    // The app polls this while no local daemon runs. Answer that case in-process,
+    // since launching the CLI once per poll keeps spawning processes while idle.
+    if (!(await readDaemonInstance(home))) {
+      return statusFromDaemonProbe({ localDaemon: "stopped" }, home);
+    }
+
     const password =
       (await desktopCommandCentreCredential()) ?? (await localServiceStatusAuth(home));
     const args = ["daemon", "status", "--home", home, "--json"];
@@ -264,7 +270,7 @@ export async function resolveDesktopDaemonStatus(): Promise<DesktopDaemonStatus>
     return { ...statusFromDaemonProbe(payload, home), usesGeneratedCredential: Boolean(password) };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logDesktopDaemonLifecycle("resolveStatus CLI command failed", { error: errorMessage });
+    logDesktopDaemonLifecycle("resolveStatus failed", { error: errorMessage });
     return {
       serverId: "",
       status: "errored",

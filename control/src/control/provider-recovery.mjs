@@ -24,6 +24,11 @@
 // of that error (review H7 B2: keyed by the text alone, the constant explicit-close-recovery text or a repeat of the
 // same 401 was recovered once per session, ever) -- MAX_ATTEMPTS restarts with backoff, MAX_RECOVERIES_PER_DAY a session.
 import { createHash } from "node:crypto";
+import {
+  transientNetworkError,
+  endingNetworkError,
+  NETWORK_BACKOFF_MS,
+} from "./transient-network.mjs";
 import { assertColumns } from "./schema.mjs";
 import { uuid, RecipientBusy } from "./authority.mjs";
 import { quotaDecision } from "./quota-wait.mjs";
@@ -57,6 +62,7 @@ const derived = (x, purpose) => {
 export function classify(a) {
   if (a?.status !== "error") return null;
   const e = String(a.lastError ?? "");
+  if (transientNetworkError(e)) return "network";
   if (REFRESH.test(e)) return "refresh";
   if (a.provider !== "codex") return null;
   if (QUOTA.test(e) && !/\b401\b|unauthori[sz]ed/i.test(e)) return "quota";
@@ -64,11 +70,13 @@ export function classify(a) {
 }
 export function continuationText(r, rotation = null) {
   const what =
-    r.kind === "quota"
-      ? rotation?.to
-        ? "its usage limit"
-        : "its usage limit, which has now lifted"
-      : "a provider failure, and the controller restarted it with its history";
+    r.kind === "network"
+      ? "a temporary network failure"
+      : r.kind === "quota"
+        ? rotation?.to
+          ? "its usage limit"
+          : "its usage limit, which has now lifted"
+        : "a provider failure, and the controller restarted it with its history";
   return (
     `[Orca controller: your previous turn stopped at ${what} ("${r.error.slice(0, 200)}", recorded ${r.at}).${rotation?.to ? " " + rotationNote(rotation) : ""}]\n` +
     "Continue exactly where you stopped. First check your working tree, git log and any receipts or artifacts to see how far that turn got, " +
@@ -83,6 +91,7 @@ export class ProviderRecovery {
     this.db = this.store.db;
     this.now = now;
     this.flights = new Map();
+    this.networkSeen = new Map();
     this.ticking = null;
     this.lastError = null;
     this.db.exec(
@@ -108,11 +117,24 @@ export class ProviderRecovery {
   onAgent(a) {
     if (!uuid(a?.id) || !this.store.get(a.id)) return null;
     if (classify(a)) return this.observe(a.id);
+    if (a.provider === "claude" && a.status === "idle") {
+      if (a.updatedAt && this.networkSeen.get(a.id) === a.updatedAt) return null;
+      this.networkSeen.set(a.id, a.updatedAt);
+      if (this.networkSeen.size > 1024)
+        this.networkSeen.delete(this.networkSeen.keys().next().value);
+      // Idle is out of any reported error, but its last message may still be a network failure:
+      // network episodes clear only once that ending is gone.
+      this.cleared(a.id, "AND kind!='network'");
+      return this.observe(a.id).then((found) => found ?? this.cleared(a.id));
+    }
+    return this.cleared(a.id);
+  }
+  cleared(id, only = "") {
     this.db
       .prepare(
-        "UPDATE provider_recoveries SET cleared=1 WHERE session=? AND cleared=0 AND state!='waiting'",
+        `UPDATE provider_recoveries SET cleared=1 WHERE session=? AND cleared=0 AND state!='waiting' ${only}`,
       )
-      .run(a.id);
+      .run(id);
     return null;
   }
   observe(id) {
@@ -126,12 +148,34 @@ export class ProviderRecovery {
     this.flights.set(id, flight);
     return flight;
   }
+  async failure(id) {
+    const a = await this.control.native.snapshot(id);
+    if (classify(a) || a?.status !== "idle" || a.provider !== "claude") return a;
+    const tail = await this.control.native.limitTail?.(id);
+    const last = tail?.entries?.at(-1);
+    const error =
+      last?.item?.type === "assistant_message" &&
+      (tail.maxSeq === undefined || last.seqEnd === tail.maxSeq) &&
+      endingNetworkError(last.item.text);
+    return error ? { ...a, status: "error", lastError: error } : a;
+  }
+  async networkEnabled(id) {
+    if ((await this.control.native.automaticResumeEnabled?.(id)) !== true) return false;
+    // The per-session opt-out is read fresh at every gate, like the host toggle.
+    const snapshot = await this.control.native.snapshot(id);
+    return snapshot?.labels?.["fulcra.limit-resume"] !== "off";
+  }
   async observeOnce(id) {
     const s = this.store.get(id);
     if (!s) return null;
-    const a = await this.control.native.snapshot(id),
+    const a = await this.failure(id),
       kind = classify(a);
     if (!kind) return null;
+    if (
+      kind === "network" &&
+      (!(await this.networkEnabled(id)) || !s.expected || a.pendingPermissions?.length)
+    )
+      return null;
     const error = String(a.lastError).slice(0, 1000),
       base = `${id}:${s.generation}:${digest(error)}`;
     // The newest episode of this failure: still open, or finished and not yet seen cleared -> the same occurrence.
@@ -162,7 +206,12 @@ export class ProviderRecovery {
         error,
         last,
         s.mode === "delegated" ? "waiting" : "held",
-        this.iso(this.now() + BACKOFF_MS[0]),
+        this.iso(
+          this.now() +
+            (kind === "network"
+              ? (NETWORK_BACKOFF_MS[this.networkCount(id)] ?? NETWORK_BACKOFF_MS.at(-1))
+              : BACKOFF_MS[0]),
+        ),
         this.iso(),
         episode,
       );
@@ -210,15 +259,37 @@ export class ProviderRecovery {
     });
     return this.ticking;
   }
+  networkCount(id) {
+    return this.db
+      .prepare(
+        "SELECT count(*) n FROM provider_recoveries WHERE session=? AND kind='network' AND state='recovered' AND at>?",
+      )
+      .get(id, this.iso(this.now() - 30 * 60_000)).n;
+  }
+  networkCurrent(r) {
+    const current = this.store.get(r.session);
+    const last = this.db
+      .prepare(
+        "SELECT id FROM deliveries WHERE session=? AND kind='send' AND state='delivered' ORDER BY rowid DESC LIMIT 1",
+      )
+      .get(r.session)?.id;
+    return (
+      current?.mode === "delegated" &&
+      current.generation === r.generation &&
+      last === r.lastInstruction
+    );
+  }
   retry(r, outcome) {
     const attempts = r.attempts + 1;
-    if (attempts >= MAX_ATTEMPTS)
+    if (attempts >= (r.kind === "network" ? NETWORK_BACKOFF_MS.length : MAX_ATTEMPTS))
       return this.finish(r.id, "failed", `${outcome}; gave up after ${attempts} attempts`);
     this.db
       .prepare("UPDATE provider_recoveries SET attempts=?,nextAt=?,outcome=?,at=? WHERE id=?")
       .run(
         attempts,
-        this.iso(this.now() + BACKOFF_MS[attempts]),
+        this.iso(
+          this.now() + (r.kind === "network" ? NETWORK_BACKOFF_MS[attempts] : BACKOFF_MS[attempts]),
+        ),
         String(outcome).slice(0, 500),
         this.iso(),
         r.id,
@@ -236,7 +307,16 @@ export class ProviderRecovery {
         "superseded",
         "Session control changed since the failure was recorded",
       );
-    const a = await this.control.native.snapshot(r.session);
+    if (
+      r.kind === "network" &&
+      (!(await this.networkEnabled(r.session)) || !this.networkCurrent(r))
+    )
+      return this.finish(
+        r.id,
+        "held",
+        "Automatic resume is off or the interrupted instruction changed",
+      );
+    const a = await this.failure(r.session);
     if (classify(a) !== r.kind || String(a.lastError).slice(0, 1000) !== r.error) {
       this.finish(r.id, "superseded", "The session is no longer in that failure; nothing was done");
       this.db.prepare("UPDATE provider_recoveries SET cleared=1 WHERE id=?").run(r.id);
@@ -247,7 +327,10 @@ export class ProviderRecovery {
         "SELECT count(*) n FROM provider_recoveries WHERE session=? AND state='recovered' AND at>?",
       )
       .get(r.session, this.iso(this.now() - 86400000)).n;
-    if (today >= MAX_RECOVERIES_PER_DAY)
+    if (
+      today >= MAX_RECOVERIES_PER_DAY ||
+      (r.kind === "network" && this.networkCount(r.session) >= NETWORK_BACKOFF_MS.length)
+    )
       return this.finish(
         r.id,
         "held-back",
@@ -316,6 +399,11 @@ export class ProviderRecovery {
               );
               throw Error("Human activity or changed identity revoked delegation");
             }
+            if (
+              r.kind === "network" &&
+              (!(await this.networkEnabled(r.session)) || !this.networkCurrent(r))
+            )
+              throw Error("Automatic resume is off or the interrupted instruction changed");
             return this.control.native.recover(r.session);
           });
     } catch (e) {
@@ -340,6 +428,13 @@ export class ProviderRecovery {
     // The failure itself ended that turn (review H7: a failed turn may read as 'ended'), so it is continued once.
     try {
       const continuation = derived(r.id, "provider-recovery-continue");
+      if (r.kind === "network") {
+        if (!(await this.networkEnabled(r.session)) || !this.networkCurrent(r))
+          throw Error("Automatic resume is off or the interrupted instruction changed");
+        this.db
+          .prepare("UPDATE provider_recoveries SET continuation=? WHERE id=?")
+          .run(continuation, r.id);
+      }
       const sent = await this.control.send(
         { sessionId: r.session, messageId: continuation, text: continuationText(r, rotation) },
         undefined,
@@ -348,7 +443,11 @@ export class ProviderRecovery {
           automated: "provider-recovery",
           check: () => {
             const cur = this.store.get(r.session);
-            if (cur?.mode !== "delegated" || cur.generation !== r.generation)
+            if (
+              cur?.mode !== "delegated" ||
+              cur.generation !== r.generation ||
+              (r.kind === "network" && !this.networkCurrent(r))
+            )
               throw Error("Session control changed");
           },
         },

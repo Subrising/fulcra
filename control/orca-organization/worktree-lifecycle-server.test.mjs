@@ -49,17 +49,21 @@ test("index.server.ts forwards preview operationId and polling terminates", asyn
         exports
           .map((name) => {
             const value =
-              name === "withManagementInvocation"
-                ? `globalThis.${key}.withManagementInvocation`
-                : name === "localCall"
-                  ? `globalThis.${key}.call`
-                  : name.endsWith("Rpc")
-                    ? `{name:${JSON.stringify(name)}}`
-                    : name === "NotConfigured"
-                      ? "class extends Error {}"
-                      : name === "READ_DEADLINE_MS"
-                        ? "1000"
-                        : "noop";
+              name === "withDeadline"
+                ? "(run) => run()"
+                : name === "invocationReadOnly"
+                  ? "(declared) => declared"
+                  : name === "withManagementInvocation"
+                    ? `globalThis.${key}.withManagementInvocation`
+                    : name === "localCall"
+                      ? `globalThis.${key}.call`
+                      : name.endsWith("Rpc")
+                        ? `{name:${JSON.stringify(name)}}`
+                        : name === "NotConfigured"
+                          ? "class extends Error {}"
+                          : name === "READ_DEADLINE_MS"
+                            ? "1000"
+                            : "noop";
             return `export const ${name} = ${value};`;
           })
           .join("\n"),

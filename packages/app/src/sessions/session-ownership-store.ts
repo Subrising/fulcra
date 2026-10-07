@@ -88,6 +88,9 @@ export function resolveOrganizationPluginId(serverId: string): string | null {
     .filter((plugin) => plugin.serverId === serverId)
     .map((plugin) => plugin.id);
   if (installed.includes(ORGANIZATION_PLUGIN_ID)) return ORGANIZATION_PLUGIN_ID;
+  // The host's reported controller settles which family member answers.
+  const controller = pluginRegistry.reportedControllerPluginId(serverId);
+  if (controller && installed.includes(controller)) return controller;
   const family = installed.filter((id) => id.startsWith(ORGANIZATION_PLUGIN_PREFIX));
   if (family.length === 1) return family[0];
   logUnresolvedPluginId(serverId, family);

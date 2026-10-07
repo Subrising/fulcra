@@ -9,9 +9,8 @@ import type { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import { useSessionStore, type Agent } from "@/stores/session-store";
-import { useInstalledPlugin } from "@/plugins/registry";
+import { useControllerPlugin } from "@/plugins/registry";
 import { usePluginSurfaceRuntime } from "@/plugins/surface-runtime";
-import { COMMAND_CENTRE_PLUGIN_ID } from "@/plugins/command-centre-connection";
 import { useContextRead } from "./read-scope";
 import { ManagedContentGrantActions } from "./managed-content-grant-actions";
 import { projectManagedArtifacts } from "./native-evidence-model";
@@ -39,7 +38,7 @@ interface Boundary {
 export function ContextManagedContent(props: Props) {
   const agentId = props.agent?.id;
   const client = useHostRuntimeClient(props.serverId);
-  const plugin = useInstalledPlugin(props.serverId, COMMAND_CENTRE_PLUGIN_ID);
+  const plugin = useControllerPlugin(props.serverId);
   const runtime = usePluginSurfaceRuntime(client, plugin);
   const active = useRef(props.active);
   active.current = props.active;

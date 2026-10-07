@@ -16,7 +16,7 @@ export function sessionAccount(input: {
 }
 
 export function sessionAccountText(account: SessionAccount): string {
-  return account.name ? `Account: ${account.name}` : "Account unavailable";
+  return account.name ? `Account: ${account.name}` : "Account unknown";
 }
 
 export function sessionAccountDescription(provider: string, name: string | null): string {
@@ -24,7 +24,7 @@ export function sessionAccountDescription(provider: string, name: string | null)
     provider,
     labels: name ? { [SESSION_ACCOUNT_LABEL]: name } : undefined,
   });
-  return account ? ` · ${sessionAccountText(account)}` : "";
+  return account?.name ? ` · ${sessionAccountText(account)}` : "";
 }
 
 export function runtimeAccountName(

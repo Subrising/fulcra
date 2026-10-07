@@ -151,7 +151,7 @@ it("m2 binds each of two pins to its ID, never any matching hash", async () => {
 it("m2 disposes the same earlier bytes when pins disappear", async () => {
   f.evaluate.mockReturnValueOnce({
     cleanup: () => {},
-    sidebarItems: [{ id: "main", title: "Example", icon: "Blocks", surface: "main" }],
+    legacySidebarItems: [{ id: "main", title: "Example", icon: "Blocks", surface: "main" }],
   });
   const registry = new PluginRegistry({
     version: "1.0.0",

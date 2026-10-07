@@ -8,7 +8,7 @@ import type { AgentProfile } from "@getpaseo/protocol/messages";
 import { Button } from "@/components/ui/button";
 import { settingsStyles } from "@/styles/settings";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
-import { AgentProfileGlyph } from "../internal/agent-profile-glyph";
+import { AgentProfileGlyph } from "../presentation";
 import { buildAgentProfileTags } from "../internal/profile-summary";
 
 const ThemedArrowUp = withUnistyles(ArrowUp);

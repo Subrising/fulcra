@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -41,6 +42,7 @@ export const zhCN: TranslationResources = {
     total: "{{total}} 个匹配项",
   },
   common: {
+    bottomSheetBackdrop: "底部面板背景",
     back: "返回",
     loading: "加载中...",
     actions: {
@@ -166,6 +168,8 @@ export const zhCN: TranslationResources = {
     },
     attachments: {
       addImage: "添加图片",
+      choosePhoto: "选择照片",
+      takePhoto: "拍摄照片",
       pasteImage: "粘贴图片",
       addFile: "Upload file",
       addIssueOrPr: "添加 issue 或 PR",
@@ -454,7 +458,9 @@ export const zhCN: TranslationResources = {
       recovery: {
         archivedTitle: "Workspace 已归档",
         restoreDescription:
-          "{{workspaceName}} 已归档，其 worktree 已移除。恢复分支 {{branch}} 以重新打开。",
+          "恢复 {{workspaceName}} 以返回其中的代理。worktree 将使用分支 {{branch}}。",
+        restoreWithoutBranchDescription:
+          "恢复 {{workspaceName}} 以返回其中的代理。新分支将从保存的基准分支或仓库默认分支创建。",
         unarchiveDescription: "{{workspaceName}} 已归档。取消归档以重新打开。",
         restoreAction: "恢复",
         unarchiveAction: "取消归档",
@@ -1364,6 +1370,9 @@ export const zhCN: TranslationResources = {
       settings: "设置",
       closeSidebar: "关闭侧边栏",
     },
+    footer: {
+      usage: "使用情况",
+    },
     help: {
       trigger: "帮助与支持",
       sectionHelp: "帮助",
@@ -1733,7 +1742,11 @@ export const zhCN: TranslationResources = {
     loadingCommands: "正在加载 commands...",
     noFiles: "没有找到文件或目录",
     noCommands: "没有找到 commands",
+    accountUnavailable: "此计算机暂不支持账户命令。请在 {{host}} 上更新 Fulcra。",
+    thisComputer: "此计算机",
     failedToLoad: "加载失败",
+    chooseProjectForCommands: "选择项目以查看命令",
+    chooseModelForCommands: "选择模型以查看命令",
   },
   loadOlderHistory: {
     failed: "无法加载更早历史",
@@ -1743,6 +1756,8 @@ export const zhCN: TranslationResources = {
     permissionMessage: "请允许访问照片图库以附加图片。",
     errorTitle: "错误",
     failedToSelect: "选择图片失败",
+    cameraPermissionMessage: "请允许访问相机以拍摄照片。",
+    failedToTakePhoto: "无法拍摄照片",
     dialogTitle: "附加图片",
     dialogFilterName: "图片",
   },
@@ -1797,6 +1812,7 @@ export const zhCN: TranslationResources = {
     modelCountPlural: "{{count}} 个模型",
     retry: "重试",
     retrying: "正在重试...",
+    savedModels: "正在显示之前加载的 {{provider}} 模型。",
     noMatches: "没有匹配的模型",
     noMatchesForQuery: "没有与“{{query}}”匹配的模型",
     searchAllPlaceholder: "搜索所有模型...",
@@ -1839,6 +1855,16 @@ export const zhCN: TranslationResources = {
     hostPassword: {
       title: "{{host}} 的密码",
       label: "主机密码",
+    },
+    hostConfirmation: {
+      title: "连接到此主机？",
+      description: "此主机将能在此应用中运行代码，并访问你其他已连接的主机。仅在你认识它时才连接。",
+      descriptionChanged:
+        "此链接会改变你连接此主机的方式。该主机将能在此应用中运行代码，并访问你其他已连接的主机。仅在你认识它时才连接。",
+      hostLabel: "主机",
+      fingerprintLabel: "密钥指纹",
+      relayLabel: "中继",
+      connect: "连接",
     },
     connectionMethods: {
       title: "添加连接",
@@ -1909,6 +1935,12 @@ export const zhCN: TranslationResources = {
       helper: "连接到远程主机上运行的 Fulcra 守护进程。",
       fields: {
         target: "SSH 主机",
+        password: "守护进程密码",
+        optional: "可选",
+      },
+      passwordVisibility: {
+        show: "显示密码",
+        hide: "隐藏密码",
       },
       actions: {
         cancel: "取消",
@@ -2094,6 +2126,8 @@ export const zhCN: TranslationResources = {
       emptyDescription: "为此检出创建拉取请求后，可在此处查看其详情。",
     },
     architectureMap: {
+      mainOnly: "代码架构是工作区主视图。请从 + 标签页菜单打开。",
+      entryUnavailable: "添加已保存的代码图，或连接支持代码图或变更分析的主机。",
       label: "架构图",
       subtitle: "项目架构",
       tooltip: "显示项目的架构图",
@@ -2110,6 +2144,7 @@ export const zhCN: TranslationResources = {
       zoomIn: "放大",
       zoomOut: "缩小",
       fit: "适应",
+      gestureHint: en.panels.architectureMap.gestureHint,
       actualSize: "实际大小",
       components: "组件",
       boundaries: "边界",
@@ -2161,6 +2196,8 @@ export const zhCN: TranslationResources = {
         packageHint: "选择一个包以展开其模块。",
         allLevels: "显示所有层级",
         showInMap: "在地图中显示",
+        does: en.panels.architectureMap.graph.does,
+        panel: en.panels.architectureMap.graph.panel,
       },
       review: {
         open: "审查",
@@ -2191,6 +2228,7 @@ export const zhCN: TranslationResources = {
           NORMAL: "正常风险：有 {{tests}} 个测试覆盖的代码。",
           HIGH: "高风险：没有测试覆盖的代码，或此变更删除的代码。",
         },
+        plain: en.panels.architectureMap.review.plain,
         loadingDiff: "正在加载变更…",
         noDiff: "此文件没有可显示的文本变更。",
         noFindingsHere: "自动审查在此文件中没有发现问题。",
@@ -2392,7 +2430,10 @@ export const zhCN: TranslationResources = {
   sidebarCallout: {
     dismiss: "关闭",
   },
+  usagePanel: usagePanelCopy["zh-CN"],
   contextWindow: {
+    noData: "暂无上下文数据",
+    accessibilityNoData: "上下文窗口：暂无上下文数据",
     title: "上下文窗口",
     used: "已使用 {{percentage}}%",
     tokens: "{{used}} / {{max}} tokens",
@@ -2419,6 +2460,7 @@ export const zhCN: TranslationResources = {
       app: "应用",
       host: "主机",
     },
+    menu: en.settings.menu,
     hostPicker: {
       switchHost: "切换主机",
       local: "本机",
@@ -2460,6 +2502,10 @@ export const zhCN: TranslationResources = {
       refreshAccessibility: "刷新通知权限",
       playSound: "播放声音",
       playSoundHint: "收到桌面通知时播放声音",
+      digest: "合并已完成的会话",
+      digestHint: "将已完成的会话合并为一条摘要，而不是逐条提醒。审批和错误仍会立即提醒。",
+      digestFrequency: "频率",
+      digestEvery: "{{count}} 分钟",
       test: "测试通知",
       testHint: "使用当前设置发送测试通知",
       permissionRequired: "测试前请允许访问通知",
@@ -2651,8 +2697,14 @@ export const zhCN: TranslationResources = {
         description: "显示用于在提示词之间跳转的大纲",
       },
       sidebar: {
-        title: "侧边栏",
-        description: "选择侧边栏顶部显示的项目及其顺序",
+        header: {
+          title: "顶部",
+          description: "选择侧边栏顶部显示的项目及其顺序",
+        },
+        footer: {
+          title: "底部",
+          description: "选择侧边栏底部显示的行及其顺序。添加项目和图标行始终显示",
+        },
         moveUp: "上移",
         moveDown: "下移",
       },
@@ -2674,6 +2726,14 @@ export const zhCN: TranslationResources = {
         codeSize: "代码字号",
         codeSizeHint: "用于代码、差异和终端输出",
         codeSizeAccessibility: "代码字号",
+      },
+      layout: {
+        title: "布局",
+        contentWidth: "内容宽度",
+        contentWidthHint: "宽屏上聊天和 Markdown 文件的最大宽度",
+        contentWidthAccessibility: "内容宽度（像素）",
+        reset: "重置",
+        resetAccessibility: "将内容宽度重置为默认值",
       },
       syntax: {
         title: "语法",

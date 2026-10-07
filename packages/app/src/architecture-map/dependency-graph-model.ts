@@ -19,6 +19,8 @@ export interface Selection {
   dependentFiles: number;
   /** One hop: only the selected module's own connections light up. */
   oneHop?: boolean;
+  /** Only what uses the selected module: its own outgoing connections stay quiet too. */
+  callersOnly?: boolean;
 }
 
 function adjacency(edges: readonly GraphEdge[], reverse: boolean): Map<string, string[]> {
@@ -131,7 +133,9 @@ export function drawnEdges(input: {
   return edges.flatMap((edge) => {
     if (!visible.has(edge.from) || !visible.has(edge.to)) return [];
     const lit = onPath(edge);
-    const direct = selection !== null && (edge.from === selection.id || edge.to === selection.id);
+    const direct =
+      selection !== null &&
+      (edge.to === selection.id || (edge.from === selection.id && !selection.callersOnly));
     if (!lit && !direct && edge.imports < QUIET_EDGE_IMPORTS) return [];
     return [{ edge, lit: lit || direct }];
   });
@@ -240,47 +244,81 @@ export function packageOverview(graph: ArchitectureGraph): ArchitectureGraph {
   return { ...graph, nodes, edges, highlighted };
 }
 
+export interface GroupFrame {
+  group: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const FRAME_PAD = 16;
+const FRAME_TITLE = 22;
+
 /**
- * One package opened: its modules in a grid, the packages that use it on the left and the packages it uses on the
- * right (each outside package is one box), with the imports between them bundled.
+ * One package opened in place: the overview stays, and the package's box becomes a framed grid of its modules where
+ * the box was. Packages to its right in the same row move right, and lower rows move down, so nothing overlaps.
+ * Imports between two closed packages stay bundled; imports that touch the open package go to its modules.
  */
-export function expandPackage(graph: ArchitectureGraph, group: string): ArchitectureGraph {
-  const groups = membersByGroup(graph);
-  const members = groups.get(group) ?? [];
-  const inside = new Set(members.map((m) => m.id));
-  const groupOf = new Map(graph.nodes.map((n) => [n.id, n.group]));
-  const outer = (id: string) => (inside.has(id) ? id : packageNodeId(groupOf.get(id) ?? ""));
-  const touching = graph.edges.filter((e) => inside.has(e.from) || inside.has(e.to));
-  const edges = bundle(
-    touching.map((e) => ({ from: outer(e.from), to: outer(e.to), imports: e.imports })),
-  );
-  const uses = new Set(
-    edges.filter((e) => inside.has(e.from) && isPackageNode(e.to)).map((e) => e.to),
-  );
-  const usedBy = [
-    ...new Set(edges.filter((e) => isPackageNode(e.from) && inside.has(e.to)).map((e) => e.from)),
-  ]
-    .filter((id) => !uses.has(id))
-    .sort();
+export function expandInPlace(
+  graph: ArchitectureGraph,
+  group: string,
+): { graph: ArchitectureGraph; frame: GroupFrame | null } {
+  const overview = packageOverview(graph);
+  const box = overview.nodes.find((n) => n.id === packageNodeId(group));
+  const members = membersByGroup(graph).get(group) ?? [];
+  if (!box || members.length === 0) return { graph: overview, frame: null };
   const columns = Math.max(1, Math.ceil(Math.sqrt(members.length)));
-  const left = usedBy.length > 0 ? ORIGIN + BOX_W + GAP_X : ORIGIN;
-  const moduleNodes = [...members]
+  const rows = Math.ceil(members.length / columns);
+  const stepX = BOX_W + GAP_X / 2;
+  const stepY = BOX_H + GAP_Y / 2;
+  const frame: GroupFrame = {
+    group,
+    x: box.x,
+    y: box.y,
+    width: columns * stepX - GAP_X / 2 + FRAME_PAD * 2,
+    height: rows * stepY - GAP_Y / 2 + FRAME_PAD * 2 + FRAME_TITLE,
+  };
+  const growX = frame.width - BOX_W;
+  const growY = frame.height - BOX_H;
+  const moved = overview.nodes
+    .filter((n) => n.id !== box.id)
+    .map((n) => {
+      if (n.y > box.y) return Object.assign({}, n, { y: n.y + growY });
+      if (n.y === box.y && n.x > box.x) return Object.assign({}, n, { x: n.x + growX });
+      return n;
+    });
+  const modules = [...members]
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((m, i) =>
       Object.assign({}, m, {
-        x: left + (i % columns) * (BOX_W + GAP_X / 2),
-        y: ORIGIN + Math.floor(i / columns) * (BOX_H + GAP_Y / 2),
+        x: frame.x + FRAME_PAD + (i % columns) * stepX,
+        y: frame.y + FRAME_PAD + FRAME_TITLE + Math.floor(i / columns) * stepY,
       }),
     );
-  const right = left + columns * (BOX_W + GAP_X / 2) + GAP_X / 2;
-  const place = (ids: readonly string[], x: number) =>
-    ids.map((id, i) => {
-      const g = id.slice(PACKAGE_PREFIX.length);
-      return packageNode(g, groups.get(g) ?? [], x, ORIGIN + i * (BOX_H + GAP_Y / 2));
-    });
-  const nodes = [...place(usedBy, ORIGIN), ...moduleNodes, ...place([...uses].sort(), right)];
-  const highlighted = graph.highlighted.filter((id) => inside.has(id));
-  return { ...graph, nodes, edges, highlighted };
+  const inside = new Set(members.map((m) => m.id));
+  const groupOf = new Map(graph.nodes.map((n) => [n.id, n.group]));
+  const outer = (id: string) => (inside.has(id) ? id : packageNodeId(groupOf.get(id) ?? ""));
+  const edges = bundle(
+    graph.edges.map((e) => ({ from: outer(e.from), to: outer(e.to), imports: e.imports })),
+  );
+  const highlighted = [...new Set(graph.highlighted.map(outer))].sort();
+  return { graph: { ...graph, nodes: [...moved, ...modules], edges, highlighted }, frame };
+}
+
+/** Modules whose name or folder matches, best first: name starts with the query, then name contains it. */
+export function searchModules(graph: ArchitectureGraph, query: string, limit = 8): GraphNode[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const rank = (node: GraphNode) => {
+    const label = node.label.toLowerCase();
+    if (label.startsWith(q)) return 0;
+    return label.includes(q) ? 1 : 2;
+  };
+  return graph.nodes
+    .filter((node) => matchesQuery(node, q))
+    .sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label))
+    .slice(0, limit);
 }
 
 /** One hop: only the selected module's direct neighbours count as lit. */
@@ -291,4 +329,9 @@ export function nearestOnly(selection: Selection): Selection {
     usedByAll: new Set(selection.usedByDirect),
     oneHop: true,
   };
+}
+
+/** "Show what calls this": only the modules that use the selection, at every level; what it uses goes quiet. */
+export function callersOnly(selection: Selection): Selection {
+  return { ...selection, usesDirect: [], usesAll: new Set(), oneHop: false, callersOnly: true };
 }

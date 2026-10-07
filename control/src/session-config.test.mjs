@@ -211,10 +211,6 @@ const CREATION_SURFACE = {
     creates: false,
     note: "test adapter: lists agents from fixture state",
   },
-  "research/stage2-mutations.mjs": {
-    creates: false,
-    note: "C2 mutation harness: names connectNative only inside a server.mjs source-anchor string; never imports or calls it",
-  },
 };
 // Bare identifiers, NOT `import ... connectNative`. Requiring `import` to come first meant a dynamic
 // import inverted the order and slipped through -- `const { connectNative } = await import(M)` names the

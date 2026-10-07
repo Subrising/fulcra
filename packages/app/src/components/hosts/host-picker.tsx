@@ -6,6 +6,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { HostStatusDot } from "@/components/host-status-dot";
 import { Combobox, ComboboxItem, type ComboboxProps } from "@/components/ui/combobox";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
+import { useOfflineHosts } from "@/components/sidebar/use-offline-hosts";
 import { useHostRuntimeSnapshot, type ActiveConnection } from "@/runtime/host-runtime";
 import {
   describeHostEndpoint,
@@ -29,7 +30,7 @@ export {
 
 const SEARCHABLE_THRESHOLD = 10;
 type RenderHostOption = NonNullable<ComboboxProps["renderOption"]>;
-interface HostPickerHost {
+export interface HostPickerHost {
   serverId: string;
   label: string;
   // Callers pass whole host profiles; these are read only to disambiguate equal labels.
@@ -215,9 +216,16 @@ export function HostPicker({
   children,
 }: HostPickerProps): ReactElement {
   const localServerId = useLocalDaemonServerId();
+  const offlineHosts = useOfflineHosts();
   const orderedHosts = useMemo(
-    () => orderHostsLocalFirst(hosts, localServerId),
-    [hosts, localServerId],
+    () =>
+      orderHostsLocalFirst(
+        hosts.filter(
+          (host) => host.serverId === value || !offlineHosts.get(host.serverId)?.duplicate,
+        ),
+        localServerId,
+      ),
+    [hosts, localServerId, offlineHosts, value],
   );
 
   const options = useMemo(() => {

@@ -56,6 +56,11 @@ interface PluginNavigableHostProps extends PluginHostProps {
      * An unloaded registry or missing host returns unavailable; requests are never queued.
      * Distinct from openAgent's optional serverId, which navigates without checking the host.
      */
+    /** Opens the exact cached agent's native Changes view. Never resolves a host/workspace by path. */
+    readonly openAgentChangesOnHost?: (input: {
+      readonly serverId: string;
+      readonly agentId: string;
+    }) => "requested" | "host-unavailable" | "changes-unavailable";
     readonly openAgentOnHost?: (input: {
       readonly serverId: string;
       readonly agentId: string;
@@ -63,7 +68,45 @@ interface PluginNavigableHostProps extends PluginHostProps {
   };
 }
 
+/** String keys and values: params travel in the screen's URL. */
+export type PluginScreenParams = Record<string, string>;
+
+export interface PluginOpenScreenInput {
+  screenId: string;
+  params?: PluginScreenParams;
+}
+
+export interface PluginScreenLocation {
+  screenId: string;
+  params: PluginScreenParams;
+}
+
 export interface PluginSurfaceProps extends PluginNavigableHostProps {}
+
+export interface PluginScreenProps extends PluginSurfaceProps {
+  /** The params the screen was opened with; `{}` when none. */
+  params: PluginScreenParams;
+}
+
+export interface PluginPopoverProps extends PluginHostProps {
+  close(): void;
+  openScreen(input: PluginOpenScreenInput): void;
+}
+
+export interface PluginSidebarItemProps extends PluginHostProps {
+  /** This plugin's screen open on this item's host, with its params, else null. */
+  currentScreen: PluginScreenLocation | null;
+  openScreen(input: PluginOpenScreenInput): void;
+  /** Anchored to the item on wide layouts; a bottom sheet on compact layouts. */
+  openPopover(Content: ComponentType<PluginPopoverProps>): void;
+}
+
+export interface PluginSidebarItemContribution {
+  id: string;
+  /** Settings row label, accessibility label, and default label for SidebarRow. */
+  title: string;
+  Component: ComponentType<PluginSidebarItemProps>;
+}
 
 export interface PluginIconProps {
   name: string;
@@ -160,13 +203,24 @@ export interface PluginDevice {
   sign(payload: PluginChoicePayload, reason: string): Promise<PluginChoiceProof>;
 }
 
-export interface PluginClientContext extends PluginCommandCapabilities {
-  // Present only in apps that can hold a device key (iOS, Android, desktop). Absent in the
-  // browser and in older apps.
-  device?: PluginDevice;
-  addSettingsScreen(contribution: PluginSettingsScreenContribution): PluginCleanup;
+// COMPAT(pluginSidebarAliases): added in v0.11.0, remove after 2027-03-29
+interface PluginClientContextAliases {
+  /** @deprecated Use `addScreen`. */
   addSurface(id: string, Component: ComponentType<PluginSurfaceProps>): PluginCleanup;
+  /** @deprecated Use `addSidebarHeaderItem`. */
   addSidebarItem(contribution: PluginSidebarContribution): PluginCleanup;
+}
+
+export interface PluginClientContext extends PluginCommandCapabilities, PluginClientContextAliases {
+  // FULCRA(pairing): present only in apps that can hold a device key (iOS, Android, desktop).
+  // Absent in the browser and in older apps.
+  device?: PluginDevice;
+  /** Play a base64-encoded audio file on this client; resolves when playback ends. */
+  playAudio(source: { base64: string; mimeType: string }): Promise<void>;
+  addSettingsScreen(contribution: PluginSettingsScreenContribution): PluginCleanup;
+  addScreen(contribution: PluginScreenContribution): PluginCleanup;
+  addSidebarHeaderItem(contribution: PluginSidebarItemContribution): PluginCleanup;
+  addSidebarFooterItem(contribution: PluginSidebarItemContribution): PluginCleanup;
   addWorkspacePanel(contribution: PluginWorkspacePanelContribution): PluginCleanup;
   addCommandCenterItem(contribution: PluginCommandCenterItemContribution): PluginCleanup;
   addSlashCommand(contribution: PluginClientSlashCommandContribution): PluginCleanup;
@@ -180,6 +234,8 @@ export interface PluginClientContext extends PluginCommandCapabilities {
   addTimelineRenderer<Schema extends ZodType>(
     contribution: PluginTimelineRendererContribution<Schema>,
   ): PluginCleanup;
+  // FULCRA(plugin-host): turn-footer seam. Optional so plugins feature-detect it on older apps.
+  addTurnFooter?(contribution: PluginTurnFooterContribution): PluginCleanup;
   openPanel(id: string, options: PluginClientOpenPanelOptions): void;
 }
 
@@ -202,11 +258,21 @@ export interface PluginSettingsScreenContribution {
   Component: ComponentType<PluginSurfaceProps>;
 }
 
+/** The screen header's title: fixed, or derived from the params the screen was opened with. */
+export type PluginScreenTitle = string | ((params: PluginScreenParams) => string);
+
+export interface PluginScreenContribution {
+  id: string;
+  title: PluginScreenTitle;
+  Component: ComponentType<PluginScreenProps>;
+}
+
 export interface PluginSurfaceContribution {
   id: string;
   Component: ComponentType<PluginSurfaceProps>;
 }
 
+/** @deprecated Use `PluginSidebarItemContribution` with `addSidebarHeaderItem`. */
 export interface PluginSidebarContribution {
   id: string;
   title: string;
@@ -240,6 +306,27 @@ export interface PluginTimelineItemProps<Data = unknown> extends PluginHostProps
   timestamp: Date;
 }
 
+/** One tool call of a completed turn, as the chat shows it. */
+export type PluginTurnToolCall = Pick<
+  Extract<AgentTimelineItem, { type: "tool_call" }>,
+  "name" | "status" | "detail"
+>;
+
+// FULCRA(plugin-host): a component drawn under each completed assistant turn, given that turn's tool calls.
+export interface PluginTurnFooterProps extends PluginHostProps {
+  agentId: string;
+  turn: {
+    /** In the order they ran. */
+    toolCalls: readonly PluginTurnToolCall[];
+    durationMs: number | null;
+  };
+}
+
+export interface PluginTurnFooterContribution {
+  id: string;
+  Component: ComponentType<PluginTurnFooterProps>;
+}
+
 export interface PluginTimelineRendererContribution<Schema extends ZodType = ZodType> {
   kind: string;
   version: number;
@@ -253,6 +340,8 @@ export interface PluginCommandCapabilities {
     contract: PluginRpcContract<InputSchema, OutputSchema>,
     input: ZodInput<InputSchema>,
   ): Promise<ZodOutput<OutputSchema>>;
+  openScreen(input: PluginOpenScreenInput): void;
+  /** @deprecated Use `openScreen`. */
   openSurface(id: string): void;
   openSettings(id: string): void;
 }

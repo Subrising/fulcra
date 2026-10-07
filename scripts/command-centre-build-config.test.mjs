@@ -22,6 +22,8 @@ test("scratch config replaces resource sources without inheriting stale arrays",
   assert.equal(Object.hasOwn(config, "extends"), false);
   assert.deepEqual(config.extraResources, [
     { from: "/scratch/plugins", to: "bundled-plugins" },
+    // Paseo v0.11's built-in plugins (the usage reporters) ship from the source server build.
+    { from: "/source/server/dist/server/builtin-plugins", to: "builtin-plugins" },
     { from: "/scratch/web", to: "app-dist" },
     { from: "/source/desktop/assets/editor-targets", to: "editor-target-icons" },
   ]);

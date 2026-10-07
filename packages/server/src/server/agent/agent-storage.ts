@@ -3,7 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { Logger } from "pino";
 
-import { writeJsonFileAtomic } from "../atomic-file.js";
+import { writeJsonFileAtomic, writeJsonFileDurable } from "../atomic-file.js";
 import { AgentFeatureSchema, AgentStatusSchema } from "../messages.js";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import type { ManagedAgent } from "./agent-manager.js";
@@ -16,7 +16,7 @@ const SERIALIZABLE_CONFIG_SCHEMA = z
     model: z.string().nullable().optional(),
     thinkingOptionId: z.string().nullable().optional(),
     featureValues: z.record(z.string(), z.unknown()).nullable().optional(),
-    providerOptions: z.record(z.string(), z.json()).nullable().optional(),
+    providerOptions: z.record(z.string(), z.unknown()).nullable().optional(),
     toolPolicy: z
       .object({
         preapproved: z.array(
@@ -158,6 +158,22 @@ export class AgentStorage {
   async get(agentId: string): Promise<StoredAgentRecord | null> {
     await this.load();
     return this.cache.get(agentId) ?? null;
+  }
+
+  /** Sidecars survive snapshot replacement and retain the original rollback handle. */
+  async writeContextRotation(
+    agentId: string,
+    rotationId: string,
+    receipt: unknown,
+    guard: () => void,
+  ): Promise<void> {
+    z.string().uuid().parse(agentId);
+    z.string().uuid().parse(rotationId);
+    await writeJsonFileDurable(
+      path.join(this.baseDir, "context-rotations", agentId, `${rotationId}.json`),
+      receipt,
+      guard,
+    );
   }
 
   async listByProviderSession(
@@ -353,6 +369,17 @@ export class AgentStorage {
       return next;
     });
     return result;
+  }
+
+  // Daemon shutdown closes every agent, and a closed record would read as a finished turn. A turn still running at
+  // that moment keeps this marker (applySnapshot preserves it until a new user message), so the next boot sees it.
+  async markShutdownInterruption(agentId: string, marker: StoredInterruptedTurn): Promise<void> {
+    await this.load();
+    await this.queueRecordMutation(agentId, (existing) =>
+      existing && !existing.archivedAt && !existing.internal
+        ? { ...existing, interruptedTurn: marker }
+        : null,
+    );
   }
 
   async setTitle(agentId: string, title: string): Promise<void> {

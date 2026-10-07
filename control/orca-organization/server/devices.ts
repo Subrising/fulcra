@@ -14,7 +14,7 @@ type Call = (method: string, input?: unknown) => Promise<any>;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 500);
 // v1.8 §3.6 rule 3 (R2-1): the first-device window opens only when BOTH the host offers its device API (J5b ctx.device)
 // and the prime has switched pairing on in the controller. This is the host half; the controller checks its own.
-export const PAIRING_OFF = "Pairing arrives with the next Fulcra update";
+export const PAIRING_OFF = "Device pairing isn't available in this version of Fulcra yet";
 export function createDevices({
   call,
   hostDevice = false,

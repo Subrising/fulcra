@@ -24,6 +24,9 @@ import {
   type Step,
   type Turn,
 } from "../shared/session-steps";
+import { whatItDid } from "./what-it-did";
+import { WhatItDidCard } from "./what-it-did-card";
+import { FreshStartHistory } from "./fresh-start-view";
 
 type Theme = PluginSurfaceProps["theme"];
 export type StepThroughProps = Pick<PluginSurfaceProps, "theme" | "layout" | "host"> & {
@@ -33,6 +36,8 @@ export type StepThroughProps = Pick<PluginSurfaceProps, "theme" | "layout" | "ho
   taskTitle?: string | null;
   provider?: string | null;
   onClose?: () => void;
+  /** Opens on the latest loaded turn and names the view "What it did" (the panel beside a chat). */
+  startAtLatest?: boolean;
 };
 interface Position {
   turn: number;
@@ -279,6 +284,12 @@ export function StepThrough(props: StepThroughProps) {
     [allTurns, onlyChanges, fileTouches],
   );
   const turn = turns[Math.min(position.turn, Math.max(turns.length - 1, 0))];
+  const jumpedToLatest = useRef(false);
+  useEffect(() => {
+    if (!props.startAtLatest || jumpedToLatest.current || !turns.length) return;
+    jumpedToLatest.current = true;
+    setPosition({ turn: turns.length - 1, step: 0 });
+  }, [props.startAtLatest, turns.length]);
 
   const stepQuery = useQuery({
     queryKey: ["orca-session-step", host?.id, sessionId, turn?.turnId],
@@ -400,14 +411,20 @@ export function StepThrough(props: StepThroughProps) {
           </WorkButton>
         )}
         <Text style={{ ...muted, fontSize: 12, fontWeight: "600", letterSpacing: 1 }}>
-          STEP THROUGH · {providerName(detail?.provider ?? props.provider).toUpperCase()}
+          {props.startAtLatest ? "WHAT IT DID" : "STEP THROUGH"} ·{" "}
+          {providerName(detail?.provider ?? props.provider).toUpperCase()}
         </Text>
       </View>
       {props.taskTitle && (
         <Text style={{ ...text, fontSize: 22, fontWeight: "600" }}>{props.taskTitle}</Text>
       )}
       {props.title && <Text style={muted}>{props.title}</Text>}
-      <Text style={muted}>Replay what this session did, step by step.</Text>
+      <Text style={muted}>
+        {props.startAtLatest
+          ? "What this session did in each turn, in plain words. Step through any turn for the detail."
+          : "Replay what this session did, step by step."}
+      </Text>
+      <FreshStartHistory sessionId={sessionId} theme={theme} hostId={host?.id} />
     </View>
   );
 
@@ -646,6 +663,9 @@ export function StepThrough(props: StepThroughProps) {
             </Text>
           )}
         </View>
+      )}
+      {detail && turn && detail.turnId === turn.turnId && (
+        <WhatItDidCard summary={whatItDid(turn, detail.steps)} theme={theme} />
       )}
       {!compact && steps.length > 0 && (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>

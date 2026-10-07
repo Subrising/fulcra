@@ -1544,3 +1544,20 @@ test("does not use stream_event uuid as assistant message identity when message_
 
   await session.close();
 });
+
+test("a rotation's fresh Claude session reports its preset id before the first turn; others stay unnamed", async () => {
+  const client = new ClaudeAgentClient({
+    logger: createTestLogger(),
+    queryFactory: sdkQueryFactory,
+    resolveBinary: async () => "/test/claude/bin",
+  });
+  const freshSessionId = "11111111-1111-4111-8111-111111111111";
+  const fresh = await client.createSession({ provider: "claude", cwd: process.cwd() }, undefined, {
+    freshSessionId,
+  });
+  expect(fresh.describePersistence()?.sessionId).toBe(freshSessionId);
+  const plain = await createSession();
+  expect(plain.describePersistence()).toBeNull();
+  await fresh.close();
+  await plain.close();
+});

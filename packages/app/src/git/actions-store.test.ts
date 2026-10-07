@@ -400,7 +400,7 @@ describe("Git AI preview and deliberate use", () => {
     expect(model.getSnapshot()).toEqual({
       phase: "error",
       draft: null,
-      error: "Could not generate a draft. Try again.",
+      error: "Couldn't write a draft just now. Try again.",
     });
     fail = false;
     await model.request("commit-message");

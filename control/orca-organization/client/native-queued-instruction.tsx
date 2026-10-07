@@ -98,7 +98,7 @@ export function NativeQueuedInstruction({ target, fresh, hostId, colors }: Props
       draft.current = input;
       setSent(true);
       setNotice({
-        message: "Native queue acknowledgement pending. Draft and original attempt retained.",
+        message: "Sending… Your draft is kept in case it does not go through.",
         epoch: captured,
       });
       check();
@@ -109,8 +109,8 @@ export function NativeQueuedInstruction({ target, fresh, hostId, colors }: Props
       if (!output.ok) {
         setNotice({
           message: output.dispatched
-            ? "Outcome uncertain. Inspect the original delivery; no resend was made."
-            : "Host refused this management request. Draft and attempt retained; no resend was made.",
+            ? "We cannot tell whether this was delivered. Check the original message; nothing was sent again."
+            : "This computer refused the request. Your draft is kept and nothing was sent again.",
           epoch: captured,
         });
         return;
@@ -127,7 +127,7 @@ export function NativeQueuedInstruction({ target, fresh, hostId, colors }: Props
         throw new Error("Unconfirmed native outcome");
       check();
       setNotice({
-        message: `Native receipt: ${receipt.state}. Queued is not delivered; provider acceptance is not completion. Draft and original attempt retained.`,
+        message: `Message ${receipt.state}. Queued means waiting its turn, not yet delivered, and delivered does not mean the work is done. Your draft is kept.`,
         epoch: captured,
       });
     } catch {

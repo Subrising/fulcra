@@ -5,6 +5,7 @@ import {
   filterAndRankCommandAutocompleteEntries,
   filterInlineSkillCommandEntries,
   findActiveSlashCommand,
+  isUnofferedAccountCommand,
 } from "./agent-command-autocomplete";
 
 describe("filterAndRankCommandAutocompleteEntries", () => {
@@ -132,5 +133,18 @@ describe("filterInlineSkillCommandEntries", () => {
     expect(filterInlineSkillCommandEntries(entries).map((entry) => entry.command.name)).toEqual([
       "taste",
     ]);
+  });
+});
+
+describe("isUnofferedAccountCommand", () => {
+  it("explains a missing /account instead of saying no commands exist", () => {
+    expect(isUnofferedAccountCommand("acc", [])).toBe(true);
+    expect(isUnofferedAccountCommand("account", ["review"])).toBe(true);
+  });
+
+  it("stays out of the way when /account is offered or another command is typed", () => {
+    expect(isUnofferedAccountCommand("acc", ["account"])).toBe(false);
+    expect(isUnofferedAccountCommand("review", [])).toBe(false);
+    expect(isUnofferedAccountCommand("", [])).toBe(false);
   });
 });

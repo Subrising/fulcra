@@ -35,7 +35,7 @@ export type RowKind =
   | "more"
   | "unplaced"
   | "notice";
-export type LinkKind = "membership" | "parent" | "adopted" | "channel" | "escalation";
+export type LinkKind = "membership" | "parent" | "adopted" | "channel" | "ownership";
 export interface Row {
   id: string;
   kind: RowKind;
@@ -50,7 +50,21 @@ export interface Row {
   expanded: boolean;
   attention: number;
   link: LinkKind | null;
-  target: { projectId?: string; taskId?: string; sessionId?: string };
+  target: {
+    projectId?: string;
+    taskId?: string;
+    sessionId?: string;
+    serverId?: string;
+    agentId?: string;
+  };
+  related?: { from: string; kind: LinkKind }[];
+  activity?: string;
+  observedAt?: string;
+  connection?: string;
+  changesAvailable?: boolean;
+  responsibility?: string;
+  creationParent?: string;
+  projectName?: string;
 }
 export type Freshness = "live" | "stale" | "frozen";
 
@@ -211,7 +225,7 @@ export function buildOutline({
       title: `Prime · ${prime.seat}`,
       detail: `${text} · ${prime.session ? modeText(prime.session.mode) : "no orchestrator"}`,
       glyph: "◆",
-      label: `Prime seat ${prime.seat}, ${text}`,
+      label: `Main assistant ${prime.seat}, ${text}`,
       expandable: false,
       expanded: false,
       attention: 0,
@@ -219,7 +233,6 @@ export function buildOutline({
       target: { sessionId: prime.sessionId ?? undefined },
     });
   }
-  const assignedPrimes = overview.primes.filter((p) => p.state === "assigned");
 
   for (const p of overview.projects) {
     const detail = projects[p.projectId];
@@ -243,21 +256,22 @@ export function buildOutline({
     }
     const open = expanded.includes(p.projectId) || Boolean(childHit);
     const leader = seatText(p.seat);
-    const channel = p.channels.find((c) => c.open);
+    const channels = p.channels.filter((channel) => channel.open);
     rows.push({
       id: `project:${p.projectId}`,
       kind: "project",
       depth: 1,
       parent: null,
       title: name,
-      detail: `${leader} · ${p.workstreams === null || p.workstreams === undefined ? "workstreams not known" : plural(p.workstreams, "workstream")} · ${plural(p.sessions, "session")} (${p.running} running)${attention ? ` · ⚠ ${attention}` : ""}`,
+      detail: `${leader} · ${p.workstreams === null || p.workstreams === undefined ? "workstreams not known" : plural(p.workstreams, "workstream")} · ${plural(p.sessions, "session")} (${p.running} reported running)${attention ? ` · ⚠ ${attention}` : ""}`,
       glyph: "▣",
       label: `Project ${name}, ${leader}, ${attention} needing attention, ${open ? "expanded" : "collapsed"}`,
       expandable: true,
       expanded: open,
       attention,
-      link: channel ? "channel" : assignedPrimes.length ? "escalation" : null,
-      target: { projectId: p.projectId },
+      link: null,
+      related: channels.map((channel) => ({ from: `prime:${channel.primeSeat}`, kind: "channel" })),
+      target: { projectId: p.projectId, sessionId: p.seat?.sessionId ?? undefined },
     });
     if (!open) continue;
     if (!detail) {
@@ -464,7 +478,7 @@ function pushSessions(
       expanded: false,
       attention: (s.runtime?.pending ?? 0) > 0 || s.runtime?.error ? 1 : 0,
       link,
-      target: { sessionId: s.sessionId, taskId },
+      target: { sessionId: s.sessionId, taskId, projectId: project.projectId },
     });
     const kids = children.get(s.sessionId) ?? [];
     if (!kids.length) return;
@@ -555,13 +569,11 @@ export function layoutMap(rows: Row[]) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const add = (from: string, to: string, kind: LinkKind) => {
     if (edges.length < LIMITS.edges && byId.has(from) && byId.has(to))
-      edges.push({ id: `${from}>${to}`, from, to, kind });
+      edges.push({ id: `${from}>${to}:${kind}`, from, to, kind });
   };
-  const primes = nodes.filter((n) => n.row.kind === "prime");
   for (const n of nodes) {
-    if (n.row.kind === "project")
-      for (const p of primes) add(p.id, n.id, n.row.link === "channel" ? "channel" : "escalation");
-    else if (n.row.parent && n.row.link) add(n.row.parent, n.id, n.row.link);
+    for (const relation of n.row.related ?? []) add(relation.from, n.id, relation.kind);
+    if (n.row.parent && n.row.link) add(n.row.parent, n.id, n.row.link);
   }
   const width = Math.max(640, ...nodes.map((n) => n.x + CARD.width + 24));
   const height = Math.max(320, ...nodes.map((n) => n.y + CARD.height + 24));
@@ -570,10 +582,10 @@ export function layoutMap(rows: Row[]) {
 
 /** Line style per link kind; the legend reads from the same table. */
 export const LINK_STYLE: Record<LinkKind, { dashed: boolean; weight: number; words: string }> = {
-  channel: { dashed: false, weight: 3, words: "open prime–project channel" },
-  escalation: { dashed: true, weight: 1, words: "escalation address only" },
+  ownership: { dashed: false, weight: 2, words: "recorded main assistant responsibility" },
+  channel: { dashed: false, weight: 3, words: "open main assistant–project channel" },
   membership: { dashed: false, weight: 1, words: "member of" },
-  parent: { dashed: false, weight: 2, words: "recorded parent" },
+  parent: { dashed: false, weight: 2, words: "recorded creation parent — not reporting authority" },
   adopted: { dashed: true, weight: 2, words: "adopted by an operator" },
 };
 

@@ -1,3 +1,4 @@
+import { usagePanelCopy } from "../usage-panel-copy";
 import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
@@ -42,6 +43,7 @@ export const ko: TranslationResources = {
     total: "일치 항목 {{total}}개",
   },
   common: {
+    bottomSheetBackdrop: "하단 시트 배경",
     back: "뒤로",
     loading: "불러오는 중...",
     actions: {
@@ -167,6 +169,8 @@ export const ko: TranslationResources = {
     },
     attachments: {
       addImage: "이미지 추가",
+      choosePhoto: "사진 선택",
+      takePhoto: "사진 촬영",
       pasteImage: "이미지 붙여넣기",
       addFile: "파일 업로드",
       addIssueOrPr: "이슈 또는 PR 추가",
@@ -456,7 +460,9 @@ export const ko: TranslationResources = {
       recovery: {
         archivedTitle: "워크스페이스가 보관되었습니다",
         restoreDescription:
-          "{{workspaceName}}가 보관되고 워크트리가 제거되었습니다. 다시 열려면 {{branch}} 브랜치를 복원하세요.",
+          "{{workspaceName}}를 복원하여 에이전트로 돌아갑니다. 워크트리는 {{branch}} 브랜치를 사용합니다.",
+        restoreWithoutBranchDescription:
+          "{{workspaceName}}를 복원하여 에이전트로 돌아갑니다. 저장된 기반 브랜치 또는 저장소 기본 브랜치에서 새 브랜치를 만듭니다.",
         unarchiveDescription: "{{workspaceName}}가 보관되었습니다. 다시 열려면 보관을 취소하세요.",
         restoreAction: "복원",
         unarchiveAction: "보관 취소",
@@ -1387,6 +1393,9 @@ export const ko: TranslationResources = {
       settings: "설정",
       closeSidebar: "사이드바 닫기",
     },
+    footer: {
+      usage: "사용량",
+    },
     help: {
       trigger: "도움말 및 지원",
       sectionHelp: "도움말",
@@ -1768,7 +1777,12 @@ export const ko: TranslationResources = {
     loadingCommands: "명령 불러오는 중...",
     noFiles: "파일 또는 디렉터리를 찾을 수 없습니다",
     noCommands: "명령을 찾을 수 없습니다",
+    accountUnavailable:
+      "이 컴퓨터에서는 아직 계정 명령을 사용할 수 없습니다. {{host}}에서 Fulcra를 업데이트하세요.",
+    thisComputer: "이 컴퓨터",
     failedToLoad: "불러오지 못했습니다",
+    chooseProjectForCommands: "명령을 보려면 프로젝트를 선택하세요",
+    chooseModelForCommands: "명령을 보려면 모델을 선택하세요",
   },
   loadOlderHistory: {
     failed: "이전 기록을 불러올 수 없습니다",
@@ -1778,6 +1792,8 @@ export const ko: TranslationResources = {
     permissionMessage: "이미지를 첨부하려면 사진 라이브러리 접근을 허용해 주세요.",
     errorTitle: "오류",
     failedToSelect: "이미지를 선택하지 못했습니다",
+    cameraPermissionMessage: "사진을 촬영하려면 카메라 접근을 허용해 주세요.",
+    failedToTakePhoto: "사진을 촬영하지 못했습니다",
     dialogTitle: "이미지 첨부",
     dialogFilterName: "이미지",
   },
@@ -1832,6 +1848,7 @@ export const ko: TranslationResources = {
     modelCountPlural: "모델 {{count}}개",
     retry: "다시 시도",
     retrying: "다시 시도 중...",
+    savedModels: "이전에 불러온 {{provider}} 모델을 표시합니다.",
     noMatches: "검색과 일치하는 모델이 없습니다",
     noMatchesForQuery: '"{{query}}"과(와) 일치하는 모델이 없습니다',
     searchAllPlaceholder: "모든 모델 검색...",
@@ -1874,6 +1891,17 @@ export const ko: TranslationResources = {
     hostPassword: {
       title: "{{host}}의 비밀번호",
       label: "호스트 비밀번호",
+    },
+    hostConfirmation: {
+      title: "이 호스트에 연결할까요?",
+      description:
+        "이 호스트는 이 앱에서 코드를 실행하고 연결된 다른 호스트에 접근할 수 있게 됩니다. 알고 있는 호스트인 경우에만 연결하세요.",
+      descriptionChanged:
+        "이 링크는 이 호스트에 연결하는 방식을 변경합니다. 호스트는 이 앱에서 코드를 실행하고 연결된 다른 호스트에 접근할 수 있게 됩니다. 알고 있는 호스트인 경우에만 연결하세요.",
+      hostLabel: "호스트",
+      fingerprintLabel: "키 지문",
+      relayLabel: "릴레이",
+      connect: "연결",
     },
     connectionMethods: {
       title: "연결 추가",
@@ -1947,6 +1975,12 @@ export const ko: TranslationResources = {
       helper: "원격 호스트에서 실행 중인 Fulcra 데몬에 연결합니다.",
       fields: {
         target: "SSH 호스트",
+        password: "데몬 비밀번호",
+        optional: "선택 사항",
+      },
+      passwordVisibility: {
+        show: "비밀번호 표시",
+        hide: "비밀번호 숨기기",
       },
       actions: {
         cancel: "취소",
@@ -2136,6 +2170,9 @@ export const ko: TranslationResources = {
       emptyDescription: "이 체크아웃에 풀 리퀘스트를 만들면 세부 정보가 여기에 표시됩니다.",
     },
     architectureMap: {
+      mainOnly: "코드 아키텍처는 기본 작업 공간 보기입니다. + 탭 메뉴에서 여세요.",
+      entryUnavailable:
+        "저장된 코드 맵을 추가하거나 코드 그래프 또는 변경 분석을 지원하는 호스트에 연결하세요.",
       label: "아키텍처 맵",
       subtitle: "프로젝트 아키텍처",
       tooltip: "프로젝트 아키텍처 맵 보기",
@@ -2152,6 +2189,7 @@ export const ko: TranslationResources = {
       zoomIn: "확대",
       zoomOut: "축소",
       fit: "맞춤",
+      gestureHint: en.panels.architectureMap.gestureHint,
       actualSize: "실제 크기",
       components: "구성 요소",
       boundaries: "경계",
@@ -2203,6 +2241,8 @@ export const ko: TranslationResources = {
         packageHint: "패키지를 선택하면 모듈이 열립니다.",
         allLevels: "모든 단계 표시",
         showInMap: "지도에서 보기",
+        does: en.panels.architectureMap.graph.does,
+        panel: en.panels.architectureMap.graph.panel,
       },
       review: {
         open: "리뷰",
@@ -2233,6 +2273,7 @@ export const ko: TranslationResources = {
           NORMAL: "보통 위험: 테스트 {{tests}}개가 닿는 코드.",
           HIGH: "높은 위험: 어떤 테스트도 닿지 않는 코드 또는 이 변경이 삭제하는 코드.",
         },
+        plain: en.panels.architectureMap.review.plain,
         loadingDiff: "변경 사항을 불러오는 중…",
         noDiff: "이 파일에 표시할 텍스트 변경이 없습니다.",
         noFindingsHere: "자동 리뷰가 이 파일에서 아무것도 찾지 못했습니다.",
@@ -2439,7 +2480,10 @@ export const ko: TranslationResources = {
   sidebarCallout: {
     dismiss: "닫기",
   },
+  usagePanel: usagePanelCopy["ko"],
   contextWindow: {
+    noData: "컨텍스트 데이터 없음",
+    accessibilityNoData: "컨텍스트 창: 컨텍스트 데이터 없음",
     title: "컨텍스트 윈도우",
     used: "{{percentage}}% 사용됨",
     tokens: "{{used}} / {{max}} 토큰",
@@ -2466,6 +2510,7 @@ export const ko: TranslationResources = {
       app: "앱",
       host: "호스트",
     },
+    menu: en.settings.menu,
     hostPicker: {
       switchHost: "호스트 전환",
       local: "로컬",
@@ -2507,6 +2552,11 @@ export const ko: TranslationResources = {
       refreshAccessibility: "알림 권한 새로 고침",
       playSound: "소리 재생",
       playSoundHint: "데스크톱 알림이 도착하면 소리를 재생합니다",
+      digest: "완료된 세션 묶기",
+      digestHint:
+        "완료된 세션마다 알리는 대신 요약을 한 번 보여 줍니다. 승인과 오류는 계속 바로 알립니다.",
+      digestFrequency: "빈도",
+      digestEvery: "{{count}}분",
       test: "알림 테스트",
       testHint: "현재 설정으로 테스트 알림을 보냅니다",
       permissionRequired: "테스트하기 전에 알림 접근을 허용하세요",
@@ -2702,8 +2752,15 @@ export const ko: TranslationResources = {
         description: "프롬프트 사이를 이동하기 위한 개요 표시",
       },
       sidebar: {
-        title: "사이드바",
-        description: "사이드바 상단에 표시할 항목과 순서를 선택하세요",
+        header: {
+          title: "헤더",
+          description: "사이드바 상단에 표시할 항목과 순서를 선택하세요",
+        },
+        footer: {
+          title: "푸터",
+          description:
+            "사이드바 하단에 표시할 행과 순서를 선택하세요. 프로젝트 추가와 아이콘 행은 항상 표시됩니다",
+        },
         moveUp: "위로 이동",
         moveDown: "아래로 이동",
       },
@@ -2726,6 +2783,14 @@ export const ko: TranslationResources = {
         codeSize: "코드 크기",
         codeSizeHint: "코드, diff 및 터미널 출력에 사용됩니다",
         codeSizeAccessibility: "코드 글꼴 크기",
+      },
+      layout: {
+        title: "레이아웃",
+        contentWidth: "콘텐츠 너비",
+        contentWidthHint: "와이드 화면에서 채팅과 Markdown 파일의 최대 너비",
+        contentWidthAccessibility: "콘텐츠 너비(픽셀)",
+        reset: "재설정",
+        resetAccessibility: "콘텐츠 너비를 기본값으로 재설정",
       },
       syntax: {
         title: "구문",

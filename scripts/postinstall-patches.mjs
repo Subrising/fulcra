@@ -8,6 +8,10 @@ import { join, relative } from "node:path";
 // workspace root live in their workspace's own node_modules, and patch-package resolves
 // the patch's node_modules/... paths relative to its working directory.
 const patchedPackages = [
+  {
+    nodeModulesPath: "node_modules/app-builder-lib",
+    patchPrefix: "app-builder-lib+26.8.1",
+  },
   // EAS 16 imports tar as a default; patched tar 7 exposes named exports.
   {
     nodeModulesPath: "node_modules/eas-cli",
@@ -24,6 +28,10 @@ const patchedPackages = [
   {
     nodeModulesPath: "node_modules/react-native-markdown-display",
     patchPrefix: "react-native-markdown-display+",
+  },
+  {
+    nodeModulesPath: "node_modules/react-native-uitextview",
+    patchPrefix: "react-native-uitextview+",
   },
   // Remove after react-native-unistyles ships
   // https://github.com/jpudysz/react-native-unistyles/pull/1203.

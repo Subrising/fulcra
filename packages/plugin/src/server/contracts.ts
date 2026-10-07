@@ -3,6 +3,7 @@ import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
 import type { PluginRpcContract } from "../rpc.js";
 import type { PluginCleanup } from "../contracts.js";
 import type { ProviderRegistration } from "./provider.js";
+import type { UsageSourceRegistration } from "./usage.js";
 import type { PluginLifecycleRegistration } from "./lifecycle.js";
 
 export interface PluginHandlerContext {
@@ -29,9 +30,14 @@ export interface PluginSettings<Schema extends ZodType> {
 
 // Secrets the operator stored for this plugin in the host's login keychain. The host namespaces every
 // name by plugin id; `exists` never reads the value. Hosts that predate this capability omit it.
+// FULCRA(plugin-sdk): `save` and `remove` keep secrets the plugin itself collected (for example a cluster sign-in) in
+// the OS credential store, under `ai.fulcra.plugin-store.<plugin id>`. `read` and `exists` see those first, then the
+// operator's legacy `ai.fulcra.plugin.<plugin id>` items, which stay read-only. Hosts that predate them omit them.
 export interface PluginSecrets {
   read(name: string): Promise<string | null>;
   exists(name: string): Promise<boolean>;
+  save?(name: string, value: string): Promise<void>;
+  remove?(name: string): Promise<void>;
 }
 
 // A notification for the user. Every accepted one joins the host's in-app list; only `now` also
@@ -114,6 +120,7 @@ export interface PluginServerContext extends PluginLifecycleRegistration {
     options?: { readOnly?: boolean },
   ): void;
   registerProvider(provider: ProviderRegistration): void;
+  registerUsageSource(source: UsageSourceRegistration): void;
 }
 
 export type PluginServerContribution = (server: PluginServerContext) => PluginCleanup;

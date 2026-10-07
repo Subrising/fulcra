@@ -1,6 +1,7 @@
 import "@/styles/unistyles";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { PortalProvider } from "@gorhom/portal";
+import { LucideProvider } from "lucide-react-native";
 import * as Linking from "expo-linking";
 import * as Notifications from "expo-notifications";
 import { Stack, useNavigationContainerRef, usePathname, useRouter } from "expo-router";
@@ -44,6 +45,7 @@ import { WorkspaceSetupDialog } from "@/components/workspace-setup-dialog";
 import { WorkspaceShortcutTargetsSubscriber } from "@/components/workspace-shortcut-targets-subscriber";
 import { FloatingPanelPortalHost } from "@/components/ui/floating-panel-portal";
 import { HostChooserModal, useHostChooser } from "@/hosts/host-chooser";
+import { HostConfirmationSheet } from "@/hosts/host-confirmation-sheet";
 import {
   getIsElectronRuntime,
   HEADER_INNER_HEIGHT,
@@ -114,7 +116,7 @@ import { isPairingBundle, pairEveryOffer, parsePairingBundle } from "@/relay/pai
 import { getDaemonStartService } from "@/runtime/daemon-start-service";
 import { usePanelStore } from "@/stores/panel-store";
 import { flushDraftPersistStorage } from "@/stores/draft-store";
-import { getNextThemePreference } from "@/styles/theme";
+import { getNextThemePreference, ICON_STROKE_WIDTH } from "@/styles/theme";
 import { useSessionStore } from "@/stores/session-store";
 import { installWebScrollbarStyles } from "@/styles/install-web-scrollbar-styles";
 import type { HostProfile } from "@/types/host-connection";
@@ -608,6 +610,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
         <CommandCenter />
         <AddProjectFlowHost />
         <HostChooserModal />
+        <HostConfirmationSheet />
         <ProviderSettingsHost />
         <WorkspaceSetupDialog />
         <KeyboardShortcutsDialog />
@@ -717,6 +720,10 @@ function OfferLinkListener({
           offers = parsePairingBundle(url);
         } catch (error) {
           console.warn("[Linking] Failed to read pairing link", error);
+          router.replace({
+            pathname: "/pair",
+            params: { error: "Check the pairing link and try again from Settings." },
+          });
           return;
         }
         void pairEveryOffer(offers, (offer) =>
@@ -727,23 +734,49 @@ function OfferLinkListener({
             for (const r of results.filter((x) => !x.ok))
               console.warn("[Linking] Could not pair with a host from the link", r.label, r.error);
             if (results.some((r) => r.ok)) router.replace(buildOpenProjectRoute());
+            else
+              router.replace({
+                pathname: "/pair",
+                params: { error: "The host could not be reached. Try again from Settings." },
+              });
             return;
           })
           .catch(() => undefined);
         return;
       }
-      if (!url.includes("#offer=")) return;
+      if (!url.includes("#offer=")) {
+        // A pair link the app cannot read must not leave /pair saying "Connecting" forever.
+        if (/^(fulcra|orca):\/\/\/?pair\b/i.test(url))
+          router.replace({
+            pathname: "/pair",
+            params: { error: "Check the pairing link and try again from Settings." },
+          });
+        return;
+      }
       void upsertDaemonFromOfferUrl(url)
         .then((profile) => {
           if (cancelled) return;
           const serverId = (profile as { serverId?: unknown } | null)?.serverId;
-          if (typeof serverId !== "string" || !serverId) return;
+          if (typeof serverId !== "string" || !serverId) {
+            router.replace({
+              pathname: "/pair",
+              params: { error: "The host could not be added. Try again from Settings." },
+            });
+            return;
+          }
           router.replace(buildOpenProjectRoute());
           return;
         })
         .catch((error) => {
           if (cancelled) return;
           console.warn("[Linking] Failed to import pairing offer", error);
+          router.replace({
+            pathname: "/pair",
+            params: {
+              error:
+                "The host could not be reached. Check the pairing link and try again from Settings.",
+            },
+          });
         });
     };
 
@@ -896,6 +929,7 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
       pathname === "/schedules" ||
       pathname === "/insights" ||
       pathname === "/automations" ||
+      pathname === "/usage" ||
       routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
@@ -920,16 +954,20 @@ function RootStack() {
       nestedNavigatorScreens={ROOT_STACK_NESTED_NAVIGATOR_SCREENS}
     >
       <Stack.Screen name="index" />
+      {/* Unprotected so a cold-launched pairing link has a screen before the store loads. */}
+      <Stack.Screen name="pair" />
       <Stack.Protected guard={storeReady}>
         <Stack.Screen name="welcome" />
         <Stack.Screen name="settings/index" />
         <Stack.Screen name="settings/[section]" />
         <Stack.Screen name="new" />
+        <Stack.Screen name="intake" />
         <Stack.Screen name="open-project" />
         <Stack.Screen name="sessions" />
         <Stack.Screen name="schedules" />
         <Stack.Screen name="insights" />
         <Stack.Screen name="automations" />
+        <Stack.Screen name="usage" />
         <Stack.Screen name="pair-scan" />
         <Stack.Screen name="oauth/[flowId]" />
       </Stack.Protected>
@@ -1008,11 +1046,13 @@ function RootAppTree() {
   return (
     <GestureHandlerRootView style={flexStyle}>
       <View style={layoutStyles.surfaceFill}>
-        <RootProviders>
-          <RuntimeProviders>
-            <AppShell />
-          </RuntimeProviders>
-        </RootProviders>
+        <LucideProvider strokeWidth={ICON_STROKE_WIDTH}>
+          <RootProviders>
+            <RuntimeProviders>
+              <AppShell />
+            </RuntimeProviders>
+          </RootProviders>
+        </LucideProvider>
       </View>
     </GestureHandlerRootView>
   );

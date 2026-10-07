@@ -6,7 +6,7 @@ import { auditPackagedBundle } from "./no-machine-ties.mjs";
 // Exact reviewed upstream bytes live in-repo; no sibling checkout or ASAR dependency.
 const fixtures = {
   "node_modules/dotenv/README-es.md": new URL(
-    "./fixtures/reviewed-pem/dotenv-README-es.md",
+    "./fixtures/reviewed-pem/dotenv-README-es.b64",
     import.meta.url,
   ),
   "node_modules/jose/dist/webapi/key/import.js": new URL(
@@ -50,7 +50,14 @@ test("only the three prime-reviewed vendor marker occurrences may override a cre
       const relative = e.file.split("!/")[1],
         target = path.join(src, relative);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(fixtures[relative], target);
+      const fixture = fs.readFileSync(fixtures[relative]);
+      // Encoding preserves upstream Markdown whitespace through source checks.
+      fs.writeFileSync(
+        target,
+        relative.endsWith("README-es.md")
+          ? Buffer.from(fixture.toString("utf8"), "base64")
+          : fixture,
+      );
     }
     fs.mkdirSync(path.dirname(archive), { recursive: true });
     await createPackage(src, archive);

@@ -14,6 +14,7 @@ export interface UsageRow {
   fiveHour: { usedPct: number; resetsAt: string | null } | null;
   weekly: { usedPct: number; resetsAt: string | null } | null;
   inUse: boolean;
+  sessionCount?: number;
 }
 const REFETCH_MS = 5 * 60 * 1000;
 const PROVIDER = { claude: "Claude", codex: "Codex" } as const;
@@ -50,6 +51,23 @@ export function usageLine(row: UsageRow): string {
   ]
     .filter(Boolean)
     .join("  ·  ");
+}
+/** The pool at a glance: how many accounts, and how many are ready, limited or unread. */
+export function poolSummary(rows: readonly UsageRow[]): string | null {
+  if (rows.length === 0) return null;
+  const count = (status: UsageRow["status"]) => rows.filter((row) => row.status === status).length;
+  return [
+    `${rows.length} ${rows.length === 1 ? "account" : "accounts"}`,
+    `${count("ok")} ready`,
+    count("limited") ? `${count("limited")} limited` : null,
+    count("unavailable") ? `${count("unavailable")} without usage` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+function sessionsLabel(row: UsageRow): string | null {
+  if (row.sessionCount === undefined) return row.inUse ? "in use" : null;
+  return `${row.sessionCount} ${row.sessionCount === 1 ? "session" : "sessions"} on this host`;
 }
 function rundownStyles(theme: Theme) {
   const c = theme.colors;
@@ -112,6 +130,7 @@ export function UsageRundown({ theme, hostId }: { theme: Theme; hostId: string }
   const mutate = refresh.mutate;
   const onRefresh = useCallback(() => mutate(), [mutate]);
   const rows = query.data ?? [];
+  const summary = poolSummary(rows);
   if (!list) return <Text style={styles.detail}>Update the host to see usage by account.</Text>;
   return (
     <View testID="account-usage-rundown" style={styles.container}>
@@ -128,12 +147,18 @@ export function UsageRundown({ theme, hostId }: { theme: Theme; hostId: string }
           {refresh.isPending ? "Refreshing…" : "Refresh"}
         </WorkButton>
       </View>
+      {summary ? <Text style={styles.detail}>{summary}</Text> : null}
       {query.isError || refresh.isError ? (
         <Text accessibilityRole="alert" style={styles.error}>
           Unable to load account usage. Try Refresh again.
         </Text>
       ) : null}
       {query.isPending ? <Text style={styles.detail}>Loading account usage…</Text> : null}
+      {query.isSuccess && rows.length === 0 ? (
+        <Text testID="account-usage-empty" style={styles.detail}>
+          No usage data yet.
+        </Text>
+      ) : null}
       {rows.map((row, i) => (
         <View
           key={`${row.provider}:${row.accountId ?? row.name}`}
@@ -141,9 +166,9 @@ export function UsageRundown({ theme, hostId }: { theme: Theme; hostId: string }
         >
           <View style={styles.rowHeader}>
             <Text style={styles.name}>{row.name}</Text>
-            <Text
-              style={styles.detail}
-            >{`${PROVIDER[row.provider]}${row.inUse ? " · in use" : ""}`}</Text>
+            <Text style={styles.detail}>
+              {[PROVIDER[row.provider], sessionsLabel(row)].filter(Boolean).join(" · ")}
+            </Text>
             <Text style={styles.statuses[row.status]}>{STATUS[row.status]}</Text>
           </View>
           {usageLine(row) ? <Text style={styles.detail}>{usageLine(row)}</Text> : null}

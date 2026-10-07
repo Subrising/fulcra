@@ -1,3 +1,9 @@
+import { IntakeSurface } from "./organization/intake";
+import { OrganizationStore } from "../server/organization/store.mjs";
+import { projectReferenceKey } from "../shared/workspace-organization.mjs";
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { ManagementPanel } from "./management";
 import { WorkBrief } from "./work-brief";
 import { ConversationUpdates } from "./conversation-updates";
@@ -10,7 +16,7 @@ import { PortfolioSurface } from "./portfolio";
 import { PrimeSurface } from "./prime";
 import { WorkGraph } from "./work-graph";
 import { RecoveryBanner } from "./recovery";
-import test, { afterEach } from "node:test";
+import test, { after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import React from "react";
@@ -26,12 +32,14 @@ import { TaskControls, UsagePanel } from "./tasks";
 import {
   calls,
   setHandler,
+  setNativeHostCatalog,
   panResponders,
   layoutHandlers,
   nativePans,
   setHostPanAvailable,
 } from "./ui-test-adapters.mjs";
 import { forgetAll } from "./last-good";
+import { fleetHostsRpc } from "../shared/fleet";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://component.test",
 });
@@ -85,11 +93,30 @@ const chooseTask = async (identifier = "AIN-73") =>
   fireEvent.click(
     await screen.findByRole("radio", { name: `Select ${identifier}: Task ${identifier}` }),
   );
-afterEach(() => {
+async function disposeFixture() {
   setHostPanAvailable(true);
+  setNativeHostCatalog();
   cleanup();
-  for (const client of clients.splice(0)) client.clear();
+  const owned = clients.splice(0);
+  const retainedObservers = owned.flatMap((client) =>
+    client
+      .getQueryCache()
+      .getAll()
+      .filter((query) => query.getObserversCount() > 0)
+      .map((query) => query.queryKey),
+  );
+  // Pending fake RPCs need cancellation as well as cache removal. Settle each client's
+  // cancellation callbacks before another test installs its handler or fake clock.
+  await Promise.all(owned.map((client) => client.cancelQueries()));
+  for (const client of owned) client.clear();
   forgetAll();
+  assert.deepEqual(retainedObservers, [], "Fixture query observers survived unmount");
+}
+afterEach(disposeFixture);
+after(async () => {
+  await disposeFixture();
+  // Close only this suite's window, including any timers created through its DOM APIs.
+  dom.window.close();
 });
 test("project briefing shows incoming reasons, named dependencies and original native task actions without hashes", async () => {
   const opened = [],
@@ -315,7 +342,7 @@ test("client entry registers its actual surface and return commands and cleans u
     },
     addSidebarItem: (item) => {
       registrations.push(item);
-      return () => removed.push("sidebar");
+      return () => removed.push(`sidebar:${item.id}`);
     },
     addCommandCenterItem: (command) => {
       commands.push(command);
@@ -324,12 +351,46 @@ test("client entry registers its actual surface and return commands and cleans u
     openSurface() {},
   });
   assert.equal(registrations[0][1], HomeSurface);
-  assert.equal(registrations[1].surface, "organization");
+  assert.deepEqual(
+    registrations.filter(Array.isArray).map(([id]) => id),
+    ["organization", "workspaces", "intake", "leadership", "team"],
+  );
+  assert.deepEqual(
+    registrations
+      .filter((entry) => !Array.isArray(entry))
+      .map((entry) => [entry.id, entry.surface]),
+    [
+      ["workspaces", "workspaces"],
+      ["organization", "organization"],
+    ],
+  );
   assert.equal(commands.length, 2);
   cleanup();
-  assert.equal(removed.length, 4);
+  assert.deepEqual(
+    removed.sort(),
+    [
+      "organization",
+      "workspaces",
+      "intake",
+      "leadership",
+      "team",
+      "sidebar:workspaces",
+      "sidebar:organization",
+      ...commands.map((command) => command.id),
+    ].sort(),
+  );
 });
 function base(name, input, { inactive = false, sessions = [] } = {}) {
+  if (name === "organization.fleet-hosts")
+    return Promise.resolve(
+      fleetHostsRpc.output.parse({
+        local: "mini",
+        hosts: [
+          { name: "mini", serverId: null },
+          { name: "macbook", serverId: null },
+        ],
+      }),
+    );
   if (name === "organization.project-briefing")
     return Promise.resolve({
       observedAt: time(),
@@ -971,7 +1032,10 @@ test("failed decision refresh marks retained evidence stale and hides saved text
 
 function setFleetHandler(fn) {
   setHandler(async (name, input) => {
-    const result = await (name === "organization.outcome" ? base(name, input) : fn(name, input));
+    // The configured host directory is a separate RPC, not an activity-history reply.
+    const result = await (["organization.outcome", "organization.fleet-hosts"].includes(name)
+      ? base(name, input)
+      : fn(name, input));
     if (name !== "organization.fleet") return result;
     return {
       ...result,
@@ -1035,10 +1099,11 @@ test("fleet defaults to both hosts, filters Book and opens receipt evidence with
   fireEvent.click(await screen.findByTestId("organization-tab-organisation"));
   fireEvent.click(await screen.findByRole("button", { name: "Workstreams", exact: true }));
   await screen.findByText("Your orchestrators");
-  fireEvent.click(screen.getByRole("button", { name: "Sessions", exact: true }));
+  fireEvent.click(await screen.findByRole("button", { name: "More views" }));
+  fireEvent.click(await screen.findByTestId("organization-tab-sessions"));
   await screen.findByText(/Your work, at a glance/);
   await screen.findByRole("button", { name: "Inspect Mini author" });
-  fireEvent.click(screen.getByRole("button", { name: "macbook", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Macbook", exact: true }));
   assert.equal(screen.queryByRole("button", { name: "Inspect Mini author" }), null);
   fireEvent.click(await screen.findByRole("button", { name: "Inspect Book author" }));
   evidence();
@@ -1050,7 +1115,12 @@ test("fleet defaults to both hosts, filters Book and opens receipt evidence with
     calls.every((c) =>
       [
         "organization.recovery",
+        // Home counts deploy plans a session prepared under Needs you.
+        "organization.deploy-overview",
+        "organization.inbox",
+        "organization.integrations",
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -1358,6 +1428,7 @@ test("scrollable graph reuses history reset, keeps evidence reachable and suppor
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -1651,7 +1722,7 @@ test("graph selection preserves requested navigation through delayed history and
     null,
   );
   fireEvent.click(screen.getByRole("button", { name: "Back to work list" }));
-  fireEvent.click(screen.getByRole("button", { name: "macbook" }));
+  fireEvent.click(screen.getByRole("button", { name: "Macbook" }));
   await waitFor(() =>
     assert.equal(screen.getByRole("button", { name: "Open work graph" }).disabled, false),
   );
@@ -1681,6 +1752,7 @@ test("graph selection preserves requested navigation through delayed history and
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -1907,6 +1979,7 @@ test("original conversation action uses exact Book target in list and graph with
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -2131,6 +2204,7 @@ test("compact work design keeps one primary action and historical recovery outsi
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -2243,6 +2317,7 @@ for (const platform of ["web"])
       calls.every((c) =>
         [
           "organization.fleet",
+          "organization.fleet-hosts",
           "organization.activity-history",
           "organization.outcome",
           "organization.projects",
@@ -2435,6 +2510,7 @@ for (const available of [true, false])
       calls.every((c) =>
         [
           "organization.fleet",
+          "organization.fleet-hosts",
           "organization.activity-history",
           "organization.outcome",
           "organization.projects",
@@ -2551,6 +2627,7 @@ test("work list and selected session show queued work separately from native idl
     calls.every((c) =>
       [
         "organization.fleet",
+        "organization.fleet-hosts",
         "organization.activity-history",
         "organization.outcome",
         "organization.projects",
@@ -3504,7 +3581,7 @@ test("unnamed sessions stay selectable by original identity and expose IDs only 
     updatedAt: time(),
     error: null,
   }));
-  setHandler((name, input) =>
+  setFleetHandler((name, input) =>
     Promise.resolve(
       name === "organization.fleet"
         ? {
@@ -3618,7 +3695,7 @@ test("work overview bounds brief reads and reveals additional retained tasks on 
     updatedAt: time(),
     error: null,
   }));
-  setHandler((name) =>
+  setFleetHandler((name) =>
     Promise.resolve(
       name === "organization.fleet"
         ? {
@@ -3828,10 +3905,10 @@ test("prime leadership names the actual seated orchestrator and opens its real c
   );
 
   // The prime comes from its explicit seat, not from the nested supervisor relationship.
-  await screen.findByText("PRIME ORCHESTRATOR · orca");
+  await screen.findByText("MAIN ASSISTANT · orca");
   assert(
     screen.getByRole("button", {
-      name: "Read retained updates from Chief of staff, prime seat orca",
+      name: "Read retained updates from Chief of staff, main assistant orca",
     }),
   );
   // The supervision relationship is still shown, but never as the role itself.
@@ -3951,10 +4028,10 @@ test("prime leadership keeps an unreadable binding table distinct from an empty 
   await screen.findByText(/Controller reported: Unknown method bindings-status/);
   assert(
     screen.getByText(
-      /Recorded leadership roles could not be read, so no prime orchestrator can be named or ruled out/,
+      /Fulcra could not read who leads what, so it cannot say whether a main assistant is set/,
     ),
   );
-  assert.equal(screen.queryByText(/PRIME ORCHESTRATOR/), null);
+  assert.equal(screen.queryByText(/MAIN ASSISTANT ·/), null);
   fireEvent.click(await screen.findByRole("button", { name: "Project overview: Orca" }));
   await screen.findByText("Unknown");
   // The crucial distinction: unreadable is not empty, and no seat action is offered.
@@ -4304,7 +4381,7 @@ test("leadership and workstreams read one shared observation rather than a priva
     onTask: () => {},
   };
   mount(h(React.Fragment, null, h(PrimeSurface, props), h(PortfolioSurface, props)));
-  await screen.findByText("Who leads your leaders");
+  await screen.findByText("Who leads your work");
   await waitFor(() => assert(calls.some((c) => c.name === "organization.projects")));
   // One cache entry per read, so a refresh on either tab cannot leave the other stale.
   assert.equal(calls.filter((c) => c.name === "organization.fleet").length, 1);
@@ -4868,6 +4945,7 @@ test("Manage task opened from Sessions keeps its tab id and Back returns to Sess
       host: { id: "sheet-host" },
     }),
   );
+  fireEvent.click(await screen.findByRole("button", { name: "More views" }));
   fireEvent.click(await screen.findByTestId("organization-tab-sessions"));
   fireEvent.click(await screen.findByRole("button", { name: "Inspect Steady author" }));
   fireEvent.click(await screen.findByRole("button", { name: "Open task decisions and work" }));
@@ -4899,6 +4977,36 @@ test("Changes is visible and older hosts get plain navigation instructions", asy
     screen.getByTestId("changes-navigation-unavailable").textContent,
     /Architecture map/,
   );
+});
+
+test("a broken session view leaves tabs usable and retry is scoped to that view", async () => {
+  setFleetHandler((name, input) =>
+    name === "organization.fleet"
+      ? Promise.resolve({
+          observedAt: time(),
+          total: 1,
+          partial: false,
+          nodes: [null],
+          tasks: [],
+          edges: [],
+          note: "Broken observation",
+        })
+      : base(name, input),
+  );
+  mount(
+    h(HomeSurface, {
+      theme,
+      layout: { compact: false, platform: "web" },
+      host: { id: "broken-tab" },
+    }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "More views" }));
+  fireEvent.click(await screen.findByTestId("organization-tab-sessions"));
+  await screen.findByRole("button", { name: "Retry this view" });
+  assert(screen.getByTestId("organization-tab-today"));
+  fireEvent.click(screen.getByTestId("organization-tab-changes"));
+  assert(screen.getByTestId("changes-entry"));
+  assert.equal(screen.queryByRole("button", { name: "Retry this view" }), null);
 });
 
 test("Sessions sends paging and search to the server and replaces the displayed page", async () => {
@@ -4984,4 +5092,329 @@ test("controller retry remains reachable before any task can be loaded", async (
   assert(
     calls.some((c) => c.name === "organization.manage" && c.input.action === "retry-controller"),
   );
+});
+
+function intakeFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-intake-ui-")),
+    store = new OrganizationStore(path.join(root, "state.sqlite"));
+  t.after(() => {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const host = "srv_example_book",
+    company = "srv_example_mini",
+    ship = { serverId: host, projectId: "prj_ship", name: "Ship It" },
+    demo = { serverId: host, projectId: "prj_demo", name: "Demo Day" };
+  const update = (command) =>
+    store.mutate({ requestId: randomUUID(), expectedRevision: store.read().revision, command });
+  update({ action: "create-workspace", name: "AI Game Dev", prime: null });
+  const workspaceId = store.read().workspaces[0].id;
+  for (const project of [ship, demo]) update({ action: "add-project", workspaceId, project });
+  const created = [],
+    opened = [];
+  const contexts = [ship, demo].map((project) => ({
+    id: `wks_${project.projectId}`,
+    projectId: project.projectId,
+    name: "main",
+    status: "idle",
+    workspaceDirectory: `/fixture/${project.projectId}`,
+    projectRootPath: `/fixture/${project.projectId}`,
+  }));
+  const api = {
+    projects: {
+      list: async () => ({
+        projects: [ship, demo].map((project) => ({
+          projectId: project.projectId,
+          projectDisplayName: project.name,
+        })),
+      }),
+      create: () => assert.fail("No project allocation"),
+    },
+    workspaces: {
+      list: async () => ({ entries: contexts, pageInfo: { hasMore: false } }),
+      create: () => assert.fail("No workspace allocation"),
+      ref: (id) => ({
+        refresh: async () => contexts.find((context) => context.id === id),
+        agents: {
+          create: async (options) => {
+            created.push({ workspaceId: id, options });
+            return { id: options.agentId };
+          },
+        },
+      }),
+    },
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    providers: {
+      snapshot: async (options) => {
+        assert(contexts.some((context) => context.workspaceDirectory === options?.cwd));
+        return {
+          entries: [
+            {
+              provider: "codex",
+              label: "Codex",
+              defaultModeId: "auto-review",
+              modes: [{ id: "auto-review", label: "Auto review" }],
+              enabled: true,
+              status: "ready",
+              models: [
+                {
+                  id: "gpt-6.1-sol",
+                  provider: "codex",
+                  label: "GPT-6.1 Sol",
+                  thinkingOptions: [{ id: "high", label: "High" }],
+                },
+              ],
+            },
+          ],
+        };
+      },
+    },
+  };
+  setNativeHostCatalog(
+    [{ serverId: host, label: "Book", status: "online" }],
+    new Map([[host, api]]),
+  );
+  setHandler((name, input) => {
+    if (name === "organization.workspace.get_directory.request") return store.read();
+    if (name === "organization.workspace.update.request") return store.mutate(input);
+    if (name === "organization.session-defaults") return { roles: {}, modes: {} };
+    throw Error(`Unexpected intake RPC ${name}`);
+  });
+  const intakeId = randomUUID();
+  const props = {
+    theme,
+    host: { id: company, label: "Mini" },
+    layout: { compact: false, platform: "web" },
+    organizationDraft: {
+      id: intakeId,
+      text: "Improve Ship It onboarding",
+      setText() {},
+      bindSource() {},
+    },
+    navigation: {
+      openAgentOnHost: (input) => {
+        opened.push(input);
+        return "requested";
+      },
+    },
+    organizationNavigation: { canReuseContext: () => true },
+  };
+  return { store, update, workspaceId, ship, demo, created, opened, props, intakeId, host };
+}
+test("company intake visibly owns a named request and starts one chat in its existing Book context", async (t) => {
+  const f = intakeFixture(t);
+  mount(h(IntakeSurface, f.props));
+  await screen.findByText(/Responsible intake: you/);
+  const start = await screen.findByRole("button", { name: "Start chat in Ship It" });
+  await waitFor(() => assert.equal(start.disabled, false));
+  fireEvent.click(start);
+  await waitFor(() => assert.equal(f.store.read().intakes[0].conversations[0].state, "created"));
+  await waitFor(() => assert.equal(screen.queryByText("Updating this retained request…"), null));
+  await screen.findByRole("button", { name: "Open original conversation (same history)" });
+  assert.equal(f.created[0].workspaceId, "wks_prj_ship");
+  assert.equal(f.created[0].options.labels["fulcra.intake"], f.intakeId);
+  assert.equal(f.created[0].options.config.provider, "codex/gpt-6.1-sol");
+  assert.equal(f.created[0].options.config.thinkingOptionId, "high");
+  assert.deepEqual(f.opened, [{ serverId: f.host, agentId: f.created[0].options.agentId }]);
+  assert.equal(f.store.read().intakes.length, 1);
+});
+test("correcting the visible project destination preserves the original conversation without replay", async (t) => {
+  const f = intakeFixture(t),
+    agentId = randomUUID(),
+    deliveryId = randomUUID();
+  f.update({
+    action: "begin-intake",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    text: f.props.organizationDraft.text,
+    projectKey: null,
+  });
+  f.update({
+    action: "route",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    projectKey: projectReferenceKey(f.ship),
+    context: { serverId: f.host, projectId: f.ship.projectId, workspaceId: "wks_prj_ship" },
+  });
+  f.update({
+    action: "reserve-chat",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    deliveryId,
+    agentId,
+  });
+  f.update({
+    action: "chat-result",
+    workspaceId: f.workspaceId,
+    intakeId: f.intakeId,
+    deliveryId,
+    state: "created",
+    taskId: null,
+  });
+  mount(h(IntakeSurface, f.props));
+  await screen.findByText(/Destination: Ship It/);
+  fireEvent.click(screen.getByRole("button", { name: "Change destination project" }));
+  fireEvent.click(screen.getByRole("button", { name: "Demo Day" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Save corrected destination for future requests" }),
+  );
+  await screen.findByText(/destination correction is saved/);
+  assert.equal(f.created.length, 0);
+  assert.equal(f.store.read().intakes[0].conversations[0].agentId, agentId);
+  assert.equal(f.store.read().intakes[0].projectKey, projectReferenceKey(f.demo));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Open original conversation (same history)" }),
+  );
+  assert.deepEqual(f.opened, [{ serverId: f.host, agentId }]);
+});
+
+test("empty workspace intake retains ownership without spending a prime turn or allocating technical placement", async (t) => {
+  const f = intakeFixture(t);
+  f.update({
+    action: "create-workspace",
+    name: "Empty planning workspace",
+    prime: { serverId: "srv_example_mini", agentId: S, seat: "delivery", label: "Delivery prime" },
+  });
+  const workspaceId = f.store.read().workspaces[1].id;
+  mount(
+    h(IntakeSurface, {
+      ...f.props,
+      organizationDraft: { ...f.props.organizationDraft, workspaceId },
+    }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Retain this request" }));
+  await screen.findByText(
+    "Your request is retained. Add an existing project in Workspaces before asking the prime to route it.",
+  );
+  assert.equal(f.store.read().intakes[0].id, f.intakeId);
+  assert.equal(f.store.read().intakes[0].prime.agentId, S);
+  assert.equal(f.created.length, 0);
+  assert.equal(
+    calls.filter((call) =>
+      ["organization.workspace.receiver.request", "organization.operator-invoke"].includes(
+        call.name,
+      ),
+    ).length,
+    0,
+  );
+});
+
+test("task-first Home keeps primary tasks clear, Inbox direct and extra history routes available", async () => {
+  setFleetHandler((name) =>
+    name === "organization.inbox"
+      ? {
+          version: 1,
+          observedAt: time(),
+          partial: false,
+          stale: false,
+          error: null,
+          items: [],
+          counts: {
+            now: 0,
+            today: 0,
+            fyi: 0,
+            decisions: 0,
+            approvals: 0,
+            held: 0,
+            digests: 0,
+            total: 0,
+          },
+        }
+      : Promise.reject(new Error("Fixture source unavailable")),
+  );
+  mount(
+    h(HomeSurface, {
+      theme,
+      layout: { compact: true, platform: "web" },
+      host: { id: "task-first", label: "Fixture host" },
+    }),
+  );
+  for (const label of ["Home", "Projects", "Team", "Changes & impact", "Settings"])
+    assert(screen.getByRole("button", { name: label }));
+  assert.equal(screen.queryByTestId("organization-tab-sessions"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Open Inbox" }));
+  await screen.findByTestId("inbox-list");
+  assert(screen.getByTestId("organization-tab-inbox"));
+  assert(screen.getByRole("button", { name: /^All activity and history/ }));
+  for (const key of ["sessions", "environments", "trackers"])
+    assert(screen.getByTestId(`organization-tab-${key}`));
+  assert(
+    calls.every(
+      (call) =>
+        !call.name.includes("choose") &&
+        !call.name.includes("send") &&
+        !call.name.includes("release"),
+    ),
+    "navigation grants no write authority",
+  );
+});
+
+test("Settings opens Accounts & models and retains Devices, Channels and Clean-up under Advanced", async () => {
+  setFleetHandler(() => Promise.reject(new Error("Fixture source unavailable")));
+  mount(
+    h(HomeSurface, {
+      theme,
+      layout: { compact: true, platform: "web" },
+      host: { id: "settings-default", label: "Fixture host" },
+      initialPillar: "settings",
+    }),
+  );
+  assert.equal(
+    screen.getByTestId("organization-tab-accounts").getAttribute("aria-selected"),
+    "true",
+  );
+  for (const key of ["devices", "channels", "cleanup"])
+    assert.equal(screen.queryByTestId(`organization-tab-${key}`), null);
+  fireEvent.click(screen.getByRole("button", { name: "Show advanced settings" }));
+  for (const key of ["devices", "channels", "cleanup"])
+    assert(screen.getByTestId(`organization-tab-${key}`));
+  fireEvent.click(screen.getByTestId("organization-tab-devices"));
+  assert.equal(
+    screen.getByTestId("organization-tab-devices").getAttribute("aria-selected"),
+    "true",
+  );
+});
+
+test("Recovery: at the top of a page a restart shows once; Home's activity still shows it after that", async () => {
+  const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const item = {
+    interruptionId: U(201),
+    sessionId: U(21),
+    task: null,
+    mode: "human",
+    generation: 3,
+    cause: "boot",
+    state: "idle-at-restart",
+    turn: "ended",
+    since: "2026-10-02T09:00:00.000Z",
+    previousBoot: null,
+    observedBoot: "boot-once",
+    doing: null,
+    grants: { role: false, seated: false, permission: null },
+    owner: null,
+    repo: { repos: [] },
+    observeError: null,
+    currentStatus: "idle",
+    resumable: true,
+    reason: null,
+    disposition: "resume",
+  };
+  setHandler(() =>
+    Promise.resolve({
+      status: "observed",
+      observedAt: time(),
+      recovery: { items: [item], unsettled: [], error: null, note: "" },
+    }),
+  );
+  const host = { id: "srv_once_fixture" };
+  const banner = (props) => h(RecoveryBanner, { theme, navigation: null, host, ...props });
+  const first = mount(banner({ once: true }));
+  await screen.findByRole("button", { name: /^Recovery: Host restart at 2 Oct/ });
+  first.unmount();
+  mount(banner({ once: true }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(screen.queryByRole("button", { name: /^Recovery: Host restart/ }), null);
+  cleanup();
+  mount(banner({}));
+  await screen.findByRole("button", { name: /^Recovery: Host restart at 2 Oct/ });
 });

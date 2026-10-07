@@ -33,7 +33,8 @@ Status: in this release. See [Changes in detail](#changes-in-detail) below.
 ### Environments
 
 What is running where (for example dev, next and prod), what each needs before it is ready, and one approval to
-promote a version to the next step, with automatic rollback if it fails.
+promote a version to the next step, with automatic rollback if it fails. **Deploy** puts a branch, pull request or commit on a Radius
+environment after you read what will change and confirm it, and rolls back the same way.
 
 Status: in this release. Promotions can be prepared, and run once your paired device can approve them. See
 [Environments in detail](#environments-in-detail) below.
@@ -84,7 +85,9 @@ Status: in this release. See [Trackers in detail](#trackers-in-detail) below.
 
 ## Organisation in detail
 
-The **Organisation** tab opens on this view. It shows your primes, what each one owns, their projects, who runs each project, and how many of its sessions are working. On a phone it is a list you can fold up by prime. On a wide screen the work map is one tap away under **Map**; a phone says "The work map needs a wider screen." On a wide screen the old work map is one tap away under **Map**.
+The **Organisation** tab opens on your recorded prime/project tree. **Map** is available on wide and compact screens, with an accessible list alternative. Start with active work, expand project branches and select a session to open its exact host conversation or native Changes view. Changes needs an online host and a known Git workspace. Cache-only native events update activity without restoring a provider or loading its history; resident processes alone are not labelled model work.
+
+Map distinguishes recorded prime responsibility, explicit message channels and creation ancestry. It never connects every project to every prime. All recorded prime seats remain top-level when prime reporting relationships are unknown. Native sessions outside expanded branches remain visible; sessions with no recorded responsibility in the bounded observation have a separate group. Coverage, stale/offline states and hidden counts stay visible. Nothing in the graph assigns roles or grants authority.
 
 - **A prime** has a one-line remit, such as _"Owns Platform work · 2 projects"_ or _"Owns 2 projects: Command Centre and Tally"_.
 - **A project** shows its orchestrator (_"Tally orchestrator · working now"_, or _"No orchestrator yet"_) and its live work (_"2 of 5 sessions working"_).
@@ -216,7 +219,7 @@ the step-by-step log sit behind **Details**.
   and only the settings it needs, and never as a shell command. Anything a script starts is stopped when the script
   ends, runs out of time or is cancelled; after a restart, anything still left over is stopped or reported. What it
   prints is kept only after personal paths, private host names and secrets are removed.
-- There are no Radius operations: Environments never creates or removes Radius resources.
+- Promotions never create or remove Radius resources. Radius deploys go through **Deploy**, below.
 
 **Setting it up (operator).**
 
@@ -230,6 +233,47 @@ the step-by-step log sit behind **Details**.
 {"github:acme/tally": "…"}}`, and it is never stored in the journal.
 - **Asking from the app.** Until the decision store can ask on its own behalf, the approval card is asked by the
   project's orchestrator. Pressing Promote in the app prepares everything and says so.
+
+### Deploy
+
+**Deploy**, at the top of Environments, puts a version of an app on an environment with Radius
+([v0.60.2](https://github.com/radius-project/radius/releases/tag/v0.60.2)). The app is the project's Radius
+definition: `app.bicep` at the top of the repository, in `deploy/`, `infra/` or `radius/`, or the file named by
+`.fulcra/deploy.json` (`{"bicep": "path/to/app.bicep"}`).
+
+For example: you connect **Test**, a local cluster on this Mac. You pick the Shop project's `add-cache` branch and press
+**Preview changes**. Fulcra reads "Adds a Redis cache (cache) and updates the web container", lists the new image, and
+draws the parts of the app with the changed ones highlighted. You press **Deploy to Test** and watch the steps. The
+card then says what is running and links to the commit and the app.
+
+- **Connect** an environment once. **Local test cluster on this Mac** creates a k3d cluster in Docker, installs Radius
+  and registers Radius's local recipes, so a Redis cache or database in the app gets a real container. **A cluster you
+  sign in to** takes a kubeconfig; Fulcra keeps it in the Keychain and only reads the cluster while connecting.
+  Installing Radius on a real cluster is left to you or your platform team. Fulcra downloads the Radius CLI and k3d
+  at pinned versions into its own folder and refuses a download whose checksum does not match.
+- **Plan** compiles the chosen branch, pull request or commit's Bicep exactly as committed and compares it with
+  what Fulcra last deployed there. Radius has no preview of its own, so this comparison is the preview. Anything
+  running there that Fulcra did not deploy is named and left alone.
+- **Confirm** deploys exactly the template you previewed. If something else was deployed since, or the environment no
+  longer matches the preview, the plan goes stale and you prepare a new one. A plan that deletes anything asks you to
+  type the environment's name; deleting a cache or database says that its data goes too.
+- **Roll back** prepares a plan back to the deployment before the current one. It is previewed and confirmed like any
+  other.
+- **Sessions** can prepare a plan but never deploy one. The plan waits on Home under **Needs you** until you open it
+  and confirm. From the project's folder, a session runs `node <Command Centre folder>/deploy-plan.mjs --environment
+Test [--ref branch:main | pr:12 | commit:<sha>] --as "Release helper"`.
+
+Records live in `deploy/` in the Command Centre's state folder: connected environments, plans with their compiled
+templates, each environment's history and job logs. A local cluster's sign-in comes from k3d when a command needs it;
+a connected cluster's comes from the Keychain. Either is written to a private file only while one command runs, then
+removed. Logs drop your home folder and that private folder.
+
+To check it end to end, run `screens/deploy-live/bridge.mjs` on a Mac with Docker, tunnel its port, and run
+`node verify-deploy-live.mjs <tooling folder> <output folder>`. It drives the real screens through connect, two
+deploys, a session's plan on Home and a rollback on a local k3d cluster, taking desktop and phone screenshots.
+
+Disconnecting forgets an environment and its Keychain item. It never deletes a cluster; remove a local one with
+`k3d cluster delete fulcra-<name>`.
 
 ## Inbox, channels and devices
 
@@ -264,7 +308,7 @@ Your inbox isn't only in the Fulcra app. You can check it and answer it from you
 - **What a channel shows.** Each question with its options, their everyday examples and the recommendation. Held messages only say that one is waiting: you read them in the app, never in a chat.
 - **Answered everywhere.** When you answer anywhere, every other copy changes to say who answered and when: _"You decided on iPhone at 09:14: Use GitHub's built-in copies"_ when your paired device confirmed it, otherwise _"Answered by the operator at 09:14, not confirmed on your device"_. A second attempt to answer is told _"Already answered …"_ the same way, and nothing changes.
 - **Who answered.**
-  - An answer from Discord counts as yours only when you typed it yourself and you paired that conversation from a device you have confirmed. That device confirmation arrives with the next Fulcra update. Each Discord message can give one answer; answer a second question in a new message.
+  - An answer from Discord counts as yours only when you typed it yourself and you paired that conversation from a device you have confirmed. Device confirmation isn't available in this version yet. Each Discord message can give one answer; answer a second question in a new message.
   - Answers from a terminal or a session are marked "answered by the operator", because Fulcra can't tell your typing from an agent's there. Even so, Fulcra checks that a person typed them: a terminal answer needs you to type the option number again at the prompt (it won't work when run by a script), and a session answer counts only if a message typed into that session after the question was shown names the option.
   - If you revoke the device you paired a Discord conversation from, that conversation is paused and its answers stop counting as yours.
   - Every new channel is announced at the top of the Inbox and in the daily digest, like a new device.
@@ -285,7 +329,7 @@ An answer in the Inbox counts as yours only when a device you paired confirms it
 
 For example: you pair your Mac. Later an alert reads _"A new device, iPhone, was paired at 21:04. Not you? Revoke it."_ If you didn't pair it, tap Revoke on your Mac, and that iPhone can no longer answer for you.
 
-**Pairing is switched off in this build.** The Devices tab says "Pair a device after the next Fulcra update", and the controller refuses every pairing request until two things are true:
+**Pairing is switched off in this build.** The Devices tab says "No devices paired" and that device pairing isn't available in this version yet, and the controller refuses every pairing request until two things are true:
 
 - this version of Fulcra is a release that allows pairing. That is built into the release itself; there is no setting or file that turns it on; and
 - the Fulcra app on this computer can create and protect device keys, which the controller checks with the app directly.

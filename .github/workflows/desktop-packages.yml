@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - "packages/desktop/**"
+      - "plugins/**"
       - "nix/**"
       - ".github/workflows/desktop-packages.yml"
   # So a branch can be verified once before it is promoted to main.

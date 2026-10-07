@@ -6,7 +6,9 @@
  * it, pinning it to the model picker, and drawing a profile's glyph. Everything
  * else (the form model, the catalog and feature probes, the materialization
  * rules, the icon registry, the row and modal chrome) is internal; import from
- * `@/agent-profiles`, never a path inside it.
+ * `@/agent-profiles` for stateful APIs. Stateless renderer consumers use
+ * `@/agent-profiles/presentation` for the real glyph and picker view types;
+ * other paths remain internal.
  *
  * `useAgentProfilePicker` deliberately hands the picker a flat row view model
  * and one `applyProfile(id)` callback rather than the profiles themselves: what
@@ -25,5 +27,5 @@ export {
   type AgentProfilePickerRow,
   type DraftAgentProfileControls,
 } from "./internal/use-agent-profile-picker";
-export { AgentProfileGlyph } from "./internal/agent-profile-glyph";
+export { AgentProfileGlyph } from "./presentation";
 export { AgentProfilesSection } from "./settings/agent-profiles-section";

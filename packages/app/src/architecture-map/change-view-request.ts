@@ -57,3 +57,19 @@ export const useChangeViewRequests = create<ChangeViewRequests>((set, get) => ({
 
 export const changeViewRequestKey = (serverId: string, workspaceId: string) =>
   `${serverId}\u0000${workspaceId}`;
+
+/** Navigation only: preserves exact host/workspace and validates an explicit native PR selector. */
+export function codeArchitectureNavigation(input: {
+  serverId: string;
+  workspaceId: string;
+  pullRequest?: number;
+}) {
+  return {
+    key: changeViewRequestKey(input.serverId, input.workspaceId),
+    target: { kind: "architecture_map" as const },
+    selection:
+      input.pullRequest === undefined
+        ? undefined
+        : parseArchitectureChangeSelection({ pullRequest: input.pullRequest }),
+  };
+}

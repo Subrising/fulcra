@@ -143,7 +143,7 @@ describe("W1 row 9: clean-exit seal inputs", () => {
   it("bootstrap seals synchronously immediately before the host closes, after the shutdown closure", () => {
     const text = readFileSync(path.join(__dirname, "../bootstrap.ts"), "utf8");
     const stop = text.slice(text.indexOf("const stop = async () => {"));
-    const closure = stop.indexOf("closeAllAgents(logger, agentManager)");
+    const closure = stop.indexOf("closeAllAgents(logger, agentManager, agentStorage)");
     const seal = stop.indexOf("distribution?.sealBoot?.(");
     const close = stop.indexOf("trustedPlugins.close();");
     expect(closure).toBeGreaterThan(0);
@@ -164,7 +164,7 @@ describe("W1 row 9: clean-exit seal inputs", () => {
     expect(callers).toEqual([
       [
         "bootstrap.ts",
-        "await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager));",
+        "await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage));",
       ],
     ]);
     const text = readFileSync(path.join(root, "bootstrap.ts"), "utf8");

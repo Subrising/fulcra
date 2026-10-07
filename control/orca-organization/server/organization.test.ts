@@ -255,6 +255,8 @@ test("server entry obeys host cleanup contract and registers explicit management
   assert.deepEqual(names, [
     "organization.cleanup-preview",
     "organization.cleanup-apply",
+    "organization.cleanup-settings",
+    "organization.cleanup-now",
     "organization.cleanup-retention",
     "organization.projects",
     "organization.fleet",

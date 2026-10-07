@@ -87,7 +87,7 @@ files.push(
 files.push("shared/host-binding.ts", "server/host-binding.ts");
 files.push("server/remote-observation.ts", "server/remote-observation.test.ts");
 files.push("client/inbox-model.ts", "client/inbox-model.test.ts");
-// Update-7: the account pool, rotation, role defaults, orchestration, Accounts & Defaults.
+// Update-7: the account pool, rotation, role defaults, orchestration, Accounts & models.
 files.push(
   "server/accounts.mjs",
   "server/accounts.d.mts",
@@ -245,6 +245,25 @@ files.push(
   "client/step-through.tsx",
   "client/step-through-panel.tsx",
   "client/step-through.ui.test.mjs",
+  "client/what-it-did.ts",
+  "client/what-it-did.test.ts",
+  "client/what-it-did-card.tsx",
+  "client/what-it-did-footer.tsx",
+  "shared/step-shaping.ts",
+  "client/team-tree.ts",
+  "client/team-tree.test.ts",
+  "client/team-tree-view.tsx",
+  "client/team-tree.ui.test.mjs",
+  "client/fresh-start.ts",
+  "client/fresh-start.test.ts",
+  "client/fresh-start-view.tsx",
+  "client/cleanup-now.ts",
+  "client/recovery-seen.ts",
+  "client/pending-questions.tsx",
+  "client/organisation-model.test.ts",
+  "client/cleanup-now.test.ts",
+  "client/cleanup-now-view.tsx",
+  "client/cleanup-now.ui.test.mjs",
   "screens/session-fixtures.ts",
 );
 files.push(
@@ -385,6 +404,11 @@ for (const [entry, output] of [
   ["client/work-map-readonly.test.ts", "work-map-readonly.test.mjs"],
   ["shared/cc/refs.test.ts", "refs.test.mjs"],
   ["client/tabs.test.ts", "tabs.test.mjs"],
+  ["client/what-it-did.test.ts", "what-it-did.test.mjs"],
+  ["client/team-tree.test.ts", "team-tree.test.mjs"],
+  ["client/fresh-start.test.ts", "fresh-start.test.mjs"],
+  ["client/cleanup-now.test.ts", "cleanup-now.test.mjs"],
+  ["client/organisation-model.test.ts", "organisation-model.test.mjs"],
   ["server/session-steps.test.ts", "session-steps.test.mjs"],
   ["client/last-good.test.ts", "last-good.test.mjs"],
   ["server/session-defaults.test.ts", "session-defaults.test.mjs"],
@@ -457,6 +481,11 @@ try {
       "runtime/refs.test.mjs",
       "shared/cc/refs.test.mjs",
       "runtime/tabs.test.mjs",
+      "runtime/what-it-did.test.mjs",
+      "runtime/team-tree.test.mjs",
+      "runtime/fresh-start.test.mjs",
+      "runtime/cleanup-now.test.mjs",
+      "runtime/organisation-model.test.mjs",
       "runtime/today-model.test.mjs",
       "runtime/inbox-model.test.mjs",
       "runtime/launchpad-model.test.mjs",
