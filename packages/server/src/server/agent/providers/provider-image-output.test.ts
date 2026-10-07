@@ -3,7 +3,9 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
+  isEvictedProviderImage,
   isProviderImageMarkdown,
+  MAX_PRIVATE_FILES,
   materializeProviderImage,
   renderProviderImageOutputAsAssistantMarkdown,
 } from "./provider-image-output.js";
@@ -123,3 +125,31 @@ test.runIf(process.platform === "win32")(
     );
   },
 );
+
+// FULCRA(image-retention): at the cap the oldest images make room; new screenshots keep rendering.
+describe("provider image retention", () => {
+  test("past the file cap the newest image still renders and only the oldest is evicted", () => {
+    const image = (i: number) => ({
+      data: Buffer.from(`retention-test-image-${i}`).toString("base64"),
+      mimeType: "image/png",
+    });
+    const first = materializeProviderImage(image(0)).path;
+    let newest = "";
+    for (let i = 1; i <= MAX_PRIVATE_FILES; i++) {
+      const item = renderProviderImageOutputAsAssistantMarkdown(image(i), {
+        materialize: materializeProviderImage,
+      });
+      if (item?.type !== "assistant_message") throw new Error("Expected an image message");
+      expect(item.text).not.toContain("Image output was omitted");
+      if (i === MAX_PRIVATE_FILES) newest = item.text;
+    }
+    const newestPath = /\]\((.*)\)$/.exec(newest)?.[1] ?? "";
+    expect(isProviderImageMarkdown(newest)).toBe(true);
+    expect(existsSync(newestPath)).toBe(true);
+    expect(isEvictedProviderImage(newestPath)).toBe(false);
+    expect(existsSync(first)).toBe(false);
+    expect(isEvictedProviderImage(first)).toBe(true);
+    expect(isEvictedProviderImage(path.join(path.dirname(first), "unknown.png"))).toBe(false);
+    rmSync(path.dirname(first), { recursive: true, force: true });
+  });
+});
