@@ -382,6 +382,22 @@ describe("ProviderSnapshotManager public surface", () => {
     }
   });
 
+  test("warmUpGlobalSnapshot makes the first non-waiting read ready", async () => {
+    const isAvailable = vi.fn(async () => true);
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      extraClients: { codex: createExtraClient("codex", { isAvailable }) },
+    });
+    try {
+      await manager.warmUpGlobalSnapshot(["codex"]);
+      const codex = manager.getSnapshot().records.find(({ entry }) => entry.provider === "codex");
+      expect(codex?.entry.status).toBe("ready");
+      expect(isAvailable).toHaveBeenCalledTimes(1);
+    } finally {
+      manager.destroy();
+    }
+  });
+
   test("providerOverrides with enabled:false marks the provider as unavailable without probing", async () => {
     const isAvailable = vi.fn(async () => true);
     const fetchCatalog = vi.fn(async () => ({

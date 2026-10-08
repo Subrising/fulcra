@@ -2019,6 +2019,7 @@ export async function createPaseoDaemon(
               });
             }
             providerSnapshotManager.settlePluginProviders();
+            void providerSnapshotManager.warmUpGlobalSnapshot();
             wsServer.beginAcceptingConnections();
             relayRuntime = createRelayRuntime({
               config: {
