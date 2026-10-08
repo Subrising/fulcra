@@ -14,7 +14,7 @@ async function readFontSize(locator) {
 
 export async function runAppearanceFontSizeRegression(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Appearance", exact: true }).click();
+  await page.getByTestId("settings-section-general").click();
 
   await page.getByLabel(DEFAULT_THEME_LABEL, { exact: true }).click();
   await page.getByText("Pure black", { exact: true }).click();

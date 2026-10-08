@@ -9,7 +9,7 @@ import {
   linkSync,
   chmodSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -23,8 +23,16 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+// The reader refuses parents that group or others can write. Linux /tmp is 1777, so the test roots sit
+// in a private folder under the home directory instead.
+function privateBase() {
+  const base = path.join(realpathSync(homedir()), ".cache", "fulcra-public-baseline-tests");
+  mkdirSync(base, { recursive: true, mode: 0o700 });
+  chmodSync(base, 0o700);
+  return base;
+}
 function host() {
-  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "public-baseline-"));
+  const root = mkdtempSync(path.join(privateBase(), "public-baseline-"));
   roots.push(root);
   mkdirSync(path.join(root, ".config/fulcra/baseline/providers"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(root, ".codex"), { mode: 0o700 });

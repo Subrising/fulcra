@@ -6,6 +6,7 @@ import type { WebSocketRoute } from "@playwright/test";
 import { gotoAppShell, openSettings } from "./app";
 import { daemonWsRoutePattern } from "./daemon-port";
 import { getServerId } from "./server-id";
+import { openSettingsAdvanced } from "./settings";
 import { buildProjectsSettingsRoute } from "@/utils/host-routes";
 
 type WebSocketMessage = string | Buffer;
@@ -36,7 +37,8 @@ function getSessionMessage(message: WebSocketMessage): Record<string, unknown> |
 export async function openProjects(page: Page): Promise<void> {
   await gotoAppShell(page);
   await openSettings(page);
-  await page.getByRole("button", { name: "Projects", exact: true }).click();
+  await openSettingsAdvanced(page);
+  await page.getByTestId("settings-host-section-projects").click();
   await expect(page).toHaveURL(buildProjectsSettingsRoute(getServerId()));
 }
 

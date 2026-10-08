@@ -236,6 +236,7 @@ A self-built app shows the base version 0.11.0-beta.5 in **About**. This is corr
    ```
 
    Use the tag of the version that you want.
+
 3. Do steps 2, 3 and 4 again.
 4. Quit Fulcra.
 5. Replace `/Applications/Fulcra.app` with the new app.

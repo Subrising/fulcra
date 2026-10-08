@@ -3725,6 +3725,7 @@ describe("HostRuntimeStore", () => {
         },
         getClientId: async () => "cid_pairing",
       },
+      storage: createMemoryHostRuntimeStorage(),
     });
     const offerUrl = encodeOfferUrl(makeOffer());
     await expect(store.probeAndUpsertConnectionFromOfferUrl(offerUrl)).rejects.toThrow(
@@ -4055,8 +4056,9 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
       },
     });
     const link = encodeOfferUrl(makeOffer({ serverId: "srv_pair" }));
-    await expect(store.importConnectionLink(link, "hostRoot")).resolves.toEqual({
+    await expect(store.importConnectionLink(link, "hostRoot")).resolves.toMatchObject({
       status: "password_required",
+      link,
     });
     expect(store.getHosts()).toHaveLength(0);
     await store.probeAndUpsertConnectionFromOfferUrl(link, "correct-password");

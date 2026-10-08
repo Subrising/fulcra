@@ -5,7 +5,7 @@ import { gotoAppShell, openSettings } from "./app";
 import { connectDaemonClient } from "./daemon-client-loader";
 import { getServerId } from "./server-id";
 import { expectAppRoute } from "./route-assertions";
-import { openSettingsHost } from "./settings";
+import { openSettingsAdvanced, openSettingsHost } from "./settings";
 
 // ─── Daemon-side seeding ───────────────────────────────────────────────────
 
@@ -142,7 +142,8 @@ export async function openAgentProfileSettings(page: Page): Promise<void> {
   await gotoAppShell(page);
   await openSettings(page);
   await openSettingsHost(page, serverId);
-  await page.getByRole("button", { name: "Agents", exact: true }).click();
+  await openSettingsAdvanced(page);
+  await page.getByTestId("settings-host-section-agents").click();
   await expectAppRoute(page, buildSettingsHostSectionRoute(serverId, "agents"));
   await expect(page.getByTestId("agent-profiles-card")).toBeVisible({ timeout: 30_000 });
 }
