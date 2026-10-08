@@ -666,8 +666,8 @@ test("inactive human-owned sessions cannot be delegated even with a complete rea
   fireEvent.change(screen.getByLabelText("Control transfer context"), {
     target: { value: "Complete but unauthorized delegation reason" },
   });
-  assert.equal(screen.getByRole("button", { name: "Delegate session" }).disabled, true);
-  assert.equal(screen.getByRole("button", { name: "Delegate as supervisor" }).disabled, true);
+  assert.equal(screen.getByRole("button", { name: "Let Fulcra control this" }).disabled, true);
+  assert.equal(screen.getByRole("button", { name: "Let Fulcra control this as a lead" }).disabled, true);
   assert.equal(screen.getByRole("button", { name: "Take control" }).disabled, false);
 });
 test("failed management and usage reads become visible and do not retry automatically", async () => {
