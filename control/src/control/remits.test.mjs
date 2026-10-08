@@ -1,6 +1,7 @@
 // Fulcra J1 (CONTRACTS.md §4, §5) on a temporary journal: remit invariants (one owner, owner resolution, atomic
 // move, history, idempotency, authority), brief authorship, brief validation and the stale computation. The
 // J3 fixture supplies two prime seats (delivery, research) and one project seat, all delegated.
+import "./state-root.fixture.mjs";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
