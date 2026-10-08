@@ -98,6 +98,8 @@ export interface DesktopDaemonStatus {
   usesGeneratedCredential?: boolean;
   startedAt: string | null;
   error: string | null;
+  /** The daemon answered the status probe (`connectedDaemon: "reachable"`). */
+  answering?: boolean;
 }
 
 interface DesktopDaemonLogs {
@@ -215,6 +217,7 @@ function statusFromDaemonProbe(
     version: typeof payload.daemonVersion === "string" ? payload.daemonVersion : null,
     desktopManaged: payload.desktopManaged === true,
     startedAt: typeof payload.startedAt === "string" ? payload.startedAt : null,
+    answering: payload.connectedDaemon === "reachable",
     ownedByDesktop: Boolean(
       ownedLaunch &&
       ownedLaunch.home === home &&
@@ -473,6 +476,37 @@ async function assertDesktopStopCompleted(
   await assertDesktopHomeAbsent(home);
 }
 
+// FULCRA(daemon-start-race): a daemon that is shutting down still reads "running" for a moment. On 8 Oct 2026 the
+// MacBook app restarted 5 s after the old daemon got SIGTERM, saw the old supervisor still "running", started nothing,
+// and showed "Connecting" after the old one exited. A running or starting daemon that does not answer is now
+// awaited: when it answers it is used, when it exits a new one starts, and when it never answers within the wait an
+// owned one is stopped and replaced. A daemon this app does not own is never stopped; that case still refuses.
+export const DESKTOP_STARTUP_ANSWER_WAIT = { totalMs: 20_000, stepMs: 500 };
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function settleExistingDaemon(current: DesktopDaemonStatus): Promise<DesktopDaemonStatus> {
+  if ((current.status !== "running" && current.status !== "starting") || current.answering)
+    return current;
+  logDesktopDaemonLifecycle("existing daemon does not answer; waiting", {
+    status: current.status,
+    pid: current.pid,
+  });
+  const deadline = Date.now() + DESKTOP_STARTUP_ANSWER_WAIT.totalMs;
+  let latest = current;
+  while (Date.now() < deadline) {
+    await pause(DESKTOP_STARTUP_ANSWER_WAIT.stepMs);
+    latest = await resolveDesktopDaemonStatus();
+    if (latest.status === "stopped" || (latest.status === "running" && latest.answering)) {
+      logDesktopDaemonLifecycle("existing daemon settled", { status: latest.status, pid: latest.pid });
+      return latest;
+    }
+  }
+  logDesktopDaemonLifecycle("existing daemon never answered; replacing it", { pid: latest.pid });
+  const stopped = await stopDesktopDaemon("restart");
+  if (stopped.status !== "stopped")
+    throw retryOwnedDaemon("Desktop daemon is running but does not answer; launch refused.");
+  return stopped;
+}
+
 async function startDaemon(): Promise<DesktopDaemonStatus> {
   assertBuiltInDaemonManagementEnabled(await getDesktopSettingsStore().get());
 
@@ -488,15 +522,17 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
       instance: previousInstance,
       endpoint: ownedEndpoint(getPaseoHome(), previousInstance),
     };
-  const current = await resolveDesktopStartupStatus(home, previousInstance);
+  const initial = await resolveDesktopStartupStatus(home, previousInstance);
   logDesktopDaemonLifecycle("initial status check before start", {
-    status: current.status,
-    pid: current.pid,
-    listen: current.listen,
-    serverId: current.serverId || null,
-    error: current.error,
-    desktopManaged: current.desktopManaged,
+    status: initial.status,
+    pid: initial.pid,
+    listen: initial.listen,
+    serverId: initial.serverId || null,
+    error: initial.error,
+    desktopManaged: initial.desktopManaged,
+    answering: initial.answering === true,
   });
+  const current = await settleExistingDaemon(initial);
   if (current.status === "running" || current.status === "starting") {
     if (shouldRestartForVersion(current)) {
       logDesktopDaemonLifecycle("daemon version mismatch, restarting", {
