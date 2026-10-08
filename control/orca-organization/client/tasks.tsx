@@ -91,8 +91,8 @@ export function TaskControls({
         </View>
       )}
       <Text style={{ color: c.foregroundMuted }}>
-        Selecting a task does not start or delegate work. Return here through Menu → Fulcra or the
-        Return to Fulcra command.
+        Selecting a task does not start work or give control of it to a lead. Return here through
+        Menu → Fulcra or the Return to Fulcra command.
       </Text>
       {query.isError && (
         <Text style={{ color: c.foreground }}>

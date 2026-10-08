@@ -12,6 +12,7 @@ import {
   type Fleet,
   type FleetHosts,
 } from "../shared/fleet";
+import { CONTROLLER_METHOD } from "../shared/roles";
 import { readProjects } from "./projects";
 import { localCall } from "./management";
 import { readBoard } from "./organization";
@@ -231,10 +232,14 @@ export async function listAgents(paseo: PaseoApi, ms: number, pages = 5) {
   }
   return { entries, complete };
 }
+// FULCRA(lead-status): `pinned` (the main assistants' and project leads' sessions) rank before every other row. After a
+// daemon restart nothing is working or recently active yet, so the newest sessions filled the cap and the long-lived
+// leads fell out: the sidebar then showed "Status unknown" for them.
 export function chooseRows<T extends { id: string; host?: string }>(
   all: T[],
   entries: { agent: { id: string; status?: string; updatedAt?: string | null } }[],
   limit = FLEET_NODE_LIMIT,
+  pinned: ReadonlySet<string> = new Set(),
 ): T[] {
   if (all.length <= limit) return all;
   const localHost = portable.localHost.name;
@@ -244,16 +249,35 @@ export function chooseRows<T extends { id: string; host?: string }>(
       const a = row.host === localHost ? native.get(row.id) : undefined;
       return {
         index,
+        lead: pinned.has(row.id) ? 0 : 1,
         working: a && ["running", "initializing"].includes(a.status ?? "") ? 0 : 1,
         active: Date.parse(a?.updatedAt ?? "") || 0,
       };
     })
-    .sort((x, y) => x.working - y.working || y.active - x.active || y.index - x.index);
+    .sort(
+      (x, y) =>
+        x.lead - y.lead || x.working - y.working || y.active - x.active || y.index - x.index,
+    );
   return rank
     .slice(0, limit)
     .map((r) => r.index)
     .sort((a, b) => a - b)
     .map((i) => all[i]);
+}
+// The sessions holding a main assistant or project lead seat, from the controller's role directory (none if unread).
+export function leadSessions(read: PromiseSettledResult<any>): Set<string> {
+  if (read.status !== "fulfilled") return new Set();
+  const bindings = Array.isArray(read.value?.bindings) ? read.value.bindings.slice(0, 512) : [];
+  return new Set(
+    bindings
+      .filter(
+        (b: any) =>
+          (b?.role === "prime" || b?.role === "project-orchestrator") &&
+          b?.state === "assigned" &&
+          typeof b?.sessionId === "string",
+      )
+      .map((b: any) => b.sessionId as string),
+  );
 }
 export async function readFleet(
   paseo: PaseoApi,
@@ -269,11 +293,12 @@ export async function readFleet(
   const bindings = readNativeHostBindings();
   const all = await enrollment(call, left());
   const stage = left();
-  const [native, roles, board, quotaRead] = await Promise.allSettled([
+  const [native, roles, board, quotaRead, seats] = await Promise.allSettled([
     listAgents(paseo, stage),
     bounded(call("manager-summary"), stage),
     bounded(catalog(), stage),
     bounded(call("quota-status"), stage),
+    bounded(call(CONTROLLER_METHOD.directory), stage),
   ]);
   let quota: ReturnType<typeof quotaStatusSchema.parse> | null = null;
   try {
@@ -327,7 +352,7 @@ export async function readFleet(
     );
   });
   // Rank the entire matching set once, then page it. The old chooseRows order stays on the default page.
-  const first = chooseRows(eligible, entries),
+  const first = chooseRows(eligible, entries, FLEET_NODE_LIMIT, leadSessions(seats)),
     firstIds = new Set(first.map((r) => r.id));
   const ordered = [...first, ...eligible.filter((r) => !firstIds.has(r.id))];
   const offset = input.offset ?? 0,

@@ -1803,7 +1803,7 @@ export const ko: TranslationResources = {
       label: "역할",
       none: "없음",
       planning: "계획",
-      orchestration: "오케스트레이션",
+      orchestration: "리드",
       implementation: "구현",
       usesDefault: "{{role}} 기본값 사용: {{model}}, 추론 강도 {{effort}}",
       usesDefaultModel: "{{role}} 기본값 사용: {{model}}",

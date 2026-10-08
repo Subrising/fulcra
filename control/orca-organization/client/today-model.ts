@@ -97,11 +97,14 @@ const isId = (v: unknown): v is string =>
 /** Operator words → plain words, for titles and notes written by agents. */
 export function plain(text: string): string {
   return text
+    .replace(/\bprime orchestrators?\b/gi, (m) =>
+      /s$/i.test(m) ? "main assistants" : "main assistant",
+    )
     .replace(/\bproject orchestrators?\b/gi, (m) =>
       /s$/i.test(m) ? "project leads" : "project lead",
     )
     .replace(/\borchestrators?\b/gi, (m) => (/s$/i.test(m) ? "leads" : "lead"))
-    .replace(/\bprimes?\b/gi, (m) => (/s$/i.test(m) ? "leads" : "lead"))
+    .replace(/\bprimes?\b/gi, (m) => (/s$/i.test(m) ? "main assistants" : "main assistant"))
     .replace(/\bseats?\b/gi, (m) => (/s$/i.test(m) ? "roles" : "role"))
     .replace(/\bgenerations?\b/gi, (m) => (/s$/i.test(m) ? "restarts" : "restart"))
     .replace(/\bcapabilit(?:y|ies)\b/gi, (m) => (/ies$/i.test(m) ? "permissions" : "permission"))

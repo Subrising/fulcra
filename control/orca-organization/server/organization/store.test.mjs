@@ -151,7 +151,7 @@ test("route corrections retain conversation identity and prohibit creation repla
     /already retained/,
   );
 });
-test("held/offline prime outcomes retain request ID and never replay automatically", (t) => {
+test("held/offline main assistant outcomes retain request ID and never replay automatically", (t) => {
   const { store, apply, workspaceId } = fixture(t),
     intakeId = randomUUID(),
     requestId = randomUUID();
@@ -175,7 +175,7 @@ test("held/offline prime outcomes retain request ID and never replay automatical
     intakeId,
     requestId,
     state: "held",
-    reply: "Held for the existing prime's operator",
+    reply: "Held for the existing main assistant's operator",
   });
   assert.equal(store.read().intakes[0].primeRequest.id, requestId);
   assert.throws(
@@ -312,7 +312,7 @@ test("workspace names use word boundaries, and the configured umbrella resolves 
   );
   assert.equal(resolveIntakeWorkspace({ workspaces: [ai, game] }, "AI game dev").kind, "ambiguous");
 });
-test("a correlated prime clarification is readable and a prior reply cannot become this request's answer", () => {
+test("a correlated main assistant clarification is readable and a prior reply cannot become this request's answer", () => {
   assert.equal(
     parsePrimeQuestion(
       '{"intakeId":"request","question":"Is this for Ship It or Demo Day?"}',

@@ -180,13 +180,13 @@ export function IntakeSurface(props: Props) {
     const epoch = state.choiceEpoch;
     if (!workspace!.projects.length) {
       model.setNotice(
-        "Your request is retained. Add an existing project in Workspaces before asking the prime to route it.",
+        "Your request is retained. Add an existing project in Workspaces before asking the main assistant to route it.",
       );
       return;
     }
     if (!intake.prime) {
       model.setNotice(
-        "Your intake is retained with you. Choose its existing project or configure a receiving prime in Workspaces.",
+        "Your intake is retained with you. Choose its existing project or configure a receiving main assistant in Workspaces.",
       );
       return;
     }
@@ -209,7 +209,7 @@ export function IntakeSurface(props: Props) {
       else
         model.setNotice(
           parsePrimeQuestion(reply, intake.id) ??
-            "The receiving prime needs a project choice. Your original request and reply are retained.",
+            "The receiving main assistant needs a project choice. Your original request and reply are retained.",
         );
     }
   };
@@ -239,7 +239,9 @@ export function IntakeSurface(props: Props) {
         {responsible
           ? `Responsible intake: ${responsible.label ?? responsible.seat ?? "recorded receiver"}`
           : "Responsible intake: you"}
-        {responsible?.kind === "human-session" ? " · human-held; no automated prime routing" : ""}
+        {responsible?.kind === "human-session"
+          ? " · human-held; no automated main assistant routing"
+          : ""}
       </Text>
       {responsible && (
         <WorkButton

@@ -1823,7 +1823,7 @@ export const ru: TranslationResources = {
       label: "Роль",
       none: "Нет",
       planning: "Планирование",
-      orchestration: "Оркестрация",
+      orchestration: "Ведущий",
       implementation: "Реализация",
       usesDefault: "Использует значения роли «{{role}}»: {{model}}, усилие {{effort}}",
       usesDefaultModel: "Использует значения роли «{{role}}»: {{model}}",

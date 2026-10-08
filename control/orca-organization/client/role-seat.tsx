@@ -156,7 +156,7 @@ export function SeatPanel({
         </View>
         {!target.candidateTaskIds.length && (
           <Text style={text}>
-            No workstream is available for this seat, so no session can be named accountable for it
+            No workstream is available for this role, so no session can be named accountable for it
             yet.
           </Text>
         )}
@@ -252,7 +252,7 @@ export function SeatPanel({
           <WorkButton
             theme={props.theme}
             disabled={busy || short}
-            label="Vacate this seat, leaving the project with no recorded orchestrator"
+            label="Empty this role. The project then has no recorded lead"
             onPress={() =>
               run(() => ({
                 action: "vacate",
@@ -263,7 +263,7 @@ export function SeatPanel({
               }))
             }
           >
-            Vacate this seat
+            Empty this role
           </WorkButton>
         )}
       </>
@@ -275,7 +275,7 @@ export function SeatPanel({
       )}
       {result?.status === "error" && (
         <Text style={muted}>
-          Nothing was changed. Refresh to read the current seat before trying again.
+          Nothing was changed. Refresh to read the current role before trying again.
         </Text>
       )}
       <WorkButton theme={props.theme} label="Close accountability panel" onPress={onDone}>

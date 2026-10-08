@@ -1820,7 +1820,7 @@ export const en = {
       label: "Role",
       none: "None",
       planning: "Planning",
-      orchestration: "Orchestration",
+      orchestration: "Lead",
       implementation: "Implementation",
       usesDefault: "Uses the {{role}} default: {{model}}, {{effort}} effort",
       usesDefaultModel: "Uses the {{role}} default: {{model}}",

@@ -85,6 +85,8 @@ def validate(profile_path, expected, role):
     if not os.access(argv[0], os.X_OK):
         raise ValueError('Required executable unavailable')
     allowed = {'PATH', 'PASEO_HOME', 'PASEO_LISTEN'}
+    # The SSH Book transport is retired (0.2.7) and nothing reads this variable. It stays accepted so that an
+    # existing launch profile that still sets it keeps starting the controller.
     if role == 'controller': allowed.add('ORCA_BOOK_TRANSPORT_PROFILE')
     # C1 (J0 item 2): where the controller home, the daemon installation, outcomes and tasks live. Both roles; each
     # value only as an absolute canonical path (no relative, "..", trailing or symlinked components).
