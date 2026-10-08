@@ -6,40 +6,49 @@ const STRESS_ROUNDS = 4;
 // React Native Web's document-level pointer listener can retain its last target.
 const MAX_TRANSIENT_DETACHED_PANES = 2;
 
+// Fulcra's Settings menu: every entry except the first two sits behind "Show advanced settings".
+// `title` is the label of the row and the title of the detail header.
 const SETTINGS_DESTINATIONS = [
-  "General",
-  "Appearance",
-  "Sidebar",
-  "Chat",
-  "Terminal",
-  "Browser",
-  "Editor",
-  "Shortcuts",
-  "Integrations",
-  "Notifications",
-  "Permissions",
-  "Diagnostics",
-  "About",
-  "Overview",
-  "Projects",
-  "Connections",
-  "Pair device",
-  "Agents",
-  "Metadata",
-  "Workspaces",
-  "Providers",
-  "Usage",
-  "Terminals",
-  "Plugins",
+  { testId: "settings-section-general", title: "Appearance & language" },
+  { testId: "settings-section-notifications", title: "Notifications" },
+  { testId: "settings-section-behaviour", title: "Sending & opening" },
+  { testId: "settings-section-chat", title: "Chat display" },
+  { testId: "settings-section-sidebar", title: "Sidebar" },
+  { testId: "settings-section-terminal", title: "Terminal" },
+  { testId: "settings-section-browser", title: "Built-in browser" },
+  { testId: "settings-section-editor", title: "Editor" },
+  { testId: "settings-section-shortcuts", title: "Keyboard shortcuts" },
+  { testId: "settings-section-integrations", title: "Command line" },
+  { testId: "settings-section-permissions", title: "Mac permissions" },
+  { testId: "settings-section-diagnostics", title: "Troubleshooting" },
+  { testId: "settings-section-about", title: "About" },
+  { testId: "settings-host-section-host", title: "Overview" },
+  { testId: "settings-host-section-projects", title: "Projects" },
+  { testId: "settings-host-section-connections", title: "Connections" },
+  { testId: "settings-host-section-pair-device", title: "Pair a phone" },
+  { testId: "settings-host-section-agents", title: "Agent tools" },
+  { testId: "settings-host-section-metadata", title: "Auto titles & messages" },
+  { testId: "settings-host-section-workspaces", title: "Workspaces" },
+  { testId: "settings-host-section-providers", title: "AI providers" },
+  { testId: "settings-host-section-usage", title: "Usage" },
+  { testId: "settings-host-section-terminals", title: "Terminal profiles" },
+  { testId: "settings-host-section-plugins", title: "Plugins" },
 ];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-async function openSettingsDestination(page, title) {
+async function openSettingsAdvanced(page) {
+  const toggle = page.locator('[data-testid="settings-advanced-toggle"]:visible').first();
+  await toggle.waitFor({ state: "visible" });
+  if ((await toggle.getAttribute("aria-label")) === "Show advanced settings") await toggle.click();
+}
+
+async function openSettingsDestination(page, { testId, title }) {
   const sidebar = page.locator('[data-testid="settings-sidebar"]:visible');
-  const button = sidebar.getByRole("button", { name: title, exact: true });
+  await openSettingsAdvanced(page);
+  const button = sidebar.getByTestId(testId);
   try {
     await button.waitFor({ state: "visible" });
   } catch (error) {
@@ -66,8 +75,8 @@ async function rotateSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator('[data-testid="settings-sidebar"]:visible').waitFor({ state: "visible" });
 
-  for (const title of SETTINGS_DESTINATIONS) {
-    await openSettingsDestination(page, title);
+  for (const destination of SETTINGS_DESTINATIONS) {
+    await openSettingsDestination(page, destination);
   }
 
   await page.locator('[data-testid="settings-back-to-workspace"]:visible').click();
