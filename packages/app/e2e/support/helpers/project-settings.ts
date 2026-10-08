@@ -6,6 +6,7 @@ import type { WebSocketRoute } from "@playwright/test";
 import { gotoAppShell, openSettings } from "./app";
 import { daemonWsRoutePattern } from "./daemon-port";
 import { getServerId } from "./server-id";
+import { openSettingsAdvanced } from "./settings";
 import { buildProjectsSettingsRoute } from "@/utils/host-routes";
 
 type WebSocketMessage = string | Buffer;
