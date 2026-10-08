@@ -66,9 +66,12 @@ export function resolveSender(input: {
   ancestors?: () => ProcessInfo[];
 }): Sender | null {
   const own = (input.env ?? process.env).PASEO_AGENT_ID?.trim();
+  const insideChat = () => (input.ancestors ?? readAncestors)().some(isChatProcess);
   if (input.from !== undefined) {
     const from = parseFrom(input.from);
-    if (own && own !== from.agentId)
+    // A relay (the SSH route from another computer) runs outside any chat. A chat never uses --from, not even with
+    // its own id: "<own id>@<any server>" would read as a remote sender and skip its own line.
+    if (own || insideChat())
       throw {
         code: "INVALID_FROM",
         message: "--from is only for a send relayed from another computer, not from inside a chat",
@@ -76,7 +79,7 @@ export function resolveSender(input: {
     return from;
   }
   if (own) return { agentId: own };
-  if ((input.ancestors ?? readAncestors)().some(isChatProcess))
+  if (insideChat())
     throw {
       code: "SENDER_UNKNOWN",
       message: "This send comes from a chat with no identity; send it from your own chat",

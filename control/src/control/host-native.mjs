@@ -133,6 +133,18 @@ export class HostNative {
       return Promise.reject(Error("Human input cannot be checked for this session"));
     return this.local.humanMessagesSince(id, since);
   }
+  // Fulcra 0.2.8 reporting lines: labels on a chat on this computer only. A Book chat is labelled on its own host.
+  setLabels(id, labels) {
+    if (this.route(id)) throw Error("A chat on another computer is labelled on its own host");
+    if (typeof this.local.setLabels !== "function")
+      throw Error("This native adapter cannot write labels");
+    return this.local.setLabels(id, labels);
+  }
+  labelled(key, value) {
+    if (typeof this.local.labelled !== "function")
+      throw Error("This native adapter cannot list labels");
+    return this.local.labelled(key, value);
+  }
   assertLocal(...ids) {
     if (ids.some((id) => typeof id === "string" && this.route(id)))
       throw Error("Book parent/supervisor grants are not supported");

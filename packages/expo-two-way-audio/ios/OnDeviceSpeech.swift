@@ -17,7 +17,7 @@ final class OnDeviceSpeech {
     private var finished = false
     private var finishing = false
     private var failed = false
-    private var restarts = 0
+    private var restarts = RestartBudget(limit: OnDeviceSpeech.maxRestarts)
     private var pending: Promise?
     private var deadline: DispatchWorkItem?
     var onPartial: ((String) -> Void)?
@@ -81,8 +81,8 @@ final class OnDeviceSpeech {
     }
 
     private func replaceTask() {
-        restarts += 1
-        guard restarts <= OnDeviceSpeech.maxRestarts else { failed = true; return }
+        // Past the cap the rest of the audio would be dropped; the dictation ends as truncated (see complete()).
+        guard restarts.spend() else { failed = true; return }
         startTask(epoch)
     }
 
@@ -94,10 +94,9 @@ final class OnDeviceSpeech {
         let text = transcript.text
         if let pending = pending {
             self.pending = nil
-            if text.isEmpty && failed {
-                pending.reject("ON_DEVICE_SPEECH_UNAVAILABLE", "On-device transcription unavailable; recorded audio is retained")
-            } else {
-                pending.resolve(text)
+            switch DictationOutcome.decide(text: text, failed: failed, truncated: restarts.exhausted) {
+            case .text(let kept): pending.resolve(kept)
+            case .reject(let code, let message): pending.reject(code, message)
             }
         }
     }
@@ -158,6 +157,6 @@ final class OnDeviceSpeech {
         finished = false
         finishing = false
         failed = false
-        restarts = 0
+        restarts = RestartBudget(limit: OnDeviceSpeech.maxRestarts)
     }
 }
