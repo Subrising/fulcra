@@ -213,7 +213,7 @@ test("recorded workstream leaders never fill the project role", () => {
   );
   const project = h.projects.find((p) => p.id === PROJECT)!;
   assert.equal(project.orchestrator.state, "unassigned-with-leaders");
-  assert.match(project.orchestrator.detail, /seat is recorded as empty/);
+  assert.match(project.orchestrator.detail, /role is recorded as empty/);
   assert.match(project.orchestrator.detail, /not accountability for the project/);
   assert.equal(project.leaders.length, 2);
 });
@@ -550,7 +550,7 @@ test("an explicit role names the actual project lead and routes to its conversat
     project.leaders.map((l) => l.sessionId),
     [LEAD],
   );
-  assert.doesNotMatch(view.detail, /seat is recorded as empty/);
+  assert.doesNotMatch(view.detail, /role is recorded as empty/);
 });
 
 test("role drift is named without erasing the accountability record", () => {
@@ -619,7 +619,7 @@ test("unreadable role records leave the role unknown rather than unassigned", ()
   assert.equal(project.orchestrator.state, "unknown");
   assert.equal(h.rolesAvailable, false);
   assert.equal(h.rolesUnavailable, "Unknown method bindings-status");
-  assert.match(project.orchestrator.detail, /not the same as the seat being empty/);
+  assert.match(project.orchestrator.detail, /not the same as the role being empty/);
   // Nested supervisors exist, but with no role read they must not be promoted into a prime.
   assert.deepEqual(h.primeSeats, []);
   assert.equal(h.primes.length, 1);
@@ -684,7 +684,7 @@ test("the lead display stays exhaustive over every role state", () => {
   // silently rendering a wrong heading over a real record.
   assert.throws(
     () => orchestratorView({ state: "seated" } as unknown as OrchestratorAssignment),
-    /Unhandled project orchestrator state/,
+    /Unhandled project lead state/,
   );
 });
 

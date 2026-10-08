@@ -2823,7 +2823,7 @@ test("portfolio distinguishes provider, saved leader and live activity and opens
   await screen.findByText("Product lead");
   assert(screen.getByText("Claude · Chosen model · macbook"));
   assert(screen.getByText("Idle"));
-  assert(screen.getByText(/You have control. This saved leader/));
+  assert(screen.getByText(/You control this. The lead does not control this saved leader now/));
   assert(screen.getByText("No workers recorded yet. This lead can still lead the work."));
   assert.equal(screen.queryByText("Customer research"), null);
   fireEvent.click(screen.getByRole("button", { name: "Tasks without a recorded leader" }));
@@ -3921,7 +3921,7 @@ test("main assistant leadership names the actual seated lead and opens its real 
   assert.equal(screen.queryByText("Unknown"), null);
   assert(
     screen.getByText(
-      /A recorded controller role binding names this session as the project orchestrator/,
+      /A recorded controller role binding names this session as the project lead/,
     ),
   );
   assert(
@@ -4036,7 +4036,7 @@ test("main assistant leadership keeps an unreadable binding table distinct from 
   await screen.findByText("Unknown");
   // The crucial distinction: unreadable is not empty, and no seat action is offered.
   assert.equal(screen.queryByText("Unassigned"), null);
-  assert(screen.getByText(/not the same as the seat being empty/));
+  assert(screen.getByText(/not the same as the role being empty/));
   assert.equal(screen.queryByRole("button", { name: "Record who is accountable for Orca" }), null);
   assert(
     screen.getByText(
@@ -4639,7 +4639,7 @@ test("clicking a project shows its goal, progress and needs, and asks the lead f
   assert(screen.getByText(/A request is not a session/));
 
   // The seat's allowance is stated before the operator is asked to write a reason.
-  assert(await screen.findByText(/Session allowance: 3 remaining of 4 at seat revision 3/));
+  assert(await screen.findByText(/Session allowance: 3 remaining of 4 at role revision 3/));
 
   // A declared session is offered for adoption, and adoption is named as spending allowance.
   assert(await screen.findByText(/Owned by this project, led by nobody/));
@@ -4774,7 +4774,7 @@ test("an unassigned project offers assigning a lead instead of a permanent place
   );
   fireEvent.click(await screen.findByRole("button", { name: "Project overview: Shared memory" }));
   await screen.findByText(
-    /This project has no assigned orchestrator, so work cannot be routed through one/,
+    /This project has no assigned lead, so work cannot be routed through one/,
   );
   // The empty state is an action, not a dead label.
   fireEvent.click(screen.getByRole("button", { name: "Assign a lead for Shared memory" }));
@@ -4838,7 +4838,7 @@ test("Recovery: the cards directly under the headline are the headline restart; 
   const latest = screen.getByTestId("recovery-section-latest"),
     earlier = screen.getByTestId("recovery-section-earlier");
   assert.match(latest.textContent, /H4 worker/);
-  assert.match(latest.textContent, /H4 orchestrator/);
+  assert.match(latest.textContent, /H4 lead/);
   assert.doesNotMatch(latest.textContent, /H2 worker|23 Sep/);
   assert.match(earlier.textContent, /^Earlier restarts and other takeovers/);
   assert.match(earlier.textContent, /H2 worker/);
