@@ -255,7 +255,8 @@ export function chooseRows<T extends { id: string; host?: string }>(
       };
     })
     .sort(
-      (x, y) => x.lead - y.lead || x.working - y.working || y.active - x.active || y.index - x.index,
+      (x, y) =>
+        x.lead - y.lead || x.working - y.working || y.active - x.active || y.index - x.index,
     );
   return rank
     .slice(0, limit)

@@ -76,12 +76,13 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
 }));
 import { PrimeSidebarRows } from "./prime-sidebar";
 const clients: QueryClient[] = [];
+const fastRetry = () => 1;
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
   render(
     <QueryClientProvider client={client}>
-      <PrimeSidebarRows serverId="mini" retryDelay={() => 1} />
+      <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
     </QueryClientProvider>,
   );
 }
@@ -306,7 +307,9 @@ it("retries the first load by itself after a restart", async () => {
     .mockReset()
     .mockRejectedValueOnce(new Error("plugin not ready"))
     .mockResolvedValue({
-      nodes: [{ id: "original-prime", host: "Mac mini", status: "idle", pending: 0, title: "Main" }],
+      nodes: [
+        { id: "original-prime", host: "Mac mini", status: "idle", pending: 0, title: "Main" },
+      ],
     });
   mount();
   expect(
@@ -321,7 +324,9 @@ it("Retry reads the lead status again, not only the main assistant list", async 
   f.read.mockResolvedValue({ available: false, primes: [] });
   f.fleet.mockReset().mockRejectedValue(new Error("plugin not ready"));
   mount();
-  const retry = await screen.findByRole("button", { name: "Couldn't load main assistants · Retry" });
+  const retry = await screen.findByRole("button", {
+    name: "Couldn't load main assistants · Retry",
+  });
   const fleetCalls = f.fleet.mock.calls.length;
   f.read.mockResolvedValue({
     available: true,
