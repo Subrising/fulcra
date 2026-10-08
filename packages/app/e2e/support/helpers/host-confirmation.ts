@@ -15,10 +15,16 @@ export interface LinkedHost {
  */
 export function buildPairingLink(host: LinkedHost): string {
   const offer = {
-    v: 2,
+    v: 3,
     serverId: host.serverId,
     daemonPublicKeyB64: host.daemonPublicKeyB64,
     relay: { endpoint: host.relayEndpoint, useTls: false },
+    // Fulcra claims the pairing on the relay after the confirmation, so every offer carries one.
+    pairing: {
+      id: "A".repeat(22),
+      secret: "B".repeat(43),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    },
   };
   const encoded = Buffer.from(JSON.stringify(offer), "utf8").toString("base64url");
   return `/settings/general#offer=${encoded}`;
