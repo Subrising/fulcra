@@ -6,7 +6,10 @@ import type { SessionInboundMessage, SessionOutboundMessage } from "../../messag
 import { TTSManager } from "../../agent/tts-manager.js";
 import { STTManager } from "../../agent/stt-manager.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "../../speech/speech-provider.js";
-import type { TurnDetectionProvider } from "../../speech/turn-detection-provider.js";
+import {
+  type TurnDetectionProvider,
+  VOICE_TURN_PAUSE_MS,
+} from "../../speech/turn-detection-provider.js";
 import { maybePersistTtsDebugAudio } from "../../agent/tts-debug.js";
 import { isPaseoDictationDebugEnabled } from "../../agent/recordings-debug.js";
 import {
@@ -141,6 +144,8 @@ export interface VoiceSessionOptions {
   stt: Resolvable<SpeechToTextProvider | null>;
   voice?: {
     turnDetection?: Resolvable<TurnDetectionProvider | null>;
+    /** FULCRA(core-fixes): silence that ends a spoken turn, in ms. */
+    turnPauseMs?: Resolvable<number>;
   };
   voiceBridge?: {
     registerVoiceSpeakHandler?: (agentId: string, handler: VoiceSpeakHandler) => void;
@@ -179,6 +184,7 @@ export class VoiceSession {
 
   private readonly dictationStreamManager: DictationStreamManager;
   private readonly resolveVoiceTurnDetection: () => TurnDetectionProvider | null;
+  private readonly resolveVoiceTurnPauseMs: () => number;
   private voiceTurnController: VoiceTurnController | null = null;
   private voiceInputChunkCount = 0;
   private voiceInputBytes = 0;
@@ -221,6 +227,7 @@ export class VoiceSession {
     this.abortController = new AbortController();
 
     this.resolveVoiceTurnDetection = toResolver(voice?.turnDetection ?? null);
+    this.resolveVoiceTurnPauseMs = toResolver(voice?.turnPauseMs ?? VOICE_TURN_PAUSE_MS);
     this.registerVoiceSpeakHandler = voiceBridge?.registerVoiceSpeakHandler;
     this.unregisterVoiceSpeakHandler = voiceBridge?.unregisterVoiceSpeakHandler;
     this.registerVoiceCallerContext = voiceBridge?.registerVoiceCallerContext;
@@ -583,6 +590,7 @@ export class VoiceSession {
     const controller = createVoiceTurnController({
       logger: this.sessionLogger.child({ component: "voice-turn-controller" }),
       turnDetection,
+      turnPauseMs: this.resolveVoiceTurnPauseMs(),
       stt,
       sttLanguage: this.sttLanguage,
       callbacks: {

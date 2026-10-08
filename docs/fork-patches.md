@@ -32,20 +32,20 @@ Organisation, report-up, hierarchy, accounts presentation and switching already 
 | Patch | Owner | Upstream files changed | Lines in them | New files | New lines | Reason |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | `image-retention` | Fulcra prime (platform) | 4 | +467/−37 | 0 | +0 | Agent image files: confined private storage and a rolling retention window. At about 2,000 files or 1 GB the least recently written images are deleted to make room, and a deleted image reads as 'Image no longer kept'. Paseo refused every new image after 256 files or 64 MB per daemon run. |
-| `orchestration` | Fulcra prime (orchestration) | 59 | +19975/−3689 | 62 | +15205 | Primes/leads/workers hierarchy, durable report-up and receipts, re-parent/promote, controller channel and management route. Paseo has no hierarchy or durable delivery. |
+| `orchestration` | Fulcra prime (orchestration) | 59 | +19979/−3689 | 62 | +15205 | Primes/leads/workers hierarchy, durable report-up and receipts, re-parent/promote, controller channel and management route. Paseo has no hierarchy or durable delivery. |
 | `admission` | Fulcra prime (security) | 25 | +4160/−455 | 28 | +6278 | Permission veto and input admission (human seat vs delegated seat), per-agent grants, trusted host. Paseo has no before-hook on prompt/send/permission and its permissions are daemon-wide. |
 | `accounts` | Fulcra prime (accounts) | 16 | +1102/−240 | 126 | +22702 | Account pool, per-launch credentials, plugin secrets/credential store (including plugin-saved secrets, used by Deploy for a cluster sign-in), connectors, account usage, quota and limit resume. Paseo has no secret store or multi-account launch. |
-| `session-launch` | Fulcra prime (providers) | 81 | +7809/−1101 | 33 | +5673 | Session launch: create-agent intent, provider launch config, Claude/Codex/OpenCode/Pi provider changes, public baseline transport, model catalog. |
+| `session-launch` | Fulcra prime (providers) | 84 | +7857/−1103 | 33 | +5673 | Session launch: create-agent intent, provider launch config, Claude/Codex/OpenCode/Pi provider changes, public baseline transport, model catalog. |
 | `plugin-host` | Fulcra prime (platform) | 59 | +3054/−222 | 56 | +6144 | Bundled trusted plugin loading and the SDK adapters the bundled plugin needs (update/cancel, notifications, replayable events, panels, turn footers, and AgentQuestions in the UI kit, which reuses the core PermissionRequestCard exported from agent-stream/view.tsx). |
-| `pairing` | Fulcra prime (security) | 40 | +3388/−1312 | 71 | +8484 | Relay v3, signed invitations, device proof, immutable daemon-key pin, host repair, multi-Mac pairing bundles. Security transport below the plugin layer. |
-| `durability` | Fulcra prime (platform) | 24 | +2201/−72 | 2 | +1066 | Durable timelines and state: file timeline store, atomic writes, pid lock, persisted config, workspace reconciliation fixes that prevent history loss. |
-| `desktop-runtime` | Fulcra prime (release) | 63 | +3031/−474 | 26 | +3674 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
+| `pairing` | Fulcra prime (security) | 40 | +3388/−1312 | 71 | +8528 | Relay v3, signed invitations, device proof, immutable daemon-key pin, host repair, multi-Mac pairing bundles. Security transport below the plugin layer. |
+| `durability` | Fulcra prime (platform) | 24 | +2203/−72 | 2 | +1066 | Durable timelines and state: file timeline store, atomic writes, pid lock, persisted config, workspace reconciliation fixes that prevent history loss. |
+| `desktop-runtime` | Fulcra prime (release) | 66 | +3073/−483 | 27 | +3764 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
 | `automations` | Fulcra prime (product) | 1 | +11/−0 | 10 | +2717 | Automations ("when X, do Y") on top of Paseo schedules: service, protocol messages, client calls, screen and sidebar entry. Kept in core: moving it into the plugin needs two SDK seams and a ~900-line UI rewrite to save ~150 shared-file lines. |
 | `features` | Fulcra prime (product) | 146 | +3569/−1014 | 170 | +27173 | Fulcra product UI and helpers in the app: architecture map and plain-English PR review (the checkout.pull-request-review.explain RPC behind the pullRequestReviewExplain feature, cached in PASEO_HOME/review-explanations, capped daily by the optional daemon config field explainDailyLimit), insights, work map, attention, schedules, navigation, sidebar and other views. Kept in core because each would cost more to move into the plugin than the shared-file lines it saves. |
-| `branding` | Fulcra prime (release) | 71 | +6137/−1897 | 100 | +4463 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
-| `build-ci` | Fulcra prime (release) | 59 | +1511/−2141 | 69 | +5643 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
-| `core-fixes` | Fulcra prime (platform) | 48 | +999/−252 | 60 | +6239 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
-| **total** | | 696 | +57414/−12906 | 813 | +115461 | |
+| `branding` | Fulcra prime (release) | 71 | +6191/−1877 | 101 | +4524 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
+| `build-ci` | Fulcra prime (release) | 60 | +1514/−2142 | 69 | +5643 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
+| `core-fixes` | Fulcra prime (platform) | 48 | +999/−252 | 62 | +6388 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
+| **total** | | 703 | +57567/−12898 | 817 | +115805 | |
 
 Shared seams (upstream files where several patches meet; resolve these hunk by hunk on merge):
 
