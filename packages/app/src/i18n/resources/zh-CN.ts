@@ -2225,7 +2225,8 @@ export const zhCN: TranslationResources = {
         },
         riskExplain: {
           LOW: "低风险：测试、文档或配置。",
-          NORMAL: "正常风险：有 {{tests}} 个测试覆盖的代码。",
+          NORMAL_one: "正常风险：有 {{count}} 个测试覆盖的代码。",
+          NORMAL_other: "正常风险：有 {{count}} 个测试覆盖的代码。",
           HIGH: "高风险：没有测试覆盖的代码，或此变更删除的代码。",
         },
         plain: en.panels.architectureMap.review.plain,

@@ -2322,7 +2322,8 @@ export const fr: TranslationResources = {
         },
         riskExplain: {
           LOW: "Risque faible : tests, documentation ou configuration.",
-          NORMAL: "Risque normal : code atteint par {{tests}} tests.",
+          NORMAL_one: "Risque normal : code atteint par {{count}} tests.",
+          NORMAL_other: "Risque normal : code atteint par {{count}} tests.",
           HIGH: "Risque élevé : code qu'aucun test n'atteint, ou code que ce changement supprime.",
         },
         plain: en.panels.architectureMap.review.plain,

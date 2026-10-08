@@ -2270,7 +2270,8 @@ export const ko: TranslationResources = {
         },
         riskExplain: {
           LOW: "낮은 위험: 테스트, 문서 또는 설정.",
-          NORMAL: "보통 위험: 테스트 {{tests}}개가 닿는 코드.",
+          NORMAL_one: "보통 위험: 테스트 {{count}}개가 닿는 코드.",
+          NORMAL_other: "보통 위험: 테스트 {{count}}개가 닿는 코드.",
           HIGH: "높은 위험: 어떤 테스트도 닿지 않는 코드 또는 이 변경이 삭제하는 코드.",
         },
         plain: en.panels.architectureMap.review.plain,
