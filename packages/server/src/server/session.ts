@@ -654,6 +654,8 @@ export interface SessionOptions {
   resolveScriptHealth?: (hostname: string) => ScriptHealthState | null;
   voice?: {
     turnDetection?: Resolvable<TurnDetectionProvider | null>;
+    // FULCRA(core-fixes): silence that ends a voice-mode turn, in ms.
+    turnPauseMs?: Resolvable<number>;
   };
   voiceBridge?: {
     registerVoiceSpeakHandler?: (agentId: string, handler: VoiceSpeakHandler) => void;

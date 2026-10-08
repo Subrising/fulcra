@@ -174,6 +174,9 @@ export function resolveSpeechConfig(params: {
     speech: {
       providers,
       sttLanguages: local.sttLanguages,
+      ...(params.persisted.features?.voiceMode?.turnDetection?.pauseMs !== undefined
+        ? { voiceTurnPauseMs: params.persisted.features.voiceMode.turnDetection.pauseMs }
+        : {}),
       ...(local.local ? { local: local.local } : {}),
     },
   };
