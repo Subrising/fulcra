@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type {
+  AgentSlashCommand,
   AgentCapabilityFlags,
   AgentClient,
   AgentFeature,
@@ -952,6 +953,11 @@ export class MockLoadTestAgentSession implements AgentSession {
     userMessageTimer.unref?.();
     if (userMessageDelayMs === 0) scheduleTurn();
     return { turnId };
+  }
+
+  // The app rejects slash commands the provider does not list, so the mock lists its own.
+  async listCommands(): Promise<AgentSlashCommand[]> {
+    return [{ name: "mock", description: "Mock daemon-handled command", argumentHint: "handled-command" }];
   }
 
   tryHandleOutOfBand(

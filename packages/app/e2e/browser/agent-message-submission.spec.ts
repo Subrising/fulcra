@@ -1,4 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
+import { openSettingsSection } from "../support/helpers/settings";
 import { expect, test as baseTest } from "../support/fixtures";
 import {
   awaitToolCall,
@@ -306,6 +307,7 @@ async function configureSteerInSettings(page: Page): Promise<void> {
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+Comma`);
   await expect(page).toHaveURL(/\/settings\/general$/);
+  await openSettingsSection(page, "behaviour");
   await selectSteerInSettings(page);
 }
 
@@ -318,6 +320,7 @@ async function configureInterruptInSettings(page: Page): Promise<void> {
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+Comma`);
   await expect(page).toHaveURL(/\/settings\/general$/);
+  await openSettingsSection(page, "behaviour");
   await selectSendBehaviorInSettings(page, "Interrupt", "interrupt");
 }
 
@@ -345,6 +348,7 @@ async function replaySteeredSleepTurnInBrowser(
   gate.holdNextShellToolCall("completed");
   await gotoAppShell(page);
   await openSettings(page);
+  await openSettingsSection(page, "behaviour");
   await selectSteerInSettings(page);
   const agent = await startRunningMockAgent(page, {
     prefix: `steer-replay-${shape}-${testInfo.workerIndex}-`,
