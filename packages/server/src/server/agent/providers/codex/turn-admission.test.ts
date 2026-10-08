@@ -212,7 +212,7 @@ test("a configuration change inside the synchronous callback cannot submit stale
     await expect(
       f.session.startTurn("Owned work", {
         [CODEX_TURN_ADMISSION]: () => {
-          void f.session.setFeature("fast_mode", true);
+          void f.session.setFeature("plan_mode", true);
           return true;
         },
       }),

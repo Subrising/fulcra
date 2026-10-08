@@ -20,6 +20,8 @@ interface SavedSettingsHostInput {
 
 const SECTION_LABELS = {
   general: "General",
+  behaviour: "Sending & opening",
+  notifications: "Notifications",
   chat: "Chat",
   appearance: "Appearance",
   sidebar: "Sidebar",
@@ -48,17 +50,38 @@ type HostSection =
   | "plugins"
   | "host";
 
+// Fulcra keeps only a few entries visible. Everything else sits behind the
+// "Show advanced settings" button, which opens by itself only when the current
+// route is already an advanced page.
+export async function openSettingsAdvanced(page: Page): Promise<void> {
+  const toggle = page.locator('[data-testid="settings-advanced-toggle"]:visible').first();
+  await expect(toggle).toBeVisible();
+  // The button label flips between "Show" and "Hide"; the web build sets no aria-expanded.
+  if ((await toggle.getAttribute("aria-label")) === "Show advanced settings") {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-label", "Hide advanced settings");
+  }
+}
+
+// Fulcra shows Appearance inside General.
+function menuSectionFor(section: SettingsSection): string {
+  return section === "appearance" ? "general" : section;
+}
+
 export async function openSettingsSection(page: Page, section: SettingsSection): Promise<void> {
   const sidebar = page.getByTestId("settings-sidebar");
   await expect(sidebar).toBeVisible();
 
-  await sidebar.getByRole("button", { name: SECTION_LABELS[section], exact: true }).click();
-  await expectAppRoute(page, buildSettingsSectionRoute(section));
+  const row = sidebar.getByTestId(`settings-section-${menuSectionFor(section)}`);
+  if ((await row.count()) === 0) await openSettingsAdvanced(page);
+  await row.click();
+  await expectAppRoute(page, buildSettingsSectionRoute(menuSectionFor(section) as SettingsSection));
 }
 
 export async function openSettingsHost(page: Page, serverId: string): Promise<void> {
   // Host sections are now flat top-level rows under the Host group. Navigate by
   // clicking the Connections section row; the picker only matters when >1 host.
+  await openSettingsAdvanced(page);
   await page.getByTestId("settings-host-section-connections").click();
   await expectHostSettingsUrl(page, serverId);
   await expect(page.getByTestId("host-page-connections-card")).toBeVisible();
@@ -69,6 +92,7 @@ export async function openSettingsHostSection(
   serverId: string,
   section: HostSection,
 ): Promise<void> {
+  await openSettingsAdvanced(page);
   await page.getByTestId(`settings-host-section-${section}`).click();
   await expectAppRoute(page, buildSettingsHostSectionRoute(serverId, section));
 }
@@ -80,6 +104,7 @@ export async function expectSettingsHeader(page: Page, title: string): Promise<v
 export async function openAddHostFlow(page: Page): Promise<void> {
   // "Add host" is now an item inside the host picker (a Combobox); open the
   // picker first, then pick it. The picker renders whenever a host exists.
+  await openSettingsAdvanced(page);
   await page.getByTestId("settings-host-picker").click();
   await page.getByTestId("settings-add-host").click();
   await expect(page.getByText("Add connection", { exact: true })).toBeVisible();
@@ -166,6 +191,7 @@ export async function seedSavedSettingsHosts(
 }
 
 export async function selectSettingsHost(page: Page, serverId: string): Promise<void> {
+  await openSettingsAdvanced(page);
   await page.locator('[data-testid="settings-host-picker"]:visible').click();
   await page.locator(`[data-testid="settings-host-picker-item-${serverId}"]:visible`).click();
 }
@@ -197,10 +223,9 @@ export async function expectSettingsSidebarSections(
   sections: SettingsSection[],
 ): Promise<void> {
   const sidebar = page.getByTestId("settings-sidebar");
+  await openSettingsAdvanced(page);
   for (const section of sections) {
-    await expect(
-      sidebar.getByRole("button", { name: SECTION_LABELS[section], exact: true }),
-    ).toBeVisible();
+    await expect(sidebar.getByTestId(`settings-section-${menuSectionFor(section)}`)).toBeVisible();
   }
 }
 
@@ -389,11 +414,11 @@ export async function expectHostNoDaemonLifecycleRow(page: Page): Promise<void> 
 export async function expectRetiredSidebarSectionsAbsent(page: Page): Promise<void> {
   const sidebar = page.getByTestId("settings-sidebar");
   await expect(sidebar).toBeVisible();
+  await openSettingsAdvanced(page);
 
-  // App group rows remain top-level.
-  await expect(sidebar.getByRole("button", { name: "General", exact: true })).toBeVisible();
-  await expect(sidebar.getByRole("button", { name: "Diagnostics", exact: true })).toBeVisible();
-  await expect(sidebar.getByRole("button", { name: "About", exact: true })).toBeVisible();
+  await expect(sidebar.getByTestId("settings-section-general")).toBeVisible();
+  await expect(sidebar.getByTestId("settings-section-diagnostics")).toBeVisible();
+  await expect(sidebar.getByTestId("settings-section-about")).toBeVisible();
   await expect(sidebar.getByRole("button", { name: "Daemon", exact: true })).toHaveCount(0);
 
   // Host group rows are now flat top-level sections (no drill-in).
@@ -416,6 +441,7 @@ export async function expectHostPageVisible(page: Page, _serverId: string): Prom
 export async function expectLocalHostEntryFirst(page: Page, _serverId: string): Promise<void> {
   const sidebar = page.getByTestId("settings-sidebar");
   await expect(sidebar).toBeVisible({ timeout: 15_000 });
+  await openSettingsAdvanced(page);
 
   // Single-host fixture: the picker is a non-interactive chip (no dropdown to
   // open) that surfaces the local host by its label. The per-row connection

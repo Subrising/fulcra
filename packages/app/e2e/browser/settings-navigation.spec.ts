@@ -58,19 +58,19 @@ test.describe("Settings sidebar navigation", () => {
     await openSettings(page);
 
     await openSettingsSection(page, "diagnostics");
-    await expectSettingsHeader(page, "Diagnostics");
+    await expectSettingsHeader(page, "Troubleshooting");
     await expectDiagnosticsContent(page);
 
     await openSettingsSection(page, "about");
     await expectSettingsHeader(page, "About");
     await expectAboutContent(page);
 
-    await openSettingsSection(page, "general");
-    await expectSettingsHeader(page, "General");
+    await openSettingsSection(page, "behaviour");
+    await expectSettingsHeader(page, "Sending & opening");
     await expectGeneralContent(page);
 
     await openSettingsSection(page, "appearance");
-    await expectSettingsHeader(page, "Appearance");
+    await expectSettingsHeader(page, "Appearance & language");
     await expectAppearanceContent(page);
 
     await clickSettingsBackToWorkspace(page);

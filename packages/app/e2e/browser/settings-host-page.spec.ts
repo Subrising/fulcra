@@ -40,12 +40,12 @@ test.describe("Settings host page", () => {
     });
     await test.step("agents section shows the inject MCP toggle", async () => {
       await openHostSection(page, serverId, "agents");
-      await expectSettingsHeader(page, "Agents");
+      await expectSettingsHeader(page, "Agent tools");
       await expectHostInjectMcpCard(page);
     });
     await test.step("providers section shows the providers card", async () => {
       await expectHostProvidersCard(page, serverId);
-      await expectSettingsHeader(page, "Providers");
+      await expectSettingsHeader(page, "AI providers");
     });
     await test.step("host section shows the host label and restart/remove action cards", async () => {
       await openHostSection(page, serverId, "host");

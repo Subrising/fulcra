@@ -39,7 +39,7 @@ async function createClaudeConfigDirWithRawSettings(settings: string): Promise<s
   return configDir;
 }
 
-function createCatalogClient(claudeCodeVersion = "2.1.284"): ClaudeAgentClient {
+function createCatalogClient(claudeCodeVersion = "2.1.293"): ClaudeAgentClient {
   return new ClaudeAgentClient({
     logger: createTestLogger(),
     resolveVersion: async () => claudeCodeVersion,
@@ -70,6 +70,7 @@ describe("getClaudeModels", () => {
       "claude-opus-4-6",
       "claude-sonnet-4-6[1m]",
       "claude-sonnet-4-6",
+      "claude-haiku-5-5",
       "claude-haiku-4-5",
     ]);
   });
@@ -105,6 +106,7 @@ describe("getClaudeModels", () => {
         ["claude-sonnet-4-6[1m]", 1_000_000],
         ["claude-sonnet-4-6", 200_000],
         ["claude-haiku-4-5", 200_000],
+        ["claude-haiku-5-5", 1_000_000],
       ]),
     );
   });
@@ -124,6 +126,8 @@ describe("getClaudeModels", () => {
     expect(getClaudeModels("2.1.280").find((model) => model.isDefault)?.id).toBe("claude-opus-5-5");
 
     expect(getClaudeModels("2.1.283").map((model) => model.id)).not.toContain("claude-sonnet-5-5");
+    expect(getClaudeModels("2.1.292").map((model) => model.id)).not.toContain("claude-haiku-5-5");
+    expect(getClaudeModels("2.1.293").map((model) => model.id)).toContain("claude-haiku-5-5");
     expect(getClaudeModels("2.1.284").map((model) => model.id)).toContain("claude-sonnet-5-5");
   });
 
