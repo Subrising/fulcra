@@ -206,17 +206,8 @@ jobs:
         if: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.server == 'false' && needs.changes.outputs.hub != 'false' }}
         run: npm run test:hub-cli-contract --workspace=@getpaseo/server
 
-  server-tests-windows:
-    name: server-tests (windows-latest)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
-    runs-on: windows-latest
-    steps: *server_test_steps
-
-  # native-recursive.ts serves darwin and win32, but windows-latest above is the only
-  # runner that exercises it. macOS — the platform the reported watcher bug was on —
-  # otherwise has no server-test coverage. Scoped to the observer/watcher suites to
-  # bound runtime.
+  # Fulcra runs on macOS. native-recursive.ts serves darwin; this job exercises it on a
+  # macOS runner. Scoped to the observer/watcher suites to bound runtime.
   server-tests-macos:
     name: server-tests (macos-14, file observation)
     needs: changes
@@ -344,16 +335,6 @@ jobs:
         run: |
           echo "::warning title=Diagnostic upload failed::desktop-browser-e2e was not uploaded. The job log still has the full output."
           echo "Diagnostic artifact \`desktop-browser-e2e\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
-
-  desktop-tests-windows:
-    name: desktop-tests (windows-latest)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
-    runs-on: windows-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps: *desktop_test_steps
 
   app-tests:
     name: app-tests
