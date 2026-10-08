@@ -54,9 +54,10 @@ type HostSection =
 export async function openSettingsAdvanced(page: Page): Promise<void> {
   const toggle = page.locator('[data-testid="settings-advanced-toggle"]:visible').first();
   await expect(toggle).toBeVisible();
-  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+  // The button label flips between "Show" and "Hide"; the web build sets no aria-expanded.
+  if ((await toggle.getAttribute("aria-label")) === "Show advanced settings") {
     await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(toggle).toHaveAttribute("aria-label", "Hide advanced settings");
   }
 }
 
