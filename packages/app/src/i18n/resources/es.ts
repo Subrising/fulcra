@@ -3218,6 +3218,7 @@ export const es: TranslationResources = {
     providers: {
       title: "Proveedores",
       addProvider: "Agregar proveedor",
+      refreshModels: "Actualizar modelos",
       providerDetails: "Detalles del proveedor{{name}}",
       enableProvider: "Habilitar{{name}}",
       unavailable: "Conéctese a este host para ver proveedores",

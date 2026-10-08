@@ -3098,6 +3098,7 @@ export const zhCN: TranslationResources = {
     providers: {
       title: "Providers",
       addProvider: "添加 Provider",
+      refreshModels: "刷新模型",
       providerDetails: "{{name}} Provider 详情",
       enableProvider: "启用 {{name}}",
       unavailable: "连接到这个 Host 以查看 Providers",

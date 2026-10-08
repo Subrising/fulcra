@@ -3164,6 +3164,7 @@ export const ko: TranslationResources = {
     providers: {
       title: "프로바이더",
       addProvider: "프로바이더 추가",
+      refreshModels: "모델 새로고침",
       providerDetails: "{{name}} 프로바이더 세부 정보",
       enableProvider: "{{name}} 활성화",
       unavailable: "프로바이더를 보려면 이 호스트에 연결하세요",
