@@ -22,6 +22,7 @@ export const LEAD_ROLES = Object.freeze(["orchestration", "planning", "review"])
 const sel = (model, thinkingOptionId) => ({ model, thinkingOptionId });
 // The owner's rule (update-7 W3): leads (prime, orchestrator, planner, reviewer) Opus 5.5 medium; implementers Sonnet 5.5
 // medium, or Codex gpt-6.1-sol medium. High is what a task asks for (a per-call effort), not what every lead pays for.
+// FULCRA(claude-only, the owner 7 Oct 2026): every role's default provider is Claude; Codex stays a choice.
 export const SEED = Object.freeze({
   orchestration: {
     provider: "claude",
@@ -39,12 +40,12 @@ export const SEED = Object.freeze({
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   implementation: {
-    provider: "codex",
+    provider: "claude",
     claude: sel("claude/claude-sonnet-5-5", "medium"),
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   research: {
-    provider: "codex",
+    provider: "claude",
     claude: sel("claude/claude-sonnet-5-5", "medium"),
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },

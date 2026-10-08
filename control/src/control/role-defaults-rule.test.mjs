@@ -290,8 +290,8 @@ test("fresh and migrated homes seed installation modes once and preserve explici
   const root = scratch();
   const table = initializeRoleDefaults(root);
   assert.deepEqual(table.modes, { claude: "auto", codex: "auto-review" });
-  assert.equal(table.roles.implementation.provider, "codex");
-  assert.equal(table.roles.research.provider, "codex");
+  assert.equal(table.roles.implementation.provider, "claude");
+  assert.equal(table.roles.research.provider, "claude");
   assert.equal(fs.statSync(path.join(root, "accounts/defaults.json")).mode & 0o777, 0o600);
   assert.equal(sessionDefaults("claude", {}, { home: root }, "implementation").modeId, "auto");
   assert.equal(
