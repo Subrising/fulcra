@@ -15,7 +15,10 @@ const create = (role) => ({
 
 test("create and management-prepare accept every controller role, and refuse an unknown one", () => {
   for (const role of DEFAULT_ROLES) {
-    assert.equal(parseControllerCommand({ method: "create", input: create(role) }).input.role, role);
+    assert.equal(
+      parseControllerCommand({ method: "create", input: create(role) }).input.role,
+      role,
+    );
     const { messageId, ...body } = create(role);
     const prepared = parseControllerCommand({
       method: "management-prepare",
