@@ -190,7 +190,7 @@ export function OrganisationSurface(
           targetHost={leader.host}
           targetServerId={leader.serverId}
           agentId={leader.agentId}
-          label={`Talk to project orchestrator: ${leader.title}`}
+          label={`Talk to project lead: ${leader.title}`}
         />
       )}
       <View style={{ gap: 8 }} testID="org-project-board">
@@ -344,8 +344,8 @@ export function OrganisationSurface(
                 {p.filled
                   ? p.holder
                     ? `Led by ${p.holder}`
-                    : "Seat filled"
-                  : "No one is in this seat"}
+                    : "Role filled"
+                  : "No one is in this role"}
               </Text>
             </Pressable>
             {open &&

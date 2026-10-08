@@ -205,7 +205,7 @@ function NewPrimeSeat({
               sessionTaskMatches: false,
               dispatch: null,
             },
-            label: `the ${slug} main assistant seat`,
+            label: `the ${slug} main assistant role`,
             candidateTaskIds: [programme],
             scope:
               "A main assistant is a session enrolled on the programme root. Pick one of its saved sessions.",
@@ -288,7 +288,7 @@ function LeaderCard({
         {leader.leads.length
           ? ` ${leader.leads.length} of them ${leader.leads.length === 1 ? "leads" : "lead"} work of their own.`
           : ""}
-        {leader.active ? "" : " Delegation is suspended; review control before continuing."}
+        {leader.active ? "" : " Lead control is paused. Check who controls this before you continue."}
       </Text>
       {leader.waitingAcknowledgement > 0 && (
         <Text style={text}>
@@ -398,7 +398,7 @@ function ProjectOverview({
           backgroundColor: c.surface1 ?? c.surface0,
         }}
       >
-        <Text style={{ ...muted, fontSize: 12, letterSpacing: 1 }}>PROJECT ORCHESTRATOR</Text>
+        <Text style={{ ...muted, fontSize: 12, letterSpacing: 1 }}>PROJECT LEAD</Text>
         <Text style={{ ...text, fontSize: 20, fontWeight: "600" }}>{roleHeading}</Text>
         {roleNode && (
           <Text style={muted}>
@@ -427,13 +427,13 @@ function ProjectOverview({
             targetHost={roleNode.host}
             targetServerId={roleNode.serverId}
             agentId={roleNode.agentId}
-            label={`Talk to ${roleHeading}, project orchestrator`}
+            label={`Talk to ${roleHeading}, project lead`}
           />
         )}
         {roleNode && (
           <WorkButton
             theme={props.theme}
-            label={`Read retained updates from ${roleHeading}, project orchestrator`}
+            label={`Read retained updates from ${roleHeading}, project lead`}
             onPress={() => onSession(roleNode.id)}
           >
             Retained updates and conversation
@@ -449,7 +449,7 @@ function ProjectOverview({
             }
             onPress={() => onSeat(project)}
           >
-            {role.sessionId ? "Change or vacate this seat" : "Assign an orchestrator"}
+            {role.sessionId ? "Change or empty this role" : "Assign a lead"}
           </WorkButton>
         )}
       </View>
@@ -815,7 +815,7 @@ export function PrimeSurface(props: Props) {
                       <WorkButton
                         key={`led-${p.id}`}
                         theme={props.theme}
-                        label={`Open project with an orchestrator: ${p.name}`}
+                        label={`Open project with a lead: ${p.name}`}
                         onPress={() => {
                           setProject(p.id);
                           setSession(null);
@@ -827,13 +827,13 @@ export function PrimeSurface(props: Props) {
                       <WorkButton
                         key={`vac-${p.id}`}
                         theme={props.theme}
-                        label={`Open project needing an orchestrator: ${p.name}`}
+                        label={`Open project needing a lead: ${p.name}`}
                         onPress={() => {
                           setProject(p.id);
                           setSession(null);
                           setSeatTarget(null);
                         }}
-                      >{`${p.name} · needs an orchestrator`}</WorkButton>
+                      >{`${p.name} · needs a lead`}</WorkButton>
                     ))}
                   </>
                 );

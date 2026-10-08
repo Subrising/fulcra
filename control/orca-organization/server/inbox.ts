@@ -322,7 +322,7 @@ export function createInbox({
             messageId: input.messageId,
           }),
         );
-        if (!m.canRelease) throw new Error("This seat is no longer held for you");
+        if (!m.canRelease) throw new Error("This role is no longer held for you");
         await call("seat-unhold", {
           role: "prime",
           seat: m.toSeat,

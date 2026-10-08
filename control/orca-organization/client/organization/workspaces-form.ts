@@ -8,7 +8,7 @@ export function openWorkspacesForm() {
     projectSearch: "",
     parentId: "",
     prime: null as Prime,
-    primeLabel: "No intake prime",
+    primeLabel: "No intake main assistant",
     titles: {} as Record<string, string>,
     busy: false,
     notice: "",

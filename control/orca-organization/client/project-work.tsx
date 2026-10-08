@@ -47,13 +47,13 @@ type Props = PluginSurfaceProps & { onTask: (id: string) => void };
 function ownershipLabel(own: AppOwnershipRecord): string {
   switch (own.state) {
     case "recorded":
-      return `Created through this project's orchestrator${own.leaderTitle ? `, led by ${own.leaderTitle}` : ""}`;
+      return `Created through this project's lead${own.leaderTitle ? `, led by ${own.leaderTitle}` : ""}`;
     case "adopted":
       return `Adopted into this project${own.leaderTitle ? `, led by ${own.leaderTitle}` : ""}`;
     case "declared":
       return "Owned by this project, led by nobody";
     case "managed":
-      return `Managed by ${own.leaderTitle ?? own.leaderAgentId ?? "recorded manager"}; role-session: n/a`;
+      return `Worker for ${own.leaderTitle ?? own.leaderAgentId ?? "a recorded lead"}`;
     case "unknown":
       return "Owner not recorded";
     default: {
@@ -213,7 +213,7 @@ export function ProjectGovernance({
     } catch (error) {
       setResult({
         status: "refused",
-        message: error instanceof Error ? error.message : "Seat request unavailable",
+        message: error instanceof Error ? error.message : "Role request unavailable",
         observedAt: new Date().toISOString(),
         requestId: null,
         state: null,
@@ -453,7 +453,7 @@ export function ProjectGovernance({
                     <WorkButton
                       theme={props.theme}
                       disabled={adopting !== null || short || exhausted}
-                      label={`Adopt ${name} into this project's orchestrator seat`}
+                      label={`Adopt ${name} into this project's lead role`}
                       onPress={() => {
                         const request = requestOf(s.sessionId);
                         if (request) void runAdopt(s.sessionId, request);
@@ -508,7 +508,7 @@ export function ProjectGovernance({
               </Text>
               <WorkButton
                 theme={props.theme}
-                label={`Assign an orchestrator for ${project.name}`}
+                label={`Assign a lead for ${project.name}`}
                 onPress={onAssign}
               >
                 Assign an orchestrator
@@ -538,7 +538,7 @@ export function ProjectGovernance({
                 <Text style={text}>
                   Session allowance: {allowance.remaining ?? "unknown"} remaining
                   {allowance.limit === null ? "" : ` of ${allowance.limit}`}
-                  {allowance.revision === null ? "" : ` at seat revision ${allowance.revision}`}.
+                  {allowance.revision === null ? "" : ` at role revision ${allowance.revision}`}.
                 </Text>
               )}
               {stalePin && (
@@ -558,7 +558,7 @@ export function ProjectGovernance({
               {(allowance === null || exhausted || stalePin) && allowances.data?.available && (
                 <>
                   <TextInput
-                    accessibilityLabel="Sessions to allow this seat"
+                    accessibilityLabel="Sessions to allow this role"
                     placeholder="Sessions to allow (0 to 32)"
                     placeholderTextColor={c.foregroundMuted}
                     value={grant}
@@ -573,7 +573,7 @@ export function ProjectGovernance({
                   <WorkButton
                     theme={props.theme}
                     disabled={busy || short || grant === "" || Number(grant) > 32}
-                    label="Grant this seat a session allowance"
+                    label="Grant this role a session allowance"
                     onPress={() => {
                       void runGrant();
                     }}
@@ -656,7 +656,7 @@ export function ProjectGovernance({
               <WorkButton
                 theme={props.theme}
                 disabled={busy || short || !taskId || exhausted}
-                label="Ask this project's orchestrator for a session"
+                label="Ask this project's lead for a session"
                 onPress={() => {
                   void run();
                 }}
@@ -666,7 +666,7 @@ export function ProjectGovernance({
               <Text style={muted}>
                 {short
                   ? `A title and a recorded reason of at least ${MIN_REASON} characters are required.`
-                  : "A seat can be current and still refuse: its operator session allowance may be exhausted or pinned to an older revision."}
+                  : "A role can be current and still refuse: its operator session allowance may be exhausted or pinned to an older revision."}
               </Text>
             </>
           )}

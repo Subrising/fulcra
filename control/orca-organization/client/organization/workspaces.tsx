@@ -60,9 +60,9 @@ export function WorkspacesSurface(props: SurfaceProps) {
         agentId: prime.sessionId!,
         seat: prime.seat,
         kind: "recorded-prime",
-        label: `${prime.seat} prime`,
+        label: `${prime.seat} main assistant`,
       },
-      `${prime.seat} prime`,
+      `${prime.seat} main assistant`,
     );
   };
   const content = (
@@ -113,7 +113,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
                 initialValue={state.name}
                 onChangeText={model.setName}
               />
-              <Text style={{ color: c.foregroundMuted }}>Responsible intake prime</Text>
+              <Text style={{ color: c.foregroundMuted }}>Responsible intake main assistant</Text>
               <WorkButton
                 theme={props.theme}
                 label="Keep intake with me"
@@ -124,7 +124,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
                 <WorkButton
                   key={prime.seat}
                   theme={props.theme}
-                  label={`${prime.seat} prime`}
+                  label={`${prime.seat} main assistant`}
                   selected={state.prime?.agentId === prime.sessionId}
                   onPress={() => selectPrime(prime)}
                 />

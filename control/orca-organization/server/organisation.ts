@@ -176,8 +176,8 @@ export function createOrganisation({
       const authorName = !brief
         ? null
         : brief.author.seat === input.projectId
-          ? `the ${name ?? "project"} orchestrator`
-          : `the ${brief.author.seat} prime`;
+          ? `the ${name ?? "project"} lead`
+          : `the ${brief.author.seat} main assistant`;
       const out = projectBriefRpc.output.parse({
         version: 1,
         observedAt: read.observedAt,

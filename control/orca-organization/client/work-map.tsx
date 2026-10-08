@@ -298,10 +298,10 @@ export function WorkMapSurface({ theme, layout, host, navigation, fleet, remits 
         </WorkButton>
       </View>
       <TextInput
-        accessibilityLabel="Search sessions, seats, workstreams and issues"
+        accessibilityLabel="Search sessions, roles, workstreams and issues"
         value={search}
         onChangeText={(v) => setSearch(v.slice(0, 160))}
-        placeholder="Search sessions, seats, issues…"
+        placeholder="Search sessions, roles, issues…"
         placeholderTextColor={c.foregroundMuted}
         style={{
           color: c.foreground,
@@ -347,8 +347,8 @@ export function WorkMapSurface({ theme, layout, host, navigation, fleet, remits 
             [
               ["all", "All"],
               ["attention", "Needs attention"],
-              ["delegated", "Run by Fulcra"],
-              ["human", "Run by you"],
+              ["delegated", "Fulcra controls this"],
+              ["human", "You control this"],
             ] as const
           ).map(([key, label]) => (
             <Pressable
@@ -454,7 +454,7 @@ export function WorkMapSurface({ theme, layout, host, navigation, fleet, remits 
           {(overview.error as Error)?.message ?? "unavailable"}.
         </Text>
       )}
-      {!d && overview.isPending && <Text style={muted}>Reading seats, projects and sessions…</Text>}
+      {!d && overview.isPending && <Text style={muted}>Reading roles, projects and sessions…</Text>}
       {d && last.notice && (
         <Text accessibilityLiveRegion="polite" testID="work-map-stall" style={text}>
           {last.notice}
@@ -785,7 +785,7 @@ function Legend({ theme }: Pick<PluginSurfaceProps, "theme">) {
         working. Runtime: ● reported running · ◐ waiting for permission · ○ idle — not done · ✕
         error · ? runtime unavailable
       </Text>
-      <Text style={line}>Control mode: delegated · human · transitioning</Text>
+      <Text style={line}>Control: Fulcra controls this · you control this · changing</Text>
       <Text style={line}>
         Orchestrator: assigned · none yet · held by you · session gone · restarted since it was
         assigned · moved to other work

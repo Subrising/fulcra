@@ -205,7 +205,7 @@ export function createManagement(
         await call("takeover", { sessionId: row.id, reason: input.reason });
         return reply(
           "human",
-          "Future delegated input revoked. Already delivered work may still be running.",
+          "You control this again. Work that was already sent can still be running.",
           { sessionId: row.id },
         );
       }
@@ -283,7 +283,7 @@ export function createManagement(
         return reply(
           d.state,
           d.state === "delivered"
-            ? "Selected delegation restored. Send the supervisor an instruction to continue; no earlier work was replayed."
+            ? "The lead controls this again. Send the supervisor an instruction to continue. No earlier work was replayed."
             : d.state === "refused"
               ? `Handback was not committed: ${d.result?.error ?? d.result?.note ?? "inspect the receipt"}`
               : "Handback outcome is unconfirmed. Reconcile this receipt before trying again.",
@@ -299,7 +299,7 @@ export function createManagement(
         });
         return reply(
           "supervisor",
-          "Supervisor delegated. Send its outcome here; it can create and direct workers within its allowance. Previous orphaned workers are not resumed.",
+          "The supervisor controls this now. Send its outcome here; it can create and direct workers within its allowance. Previous orphaned workers are not resumed.",
           { sessionId: row.id },
         );
       }
@@ -311,12 +311,12 @@ export function createManagement(
         });
         return reply(
           "delegated",
-          "Delegated. You can send work below; typing or stopping in the native conversation takes control back.",
+          "The lead controls this. You can send work below. If you type or stop in the native conversation, you control it again.",
           { sessionId: row.id },
         );
       }
       if (row.mode !== "delegated")
-        throw new Error("Explicit delegation is required before assigning work");
+        throw new Error("Give control to the lead before you assign work");
       if (Buffer.byteLength(input.text) > 16384) throw new Error("Instruction exceeds UTF-8 limit");
       const body = { sessionId: row.id, expectedGeneration: input.generation, text: input.text };
       effectiveId = await call("management-prepare", {
