@@ -35,7 +35,7 @@ const theme = {
   },
 };
 const clients = [];
-function mount(compact = true) {
+function mount(compact = true, extra = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
   return render(
@@ -46,6 +46,7 @@ function mount(compact = true) {
         theme,
         layout: { compact, platform: "web" },
         host: { id: "host-demo", label: "Demo" },
+        ...extra,
       }),
     ),
   );
@@ -175,4 +176,56 @@ test("a stalled read keeps the last view and says so", async () => {
   mount();
   await screen.findByText("This view may be out of date. Fulcra is slow to answer; retrying.");
   assert.ok(screen.getByTestId("env-row-next"));
+});
+
+const LOCAL = {
+  id: "7d0f6c1e-3b7a-4c1e-9f63-2a1d5b0c9e11",
+  name: "Test",
+  kind: "local",
+  state: "ready",
+  problem: null,
+  where: "A local test cluster on this Mac",
+  runningJobId: null,
+  current: null,
+  canRollBack: false,
+  history: [],
+};
+const serveDeploy = () =>
+  setHandler((name) =>
+    name === "organization.projects"
+      ? Promise.resolve(projects())
+      : name === "organization.environments"
+        ? Promise.resolve(view())
+        : name === "organization.deploy-overview"
+          ? Promise.resolve({ available: true, message: null, environments: [LOCAL], plans: [] })
+          : name === "organization.deploy-sources"
+            ? Promise.resolve({
+                sources: [{ id: "ws-shop", project: "Shop", branch: "main", pullRequests: [] }],
+              })
+            : Promise.reject(new Error(`unexpected ${name}`)),
+  );
+
+test("Deploy opens the project's main architecture map in the app", async () => {
+  serveDeploy();
+  const opened = [];
+  mount(false, {
+    navigation: {
+      openAgent() {},
+      openWorkspace() {},
+      openArchitectureMap: (input) => opened.push(input),
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Deploy a version" }));
+  const button = await screen.findByRole("button", { name: "Open architecture map" });
+  await waitFor(() => assert.equal(button.disabled, false));
+  fireEvent.click(button);
+  assert.deepEqual(opened, [{ workspaceId: "ws-shop", serverId: "host-demo" }]);
+});
+
+test("an app without the map navigation shows no map button", async () => {
+  serveDeploy();
+  mount(false, { navigation: { openAgent() {}, openWorkspace() {} } });
+  fireEvent.click(await screen.findByRole("button", { name: "Deploy a version" }));
+  await screen.findByText(/What to deploy to Test/);
+  assert.equal(screen.queryByRole("button", { name: "Open architecture map" }), null);
 });
