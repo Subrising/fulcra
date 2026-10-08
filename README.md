@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Subrising/fulcra/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/release-v0.2.0%20source-5E1623?style=flat-square" alt="Release v0.2.0 (source)"></a>
+  <a href="https://github.com/Subrising/fulcra/releases/tag/v0.2.7"><img src="https://img.shields.io/badge/release-v0.2.7%20source-5E1623?style=flat-square" alt="Release v0.2.7 (source)"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-5E1623?style=flat-square" alt="Licence Apache-2.0"></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20silicon-FF8A5B?style=flat-square" alt="macOS Apple silicon">
   <img src="https://img.shields.io/badge/iPhone-build%20from%20source-FF8A5B?style=flat-square" alt="iPhone: build from source">
@@ -143,31 +143,105 @@ flowchart LR
 
 ## Install
 
-**v0.2.0 is a source-only release.** Its [GitHub release](https://github.com/Subrising/fulcra/releases/tag/v0.2.0) has no uploaded binaries: there is no Fulcra DMG, Homebrew formula, published npm package, TestFlight or store listing. Build from [the tagged source](https://github.com/Subrising/fulcra/tree/v0.2.0) on the platform you want.
+Fulcra has no public app download. You build and package your own copy from source. The steps below make a macOS app for Apple silicon.
 
 | Platform                  | Status                                                                                                              | Guide                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| **macOS** (Apple silicon) | Built and used from source                                                                                          | [Build, launch &amp; pair](docs/getting-started.md) |
+| **macOS** (Apple silicon) | Build and package your own app (below)                                                                              | [Build, launch &amp; pair](docs/getting-started.md) |
 | **iPhone**                | Tested method: Xcode with your own free Apple Account (Personal Team); onboarding taps and re-signing not exercised | [iPhone guide](docs/ios-personal-device.md)         |
 | **Android**               | **Untested** source-derived APK build                                                                               | [Android guide](docs/android.md)                    |
 | **Windows**               | **Untested** source-derived NSIS build and CLI                                                                      | [Windows guide](docs/windows.md)                    |
 
-TestFlight and App Store distribution are planned. [Platform evidence](docs/platform-installation-status.md) records exactly what was run for each guide.
+[Platform evidence](docs/platform-installation-status.md) records what was run for each guide.
 
-### macOS
+### Build and package your own Fulcra (macOS)
 
-Prepare Node.js 24, npm 11.12.1, Python 3 and the Xcode command-line tools. Install and sign in to the provider CLIs you want to use (Claude Code, Codex) separately.
+**Prerequisites**
+
+- A Mac with Apple silicon.
+- About 30 GB of free disk space.
+- Node.js 24 and npm 11. Run `node --version` and `npm --version` to check.
+- Git, Python 3 and the Xcode command-line tools. To install the tools, run `xcode-select --install`.
+- The provider CLIs that you want to use, for example Claude Code or Codex. Install each one and sign in to it before you start Fulcra.
+
+**1. Clone the source**
 
 ```bash
 git clone https://github.com/Subrising/fulcra.git
 cd fulcra
-git checkout v0.2.0
+git checkout v0.2.7
+```
+
+**2. Install the dependencies**
+
+```bash
 npm ci
 npm --prefix control ci
+```
+
+The controller has its own `control/package-lock.json`. It is not a root workspace, so install both dependency trees.
+
+**3. Build and package the app**
+
+```bash
 node scripts/package-command-centre.mjs ./control
 ```
 
-The controller uses its own `control/package-lock.json` and is not a root workspace, so install both dependency trees. The wrapper builds the server, Command Centre, app and desktop and writes `packages/desktop/release/mac-arm64/Fulcra.app`. It is an **unsigned, unnotarised** developer build: open it with macOS's per-app first-open flow, and do not disable macOS security protections globally.
+This command builds the server, the Command Centre, the app and the desktop shell. It then starts the packaged app once in a scratch folder to check it. The app is at `packages/desktop/release.noindex/mac-arm64/Fulcra.app`.
+
+**4. Sign the app**
+
+The packaged app is not signed. Sign it with one of these two methods:
+
+- With your own certificate (for example an "Apple Development" certificate from Xcode):
+
+  ```bash
+  security find-identity -v -p codesigning
+  codesign --force --deep --sign "Apple Development: Your Name (TEAMID)" packages/desktop/release.noindex/mac-arm64/Fulcra.app
+  ```
+
+- Ad hoc (no certificate; for use on this Mac only):
+
+  ```bash
+  codesign --force --deep --sign - packages/desktop/release.noindex/mac-arm64/Fulcra.app
+  ```
+
+Then make sure that the signature is valid:
+
+```bash
+codesign --verify --deep --strict --verbose=2 packages/desktop/release.noindex/mac-arm64/Fulcra.app
+```
+
+The app is not notarised. Do not turn off the macOS security protections.
+
+**5. First start**
+
+1. Copy `Fulcra.app` to `/Applications`.
+2. Open Fulcra. The app starts its own daemon.
+3. To use Fulcra's leads and workers, enable **Command Centre** in **Settings**.
+4. Continue with [Quick start](#quick-start).
+
+An app that you build on the same Mac has no quarantine flag, so macOS opens it without a warning. If you copy the app to a different Mac, macOS can block it. In that case, open **System Settings → Privacy & Security** and select **Open Anyway**. (We did not test this case.)
+
+A self-built app shows the base version 0.11.0-beta.5 in **About**. This is correct.
+
+**6. Update**
+
+1. Keep a copy of your current `/Applications/Fulcra.app`. You can go back to it if the new version has a problem.
+2. In your clone, get the new version:
+
+   ```bash
+   git fetch --tags
+   git checkout v0.2.8
+   ```
+
+   Use the tag of the version that you want.
+3. Do steps 2, 3 and 4 again.
+4. Quit Fulcra.
+5. Replace `/Applications/Fulcra.app` with the new app.
+6. Open Fulcra. If the daemon from the old version is still running, the new app replaces it.
+
+We tested steps 1 to 4 from a clean clone on a MacBook Pro (Apple silicon, macOS 26) with ad hoc signing. The packaged checks passed: the app started, the daemon and the command line operated, the bundled plugins loaded and the provider models were listed.
 
 ### iPhone
 
