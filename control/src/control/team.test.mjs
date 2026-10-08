@@ -25,7 +25,7 @@ const owner = {
 };
 const NOTE = "The owner asked for this team change";
 
-function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
+function world(t, { snapshots = {}, labels = {}, failClear = null, failDetach = null } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-team-")));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const tasks = path.join(dir, "tasks.json");
@@ -45,6 +45,7 @@ function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
   t.after(() => store.db.close());
   const labelWrites = [];
   const detaches = [];
+  let failing = failDetach;
   const native = {
     route: () => undefined,
     setLabels: async (id, patch) => {
@@ -57,6 +58,7 @@ function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
       labels[id] = { ...labels[id], ...patch };
     },
     detach: async (id) => {
+      if (failing === id) throw Error("That chat cannot be detached now");
       detaches.push(id);
       if (labels[id]) delete labels[id]["paseo.parent-agent-id"];
     },
@@ -66,7 +68,7 @@ function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
         .map(([id]) => id),
     snapshot: async (id) => {
       if (snapshots[id] === undefined) throw Error("Native snapshot unavailable");
-      return snapshots[id];
+      return { ...snapshots[id], labels: { ...labels[id] } };
     },
   };
   const control = new Controller({ store, native, authority: async (id) => ({ id }) });
@@ -83,7 +85,18 @@ function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
     config: { tasks, authority: { issueApi: null, companyId: COMPANY, programmeId: PROGRAMME } },
   });
   const dispatch = (method, input) => managementDispatcher(control)({ method, input }, owner);
-  return { dir, store, control, dispatch, read, labelWrites, labels, detaches };
+  const setFailDetach = (id) => (failing = id);
+  return {
+    dir,
+    store,
+    control,
+    dispatch,
+    read,
+    labelWrites,
+    labels,
+    detaches,
+    failDetach: setFailDetach,
+  };
 }
 const chat = (cwd = "/tmp/chat") => ({ cwd, provider: "claude", archivedAt: null });
 
@@ -301,7 +314,7 @@ test("upgrade: a main assistant seated before 0.2.8 gets the label at the first 
     "fulcra.seat": "main-assistant",
     "fulcra.reports-to": "owner",
   });
-  assert.deepEqual(w.detaches, [main]);
+  assert.deepEqual(w.detaches, []); // no parent: nothing to detach, nothing written
   const changes = w.control.team.history().filter((c) => c.kind.startsWith("seat-"));
   assert.equal(changes.length, 1);
   assert.equal(changes[0].kind, "seat-set");
@@ -328,6 +341,36 @@ test("a main assistant created by another chat reports to the owner and loses th
   assert.equal(w.labels[main]["fulcra.reports-to"], "owner");
   assert.equal(w.labels[main]["fulcra.seat"], "main-assistant");
   assert.equal(w.labels[main].role, "main"); // other labels are left alone
+});
+
+test("a holder labelled earlier that still has a parent is detached at the next pass; a failed detach is retried", async (t) => {
+  const main = randomUUID(),
+    creator = randomUUID();
+  const w = world(t, {
+    snapshots: { [main]: chat() },
+    labels: {
+      [main]: {
+        "fulcra.seat": "main-assistant",
+        "fulcra.reports-to": "owner",
+        "paseo.parent-agent-id": creator,
+      },
+    },
+    failDetach: main,
+  });
+  await seatMain(w, main);
+  await assert.rejects(
+    w.control.team.syncSeat("start"),
+    /still a child of the chat that created it/,
+  );
+  assert.equal(w.labels[main]["fulcra.seat"], "main-assistant"); // routing stays correct
+  w.failDetach(null);
+  await w.control.team.syncSeat("timer");
+  assert.deepEqual(w.detaches, [main]);
+  assert.equal(w.labels[main]["paseo.parent-agent-id"], undefined);
+  const kinds = w.control.team.history().map((c) => c.kind);
+  assert.equal(kinds.filter((k) => k === "seat-detached").length, 1);
+  await w.control.team.syncSeat("timer"); // no parent now: nothing more
+  assert.deepEqual(w.detaches, [main]);
 });
 
 test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {

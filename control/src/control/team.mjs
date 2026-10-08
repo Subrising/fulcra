@@ -147,10 +147,33 @@ export class Team {
       });
       set = true;
       this.record("seat-set", holder, null, SYSTEM_ACTOR, `${reason}: holds the ${seat.seat} seat`);
-      // The main assistant reports to the owner, so a chat that created it is not its parent any more: that label
-      // also drives archive cascades. The daemon changes a parent only through detach (never a label update), and
-      // detach does nothing for a chat with no parent.
-      if (typeof native.detach === "function") await native.detach(holder);
+    }
+    // The main assistant reports to the owner, so a chat that created it is not its parent any more: that label also
+    // drives archive cascades. Checked on every pass, so a holder labelled earlier, or a failed detach, is repaired.
+    // The daemon changes a parent only through detach (never a label update). Detach only when a parent is there,
+    // so the timer writes nothing on a normal pass.
+    if (holder && typeof native.detach === "function" && typeof native.snapshot === "function") {
+      const snapshot = await native.snapshot(holder).catch(() => null);
+      const parent = snapshot?.labels?.["paseo.parent-agent-id"];
+      if (typeof parent === "string" && parent.trim()) {
+        try {
+          await native.detach(holder);
+        } catch (error) {
+          throw Object.assign(
+            Error(
+              `The main assistant is set, but it is still a child of the chat that created it: ${error?.message ?? error}`,
+            ),
+            { detachFailed: true },
+          );
+        }
+        this.record(
+          "seat-detached",
+          holder,
+          null,
+          SYSTEM_ACTOR,
+          `${reason}: no longer a child of ${parent.trim().slice(0, 8)}`,
+        );
+      }
     }
     return { holder, cleared, set };
   }

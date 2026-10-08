@@ -316,10 +316,7 @@ test("a label that cannot be written leaves the seat and says so", async () => {
   const r = await createTeamSetup(call, () => NOW)({ action: "main-assistant", sessionId: id(1) });
   assert.equal(r.status, "partly");
   assert.ok(r.steps.includes("The chat is now the main assistant."));
-  assert.match(
-    r.steps.at(-1)!,
-    /Main assistant label not updated: That chat cannot be changed now\./,
-  );
+  assert.match(r.steps.at(-1)!, /Not finished: That chat cannot be changed now\./);
   const lead = controller();
   const lineCall = async (method: string, input?: any) => {
     if (method === "team-line") throw new Error("That chat is not on this computer.");

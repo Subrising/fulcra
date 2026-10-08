@@ -65,8 +65,9 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
     try {
       await call("team-seat-sync");
     } catch (error) {
-      steps.push(`Main assistant label not updated: ${reason(error)}`);
-      throw Object.assign(Error("The seat is set, but the main assistant label is not."), {
+      // The controller's own message says which part is not done (the label, or the parent).
+      steps.push(`Not finished: ${reason(error)}`);
+      throw Object.assign(Error("The seat is set, but one main assistant step is not done."), {
         partial: true,
       });
     }
