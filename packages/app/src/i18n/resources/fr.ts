@@ -1850,7 +1850,7 @@ export const fr: TranslationResources = {
       label: "Rôle",
       none: "Aucun",
       planning: "Planification",
-      orchestration: "Orchestration",
+      orchestration: "Responsable",
       implementation: "Implémentation",
       usesDefault: "Utilise la valeur par défaut de {{role}} : {{model}}, effort {{effort}}",
       usesDefaultModel: "Utilise la valeur par défaut de {{role}} : {{model}}",

@@ -182,7 +182,7 @@ export function recoveryCard(
 export function resumePreview(x, note) {
   return [
     "Hands this session back to Fulcra (a new control generation).",
-    x.grants?.role ? "Reissues its role capability (it still holds its seat)." : null,
+    x.grants?.role ? "Reissues its role capability (it still has its role)." : null,
     x.grants?.permission
       ? x.grants.permission.root
         ? "Re-confers its routine file grant, unless the operator revoked it."

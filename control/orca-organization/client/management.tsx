@@ -17,7 +17,7 @@ type SessionRole = "planning" | "orchestration" | "implementation";
 const ROLE_CHOICES: ReadonlyArray<readonly [SessionRole | null, string]> = [
   [null, "Default"],
   ["planning", "Planning"],
-  ["orchestration", "Orchestration"],
+  ["orchestration", "Lead"],
   ["implementation", "Implementation"],
 ];
 // Correlation IDs convey no authority; a collision is rejected by the controller's body check.
@@ -241,7 +241,7 @@ export function ManagementPanel({
       <Text style={muted}>
         Anyone authenticated to this private Fulcra host can manage enrolled sessions. Typing,
         stopping or answering a permission prompt in the native conversation takes control back;
-        instructions sent here retain delegation.
+        instructions sent here keep the lead in control.
       </Text>
       {list.data?.permissionError && (
         <Text style={text}>Routine permission handler: {list.data.permissionError}</Text>
@@ -466,7 +466,7 @@ export function ManagementPanel({
             {openConversation(row.id, "Open managed conversation")}
             <TextInput
               accessibilityLabel="Control transfer context"
-              placeholder="Context for taking control or delegating"
+              placeholder="Context for taking control or handing it to Fulcra"
               placeholderTextColor={colors.foregroundMuted}
               value={reason}
               onChangeText={setReason}
@@ -476,7 +476,7 @@ export function ManagementPanel({
             />
             {row.mode === "human" &&
               button(
-                "Delegate session",
+                "Let Fulcra control this",
                 () =>
                   void act({
                     action: "handback",
@@ -538,8 +538,8 @@ export function ManagementPanel({
             {row.mode === "human" && (
               <View style={{ gap: 8 }}>
                 <Text style={muted}>
-                  Delegate a newly created session as a supervisor. It may create this many workers
-                  over its lifetime. Use Restore saved delegation above for an existing
+                  Give a newly created session control as a supervisor. It may create this many workers
+                  over its lifetime. Use Give control back to the lead above for an existing
                   organization.
                 </Text>
                 <TextInput
@@ -552,7 +552,7 @@ export function ManagementPanel({
                   style={field}
                 />
                 {button(
-                  "Delegate as supervisor",
+                  "Let Fulcra control this as a lead",
                   () =>
                     void act({
                       action: "supervise",

@@ -120,7 +120,7 @@ test("Promote to next prepares the version on dev with the revision you saw, and
     observedAt: new Date().toISOString(),
     promotion: { ...view().promotions[0].promotion, state: "proposed", decisionId: null },
     waiting:
-      "Prepared. The approval can be asked by this project's orchestrator; asking it from the app needs the next decision-store update",
+      "Prepared. The approval can be asked by this project's lead; asking it from the app needs the next decision-store update",
   });
   mount();
   const promote = await screen.findByTestId("env-promote");

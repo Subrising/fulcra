@@ -746,7 +746,7 @@ test("server search and paging reach an idle session outside the first 64, inclu
   const entries = rows.map((r, i) => ({
     agent: {
       id: r.id,
-      title: i === 0 ? "Quiet orchestrator" : `Fixture ${i}`,
+      title: i === 0 ? "Quiet lead" : `Fixture ${i}`,
       provider: "codex",
       status: "idle",
       pendingPermissions: [],
@@ -779,7 +779,7 @@ test("server search and paging reach an idle session outside the first 64, inclu
   assert.equal(second.nodes.length, 36);
   assert.ok(second.nodes.some((n) => n.id === rows[0].id));
   assert.equal(new Set([...first.nodes, ...second.nodes].map((n) => n.id)).size, 100);
-  const found = await read({ search: "Quiet orchestrator" });
+  const found = await read({ search: "Quiet lead" });
   assert.deepEqual(
     found.nodes.map((n) => n.id),
     [rows[0].id],

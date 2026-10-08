@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { openIntakeForm } from "./intake-form.ts";
 import { openWorkspacesForm } from "./workspaces-form.ts";
-test("a late prime reply cannot replace the human's explicit destination or lose its local draft", () => {
+test("a late main assistant reply cannot replace the human's explicit destination or lose its local draft", () => {
   const edits = [];
   const model = openIntakeForm({
     id: "one-request",

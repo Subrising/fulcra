@@ -484,7 +484,7 @@ test("T1 the operator note is shortened for display and worker-fault detail to 2
 
 // ---------- T4 (server half): seats, holds, parent links ----------
 
-test("T4 an effective hold marks the prime; a hold row on another revision is only declared", async () => {
+test("T4 an effective hold marks the main assistant; a hold row on another revision is only declared", async () => {
   const holds = [
     { role: "prime", seat: "delivery", revision: 3, session: PRIME_S, effective: true },
     { role: "project-orchestrator", seat: PROJ_1, revision: 1, session: LEAD_S, effective: false },
@@ -502,7 +502,7 @@ test("T4 an effective hold marks the prime; a hold row on another revision is on
   assert.equal(d.projects.find((p) => p.projectId === PROJ_SEAT_ONLY)?.seat?.hold, null);
 });
 
-test("T4 an effective hold for an older revision does not mark the current seat held", async () => {
+test("T4 an effective hold for an older revision does not mark the current role held", async () => {
   const holds = [
     { role: "prime", seat: "delivery", revision: 2, session: PRIME_S, effective: true },
   ];
@@ -547,7 +547,7 @@ test("T4 parent links come only from recorded ownership; adoption is its own lin
 
 // ---------- overview composition and unavailability ----------
 
-test("overview: vacant and seat-less projects need an orchestrator; seat-only projects appear unnamed", async () => {
+test("overview: vacant and role-less projects need a lead; role-only projects appear unnamed", async () => {
   const d = await createWorkMapReader({
     call: controller({ "bindings-status": status(), "channels-status": channels() }),
     fleet: async () => fleet(),
@@ -577,7 +577,7 @@ test("overview: vacant and seat-less projects need an orchestrator; seat-only pr
   assert.ok(d.attention.some((a) => a.kind === "pending-permission" && a.sessionId === STRAY_S));
 });
 
-test("overview: unreadable seats are unknown, and never reported as projects needing an orchestrator", async () => {
+test("overview: unreadable roles are unknown, and never reported as projects needing a lead", async () => {
   const d = await createWorkMapReader({
     call: controller({
       "bindings-status": new Error("Operator authorization required"),
@@ -608,7 +608,7 @@ test("overview: an unavailable project directory leaves membership unknown and e
   assert.equal(d.unplaced.length, 3);
 });
 
-test("overview: a failed fleet read keeps seats and marks runtime unavailable", async () => {
+test("overview: a failed fleet read keeps roles and marks runtime unavailable", async () => {
   const d = await createWorkMapReader({
     call: controller({ "bindings-status": status(), "channels-status": new Error("down") }),
     fleet: async () => {
@@ -768,7 +768,7 @@ test("T7 the board provider maps each workstream to its own issue and normalises
     {
       id: TASK_B,
       identifier: "AIN-93",
-      title: "Seat restore",
+      title: "Role restore",
       status: "weird_new_state",
       assigneeUserId: "a@b.c",
     },
@@ -794,7 +794,7 @@ test("T7 the board provider maps each workstream to its own issue and normalises
   assert.match(down.providers[0].note, /unavailable/);
 });
 
-test("validated manager is projected as display association, never as creator or adopted seat", async () => {
+test("validated manager is projected as display association, never as creator or adopted role", async () => {
   const source = projection();
   source.tasks[0].sessions.find((s) => s.id === LOOSE_S)!.owner = owner("managed", {
     sessionId: LOOSE_S,

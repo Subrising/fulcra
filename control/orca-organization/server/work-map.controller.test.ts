@@ -106,7 +106,7 @@ async function seeded(t: { after: (fn: () => void) => void }) {
     sessionId: prime,
     expectedSessionGeneration: 1,
     expectedRevision: 0,
-    note: "Accountable prime seat for delivery",
+    note: "Accountable main assistant role for delivery",
   });
   await request({
     method: "seat-hold",
@@ -194,9 +194,9 @@ const fleetOf = (ids: [string, string, string][]): Fleet => ({
   })),
 });
 
-test("contract: the overview reads the real seat, hold and channel tables", async (t) => {
+test("contract: the overview reads the real role, hold and channel tables", async (t) => {
   const f = await seeded(t);
-  assert.ok(f.child, "the seat created a session");
+  assert.ok(f.child, "the role created a session");
   const d = await createWorkMapReader({
     call: f.call,
     fleet: async () =>

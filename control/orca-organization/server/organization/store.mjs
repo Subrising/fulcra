@@ -318,12 +318,12 @@ export class OrganizationStore {
           (!intake.primeRequest ||
             (intake.primeRequest.id === c.requestId &&
               ["held", "offline", "busy", "unavailable"].includes(intake.primeRequest.state))),
-        "Prime routing already requested or no prime is recorded",
+        "Main assistant routing already requested or no main assistant is recorded",
       );
       requireValue(
         text(c.prompt, 16384) &&
           (!intake.primeRequest?.prompt || intake.primeRequest.prompt === c.prompt),
-        "The original prime routing prompt must be retained",
+        "The original main assistant routing prompt must be retained",
       );
       intake.primeRequest = { id: c.requestId, state: "pending", prompt: c.prompt, at: this.now() };
       intake.state = "waiting-prime";
@@ -332,13 +332,13 @@ export class OrganizationStore {
     if (c.action === "prime-result") {
       requireValue(
         intake.primeRequest?.id === c.requestId && intake.primeRequest.state === "pending",
-        "This is not the retained prime request",
+        "This is not the retained main assistant request",
       );
       requireValue(
         ["answered", "held", "offline", "busy", "unavailable", "uncertain", "queued"].includes(
           c.state,
         ),
-        "Invalid prime delivery result",
+        "Invalid main assistant delivery result",
       );
       intake.primeRequest.state = c.state;
       intake.primeReply = typeof c.reply === "string" ? c.reply.slice(0, 16384) : null;

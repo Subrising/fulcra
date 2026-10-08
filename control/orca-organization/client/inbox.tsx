@@ -760,9 +760,9 @@ function Details({
       {line(
         "Asked by",
         p.askedBy.system
-          ? `Fulcra (${p.askedBy.system})${p.askedBy.seat ? ` for seat ${p.askedBy.seat}` : ""}`
+          ? `Fulcra (${p.askedBy.system})${p.askedBy.seat ? ` for role ${p.askedBy.seat}` : ""}`
           : p.askedBy.seat
-            ? `seat ${p.askedBy.seat}`
+            ? `role ${p.askedBy.seat}`
             : `session ${p.askedBy.sessionId}`,
       )}
       {line("Decision", `${p.id} · revision ${p.revision} · level ${p.level} · ${p.kind}`)}
@@ -966,7 +966,7 @@ export function HeldCard({
                     messageId: m.messageId,
                     expectedSeatRevision: m.pins!.seatRevision,
                   }),
-                "Hold released. New messages go to the seat directly.",
+                "Hold released. New messages go to the role directly.",
               );
               setReleasing(false);
             }}

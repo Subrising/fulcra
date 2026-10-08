@@ -161,11 +161,11 @@ export function orchestratorLine(o: TreeOrchestrator) {
     case "idle":
       return `${o.name} · waiting`;
     case "not-seen":
-      return "Orchestrator not running right now";
+      return "Lead not running right now";
     case "none":
-      return "No orchestrator yet";
+      return "No lead yet";
     default:
-      return "Orchestrator unknown";
+      return "Lead unknown";
   }
 }
 export function sessionsLine(p: TreeProject) {
@@ -175,7 +175,7 @@ export function sessionsLine(p: TreeProject) {
 export function ownerLine(owner: Owner) {
   return owner.primeSeat
     ? `Owned by the ${primeName(owner.primeSeat)}${owner.kind === "domain" ? " (through its area)" : ""}`
-    : "No prime yet";
+    : "No main assistant yet";
 }
 
 export function relativeTime(iso: string, now = Date.now()) {
