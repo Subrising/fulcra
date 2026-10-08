@@ -100,6 +100,8 @@ export interface DesktopDaemonStatus {
   error: string | null;
   /** The daemon answered the status probe (`connectedDaemon: "reachable"`). */
   answering?: boolean;
+  /** The status probe ran and could not connect (`connectedDaemon: "unreachable"`), as when it is shutting down. */
+  unreachable?: boolean;
 }
 
 interface DesktopDaemonLogs {
@@ -218,6 +220,7 @@ function statusFromDaemonProbe(
     desktopManaged: payload.desktopManaged === true,
     startedAt: typeof payload.startedAt === "string" ? payload.startedAt : null,
     answering: payload.connectedDaemon === "reachable",
+    unreachable: payload.connectedDaemon === "unreachable",
     ownedByDesktop: Boolean(
       ownedLaunch &&
       ownedLaunch.home === home &&
@@ -485,11 +488,9 @@ async function assertDesktopStopCompleted(
 export const DESKTOP_STARTUP_ANSWER_WAIT = { totalMs: 20_000, stepMs: 500 };
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function settleExistingDaemon(current: DesktopDaemonStatus): Promise<DesktopDaemonStatus> {
-  if (
-    (current.status !== "running" && current.status !== "starting") ||
-    current.answering ||
-    !current.desktopManaged
-  )
+  // Only the shutdown case waits: running, desktop-managed, and the probe could not connect. A starting daemon,
+  // an authentication answer or a skipped probe keeps the earlier behaviour.
+  if (current.status !== "running" || !current.unreachable || !current.desktopManaged)
     return current;
   logDesktopDaemonLifecycle("existing daemon does not answer; waiting", {
     status: current.status,
@@ -500,7 +501,7 @@ async function settleExistingDaemon(current: DesktopDaemonStatus): Promise<Deskt
   while (Date.now() < deadline) {
     await pause(DESKTOP_STARTUP_ANSWER_WAIT.stepMs);
     latest = await resolveDesktopDaemonStatus();
-    if (latest.status === "stopped" || (latest.status === "running" && latest.answering)) {
+    if (latest.status !== "running" || !latest.unreachable) {
       logDesktopDaemonLifecycle("existing daemon settled", {
         status: latest.status,
         pid: latest.pid,
