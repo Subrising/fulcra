@@ -90,7 +90,7 @@ export function createManagement(
         return reply(
           d.state,
           d.state === "delivered"
-            ? "Session created under human control. Open it or explicitly delegate work."
+            ? "Session created. You control this. Open it, or let Fulcra control it."
             : "Creation is unconfirmed. Keep this delivery ID for reconciliation.",
           { messageId: effectiveId, ...(d.result?.id ? { sessionId: d.result.id } : {}) },
         );

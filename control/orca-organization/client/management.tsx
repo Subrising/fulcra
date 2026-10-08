@@ -466,7 +466,7 @@ export function ManagementPanel({
             {openConversation(row.id, "Open managed conversation")}
             <TextInput
               accessibilityLabel="Control transfer context"
-              placeholder="Context for taking control or delegating"
+              placeholder="Context for taking control or handing it to Fulcra"
               placeholderTextColor={colors.foregroundMuted}
               value={reason}
               onChangeText={setReason}
@@ -476,7 +476,7 @@ export function ManagementPanel({
             />
             {row.mode === "human" &&
               button(
-                "Delegate session",
+                "Let Fulcra control this",
                 () =>
                   void act({
                     action: "handback",
@@ -552,7 +552,7 @@ export function ManagementPanel({
                   style={field}
                 />
                 {button(
-                  "Delegate as supervisor",
+                  "Let Fulcra control this as a lead",
                   () =>
                     void act({
                       action: "supervise",
