@@ -155,7 +155,7 @@ admission	M	13	0	packages/app/src/utils/agent-command-autocomplete.ts
 admission	M	50	1	packages/client/src/daemon-client-transport.test.ts
 admission	A	35	0	packages/client/src/daemon-client.auth-refusal.test.ts
 admission	M	1835	174	packages/client/src/daemon-client.test.ts
-admission	M	1588	85	packages/client/src/daemon-client.ts
+admission	M	1591	85	packages/client/src/daemon-client.ts
 admission	A	173	0	packages/plugin/src/server/trusted.ts
 admission	A	110	0	packages/plugin/TRUSTED-HOST.md
 admission	A	91	0	packages/protocol/src/trusted-input.test.ts
@@ -248,7 +248,7 @@ branding	A	102	0	docs/command-centre-packaging.md
 branding	M	1	0	docs/data-model.md
 branding	M	4	2	docs/development.md
 branding	M	23	13	docs/expo-router.md
-branding	A	83	0	docs/getting-started.md
+branding	A	99	0	docs/getting-started.md
 branding	A	157	0	docs/integrations-auth.md
 branding	A	5	0	docs/media/README.md
 branding	A	21	0	docs/pa34-security-notes.md
@@ -531,6 +531,8 @@ core-fixes	M	2	2	packages/cli/src/commands/script/shared.ts
 core-fixes	M	3	3	packages/cli/src/commands/worktree/index.ts
 core-fixes	M	70	0	packages/cli/src/utils/client.ts
 core-fixes	A	124	0	packages/cli/src/utils/daemon-endpoint-url.test.ts
+core-fixes	A	58	0	packages/cli/src/utils/send-sender.test.ts
+core-fixes	A	85	0	packages/cli/src/utils/send-sender.ts
 core-fixes	M	3	3	packages/cli/tests/e2e/plugin-lifecycle.test.ts
 core-fixes	M	40	7	packages/cli/tests/helpers/network.ts
 core-fixes	M	6	0	packages/cli/tests/run-all.ts
@@ -576,6 +578,7 @@ core-fixes	A	64	0	packages/server/src/server/checkout/module-excerpt.ts
 core-fixes	M	24	0	packages/server/src/server/checkout/status-projection.test.ts
 core-fixes	M	2	0	packages/server/src/server/checkout/status-projection.ts
 core-fixes	M	8	0	packages/server/src/server/client-message-id.test.ts
+core-fixes	A	88	0	packages/server/src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
 core-fixes	A	189	0	packages/server/src/server/daemon-e2e/stored-timeline-read.e2e.test.ts
 core-fixes	A	75	0	packages/server/src/server/directory-access.test.ts
 core-fixes	A	121	0	packages/server/src/server/directory-access.ts
@@ -594,6 +597,8 @@ core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
+core-fixes	A	200	0	packages/server/src/server/reporting-lines.test.ts
+core-fixes	A	145	0	packages/server/src/server/reporting-lines.ts
 core-fixes	M	1	1	packages/server/src/server/selective-timeline-delivery.e2e.test.ts
 core-fixes	M	145	1	packages/server/src/server/session/checkout/checkout-session.test.ts
 core-fixes	M	101	5	packages/server/src/server/session/checkout/checkout-session.ts
@@ -832,7 +837,7 @@ features	M	1	0	packages/app/src/components/sidebar/sidebar-labels.test.ts
 features	M	3	1	packages/app/src/components/sidebar/sidebar-labels.ts
 features	M	21	1	packages/app/src/components/sidebar/sidebar-model.tsx
 features	A	380	0	packages/app/src/components/sidebar/sidebar-multihost.test.ts
-features	M	47	1	packages/app/src/components/sidebar/sidebar-nav-rows.tsx
+features	M	52	2	packages/app/src/components/sidebar/sidebar-nav-rows.tsx
 features	A	72	0	packages/app/src/components/sidebar/sidebar-new-chat-row.test.tsx
 features	A	56	0	packages/app/src/components/sidebar/sidebar-new-chat-row.tsx
 features	A	233	0	packages/app/src/components/sidebar/sidebar-offline-hosts.ts
@@ -1086,13 +1091,14 @@ orchestration	A	60	0	packages/app/src/stores/organization-intake-preferences-sto
 orchestration	M	8	2	packages/app/src/styles/unistyles-module-scope.test.ts
 orchestration	M	19	4	packages/app/src/utils/connection-selection.test.ts
 orchestration	M	18	1	packages/app/src/utils/connection-selection.ts
-orchestration	M	137	0	packages/cli/src/commands/agent/run.test.ts
-orchestration	M	7	5	packages/cli/src/commands/agent/run.ts
-orchestration	A	212	0	packages/cli/src/commands/agent/send.test.ts
-orchestration	M	129	6	packages/cli/src/commands/agent/send.ts
+orchestration	M	148	0	packages/cli/src/commands/agent/run.test.ts
+orchestration	M	21	6	packages/cli/src/commands/agent/run.ts
+orchestration	A	240	0	packages/cli/src/commands/agent/send.test.ts
+orchestration	M	141	7	packages/cli/src/commands/agent/send.ts
 orchestration	M	12	1	packages/cli/tests/03-daemon.test.ts
 orchestration	M	27	17	packages/cli/tests/34-daemon-status-auth.test.ts
 orchestration	A	50	0	packages/plugin/src/server/management.ts
+orchestration	M	14	0	packages/protocol/src/agent-labels.ts
 orchestration	A	118	0	packages/protocol/src/controller-frames.ts
 orchestration	A	48	0	packages/protocol/src/controller-management.ts
 orchestration	A	32	0	packages/protocol/src/controller-service.test.ts
@@ -1105,7 +1111,7 @@ orchestration	A	21	0	packages/protocol/src/messages.management.test.ts
 orchestration	A	54	0	packages/protocol/src/messages.permissions.wire-compat.test.ts
 orchestration	M	42	0	packages/protocol/src/messages.stream-parsing.test.ts
 orchestration	M	259	1	packages/protocol/src/messages.test.ts
-orchestration	M	1350	10	packages/protocol/src/messages.ts
+orchestration	M	1359	10	packages/protocol/src/messages.ts
 orchestration	M	1	1	packages/protocol/src/messages.wire-compat.test.ts
 orchestration	A	176	0	packages/protocol/src/native-intercom.ts
 orchestration	M	69	2	packages/protocol/src/provider-manifest.ts
@@ -1161,7 +1167,7 @@ orchestration	A	47	0	packages/server/src/server/report-inbox.ts
 orchestration	A	1558	0	packages/server/src/server/report-registry.ts
 orchestration	M	609	2	packages/server/src/server/session.test.ts
 orchestration	A	129	0	packages/server/src/server/session.trusted.test.ts
-orchestration	M	1714	97	packages/server/src/server/session.ts
+orchestration	M	1797	99	packages/server/src/server/session.ts
 orchestration	M	9	6	packages/server/src/server/session.workspace-git-watch.test.ts
 orchestration	M	14	9	packages/server/src/server/session.workspace-resolution-invariants.test.ts
 orchestration	M	11	7	packages/server/src/server/session.workspaces.test.ts
@@ -1310,7 +1316,7 @@ plugin-host	M	4	0	packages/app/src/plugins/contribution-host.ts
 plugin-host	M	31	0	packages/app/src/plugins/evaluate.test.ts
 plugin-host	M	19	0	packages/app/src/plugins/evaluate.ts
 plugin-host	A	74	0	packages/app/src/plugins/home-computer.test.ts
-plugin-host	A	100	0	packages/app/src/plugins/home-computer.ts
+plugin-host	A	164	0	packages/app/src/plugins/home-computer.ts
 plugin-host	M	45	0	packages/app/src/plugins/host-navigation-model.ts
 plugin-host	A	154	0	packages/app/src/plugins/host-navigation.integration.test.tsx
 plugin-host	M	128	0	packages/app/src/plugins/host-navigation.test.ts
@@ -1321,8 +1327,8 @@ plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
 plugin-host	A	181	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
-plugin-host	A	352	0	packages/app/src/plugins/prime-sidebar.test.tsx
-plugin-host	A	399	0	packages/app/src/plugins/prime-sidebar.tsx
+plugin-host	A	366	0	packages/app/src/plugins/prime-sidebar.test.tsx
+plugin-host	A	497	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
 plugin-host	A	138	0	packages/app/src/plugins/radius-scratch-owner.ts
 plugin-host	A	290	0	packages/app/src/plugins/react-native/pan-surface.test.tsx

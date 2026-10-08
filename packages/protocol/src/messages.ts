@@ -1481,6 +1481,15 @@ export const SendAgentMessageRequestSchema = z.object({
   activeTurnBehavior: ActiveTurnBehaviorSchema.optional(),
   images: z.array(ImageAttachmentSchema).optional(),
   attachments: AgentAttachmentsSchema,
+  // COMPAT(reportingLines): added v0.2.8, optional. The chat that sends, stamped by the CLI from PASEO_AGENT_ID (or
+  // --from for a send relayed from another computer). Absent means the owner (the app, the phone, the owner's own
+  // command). An older daemon ignores it. Remove the COMPAT note after 2027-10-01.
+  sender: z
+    .object({
+      agentId: z.string().min(1).max(200),
+      serverId: z.string().min(1).max(200).optional(),
+    })
+    .optional(),
 });
 
 export const NativeArtifactContentReadRequestSchema = NativeArtifactContentReadInputSchema.extend({

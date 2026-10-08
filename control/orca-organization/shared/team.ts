@@ -44,6 +44,10 @@ export const teamSetupRpc = defineContract({
       })
       .strict(),
     z.object({ action: z.literal("archive-project"), projectId: id }).strict(),
+    // The one chat a chat may also message directly, outside its reporting line. null removes it.
+    z
+      .object({ action: z.literal("direct-link"), sessionId: id, linkedSessionId: id.nullable() })
+      .strict(),
     z
       .object({ action: z.literal("retire-main-assistant"), seat: z.string().min(1).max(64) })
       .strict(),
