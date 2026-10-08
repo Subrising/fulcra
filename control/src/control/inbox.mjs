@@ -213,14 +213,14 @@ server.registerTool(
   "role_start_session",
   {
     description:
-      "Start one persistent session under a project you hold, on a task the project source records as a member of it. Choose a UUID messageId once and retain it across retries \u2014 call role_job_directory with it first and stage the job\u2019s files there. It appears under the project with its owner and parent recorded at creation, never inferred, and starts delegated with your own routine file allowance. Give it `brief` to state the job: it is delivered once, as the session\u2019s first message, and there is no second one. You cannot start a session outside your project, on another host, or beyond your allowance; an uncertain outcome needs operator recovery, not a retry with a new identity. `role` is `implementation` (default), `review`, `planning` or `research`; give `model` and `effort` to choose the session\u2019s model and effort; whatever you leave out comes from the installation\u2019s defaults for that role (Settings \u203a Accounts & models), and a model the provider does not list is refused before anything is reserved. provider may be omitted to use the role\u2019s configured provider, or the role default\u2019s when none is chosen and this host offers it.",
+      "Start one persistent session under a project you hold, on a task the project source records as a member of it. Choose a UUID messageId once and retain it across retries \u2014 call role_job_directory with it first and stage the job\u2019s files there. It appears under the project with its owner and parent recorded at creation, never inferred, and starts delegated with your own routine file allowance. Give it `brief` to state the job: it is delivered once, as the session\u2019s first message, and there is no second one. You cannot start a session outside your project, on another host, or beyond your allowance; an uncertain outcome needs operator recovery, not a retry with a new identity. `role` is `implementation` (default), `review`, `planning`, `research` or `light` (summaries, digests, searches, test runs, simulated users and monitors); give `model` and `effort` to choose the session\u2019s model and effort; whatever you leave out comes from the installation\u2019s defaults for that role (Settings \u203a Accounts & models), and a model the provider does not list is refused before anything is reserved. provider may be omitted to use the role\u2019s configured provider, or the role default\u2019s when none is chosen and this host offers it.",
     inputSchema: z
       .object({
         seat: z.string().refine(uuid),
         taskId: z.string().refine(uuid),
         messageId: z.string().refine(uuid),
         provider: z.enum(["claude", "codex"]).optional(),
-        role: z.enum(["implementation", "planning", "review", "research"]).optional(),
+        role: z.enum(["implementation", "planning", "review", "research", "light"]).optional(),
         title: z.string().min(3).max(120),
         brief: z.string().min(12).max(8192).optional(),
         model: MODEL,

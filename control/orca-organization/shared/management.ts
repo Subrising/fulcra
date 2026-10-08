@@ -114,7 +114,7 @@ export const managementInput = z.discriminatedUnion("action", [
       provider: z.enum(["claude", "codex"]),
       title: z.string().trim().min(3).max(120),
       role: z
-        .enum(["planning", "orchestration", "implementation", "review", "research"])
+        .enum(["planning", "orchestration", "implementation", "review", "research", "light"])
         .optional(),
       model: z
         .string()

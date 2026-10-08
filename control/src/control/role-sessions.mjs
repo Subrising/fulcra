@@ -48,7 +48,13 @@ export const MAX_SESSION_FOLLOWUPS = 32;
 export const MAX_BRIEF_BYTES = 8192;
 // DESIGN-NEXT-BUILD A3: the roles a seat may start a session as.
 // R1 W3-4: review and research too, so a lead's reviewer gets review's defaults rather than planning's.
-export const SEAT_START_ROLES = Object.freeze(["implementation", "planning", "review", "research"]);
+export const SEAT_START_ROLES = Object.freeze([
+  "implementation",
+  "planning",
+  "review",
+  "research",
+  "light",
+]);
 // Bounded like every other retry in this controller: a busy recipient is retried, never indefinitely.
 export const MAX_BRIEF_ATTEMPTS = 20;
 const BUSY = /Recipient is busy or waiting for permission/;
