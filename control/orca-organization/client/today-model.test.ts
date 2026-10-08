@@ -116,6 +116,7 @@ const stop = (n: number, resetAt: string, stoppedAt = "2026-09-28T11:06:35.349Z"
 
 test("operator words become plain words, and tracking codes leave titles", () => {
   assert.equal(plain("Command Centre project orchestrator"), "Command Centre project lead");
+  assert.equal(plain("No prime orchestrator is recorded"), "No main assistant is recorded");
   assert.equal(
     plain("the delivery prime took the seat after a generation change; ack pending"),
     "the delivery main assistant took the role after a restart change; receipt pending",
