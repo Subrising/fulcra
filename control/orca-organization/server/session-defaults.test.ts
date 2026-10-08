@@ -510,3 +510,30 @@ test("P-3 interim: a child never gets a more permissive class than its caller", 
   } as any;
   assert.equal(applyModeDefault(explicit, modes).config.modeId, "full-access");
 });
+
+// FULCRA(light-role): the create hook gives a light session Haiku 5.5 at medium effort when the host offers it.
+test("light role: the create hook applies Haiku 5.5 medium from the seed", async () => {
+  const { readRoleDefaults, hookRoles } = await import("./role-defaults-store.mjs");
+  const fs = await import("node:fs"),
+    os = await import("node:os"),
+    path = await import("node:path");
+  const roles = hookRoles(
+    readRoleDefaults(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-hook-light-")))),
+  );
+  const HAIKU = { id: "claude-haiku-5-5", provider: "claude", thinkingOptions: effort };
+  const light = await applyRoleDefaults(
+    request({ [SESSION_ROLE_LABEL]: "light" }),
+    roles,
+    listing([OPUS, SONNET, HAIKU]).list,
+  );
+  assert.deepEqual(
+    [light.config.model, light.config.thinkingOptionId],
+    ["claude-haiku-5-5", "medium"],
+  );
+  const older = await applyRoleDefaults(
+    request({ [SESSION_ROLE_LABEL]: "light" }),
+    roles,
+    listing([OPUS, SONNET]).list,
+  );
+  assert.notEqual(older.config.model, "claude-haiku-5-5", "a host without Haiku 5.5 falls back");
+});
