@@ -128,7 +128,7 @@ export function projectTasks(
       };
     }),
     note: boardAvailable
-      ? "Selection does not delegate work. Current authority is checked before an action."
+      ? "Selecting a task does not give Fulcra control. Fulcra checks who controls it before each action."
       : "Task board unavailable. Retained work remains visible for inspection and human control.",
   };
 }

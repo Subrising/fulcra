@@ -123,7 +123,7 @@ export function RemitSheet({
           {project.owner.primeSeat
             ? `Now: the ${primeName(project.owner.primeSeat)}${project.owner.kind === "domain" ? ", through its area" : ""}.`
             : "Now: no main assistant yet."}{" "}
-          The owning prime can write this project's update and sees it in its list. It gains no
+          The owning main assistant can write this project's update and sees it in its list. It gains no
           other control.
         </Text>
       </View>
@@ -152,7 +152,7 @@ export function RemitSheet({
                 <Text style={{ color: c.foreground, fontWeight: prime === p.seat ? "700" : "600" }}>
                   {primeName(p.seat)}
                   {current ? " · now" : ""}
-                  {p.state === "vacant" ? " · seat empty" : ""}
+                  {p.state === "vacant" ? " · role empty" : ""}
                 </Text>
               </Button>
             );

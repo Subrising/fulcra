@@ -25,7 +25,7 @@ import type { RoleDirectory, Seat } from "../shared/roles";
 export const UNGROUPED_PROJECT = "ungrouped";
 const TRAVERSAL_LIMIT = 64;
 const ROLE_BINDING_NOTE =
-  "Naming a project orchestrator records who is accountable for the project. It does not start, stop or message any session.";
+  "Naming a project lead records who is accountable for the project. It does not start, stop or message any session.";
 
 type Supervisor = NonNullable<Fleet["supervisors"]>[number];
 
@@ -111,7 +111,7 @@ export function orchestratorView(orchestrator: OrchestratorAssignment): {
       };
     default: {
       const unhandled: never = orchestrator;
-      throw new Error(`Unhandled project orchestrator state: ${JSON.stringify(unhandled)}`);
+      throw new Error(`Unhandled project lead state: ${JSON.stringify(unhandled)}`);
     }
   }
 }
@@ -231,23 +231,23 @@ function assignedFrom(seat: Seat): OrchestratorAssignment {
     : !seat.sessionTaskMatches
       ? " The bound session is now enrolled on a different task than the one whose project membership was verified."
       : seat.sessionGenerationChanged
-        ? " Control of the bound session has changed since the seat was recorded; re-confirm before relying on it."
+        ? " Control of the bound session has changed since the role was recorded; re-confirm before relying on it."
         : "";
   const remote =
     seat.dispatch && !seat.dispatch.supported
-      ? ` ${seat.dispatch.reason ?? "This seat's session cannot be reached from here."}`
+      ? ` ${seat.dispatch.reason ?? "This role's session cannot be reached from here."}`
       : "";
   return {
     state: "assigned",
     heading: "Assigned",
-    detail: `A recorded controller role binding names this session as the project orchestrator.${drift}${remote}`,
+    detail: `A recorded controller role binding names this session as the project lead.${drift}${remote}`,
     note: ROLE_BINDING_NOTE,
     sessionId: seat.sessionId!,
   };
 }
 
 const ROLES_UNREADABLE =
-  "Recorded leadership roles could not be read, so no project orchestrator can be named or ruled out. This is not the same as the seat being empty.";
+  "Recorded leadership roles could not be read, so no project lead can be named or ruled out. This is not the same as the role being empty.";
 
 export function buildHierarchy(
   fleet?: Fleet,
@@ -446,14 +446,14 @@ export function buildHierarchy(
                 state: "unknown",
                 heading: "Not applicable",
                 detail:
-                  "Work without a recorded project has no project seat to fill. A project orchestrator is bound to a registered project, never to a task.",
+                  "Work without a recorded project has no project role to fill. A project lead is bound to a registered project, never to a task.",
                 note: ROLE_BINDING_NOTE,
               }
             : memberLeaders.length
               ? {
                   state: "unassigned-with-leaders",
                   heading: "Unassigned",
-                  detail: `This project's orchestrator seat is recorded as empty. ${memberLeaders.length} recorded ${memberLeaders.length === 1 ? "leader leads a workstream" : "leaders lead workstreams"} inside it${observed}; leading a workstream is not accountability for the project.`,
+                  detail: `This project's lead role is recorded as empty. ${memberLeaders.length} recorded ${memberLeaders.length === 1 ? "leader leads a workstream" : "leaders lead workstreams"} inside it${observed}; leading a workstream is not accountability for the project.`,
                   note: ROLE_BINDING_NOTE,
                 }
               : leadersComplete
@@ -461,14 +461,14 @@ export function buildHierarchy(
                     state: "unassigned",
                     heading: "Unassigned",
                     detail:
-                      "This project's orchestrator seat is recorded as empty, and no workstream leader is recorded here.",
+                      "This project's lead role is recorded as empty, and no workstream leader is recorded here.",
                     note: ROLE_BINDING_NOTE,
                   }
                 : {
                     state: "unassigned",
                     heading: "Unassigned",
                     detail:
-                      "This project's orchestrator seat is recorded as empty. No workstream leader is recorded in what could be observed either, and work or grouping was missing from this read, so a leader here is not ruled out.",
+                      "This project's lead role is recorded as empty. No workstream leader is recorded in what could be observed either, and work or grouping was missing from this read, so a leader here is not ruled out.",
                     note: ROLE_BINDING_NOTE,
                   },
       statuses,

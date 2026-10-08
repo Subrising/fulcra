@@ -36,7 +36,7 @@ const { createOrganisation } = await import(path.join(out, "organisation-server.
 const R = await import(path.join(out, "cc-remit.mjs"));
 const B = await import(path.join(out, "cc-brief.mjs"));
 const H = 3600000;
-const why = "The delivery prime should own this project now";
+const why = "The delivery main assistant should own this project now";
 const brief = (x = {}) => ({
   projectId: P(1),
   health: "at-risk",
@@ -225,7 +225,7 @@ test("O2: the remit view and every write parse against what the controller retur
     note: why,
   });
   assert.equal(unknown.ok, false);
-  assert.match(unknown.message, /no prime seat with that name/);
+  assert.match(unknown.message, /no main assistant with that name/);
 });
 
 test('O3: the project brief carries observed counts from the fleet and journal, and "Written by"', async (t) => {
@@ -246,7 +246,7 @@ test('O3: the project brief carries observed counts from the fleet and journal, 
   const read = await o.brief({ projectId: P(1) });
   assert.equal(B.projectBriefRpc.output.safeParse(read).success, true);
   assert.equal(read.brief.headline, "Launch may slip by a week.");
-  assert.equal(read.authorName, "the Orca orchestrator");
+  assert.equal(read.authorName, "the Orca lead");
   assert.equal(read.stale, false);
   assert.equal(read.partial, false);
   assert.deepEqual(

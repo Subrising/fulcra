@@ -57,13 +57,13 @@ async function seeded(t) {
   const channel = await f.op("channels-open", {
     primeSeat: "delivery",
     projectSeat: P(1),
-    purpose: "Weekly delivery check-in between the board seat and this project",
+    purpose: "Weekly delivery check-in between the board role and this project",
     maxMessages: 6,
     expiresAt: new Date(Date.now() + 86400000).toISOString(),
     expectedPrimeRevision: 1,
     expectedProjectRevision: 1,
   });
-  f.control.takeover(f.prime, "The human-facing lead holds this seat");
+  f.control.takeover(f.prime, "The human-facing lead holds this role");
   await f.op("seat-hold", {
     role: "prime",
     seat: "delivery",
@@ -131,7 +131,7 @@ test("R1: inputs are strict; no caller can name an actor, a channel of origin or
       seat: "delivery",
     }).success,
     false,
-    "the seat comes from the message, never input",
+    "the role comes from the message, never input",
   );
 });
 
@@ -237,7 +237,7 @@ test("R2: every read and write output from the real controller satisfies its con
         expectedSeatRevision: held.message.pins.seatRevision,
       })
     ).message,
-    "This seat is no longer held for you",
+    "This role is no longer held for you",
   );
   const digestItem = list.items.find(
     (i) => i.source === "digest" && i.title === "Daily digest · All work",

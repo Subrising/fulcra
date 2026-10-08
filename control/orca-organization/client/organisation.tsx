@@ -190,7 +190,7 @@ export function OrganisationSurface(
           targetHost={leader.host}
           targetServerId={leader.serverId}
           agentId={leader.agentId}
-          label={`Talk to project orchestrator: ${leader.title}`}
+          label={`Talk to project lead: ${leader.title}`}
         />
       )}
       <View style={{ gap: 8 }} testID="org-project-board">
@@ -304,8 +304,8 @@ export function OrganisationSurface(
       )}
       {remits.data && !tree.ownersKnown && (
         <Notice colors={c} tone="warning">
-          Which prime owns which project could not be read, so every project is listed under "No
-          prime yet" for now.
+          Which main assistant owns which project could not be read, so every project is listed
+          under "No main assistant yet" for now.
         </Notice>
       )}
       {(map.data || remits.data) && !tree.primes.length && (
@@ -344,8 +344,8 @@ export function OrganisationSurface(
                 {p.filled
                   ? p.holder
                     ? `Led by ${p.holder}`
-                    : "Seat filled"
-                  : "No one is in this seat"}
+                    : "Role filled"
+                  : "No one is in this role"}
               </Text>
             </Pressable>
             {open &&

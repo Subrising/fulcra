@@ -73,7 +73,7 @@ export function intakeRoutingPrompt(intake, workspace) {
   const prompt = `Route this human-authored intake ${intake.id}. This is a routing question only. Do not create projects, workspaces, sessions, worktrees or grant authority. Choose an existing project only when the intent supports it. Reply with JSON {"intakeId":"${intake.id}","projectKey":"an exact alias below"}; otherwise reply with JSON {"intakeId":"${intake.id}","question":"the actual ambiguity for the human to clarify"}.\nProjects: ${JSON.stringify(workspace.projects.map(({ name }, index) => ({ projectKey: `p${index + 1}`, name })))}\nRequest: ${intake.text}`;
   if (new TextEncoder().encode(prompt).byteLength > 16384)
     throw new Error(
-      "This retained request is too large for one prime routing message. Choose its existing project directly.",
+      "This retained request is too large for one main assistant routing message. Choose its existing project directly.",
     );
   return prompt;
 }
@@ -92,7 +92,7 @@ export async function askIntakePrime({
     (intake.primeRequest &&
       !["held", "offline", "busy", "unavailable"].includes(intake.primeRequest.state))
   )
-    throw new Error("No new prime request can be sent for this intake");
+    throw new Error("No new main assistant request can be sent for this intake");
   const prompt = intake.primeRequest?.prompt ?? intakeRoutingPrompt(intake, workspace);
   await record({ action: "reserve-prime", requestId, prompt });
   const finish = (state, reply) => record({ action: "prime-result", requestId, state, reply });
@@ -114,14 +114,14 @@ export async function askIntakePrime({
   ) {
     await finish(
       "unavailable",
-      "The prime’s existing receiving route is not confirmed. Your intake is saved; choose a project or review the original prime’s controls.",
+      "The main assistant’s existing receiving route is not confirmed. Your intake is saved; choose a project or review the original main assistant’s controls.",
     );
     return null;
   }
   if (!available) {
     await finish(
       "offline",
-      "The prime host is offline. Your intake is saved; no message was sent.",
+      "The main assistant host is offline. Your intake is saved; no message was sent.",
     );
     return null;
   }
@@ -138,14 +138,14 @@ export async function askIntakePrime({
     ) {
       await finish(
         "offline",
-        "The original prime is unavailable. Open its receiving controls or choose an existing project.",
+        "The original main assistant is unavailable. Open its receiving controls or choose an existing project.",
       );
       return null;
     }
     if (current.status !== "idle") {
       await finish(
         "busy",
-        "The prime is busy. Your intake is retained; no second reasoning turn was sent.",
+        "The main assistant is busy. Your intake is retained; no second reasoning turn was sent.",
       );
       return null;
     }
@@ -161,7 +161,7 @@ export async function askIntakePrime({
     if (!output.ok) {
       await finish(
         output.dispatched ? "uncertain" : "unavailable",
-        "The prime request is not confirmed. Open its existing controls; this request will not be resent automatically.",
+        "The main assistant request is not confirmed. Open its existing controls; this request will not be resent automatically.",
       );
       return null;
     }
@@ -174,21 +174,21 @@ export async function askIntakePrime({
     ) {
       await finish(
         "uncertain",
-        "The original prime delivery could not be correlated. Inspect it rather than resend.",
+        "The original main assistant delivery could not be correlated. Inspect it rather than resend.",
       );
       return null;
     }
     if (receipt.state !== "delivered") {
       await finish(
         receipt.state === "queued" ? "queued" : "unavailable",
-        "Your request remains with the original prime’s receiving route. A queue acknowledgement is not a routing answer.",
+        "Your request remains with the original main assistant’s receiving route. A queue acknowledgement is not a routing answer.",
       );
       return null;
     }
     if (!receipt.providerTurnId) {
       await finish(
         "uncertain",
-        "Prime acceptance is not confirmed. Your retained request and original prime remain available.",
+        "Main assistant acceptance is not confirmed. Your retained request and original main assistant remain available.",
       );
       return null;
     }
@@ -197,7 +197,7 @@ export async function askIntakePrime({
       await finish(
         "uncertain",
         result.error ??
-          "No confirmed routing reply. Open the original prime conversation; no resend was made.",
+          "No confirmed routing reply. Open the original main assistant conversation; no resend was made.",
       );
       return null;
     }
@@ -208,7 +208,7 @@ export async function askIntakePrime({
     if (reply?.intakeId !== intake.id) {
       await finish(
         "uncertain",
-        "The reply does not name this intake. Keep the same request and inspect the original prime conversation.",
+        "The reply does not name this intake. Keep the same request and inspect the original main assistant conversation.",
       );
       return null;
     }
@@ -217,7 +217,7 @@ export async function askIntakePrime({
   } catch (error) {
     await finish(
       "uncertain",
-      "The prime request could not be confirmed. Keep the same identity and open the original conversation.",
+      "The main assistant request could not be confirmed. Keep the same identity and open the original conversation.",
     );
     throw error;
   }

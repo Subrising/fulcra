@@ -52,5 +52,5 @@ export function sessionRole(node: Node, fleet: Fleet) {
         return n ? sessionName(n, fleet) : "unavailable leader";
       })
       .join(", ")}`;
-  return leader ? "Lead orchestrator" : "No leader recorded";
+  return leader ? "Lead" : "No leader recorded";
 }

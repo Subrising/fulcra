@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { primeName } from "./organisation-model";
 
-test("a main assistant seat reads as a name, without saying main twice", () => {
+test("a main assistant role reads as a name, without saying main twice", () => {
   assert.equal(primeName("delivery"), "Delivery main assistant");
   assert.equal(primeName("game-studio"), "Game studio main assistant");
   assert.equal(primeName("main"), "Main assistant");

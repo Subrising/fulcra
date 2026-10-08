@@ -112,7 +112,7 @@ function ResumeGroup({
       />
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Restore saved delegation: ${titles[parent.id] ?? parent.id}`}
+        accessibilityLabel={`Give control back to the lead: ${titles[parent.id] ?? parent.id}`}
         disabled={disabled}
         onPress={() =>
           onResume({
@@ -129,7 +129,7 @@ function ResumeGroup({
           opacity: disabled ? 0.45 : 1,
         }}
       >
-        <Text style={{ color: colors.accentForeground }}>Restore saved delegation</Text>
+        <Text style={{ color: colors.accentForeground }}>Give control back to the lead</Text>
       </Pressable>
     </View>
   );
@@ -159,14 +159,14 @@ export function SupervisionPanel({
       <Text style={{ ...text, fontSize: 20, fontWeight: "600" }}>Supervisors and workers</Text>
       <Text style={muted}>
         {fresh
-          ? "Saved delegation and event records. Native activity is shown in the conversations."
+          ? "Saved control and event records. Native activity is shown in the conversations."
           : "Connection unconfirmed. These are saved records, not live state."}
         {observedAt ? ` Saved at ${new Date(observedAt).toLocaleTimeString()}.` : ""}
       </Text>
       {!roles.length && (
         <Text style={muted}>
           {fresh
-            ? "No supervisor roles recorded. Create a session and delegate it as a supervisor below."
+            ? "No supervisor roles recorded. Create a session and give it control as a supervisor below."
             : "No saved supervisor observation is available."}
         </Text>
       )}

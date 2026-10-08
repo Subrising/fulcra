@@ -59,7 +59,7 @@ describe("chooseHomeComputer", () => {
 });
 
 describe("hasMainAssistant", () => {
-  it("needs a readable directory with an assigned seat", () => {
+  it("needs a readable directory with an assigned role", () => {
     expect(
       hasMainAssistant({ available: true, primes: [{ state: "assigned", sessionId: "s" }] }),
     ).toBe(true);

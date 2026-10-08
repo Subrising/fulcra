@@ -155,7 +155,7 @@ export function createRoleDirectoryReader(
         primes: [],
         projectSeats: [],
         programme: null,
-        note: "Recorded leadership roles could not be read, so no orchestrator can be named or ruled out here.",
+        note: "Recorded leadership roles could not be read, so no lead can be named or ruled out here.",
       });
     }
   };
@@ -230,7 +230,7 @@ export function createRoleProjectReader(
         needed: [],
         blockers: [],
         sessions: [],
-        note: "Recorded leadership roles could not be read for this project, so its orchestrator is unknown rather than absent.",
+        note: "Recorded leadership roles could not be read for this project, so its lead is unknown rather than absent.",
       });
     }
   };
@@ -324,7 +324,7 @@ export function createSessionRequest(
           ...base,
           status: "refused",
           message:
-            "The controller did not return a request record, so nothing was asked of the seat.",
+            "The controller did not return a request record, so nothing was asked of the role.",
         };
       }
       return {
@@ -332,7 +332,7 @@ export function createSessionRequest(
         status: "requested",
         requestId,
         state,
-        message: `Requested from this project's orchestrator${state ? ` · ${state}` : ""}. The seat has been asked; no session exists yet and none is shown until the controller reports one.`,
+        message: `Requested from this project's lead${state ? ` · ${state}` : ""}. The role has been asked; no session exists yet and none is shown until the controller reports one.`,
       };
     } catch (error) {
       const text = reason(error);
@@ -340,7 +340,7 @@ export function createSessionRequest(
         return {
           ...base,
           status: "unavailable",
-          message: `This controller does not expose seat session requests yet, so work cannot be routed through a project orchestrator here. Nothing was requested. Controller reported: ${text}`,
+          message: `This controller does not expose role session requests yet, so work cannot be routed through a project lead here. Nothing was requested. Controller reported: ${text}`,
         };
       }
       return { ...base, status: "refused", message: `${text} Nothing was requested.` };
@@ -561,7 +561,7 @@ export function createRoleAdopt(
         status: "adopted",
         sessionId: asUuid(d?.sessionId),
         remaining,
-        message: `Adopted into this seat. The session is now led by it${remaining === null ? "" : `; ${remaining} of the seat's session allowance ${remaining === 1 ? "remains" : "remain"}`}. Adoption spends allowance, and grants the seat no authority over the session's task.`,
+        message: `Adopted into this role. The session is now led by it${remaining === null ? "" : `; ${remaining} of the role's session allowance ${remaining === 1 ? "remains" : "remain"}`}. Adoption spends allowance, and grants the role no authority over the session's task.`,
       };
     } catch (error) {
       const text = reason(error);
@@ -569,7 +569,7 @@ export function createRoleAdopt(
         return {
           ...base,
           status: "unavailable",
-          message: `This controller does not expose adoption yet, so a declared session cannot be placed under a seat here. Nothing was changed. Controller reported: ${text}`,
+          message: `This controller does not expose adoption yet, so a declared session cannot be placed under a role here. Nothing was changed. Controller reported: ${text}`,
         };
       }
       return { ...base, status: "refused", message: `${text} Nothing was adopted.` };
@@ -664,7 +664,7 @@ export function createAllowanceSet(
         status: "granted",
         maxSessions,
         remaining,
-        message: `This seat may now be asked for ${maxSessions} ${maxSessions === 1 ? "session" : "sessions"} at its current revision. The allowance is pinned to that revision: replacing the leader resets it and the successor needs a fresh grant. It grants no authority.`,
+        message: `This role may now be asked for ${maxSessions} ${maxSessions === 1 ? "session" : "sessions"} at its current revision. The allowance is pinned to that revision: replacing the leader resets it and the successor needs a fresh grant. It grants no authority.`,
       };
     } catch (error) {
       const text = reason(error);
@@ -741,12 +741,12 @@ export function createRoleAssign(
         grantsAuthority: false,
         message:
           status === "vacated"
-            ? "Seat vacated. The session keeps its own task and control; only the accountability record changed."
+            ? "Role emptied. The session keeps its own task and control. Only the accountability record changed."
             : status === "replaced"
-              ? "Seat reassigned to the named session. The previous holder keeps its own task and control; no work moved and nothing was sent."
+              ? "Role reassigned to the named session. The previous holder keeps its own task and control; no work moved and nothing was sent."
               : status === "reaffirmed"
-                ? "The same session is recorded again for this seat. Nothing else changed."
-                : "Seat assigned. This records accountability only: no task authority, no delegation, no prompt.",
+                ? "The same session is recorded again for this role. Nothing else changed."
+                : "Role assigned. This records accountability only. It gives no task authority, gives no control and sends no prompt.",
       };
     } catch (error) {
       return fail(reason(error));

@@ -86,7 +86,7 @@ export function liveMapRows(input: {
       row = {
         ...row,
         related,
-        detail: `${row.detail} · ${parent ? `responsible prime: ${owner!.primeSeat}` : "responsible prime not recorded in this observation"}`,
+        detail: `${row.detail} · ${parent ? `responsible main assistant: ${owner!.primeSeat}` : "responsible main assistant not recorded in this observation"}`,
       };
     }
     const matches = row.target.sessionId
