@@ -5,6 +5,7 @@ accounts	A	0	0	docs/assets/features/accounts-dark.png
 accounts	A	0	0	docs/assets/features/accounts-light.png
 accounts	A	0	0	docs/assets/screens/accounts-dark.png
 accounts	A	0	0	docs/assets/screens/accounts-light.png
+accounts	M	20	6	packages/app/e2e/mobile/native-text-reflow/ios.py
 accounts	A	56	0	packages/app/src/app/oauth/[flowId].tsx
 accounts	M	2	2	packages/app/src/components/context-window-details.tsx
 accounts	A	130	0	packages/app/src/components/limit-resume-banner.tsx
@@ -313,6 +314,7 @@ branding	D	0	0	packages/app/e2e/mobile/diff-tree/evidence/light.png
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/android-after.mp4
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/android-before.mp4
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/browser.webm
+branding	M	10	0	packages/app/e2e/mobile/native-text-reflow/README.md
 branding	D	0	29	packages/app/e2e/support/helpers/changelog.ts
 branding	M	0	0	packages/app/public/apple-touch-icon.png
 branding	M	5	7	packages/app/public/index.html
@@ -453,6 +455,7 @@ build-ci	A	30	0	patches/eas-cli+16.32.0.patch
 build-ci	A	44	0	patches/electron-updater++builder-util-runtime+9.7.0.patch
 build-ci	A	12	0	patches/electron-updater+6.8.9.patch
 build-ci	M	18	0	patches/react-native-markdown-display+7.0.2.patch
+build-ci	M	38	10	patches/react-native-uitextview+2.2.0.patch
 build-ci	A	16	0	release/common.sh
 build-ci	A	16	0	release/control-suites.sh
 build-ci	A	60	0	release/package.sh
@@ -531,6 +534,7 @@ core-fixes	M	11	3	packages/app/e2e/browser/sessions-search.spec.ts
 core-fixes	M	2	0	packages/app/e2e/browser/settings-toggle-tab-regression.spec.ts
 core-fixes	M	9	14	packages/app/e2e/browser/viewed-agent-timelines.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
+core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	A	104	0	packages/cli/src/commands/daemon/status.test.ts
@@ -1001,6 +1005,7 @@ features	M	20	2	packages/app/src/sidebar-nav/model.test.ts
 features	M	5	1	packages/app/src/sidebar-nav/model.ts
 features	M	14	3	packages/app/src/sidebar-nav/use-sidebar-nav-items.ts
 features	M	2	2	packages/app/src/stores/explorer-tab-memory.ts
+features	A	45	0	packages/app/src/stores/main-assistant-memory-store.ts
 features	M	1	1	packages/app/src/stores/panel-store/state.ts
 features	M	13	0	packages/app/src/stores/session-store.ts
 features	A	35	0	packages/app/src/stores/workspace-layout-storage.test.ts
@@ -1328,8 +1333,8 @@ plugin-host	A	137	0	packages/app/src/plugins/command-centre-relay.browser.test.t
 plugin-host	M	4	0	packages/app/src/plugins/contribution-host.ts
 plugin-host	M	31	0	packages/app/src/plugins/evaluate.test.ts
 plugin-host	M	19	0	packages/app/src/plugins/evaluate.ts
-plugin-host	A	74	0	packages/app/src/plugins/home-computer.test.ts
-plugin-host	A	164	0	packages/app/src/plugins/home-computer.ts
+plugin-host	A	159	0	packages/app/src/plugins/home-computer.test.ts
+plugin-host	A	214	0	packages/app/src/plugins/home-computer.ts
 plugin-host	M	45	0	packages/app/src/plugins/host-navigation-model.ts
 plugin-host	A	154	0	packages/app/src/plugins/host-navigation.integration.test.tsx
 plugin-host	M	128	0	packages/app/src/plugins/host-navigation.test.ts
@@ -1339,9 +1344,9 @@ plugin-host	M	5	5	packages/app/src/plugins/hosts/index.test.ts
 plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
-plugin-host	A	181	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
-plugin-host	A	366	0	packages/app/src/plugins/prime-sidebar.test.tsx
-plugin-host	A	497	0	packages/app/src/plugins/prime-sidebar.tsx
+plugin-host	A	300	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
+plugin-host	A	478	0	packages/app/src/plugins/prime-sidebar.test.tsx
+plugin-host	A	652	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
 plugin-host	A	138	0	packages/app/src/plugins/radius-scratch-owner.ts
 plugin-host	A	290	0	packages/app/src/plugins/react-native/pan-surface.test.tsx
