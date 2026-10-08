@@ -1,6 +1,7 @@
 // 0.2.7: the SSH Book transport is retired. Even with a leftover <ORCA_HOME>/book-transport.json, the real
 // startController (tools/test-support.book-startup.mjs) reports "retired", refuses Book creations and never starts
 // a remote process.
+import "./state-root.fixture.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
