@@ -47,6 +47,18 @@ describe("plugin host navigation", () => {
     ]);
   });
 
+  it("opens the main architecture map of a known workspace and refuses an unknown one", () => {
+    const { navigation, destinations } = setup();
+    navigation.openArchitectureMap!({ workspaceId: "two", serverId: "remote" });
+    expect(destinations).toEqual([
+      { serverId: "remote", workspaceId: "two", target: { kind: "architecture_map" } },
+    ]);
+    expect(() => navigation.openArchitectureMap!({ workspaceId: "missing" })).toThrow(
+      "Workspace is unavailable",
+    );
+    expect(destinations).toHaveLength(1);
+  });
+
   it("refuses unknown or removed workspaces before creating browser records", () => {
     const { navigation, destinations, browsers, workspaces } = setup();
     expect(() =>

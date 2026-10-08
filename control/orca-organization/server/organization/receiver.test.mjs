@@ -39,7 +39,7 @@ test("missing hold knowledge is unknown and an old hold is never applied to a su
   }))({ prime });
   assert.equal(result.binding.humanHeld, false);
 });
-test("changed or unreadable seats remain unavailable rather than substituting a prime", async () => {
+test("changed or unreadable roles remain unavailable rather than substituting a main assistant", async () => {
   const changed = await createIntakeReceiverReader(async () => ({
     bindings: [{ ...row, sessionId: "successor" }],
     holds: [],

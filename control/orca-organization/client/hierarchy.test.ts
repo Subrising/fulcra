@@ -147,7 +147,7 @@ const briefing = (entries: Briefing["entries"], extra: Partial<Briefing> = {}): 
   ...extra,
 });
 
-test("a leader whose linked worker is itself a leader becomes a prime with a recorded project reach", () => {
+test("a leader whose linked worker is itself a leader becomes a main assistant with a recorded project reach", () => {
   const d = fleet({
     supervisors: [
       role(PRIME, TASK_A, [worker(LEAD), worker(WORKER)]),
@@ -185,7 +185,7 @@ test("a leadership loop is reported rather than followed forever", () => {
   assert.deepEqual(h.soloLeaders, []);
 });
 
-test("unavailable supervision names no leader, and it is the role read that decides the seat", () => {
+test("unavailable supervision names no leader, and it is the role read that decides the role", () => {
   const d = fleet({
     supervisionAvailable: false,
     supervisors: [role(PRIME, TASK_A, [worker(LEAD)])],
@@ -204,7 +204,7 @@ test("unavailable supervision names no leader, and it is the role read that deci
   );
 });
 
-test("recorded workstream leaders never fill the project seat", () => {
+test("recorded workstream leaders never fill the project role", () => {
   const h = buildHierarchy(
     fleet({ supervisors: [role(PRIME, TASK_A, [worker(LEAD)]), role(LEAD, TASK_B)] }),
     directory(),
@@ -213,7 +213,7 @@ test("recorded workstream leaders never fill the project seat", () => {
   );
   const project = h.projects.find((p) => p.id === PROJECT)!;
   assert.equal(project.orchestrator.state, "unassigned-with-leaders");
-  assert.match(project.orchestrator.detail, /seat is recorded as empty/);
+  assert.match(project.orchestrator.detail, /role is recorded as empty/);
   assert.match(project.orchestrator.detail, /not accountability for the project/);
   assert.equal(project.leaders.length, 2);
 });
@@ -376,7 +376,7 @@ test("a briefing page that is not the whole deployment can never establish that 
   assert.equal(empty.complete, true);
 });
 
-test("an unreadable or partial project directory leaves a prime reach unknown rather than none", () => {
+test("an unreadable or partial project directory leaves a main assistant reach unknown rather than none", () => {
   const d = fleet({ supervisors: [role(PRIME, TASK_A, [worker(LEAD)]), role(LEAD, TASK_B)] });
   const unavailable = buildHierarchy(
     d,
@@ -500,7 +500,7 @@ test("a hierarchy deeper than the traversal limit is reported truncated, never a
   assert.equal(h.primes[0].reachKnown, false);
 });
 
-test("a loop inside a prime subtree is reported as a loop and not as truncation", () => {
+test("a loop inside a main assistant subtree is reported as a loop and not as truncation", () => {
   const TASK_C = uuid(12);
   const d = fleet({
     supervisors: [
@@ -532,7 +532,7 @@ test("published outcome and current state are carried through as the actual proj
   assert.equal(project.briefed, 1);
 });
 
-test("an explicit seat names the actual project orchestrator and routes to its conversation", () => {
+test("an explicit role names the actual project lead and routes to its conversation", () => {
   const h = buildHierarchy(
     fleet({ supervisors: [role(LEAD, TASK_B)] }),
     directory(),
@@ -550,10 +550,10 @@ test("an explicit seat names the actual project orchestrator and routes to its c
     project.leaders.map((l) => l.sessionId),
     [LEAD],
   );
-  assert.doesNotMatch(view.detail, /seat is recorded as empty/);
+  assert.doesNotMatch(view.detail, /role is recorded as empty/);
 });
 
-test("seat drift is named without erasing the accountability record", () => {
+test("role drift is named without erasing the accountability record", () => {
   const gone = buildHierarchy(
     fleet(),
     directory(),
@@ -596,7 +596,7 @@ test("seat drift is named without erasing the accountability record", () => {
           dispatch: {
             host: "macbook",
             supported: false,
-            reason: "The seat session runs on the Book host.",
+            reason: "The role session runs on the Book host.",
           },
         }),
       ],
@@ -608,7 +608,7 @@ test("seat drift is named without erasing the accountability record", () => {
   );
 });
 
-test("unreadable role records leave the seat unknown rather than unassigned", () => {
+test("unreadable role records leave the role unknown rather than unassigned", () => {
   const h = buildHierarchy(
     fleet({ supervisors: [role(PRIME, TASK_A, [worker(LEAD)]), role(LEAD, TASK_B)] }),
     directory(),
@@ -619,13 +619,13 @@ test("unreadable role records leave the seat unknown rather than unassigned", ()
   assert.equal(project.orchestrator.state, "unknown");
   assert.equal(h.rolesAvailable, false);
   assert.equal(h.rolesUnavailable, "Unknown method bindings-status");
-  assert.match(project.orchestrator.detail, /not the same as the seat being empty/);
+  assert.match(project.orchestrator.detail, /not the same as the role being empty/);
   // Nested supervisors exist, but with no role read they must not be promoted into a prime.
   assert.deepEqual(h.primeSeats, []);
   assert.equal(h.primes.length, 1);
 });
 
-test("a prime is an explicit seat, never inferred from nested supervisors", () => {
+test("a main assistant is an explicit role, never inferred from nested supervisors", () => {
   const nested = fleet({ supervisors: [role(PRIME, TASK_A, [worker(LEAD)]), role(LEAD, TASK_B)] });
   const none = buildHierarchy(nested, directory(), undefined, roles());
   // Supervision shape alone leaves the prime seat empty; it is evidence, not a role.
@@ -644,7 +644,7 @@ test("a prime is an explicit seat, never inferred from nested supervisors", () =
   assert.equal(filled.primeSeats[0].sessionId, PRIME);
 });
 
-test("work without a recorded project has no seat to fill and says so", () => {
+test("work without a recorded project has no role to fill and says so", () => {
   const h = buildHierarchy(
     fleet(),
     directory({
@@ -663,7 +663,7 @@ test("work without a recorded project has no seat to fill and says so", () => {
   assert.match(ungrouped.orchestrator.detail, /bound to a registered project, never to a task/);
 });
 
-test("the orchestrator display stays exhaustive over every seat state", () => {
+test("the lead display stays exhaustive over every role state", () => {
   const assigned: OrchestratorAssignment = {
     state: "assigned",
     heading: "Assigned",
@@ -684,7 +684,7 @@ test("the orchestrator display stays exhaustive over every seat state", () => {
   // silently rendering a wrong heading over a real record.
   assert.throws(
     () => orchestratorView({ state: "seated" } as unknown as OrchestratorAssignment),
-    /Unhandled project orchestrator state/,
+    /Unhandled project lead state/,
   );
 });
 

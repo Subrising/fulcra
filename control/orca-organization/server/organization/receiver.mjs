@@ -21,7 +21,8 @@ export function createIntakeReceiverReader(readDirectory) {
         return {
           available: false,
           binding: null,
-          reason: "The configured prime identity is not confirmed in the current seat directory.",
+          reason:
+            "The configured main assistant identity is not confirmed in the current role directory.",
         };
       const binding = candidates[0];
       const humanHeld = Array.isArray(directory.holds)
@@ -55,7 +56,8 @@ export function createIntakeReceiverReader(readDirectory) {
       return {
         available: false,
         binding: null,
-        reason: "The prime’s current receiving controls are unavailable. Your intake is retained.",
+        reason:
+          "The main assistant’s current receiving controls are unavailable. Your intake is retained.",
       };
     }
   };

@@ -1843,7 +1843,7 @@ export const es: TranslationResources = {
       label: "Rol",
       none: "Ninguno",
       planning: "Planificación",
-      orchestration: "Orquestación",
+      orchestration: "Líder",
       implementation: "Implementación",
       usesDefault: "Usa el valor predeterminado de {{role}}: {{model}}, esfuerzo {{effort}}",
       usesDefaultModel: "Usa el valor predeterminado de {{role}}: {{model}}",

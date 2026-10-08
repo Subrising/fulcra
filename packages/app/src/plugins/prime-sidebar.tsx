@@ -52,14 +52,27 @@ export function PrimeSidebar({
 
 type FleetNode = Fleet["nodes"][number];
 
+// FULCRA(sidebar-retry): right after a daemon restart the controller plugin is not ready yet, so the first reads fail or
+// report the role records unavailable. The sidebar tries again by itself (about 35 s in total) before it shows
+// "Couldn't load", instead of waiting for someone to press Retry.
+export const SIDEBAR_READ_RETRIES = 6;
+export const sidebarRetryDelay = (attempt: number) => Math.min(1000 * 2 ** attempt, 10_000);
+async function availableDirectory<T extends { available?: boolean }>(read: Promise<T>): Promise<T> {
+  const directory = await read;
+  if (directory?.available !== true) throw new Error("Role records unavailable");
+  return directory;
+}
+
 export function PrimeSidebarRows({
   serverId,
   onBeforeNavigate,
   hasTeamMap = false,
+  retryDelay = sidebarRetryDelay,
 }: {
   serverId: string;
   onBeforeNavigate?: () => void;
   hasTeamMap?: boolean;
+  retryDelay?: (attempt: number) => number;
 }) {
   const read = useContract(roleDirectoryRpc);
   const readFleet = useContract(fleetRpc);
@@ -67,24 +80,27 @@ export function PrimeSidebarRows({
   const navigation = usePluginHostNavigation(serverId);
   const query = useFetchQuery({
     queryKey: ["orca-role-directory", serverId],
-    queryFn: () => read({}),
+    queryFn: () => availableDirectory(read({})),
     staleTimeMs: 30_000,
     dataShape: "value",
-    retry: false,
+    retry: SIDEBAR_READ_RETRIES,
+    retryDelay,
   });
   const fleet = useFetchQuery({
     queryKey: ["orca-fleet", serverId],
     queryFn: () => readFleet({}),
     staleTimeMs: 30_000,
     dataShape: "value",
-    retry: false,
+    retry: SIDEBAR_READ_RETRIES,
+    retryDelay,
   });
   const projects = useFetchQuery({
     queryKey: ["orca-projects", serverId],
     queryFn: () => readProjects({}),
     staleTimeMs: 60_000,
     dataShape: "value",
-    retry: false,
+    retry: SIDEBAR_READ_RETRIES,
+    retryDelay,
   });
   const openSurface = useCallback(
     (id: string) => {
@@ -104,9 +120,14 @@ export function PrimeSidebarRows({
     [hasTeamMap, openSurface],
   );
   const { refetch } = query;
+  const { refetch: refetchFleet } = fleet;
+  const { refetch: refetchProjects } = projects;
+  // Retry reads all three again: retrying only the directory left lead rows without status ("Status unknown").
   const retry = useCallback(() => {
     void refetch();
-  }, [refetch]);
+    void refetchFleet();
+    void refetchProjects();
+  }, [refetch, refetchFleet, refetchProjects]);
   const available = !query.isError && query.data?.available === true;
   const nodes = new Map((fleet.data?.nodes ?? []).map((node) => [node.id, node]));
   const projectName = new Map((projects.data?.projects ?? []).map((p) => [p.id, p.name]));

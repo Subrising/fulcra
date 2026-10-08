@@ -174,9 +174,9 @@ test("unconfirmed native creation is retained and never automatically retried", 
   );
   assert.equal(count, 1);
 });
-test("held prime remains visible without sending an automated prompt", async () => {
+test("held main assistant remains visible without sending an automated prompt", async () => {
   const effects = [],
-    api = { agents: { ref: () => assert.fail("Held prime must not be prompted") } };
+    api = { agents: { ref: () => assert.fail("Held main assistant must not be prompted") } };
   await askIntakePrime({
     intake,
     workspace: { projects: [] },
@@ -188,7 +188,7 @@ test("held prime remains visible without sending an automated prompt", async () 
   assert.equal(effects.at(-1).state, "held");
   assert.equal(effects.at(-1).requestId, "prime-request");
 });
-test("busy prime does not consume another reasoning turn", async () => {
+test("busy main assistant does not consume another reasoning turn", async () => {
   const effects = [],
     api = {
       agents: {
@@ -210,7 +210,7 @@ test("busy prime does not consume another reasoning turn", async () => {
   });
   assert.equal(effects.at(-1).state, "busy");
 });
-test("one protected routing request preserves the original prime, generation and reply identity", async () => {
+test("one protected routing request preserves the original main assistant, generation and reply identity", async () => {
   const effects = [];
   let sends = 0,
     waits = 0;
@@ -256,7 +256,7 @@ test("one protected routing request preserves the original prime, generation and
   assert.equal(JSON.parse(reply).intakeId, intake.id);
   assert.equal(effects.at(-1).state, "answered");
 });
-test("an acknowledged queue remains pending and cannot be advertised as a prime answer", async () => {
+test("an acknowledged queue remains pending and cannot be advertised as a main assistant answer", async () => {
   const effects = [];
   const api = {
     agents: {
@@ -292,7 +292,7 @@ test("an acknowledged queue remains pending and cannot be advertised as a prime 
 });
 test("unknown/changed controller receiving state never falls through to raw SDK input", async () => {
   const effects = [],
-    api = { agents: { ref: () => assert.fail("Unknown prime must not be accessed") } };
+    api = { agents: { ref: () => assert.fail("Unknown main assistant must not be accessed") } };
   await askIntakePrime({
     intake,
     workspace: { projects: [] },

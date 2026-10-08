@@ -876,6 +876,69 @@ describe("owned startup and Settings recovery", () => {
     expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
     expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
   });
+  describe("a desktop-managed daemon that does not answer", () => {
+    const silent = {
+      localDaemon: "running",
+      connectedDaemon: "unreachable",
+      ...instance,
+      desktopManaged: true,
+      daemonVersion: "1.2.3",
+    };
+    beforeEach(() => {
+      manager.DESKTOP_STARTUP_ANSWER_WAIT.totalMs = 200;
+      manager.DESKTOP_STARTUP_ANSWER_WAIT.stepMs = 5;
+      mocks.readInstance.mockResolvedValue(instance);
+    });
+    // The first two probes see the silent daemon; later probes see the result.
+    function probesThen(after: () => unknown) {
+      let probes = 0;
+      mocks.runExternalCliJsonCommand.mockImplementation(async () => {
+        probes += 1;
+        return probes < 3 ? silent : after();
+      });
+      return () => probes;
+    }
+    function exited() {
+      mocks.readInstance.mockResolvedValue(null);
+      return stopped;
+    }
+    function answers() {
+      return { ...silent, connectedDaemon: "reachable" };
+    }
+    it("is awaited while it shuts down, then a new daemon starts", async () => {
+      const probes = probesThen(exited);
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(probes()).toBeGreaterThanOrEqual(3);
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(1);
+    });
+    it("is used, not replaced, when it starts to answer", async () => {
+      probesThen(answers);
+      const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(status).toMatchObject({ status: "running", answering: true });
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+    });
+    it.each([
+      { ...silent, connectedDaemon: "auth_required" },
+      { ...silent, connectedDaemon: "auth_failed" },
+      { ...silent, localDaemon: "not_ready", connectedDaemon: "not_probed" },
+    ])("is not awaited or replaced when the probe got another answer: %j", async (payload) => {
+      mocks.runExternalCliJsonCommand.mockResolvedValue(payload);
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(mocks.runExternalCliJsonCommand).toHaveBeenCalledTimes(1);
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
+    it("is never stopped when this app does not own it; the launch refuses", async () => {
+      mocks.runExternalCliJsonCommand.mockResolvedValue(silent);
+      await expect(manager.createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
+        /does not answer/,
+      );
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
+  });
   it("Settings status failure rolls enabled flag back and does not launch", async () => {
     mocks.settings.daemon.commandCentreEnabled = false;
     mocks.runExternalCliJsonCommand.mockRejectedValue(Error("fake status failure"));

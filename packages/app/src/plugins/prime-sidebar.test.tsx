@@ -76,12 +76,13 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
 }));
 import { PrimeSidebarRows } from "./prime-sidebar";
 const clients: QueryClient[] = [];
+const fastRetry = () => 1;
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
   render(
     <QueryClientProvider client={client}>
-      <PrimeSidebarRows serverId="mini" />
+      <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
     </QueryClientProvider>,
   );
 }
@@ -100,7 +101,7 @@ afterEach(() => {
   cleanup();
   clients.splice(0).forEach((c) => c.clear());
 });
-it("opens the recorded prime identity and manages vacant slots through Leadership", async () => {
+it("opens the recorded main assistant identity and manages vacant slots through Leadership", async () => {
   f.read.mockResolvedValue({
     available: true,
     primes: [
@@ -134,7 +135,7 @@ it("distinguishes unavailable role records from an empty directory and allows re
   expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
   expect(f.open).not.toHaveBeenCalled();
 });
-it("keeps top primes and setup reachable for an empty organization", async () => {
+it("keeps top main assistants and setup reachable for an empty organization", async () => {
   f.read.mockResolvedValue({ available: true, primes: [] });
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "No main assistant yet · Set up" }));
@@ -175,7 +176,7 @@ it("does not open a missing or unloaded identity on the controller host", async 
   expect(f.push).toHaveBeenCalledTimes(2);
 });
 
-it("opens a Book prime on its original host instead of the controller", async () => {
+it("opens a Book main assistant on its original host instead of the controller", async () => {
   f.host = "book";
   f.read.mockResolvedValue({
     available: true,
@@ -197,7 +198,7 @@ it("opens a Book prime on its original host instead of the controller", async ()
 });
 
 for (const refusal of ["missing-host", "registry-not-ready"] as const) {
-  it(`retains the cached Book prime identity and opens Leadership when ${refusal}`, async () => {
+  it(`retains the cached Book main assistant identity and opens Leadership when ${refusal}`, async () => {
     f.host = "book";
     f.registeredHost = refusal !== "missing-host";
     f.registryReady = refusal !== "registry-not-ready";
@@ -287,4 +288,65 @@ it("Team map is one click from the sidebar", async () => {
     await screen.findByRole("button", { name: "Team map: who leads whom and what each is doing" }),
   );
   expect(f.push).toHaveBeenCalledWith("/h/mini/plugin/orca-organization-next/surface/leadership");
+});
+
+// FULCRA(sidebar-retry): after a daemon restart the first reads fail; the sidebar must load without a Retry press.
+it("retries the first load by itself after a restart", async () => {
+  const delivery = {
+    seat: "delivery",
+    role: "prime",
+    state: "assigned",
+    sessionPresent: true,
+    sessionId: "original-prime",
+  };
+  f.read
+    .mockRejectedValueOnce(new Error("plugin not ready"))
+    .mockResolvedValueOnce({ available: false, primes: [] })
+    .mockResolvedValue({ available: true, primes: [delivery] });
+  f.fleet
+    .mockReset()
+    .mockRejectedValueOnce(new Error("plugin not ready"))
+    .mockResolvedValue({
+      nodes: [
+        { id: "original-prime", host: "Mac mini", status: "idle", pending: 0, title: "Main" },
+      ],
+    });
+  mount();
+  expect(
+    await screen.findByRole("button", { name: "Open Delivery main assistant conversation" }),
+  ).toBeTruthy();
+  expect(screen.queryByText("Couldn't load main assistants · Retry")).toBeNull();
+  expect(f.read).toHaveBeenCalledTimes(3);
+  expect(f.fleet).toHaveBeenCalledTimes(2);
+});
+
+it("Retry reads the lead status again, not only the main assistant list", async () => {
+  f.read.mockResolvedValue({ available: false, primes: [] });
+  f.fleet.mockReset().mockRejectedValue(new Error("plugin not ready"));
+  mount();
+  const retry = await screen.findByRole("button", {
+    name: "Couldn't load main assistants · Retry",
+  });
+  const fleetCalls = f.fleet.mock.calls.length;
+  f.read.mockResolvedValue({
+    available: true,
+    primes: [],
+    projectSeats: [
+      {
+        seat: "p1",
+        role: "project-orchestrator",
+        projectId: "proj-1",
+        state: "assigned",
+        sessionPresent: true,
+        sessionId: "remote",
+      },
+    ],
+  });
+  f.fleet.mockResolvedValue({
+    nodes: [{ id: "remote", host: "MacBook Pro", status: "idle", pending: 0, title: "Lead" }],
+  });
+  fireEvent.click(retry);
+  await vi.waitFor(() => expect(f.fleet.mock.calls.length).toBeGreaterThan(fleetCalls));
+  expect(await screen.findByText(/Idle · MacBook Pro/)).toBeTruthy();
+  expect(screen.queryByText(/Status unknown/)).toBeNull();
 });

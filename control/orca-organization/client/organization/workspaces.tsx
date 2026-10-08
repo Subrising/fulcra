@@ -60,9 +60,9 @@ export function WorkspacesSurface(props: SurfaceProps) {
         agentId: prime.sessionId!,
         seat: prime.seat,
         kind: "recorded-prime",
-        label: `${prime.seat} prime`,
+        label: `${prime.seat} main assistant`,
       },
-      `${prime.seat} prime`,
+      `${prime.seat} main assistant`,
     );
   };
   const content = (
@@ -113,7 +113,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
                 initialValue={state.name}
                 onChangeText={model.setName}
               />
-              <Text style={{ color: c.foregroundMuted }}>Responsible intake prime</Text>
+              <Text style={{ color: c.foregroundMuted }}>Responsible intake main assistant</Text>
               <WorkButton
                 theme={props.theme}
                 label="Keep intake with me"
@@ -124,7 +124,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
                 <WorkButton
                   key={prime.seat}
                   theme={props.theme}
-                  label={`${prime.seat} prime`}
+                  label={`${prime.seat} main assistant`}
                   selected={state.prime?.agentId === prime.sessionId}
                   onPress={() => selectPrime(prime)}
                 />
@@ -148,8 +148,8 @@ export function WorkspacesSurface(props: SurfaceProps) {
                     onChangeText={setReceiverSearch}
                   />
                   <Text style={{ color: c.foregroundMuted }}>
-                    This records a human-held intake reference. It creates no prime seat, grants no
-                    control and sends no instruction.
+                    This records a human-held intake reference. It creates no main assistant role,
+                    grants no control and sends no instruction.
                   </Text>
                   {catalog.sessions
                     .filter((session) =>
@@ -187,8 +187,8 @@ export function WorkspacesSurface(props: SurfaceProps) {
               )}
               {!roles.data?.available && (
                 <Text style={{ color: c.foregroundMuted }}>
-                  Prime records are unavailable. Human-owned chats still use an existing project
-                  context.
+                  Main assistant records are unavailable. Human-owned chats still use an existing
+                  project context.
                 </Text>
               )}
               <WorkButton
@@ -297,8 +297,8 @@ export function WorkspacesSurface(props: SurfaceProps) {
             )}
             {configureWorkspaceId === workspace.id && (
               <Text style={{ color: c.foregroundMuted }}>
-                Choose the receiving prime in Company settings above, then apply it here. This
-                records routing responsibility only.
+                Choose the receiving main assistant in Company settings above, then apply it here.
+                This records routing responsibility only.
               </Text>
             )}
             {props.organizationNavigation && (

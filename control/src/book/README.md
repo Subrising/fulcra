@@ -1,3 +1,5 @@
+> **Retired in 0.2.7.** The SSH transport (`transport.mjs`, `receiver-cli.mjs`) is removed. The controller no longer starts remote receivers and ignores `book-transport.json`. The text below is history.
+
 # Book operator task control — AIN99
 
 ## Provider-bound source preparation — AIN121

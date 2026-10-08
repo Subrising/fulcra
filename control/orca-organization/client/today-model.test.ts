@@ -116,9 +116,10 @@ const stop = (n: number, resetAt: string, stoppedAt = "2026-09-28T11:06:35.349Z"
 
 test("operator words become plain words, and tracking codes leave titles", () => {
   assert.equal(plain("Command Centre project orchestrator"), "Command Centre project lead");
+  assert.equal(plain("No prime orchestrator is recorded"), "No main assistant is recorded");
   assert.equal(
     plain("the delivery prime took the seat after a generation change; ack pending"),
-    "the delivery lead took the role after a restart change; receipt pending",
+    "the delivery main assistant took the role after a restart change; receipt pending",
   );
   assert.equal(
     plainTitle("CC R-V11B: adversarial security review of V1.1b"),
@@ -293,7 +294,7 @@ test("a written update is used as the story, in plain words", () => {
   const s = t.projects[0].story;
   assert.equal(s.written, true);
   assert.equal(s.now, "The lead is testing the fix.");
-  assert.deepEqual(s.next, ["Ship to the lead"]);
+  assert.deepEqual(s.next, ["Ship to the main assistant"]);
   assert.deepEqual(
     t.done.map((d) => d.text),
     ["Tracker refresh"],

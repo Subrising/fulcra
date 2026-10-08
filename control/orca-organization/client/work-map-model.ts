@@ -119,8 +119,8 @@ export const displayGlyph = (glyph: string, fresh: Freshness) =>
 
 // J0 plain language: who is driving the session, in words. The controller's mode names stay in the data.
 export function modeText(mode: string) {
-  if (mode === "delegated") return "run by Fulcra";
-  if (mode === "human") return "run by you";
+  if (mode === "delegated") return "Fulcra controls this";
+  if (mode === "human") return "you control this";
   if (["revoking", "delegating", "resuming"].includes(mode)) return "changing hands";
   return "not recorded";
 }
@@ -128,23 +128,23 @@ const OWNERSHIP_TEXT: Record<string, string> = {
   recorded: "owner recorded",
   adopted: "adopted",
   declared: "no leader recorded",
-  managed: "Managed worker; role-session: n/a",
+  managed: "Worker",
   unknown: "Owner not recorded",
 };
 export const ownershipText = (ownership: string) =>
   OWNERSHIP_TEXT[ownership] ?? OWNERSHIP_TEXT.unknown;
 const SEAT_ROLE_TEXT: Record<string, string> = {
-  prime: "prime orchestrator",
-  "project-orchestrator": "project orchestrator",
+  prime: "main assistant",
+  "project-orchestrator": "project lead",
 };
 
 /** The seat's state in words. Human-held needs both the effective hold and a human-mode holder. */
 export function seatText(seat: MapSeat | null): string {
-  if (!seat || seat.state !== "assigned") return "No orchestrator yet";
+  if (!seat || seat.state !== "assigned") return "No lead yet";
   if (seat.hold === "effective" && seat.session?.mode === "human") return "Held by you";
-  if (!seat.sessionPresent) return "Its orchestrator session is gone";
-  if (seat.sessionGenerationChanged) return "This orchestrator was restarted since it was assigned";
-  if (!seat.sessionTaskMatches) return "Its orchestrator moved to other work";
+  if (!seat.sessionPresent) return "Its lead session is gone";
+  if (seat.sessionGenerationChanged) return "This lead was restarted since it was assigned";
+  if (!seat.sessionTaskMatches) return "Its lead moved to other work";
   if (seat.hold === "declared") return "Assigned · a hold was asked for but is not in force";
   return "Assigned";
 }
@@ -222,8 +222,8 @@ export function buildOutline({
       kind: "prime",
       depth: 0,
       parent: null,
-      title: `Prime · ${prime.seat}`,
-      detail: `${text} · ${prime.session ? modeText(prime.session.mode) : "no orchestrator"}`,
+      title: `Main assistant · ${prime.seat}`,
+      detail: `${text} · ${prime.session ? modeText(prime.session.mode) : "no lead"}`,
       glyph: "◆",
       label: `Main assistant ${prime.seat}, ${text}`,
       expandable: false,
@@ -471,7 +471,7 @@ function pushSessions(
       depth,
       parent: parentRow,
       title: name,
-      detail: `${modeText(s.mode)} · ${st.text}${s.seatRole ? ` · ${SEAT_ROLE_TEXT[s.seatRole] ?? "holds a seat"}` : ""} · ${association}${s.leaderChanged ? " · its leader changed since it started" : ""}${also.length ? ` · also in ${also.length} other workstream${also.length === 1 ? "" : "s"}` : ""}`,
+      detail: `${modeText(s.mode)} · ${st.text}${s.seatRole ? ` · ${SEAT_ROLE_TEXT[s.seatRole] ?? "has a role"}` : ""} · ${association}${s.leaderChanged ? " · its leader changed since it started" : ""}${also.length ? ` · also in ${also.length} other workstream${also.length === 1 ? "" : "s"}` : ""}`,
       glyph: st.glyph,
       label: `Session ${name}, ${modeText(s.mode)}, ${st.text}${parentName ? `, child of ${parentName}` : link === "adopted" ? ", adopted by an operator" : ""}`,
       expandable: false,

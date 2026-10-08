@@ -1832,7 +1832,7 @@ export const ptBR: TranslationResources = {
       label: "Função",
       none: "Nenhuma",
       planning: "Planejamento",
-      orchestration: "Orquestração",
+      orchestration: "Líder",
       implementation: "Implementação",
       usesDefault: "Usa o padrão de {{role}}: {{model}}, esforço {{effort}}",
       usesDefaultModel: "Usa o padrão de {{role}}: {{model}}",

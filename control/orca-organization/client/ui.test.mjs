@@ -666,8 +666,11 @@ test("inactive human-owned sessions cannot be delegated even with a complete rea
   fireEvent.change(screen.getByLabelText("Control transfer context"), {
     target: { value: "Complete but unauthorized delegation reason" },
   });
-  assert.equal(screen.getByRole("button", { name: "Delegate session" }).disabled, true);
-  assert.equal(screen.getByRole("button", { name: "Delegate as supervisor" }).disabled, true);
+  assert.equal(screen.getByRole("button", { name: "Let Fulcra control this" }).disabled, true);
+  assert.equal(
+    screen.getByRole("button", { name: "Let Fulcra control this as a lead" }).disabled,
+    true,
+  );
   assert.equal(screen.getByRole("button", { name: "Take control" }).disabled, false);
 });
 test("failed management and usage reads become visible and do not retry automatically", async () => {
@@ -1098,7 +1101,7 @@ test("fleet defaults to both hosts, filters Book and opens receipt evidence with
   mount(h(HomeSurface, { theme, layout: { compact: true, platform: "web" } }));
   fireEvent.click(await screen.findByTestId("organization-tab-organisation"));
   fireEvent.click(await screen.findByRole("button", { name: "Workstreams", exact: true }));
-  await screen.findByText("Your orchestrators");
+  await screen.findByText("Your leads");
   fireEvent.click(await screen.findByRole("button", { name: "More views" }));
   fireEvent.click(await screen.findByTestId("organization-tab-sessions"));
   await screen.findByText(/Your work, at a glance/);
@@ -2823,8 +2826,8 @@ test("portfolio distinguishes provider, saved leader and live activity and opens
   await screen.findByText("Product lead");
   assert(screen.getByText("Claude · Chosen model · macbook"));
   assert(screen.getByText("Idle"));
-  assert(screen.getByText(/You have control. This saved leader/));
-  assert(screen.getByText("No workers recorded yet. This orchestrator can still lead the work."));
+  assert(screen.getByText(/You control this. The lead does not control this saved leader now/));
+  assert(screen.getByText("No workers recorded yet. This lead can still lead the work."));
   assert.equal(screen.queryByText("Customer research"), null);
   fireEvent.click(screen.getByRole("button", { name: "Tasks without a recorded leader" }));
   assert(screen.getByRole("button", { name: "Set up leadership: Customer research" }));
@@ -2968,7 +2971,7 @@ test("project source failure retains all work and a removed selection stays expl
   assert(screen.getByText(/Project membership is unavailable or outdated/));
   assert(screen.getByText("Retained work"));
   unavailable = true;
-  fireEvent.click(screen.getByRole("button", { name: "Refresh orchestrators" }));
+  fireEvent.click(screen.getByRole("button", { name: "Refresh leads" }));
   await waitFor(() =>
     assert(view.client.getQueryState(["orca-projects", undefined]).status === "error"),
   );
@@ -3019,9 +3022,9 @@ test("portfolio treats missing leadership and stale runtime as unknown, not infe
   );
   await screen.findByText(/Leadership records are unavailable/);
   assert(screen.getByText(/This view may be out of date/));
-  assert.equal(screen.queryByText("LEAD ORCHESTRATOR"), null);
+  assert.equal(screen.queryByText("LEAD"), null);
   assert.equal(screen.queryByText("Working now"), null);
-  assert.equal(screen.queryByText("No orchestrator is recorded for this workstream."), null);
+  assert.equal(screen.queryByText("No lead is recorded for this workstream."), null);
 });
 test("portfolio keeps suspended team relationships visible and opens their readable updates", async () => {
   const fleet = {
@@ -3110,8 +3113,8 @@ test("portfolio keeps suspended team relationships visible and opens their reada
         c.input.taskId === A,
     ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Back to orchestrators" }));
-  assert(screen.getByText("Your orchestrators"));
+  fireEvent.click(screen.getByRole("button", { name: "Back to leads" }));
+  assert(screen.getByText("Your leads"));
 });
 
 function managedNavigationFixture(nodes) {
@@ -3732,7 +3735,7 @@ test("work overview bounds brief reads and reveals additional retained tasks on 
   );
 });
 
-test("prime leadership names the actual seated orchestrator and opens its real conversation", async () => {
+test("main assistant leadership names the actual seated lead and opens its real conversation", async () => {
   const PRIME = "33333333-3333-4333-8333-333333333333",
     LEAD = "44444444-4444-4444-8444-444444444444",
     TASK2 = "55555555-5555-4555-8555-555555555555",
@@ -3916,13 +3919,11 @@ test("prime leadership names the actual seated orchestrator and opens its real c
 
   // Clicking the project names the actual accountable session instead of a placeholder.
   fireEvent.click(screen.getByRole("button", { name: "Project overview: Shared memory" }));
-  await screen.findByText("PROJECT ORCHESTRATOR");
+  await screen.findByText("PROJECT LEAD");
   assert.equal(screen.queryByText("Unassigned"), null);
   assert.equal(screen.queryByText("Unknown"), null);
   assert(
-    screen.getByText(
-      /A recorded controller role binding names this session as the project orchestrator/,
-    ),
+    screen.getByText(/A recorded controller role binding names this session as the project lead/),
   );
   assert(
     screen.getByText(
@@ -3932,10 +3933,10 @@ test("prime leadership names the actual seated orchestrator and opens its real c
   // The real conversation of the assigned leader is reachable from the project.
   assert(
     screen.getByRole("button", {
-      name: "Read retained updates from Memory lead, project orchestrator",
+      name: "Read retained updates from Memory lead, project lead",
     }),
   );
-  assert(screen.getByRole("button", { name: "Talk to Memory lead, project orchestrator" }));
+  assert(screen.getByRole("button", { name: "Talk to Memory lead, project lead" }));
   assert(screen.getByRole("button", { name: "Change who is accountable for Shared memory" }));
   assert(screen.getByText(/1 of 2 workstreams have a published brief/));
   fireEvent.click(screen.getByRole("button", { name: "Open decision work: Shared memory format" }));
@@ -3944,15 +3945,15 @@ test("prime leadership names the actual seated orchestrator and opens its real c
   // Sessions remain a drill-down and return without losing the project.
   fireEvent.click(
     screen.getByRole("button", {
-      name: "Read retained updates from Memory lead, project orchestrator",
+      name: "Read retained updates from Memory lead, project lead",
     }),
   );
   await screen.findByText("SELECTED SESSION");
   fireEvent.click(screen.getByRole("button", { name: "Back to leadership" }));
-  await screen.findByText("PROJECT ORCHESTRATOR");
+  await screen.findByText("PROJECT LEAD");
 });
 
-test("prime leadership keeps an unreadable binding table distinct from an empty seat", async () => {
+test("main assistant leadership keeps an unreadable binding table distinct from an empty role", async () => {
   const node = {
     id: A,
     task: B,
@@ -4001,7 +4002,7 @@ test("prime leadership keeps an unreadable binding table distinct from an empty 
                 primes: [],
                 projectSeats: [],
                 programme: null,
-                note: "Recorded leadership roles could not be read, so no orchestrator can be named or ruled out here.",
+                note: "Recorded leadership roles could not be read, so no lead can be named or ruled out here.",
               }
             : {
                 observedAt: time(),
@@ -4036,16 +4037,16 @@ test("prime leadership keeps an unreadable binding table distinct from an empty 
   await screen.findByText("Unknown");
   // The crucial distinction: unreadable is not empty, and no seat action is offered.
   assert.equal(screen.queryByText("Unassigned"), null);
-  assert(screen.getByText(/not the same as the seat being empty/));
+  assert(screen.getByText(/not the same as the role being empty/));
   assert.equal(screen.queryByRole("button", { name: "Record who is accountable for Orca" }), null);
   assert(
     screen.getByText(
-      /Recording an orchestrator is unavailable while leadership role records cannot be read/,
+      /Recording a lead is unavailable while leadership role records cannot be read/,
     ),
   );
 });
 
-test("prime leadership reports paged brief coverage and published status instead of claiming none", async () => {
+test("main assistant leadership reports paged brief coverage and published status instead of claiming none", async () => {
   const PRIME = "33333333-3333-4333-8333-333333333333",
     TASK2 = "55555555-5555-4555-8555-555555555555",
     CURSOR = "66666666-6666-4666-8666-666666666666";
@@ -4135,7 +4136,7 @@ test("prime leadership reports paged brief coverage and published status instead
     }),
   );
   fireEvent.click(await screen.findByRole("button", { name: "Project overview: Shared memory" }));
-  await screen.findByText("PROJECT ORCHESTRATOR");
+  await screen.findByText("PROJECT LEAD");
   // A page is not the deployment: the unbriefed workstream is unknown here, never asserted absent.
   assert.equal(screen.queryByText(/1 have none, so their progress is unknown here/), null);
   assert.equal(screen.queryByText(/has none, so their progress is unknown here/), null);
@@ -4151,7 +4152,7 @@ test("prime leadership reports paged brief coverage and published status instead
   assert(screen.getByText("Comparison of three formats is ready"));
 });
 
-test("prime leadership leaves project reach and membership unknown when the directory cannot be read", async () => {
+test("main assistant leadership leaves project reach and membership unknown when the directory cannot be read", async () => {
   const PRIME = "33333333-3333-4333-8333-333333333333",
     LEAD = "44444444-4444-4444-8444-444444444444",
     TASK2 = "55555555-5555-4555-8555-555555555555";
@@ -4238,7 +4239,7 @@ test("prime leadership leaves project reach and membership unknown when the dire
   assert(screen.getByText(/no leader's project reach can be established from this read/));
 });
 
-test("prime leadership separates a hierarchy deeper than the traversal limit from a leadership loop", async () => {
+test("main assistant leadership separates a hierarchy deeper than the traversal limit from a leadership loop", async () => {
   const id = (n) => `${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`;
   const supervisors = Array.from({ length: 70 }, (_, i) => ({
     id: id(100 + i),
@@ -4346,7 +4347,7 @@ test("a selected project that leaves the observation is stated, not silently dro
     }),
   );
   fireEvent.click(await screen.findByRole("button", { name: "Project overview: Shared memory" }));
-  await screen.findByText("PROJECT ORCHESTRATOR");
+  await screen.findByText("PROJECT LEAD");
   await act(async () =>
     view.client.setQueryData(["orca-projects", undefined], {
       ...directory,
@@ -4356,7 +4357,7 @@ test("a selected project that leaves the observation is stated, not silently dro
     }),
   );
   await screen.findByText(/The project you opened is no longer in the current observation/);
-  assert.equal(screen.queryByText("PROJECT ORCHESTRATOR"), null);
+  assert.equal(screen.queryByText("PROJECT LEAD"), null);
 });
 
 test("leadership and workstreams read one shared observation rather than a private copy each", async () => {
@@ -4388,7 +4389,7 @@ test("leadership and workstreams read one shared observation rather than a priva
   assert.equal(calls.filter((c) => c.name === "organization.projects").length, 1);
 });
 
-test("clicking a project shows its goal, progress and needs, and asks the orchestrator for a session", async () => {
+test("clicking a project shows its goal, progress and needs, and asks the lead for a session", async () => {
   const LEAD = "44444444-4444-4444-8444-444444444444",
     TASK2 = "55555555-5555-4555-8555-555555555555",
     OWNED = "77777777-7777-4777-8777-777777777777",
@@ -4481,7 +4482,8 @@ test("clicking a project shows its goal, progress and needs, and asks the orches
     needed: [
       {
         kind: "no-prime",
-        detail: "No prime seat is filled, so this project has no recorded escalation address",
+        detail:
+          "No main assistant role is filled, so this project has no recorded escalation address",
         taskId: null,
         sessionId: null,
         at: null,
@@ -4508,7 +4510,7 @@ test("clicking a project shows its goal, progress and needs, and asks the orches
       return Promise.resolve({
         status: "unavailable",
         message:
-          "This controller does not expose seat session requests yet, so work cannot be routed through a project orchestrator here. Nothing was requested.",
+          "This controller does not expose role session requests yet, so work cannot be routed through a project lead here. Nothing was requested.",
         observedAt: time(),
         requestId: null,
         state: null,
@@ -4531,7 +4533,7 @@ test("clicking a project shows its goal, progress and needs, and asks the orches
             state: "pending",
             sessionId: null,
             at: time(),
-            detail: "The seat has been woken",
+            detail: "The role has been woken",
           },
         ],
       });
@@ -4574,7 +4576,7 @@ test("clicking a project shows its goal, progress and needs, and asks the orches
       return Promise.resolve({
         status: "unavailable",
         message:
-          "This controller does not expose adoption yet, so a declared session cannot be placed under a seat here. Nothing was changed.",
+          "This controller does not expose adoption yet, so a declared session cannot be placed under a role here. Nothing was changed.",
         observedAt: time(),
         sessionId: null,
         seat: null,
@@ -4639,12 +4641,12 @@ test("clicking a project shows its goal, progress and needs, and asks the orches
   assert(screen.getByText(/A request is not a session/));
 
   // The seat's allowance is stated before the operator is asked to write a reason.
-  assert(await screen.findByText(/Session allowance: 3 remaining of 4 at seat revision 3/));
+  assert(await screen.findByText(/Session allowance: 3 remaining of 4 at role revision 3/));
 
   // A declared session is offered for adoption, and adoption is named as spending allowance.
   assert(await screen.findByText(/Owned by this project, led by nobody/));
   assert(screen.getByText(/led by no recorded leader/));
-  assert(screen.getByText(/adopting spends the seat's session allowance/));
+  assert(screen.getByText(/adopting spends/));
 
   // Starting work routes through the seat and reports an unavailable controller honestly.
   fireEvent.click(
@@ -4656,10 +4658,8 @@ test("clicking a project shows its goal, progress and needs, and asks the orches
   fireEvent.change(screen.getByRole("textbox", { name: "Why this work belongs to this project" }), {
     target: { value: "Owned by the shared memory project" },
   });
-  fireEvent.click(
-    screen.getByRole("button", { name: "Ask this project's orchestrator for a session" }),
-  );
-  await screen.findByText(/does not expose seat session requests yet/);
+  fireEvent.click(screen.getByRole("button", { name: "Ask this project's lead for a session" }));
+  await screen.findByText(/does not expose role session requests yet/);
   assert.equal(sent.length, 1);
   // The app names the seat and workstream only; it mints no identity and claims no ownership.
   assert.equal(sent[0].seat, B);
@@ -4670,7 +4670,7 @@ test("clicking a project shows its goal, progress and needs, and asks the orches
   assert.equal("projectId" in sent[0], false);
 });
 
-test("an unassigned project offers assigning an orchestrator instead of a permanent placeholder", async () => {
+test("an unassigned project offers assigning a lead instead of a permanent placeholder", async () => {
   const TASK2 = "55555555-5555-4555-8555-555555555555";
   const fleet = {
     observedAt: time(),
@@ -4774,14 +4774,14 @@ test("an unassigned project offers assigning an orchestrator instead of a perman
   );
   fireEvent.click(await screen.findByRole("button", { name: "Project overview: Shared memory" }));
   await screen.findByText(
-    /This project has no assigned orchestrator, so work cannot be routed through one/,
+    /This project has no assigned lead, so work cannot be routed through one/,
   );
   // The empty state is an action, not a dead label.
-  fireEvent.click(screen.getByRole("button", { name: "Assign an orchestrator for Shared memory" }));
+  fireEvent.click(screen.getByRole("button", { name: "Assign a lead for Shared memory" }));
   await screen.findByText("Who is accountable for Shared memory");
   assert(screen.getByRole("button", { name: "Record this session as accountable" }));
   assert.equal(
-    screen.queryByRole("button", { name: "Ask this project's orchestrator for a session" }),
+    screen.queryByRole("button", { name: "Ask this project's lead for a session" }),
     null,
   );
 });
@@ -4828,7 +4828,7 @@ test("Recovery: the cards directly under the headline are the headline restart; 
     h(RecoveryBanner, {
       theme,
       navigation: null,
-      titles: { [U(1)]: "H2 worker", [U(2)]: "H4 worker", [U(3)]: "H4 orchestrator" },
+      titles: { [U(1)]: "H2 worker", [U(2)]: "H4 worker", [U(3)]: "H4 lead" },
     }),
   );
   const toggle = await screen.findByRole("button", {
@@ -4838,7 +4838,7 @@ test("Recovery: the cards directly under the headline are the headline restart; 
   const latest = screen.getByTestId("recovery-section-latest"),
     earlier = screen.getByTestId("recovery-section-earlier");
   assert.match(latest.textContent, /H4 worker/);
-  assert.match(latest.textContent, /H4 orchestrator/);
+  assert.match(latest.textContent, /H4 lead/);
   assert.doesNotMatch(latest.textContent, /H2 worker|23 Sep/);
   assert.match(earlier.textContent, /^Earlier restarts and other takeovers/);
   assert.match(earlier.textContent, /H2 worker/);
@@ -5268,12 +5268,17 @@ test("correcting the visible project destination preserves the original conversa
   assert.deepEqual(f.opened, [{ serverId: f.host, agentId }]);
 });
 
-test("empty workspace intake retains ownership without spending a prime turn or allocating technical placement", async (t) => {
+test("empty workspace intake retains ownership without spending a main assistant turn or allocating technical placement", async (t) => {
   const f = intakeFixture(t);
   f.update({
     action: "create-workspace",
     name: "Empty planning workspace",
-    prime: { serverId: "srv_example_mini", agentId: S, seat: "delivery", label: "Delivery prime" },
+    prime: {
+      serverId: "srv_example_mini",
+      agentId: S,
+      seat: "delivery",
+      label: "Delivery main assistant",
+    },
   });
   const workspaceId = f.store.read().workspaces[1].id;
   mount(
@@ -5284,7 +5289,7 @@ test("empty workspace intake retains ownership without spending a prime turn or 
   );
   fireEvent.click(await screen.findByRole("button", { name: "Retain this request" }));
   await screen.findByText(
-    "Your request is retained. Add an existing project in Workspaces before asking the prime to route it.",
+    "Your request is retained. Add an existing project in Workspaces before asking the main assistant to route it.",
   );
   assert.equal(f.store.read().intakes[0].id, f.intakeId);
   assert.equal(f.store.read().intakes[0].prime.agentId, S);

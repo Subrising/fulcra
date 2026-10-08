@@ -168,18 +168,15 @@ test("T4 human-held needs the effective hold AND a human-mode holder", () => {
 });
 
 // J0 plain language: the same states, in sentences a busy reader understands (J7 walkthrough, screen 01).
-test("T4 seat states read in words: vacant, holder missing, generation changed, task changed", () => {
-  assert.equal(seatText(null), "No orchestrator yet");
-  assert.equal(seatText(seat({ state: "vacant" })), "No orchestrator yet");
-  assert.equal(seatText(seat({ sessionPresent: false })), "Its orchestrator session is gone");
+test("T4 role states read in words: vacant, holder missing, generation changed, task changed", () => {
+  assert.equal(seatText(null), "No lead yet");
+  assert.equal(seatText(seat({ state: "vacant" })), "No lead yet");
+  assert.equal(seatText(seat({ sessionPresent: false })), "Its lead session is gone");
   assert.equal(
     seatText(seat({ sessionGenerationChanged: true })),
-    "This orchestrator was restarted since it was assigned",
+    "This lead was restarted since it was assigned",
   );
-  assert.equal(
-    seatText(seat({ sessionTaskMatches: false })),
-    "Its orchestrator moved to other work",
-  );
+  assert.equal(seatText(seat({ sessionTaskMatches: false })), "Its lead moved to other work");
   for (const state of [
     null,
     seat({ state: "vacant" }),
@@ -450,7 +447,7 @@ test("T5 layout is deterministic and a status change moves no node", () => {
   assert.equal(changeAnnouncement(buildOutline(input).rows, buildOutline(input).rows), null);
 });
 
-test("T5 graph links: recorded channel only, never a fabricated all-prime escalation, membership, recorded parent, adoption", () => {
+test("T5 graph links: recorded channel only, never a fabricated all-main assistant escalation, membership, recorded parent, adoption", () => {
   const ov = overview(2);
   ov.projects[0].channels = [{ primeSeat: "delivery", state: "open", open: true }];
   const lead = session(1, W1),
@@ -614,7 +611,7 @@ const liveInput = (rows: Row[], entries: PluginObservedAgent[]) => ({
   now: T0,
 });
 
-test("live map links only the recorded responsible prime and explicitly opened channel", () => {
+test("live map links only the recorded responsible main assistant and explicitly opened channel", () => {
   const ov = overview(2);
   ov.primes.push(seat({ seat: "research", sessionId: uuid(903) }));
   ov.projects[0].channels = [{ primeSeat: "research", open: true, state: "open" }];
