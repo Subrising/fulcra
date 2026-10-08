@@ -435,6 +435,7 @@ build-ci	M	98	3	packages/app/src/e2e-metro-readiness.test.ts
 build-ci	A	3	0	packages/app/test-stubs/expo-clipboard.ts
 build-ci	M	98	0	packages/app/test-stubs/lucide-react-native.ts
 build-ci	M	3	0	packages/app/test-stubs/react-native-svg.ts
+build-ci	M	2	1	packages/app/tsconfig.json
 build-ci	M	48	1	packages/app/vitest.config.ts
 build-ci	M	1	0	packages/cli/package.json
 build-ci	M	10	0	packages/client/package.json
@@ -658,8 +659,8 @@ desktop-runtime	A	48	0	packages/desktop/src/daemon/command-centre-owner.test.ts
 desktop-runtime	A	35	0	packages/desktop/src/daemon/command-centre-owner.ts
 desktop-runtime	A	50	0	packages/desktop/src/daemon/command-centre-target.test.ts
 desktop-runtime	A	31	0	packages/desktop/src/daemon/command-centre-target.ts
-desktop-runtime	M	715	3	packages/desktop/src/daemon/daemon-manager.test.ts
-desktop-runtime	M	309	18	packages/desktop/src/daemon/daemon-manager.ts
+desktop-runtime	M	767	3	packages/desktop/src/daemon/daemon-manager.test.ts
+desktop-runtime	M	359	24	packages/desktop/src/daemon/daemon-manager.ts
 desktop-runtime	M	81	6	packages/desktop/src/daemon/desktop-packaging.test.ts
 desktop-runtime	M	26	7	packages/desktop/src/daemon/linux-launcher.posix.test.ts
 desktop-runtime	A	65	0	packages/desktop/src/daemon/managed-restart.test.ts
@@ -678,7 +679,7 @@ desktop-runtime	M	45	7	packages/desktop/src/settings/desktop-settings.test.ts
 desktop-runtime	M	45	7	packages/desktop/src/settings/desktop-settings.ts
 desktop-runtime	A	126	0	packages/server/src/server/bootstrap-interrupted-turn.test.ts
 desktop-runtime	M	75	5	packages/server/src/server/bootstrap.smoke.test.ts
-desktop-runtime	M	337	20	packages/server/src/server/bootstrap.ts
+desktop-runtime	M	338	20	packages/server/src/server/bootstrap.ts
 desktop-runtime	M	3	1	packages/server/src/server/config.test.ts
 desktop-runtime	M	42	20	packages/server/src/server/config.ts
 desktop-runtime	M	19	1	packages/server/src/server/daemon-worker.ts
@@ -1302,9 +1303,9 @@ plugin-host	M	31	0	packages/app/src/plugins/evaluate.test.ts
 plugin-host	M	19	0	packages/app/src/plugins/evaluate.ts
 plugin-host	A	74	0	packages/app/src/plugins/home-computer.test.ts
 plugin-host	A	100	0	packages/app/src/plugins/home-computer.ts
-plugin-host	M	32	0	packages/app/src/plugins/host-navigation-model.ts
+plugin-host	M	45	0	packages/app/src/plugins/host-navigation-model.ts
 plugin-host	A	154	0	packages/app/src/plugins/host-navigation.integration.test.tsx
-plugin-host	M	116	0	packages/app/src/plugins/host-navigation.test.ts
+plugin-host	M	128	0	packages/app/src/plugins/host-navigation.test.ts
 plugin-host	M	62	0	packages/app/src/plugins/host-navigation.test.tsx
 plugin-host	M	69	3	packages/app/src/plugins/host-navigation.ts
 plugin-host	M	5	5	packages/app/src/plugins/hosts/index.test.ts
@@ -1348,7 +1349,7 @@ plugin-host	M	13	14	packages/app/src/screens/settings/plugins-page.tsx
 plugin-host	M	2	2	packages/cli/src/commands/plugin/index.test.ts
 plugin-host	M	1	1	packages/cli/src/commands/plugin/index.ts
 plugin-host	M	1	0	packages/plugin/package.json
-plugin-host	M	107	0	packages/plugin/src/client/contracts.ts
+plugin-host	M	112	0	packages/plugin/src/client/contracts.ts
 plugin-host	M	43	0	packages/plugin/src/client/index.ts
 plugin-host	A	34	0	packages/plugin/src/client/navigation-contract.test.ts
 plugin-host	M	17	0	packages/plugin/src/client/react-native.ts
@@ -1458,8 +1459,8 @@ session-launch	M	12	4	packages/server/src/server/agent/projected-timeline-contra
 session-launch	M	15	1	packages/server/src/server/agent/provider-refresh-deadline.ts
 session-launch	M	22	0	packages/server/src/server/agent/provider-registry.test.ts
 session-launch	M	9	0	packages/server/src/server/agent/provider-registry.ts
-session-launch	M	26	15	packages/server/src/server/agent/provider-snapshot-manager.test.ts
-session-launch	M	76	32	packages/server/src/server/agent/provider-snapshot-manager.ts
+session-launch	M	42	15	packages/server/src/server/agent/provider-snapshot-manager.test.ts
+session-launch	M	82	32	packages/server/src/server/agent/provider-snapshot-manager.ts
 session-launch	M	108	0	packages/server/src/server/agent/providers/claude/agent.env.test.ts
 session-launch	M	94	81	packages/server/src/server/agent/providers/claude/agent.image-rendering.test.ts
 session-launch	M	87	0	packages/server/src/server/agent/providers/claude/agent.interrupt-restart-regression.test.ts
