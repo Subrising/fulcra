@@ -63,3 +63,10 @@ test("N Book creations are refused, write no route and start no remote process; 
   assert.ok(fixture.calls.some((c) => c.local === "create"));
   assert.deepEqual(remote(), []);
 });
+
+test("the process recorder sees processes started through node:child_process", async () => {
+  const { spawnSync } = await import("node:child_process");
+  spawnSync("/usr/bin/ssh", ["-V"]);
+  assert.equal(remote().length, 1);
+  fixture.processes.length = 0;
+});
