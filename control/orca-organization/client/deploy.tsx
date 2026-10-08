@@ -611,7 +611,9 @@ function PlanPicker({
       openMap({ workspaceId: source.id, serverId: host?.id });
       setProblem(null);
     } catch {
-      setProblem("The architecture map could not be opened. Check that the project is open in Fulcra.");
+      setProblem(
+        "The architecture map could not be opened. Check that the project is open in Fulcra.",
+      );
     }
   }
   async function plan() {
@@ -975,13 +977,15 @@ export function DeploySection({
               onRollBack={() => void startRollback(e)}
               onJob={setJob}
             />
-            {picking === e.id && <PlanPicker
+            {picking === e.id && (
+              <PlanPicker
                 theme={theme}
                 environment={e}
                 onPlanned={setPlan}
                 host={host}
                 navigation={navigation}
-              />}
+              />
+            )}
           </View>
         ))}
       {d?.available && !plan && (!envs.length || connecting) && (

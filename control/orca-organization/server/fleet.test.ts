@@ -52,7 +52,9 @@ test("portfolio includes recorded leaders without workers and workstreams withou
     ["Delivery project", "Product research"],
   );
   assert(
-    f.methods.every((m) => ["list", "observe", "manager-summary", "quota-status", "bindings-status"].includes(m)),
+    f.methods.every((m) =>
+      ["list", "observe", "manager-summary", "quota-status", "bindings-status"].includes(m),
+    ),
   );
 });
 test("invalid or unavailable leadership is unknown; foreign roles and workers do not become owners", async () => {
@@ -227,7 +229,9 @@ test("both hosts remain bound to task and real native IDs; inactive relationship
   assert.equal(r.nodes[1].observedAt, at);
   assert(!JSON.stringify(r).includes("never expose"));
   assert(
-    f.methods.every((m) => ["list", "observe", "manager-summary", "quota-status", "bindings-status"].includes(m)),
+    f.methods.every((m) =>
+      ["list", "observe", "manager-summary", "quota-status", "bindings-status"].includes(m),
+    ),
   );
 });
 test("active supervision uses current controller linked ownership and both delegated modes", async () => {

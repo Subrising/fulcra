@@ -176,10 +176,7 @@ test("T4 role states read in words: vacant, holder missing, generation changed, 
     seatText(seat({ sessionGenerationChanged: true })),
     "This lead was restarted since it was assigned",
   );
-  assert.equal(
-    seatText(seat({ sessionTaskMatches: false })),
-    "Its lead moved to other work",
-  );
+  assert.equal(seatText(seat({ sessionTaskMatches: false })), "Its lead moved to other work");
   for (const state of [
     null,
     seat({ state: "vacant" }),

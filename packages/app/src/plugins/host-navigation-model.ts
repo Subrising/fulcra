@@ -29,7 +29,8 @@ export function createPluginHostNavigation(
       const destinationWorkspaceId = workspaceId.trim()
         ? owner.resolveWorkspace({ serverId: destinationServerId, workspaceId })
         : null;
-      if (!destinationWorkspaceId) throw new Error("Workspace is unavailable on the requested host.");
+      if (!destinationWorkspaceId)
+        throw new Error("Workspace is unavailable on the requested host.");
       owner.openWorkspace({
         serverId: destinationServerId,
         workspaceId: destinationWorkspaceId,

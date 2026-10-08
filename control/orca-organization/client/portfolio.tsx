@@ -87,11 +87,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
     >
       {chosen ? (
         <>
-          <WorkButton
-            theme={props.theme}
-            label="Back to leads"
-            onPress={() => setSelected(null)}
-          />
+          <WorkButton theme={props.theme} label="Back to leads" onPress={() => setSelected(null)} />
           <Activity
             key={`${props.host?.id}:${chosen.id}`}
             {...props}
@@ -386,8 +382,8 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
               {showUnassigned && (
                 <>
                   <Text style={muted}>
-                    No lead is recorded for these tasks. Opening a task does not give control
-                    of it to a lead.
+                    No lead is recorded for these tasks. Opening a task does not give control of it
+                    to a lead.
                   </Text>
                   {unassigned.slice(0, limit).map((task) => (
                     <WorkButton
