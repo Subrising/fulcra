@@ -222,6 +222,8 @@ describe("daemon-manager commands", () => {
   it("reports an errored daemon when the local daemon state cannot be read", async () => {
     mkdirSync(mocks.paseoHome);
     writeFileSync(path.join(mocks.paseoHome, "paseo.pid"), "garbage");
+    // readDaemonInstance is mocked in this file; an unreadable pid file makes it throw.
+    mocks.readInstance.mockRejectedValueOnce(new Error("Invalid daemon pid file"));
 
     const status = await createDaemonCommandHandlers().desktop_daemon_status();
 
@@ -532,9 +534,10 @@ describe("D29-correctness: uncached main-process handshake", () => {
     expect(await request()).toEqual({ cancel: true });
   });
   it("refuses ownership replaced during asynchronous credential lookup", async () => {
+    // A replaced lifetime stays replaced: every read after the first sees it, including the final check.
     mocks.readInstance
       .mockResolvedValueOnce(instance)
-      .mockResolvedValueOnce({ ...instance, startedAt: "replaced" });
+      .mockResolvedValue({ ...instance, startedAt: "replaced" });
     expect(await request()).toEqual({ cancel: true });
   });
 });
