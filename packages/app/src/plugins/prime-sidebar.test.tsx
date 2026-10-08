@@ -100,7 +100,7 @@ afterEach(() => {
   cleanup();
   clients.splice(0).forEach((c) => c.clear());
 });
-it("opens the recorded prime identity and manages vacant slots through Leadership", async () => {
+it("opens the recorded main assistant identity and manages vacant slots through Leadership", async () => {
   f.read.mockResolvedValue({
     available: true,
     primes: [
@@ -134,7 +134,7 @@ it("distinguishes unavailable role records from an empty directory and allows re
   expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
   expect(f.open).not.toHaveBeenCalled();
 });
-it("keeps top primes and setup reachable for an empty organization", async () => {
+it("keeps top main assistants and setup reachable for an empty organization", async () => {
   f.read.mockResolvedValue({ available: true, primes: [] });
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "No main assistant yet · Set up" }));
@@ -175,7 +175,7 @@ it("does not open a missing or unloaded identity on the controller host", async 
   expect(f.push).toHaveBeenCalledTimes(2);
 });
 
-it("opens a Book prime on its original host instead of the controller", async () => {
+it("opens a Book main assistant on its original host instead of the controller", async () => {
   f.host = "book";
   f.read.mockResolvedValue({
     available: true,
@@ -197,7 +197,7 @@ it("opens a Book prime on its original host instead of the controller", async ()
 });
 
 for (const refusal of ["missing-host", "registry-not-ready"] as const) {
-  it(`retains the cached Book prime identity and opens Leadership when ${refusal}`, async () => {
+  it(`retains the cached Book main assistant identity and opens Leadership when ${refusal}`, async () => {
     f.host = "book";
     f.registeredHost = refusal !== "missing-host";
     f.registryReady = refusal !== "registry-not-ready";

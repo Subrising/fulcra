@@ -139,7 +139,7 @@ const fleet = {
       task: W,
       host: "mini",
       agentId: null,
-      title: "Tally orchestrator",
+      title: "Tally lead",
       provider: "claude",
       model: null,
       mode: "delegated",
@@ -245,7 +245,7 @@ const brief = (extra = {}) => ({
   partial: false,
   error: null,
   projectId: TALLY,
-  authorName: "the Tally orchestrator",
+  authorName: "the Tally lead",
   stale: false,
   observed: {
     sessionsRunning: 1,
@@ -319,7 +319,7 @@ test("M1: the tree groups projects by the owner the controller resolved; unowned
   );
   assert.deepEqual(t.primes[0].projects[0].orchestrator, {
     state: "working",
-    name: "Tally orchestrator",
+    name: "Tally lead",
     sessionId: LEAD,
   });
   assert.equal(t.primes[0].holder, "Release lead");
@@ -337,7 +337,7 @@ test("M1: the tree groups projects by the owner the controller resolved; unowned
   assert.equal(relativeTime(iso(30 * 3600000)), "yesterday");
 });
 
-test("U1: primes with a one-line remit, their projects, each orchestrator and live session count", async () => {
+test("U1: main assistants with a one-line remit, their projects, each lead and live session count", async () => {
   serve();
   mount();
   await waitFor(() => assert(screen.getByTestId(`org-project-${TALLY}`)));
@@ -346,17 +346,17 @@ test("U1: primes with a one-line remit, their projects, each orchestrator and li
   assert(within(tree).getByText("Owns 1 project: Tally"));
   assert(within(tree).getByText("Led by Release lead"));
   assert(within(tree).getByText("Owns Platform work · 1 project"));
-  assert(within(tree).getByText("No one is in this seat"));
+  assert(within(tree).getByText("No one is in this role"));
   const row = screen.getByTestId(`org-project-${TALLY}`);
-  assert(within(row).getByText("Tally orchestrator · working now"));
+  assert(within(row).getByText("Tally lead · working now"));
   assert(within(row).getByText("● 1 of 3 sessions working"));
-  assert(within(screen.getByTestId(`org-project-${ORCA}`)).getByText("No orchestrator yet"));
+  assert(within(screen.getByTestId(`org-project-${ORCA}`)).getByText("No lead yet"));
   assert(screen.getByText("No main assistant yet · 1"));
   assert(screen.getByTestId(`org-project-${SITE}`));
   assert(!tree.textContent.includes(TALLY), "ids stay out of the tree");
 });
 
-test("U2: a prime collapses and expands its projects", async () => {
+test("U2: a main assistant collapses and expands its projects", async () => {
   serve();
   mount({ compact: true, platform: "ios" });
   const header = await screen.findByRole("button", {
@@ -381,7 +381,7 @@ test('U3: tapping a project shows Now / Next / Needs you / Risks, "Written by", 
   fireEvent.click(await screen.findByTestId(`org-project-${TALLY}`));
   const story = await screen.findByTestId("org-story");
   await waitFor(() => assert(within(story).getByText("Launch may slip by a week.")));
-  assert(within(story).getByText("Written by the Tally orchestrator, 10 min ago"));
+  assert(within(story).getByText("Written by the Tally lead, 10 min ago"));
   for (const s of ["Now", "Next", "Needs you", "Risks", "Finished since last time"])
     assert(within(story).getByText(s));
   assert(within(story).getByText("• Fix the two sign-up problems — by 1 Oct"));
@@ -420,7 +420,7 @@ test('U4: a stale story says "May be out of date"; a project with no story says 
   await waitFor(() =>
     assert(within(screen.getByTestId("org-story")).getByText("No update has been written yet.")),
   );
-  assert(within(screen.getByTestId("org-story")).getByText("No prime yet"));
+  assert(within(screen.getByTestId("org-story")).getByText("No main assistant yet"));
 });
 
 test("U5: Edit remit moves a project with a reason, as one move with the revision it showed", async () => {
@@ -467,11 +467,11 @@ test("U5: Edit remit moves a project with a reason, as one move with the revisio
   assert(!calls.some((c) => c.name === "organization.remit-assign"));
 });
 
-test("U6: a project with no prime gets its own remit; a refusal is shown as it is; history reads as words", async () => {
+test("U6: a project with no main assistant gets its own remit; a refusal is shown as it is; history reads as words", async () => {
   serve({
     "organization.remit-assign": () => ({
       ok: false,
-      message: "Changed since you looked; refresh: it already has a prime, so move it instead",
+      message: "Changed since you looked; refresh: it already has a main assistant, so move it instead",
       observedAt: iso(),
       remit: null,
     }),
@@ -488,7 +488,7 @@ test("U6: a project with no prime gets its own remit; a refusal is shown as it i
   await waitFor(() =>
     assert(
       within(sheet).getByText(
-        "Changed since you looked; refresh: it already has a prime, so move it instead",
+        "Changed since you looked; refresh: it already has a main assistant, so move it instead",
       ),
     ),
   );
@@ -560,7 +560,7 @@ test("a project session opens step-through directly", async () => {
   fireEvent.click(await screen.findByTestId(`org-project-${TALLY}`));
   fireEvent.click(screen.getByRole("button", { name: /Show saved conversations/ }));
   fireEvent.click(
-    await screen.findByRole("button", { name: "Read activity history: Tally orchestrator" }),
+    await screen.findByRole("button", { name: "Read activity history: Tally lead" }),
   );
   await waitFor(() =>
     assert(
@@ -570,7 +570,7 @@ test("a project session opens step-through directly", async () => {
   assert.deepEqual(
     calls.filter((c) => c.name === "organization.session-turns").map((c) => c.input.sessionId),
     [LEAD],
-    "only the exact selected orchestrator history is read",
+    "only the exact selected lead history is read",
   );
   assert(calls.some((c) => c.name === "organization.fleet" && c.input.projectId === TALLY));
 });

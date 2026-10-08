@@ -214,7 +214,7 @@ test("graph presents unknown names without hashes and resolves recorded leader r
   assert(!g.nodes.some((n) => n.title.includes("abcdef12"))); // Portable hosts (1bea30f2): the label is the configured host name.
   assert(g.nodes.some((n) => n.title === "Untitled Studio conversation"));
   assert(g.nodes.find((n) => n.target === "b")!.detail.includes("Worker for Release coordinator"));
-  assert(g.nodes.find((n) => n.target === "a")!.detail.includes("Lead orchestrator"));
+  assert(g.nodes.find((n) => n.target === "a")!.detail.includes("Lead"));
   assert(g.nodes.find((n) => n.target === "a")!.detail.includes("Idle"));
 });
 // J3 tracker items in the work graph (J3-DESIGN.md §6).

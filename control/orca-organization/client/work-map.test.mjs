@@ -127,7 +127,7 @@ const overview = (extra = {}) => ({
   attention: [
     {
       kind: "no-project-orchestrator",
-      detail: "LinkedIn and content needs an orchestrator.",
+      detail: "LinkedIn and content needs a lead.",
       projectId: P2,
       taskId: null,
       sessionId: null,
@@ -139,7 +139,7 @@ const overview = (extra = {}) => ({
     projects: { available: true, partial: false, note: "dir" },
     fleet: { available: true, partial: false, observedAt: iso() },
   },
-  note: "Read-only. A seat records accountability; idle is not done, and nothing on this map grants, sends or takes over.",
+  note: "Read-only. A role records accountability; idle is not done, and nothing on this map grants, sends or takes over.",
   ...extra,
 });
 const project = (projectId) => ({
@@ -223,14 +223,14 @@ const serve = (ov = overview()) =>
 const props = { theme, layout: { compact: true, platform: "web" }, host: { id: "mini" } };
 const READS = new Set(["organization.work-map", "organization.work-map-project"]);
 
-test("work map renders prime, projects and attention, and reads nothing but the two work-map reads", async () => {
+test("work map renders main assistant, projects and attention, and reads nothing but the two work-map reads", async () => {
   serve();
   mount(h(WorkMapSurface, props));
   await screen.findByText("Fulcra work map");
   await screen.findByRole("button", { name: /Main assistant delivery, Held by you/ });
   assert(screen.getByRole("button", { name: /Project Orca platform, Assigned/ }));
   assert(
-    screen.getByRole("button", { name: "Attention: LinkedIn and content needs an orchestrator." }),
+    screen.getByRole("button", { name: "Attention: LinkedIn and content needs a lead." }),
   );
   assert(screen.getByText(/Observed \d+ s ago/));
   // The opening view stays at prime/project summaries and reads no project until expansion.
@@ -314,7 +314,7 @@ test("a stale observation is retained, labelled STALE, dimmed and drawn with hol
   serve(overview({ observedAt: iso(120_000) }));
   mount(h(WorkMapSurface, props));
   await screen.findByText(/STALE · retained 2 min ago/);
-  assert(screen.getByText(/◇ Prime · delivery/), "the prime glyph is hollow when stale");
+  assert(screen.getByText(/◇ Prime · delivery/), "the main assistant glyph is hollow when stale");
   assert(screen.getByRole("button", { name: /Main assistant delivery/ }));
 });
 
@@ -340,7 +340,7 @@ test("with no observation at all the error state names Fulcra and the reason", a
   );
 });
 
-test("unreadable seats are shown as unknown, never as no seats", async () => {
+test("unreadable roles are shown as unknown, never as no roles", async () => {
   serve(
     overview({
       available: false,
@@ -351,16 +351,16 @@ test("unreadable seats are shown as unknown, never as no seats", async () => {
   );
   mount(h(WorkMapSurface, props));
   await screen.findByText(
-    "Recorded seats could not be read (Operator authorization required). No orchestrator can be named or ruled out.",
+    "Recorded roles could not be read (Operator authorization required). No lead can be named or ruled out.",
   );
   assert.equal(screen.queryByText(/No prime or project orchestrator is recorded yet/), null);
 });
 
-test("an empty installation says where seats are assigned, without offering to assign them", async () => {
+test("an empty installation says where roles are assigned, without offering to assign them", async () => {
   serve(overview({ primes: [], projects: [], unplaced: [], attention: [] }));
   mount(h(WorkMapSurface, props));
   await screen.findByText(
-    "No prime or project orchestrator is recorded yet. Seats are assigned in Leadership.",
+    "No main assistant or project lead is recorded yet. Roles are assigned in Leadership.",
   );
 });
 
@@ -371,7 +371,7 @@ test("freeze stops updates and says so; polling cadence is 15 s overview / 30 s 
   const { client } = mount(h(WorkMapSurface, props));
   await screen.findByRole("button", { name: /Main assistant delivery/ });
   fireEvent.click(
-    screen.getByRole("button", { name: "Attention: LinkedIn and content needs an orchestrator." }),
+    screen.getByRole("button", { name: "Attention: LinkedIn and content needs a lead." }),
   );
   await waitFor(() =>
     assert(client.getQueryCache().find({ queryKey: ["orca-work-map-project", "mini", P2] })),
@@ -407,7 +407,7 @@ test("the needs-attention filter and search narrow the outline; a miss offers to
   );
   assert(screen.getByRole("button", { name: /Project LinkedIn and content/ }));
   fireEvent.click(screen.getByRole("radio", { name: "Filter: All" }));
-  fireEvent.change(screen.getByLabelText("Search sessions, seats, workstreams and issues"), {
+  fireEvent.change(screen.getByLabelText("Search sessions, roles, workstreams and issues"), {
     target: { value: "no such thing" },
   });
   await screen.findByText("Nothing matches these filters.");

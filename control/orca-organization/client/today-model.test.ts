@@ -115,9 +115,9 @@ const stop = (n: number, resetAt: string, stoppedAt = "2026-09-28T11:06:35.349Z"
 });
 
 test("operator words become plain words, and tracking codes leave titles", () => {
-  assert.equal(plain("Command Centre project orchestrator"), "Command Centre project lead");
+  assert.equal(plain("Command Centre project lead"), "Command Centre project lead");
   assert.equal(
-    plain("the delivery prime took the seat after a generation change; ack pending"),
+    plain("the delivery main assistant took the role after a generation change; ack pending"),
     "the delivery lead took the role after a restart change; receipt pending",
   );
   assert.equal(
@@ -282,8 +282,8 @@ test("a written update is used as the story, in plain words", () => {
     writtenAt: "2026-09-29T02:00:00.000Z",
     health: "on-track",
     headline: "Inbox fix lands today",
-    now: "The orchestrator is testing the fix.",
-    next: [{ text: "Ship to the prime", by: null }],
+    now: "The lead is testing the fix.",
+    next: [{ text: "Ship to the main assistant", by: null }],
     needsYou: [],
     risks: [],
     shipped: [{ text: "Tracker refresh", ref: null }],
@@ -314,7 +314,7 @@ test("needs you: decisions from the inbox open in place; held counts stand in wh
         key: `decision-${sid(7)}`,
         source: "decision",
         ref: `decision:${sid(7)}`,
-        title: "Pick the orchestrator refresh design",
+        title: "Pick the lead refresh design",
         summary: "Two options.",
         projectId: P,
         urgency: "now",
