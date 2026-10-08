@@ -77,5 +77,28 @@ do {
     check("a timestamp reset is a restart", last, "one two three four five six")
 }
 
+// 7. Review 0.2.8 finding 4: past the restart cap the rest of the audio is not transcribed. The dictation must not
+//    end as a success with the short text; it is rejected so the app sends the recorded audio to the host.
+do {
+    var budget = RestartBudget(limit: 40)
+    var allowed = 0
+    for _ in 1...41 where budget.spend() { allowed += 1 }
+    check("40 restarts are allowed, the 41st is not", "\(allowed) \(budget.exhausted)", "40 true")
+    check("a truncated dictation is rejected, with its text kept out",
+          "\(DictationOutcome.decide(text: "one two three", failed: true, truncated: budget.exhausted))",
+          "\(DictationOutcome.reject(code: "ON_DEVICE_SPEECH_TRUNCATED", message: "On-device transcription stopped before the audio ended; recorded audio is retained"))")
+    var fresh = RestartBudget(limit: 40)
+    for _ in 1...40 { _ = fresh.spend() }
+    check("40 restarts still end with the text",
+          "\(DictationOutcome.decide(text: "one two three", failed: false, truncated: fresh.exhausted))",
+          "\(DictationOutcome.text("one two three"))")
+    check("no text after a failure is rejected as unavailable",
+          "\(DictationOutcome.decide(text: "", failed: true, truncated: false))",
+          "\(DictationOutcome.reject(code: "ON_DEVICE_SPEECH_UNAVAILABLE", message: "On-device transcription unavailable; recorded audio is retained"))")
+    check("a timeout keeps the text it has",
+          "\(DictationOutcome.decide(text: "one two", failed: true, truncated: false))",
+          "\(DictationOutcome.text("one two"))")
+}
+
 if failures > 0 { print("\(failures) failed"); exit(1) }
 print("all passed")

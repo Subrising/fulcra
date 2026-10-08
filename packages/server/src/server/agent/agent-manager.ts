@@ -122,6 +122,7 @@ import {
   isDelegatedAgent,
   isOpenAgentTabLabel,
   PARENT_AGENT_ID_LABEL,
+  SEAT_LABEL,
 } from "@getpaseo/protocol/agent-labels";
 import type { Logger } from "pino";
 import { childModeClass, type ChildModeClass } from "./create-agent-mode.js";
@@ -944,6 +945,14 @@ interface CascadeArchiveAdmission {
   handle?: TrustedOperationHandle;
 }
 type CascadeArchivePlan = Map<string, CascadeArchiveAdmission>;
+
+// FULCRA(orchestration): the main assistant label follows the controller's seat bindings; a new chat (a fork, a
+// `paseo run --label`) never starts with it. The controller sets it on the seat holder after the seat is held.
+function withoutSeatLabel(options: CreateAgentOptions): CreateAgentOptions {
+  if (!options.labels || !Object.hasOwn(options.labels, SEAT_LABEL)) return options;
+  const { [SEAT_LABEL]: _dropped, ...labels } = options.labels;
+  return { ...options, labels };
+}
 
 export class AgentManager {
   readonly trustedPlugins: TrustedPlugins;
@@ -2503,6 +2512,7 @@ export class AgentManager {
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
+    options = withoutSeatLabel(options);
     if (this.pluginLifecycle && !config.internal) {
       // Update-7 W3 (R1 P-3 seam): a create with a caller shows the hook the caller's provider, mode and mode class,
       // so a host policy for children can be applied there. Context only: a hook's changes to it are not applied.

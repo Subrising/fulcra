@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   checkReportingLine,
+  checkPromptLine,
+  decideSend,
   findRoleHolder,
+  type LineStore,
   resolveLineRef,
   type LineAgent,
 } from "./reporting-lines.js";
@@ -20,6 +23,10 @@ const lead = agent("lead-1", "Fulcra lead", { "fulcra.reports-to": "main-1" });
 const otherLead = agent("lead-2", "FMC lead", { "fulcra.reports-to": "main-1" });
 const worker = agent("work-1", "Review", { "fulcra.reports-to": "lead-1" });
 const otherWorker = agent("work-2", "Talkboard", { "fulcra.reports-to": "lead-2" });
+const holderId = (agents: LineAgent[]) => {
+  const holder = findRoleHolder(agents, "main-assistant");
+  return holder && "id" in holder ? holder.id : null;
+};
 const byId = new Map([main, lead, otherLead, worker, otherWorker].map((a) => [a.id, a]));
 
 function send(from: LineAgent, to: LineAgent) {
@@ -118,7 +125,7 @@ describe("reporting lines", () => {
     };
     const newMain = agent("main-new", "Main assistant", { "fulcra.reports-to": "owner" });
     const lineTo = (to: LineAgent, holders: LineAgent[]) => {
-      const mainAssistantId = findRoleHolder(holders, "main-assistant")?.id ?? null;
+      const mainAssistantId = holderId(holders);
       return checkReportingLine({
         sender: { agentId: roleLead.id },
         senderAgent: roleLead,
@@ -136,9 +143,7 @@ describe("reporting lines", () => {
       { ...oldMain, archivedAt: "2026-10-09" },
       { ...newMain, labels: { ...newMain.labels, "fulcra.seat": "main-assistant" } },
     ];
-    expect(
-      resolveLineRef("role:main-assistant", findRoleHolder(moved, "main-assistant")?.id ?? null),
-    ).toBe("main-new");
+    expect(resolveLineRef("role:main-assistant", holderId(moved))).toBe("main-new");
     expect(lineTo(moved[1]!, moved)).toEqual({ allowed: true, why: "parent" });
     expect(lineTo(oldMain, moved)).toEqual({
       allowed: false,
@@ -157,11 +162,12 @@ describe("reporting lines", () => {
     ).toEqual({ allowed: true, why: "child" });
   });
 
-  it("picks the most recently updated live holder and says so when no chat holds the role", () => {
+  it("does not guess between two holders, ignores archived ones, and says so when no chat holds the role", () => {
     const a = { ...agent("a", "A", { "fulcra.seat": "main-assistant" }), updatedAt: "2026-10-01" };
     const b = { ...agent("b", "B", { "fulcra.seat": "main-assistant" }), updatedAt: "2026-10-08" };
-    expect(findRoleHolder([a, b], "main-assistant")?.id).toBe("b");
-    expect(findRoleHolder([{ ...b, archivedAt: "x" }, a], "main-assistant")?.id).toBe("a");
+    expect(findRoleHolder([a, b], "main-assistant")).toEqual({ ambiguous: true });
+    expect(findRoleHolder([{ ...b, archivedAt: "x" }, a], "main-assistant")).toEqual({ id: "a" });
+    expect(findRoleHolder([], "main-assistant")).toBeNull();
     const roleLead = agent("lead-9", "Lead", { "fulcra.reports-to": "role:main-assistant" });
     expect(
       checkReportingLine({
@@ -196,5 +202,57 @@ describe("reporting lines", () => {
     const made = agent("made-1", "Worker", { "fulcra.parent-session": "lead-1" });
     expect(send(made, lead)).toEqual({ allowed: true, why: "parent" });
     expect(send(made, main).allowed).toBe(false);
+  });
+
+  describe("a prompt through the Paseo MCP tool", () => {
+    const store = (agents: LineAgent[]): LineStore => ({
+      get: async (id) => agents.find((a) => a.id === id) ?? null,
+      list: async () => agents,
+    });
+    const seated = { ...main, labels: { ...main.labels, "fulcra.seat": "main-assistant" } };
+    const all = [seated, lead, otherLead, worker, otherWorker];
+
+    it("checks the calling chat's line, as a stamped CLI send is checked", async () => {
+      await expect(checkPromptLine(store(all), worker.id, lead.id)).resolves.toBe(lead.id);
+      await expect(checkPromptLine(store(all), worker.id, main.id)).rejects.toThrow(
+        "Send this to your lead, Fulcra lead (lead-1).",
+      );
+    });
+
+    it("never refuses the owner's own MCP client, which has no calling chat", async () => {
+      await expect(checkPromptLine(store(all), undefined, otherWorker.id)).resolves.toBe(
+        otherWorker.id,
+      );
+    });
+
+    it("reads role:main-assistant as the holder, and refuses when none or two chats hold it", async () => {
+      await expect(checkPromptLine(store(all), lead.id, "role:main-assistant")).resolves.toBe(
+        main.id,
+      );
+      await expect(
+        checkPromptLine(store([main, lead]), lead.id, "role:main-assistant"),
+      ).rejects.toThrow("No chat is the main assistant now. Ask the owner to set one.");
+      const second = { ...otherLead, labels: { "fulcra.seat": "main-assistant" } };
+      await expect(
+        checkPromptLine(store([seated, second, lead]), lead.id, "role:main-assistant"),
+      ).rejects.toThrow("Two chats are marked as the main assistant.");
+    });
+  });
+
+  it("refuses a local stamp that names no chat here, instead of reading it as no line", async () => {
+    const store: LineStore = {
+      get: async (id) => [main, lead].find((a) => a.id === id) ?? null,
+      list: async () => [main, lead],
+    };
+    await expect(decideSend(store, { agentId: "made-up" }, main.id, MINI)).resolves.toEqual({
+      allowed: false,
+      reason: "This send names a chat that is not on this computer.",
+    });
+    await expect(
+      decideSend(store, { agentId: "book-lead", serverId: "srv_book" }, main.id, MINI),
+    ).resolves.toEqual({ allowed: true, why: "main assistant" }); // a remote sender has no record here
+    await expect(
+      decideSend(store, { agentId: "book-lead", serverId: "srv_book" }, lead.id, MINI),
+    ).resolves.toMatchObject({ allowed: false });
   });
 });

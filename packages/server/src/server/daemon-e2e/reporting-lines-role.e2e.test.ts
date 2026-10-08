@@ -27,7 +27,11 @@ test("a lead's send to the main assistant role reaches the chat that holds the r
         undefined,
         { labels },
       );
+    // A create never carries the seat label (a fork or `paseo run --label` cannot claim the role).
     const oldMain = await create("Old main assistant", { [SEAT_LABEL]: "main-assistant" });
+    expect(manager.getAgent(oldMain.id)?.labels[SEAT_LABEL]).toBeUndefined();
+    // The controller sets it from the seat bindings (here: the daemon's own label write).
+    await manager.setLabels(oldMain.id, { [SEAT_LABEL]: "main-assistant" });
     const newMain = await create("Main assistant", {});
     const lead = await create("Mac operations lead", { [REPORTS_TO_LABEL]: MAIN_ASSISTANT_REF });
 
@@ -58,6 +62,11 @@ test("a lead's send to the main assistant role reaches the chat that holds the r
 
     client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
     await client.connect();
+    // A chat (or the app) cannot claim the role by writing the label: only the controller session writes it.
+    await expect(
+      client.updateAgent(lead.id, { labels: { [SEAT_LABEL]: "main-assistant" } }),
+    ).rejects.toThrow("fulcra.seat follows the main assistant seat");
+    expect(manager.getAgent(lead.id)?.labels[SEAT_LABEL]).toBeUndefined();
     const fromLead = { sender: { agentId: lead.id } };
 
     let reached = nextTurn(oldMain.id);

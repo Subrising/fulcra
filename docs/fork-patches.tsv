@@ -249,7 +249,7 @@ branding	A	102	0	docs/command-centre-packaging.md
 branding	M	1	0	docs/data-model.md
 branding	M	4	2	docs/development.md
 branding	M	23	13	docs/expo-router.md
-branding	A	99	0	docs/getting-started.md
+branding	A	101	0	docs/getting-started.md
 branding	A	157	0	docs/integrations-auth.md
 branding	A	5	0	docs/media/README.md
 branding	A	21	0	docs/pa34-security-notes.md
@@ -537,6 +537,7 @@ core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
 core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
+core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
 core-fixes	A	104	0	packages/cli/src/commands/daemon/status.test.ts
 core-fixes	M	1	1	packages/cli/src/commands/heartbeat/index.ts
 core-fixes	M	8	10	packages/cli/src/commands/open.ts
@@ -544,8 +545,8 @@ core-fixes	M	2	2	packages/cli/src/commands/script/shared.ts
 core-fixes	M	3	3	packages/cli/src/commands/worktree/index.ts
 core-fixes	M	70	0	packages/cli/src/utils/client.ts
 core-fixes	A	124	0	packages/cli/src/utils/daemon-endpoint-url.test.ts
-core-fixes	A	58	0	packages/cli/src/utils/send-sender.test.ts
-core-fixes	A	85	0	packages/cli/src/utils/send-sender.ts
+core-fixes	A	69	0	packages/cli/src/utils/send-sender.test.ts
+core-fixes	A	88	0	packages/cli/src/utils/send-sender.ts
 core-fixes	M	3	3	packages/cli/tests/e2e/plugin-lifecycle.test.ts
 core-fixes	M	40	7	packages/cli/tests/helpers/network.ts
 core-fixes	M	6	0	packages/cli/tests/run-all.ts
@@ -554,8 +555,8 @@ core-fixes	A	14	0	packages/client/src/controller-transport.test.ts
 core-fixes	A	109	0	packages/client/src/controller-transport.ts
 core-fixes	A	103	0	packages/client/src/daemon-client-revocation.test.ts
 core-fixes	M	1	0	packages/expo-two-way-audio/ios/ExpoTwoWayAudio.podspec
-core-fixes	A	68	0	packages/expo-two-way-audio/ios/TranscriptAccumulator.swift
-core-fixes	A	81	0	packages/expo-two-way-audio/swift-tests/transcript/main.swift
+core-fixes	A	102	0	packages/expo-two-way-audio/ios/TranscriptAccumulator.swift
+core-fixes	A	104	0	packages/expo-two-way-audio/swift-tests/transcript/main.swift
 core-fixes	A	22	0	packages/protocol/src/agent-background-work.ts
 core-fixes	M	9	0	packages/protocol/src/agent-deep-link.test.ts
 core-fixes	M	1	1	packages/protocol/src/agent-deep-link.ts
@@ -591,7 +592,7 @@ core-fixes	A	64	0	packages/server/src/server/checkout/module-excerpt.ts
 core-fixes	M	24	0	packages/server/src/server/checkout/status-projection.test.ts
 core-fixes	M	2	0	packages/server/src/server/checkout/status-projection.ts
 core-fixes	M	8	0	packages/server/src/server/client-message-id.test.ts
-core-fixes	A	88	0	packages/server/src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
+core-fixes	A	97	0	packages/server/src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
 core-fixes	A	189	0	packages/server/src/server/daemon-e2e/stored-timeline-read.e2e.test.ts
 core-fixes	A	75	0	packages/server/src/server/directory-access.test.ts
 core-fixes	A	121	0	packages/server/src/server/directory-access.ts
@@ -610,8 +611,8 @@ core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
-core-fixes	A	200	0	packages/server/src/server/reporting-lines.test.ts
-core-fixes	A	145	0	packages/server/src/server/reporting-lines.ts
+core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
+core-fixes	A	247	0	packages/server/src/server/reporting-lines.ts
 core-fixes	M	1	1	packages/server/src/server/selective-timeline-delivery.e2e.test.ts
 core-fixes	M	145	1	packages/server/src/server/session/checkout/checkout-session.test.ts
 core-fixes	M	101	5	packages/server/src/server/session/checkout/checkout-session.ts
@@ -859,7 +860,7 @@ features	A	233	0	packages/app/src/components/sidebar/sidebar-offline-hosts.ts
 features	M	1	0	packages/app/src/components/sidebar/sidebar-project-filter.test.ts
 features	M	1	0	packages/app/src/components/sidebar/sidebar-projection.test.ts
 features	M	70	3	packages/app/src/components/sidebar/sidebar-projection.ts
-features	A	147	0	packages/app/src/components/sidebar/sidebar-sessions.tsx
+features	A	156	0	packages/app/src/components/sidebar/sidebar-sessions.tsx
 features	M	35	4	packages/app/src/components/sidebar/sidebar-status-list.tsx
 features	M	17	1	packages/app/src/components/sidebar/sidebar-workspace-row-content.tsx
 features	M	41	5	packages/app/src/components/sidebar/use-limited-sidebar-group.ts
@@ -919,7 +920,8 @@ features	A	193	0	packages/app/src/hooks/persist-provider-preferences.reducer.tes
 features	A	146	0	packages/app/src/hooks/persist-provider-preferences.test.ts
 features	A	239	0	packages/app/src/hooks/sidebar-conversation-labels.test.ts
 features	A	145	0	packages/app/src/hooks/sidebar-conversation-labels.ts
-features	A	74	0	packages/app/src/hooks/sidebar-session-model.ts
+features	A	55	0	packages/app/src/hooks/sidebar-session-model.test.ts
+features	A	105	0	packages/app/src/hooks/sidebar-session-model.ts
 features	M	1	0	packages/app/src/hooks/sidebar-status-view-model.test.ts
 features	M	66	0	packages/app/src/hooks/sidebar-workspaces-view-model.test.ts
 features	M	34	3	packages/app/src/hooks/sidebar-workspaces-view-model.ts
@@ -1136,11 +1138,11 @@ orchestration	A	81	0	packages/protocol/src/session-ownership.ts
 orchestration	M	1	1	packages/server/scripts/supervisor-entrypoint.ts
 orchestration	M	2	0	packages/server/src/server/agent/agent-loading.ts
 orchestration	M	6032	2570	packages/server/src/server/agent/agent-manager.test.ts
-orchestration	M	3865	573	packages/server/src/server/agent/agent-manager.ts
+orchestration	M	3874	572	packages/server/src/server/agent/agent-manager.ts
 orchestration	M	3	0	packages/server/src/server/agent/import-sessions.ts
-orchestration	M	194	0	packages/server/src/server/agent/lifecycle-command.test.ts
-orchestration	M	123	39	packages/server/src/server/agent/lifecycle-command.ts
-orchestration	M	61	15	packages/server/src/server/agent/mcp-server.test.ts
+orchestration	M	217	0	packages/server/src/server/agent/lifecycle-command.test.ts
+orchestration	M	131	39	packages/server/src/server/agent/lifecycle-command.ts
+orchestration	M	99	15	packages/server/src/server/agent/mcp-server.test.ts
 orchestration	M	2	0	packages/server/src/server/agent/mutable-provider-config-owner.test.ts
 orchestration	A	2965	0	packages/server/src/server/agent/native-intercom-provider.integration.posix.test.ts
 orchestration	A	96	0	packages/server/src/server/agent/native-queued-dispatch.ts
@@ -1184,7 +1186,7 @@ orchestration	A	47	0	packages/server/src/server/report-inbox.ts
 orchestration	A	1558	0	packages/server/src/server/report-registry.ts
 orchestration	M	609	2	packages/server/src/server/session.test.ts
 orchestration	A	129	0	packages/server/src/server/session.trusted.test.ts
-orchestration	M	1797	99	packages/server/src/server/session.ts
+orchestration	M	1776	99	packages/server/src/server/session.ts
 orchestration	M	9	6	packages/server/src/server/session.workspace-git-watch.test.ts
 orchestration	M	14	9	packages/server/src/server/session.workspace-resolution-invariants.test.ts
 orchestration	M	11	7	packages/server/src/server/session.workspaces.test.ts
@@ -1280,7 +1282,7 @@ pairing	A	23	0	packages/desktop/src/features/relay-identity-electron.ts
 pairing	A	107	0	packages/desktop/src/features/relay-identity.test.ts
 pairing	A	106	0	packages/desktop/src/features/relay-identity.ts
 pairing	M	13	0	packages/expo-two-way-audio/ios/ExpoTwoWayAudioModule.swift
-pairing	A	163	0	packages/expo-two-way-audio/ios/OnDeviceSpeech.swift
+pairing	A	162	0	packages/expo-two-way-audio/ios/OnDeviceSpeech.swift
 pairing	M	39	68	packages/protocol/src/connection-offer.test.ts
 pairing	M	49	18	packages/protocol/src/connection-offer.ts
 pairing	M	47	2	packages/protocol/src/daemon-endpoints.test.ts
@@ -1528,7 +1530,7 @@ session-launch	M	60	53	packages/server/src/server/agent/providers/pi/agent.test.
 session-launch	M	1	1	packages/server/src/server/agent/providers/pi/extensions/tintinweb-pi-subagents/index.ts
 session-launch	M	22	0	packages/server/src/server/agent/providers/provider-availability.test.ts
 session-launch	M	11	2	packages/server/src/server/agent/runtime-mcp-config.ts
-session-launch	M	90	24	packages/server/src/server/agent/tools/paseo-tools.ts
+session-launch	M	99	25	packages/server/src/server/agent/tools/paseo-tools.ts
 session-launch	M	5	0	packages/server/src/server/agent/tools/types.ts
 session-launch	M	244	1	packages/server/src/server/daemon-client.e2e.test.ts
 session-launch	A	128	0	packages/server/src/server/plugins/catalog-controller.test.ts

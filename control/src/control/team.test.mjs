@@ -12,6 +12,7 @@ import { COMPANY, PROGRAMME } from "./authority.mjs";
 import { managementDispatcher, rpc } from "./rpc.mjs";
 import { managementReplyFailure } from "./management-refusal.mjs";
 import { Team } from "./team.mjs";
+import { HostNative } from "./host-native.mjs";
 
 // Fulcra 0.2.8: chats that already exist join the team (main assistant, lead, worker) through owner-only methods,
 // every change is recorded with who asked, and a refusal carries its real reason to the app.
@@ -24,7 +25,7 @@ const owner = {
 };
 const NOTE = "The owner asked for this team change";
 
-function world(t, { snapshots = {} } = {}) {
+function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-team-")));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const tasks = path.join(dir, "tasks.json");
@@ -45,9 +46,16 @@ function world(t, { snapshots = {} } = {}) {
   const labelWrites = [];
   const native = {
     route: () => undefined,
-    setLabels: async (id, labels) => {
-      labelWrites.push({ id, labels });
+    setLabels: async (id, patch) => {
+      if (failClear === id && patch["fulcra.seat"] === "")
+        throw Error("That chat cannot be changed now");
+      labelWrites.push({ id, labels: patch });
+      labels[id] = { ...labels[id], ...patch };
     },
+    labelled: async (key, value) =>
+      Object.entries(labels)
+        .filter(([, l]) => l[key] === value)
+        .map(([id]) => id),
     snapshot: async (id) => {
       if (snapshots[id] === undefined) throw Error("Native snapshot unavailable");
       return snapshots[id];
@@ -67,7 +75,7 @@ function world(t, { snapshots = {} } = {}) {
     config: { tasks, authority: { issueApi: null, companyId: COMPANY, programmeId: PROGRAMME } },
   });
   const dispatch = (method, input) => managementDispatcher(control)({ method, input }, owner);
-  return { dir, store, control, dispatch, read, labelWrites };
+  return { dir, store, control, dispatch, read, labelWrites, labels };
 }
 const chat = (cwd = "/tmp/chat") => ({ cwd, provider: "claude", archivedAt: null });
 
@@ -242,7 +250,7 @@ test("a reporting line is written on the chat as labels and recorded with who as
     /cannot report to itself/,
   );
   await assert.rejects(
-    w.dispatch("team-line", { sessionId: randomUUID(), seat: "main-assistant", note: NOTE }),
+    w.dispatch("team-line", { sessionId: randomUUID(), reportsTo: "owner", note: NOTE }),
     /not on this computer/,
   );
   await assert.rejects(
@@ -257,4 +265,136 @@ test("a reporting line is written on the chat as labels and recorded with who as
     /Only the owner or the main assistant can change the team/,
   );
   assert.equal(w.labelWrites.length, 1);
+});
+
+async function seatMain(w, id, seat = "main") {
+  await w.dispatch("team-enrol", { sessionId: id, taskId: PROGRAMME, note: NOTE });
+  const current = w.control.bindings
+    .directory()
+    .bindings.find((b) => b.role === "prime" && b.seat === seat);
+  await w.dispatch("bindings-assign", {
+    role: "prime",
+    seat,
+    sessionId: id,
+    expectedRevision: current?.revision ?? 0,
+    expectedSessionGeneration: w.store.get(id).generation,
+    note: NOTE,
+  });
+}
+
+test("upgrade: a main assistant seated before 0.2.8 gets the label at the first sync, once", async (t) => {
+  const main = randomUUID();
+  const w = world(t, { snapshots: { [main]: chat() } });
+  await seatMain(w, main);
+  assert.deepEqual(w.labelWrites, []); // seated with no label, as on a 0.2.7 host
+  const first = await w.control.team.syncSeat("start");
+  assert.deepEqual(first, { holder: main, cleared: [], set: true });
+  assert.deepEqual(w.labels[main], {
+    "fulcra.seat": "main-assistant",
+    "fulcra.reports-to": "owner",
+  });
+  const changes = w.control.team.history().filter((c) => c.kind.startsWith("seat-"));
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].kind, "seat-set");
+  assert.equal(changes[0].subject, main);
+  assert.equal(changes[0].actor.principal, "controller");
+  // Idempotent: the next start writes nothing and records nothing.
+  const second = await w.control.team.syncSeat("start");
+  assert.deepEqual(second, { holder: main, cleared: [], set: false });
+  assert.equal(w.labelWrites.length, 1);
+  assert.equal(w.control.team.history().filter((c) => c.kind.startsWith("seat-")).length, 1);
+});
+
+test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {
+  const main = randomUUID(),
+    stale = randomUUID(),
+    claimed = randomUUID();
+  const w = world(t, {
+    snapshots: { [main]: chat() },
+    labels: {
+      [stale]: { "fulcra.seat": "main-assistant" }, // a retired main assistant
+      [claimed]: { "fulcra.seat": "main-assistant" }, // a label a chat wrote itself
+    },
+  });
+  await seatMain(w, main);
+  const out = await w.control.team.syncSeat("start");
+  assert.deepEqual([...out.cleared].sort(), [stale, claimed].sort());
+  assert.equal(out.set, true);
+  assert.deepEqual(
+    w.labelWrites.map((x) => x.id),
+    [...out.cleared, main],
+  );
+
+  const failing = world(t, {
+    snapshots: { [main]: chat() },
+    labels: { [stale]: { "fulcra.seat": "main-assistant" } },
+    failClear: stale,
+  });
+  await seatMain(failing, main);
+  await assert.rejects(failing.control.team.syncSeat("start"), /cannot be changed now/);
+  assert.equal(failing.labels[main], undefined); // the new holder is not set while the old one still has it
+});
+
+test("no seat holder: every label is cleared; not connected: nothing is written", async (t) => {
+  const stale = randomUUID();
+  const w = world(t, { labels: { [stale]: { "fulcra.seat": "main-assistant" } } });
+  assert.deepEqual(await w.control.team.syncSeat("retire"), {
+    holder: null,
+    cleared: [stale],
+    set: false,
+  });
+  assert.equal(w.labels[stale]["fulcra.seat"], "");
+  const bare = world(t);
+  delete bare.control.native.labelled;
+  assert.equal(
+    (await bare.control.team.syncSeat("start")).skipped,
+    "Not connected to this computer's chats",
+  );
+});
+
+test("team-line can no longer write the seat label, and team-seat-sync is owner-only", async (t) => {
+  const id = randomUUID();
+  const w = world(t, { snapshots: { [id]: chat() } });
+  await assert.rejects(
+    async () => w.dispatch("team-line", { sessionId: id, seat: "main-assistant", note: NOTE }),
+    /Invalid controller command input/,
+  );
+  assert.deepEqual(w.labelWrites, []);
+  assert.deepEqual(await w.dispatch("team-seat-sync", null), {
+    holder: null,
+    cleared: [],
+    set: false,
+  });
+  await assert.rejects(
+    rpc(
+      w.control,
+      "test-operator",
+    )({ method: "team-seat-sync", input: null, capability: "role.abc" }),
+    /Only the owner or the main assistant can change the team/,
+  );
+});
+
+test("the real host adapter passes label writes and label reads to this computer's daemon", async (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-team-host-")));
+  const store = new ControlStore(path.join(dir, "journal.sqlite"));
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const writes = [];
+  const native = new HostNative({
+    store,
+    local: {
+      setLabels: async (id, labels) => writes.push({ id, labels }),
+      labelled: async (key, value) => [`${key}=${value}`],
+    },
+  });
+  const id = randomUUID();
+  await native.setLabels(id, { "fulcra.seat": "" });
+  assert.deepEqual(writes, [{ id, labels: { "fulcra.seat": "" } }]);
+  assert.deepEqual(await native.labelled("fulcra.seat", "main-assistant"), [
+    "fulcra.seat=main-assistant",
+  ]);
+  const bare = new HostNative({ store, local: {} });
+  assert.throws(() => bare.setLabels(id, {}), /cannot write labels/);
 });

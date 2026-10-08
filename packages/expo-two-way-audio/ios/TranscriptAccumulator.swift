@@ -66,3 +66,37 @@ struct TranscriptAccumulator {
         return "\(left) \(right)"
     }
 }
+
+/// How many times one dictation may restart the recognizer. Past the limit the rest of the audio is not transcribed,
+/// so the dictation is marked truncated.
+struct RestartBudget {
+    let limit: Int
+    private(set) var used = 0
+    private(set) var exhausted = false
+
+    /// Count one restart. False when the limit is passed: do not restart, the transcript is now short.
+    mutating func spend() -> Bool {
+        used += 1
+        if used > limit { exhausted = true }
+        return !exhausted
+    }
+}
+
+/// How a dictation ends. A transcript that is empty after a failure, or that stopped before the audio did, is
+/// rejected, so the app sends the recorded audio to the host instead of a short message.
+enum DictationOutcome: Equatable {
+    case text(String)
+    case reject(code: String, message: String)
+
+    static func decide(text: String, failed: Bool, truncated: Bool) -> DictationOutcome {
+        if truncated {
+            return .reject(code: "ON_DEVICE_SPEECH_TRUNCATED",
+                           message: "On-device transcription stopped before the audio ended; recorded audio is retained")
+        }
+        if text.isEmpty && failed {
+            return .reject(code: "ON_DEVICE_SPEECH_UNAVAILABLE",
+                           message: "On-device transcription unavailable; recorded audio is retained")
+        }
+        return .text(text)
+    }
+}

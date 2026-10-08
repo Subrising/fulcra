@@ -101,6 +101,7 @@ import type {
 } from "./types.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
+import { checkPromptLine, lineStoreOf } from "../../reporting-lines.js";
 
 export interface PaseoToolHostDependencies {
   nativeReportOrigin?: NativeReportOrigin;
@@ -1974,12 +1975,19 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({
-      agentId,
+      agentId: requestedAgentId,
       prompt,
       sessionMode,
       background = Boolean(callerAgentId),
       notifyOnFinish = Boolean(callerAgentId),
     }) => {
+      // FULCRA(orchestration): reporting lines. The daemon knows the calling chat here, so the line check is the
+      // same one a stamped CLI send gets, and "role:main-assistant" reaches the chat that holds the role now.
+      const agentId = await checkPromptLine(
+        lineStoreOf({ agentManager, agentStorage }),
+        callerAgentId,
+        requestedAgentId,
+      );
       function armFinishNotification(): boolean {
         if (!callerAgentId || !notifyOnFinish) {
           return false;

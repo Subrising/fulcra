@@ -263,6 +263,29 @@ describe("agent lifecycle commands", () => {
     expect(manager.archivedAgentIds).toEqual([]);
   });
 
+  test("only the controller writes the main assistant label", async () => {
+    const storage = new FakeLifecycleAgentStorage();
+    storage.records.set("agent-1", storedAgent("agent-1"));
+    const manager = new FakeLifecycleAgentManager(storage);
+    const seat = { "fulcra.seat": "main-assistant" };
+
+    await expect(
+      updateAgentCommand({ agentManager: manager }, { agentId: "agent-1", labels: seat }),
+    ).resolves.toEqual({
+      accepted: false,
+      error:
+        'fulcra.seat follows the main assistant seat. Use "Make main assistant" in team setup.',
+    });
+    expect(manager.metadataUpdates).toEqual([]);
+    await expect(
+      updateAgentCommand(
+        { agentManager: manager },
+        { agentId: "agent-1", labels: seat, seatWriter: true },
+      ),
+    ).resolves.toEqual({ accepted: true, error: null });
+    expect(manager.metadataUpdates).toEqual([{ agentId: "agent-1", updates: { labels: seat } }]);
+  });
+
   test("normalizes metadata updates and rejects empty updates", async () => {
     const storage = new FakeLifecycleAgentStorage();
     storage.records.set("agent-1", storedAgent("agent-1"));

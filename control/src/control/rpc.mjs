@@ -194,6 +194,7 @@ export const RPC_METHODS = Object.freeze(
     "team-project-anchor",
     "team-project-archive",
     "team-project-create",
+    "team-seat-sync",
     "trackers-directory",
     "trackers-history",
     "trackers-link",
@@ -518,6 +519,7 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
       case "team-project-anchor":
       case "team-project-archive":
       case "team-project-create":
+      case "team-seat-sync":
         // The operator-secret lane has no host principal; the host lane is handled in managementDispatcher.
         return teamCommand(control, request.method, a, OPERATOR_SECRET_PRINCIPAL);
       case "bindings-assign":
@@ -1035,6 +1037,7 @@ const TEAM_METHODS = new Set([
   "team-project-anchor",
   "team-project-archive",
   "team-project-create",
+  "team-seat-sync",
 ]);
 const OPERATOR_SECRET_PRINCIPAL = Object.freeze({
   id: "operator-secret",
@@ -1047,6 +1050,7 @@ function teamCommand(control, method, a, principal) {
   if (method === "team-history") return t.history(a?.limit ?? 50);
   if (method === "team-enrol") return t.enrol(a, principal);
   if (method === "team-line") return t.line(a, principal);
+  if (method === "team-seat-sync") return t.syncSeat("team setup");
   if (method === "team-project-create") return t.createProject(a, principal);
   if (method === "team-project-anchor") return t.anchor(a, principal);
   return t.archiveProject(a, principal);

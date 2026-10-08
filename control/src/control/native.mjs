@@ -305,6 +305,17 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       verifyActivation();
       await daemon.updateAgent(id, { labels });
     },
+    // The live chats here that carry one label value (archived chats are left out). Bounded to one page.
+    labelled: async (key, value) => {
+      verifyActivation();
+      const page = await daemon.fetchAgents({
+        filter: { labels: { [key]: value } },
+        page: { limit: 50 },
+      });
+      return (page.entries ?? [])
+        .map((entry) => entry?.agent?.id)
+        .filter((id) => typeof id === "string");
+    },
     // H6 item 6: the session's state and the newest timeline entries, for usage-limit detection. Read-only.
     limitTail: async (id) => {
       verifyActivation();

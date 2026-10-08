@@ -497,6 +497,8 @@ methods(
 );
 methods("team-project-anchor team-project-archive", object({ note: reason, projectId: uuid }));
 methods("team-history", either(none, object({ limit: num(1, 200) })));
+// The main assistant label follows the seat bindings (team.mjs syncSeat); no input.
+methods("team-seat-sync", none);
 // Reporting lines: who a chat reports to ("owner", the main assistant role, or a chat here or on another computer),
 // the main assistant seat label, and the one direct link a lead allows. "" clears a label.
 const lineRef = check(
@@ -513,10 +515,9 @@ methods(
       directLink: opt(either(one(""), uuid)),
       note: reason,
       reportsTo: opt(either(one(""), lineRef)),
-      seat: opt(one("", "main-assistant")),
       sessionId: uuid,
     }),
-    (v) => v.reportsTo !== undefined || v.seat !== undefined || v.directLink !== undefined,
+    (v) => v.reportsTo !== undefined || v.directLink !== undefined,
   ),
 );
 methods("roles-allowance-set", seatCommand({ ...roleChange, maxSessions: num(0, 32), role, seat }));

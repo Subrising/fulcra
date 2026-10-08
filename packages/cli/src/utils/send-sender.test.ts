@@ -40,6 +40,17 @@ describe("send sender", () => {
     expect(() =>
       resolveSender({ from: "main-1", env: { PASEO_AGENT_ID: "work-1" }, ancestors: terminal }),
     ).toThrow(expect.objectContaining({ code: "INVALID_FROM" }));
+    // A chat cannot use its own id with a made-up server to pass as remote, nor drop its id and use --from.
+    expect(() =>
+      resolveSender({
+        from: "work-1@srv_x",
+        env: { PASEO_AGENT_ID: "work-1" },
+        ancestors: terminal,
+      }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_FROM" }));
+    expect(() => resolveSender({ from: "main-1", env: {}, ancestors: insideClaude })).toThrow(
+      expect.objectContaining({ code: "INVALID_FROM" }),
+    );
     expect(() => resolveSender({ from: "a@b@c", env: {}, ancestors: terminal })).toThrow(
       expect.objectContaining({ code: "INVALID_FROM" }),
     );

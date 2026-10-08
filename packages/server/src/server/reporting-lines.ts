@@ -4,6 +4,7 @@ import {
   PARENT_AGENT_ID_LABEL,
   REPORTS_TO_LABEL,
   REPORTS_TO_OWNER,
+  MAIN_ASSISTANT_ROLE,
   SEAT_LABEL,
   ROLE_REF_PREFIX,
 } from "@getpaseo/protocol/agent-labels";
@@ -20,6 +21,8 @@ const CONTROLLER_PARENT_LABEL = "fulcra.parent-session";
 export interface LineAgent {
   id: string;
   title?: string | null;
+  /** A live agent keeps its title in its config. */
+  config?: unknown;
   labels?: Record<string, string> | null;
   archivedAt?: string | Date | null;
   updatedAt?: string | Date | null;
@@ -49,17 +52,72 @@ export function reportsTo(agent: LineAgent | null): string | null {
   return parent || null;
 }
 
-const time = (value: string | Date | null | undefined) =>
-  value ? new Date(value).getTime() || 0 : 0;
+export const NO_MAIN_ASSISTANT = "No chat is the main assistant now. Ask the owner to set one.";
+export const TWO_MAIN_ASSISTANTS =
+  "Two chats are marked as the main assistant. Fulcra corrects this within a minute; send again then.";
 
-/** The live chat that holds a role; the most recently updated one if records disagree. */
-export function findRoleHolder(agents: readonly LineAgent[], role: string): LineAgent | null {
-  let holder: LineAgent | null = null;
-  for (const agent of agents) {
-    if (agent.archivedAt || agent.labels?.[SEAT_LABEL]?.trim() !== role) continue;
-    if (!holder || time(agent.updatedAt) > time(holder.updatedAt)) holder = agent;
-  }
-  return holder;
+export type RoleHolder = { id: string } | { ambiguous: true } | null;
+
+/**
+ * The live chat that holds a role. Only the controller writes the seat label, from its seat bindings, so normally
+ * one chat has it. Two holders (a seat change part-way) are not guessed between: the send is refused until the
+ * controller's next seat sync, which clears the stale one.
+ */
+export function findRoleHolder(agents: readonly LineAgent[], role: string): RoleHolder {
+  const holders = agents.filter(
+    (agent) => !agent.archivedAt && agent.labels?.[SEAT_LABEL]?.trim() === role,
+  );
+  if (holders.length > 1) return { ambiguous: true };
+  return holders[0] ? { id: holders[0].id } : null;
+}
+
+export interface LineStore {
+  get(id: string): Promise<LineAgent | null>;
+  /** The chats on this computer, without internal helpers. */
+  list(): Promise<readonly LineAgent[]>;
+}
+
+/** The send target, with "role:main-assistant" read as the chat that holds the role at delivery time. */
+export async function resolveRoleTarget(
+  store: LineStore,
+  identifier: string,
+): Promise<{ ok: true; agentId: string } | { ok: false; error: string } | null> {
+  if (identifier.trim() !== MAIN_ASSISTANT_REF) return null;
+  const holder = findRoleHolder(await store.list(), MAIN_ASSISTANT_ROLE);
+  if (!holder) return { ok: false, error: NO_MAIN_ASSISTANT };
+  if ("ambiguous" in holder) return { ok: false, error: TWO_MAIN_ASSISTANTS };
+  return { ok: true, agentId: holder.id };
+}
+
+/** The decision for one stamped send, read from this computer's records. Null when the target is not here. */
+export async function decideSend(
+  store: LineStore,
+  sender: { agentId: string; serverId?: string },
+  targetId: string,
+  localServerId: string | null,
+): Promise<LineDecision | null> {
+  const target = await store.get(targetId);
+  if (!target) return null;
+  const remote = Boolean(sender.serverId && sender.serverId !== localServerId);
+  const senderAgent = remote ? null : await store.get(sender.agentId);
+  // A stamp from this computer names a chat that exists here; a made-up id is not "no line recorded".
+  if (!remote && !senderAgent)
+    return { allowed: false, reason: "This send names a chat that is not on this computer." };
+  const holder = findRoleHolder(await store.list(), MAIN_ASSISTANT_ROLE);
+  const mainAssistantId = holder && "id" in holder ? holder.id : null;
+  const parentRef = resolveLineRef(reportsTo(senderAgent), mainAssistantId);
+  const senderParent =
+    parentRef && parentRef !== REPORTS_TO_OWNER
+      ? await store.get(parentRef.split("@", 1)[0]!)
+      : null;
+  return checkReportingLine({
+    sender,
+    senderAgent,
+    target,
+    senderParent,
+    localServerId,
+    mainAssistantId,
+  });
 }
 
 /** A role reference becomes the chat that holds the role now; other references stay as they are. */
@@ -75,8 +133,14 @@ function sameChat(ref: string | null, agentId: string, serverId: string | null):
   return id === agentId && (server === undefined || server === serverId);
 }
 
+function titleOf(agent: LineAgent | null): string {
+  const config = agent?.config as { title?: unknown } | null | undefined;
+  const live = typeof config?.title === "string" ? config.title.trim() : "";
+  return agent?.title?.trim() || live;
+}
+
 const name = (agent: LineAgent | null, fallback: string) =>
-  `${agent?.title?.trim() || fallback} (${(agent?.id ?? fallback).slice(0, 8)})`;
+  `${titleOf(agent) || fallback} (${(agent?.id ?? fallback).slice(0, 8)})`;
 
 /** The target reports to the sender, or allowed the sender as its direct link. */
 function inboundDecision(
@@ -142,4 +206,42 @@ export function checkReportingLine(input: LineInput): LineDecision {
   if (input.senderAgent?.labels?.[DIRECT_LINK_LABEL]?.trim() === target.id)
     return { allowed: true, why: "direct link" };
   return refusal(input, rawLine, line);
+}
+
+interface LineRecord extends LineAgent {
+  internal?: boolean;
+}
+
+/** This computer's chats as the line check reads them: the stored record first, then the live one. */
+export function lineStoreOf(deps: {
+  agentManager: { getAgent(id: string): LineAgent | null | undefined };
+  agentStorage: {
+    get(id: string): Promise<LineAgent | null>;
+    list(): Promise<readonly LineRecord[]>;
+  };
+}): LineStore {
+  return {
+    get: async (id) =>
+      (await deps.agentStorage.get(id).catch(() => null)) ?? deps.agentManager.getAgent(id) ?? null,
+    list: async () => (await deps.agentStorage.list()).filter((record) => !record.internal),
+  };
+}
+
+/**
+ * A prompt from a chat through the Paseo MCP tool: the daemon knows the calling chat, so the line is checked here.
+ * Returns the chat to prompt ("role:main-assistant" resolved); throws the plain refusal. A call with no calling chat
+ * (the owner's own MCP client) is never refused.
+ */
+export async function checkPromptLine(
+  store: LineStore,
+  callerAgentId: string | null | undefined,
+  requested: string,
+): Promise<string> {
+  const role = await resolveRoleTarget(store, requested);
+  if (role && !role.ok) throw new Error(role.error);
+  const agentId = role?.ok ? role.agentId : requested;
+  if (!callerAgentId) return agentId;
+  const decision = await decideSend(store, { agentId: callerAgentId }, agentId, null);
+  if (decision && !decision.allowed) throw new Error(decision.reason);
+  return agentId;
 }

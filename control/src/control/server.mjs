@@ -1,3 +1,4 @@
+import { team } from "./team.mjs";
 import { HostNative } from "./host-native.mjs";
 import { createWorktreeLifecycle } from "./worktree-lifecycle-runtime.mjs";
 import { worktreeLifecycleSettings } from "../config.mjs";
@@ -145,6 +146,18 @@ export async function startController({
   // Review F3: a hung native call must not hold the control socket closed. After the deadline startup continues
   // and the pass completes under exclusive() exactly as a watchdog pass would (DESIGN.md s3.3: both orders safe).
   await Promise.race([sweep(), new Promise((resolve) => setTimeout(resolve, 60000).unref())]);
+  // Fulcra 0.2.8: the main assistant label follows the seat bindings. The first pass is the upgrade migration (a main
+  // assistant seated before 0.2.8 gets the label); later passes repair any drift. Never throws; logs only changes.
+  const syncSeat = () =>
+    team(control)
+      .syncSeat("start")
+      .then((out) => {
+        if (out.cleared?.length || out.set) log.line({ seatSync: out });
+      })
+      .catch((e) => log.line({ seatSync: { error: String(e?.message ?? e).slice(0, 300) } }));
+  void syncSeat();
+  const seatSyncTimer = setInterval(syncSeat, 60000);
+  seatSyncTimer.unref();
   const onEventError = (error) => {
     control.events.lastError = { message: error.message, at: new Date().toISOString() };
     console.error("Orca event observer:", error.message);
@@ -249,6 +262,7 @@ export async function startController({
     server.close();
     clearInterval(eventWatchdog);
     clearInterval(lifecycleTimer);
+    clearInterval(seatSyncTimer);
     unsubscribeEvents();
     unsubscribeLimits();
     await Promise.allSettled([

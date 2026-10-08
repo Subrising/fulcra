@@ -23,6 +23,13 @@ const refuse = (message) => {
   throw managementRefusal(message);
 };
 const name = (v) => (typeof v === "string" ? v.trim() : "");
+const SEAT_LABEL = "fulcra.seat";
+const MAIN_ASSISTANT = "main-assistant";
+const SYSTEM_ACTOR = JSON.stringify({
+  principal: "controller",
+  authentication: "seat-sync",
+  deviceId: null,
+});
 
 export function actorOf(principal) {
   return JSON.stringify({
@@ -68,6 +75,8 @@ export class Team {
     if (a.seat !== undefined) labels["fulcra.seat"] = a.seat;
     if (a.directLink !== undefined) labels["fulcra.direct-link"] = a.directLink;
     if (!Object.keys(labels).length) refuse("Say which line to set.");
+    if (a.seat !== undefined)
+      refuse("The main assistant label follows the seat. Use Make main assistant instead.");
     if (a.reportsTo === a.sessionId || a.directLink === a.sessionId)
       refuse("A chat cannot report to itself or link to itself.");
     const native = this.control.native;
@@ -84,6 +93,52 @@ export class Team {
       `${a.note} ${JSON.stringify(labels)}`.slice(0, 2000),
     );
     return { sessionId: a.sessionId, labels, at };
+  }
+
+  /**
+   * Make the main assistant label (fulcra.seat) agree with the controller's seat bindings: the chat that holds the
+   * main assistant seat carries it, and no other chat does. The seat is the authority; the label only lets the daemon
+   * route a send to "role:main-assistant" without asking the controller. Runs at start (this is the 0.2.8 migration:
+   * a main assistant seated before 0.2.8 gets the label with no manual step), every minute, and after each seat
+   * change. Idempotent. Stale holders are cleared before the holder is set, so a failed clear never leaves two.
+   */
+  async syncSeat(reason = "sync") {
+    const native = this.control.native;
+    if (typeof native?.labelled !== "function" || typeof native?.setLabels !== "function")
+      return {
+        holder: null,
+        cleared: [],
+        set: false,
+        skipped: "Not connected to this computer's chats",
+      };
+    const held = (this.control.bindings?.directory?.().bindings ?? []).filter(
+      (b) => b.role === "prime" && b.state === "assigned" && typeof b.sessionId === "string",
+    );
+    const seat = held.find((b) => b.seat === "main") ?? held[0] ?? null;
+    const holder = seat && !native.route?.(seat.sessionId) ? seat.sessionId : null;
+    const marked = await native.labelled(SEAT_LABEL, MAIN_ASSISTANT);
+    const cleared = [];
+    for (const id of marked.filter((id) => id !== holder)) {
+      await native.setLabels(id, { [SEAT_LABEL]: "" });
+      cleared.push(id);
+      this.record(
+        "seat-cleared",
+        id,
+        null,
+        SYSTEM_ACTOR,
+        `${reason}: not the main assistant seat holder`,
+      );
+    }
+    let set = false;
+    if (holder && !marked.includes(holder)) {
+      await native.setLabels(holder, {
+        [SEAT_LABEL]: MAIN_ASSISTANT,
+        "fulcra.reports-to": "owner",
+      });
+      set = true;
+      this.record("seat-set", holder, null, SYSTEM_ACTOR, `${reason}: holds the ${seat.seat} seat`);
+    }
+    return { holder, cleared, set };
   }
 
   history(limit = 50) {

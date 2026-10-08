@@ -45,7 +45,7 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
   /** Write a chat's reporting line. A line that cannot be written is a step that did not run, not a lost seat. */
   async function line(
     sessionId: string,
-    labels: { reportsTo?: string; seat?: string; directLink?: string },
+    labels: { reportsTo?: string; directLink?: string },
     steps: string[],
     done?: string,
   ) {
@@ -55,6 +55,18 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
     } catch (error) {
       steps.push(`Reporting line not set for ${sessionId.slice(0, 8)}: ${reason(error)}`);
       throw Object.assign(Error("The seat is set, but a reporting line is not."), {
+        partial: true,
+      });
+    }
+  }
+
+  /** The main assistant label follows the seat bindings; the controller writes it (team.mjs syncSeat). */
+  async function syncSeat(steps: string[]) {
+    try {
+      await call("team-seat-sync");
+    } catch (error) {
+      steps.push(`Main assistant label not updated: ${reason(error)}`);
+      throw Object.assign(Error("The seat is set, but the main assistant label is not."), {
         partial: true,
       });
     }
@@ -110,20 +122,15 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
       const held = all.find(
         (s) => s.role === "prime" && s.state === "assigned" && s.sessionId === input.sessionId,
       );
-      if (held)
+      if (held) {
+        // A main assistant seated before 0.2.8 has no label yet; pressing the button again repairs it.
+        await syncSeat(steps);
         return { message: `This chat is already the ${primeName(held.seat)}.`, projectId: null };
-      const before = all.find(
-        (s) => s.role === "prime" && s.seat === MAIN_SEAT && s.state === "assigned",
-      )?.sessionId;
+      }
       await seat("prime", MAIN_SEAT, input.sessionId, enrolled.generation);
       steps.push("The chat is now the main assistant.");
-      await line(
-        input.sessionId,
-        { seat: "main-assistant", reportsTo: "owner" },
-        steps,
-        "It reports to you. Leads now send to it.",
-      );
-      if (before && before !== input.sessionId) await line(before, { seat: "" }, steps);
+      await syncSeat(steps);
+      steps.push("It reports to you. Leads now send to it.");
       // Leads seated before reporting lines existed point at the role from now on.
       for (const lead of all.filter(
         (s) => s.role === "project-orchestrator" && s.state === "assigned" && s.sessionId,
@@ -145,6 +152,7 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
       else if (enrolled.action === "enrolled") steps.push("The chat joined the project.");
       await seat("project-orchestrator", projectId, input.sessionId, enrolled.generation);
       steps.push("The chat is now the lead of the project.");
+      await syncSeat(steps);
       await line(
         input.sessionId,
         { reportsTo: MAIN_ASSISTANT_REF },
@@ -235,6 +243,7 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
       note: NOTE,
     });
     steps.push(`The old record "${primeName(input.seat)}" is removed. The chat itself is kept.`);
+    await syncSeat(steps);
     return { message: "The old main assistant record is removed.", projectId: null };
   }
 

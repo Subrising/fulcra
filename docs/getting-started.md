@@ -90,7 +90,9 @@ Archiving hides a project from every list. Its tasks, chats, seats and history s
 
 Each chat reports to one parent: a worker to its lead, a lead to the main assistant, the main assistant to you. Team setup records the line on the chat (`fulcra.reports-to`). A lead reports to the main assistant role (`role:main-assistant`), not to one chat, so a new main assistant needs no change in any lead. A chat started with `paseo run` from another chat reports to that chat.
 
-A chat sends only to its parent, to its own chats and to one direct link that you allow in team setup. Other sends are refused with the right recipient, for example "Send this to your lead, Fulcra lead (4c111479)". `paseo send role:main-assistant "…"` reaches the chat that holds the role now.
+A chat sends only to its parent, to its own chats and to one direct link that you allow in team setup. Other sends are refused with the right recipient, for example "Send this to your lead, Fulcra lead (4c111479)". `paseo send role:main-assistant "…"` reaches the chat that holds the role now. The Paseo MCP send tool follows the same rules.
+
+The chat that holds the main assistant seat carries the label `fulcra.seat=main-assistant`. Only the controller writes it, from its seat bindings: at start, every minute and after each seat change. A chat, the app or `paseo run --label` cannot set it. After an upgrade, a main assistant seated before 0.2.8 gets the label at the controller's first start, with no step from you. Each change is recorded in `team_changes` (`seat-set`, `seat-cleared`).
 
 Sends from you (the app, the phone, your own `fulcra` command) are never refused. A send from inside a chat that has lost its identity (`PASEO_AGENT_ID`) is refused, so a chat cannot pass as you. These are cooperative rules: every chat on the host runs as you, so they keep chats in line but are not a security boundary.
 

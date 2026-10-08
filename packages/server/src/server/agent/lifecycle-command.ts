@@ -9,6 +9,7 @@ import {
   type ManagedAgent,
 } from "./agent-manager.js";
 import type { StoredAgentRecord } from "./agent-storage.js";
+import { SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentProviderNotice } from "./agent-sdk-types.js";
 
 export type LifecycleAgentSnapshot = Pick<ManagedAgent, "id" | "cwd" | "lifecycle">;
@@ -245,10 +246,17 @@ export async function updateAgentCommand(
     agentId: string;
     name?: string;
     labels?: Record<string, string>;
+    /** FULCRA(orchestration): only the controller writes the main assistant label, from its seat bindings. */
+    seatWriter?: boolean;
   },
 ): Promise<UpdateAgentResult> {
   const title = input.name?.trim();
   const labels = input.labels && Object.keys(input.labels).length > 0 ? input.labels : undefined;
+  if (labels && Object.hasOwn(labels, SEAT_LABEL) && !input.seatWriter)
+    return {
+      accepted: false,
+      error: `${SEAT_LABEL} follows the main assistant seat. Use "Make main assistant" in team setup.`,
+    };
 
   if (!title && !labels) {
     return {

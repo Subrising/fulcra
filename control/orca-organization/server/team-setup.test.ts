@@ -46,7 +46,7 @@ test("Make main assistant enrols the chat on the programme root, then seats it o
   assert.equal(r.status, "done");
   assert.deepEqual(
     c.calls.map(([m]) => m),
-    ["bindings-status", "team-enrol", "bindings-status", "bindings-assign", "team-line"],
+    ["bindings-status", "team-enrol", "bindings-status", "bindings-assign", "team-seat-sync"],
   );
   assert.equal(c.calls[1][1].taskId, PROGRAMME);
   assert.deepEqual(
@@ -86,6 +86,7 @@ test("Make lead of a new project creates it, seats the lead and puts the project
     "team-enrol",
     "bindings-status",
     "bindings-assign",
+    "team-seat-sync",
     "team-line",
     "bindings-status",
     "remits-list",
@@ -93,9 +94,9 @@ test("Make lead of a new project creates it, seats the lead and puts the project
   ]);
   assert.equal(c.calls[1][1].taskId, id(51));
   assert.equal(c.calls[3][1].seat, id(50));
-  assert.equal(c.calls[4][1].reportsTo, "role:main-assistant");
-  assert.deepEqual(c.calls[7][1].scope, { kind: "project", projectId: id(50) });
-  assert.equal(c.calls[7][1].primeSeat, "main");
+  assert.equal(c.calls[5][1].reportsTo, "role:main-assistant");
+  assert.deepEqual(c.calls[8][1].scope, { kind: "project", projectId: id(50) });
+  assert.equal(c.calls[8][1].primeSeat, "main");
 });
 
 test("an existing project owned by another main assistant moves to the main one", async () => {
@@ -190,7 +191,7 @@ test("the old main assistant record is removed only while another main assistant
   assert.equal(done.status, "done");
   assert.deepEqual(
     both.calls.map(([m]) => m),
-    ["bindings-status", "remits-list", "remits-move", "bindings-unassign"],
+    ["bindings-status", "remits-list", "remits-move", "bindings-unassign", "team-seat-sync"],
   );
 });
 
@@ -266,7 +267,7 @@ test("the chat list says each chat's place on the team in plain words", async ()
   );
 });
 
-test("reporting lines: the main assistant holds the seat label, leads point at the role, workers at their lead", async () => {
+test("reporting lines: the seat label follows the seat, leads point at the role, workers at their lead", async () => {
   const lead = id(7);
   const c = controller([
     {
@@ -289,9 +290,9 @@ test("reporting lines: the main assistant holds the seat label, leads point at t
   const lines = () =>
     c.calls.filter(([m]) => m === "team-line").map(([, a]) => ({ ...a, note: undefined }));
   await c.setup({ action: "main-assistant", sessionId: id(1) });
+  // The controller moves the label from the old holder to the new one (team.mjs syncSeat); no label write here.
+  assert.ok(c.calls.some(([m]) => m === "team-seat-sync"));
   assert.deepEqual(lines(), [
-    { sessionId: id(1), seat: "main-assistant", reportsTo: "owner", note: undefined },
-    { sessionId: id(2), seat: "", note: undefined },
     { sessionId: lead, reportsTo: "role:main-assistant", note: undefined },
   ]);
   c.calls.length = 0;
@@ -306,10 +307,10 @@ test("reporting lines: the main assistant holds the seat label, leads point at t
   assert.deepEqual(lines(), [{ sessionId: id(8), directLink: id(11), note: undefined }]);
 });
 
-test("a reporting line that cannot be written leaves the seat and says so", async () => {
+test("a label that cannot be written leaves the seat and says so", async () => {
   const c = controller();
   const call = async (method: string, input?: any) => {
-    if (method === "team-line") throw new Error("That chat is not on this computer.");
+    if (method === "team-seat-sync") throw new Error("That chat cannot be changed now.");
     return c.call(method, input);
   };
   const r = await createTeamSetup(call, () => NOW)({ action: "main-assistant", sessionId: id(1) });
@@ -317,6 +318,42 @@ test("a reporting line that cannot be written leaves the seat and says so", asyn
   assert.ok(r.steps.includes("The chat is now the main assistant."));
   assert.match(
     r.steps.at(-1)!,
+    /Main assistant label not updated: That chat cannot be changed now\./,
+  );
+  const lead = controller();
+  const lineCall = async (method: string, input?: any) => {
+    if (method === "team-line") throw new Error("That chat is not on this computer.");
+    return lead.call(method, input);
+  };
+  const r2 = await createTeamSetup(
+    lineCall,
+    () => NOW,
+  )({
+    action: "project-lead",
+    sessionId: id(3),
+    projectId: id(40),
+  });
+  assert.equal(r2.status, "partly");
+  assert.match(
+    r2.steps.at(-1)!,
     /Reporting line not set for 11111111: That chat is not on this computer\./,
   );
+});
+
+test("Make main assistant on the chat that already holds the seat repairs its label (0.2.7 upgrade)", async () => {
+  const c = controller([
+    {
+      role: "prime",
+      seat: "main",
+      state: "assigned",
+      sessionId: id(1),
+      revision: 1,
+      projectId: null,
+    },
+  ]);
+  const r = await c.setup({ action: "main-assistant", sessionId: id(1) });
+  assert.equal(r.status, "done");
+  assert.match(r.message, /already the Main assistant/);
+  assert.ok(c.calls.some(([m]) => m === "team-seat-sync"));
+  assert.ok(!c.calls.some(([m]) => m === "bindings-assign"));
 });
