@@ -501,7 +501,10 @@ async function settleExistingDaemon(current: DesktopDaemonStatus): Promise<Deskt
     await pause(DESKTOP_STARTUP_ANSWER_WAIT.stepMs);
     latest = await resolveDesktopDaemonStatus();
     if (latest.status === "stopped" || (latest.status === "running" && latest.answering)) {
-      logDesktopDaemonLifecycle("existing daemon settled", { status: latest.status, pid: latest.pid });
+      logDesktopDaemonLifecycle("existing daemon settled", {
+        status: latest.status,
+        pid: latest.pid,
+      });
       return latest;
     }
   }
