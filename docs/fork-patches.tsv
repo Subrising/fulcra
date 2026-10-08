@@ -5,6 +5,7 @@ accounts	A	0	0	docs/assets/features/accounts-dark.png
 accounts	A	0	0	docs/assets/features/accounts-light.png
 accounts	A	0	0	docs/assets/screens/accounts-dark.png
 accounts	A	0	0	docs/assets/screens/accounts-light.png
+accounts	M	20	6	packages/app/e2e/mobile/native-text-reflow/ios.py
 accounts	A	56	0	packages/app/src/app/oauth/[flowId].tsx
 accounts	M	2	2	packages/app/src/components/context-window-details.tsx
 accounts	A	130	0	packages/app/src/components/limit-resume-banner.tsx
@@ -312,6 +313,7 @@ branding	D	0	0	packages/app/e2e/mobile/diff-tree/evidence/light.png
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/android-after.mp4
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/android-before.mp4
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/browser.webm
+branding	M	10	0	packages/app/e2e/mobile/native-text-reflow/README.md
 branding	D	0	29	packages/app/e2e/support/helpers/changelog.ts
 branding	M	0	0	packages/app/public/apple-touch-icon.png
 branding	M	5	7	packages/app/public/index.html
@@ -369,8 +371,9 @@ branding	M	9	9	public-docs/sdk/quickstart.md
 branding	M	18	9	public-docs/skills.md
 branding	M	3	1	README.ja.md
 branding	M	3	1	README.ko.md
-branding	M	166	154	README.md
+branding	M	220	134	README.md
 branding	M	3	1	README.zh-CN.md
+branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	17	0	RELEASE-NOTES-v0.2.0.md
 branding	A	13	0	release/README.md
 branding	A	46	0	scripts/c2c-ui-fixture/README.md
@@ -448,6 +451,7 @@ build-ci	A	30	0	patches/eas-cli+16.32.0.patch
 build-ci	A	44	0	patches/electron-updater++builder-util-runtime+9.7.0.patch
 build-ci	A	12	0	patches/electron-updater+6.8.9.patch
 build-ci	M	18	0	patches/react-native-markdown-display+7.0.2.patch
+build-ci	M	38	10	patches/react-native-uitextview+2.2.0.patch
 build-ci	A	16	0	release/common.sh
 build-ci	A	16	0	release/control-suites.sh
 build-ci	A	60	0	release/package.sh
@@ -520,6 +524,7 @@ core-fixes	M	8	2	packages/app/e2e/browser/sessions-search-hosts.spec.ts
 core-fixes	M	11	3	packages/app/e2e/browser/sessions-search.spec.ts
 core-fixes	M	9	14	packages/app/e2e/browser/viewed-agent-timelines.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
+core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	A	104	0	packages/cli/src/commands/daemon/status.test.ts
@@ -659,8 +664,8 @@ desktop-runtime	A	48	0	packages/desktop/src/daemon/command-centre-owner.test.ts
 desktop-runtime	A	35	0	packages/desktop/src/daemon/command-centre-owner.ts
 desktop-runtime	A	50	0	packages/desktop/src/daemon/command-centre-target.test.ts
 desktop-runtime	A	31	0	packages/desktop/src/daemon/command-centre-target.ts
-desktop-runtime	M	767	3	packages/desktop/src/daemon/daemon-manager.test.ts
-desktop-runtime	M	359	24	packages/desktop/src/daemon/daemon-manager.ts
+desktop-runtime	M	778	3	packages/desktop/src/daemon/daemon-manager.test.ts
+desktop-runtime	M	360	24	packages/desktop/src/daemon/daemon-manager.ts
 desktop-runtime	M	81	6	packages/desktop/src/daemon/desktop-packaging.test.ts
 desktop-runtime	M	26	7	packages/desktop/src/daemon/linux-launcher.posix.test.ts
 desktop-runtime	A	65	0	packages/desktop/src/daemon/managed-restart.test.ts
