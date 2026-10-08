@@ -791,7 +791,7 @@ features	A	119	0	packages/app/src/architecture-map/review-flags.test.ts
 features	A	204	0	packages/app/src/architecture-map/review-flags.ts
 features	A	76	0	packages/app/src/architecture-map/review-inbox.test.ts
 features	A	64	0	packages/app/src/architecture-map/review-inbox.ts
-features	A	15	0	packages/app/src/architecture-map/review-test-count-copy.test.ts
+features	A	21	0	packages/app/src/architecture-map/review-test-count-copy.test.ts
 features	A	361	0	packages/app/src/architecture-map/use-architecture-change.ts
 features	A	83	0	packages/app/src/architecture-map/use-architecture-maps.ts
 features	A	12	0	packages/app/src/architecture-map/use-canvas-gestures.ts
@@ -1033,8 +1033,8 @@ features	A	53	0	packages/server/src/utils/architecture-map/dependency-graph.test
 features	A	210	0	packages/server/src/utils/architecture-map/dependency-graph.ts
 features	A	84	0	packages/server/src/utils/architecture-map/generate.test.ts
 features	A	706	0	packages/server/src/utils/architecture-map/generate.ts
-features	A	69	0	packages/server/src/utils/architecture-map/read-commit.test.ts
-features	A	128	0	packages/server/src/utils/architecture-map/read-commit.ts
+features	A	83	0	packages/server/src/utils/architecture-map/read-commit.test.ts
+features	A	164	0	packages/server/src/utils/architecture-map/read-commit.ts
 features	A	118	0	packages/server/src/utils/insights/agents.test.ts
 features	A	284	0	packages/server/src/utils/insights/agents.ts
 features	A	98	0	packages/server/src/utils/insights/delivery.test.ts
@@ -1043,8 +1043,8 @@ features	A	109	0	packages/server/src/utils/insights/recorder.ts
 features	A	54	0	packages/server/src/utils/insights/service.test.ts
 features	A	149	0	packages/server/src/utils/insights/service.ts
 image-retention	M	157	2	packages/server/src/server/agent/providers/provider-image-output.posix.test.ts
-image-retention	M	42	1	packages/server/src/server/agent/providers/provider-image-output.test.ts
-image-retention	M	226	32	packages/server/src/server/agent/providers/provider-image-output.ts
+image-retention	M	69	2	packages/server/src/server/agent/providers/provider-image-output.test.ts
+image-retention	M	228	32	packages/server/src/server/agent/providers/provider-image-output.ts
 image-retention	M	13	1	packages/server/src/server/session/files/workspace-files-session.ts
 orchestration	A	0	0	docs/assets/features/leadership-dark.png
 orchestration	A	0	0	docs/assets/features/leadership-light.png
@@ -1425,8 +1425,8 @@ session-launch	M	63	11	packages/app/src/provider-selection/resolve-agent-form.ts
 session-launch	A	174	0	packages/app/src/provider-selection/role-defaults.test.ts
 session-launch	A	188	0	packages/app/src/provider-selection/role-defaults.ts
 session-launch	A	50	0	packages/app/src/provider-selection/use-session-role-defaults.ts
-session-launch	M	41	2	packages/app/src/screens/settings/providers-section.test.tsx
-session-launch	M	26	1	packages/app/src/screens/settings/providers-section.tsx
+session-launch	M	85	35	packages/app/src/screens/settings/providers-section.test.tsx
+session-launch	M	29	1	packages/app/src/screens/settings/providers-section.tsx
 session-launch	M	2	1	packages/app/src/styles/unistyles.ts
 session-launch	M	2	0	packages/app/src/workspace-tabs/launcher/internal/catalog.test.ts
 session-launch	M	2	0	packages/app/src/workspace-tabs/launcher/internal/catalog.ts
