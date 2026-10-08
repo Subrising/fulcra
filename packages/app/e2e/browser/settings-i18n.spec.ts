@@ -7,7 +7,7 @@ test("Settings language selector switches General labels", async ({ page }) => {
 
   await gotoAppShell(page);
   await openSettings(page);
-  await openSettingsSection(page, "general");
+  await openSettingsSection(page, "behaviour");
 
   await expect(page.getByText("Default send", { exact: true }).first()).toBeVisible();
 
@@ -27,7 +27,7 @@ test("Settings language selector switches to Korean", async ({ page }) => {
 
   await gotoAppShell(page);
   await openSettings(page);
-  await openSettingsSection(page, "general");
+  await openSettingsSection(page, "behaviour");
 
   await page.getByRole("button", { name: "System", exact: true }).click();
   await page.getByRole("menuitem", { name: "한국어 - Korean", exact: true }).click();
