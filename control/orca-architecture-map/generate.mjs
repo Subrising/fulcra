@@ -90,6 +90,41 @@ export function listCommitFiles(root, commit) {
   return files;
 }
 
+/** One fetch of many missing blobs from the partial clone's promisor remote (what a lazy fetch requests, batched). */
+export function fetchMissingBlobs(root, blobs) {
+  let remote;
+  try {
+    remote = git(root, ["config", "--get-regexp", "^remote\\..*\\.promisor$"])
+      .toString("utf8")
+      .split("\n")
+      .map((line) => /^remote\.(.+)\.promisor\s+true$/i.exec(line.trim())?.[1])
+      .find((name) => name !== undefined && /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(name));
+  } catch {
+    return false; // no promisor remote
+  }
+  if (!remote) return false;
+  try {
+    git(
+      root,
+      [
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--filter=blob:none",
+        "--stdin",
+        remote,
+      ],
+      `${blobs.join("\n")}\n`,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Sizes of blobs in the local object store, never fetching (git 2.45+; older git fetches). */
 export function localBlobSizes(root, blobs) {
   const sizes = new Map();
@@ -135,11 +170,12 @@ export function readCommit(root, commit) {
   const candidates = files.filter(
     (f) => isCode(f.path) || /(^|\/)(package|tsconfig)\.json$/.test(f.path),
   );
-  const sizes = localBlobSizes(
-    root,
-    candidates.map((f) => f.blob),
-  );
-  // A blob missing locally has no known size; it is read and then size-checked.
+  const unique = [...new Set(candidates.map((f) => f.blob))];
+  let sizes = localBlobSizes(root, unique);
+  // Blobs missing locally come in ONE fetch, then are sized like the rest; if that fails, a missing blob is read
+  // (lazily fetched) and then size-checked.
+  const missing = unique.filter((blob) => !sizes.has(blob));
+  if (missing.length > 0 && fetchMissingBlobs(root, missing)) sizes = localBlobSizes(root, unique);
   const wanted = candidates.filter((f) => (sizes.get(f.blob) ?? 0) <= MAX_PARSE_BYTES);
   const blobs = readBlobs(
     root,

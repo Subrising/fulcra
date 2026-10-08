@@ -370,6 +370,39 @@ export function readBatch(output, names) {
   }
   return texts;
 }
+// One fetch of many missing blobs from the partial clone's promisor remote (what a lazy fetch requests, batched).
+function fetchMissing(git, oids) {
+  let remote;
+  try {
+    remote = git(["config", "--get-regexp", "^remote\\..*\\.promisor$"])
+      .toString("utf8")
+      .split("\n")
+      .map((line) => /^remote\.(.+)\.promisor\s+true$/i.exec(line.trim())?.[1])
+      .find((name) => name !== undefined && /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(name));
+  } catch {
+    return false; // no promisor remote
+  }
+  if (!remote) return false;
+  try {
+    git(
+      [
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--filter=blob:none",
+        "--stdin",
+        remote,
+      ],
+      oids.join("\n") + "\n",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 // Sizes of blobs in the local object store, never fetching (git 2.45+ `--no-lazy-fetch`; older git fetches).
 function localSizes(git, oids) {
   const sizes = new Map();
@@ -427,11 +460,12 @@ export function measureImpact({ root, range = "HEAD~1..HEAD", git = gitRunner(ro
       return { path: line.slice(tab + 1), type: meta[1], oid: meta[2] };
     })
     .filter((e) => e.type === "blob" && !e.path.includes("\n"));
-  const sizes = localSizes(
-    git,
-    listed.filter((e) => SOURCE.test(e.path)).map((e) => e.oid),
-  );
-  // A blob missing locally has no known size; it is read below and then size-checked.
+  const sourceOids = [...new Set(listed.filter((e) => SOURCE.test(e.path)).map((e) => e.oid))];
+  let sizes = localSizes(git, sourceOids);
+  // Blobs missing locally come in ONE fetch, then are sized like the rest; if that fails, a missing blob is read
+  // below (lazily fetched) and then size-checked.
+  const missing = sourceOids.filter((oid) => !sizes.has(oid));
+  if (missing.length && fetchMissing(git, missing)) sizes = localSizes(git, sourceOids);
   const tree = listed.map((e) => ({ ...e, size: sizes.get(e.oid) ?? 0 }));
   const skipped = tree
     .filter((e) => SOURCE.test(e.path) && e.size > MAX_SOURCE_BYTES)

@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 
@@ -152,5 +152,31 @@ describe("provider image retention", () => {
     expect(isEvictedProviderImage(first)).toBe(true);
     expect(isEvictedProviderImage(path.join(path.dirname(first), "unknown.png"))).toBe(false);
     rmSync(path.dirname(first), { recursive: true, force: true });
+  });
+
+  test("an image shown again moves to the newest end; a replaced oldest file is forgotten, not deleted", () => {
+    const image = (i: number) => ({
+      data: Buffer.from(`retention-order-image-${i}`).toString("base64"),
+      mimeType: "image/png",
+    });
+    const paths: string[] = [];
+    for (let i = 0; i < MAX_PRIVATE_FILES; i++) paths.push(materializeProviderImage(image(i)).path);
+    const dir = path.dirname(paths[0]);
+    try {
+      // Reuse image 0: the next eviction takes image 1, not image 0.
+      expect(materializeProviderImage(image(0)).path).toBe(paths[0]);
+      materializeProviderImage(image(MAX_PRIVATE_FILES));
+      expect(existsSync(paths[0])).toBe(true);
+      expect(existsSync(paths[1])).toBe(false);
+      // Replace the (now) oldest file with another inode: it is kept on disk, and new images still render.
+      rmSync(paths[2]);
+      writeFileSync(paths[2], "not ours", { mode: 0o600 });
+      const next = materializeProviderImage(image(MAX_PRIVATE_FILES + 1)).path;
+      expect(existsSync(next)).toBe(true);
+      expect(readFileSync(paths[2], "utf8")).toBe("not ours");
+      expect(isEvictedProviderImage(paths[2])).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

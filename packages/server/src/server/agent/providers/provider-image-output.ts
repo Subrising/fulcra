@@ -82,9 +82,9 @@ function getPrivateRoot(): PrivateRoot {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       // A missing pathname may be a still-live renamed directory. Never release its pool while
       // it may still hold images. Linux reports a removed directory with nlink 0. FULCRA(image-retention):
-      // APFS keeps nlink at 2 + entries even after removal, so on macOS an empty directory (2)
-      // proves no retained image remains; otherwise every later image failed after macOS
-      // cleared its temporary folder.
+      // APFS reports nlink 2 + entries, so on macOS nlink 2 means the directory is empty (removed,
+      // or renamed and empty): releasing its pool loses no image. Otherwise every later image
+      // failed after macOS cleared its temporary folder.
       const retained = fsSync.fstatSync(privateRoot.fd);
       const released =
         retained.nlink === 0 || (process.platform === "darwin" && retained.nlink <= 2);
@@ -136,7 +136,7 @@ function rememberEvicted(name: string): void {
   }
 }
 // Deletes the least recently written image (Map order is write order). Only the exact inode this
-// run wrote is removed; a replaced entry is refused, a missing one is just forgotten.
+// run wrote is removed; a replaced or missing one is just forgotten.
 function evictOldest(root: PrivateRoot): void {
   const oldest = root.files.entries().next().value;
   if (!oldest) return;
@@ -149,14 +149,13 @@ function evictOldest(root: PrivateRoot): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  if (current) {
-    if (!current.isFile() || current.dev !== known.dev || current.ino !== known.ino)
-      throw new Error("Private image eviction refused");
-    fsSync.unlinkSync(entryPath);
-  }
+  // A replaced entry is never deleted (it is not the file this run wrote); it is only forgotten, so one
+  // replaced file cannot stop every later image at the cap.
+  const ours = current?.isFile() && current.dev === known.dev && current.ino === known.ino;
+  if (ours) fsSync.unlinkSync(entryPath);
   root.files.delete(name);
   root.bytes -= known.size;
-  rememberEvicted(name);
+  if (ours || !current) rememberEvicted(name);
 }
 /** True when `filePath` is a provider image this daemon run deleted to make room for newer ones. */
 export function isEvictedProviderImage(filePath: string): boolean {
@@ -284,6 +283,9 @@ export function materializeProviderImage(image: {
       !observed.equals(bytes)
     )
       throw new Error("Native image materialization changed");
+    // Reuse moves the image to the newest end (Map order is the eviction order), so an image shown
+    // again, for example on history replay, is not the next one deleted.
+    root.files.delete(name);
     root.files.set(name, { dev: after.dev, ino: after.ino, size: after.size });
     const result = { path: filePath };
     materializedFacts.set(result, { sha256: hash, size: bytes.length });
