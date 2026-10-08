@@ -4,16 +4,26 @@ import ExpoModulesCore
 
 // All state is confined to the main queue. No recording or network request is
 // started here: Fulcra supplies its existing mono PCM capture, retaining it in JS.
+//
+// Fulcra 0.2.8: the recognizer restarts its transcription during long audio, and a result then holds only the newest
+// part. TranscriptAccumulator keeps every finished part, partials report the whole text, and a task that ends on its
+// own mid-stream is replaced by a new one, so nothing said before the restart is lost.
 final class OnDeviceSpeech {
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var epoch = UUID()
-    private var finalText: String?
+    private var transcript = TranscriptAccumulator()
+    private var finished = false
+    private var finishing = false
     private var failed = false
+    private var restarts = 0
     private var pending: Promise?
     private var deadline: DispatchWorkItem?
     var onPartial: ((String) -> Void)?
+
+    /// More restarts than this in one dictation means the recognizer is failing, not resetting.
+    private static let maxRestarts = 40
 
     func start(locale: String, promise: Promise) {
         DispatchQueue.main.async {
@@ -26,34 +36,8 @@ final class OnDeviceSpeech {
                       recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
                     promise.resolve(false); return
                 }
-                let request = SFSpeechAudioBufferRecognitionRequest()
-                request.requiresOnDeviceRecognition = true
-                request.shouldReportPartialResults = true
                 self.recognizer = recognizer
-                self.request = request
-                self.task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-                    DispatchQueue.main.async {
-                        guard let self = self, self.epoch == captured else { return }
-                        if let result = result {
-                            let text = result.bestTranscription.formattedString
-                            self.onPartial?(text)
-                            if result.isFinal {
-                                self.finalText = text
-                                if let pending = self.pending {
-                                    self.pending = nil
-                                    self.deadline?.cancel()
-                                    pending.resolve(text)
-                                }
-                            }
-                        }
-                        if error != nil && self.finalText == nil {
-                            self.failed = true
-                            self.deadline?.cancel()
-                            self.pending?.reject("ON_DEVICE_SPEECH_UNAVAILABLE", "On-device transcription unavailable; recorded audio is retained")
-                            self.pending = nil
-                        }
-                    }
-                }
+                self.startTask(captured)
                 promise.resolve(true)
             }
             if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
@@ -62,9 +46,65 @@ final class OnDeviceSpeech {
         }
     }
 
+    private func startTask(_ captured: UUID) {
+        guard let recognizer = recognizer else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.requiresOnDeviceRecognition = true
+        request.shouldReportPartialResults = true
+        self.request = request
+        self.task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            DispatchQueue.main.async {
+                guard let self = self, self.epoch == captured, self.request === request else { return }
+                if let result = result { self.receive(result) }
+                if error != nil, !self.finished { self.taskStopped(captured) }
+            }
+        }
+    }
+
+    private func receive(_ result: SFSpeechRecognitionResult) {
+        let segments = result.bestTranscription.segments
+        let part = TranscriptAccumulator.Result(
+            text: result.bestTranscription.formattedString,
+            firstStart: segments.first?.timestamp ?? 0,
+            lastEnd: segments.last.map { $0.timestamp + $0.duration } ?? 0
+        )
+        onPartial?(transcript.update(part, isFinal: result.isFinal))
+        guard result.isFinal else { return }
+        if finishing { complete() } else { replaceTask() }
+    }
+
+    /// The task ended with an error. Mid-stream, keep the text and listen again; while finishing, return what is kept.
+    private func taskStopped(_ captured: UUID) {
+        transcript.taskEnded()
+        if finishing { complete(); return }
+        replaceTask()
+    }
+
+    private func replaceTask() {
+        restarts += 1
+        guard restarts <= OnDeviceSpeech.maxRestarts else { failed = true; return }
+        startTask(epoch)
+    }
+
+    private func complete() {
+        guard !finished else { return }
+        finished = true
+        deadline?.cancel()
+        deadline = nil
+        let text = transcript.text
+        if let pending = pending {
+            self.pending = nil
+            if text.isEmpty && failed {
+                pending.reject("ON_DEVICE_SPEECH_UNAVAILABLE", "On-device transcription unavailable; recorded audio is retained")
+            } else {
+                pending.resolve(text)
+            }
+        }
+    }
+
     func append(base64: String) {
         DispatchQueue.main.async {
-            guard let request = self.request, !self.failed,
+            guard let request = self.request, !self.failed, !self.finishing,
                   let data = Data(base64Encoded: base64), data.count > 0,
                   data.count % 2 == 0, data.count <= 1024 * 1024,
                   let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
@@ -83,19 +123,20 @@ final class OnDeviceSpeech {
 
     func finish(promise: Promise) {
         DispatchQueue.main.async {
-            if let text = self.finalText { promise.resolve(text); return }
-            guard let request = self.request, !self.failed, self.pending == nil else {
+            guard self.recognizer != nil, self.pending == nil, !self.finished else {
                 promise.reject("ON_DEVICE_SPEECH_UNAVAILABLE", "On-device transcription unavailable; recorded audio is retained"); return
             }
             self.pending = promise
+            self.finishing = true
+            guard let request = self.request, !self.failed else { self.complete(); return }
             request.endAudio()
             let captured = self.epoch
+            // A timeout keeps the text heard so far; it is rejected only when there is none.
             let deadline = DispatchWorkItem { [weak self] in
                 guard let self = self, self.epoch == captured else { return }
-                self.pending?.reject("ON_DEVICE_SPEECH_TIMEOUT", "On-device transcription timed out; recorded audio is retained")
-                self.pending = nil
-                self.task?.cancel()
                 self.failed = true
+                self.task?.cancel()
+                self.complete()
             }
             self.deadline = deadline
             DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: deadline)
@@ -113,7 +154,10 @@ final class OnDeviceSpeech {
         task = nil
         request = nil
         recognizer = nil
-        finalText = nil
+        transcript = TranscriptAccumulator()
+        finished = false
+        finishing = false
         failed = false
+        restarts = 0
     }
 }
