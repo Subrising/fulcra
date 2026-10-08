@@ -39,6 +39,11 @@ interface PluginNavigableHostProps extends PluginHostProps {
       readonly workspaceId: string;
       readonly serverId?: string;
     }) => void;
+    /** Opens the app's main architecture map for a workspace. Absent on older apps. */
+    readonly openArchitectureMap?: (input: {
+      readonly workspaceId: string;
+      readonly serverId?: string;
+    }) => void;
     /** Opens the app's architecture comparison. Absent on older apps. Exactly one selector is required. */
     readonly openArchitectureChange?: (input: {
       readonly workspaceId: string;

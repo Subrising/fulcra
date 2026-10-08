@@ -24,6 +24,18 @@ export function createPluginHostNavigation(
       owner.openAgent({ serverId: targetServerId ?? serverId, agentId }),
     openWorkspace: ({ workspaceId, serverId: targetServerId }) =>
       owner.openWorkspace({ serverId: targetServerId ?? serverId, workspaceId }),
+    openArchitectureMap: ({ workspaceId, serverId: targetServerId }) => {
+      const destinationServerId = targetServerId ?? serverId;
+      const destinationWorkspaceId = workspaceId.trim()
+        ? owner.resolveWorkspace({ serverId: destinationServerId, workspaceId })
+        : null;
+      if (!destinationWorkspaceId) throw new Error("Workspace is unavailable on the requested host.");
+      owner.openWorkspace({
+        serverId: destinationServerId,
+        workspaceId: destinationWorkspaceId,
+        target: { kind: "architecture_map" },
+      });
+    },
     openArchitectureChange: (input) => {
       const selection = parseArchitectureChangeSelection(input);
       const destinationServerId = input.serverId ?? serverId;
