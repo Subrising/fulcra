@@ -225,7 +225,7 @@ test("O2: the remit view and every write parse against what the controller retur
     note: why,
   });
   assert.equal(unknown.ok, false);
-  assert.match(unknown.message, /no prime seat with that name/);
+  assert.match(unknown.message, /no main assistant with that name/);
 });
 
 test('O3: the project brief carries observed counts from the fleet and journal, and "Written by"', async (t) => {

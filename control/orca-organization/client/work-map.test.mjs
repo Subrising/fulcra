@@ -314,7 +314,7 @@ test("a stale observation is retained, labelled STALE, dimmed and drawn with hol
   serve(overview({ observedAt: iso(120_000) }));
   mount(h(WorkMapSurface, props));
   await screen.findByText(/STALE · retained 2 min ago/);
-  assert(screen.getByText(/◇ Prime · delivery/), "the main assistant glyph is hollow when stale");
+  assert(screen.getByText(/◇ Main assistant · delivery/), "the main assistant glyph is hollow when stale");
   assert(screen.getByRole("button", { name: /Main assistant delivery/ }));
 });
 

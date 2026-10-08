@@ -130,7 +130,7 @@ export class Remits {
   assertPrime(seat) {
     if (typeof seat !== "string" || !KEY.test(seat)) throw new RemitRefused("Choose a prime");
     if (!this.db.prepare("SELECT seat FROM role_bindings WHERE role='prime' AND seat=?").get(seat))
-      throw new RemitRefused("There is no prime seat with that name");
+      throw new RemitRefused("There is no main assistant with that name");
   }
   async assertProject(projectId) {
     const d = await this.readProjects();
