@@ -53,6 +53,7 @@ export type ProviderModelsResult = ListResult<ModelListItem>;
 export interface ProviderModelsOptions extends CommandOptions {
   host?: string;
   thinking?: boolean;
+  refresh?: boolean;
 }
 
 export async function runModelsCommand(
@@ -64,6 +65,10 @@ export async function runModelsCommand(
 
   const client = await connectToDaemon({ target: options.daemonTarget });
   try {
+    // FULCRA(model-refresh): a new model (for example after a Claude Code update) shows without a restart.
+    if (options.refresh) {
+      await client.refreshProvidersSnapshot({ providers: [normalizedProvider] });
+    }
     const result = await client.listProviderModels(normalizedProvider);
 
     if (result.error) {

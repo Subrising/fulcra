@@ -3203,6 +3203,7 @@ export const ptBR: TranslationResources = {
     providers: {
       title: "Provedores",
       addProvider: "Adicionar provedor",
+      refreshModels: "Atualizar modelos",
       providerDetails: "Detalhes do provedor {{name}}",
       enableProvider: "Ativar {{name}}",
       unavailable: "Conecte-se a este host para ver provedores",

@@ -3424,6 +3424,7 @@ export const en = {
     providers: {
       title: "Providers",
       addProvider: "Add provider",
+      refreshModels: "Refresh models",
       providerDetails: "{{name}} provider details",
       enableProvider: "Enable {{name}}",
       unavailable: "Connect to this host to see providers",

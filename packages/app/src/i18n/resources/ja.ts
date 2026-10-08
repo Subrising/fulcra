@@ -3189,6 +3189,7 @@ export const ja: TranslationResources = {
     providers: {
       title: "プロバイダー",
       addProvider: "プロバイダーを追加",
+      refreshModels: "モデルを更新",
       providerDetails: "{{name}}プロバイダーの詳細",
       enableProvider: "{{name}}を有効にする",
       unavailable: "プロバイダーを見るにはこのホストに接続してください",

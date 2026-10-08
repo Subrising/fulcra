@@ -3140,6 +3140,7 @@ export const ar: TranslationResources = {
     providers: {
       title: "مقدمي الخدمات",
       addProvider: "إضافة مزود",
+      refreshModels: "تحديث النماذج",
       providerDetails: "تفاصيل مزود{{name}}",
       enableProvider: "تمكين{{name}}",
       unavailable: "اتصل بهذا المضيف لرؤية مقدمي الخدمة",

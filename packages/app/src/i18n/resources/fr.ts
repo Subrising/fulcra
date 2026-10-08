@@ -3233,6 +3233,7 @@ export const fr: TranslationResources = {
     providers: {
       title: "Fournisseurs",
       addProvider: "Ajouter un fournisseur",
+      refreshModels: "Actualiser les modèles",
       providerDetails: "Détails du fournisseur{{name}}",
       enableProvider: "Activer{{name}}",
       unavailable: "Connectez-vous à cet hôte pour voir les fournisseurs",
