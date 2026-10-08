@@ -33,7 +33,7 @@ function hasLocalObject(cwd: string, oid: string): boolean {
 
 // FULCRA(partial-clone): a --filter=blob:none clone must not fetch every blob to list a commit.
 describe("readCommitSnapshot in a partial clone", () => {
-  it("reads the code without fetching blobs the map does not parse", () => {
+  it("reads the code without fetching blobs the map does not parse", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "read-commit-partial-"));
     dirs.push(root);
     const source = path.join(root, "source");
@@ -56,14 +56,10 @@ describe("readCommitSnapshot in a partial clone", () => {
     git(root, "clone", "-q", "--filter=blob:none", "--no-checkout", `file://${source}`, clone);
     expect(hasLocalObject(clone, picture)).toBe(false);
 
-    return readCommitSnapshot(clone, head).then((snapshot) => {
-      expect(snapshot.files.map((f) => f.path).sort()).toEqual([
-        "package.json",
-        "picture.png",
-        "src/index.ts",
-      ]);
-      expect(snapshot.texts.get("src/index.ts")).toBe('export const a = "second";\n');
-      expect(hasLocalObject(clone, picture)).toBe(false);
-    });
+    const snapshot = await readCommitSnapshot(clone, head);
+    const paths = snapshot.files.map((f) => f.path).sort();
+    expect(paths).toEqual(["package.json", "picture.png", "src/index.ts"]);
+    expect(snapshot.texts.get("src/index.ts")).toBe('export const a = "second";\n');
+    expect(hasLocalObject(clone, picture)).toBe(false);
   });
 });

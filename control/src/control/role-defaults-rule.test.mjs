@@ -322,8 +322,14 @@ test("light role: seeded, kept out of a fresh defaults.json, saved only on an ex
   assert.equal(readRoleDefaults(root).roles.light.claude.model, "claude/claude-haiku-5-5");
   await writeRoleDefaults(root, {
     role: "light",
-    defaults: { provider: "claude", claude: { model: "claude/claude-sonnet-5-5", thinkingOptionId: "low" } },
+    defaults: {
+      provider: "claude",
+      claude: { model: "claude/claude-sonnet-5-5", thinkingOptionId: "low" },
+    },
   });
-  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).roles.light.claude.model, "claude/claude-sonnet-5-5");
+  assert.equal(
+    JSON.parse(fs.readFileSync(file, "utf8")).roles.light.claude.model,
+    "claude/claude-sonnet-5-5",
+  );
   assert.equal(readRoleDefaults(root).roles.light.claude.thinkingOptionId, "low");
 });

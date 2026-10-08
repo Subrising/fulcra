@@ -424,24 +424,27 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
       );
     });
   }, [refresh, t]);
+  const refreshModelsButton = useMemo(
+    () =>
+      hasServer && isConnected ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onPress={handleRefreshModels}
+          loading={isRefreshing}
+          testID="providers-refresh-models"
+        >
+          {t("settings.providers.refreshModels")}
+        </Button>
+      ) : undefined,
+    [handleRefreshModels, hasServer, isConnected, isRefreshing, t],
+  );
 
   return (
     <>
       <SettingsSection
         title={t("settings.providers.title")}
-        trailing={
-          hasServer && isConnected ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onPress={handleRefreshModels}
-              loading={isRefreshing}
-              testID="providers-refresh-models"
-            >
-              {t("settings.providers.refreshModels")}
-            </Button>
-          ) : undefined
-        }
+        trailing={refreshModelsButton}
         testID="host-page-providers-card"
         style={styles.sectionSpacing}
       >
