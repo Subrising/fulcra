@@ -1028,7 +1028,14 @@ test("partial clone: measures the change without fetching blobs it does not read
     repo.write("assets/picture.png", Buffer.alloc(2 * 1024 * 1024, 7));
     const head = repo.commit();
     const picture = repo.git("rev-parse", `${head}:assets/picture.png`);
-    execFileSync("git", ["clone", "-q", "--filter=blob:none", "--no-checkout", `file://${repo.dir}`, clone]);
+    execFileSync("git", [
+      "clone",
+      "-q",
+      "--filter=blob:none",
+      "--no-checkout",
+      `file://${repo.dir}`,
+      clone,
+    ]);
     const local = (oid) => {
       try {
         execFileSync("git", ["cat-file", "-e", oid], {

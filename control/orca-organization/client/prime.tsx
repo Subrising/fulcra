@@ -971,9 +971,7 @@ export function PrimeSurface(props: Props) {
         </Text>
       )}
       {!chosen && !!h.projects.length && (
-        <Text style={muted}>
-          Choose a project to see what is happening and what is needed.
-        </Text>
+        <Text style={muted}>Choose a project to see what is happening and what is needed.</Text>
       )}
       {chosen && (
         <ProjectOverview
