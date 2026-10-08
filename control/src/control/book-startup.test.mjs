@@ -1,5 +1,7 @@
-// Cutover A1: startController wires Book execution from the profile pinned at <ORCA_HOME>/book-transport.json.
-// The real startController runs (tools/test-support.book-startup.mjs); only the owned channel and ssh are faked.
+// 0.2.7: the SSH Book transport is retired. Even with a leftover <ORCA_HOME>/book-transport.json, the real
+// startController (tools/test-support.book-startup.mjs) reports "retired", refuses Book creations and never starts
+// a remote process.
+import "./state-root.fixture.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -24,51 +26,33 @@ fs.writeFileSync(
 const fixture = await startWithBookFixture();
 test.after(() => fixture.stop());
 
-test("the pinned profile is loaded once, through the private-profile checks, and reported as configured", async () => {
-  assert.deepEqual(fixture.profiles, [profile]);
-  assert.deepEqual(fixture.control.native.bookStatus(), {
-    configured: true,
-    status: "Book configured",
-    profile: "book-transport.json",
-  });
+const RETIRED = { configured: false, status: "Book transport retired" };
+const remote = () =>
+  fixture.processes.filter(
+    (p) => /(^|\/)ssh$/.test(p.command) || p.args.some((a) => /receiver-cli/.test(String(a))),
+  );
+
+test("a leftover profile is ignored: the controller reports the Book transport as retired", async () => {
+  assert.deepEqual(fixture.control.native.bookStatus(), RETIRED);
   const status = await fixture.operatorRead("events-status");
-  assert.deepEqual(status.book, {
-    configured: true,
-    status: "Book configured",
-    profile: "book-transport.json",
-  });
+  assert.deepEqual(status.book, RETIRED);
 });
 
-test("a Book creation is routed to the Book transport and gets a non-null route and status; a local one stays local", async () => {
+test("N Book creations are refused, write no route and start no remote process; local creation still works", async () => {
   const native = fixture.control.native,
-    messageId = randomUUID(),
     taskId = randomUUID();
-  const created = await native.create({
-    host: "macbook",
-    provider: "codex",
-    messageId,
-    taskId,
-    title: "Book fixture",
-  });
-  const sent = fixture.calls.filter((c) => c.book === "create");
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].input.messageId, messageId);
-  assert.equal(sent[0].input.sessionId, created.id);
-  assert.ok(native.route(created.id), "route recorded");
-  assert.deepEqual(
-    { host: native.status(created.id).host, state: native.status(created.id).state },
-    { host: "macbook", state: "human" },
-  );
-  // The same request is idempotent on its route: one route row, one session identity.
-  const again = await native.create({
-    host: "macbook",
-    provider: "codex",
-    messageId,
-    taskId,
-    title: "Book fixture",
-  });
-  assert.equal(again.id, created.id);
-  assert.equal(native.db.prepare("SELECT count(*) n FROM host_routes").get().n, 1);
+  for (let i = 0; i < 5; i++)
+    await assert.rejects(
+      native.create({
+        host: "macbook",
+        provider: "codex",
+        messageId: randomUUID(),
+        taskId,
+        title: "Book fixture",
+      }),
+      /Book receiver transport is not configured/,
+    );
+  assert.equal(native.db.prepare("SELECT count(*) n FROM host_routes").get().n, 0);
   const local = await native.create({
     provider: "codex",
     messageId: randomUUID(),
@@ -76,6 +60,13 @@ test("a Book creation is routed to the Book transport and gets a non-null route 
     title: "Local fixture",
   });
   assert.equal(native.route(local.id), undefined);
-  assert.equal(native.status(local.id), undefined);
   assert.ok(fixture.calls.some((c) => c.local === "create"));
+  assert.deepEqual(remote(), []);
+});
+
+test("the process recorder sees processes started through node:child_process", async () => {
+  const { spawnSync } = await import("node:child_process");
+  spawnSync("/usr/bin/ssh", ["-V"]);
+  assert.equal(remote().length, 1);
+  fixture.processes.length = 0;
 });

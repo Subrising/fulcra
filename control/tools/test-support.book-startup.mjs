@@ -1,6 +1,6 @@
-// Test support only (cutover A1). Runs the REAL startController over a fake owned channel: connectNative is replaced by
-// a local fake, and the Book transport by one that applies the real private-profile checks and records calls instead of
-// running ssh. Everything else (HostNative wiring, the journal, the operator socket, events-status) is the shipped code.
+// Test support only. Runs the REAL startController over a fake owned channel: connectNative is replaced by a local
+// fake. node:child_process is wrapped (not replaced) so a test can prove which processes the controller starts.
+// Everything else (HostNative wiring, the journal, the operator socket, events-status) is the shipped code.
 // One startController per process: the owned process lock is held until exit.
 import { mock } from "node:test";
 import fs from "node:fs";
@@ -10,10 +10,24 @@ import { randomUUID } from "node:crypto";
 const control = new URL("../src/control/", import.meta.url);
 export async function startWithBookFixture() {
   const realNative = await import(new URL("native.mjs?real", control).href);
-  const realTransport = await import(new URL("../book/transport.mjs?real", control).href);
   const calls = [],
-    profiles = [],
-    agents = new Map(); // the receiver is idempotent per session, as the real one is
+    processes = [];
+  const realChild = await import("node:child_process");
+  const record =
+    (name) =>
+    (command, ...rest) => {
+      processes.push({ via: name, command: String(command), args: Array.isArray(rest[0]) ? rest[0] : [] });
+      return realChild[name](command, ...rest);
+    };
+  mock.module("node:child_process", {
+    namedExports: {
+      ...realChild,
+      ...Object.fromEntries(
+        ["spawn", "spawnSync", "execFile", "execFileSync", "exec", "execSync", "fork"].map((n) => [n, record(n)]),
+      ),
+    },
+    defaultExport: realChild.default,
+  });
   const local = {
     currentBoot: () => "fixture-boot",
     subscribe: () => () => {},
@@ -27,26 +41,6 @@ export async function startWithBookFixture() {
   };
   mock.module(new URL("native.mjs", control).href, {
     namedExports: { ...realNative, connectNative: async () => local },
-  });
-  mock.module(new URL("../book/transport.mjs", control).href, {
-    namedExports: {
-      ...realTransport,
-      configuredBook: (file) => {
-        realTransport.privateProfile(file);
-        profiles.push(file);
-        return async (action, input) => {
-          calls.push({ book: action, input });
-          if (action !== "create") throw Error("fixture: unexpected " + action);
-          if (!agents.has(input.sessionId)) agents.set(input.sessionId, randomUUID());
-          return {
-            id: input.sessionId,
-            host: "macbook",
-            agentId: agents.get(input.sessionId),
-            cwd: "/Users/fixture/tasks/" + input.messageId,
-          };
-        };
-      },
-    },
   });
   const { startController } = await import(new URL("server.mjs", control).href);
   const { socketLocation } = await import(new URL("socket-location.mjs", control).href);
@@ -99,7 +93,7 @@ export async function startWithBookFixture() {
     ...started,
     HOME,
     calls,
-    profiles,
+    processes,
     operatorRead,
     management: (command, principal) => management(command, principal),
     stop: async () => {

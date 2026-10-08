@@ -6,7 +6,6 @@ test("reviewed A1 Mini-side dependencies can be packaged", () => {
     "src/control/host-native.mjs",
     "src/control/remote-permissions.mjs",
     "src/control/remote-resumption.mjs",
-    "src/book/transport.mjs",
     "src/book/protocol.mjs",
     "src/book/activity.mjs",
     "src/book/activity-page.mjs",
@@ -17,7 +16,6 @@ test("Book receiver, unknown Book inputs, fixtures and deployment inputs stay ex
   for (const file of [
     "src/book/receiver.mjs",
     "src/book/new.mjs",
-    "src/book/transport.test.mjs",
     "src/control/activation.mjs",
     "src/control/permission-overlay.py",
     "provider-patches/foo.mjs",

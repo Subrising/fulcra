@@ -1,5 +1,4 @@
 import { HostNative } from "./host-native.mjs";
-import { configuredBook } from "../book/transport.mjs";
 import { createWorktreeLifecycle } from "./worktree-lifecycle-runtime.mjs";
 import { worktreeLifecycleSettings } from "../config.mjs";
 import fs from "node:fs";
@@ -42,26 +41,11 @@ import { macHeldNotifier, macLimitNotifier } from "./held-notifier.mjs";
 import { bootChainDir } from "./boot-chain.mjs";
 import { MetricsLog, instrumentDb, timedDispatch, startLoopSampler } from "./metrics.mjs";
 import { closeWithin } from "./native-close.mjs";
-// Cutover (A1): Book execution, as the live controller ran it. The live profile came from ORCA_BOOK_TRANSPORT_PROFILE; the
-// owned child's environment is fixed by its host, so the profile is pinned at <ORCA_HOME>/book-transport.json and read
-// with the same private-profile checks. Absent or refused, the controller is local-only and says so (events-status).
-export function bookTransport(home) {
-  const profile = `${home}/book-transport.json`;
-  if (!fs.existsSync(profile))
-    return { bookStatus: { configured: false, status: "Book not configured" } };
-  try {
-    return {
-      book: configuredBook(profile),
-      bookStatus: { configured: true, status: "Book configured", profile: "book-transport.json" },
-    };
-  } catch (e) {
-    return {
-      bookStatus: {
-        configured: false,
-        status: "Book transport profile refused: " + String(e?.message ?? e).slice(0, 200),
-      },
-    };
-  }
+// The SSH Book transport is retired (0.2.7): the controller never starts a remote receiver. A leftover
+// <ORCA_HOME>/book-transport.json is ignored, and Book creations are refused as "not configured".
+export const BOOK_RETIRED = Object.freeze({ configured: false, status: "Book transport retired" });
+export function bookTransport(_home) {
+  return { bookStatus: { ...BOOK_RETIRED } };
 }
 // V4 supplies the host-owned channel after its child/epoch handshake. No password bootstrap.
 export async function startController({
