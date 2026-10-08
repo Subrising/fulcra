@@ -358,14 +358,26 @@ test.skipIf(process.platform === "win32").each([["start"], ["daemon", "run"]])(
         stdio: "ignore",
       });
       const exited = new Promise((resolve) => child!.once("exit", resolve));
+      // The lock is created empty and then written (exclusive create), so wait for a whole lock,
+      // not only for the file. The daemon's own reader retries the same way.
+      const seen: { lock: { pid?: unknown } | null } = { lock: null };
       await expect
-        .poll(async () => existsSync(path.join(home, "paseo.pid")), { timeout: 10_000 })
+        .poll(
+          async () => {
+            try {
+              seen.lock = JSON.parse(await readFile(path.join(home, "paseo.pid"), "utf8"));
+            } catch {
+              seen.lock = null;
+            }
+            return typeof seen.lock?.pid === "number";
+          },
+          { timeout: 10_000 },
+        )
         .toBe(true);
-      const lock = JSON.parse(await readFile(path.join(home, "paseo.pid"), "utf8"));
       await f.ok(["status", "--home", home]);
       child.kill("SIGINT");
       await exited;
-      expect(() => process.kill(lock.pid, 0)).toThrow();
+      expect(() => process.kill(seen.lock!.pid as number, 0)).toThrow();
       expect((await f.ok(["status", "--home", home])).localDaemon).toBe("stopped");
     } finally {
       child?.kill("SIGTERM");
