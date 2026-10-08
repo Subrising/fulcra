@@ -292,6 +292,7 @@ test("upgrade: a main assistant seated before 0.2.8 gets the label at the first 
   assert.deepEqual(w.labels[main], {
     "fulcra.seat": "main-assistant",
     "fulcra.reports-to": "owner",
+    "paseo.parent-agent-id": "",
   });
   const changes = w.control.team.history().filter((c) => c.kind.startsWith("seat-"));
   assert.equal(changes.length, 1);
@@ -303,6 +304,21 @@ test("upgrade: a main assistant seated before 0.2.8 gets the label at the first 
   assert.deepEqual(second, { holder: main, cleared: [], set: false });
   assert.equal(w.labelWrites.length, 1);
   assert.equal(w.control.team.history().filter((c) => c.kind.startsWith("seat-")).length, 1);
+});
+
+test("a main assistant created by another chat reports to the owner and loses that parent", async (t) => {
+  const main = randomUUID(),
+    creator = randomUUID();
+  const w = world(t, {
+    snapshots: { [main]: chat() },
+    labels: { [main]: { "paseo.parent-agent-id": creator, role: "main" } },
+  });
+  await seatMain(w, main);
+  await w.control.team.syncSeat("start");
+  assert.equal(w.labels[main]["paseo.parent-agent-id"], "");
+  assert.equal(w.labels[main]["fulcra.reports-to"], "owner");
+  assert.equal(w.labels[main]["fulcra.seat"], "main-assistant");
+  assert.equal(w.labels[main].role, "main"); // other labels are left alone
 });
 
 test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {

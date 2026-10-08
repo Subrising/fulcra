@@ -131,9 +131,12 @@ export class Team {
     }
     let set = false;
     if (holder && !marked.includes(holder)) {
+      // The main assistant reports to the owner. A chat that created it is not its parent any more: that label
+      // also drives archive cascades, so archiving the creator must not archive the main assistant.
       await native.setLabels(holder, {
         [SEAT_LABEL]: MAIN_ASSISTANT,
         "fulcra.reports-to": "owner",
+        "paseo.parent-agent-id": "",
       });
       set = true;
       this.record("seat-set", holder, null, SYSTEM_ACTOR, `${reason}: holds the ${seat.seat} seat`);
