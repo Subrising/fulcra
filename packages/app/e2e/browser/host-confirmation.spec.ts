@@ -17,7 +17,8 @@ import {
 const linkedHost: LinkedHost = {
   serverId: "srv_link_confirmation",
   relayEndpoint: "127.0.0.1:59998",
-  daemonPublicKeyB64: "bGlua0NvbmZpcm1hdGlvbktleQ",
+  // Fulcra shows a fingerprint of the key, so it must be a real 32-byte public key.
+  daemonPublicKeyB64: Buffer.alloc(32, 7).toString("base64"),
 };
 
 test("a pairing link for a new host asks before saving it", async ({ page }) => {
