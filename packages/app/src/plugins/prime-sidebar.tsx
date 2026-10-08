@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -6,7 +6,10 @@ import { useFetchQuery } from "@/data/query";
 import { Crown, Network, Plus, RefreshCw, Users } from "lucide-react-native";
 import { router } from "expo-router";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
-import { useHostRuntimeClient } from "@/runtime/host-runtime";
+import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
+import { useOrganizationIntakePreferences } from "@/stores/organization-intake-preferences-store";
+import { preferredMainAssistant, useMainAssistantSeats } from "./home-computer";
+import { mainAssistant } from "../../../../control/orca-organization/shared/team";
 import { useSessionStore } from "@/stores/session-store";
 import { pluginRegistry, useControllerPlugin } from "./registry";
 import { PluginInstallationProvider } from "./installation-provider";
@@ -16,7 +19,6 @@ import { useContract } from "../../../../control/orca-organization/client/use-co
 import { roleDirectoryRpc, type Seat } from "../../../../control/orca-organization/shared/roles";
 import { fleetRpc, type Fleet } from "../../../../control/orca-organization/shared/fleet";
 import { projectsRpc } from "../../../../control/orca-organization/shared/projects";
-import { primeName } from "../../../../control/orca-organization/client/organisation-model";
 import { STATE_LABEL, stateOf } from "../../../../control/orca-organization/client/team-tree";
 
 import type { Theme } from "@/styles/theme";
@@ -131,8 +133,11 @@ export function PrimeSidebarRows({
   const available = !query.isError && query.data?.available === true;
   const nodes = new Map((fleet.data?.nodes ?? []).map((node) => [node.id, node]));
   const projectName = new Map((projects.data?.projects ?? []).map((p) => [p.id, p.name]));
+  // Leads of archived projects are hidden with their project.
   const leads = available
-    ? (query.data!.projectSeats ?? []).filter((seat) => seat.state === "assigned")
+    ? (query.data!.projectSeats ?? []).filter(
+        (seat) => seat.state === "assigned" && seat.projectId && projectName.has(seat.projectId),
+      )
     : [];
   return (
     <>
@@ -152,42 +157,22 @@ export function PrimeSidebarRows({
         variant="compact"
         testID="sidebar-top-primes"
       />
-      {available ? (
-        query.data!.primes.map((seat) => (
-          <LeadRow
-            key={seat.seat}
-            seat={seat}
-            title={primeName(seat.seat)}
-            node={seat.sessionId ? nodes.get(seat.sessionId) : undefined}
-            navigation={navigation}
-            leadership={leadership}
-            onBeforeNavigate={onBeforeNavigate}
-            testID={`sidebar-prime-${seat.seat}`}
-          />
-        ))
-      ) : (
+      {available ? null : (
         <SidebarHeaderRow
           icon={RefreshCw}
-          label={
-            query.isPending ? "Loading main assistants…" : "Couldn't load main assistants · Retry"
-          }
+          label={query.isPending ? "Loading leads…" : "Couldn't load leads · Retry"}
           variant="compact"
           onPress={retry}
         />
       )}
-      {available && query.data!.primes.length === 0 && (
-        <SidebarHeaderRow
-          icon={Crown}
-          label="No main assistant yet · Set up"
-          variant="compact"
-          onPress={leadership}
-        />
-      )}
+      {available && !mainAssistant(query.data!.primes) ? (
+        <MainAssistantChoice serverId={serverId} leadership={leadership} />
+      ) : null}
       {leads.map((seat) => (
         <LeadRow
           key={`project:${seat.seat}`}
           seat={seat}
-          title={`Project lead · ${(seat.projectId && projectName.get(seat.projectId)) || "project"}`}
+          title={`Lead · ${projectName.get(seat.projectId!) ?? "project"}`}
           node={seat.sessionId ? nodes.get(seat.sessionId) : undefined}
           navigation={navigation}
           leadership={leadership}
@@ -199,11 +184,121 @@ export function PrimeSidebarRows({
   );
 }
 
+function useAllMainAssistants() {
+  const hosts = useHosts();
+  const companyHost = useOrganizationIntakePreferences((state) => state.companyHost);
+  const ids = useMemo(() => hosts.map((host) => host.serverId), [hosts]);
+  const found = useMainAssistantSeats<Seat>(ids, mainAssistant);
+  const label = (serverId: string) =>
+    hosts.find((host) => host.serverId === serverId)?.label ?? "another computer";
+  return { found, companyHost, label };
+}
+
+/**
+ * Fulcra 0.2.8: the main assistant, pinned at the top of the sidebar on every device, with the computer it runs on.
+ * It comes from any connected computer, so the MacBook app shows the main assistant that runs on the Mac mini.
+ */
+export function PinnedMainAssistant({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
+  const { found, companyHost, label } = useAllMainAssistants();
+  const chosen = preferredMainAssistant(found, companyHost);
+  if (!chosen) return null;
+  return (
+    <PinnedRow
+      serverId={chosen.serverId}
+      seat={chosen.seat}
+      node={(chosen.node ?? undefined) as FleetNode | undefined}
+      hostLabel={label(chosen.serverId)}
+      onBeforeNavigate={onBeforeNavigate}
+    />
+  );
+}
+
+function PinnedRow({
+  serverId,
+  seat,
+  node,
+  hostLabel,
+  onBeforeNavigate,
+}: {
+  serverId: string;
+  seat: Seat;
+  node: FleetNode | undefined;
+  hostLabel: string;
+  onBeforeNavigate?: () => void;
+}) {
+  const navigation = usePluginHostNavigation(serverId);
+  const leadership = useCallback(() => {
+    onBeforeNavigate?.();
+    router.push(
+      buildPluginSurfaceRoute(serverId, pluginRegistry.controllerPluginId(serverId), {
+        kind: "surface",
+        id: "leadership",
+      }),
+    );
+  }, [onBeforeNavigate, serverId]);
+  return (
+    <LeadRow
+      seat={seat}
+      title="Main assistant"
+      node={node}
+      hostLabel={hostLabel}
+      navigation={navigation}
+      leadership={leadership}
+      onBeforeNavigate={onBeforeNavigate}
+      testID="sidebar-pinned-main-assistant"
+    />
+  );
+}
+
+/**
+ * This computer has no main assistant. When another connected computer has one, the first choice is to use it (it
+ * becomes Fulcra's home computer in this app); setting one up here comes second.
+ */
+function MainAssistantChoice({
+  serverId,
+  leadership,
+}: {
+  serverId: string;
+  leadership: () => void;
+}) {
+  const { found, label } = useAllMainAssistants();
+  const chooseCompany = useOrganizationIntakePreferences((state) => state.chooseCompany);
+  const elsewhere = (found ?? []).find((f) => f.serverId !== serverId) ?? null;
+  const useElsewhere = useCallback(() => {
+    if (elsewhere) chooseCompany(elsewhere.serverId);
+  }, [chooseCompany, elsewhere]);
+  return (
+    <>
+      {elsewhere ? (
+        <SidebarHeaderRow
+          icon={Crown}
+          label={`Use the main assistant on ${label(elsewhere.serverId)}`}
+          variant="compact"
+          onPress={useElsewhere}
+          testID="sidebar-use-remote-main-assistant"
+        />
+      ) : null}
+      <SidebarHeaderRow
+        icon={Crown}
+        label={elsewhere ? "Set up a main assistant here" : "No main assistant yet · Set up"}
+        variant="compact"
+        onPress={leadership}
+        testID="sidebar-set-up-main-assistant"
+      />
+    </>
+  );
+}
+
 /** "Working · Mac mini", "Empty slot", or "Unavailable" when the session cannot be opened from here. */
-export function leadStatusLine(seat: Seat, node: FleetNode | undefined, canOpen: boolean): string {
+export function leadStatusLine(
+  seat: Seat,
+  node: FleetNode | undefined,
+  canOpen: boolean,
+  hostLabel?: string,
+): string {
   if (seat.state === "vacant") return "Empty slot";
-  if (!canOpen) return "Unavailable";
-  if (!node) return "Status unknown";
+  if (!canOpen) return hostLabel ? `Not connected · ${hostLabel}` : "Unavailable";
+  if (!node) return hostLabel ?? "Status unknown";
   return `${STATE_LABEL[stateOf(node)]} · ${node.host}`;
 }
 
@@ -215,6 +310,7 @@ function LeadRow({
   leadership,
   onBeforeNavigate,
   testID,
+  hostLabel,
 }: {
   seat: Seat;
   title: string;
@@ -223,6 +319,8 @@ function LeadRow({
   leadership: () => void;
   onBeforeNavigate?: () => void;
   testID: string;
+  /** The computer the chat runs on, shown when this app has no live status for it. */
+  hostLabel?: string;
 }) {
   // A role-message dispatch address is not an app host identity. Open only on the host
   // that actually owns this saved agent; an unloaded or ambiguous identity stays in Leadership.
@@ -235,7 +333,7 @@ function LeadRow({
   const canOpen = Boolean(
     seat.state === "assigned" && seat.sessionPresent && seat.sessionId && agentServerId,
   );
-  const status = leadStatusLine(seat, node, canOpen);
+  const status = leadStatusLine(seat, node, canOpen, hostLabel);
   const label = canOpen ? title : `${title} · ${status}`;
   const [composing, setComposing] = useState(false);
   const open = useCallback(() => {
