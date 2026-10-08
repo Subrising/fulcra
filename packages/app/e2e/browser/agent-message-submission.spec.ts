@@ -348,6 +348,7 @@ async function replaySteeredSleepTurnInBrowser(
   gate.holdNextShellToolCall("completed");
   await gotoAppShell(page);
   await openSettings(page);
+  await openSettingsSection(page, "behaviour");
   await selectSteerInSettings(page);
   const agent = await startRunningMockAgent(page, {
     prefix: `steer-replay-${shape}-${testInfo.workerIndex}-`,
