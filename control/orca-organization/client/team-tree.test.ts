@@ -128,3 +128,32 @@ test("Claude model ids read as people say them; other names stay as they are", (
   const tree = buildTeamTree({ nodes: [node({ provider: "claude", model: "claude-haiku-4-5" })] });
   assert.equal(tree.roots[0]!.runs, "Claude · Haiku 4.5");
 });
+
+test("a team set up from existing chats shows the main assistant above every lead, and workers under their lead", () => {
+  const main = node({ title: "Main assistant" });
+  const lead = node({ title: "Fulcra thin fork", project: PROJECT });
+  const worker = node({ title: "Review", project: PROJECT });
+  const loose = node({ title: "Scratch" });
+  const tree = buildTeamTree({
+    nodes: [worker, loose, lead, main],
+    mainSessionIds: new Set([main.id]),
+    mainSessionId: main.id,
+    leadSessionIds: new Set([lead.id]),
+    leadByProject: new Map([[PROJECT, lead.id]]),
+    projectNames: new Map([[PROJECT, "Fulcra"]]),
+  });
+  assert.deepEqual(tree.roots.map(shape), [
+    {
+      role: "Main assistant",
+      state: "Idle",
+      children: [
+        {
+          role: "Project lead · Fulcra",
+          state: "Idle",
+          children: [{ role: "Worker · Fulcra", state: "Idle" }],
+        },
+      ],
+    },
+    { role: "Worker", state: "Idle" },
+  ]);
+});
