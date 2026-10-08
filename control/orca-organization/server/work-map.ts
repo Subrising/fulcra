@@ -200,14 +200,14 @@ export function createWorkMapReader({
       notes.push(
         attention(
           "seats-unavailable",
-          `Fulcra could not read who holds each seat: ${reason((seatRead as PromiseRejectedResult).reason)}`,
+          `Fulcra could not read who has each role: ${reason((seatRead as PromiseRejectedResult).reason)}`,
         ),
       );
     else if (!primes.some((p) => p.state === "assigned"))
       notes.push(
         attention(
           "no-prime",
-          "No prime orchestrator is assigned yet, so no project has anyone to escalate to.",
+          "No main assistant is assigned yet, so no project has anyone to escalate to.",
         ),
       );
     for (const p of projectsOut) {
@@ -215,7 +215,7 @@ export function createWorkMapReader({
         notes.push(
           attention(
             "no-project-orchestrator",
-            `${p.name ?? "This project"} needs an orchestrator.`,
+            `${p.name ?? "This project"} needs a lead.`,
             { projectId: p.projectId },
           ),
         );
@@ -223,7 +223,7 @@ export function createWorkMapReader({
         notes.push(
           attention(
             "leader-session-missing",
-            `${p.name ?? "This project"}: its orchestrator session is gone.`,
+            `${p.name ?? "This project"}: its lead session is gone.`,
             { projectId: p.projectId, sessionId: p.seat.sessionId ?? undefined },
           ),
         );
@@ -231,7 +231,7 @@ export function createWorkMapReader({
         notes.push(
           attention(
             "generation-changed",
-            `${p.name ?? "This project"}: this orchestrator was restarted since it was assigned.`,
+            `${p.name ?? "This project"}: this lead was restarted since it was assigned.`,
             { projectId: p.projectId, sessionId: p.seat.sessionId ?? undefined },
           ),
         );
@@ -241,7 +241,7 @@ export function createWorkMapReader({
         notes.push(
           attention(
             "generation-changed",
-            `Prime ${prime.seat}: this orchestrator was restarted since it was assigned.`,
+            `Main assistant ${prime.seat}: this lead was restarted since it was assigned.`,
             { sessionId: prime.sessionId ?? undefined },
           ),
         );
@@ -302,7 +302,7 @@ export function createWorkMapReader({
           ? { available: true, partial: f.partial, observedAt: f.observedAt.slice(0, 64) }
           : { available: false, partial: true, observedAt: null },
       },
-      note: "Read-only. A seat records accountability; idle is not done, and nothing on this map grants, sends or takes over.",
+      note: "Read-only. A role records accountability; idle is not done, and nothing on this map grants, sends or takes over.",
     });
   };
 }
@@ -355,7 +355,7 @@ export function createWorkMapProjectReader({
           issues: [],
           truncated: false,
         }),
-        note: "This project could not be read, so its orchestrator and workstreams are unknown rather than absent.",
+        note: "This project could not be read, so its lead and workstreams are unknown rather than absent.",
       });
     }
     // Holds are cheap and optional: without them no seat is shown as held.

@@ -152,7 +152,7 @@ export function RemitSheet({
                 <Text style={{ color: c.foreground, fontWeight: prime === p.seat ? "700" : "600" }}>
                   {primeName(p.seat)}
                   {current ? " · now" : ""}
-                  {p.state === "vacant" ? " · seat empty" : ""}
+                  {p.state === "vacant" ? " · role empty" : ""}
                 </Text>
               </Button>
             );

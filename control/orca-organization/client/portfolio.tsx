@@ -89,7 +89,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
         <>
           <WorkButton
             theme={props.theme}
-            label="Back to orchestrators"
+            label="Back to leads"
             onPress={() => setSelected(null)}
           />
           <Activity
@@ -112,7 +112,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
         <>
           <View style={{ gap: 8 }}>
             <Text style={{ ...muted, letterSpacing: 1, fontSize: 12 }}>FULCRA / LEADERSHIP</Text>
-            <Text style={{ ...text, fontSize: 30, fontWeight: "600" }}>Your orchestrators</Text>
+            <Text style={{ ...text, fontSize: 30, fontWeight: "600" }}>Your leads</Text>
             <Text style={{ ...muted, fontSize: 16, lineHeight: 24 }}>
               Who is leading. What needs you. Where the work goes next.
             </Text>
@@ -148,7 +148,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
           </Text>
           <WorkButton
             theme={props.theme}
-            label="Refresh orchestrators"
+            label="Refresh leads"
             onPress={() => {
               void query.refetch();
               void directory.refetch();
@@ -167,7 +167,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
               {d
                 ? (last.notice ?? "This view may be out of date. Fulcra is checking again.")
                 : query.isPending
-                  ? "Finding your orchestrators…"
+                  ? "Finding your leads…"
                   : "Fulcra is not answering yet; retrying."}
             </Text>
           )}
@@ -214,7 +214,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
                   <Text style={text}>
                     {allRoles.length
                       ? "Leadership relationships need attention; no top-level owner can be established."
-                      : "No orchestrator is recorded for this workstream."}
+                      : "No lead is recorded for this workstream."}
                   </Text>
                 )}
                 {leaders.map((role) => {
@@ -230,7 +230,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
                         backgroundColor: c.surface0,
                       }}
                     >
-                      <Text style={{ ...muted, fontSize: 12 }}>LEAD ORCHESTRATOR</Text>
+                      <Text style={{ ...muted, fontSize: 12 }}>LEAD</Text>
                       <Text style={{ ...text, fontSize: 20, fontWeight: "600" }}>
                         {sessionName(node, d)}
                       </Text>
@@ -252,10 +252,10 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
                       )}
                       <Text style={muted}>
                         {node.mode === "human"
-                          ? "You have control. This saved leader is not currently delegated."
+                          ? "You control this. The lead does not control this saved leader now."
                           : role.active
-                            ? "Delegation recorded. Native activity is shown separately above."
-                            : "Delegation suspended. Review control before continuing."}
+                            ? "The lead controls this. Native activity is shown separately above."
+                            : "Lead control is paused. Check who controls this before you continue."}
                       </Text>
                       <OriginalConversation
                         theme={props.theme}

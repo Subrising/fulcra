@@ -252,7 +252,7 @@ export function SeatPanel({
           <WorkButton
             theme={props.theme}
             disabled={busy || short}
-            label="Vacate this seat, leaving the project with no recorded orchestrator"
+            label="Empty this role. The project then has no recorded lead"
             onPress={() =>
               run(() => ({
                 action: "vacate",

@@ -116,7 +116,7 @@ export function ProjectStory({
             {b.headline}
           </Text>
           <Text style={muted}>
-            Written by {d?.authorName ?? "the project's orchestrator"}, {relativeTime(b.writtenAt)}
+            Written by {d?.authorName ?? "the project's lead"}, {relativeTime(b.writtenAt)}
           </Text>
           {d?.stale && (
             <Text style={muted}>

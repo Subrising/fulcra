@@ -85,7 +85,7 @@ export function NativeQueuedInstruction({ target, fresh, hostId, colors }: Props
         now.target.generation !== target.generation ||
         now.target.mode !== "delegated"
       )
-        throw new Error("Original delegation unavailable");
+        throw new Error("The original lead control is not available");
     };
     try {
       check();
