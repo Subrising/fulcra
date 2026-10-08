@@ -10,7 +10,11 @@ type PreparedBy = { kind: "person" } | { kind: "session"; sessionId: string; lab
 export function packKubeconfig(text: string): string;
 export function unpackKubeconfig(value: string): string;
 export function kubeconfigContexts(text: string): { names: string[]; current: string | null };
-export function reach(environment: unknown, template: unknown, reported: string | null): { endpoint: string | null; note: string | null };
+export function reach(
+  environment: unknown,
+  template: unknown,
+  reported: string | null,
+): { endpoint: string | null; note: string | null };
 export function endpointFor(
   environment: unknown,
   template: unknown,

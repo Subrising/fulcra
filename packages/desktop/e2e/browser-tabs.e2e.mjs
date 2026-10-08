@@ -218,9 +218,15 @@ async function registerHarnessHost(page, daemonPort) {
     await page.getByTestId("welcome-direct-connection").click();
   } else {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    // Fulcra keeps the host entries behind "Show advanced settings".
+    const advanced = page.locator('[data-testid="settings-advanced-toggle"]:visible').first();
+    await advanced.waitFor({ state: "visible" });
+    if ((await advanced.getAttribute("aria-label")) === "Show advanced settings") {
+      await advanced.click();
+    }
     await page
       .locator('[data-testid="settings-sidebar"]:visible')
-      .getByRole("button", { name: "Add host", exact: true })
+      .getByTestId("settings-add-host")
       .click();
     // "Add host" opens the method picker; the welcome entry point skips straight to direct.
     await page.getByRole("button", { name: "Direct connection", exact: true }).click();
@@ -230,7 +236,7 @@ async function registerHarnessHost(page, daemonPort) {
   await page.getByTestId("direct-host-submit").click();
   await page
     .locator('[data-testid="settings-sidebar"]:visible')
-    .getByRole("button", { name: "Overview", exact: true })
+    .getByTestId("settings-host-section-host")
     .waitFor({ state: "visible" })
     .catch(async () => {
       // Not in settings yet: the welcome flow lands in the app shell instead.

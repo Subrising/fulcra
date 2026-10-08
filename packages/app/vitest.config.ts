@@ -112,6 +112,8 @@ export default defineConfig({
       "react-native-reanimated",
       "react-native-gesture-handler",
       "react-native-keyboard-controller",
+      // Its entry imports the Flow-typed native file; unbundled, the resolver picks MaskedView.web.js.
+      "@react-native-masked-view/masked-view",
     ],
   },
   // The globals a React Native bundler defines, which esbuild is no longer there to supply for

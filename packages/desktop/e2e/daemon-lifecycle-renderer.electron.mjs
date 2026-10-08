@@ -72,6 +72,8 @@ export async function verifyAttachedDaemonControls({ repo, root, env, home, port
     page.on("pageerror", (error) => console.log("Renderer error:", error.message));
     await page.route(/:(6767|6768)\b/, (route) => route.abort());
     await page.getByRole("button", { name: "Settings", exact: true }).click({ timeout: 90_000 });
+    // Fulcra lists host rows, including this one, under the collapsed Advanced group.
+    await page.getByRole("button", { name: "Show advanced settings", exact: true }).click();
     await page.getByRole("button", { name: "Enable built-in daemon", exact: true }).click();
     await expect(page.getByText("Attached to an existing daemon", { exact: true })).toBeVisible();
     await expect(
