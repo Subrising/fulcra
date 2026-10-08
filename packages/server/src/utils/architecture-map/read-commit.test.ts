@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,6 +46,8 @@ describe("readCommitSnapshot in a partial clone", () => {
     git(source, "add", ".");
     git(source, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "one");
     writeFileSync(path.join(source, "src", "index.ts"), 'export const a = "second";\n');
+    for (let i = 0; i < 5; i++)
+      writeFileSync(path.join(source, "src", `part${i}.ts`), `export const p${i} = ${i};\n`);
     writeFileSync(path.join(source, "picture.png"), Buffer.alloc(2 * 1024 * 1024, 7));
     git(source, "add", ".");
     git(source, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "two");
@@ -55,10 +57,26 @@ describe("readCommitSnapshot in a partial clone", () => {
     const clone = path.join(root, "clone");
     git(root, "clone", "-q", "--filter=blob:none", "--no-checkout", `file://${source}`, clone);
     expect(hasLocalObject(clone, picture)).toBe(false);
+    const packs = () =>
+      readdirSync(path.join(clone, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"))
+        .length;
+    const packsBefore = packs();
 
     const snapshot = await readCommitSnapshot(clone, head);
     const paths = snapshot.files.map((f) => f.path).sort();
-    expect(paths).toEqual(["package.json", "picture.png", "src/index.ts"]);
+    expect(paths).toEqual([
+      "package.json",
+      "picture.png",
+      "src/index.ts",
+      "src/part0.ts",
+      "src/part1.ts",
+      "src/part2.ts",
+      "src/part3.ts",
+      "src/part4.ts",
+    ]);
+    // Seven missing code blobs arrive in one fetch (one new pack), not seven.
+    expect(packs()).toBe(packsBefore + 1);
+    expect(snapshot.texts.get("src/part4.ts")).toBe("export const p4 = 4;\n");
     expect(snapshot.texts.get("src/index.ts")).toBe('export const a = "second";\n');
     expect(hasLocalObject(clone, picture)).toBe(false);
   });

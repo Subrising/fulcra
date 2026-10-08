@@ -1025,6 +1025,7 @@ test("partial clone: measures the change without fetching blobs it does not read
     repo.write("src/price.test.ts", "import { price } from './price';\n");
     const base = repo.commit();
     repo.write("src/price.ts", "export const price = 2;\n");
+    for (let i = 0; i < 5; i++) repo.write(`src/part${i}.ts`, `export const p${i} = ${i};\n`);
     repo.write("assets/picture.png", Buffer.alloc(2 * 1024 * 1024, 7));
     const head = repo.commit();
     const picture = repo.git("rev-parse", `${head}:assets/picture.png`);
@@ -1049,8 +1050,13 @@ test("partial clone: measures the change without fetching blobs it does not read
       }
     };
     assert.equal(local(picture), false);
+    const packs = () =>
+      fs.readdirSync(path.join(clone, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"))
+        .length;
+    const packsBefore = packs();
     const impact = measureImpact({ root: clone, range: `${base}..${head}` });
-    assert.equal(impact.counts.changed, 2);
+    assert.equal(packs(), packsBefore + 1, "missing source blobs arrive in one fetch");
+    assert.equal(impact.counts.changed, 7);
     assert.equal(impact.counts.covered, 1);
     assert.equal(local(picture), false, "the picture blob was fetched");
   } finally {

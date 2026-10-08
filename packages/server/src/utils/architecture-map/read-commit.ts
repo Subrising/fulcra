@@ -4,8 +4,8 @@ import { isCode, type Snapshot } from "./generate.js";
 // A commit as the generator sees it, read from git objects only (`ls-tree`, one `cat-file --batch`): never the
 // working tree or the index. Every revision is a validated 40-hex id, so no revision expression can reach git.
 // FULCRA(partial-clone): the listing and the size check never fetch. In a partial clone (--filter=blob:none),
-// `ls-tree --long` fetched every missing blob one at a time to report its size and took more than 30 s; now only
-// the missing code blobs the map reads are fetched, and their size is checked after the read.
+// `ls-tree --long` fetched every missing blob one at a time to report its size and took more than 30 s; now the
+// missing code blobs the map reads are fetched together, in one request to the promisor remote.
 
 const SHA40 = /^[0-9a-f]{40}$/;
 const GIT_ENV = { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" };
@@ -76,8 +76,13 @@ export async function readCommitSnapshot(cwd: string, commit: string): Promise<S
     files.push({ path: file, blob });
   }
   const candidates = files.filter((f) => isCode(f.path) || PARSED_CONFIG.test(f.path));
-  const sizes = await localBlobSizes(cwd, [...new Set(candidates.map((f) => f.blob))]);
-  // A blob missing locally (partial clone) has no known size yet; it is read and then size-checked.
+  const unique = [...new Set(candidates.map((f) => f.blob))];
+  let sizes = await localBlobSizes(cwd, unique);
+  // Blobs missing locally (partial clone) come in ONE fetch, then are sized like the rest. If that fetch fails, a
+  // missing blob is read (lazily fetched) and then size-checked.
+  const missing = unique.filter((blob) => !sizes.has(blob));
+  if (missing.length > 0 && (await fetchMissingBlobs(cwd, missing)))
+    sizes = await localBlobSizes(cwd, unique);
   const wanted = candidates.filter((f) => (sizes.get(f.blob) ?? 0) <= MAX_PARSE_BYTES);
   const blobs = [...new Set(wanted.map((f) => f.blob))];
   const texts = new Map<string, string>();
@@ -125,4 +130,35 @@ async function localBlobSizes(cwd: string, blobs: string[]): Promise<Map<string,
     if (type === "blob") sizes.set(oid, Number(size));
   }
   return sizes;
+}
+
+const REMOTE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
+// One fetch of many missing blobs from the partial clone's promisor remote: the same request git makes for a lazy
+// fetch, batched. False when there is no promisor remote or the fetch fails.
+async function fetchMissingBlobs(cwd: string, blobs: string[]): Promise<boolean> {
+  const config = await runGitCommand(["config", "--get-regexp", "^remote\\..*\\.promisor$"], {
+    cwd,
+    envOverlay: GIT_ENV,
+    acceptExitCodes: [0, 1],
+  });
+  const remote = config.stdout
+    .split("\n")
+    .map((line) => /^remote\.(.+)\.promisor\s+true$/i.exec(line.trim())?.[1])
+    .find((name) => name !== undefined && REMOTE_NAME.test(name));
+  if (!remote) return false;
+  const fetched = await runGitCommand(
+    [
+      "-c",
+      "fetch.negotiationAlgorithm=noop",
+      "fetch",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--recurse-submodules=no",
+      "--filter=blob:none",
+      "--stdin",
+      remote,
+    ],
+    { cwd, envOverlay: GIT_ENV, input: `${blobs.join("\n")}\n`, acceptExitCodes: [0, 1, 128] },
+  );
+  return fetched.exitCode === 0;
 }

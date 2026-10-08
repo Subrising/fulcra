@@ -104,7 +104,9 @@ const defaults = object({
   ),
 });
 // DESIGN-NEXT-BUILD A3: `role` says what the session is for (its defaults); `provider` may then be left to that role.
-const sessionRole = one("planning", "orchestration", "implementation");
+// FULCRA(light-role): every role the controller accepts (role-defaults-store DEFAULT_ROLES), not the closed shared-config
+// list: review, research and light were refused here before reaching the controller.
+const sessionRole = one("planning", "orchestration", "implementation", "review", "research", "light");
 const create = {
   messageId: uuid,
   taskId: uuid,
