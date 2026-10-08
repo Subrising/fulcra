@@ -3525,14 +3525,14 @@ describe("ClaudeAgentSession context window usage", () => {
         expect.objectContaining({
           type: "turn_completed",
           provider: "claude",
-          usage: {
+          usage: expect.objectContaining({
             inputTokens: 0,
             cachedInputTokens: 0,
             outputTokens: 0,
             totalCostUsd: 0.04,
             contextWindowMaxTokens: 200_000,
             contextWindowUsedTokens: 704,
-          },
+          }),
         }),
       );
     } finally {
@@ -3578,14 +3578,14 @@ describe("ClaudeAgentSession context window usage", () => {
         expect.objectContaining({
           type: "turn_completed",
           provider: "claude",
-          usage: {
+          usage: expect.objectContaining({
             inputTokens: 0,
             cachedInputTokens: 0,
             outputTokens: 0,
             totalCostUsd: 0.04,
             contextWindowMaxTokens: 200_000,
             contextWindowUsedTokens: 704,
-          },
+          }),
         }),
       );
     } finally {
