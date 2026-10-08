@@ -307,3 +307,23 @@ test("fresh and migrated homes seed installation modes once and preserve explici
   initializeRoleDefaults(migrated, null, { claude: "acceptEdits", codex: "auto" });
   assert.deepEqual(readRoleDefaults(migrated).modes, { claude: "acceptEdits", codex: "auto" });
 });
+
+// FULCRA(light-role): Haiku 5.5 medium by default, never written to defaults.json until someone saves it.
+test("light role: seeded, kept out of a fresh defaults.json, saved only on an explicit choice", async () => {
+  const root = scratch();
+  const table = initializeRoleDefaults(root);
+  assert.deepEqual(table.roles.light, {
+    provider: "claude",
+    claude: { model: "claude/claude-haiku-5-5", thinkingOptionId: "medium" },
+    codex: { model: "codex/gpt-6.1-sol", thinkingOptionId: "medium" },
+  });
+  const file = path.join(root, "accounts/defaults.json");
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(file, "utf8")).roles, "light"), false);
+  assert.equal(readRoleDefaults(root).roles.light.claude.model, "claude/claude-haiku-5-5");
+  await writeRoleDefaults(root, {
+    role: "light",
+    defaults: { provider: "claude", claude: { model: "claude/claude-sonnet-5-5", thinkingOptionId: "low" } },
+  });
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).roles.light.claude.model, "claude/claude-sonnet-5-5");
+  assert.equal(readRoleDefaults(root).roles.light.claude.thinkingOptionId, "low");
+});
