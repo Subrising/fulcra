@@ -185,7 +185,7 @@ export function NativeQueuedInstruction({ target, fresh, hostId, colors }: Props
         <Text style={styles.buttonText}>Queue native instruction once</Text>
       </Pressable>
       <Text style={styles.detail}>
-        This protected operator route requires current delegation and host-issued native authority.
+        This protected operator route works only while the lead controls the session and the host gives native authority.
         It never creates authority from a feature, label or client flag.
       </Text>
       {notice && notice.epoch === epoch.current ? (

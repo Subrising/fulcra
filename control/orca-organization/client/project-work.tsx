@@ -256,8 +256,8 @@ export function ProjectGovernance({
   if (!grouped)
     return (
       <Text style={muted}>
-        Work without a recorded project has no orchestrator and no project goal. A project
-        orchestrator is bound to a registered project, never to a task.
+        Work without a recorded project has no lead and no project goal. A project
+        lead is bound to a registered project, never to a task.
       </Text>
     );
 
@@ -269,7 +269,7 @@ export function ProjectGovernance({
       {d && !d.available && (
         <Text accessibilityLiveRegion="polite" style={text}>
           This project's recorded leadership and progress could not be read, so its goal,
-          orchestrator and needs are unknown rather than absent.
+          lead and needs are unknown rather than absent.
           {d.unavailable ? ` Controller reported: ${d.unavailable}` : ""}
         </Text>
       )}
@@ -369,7 +369,7 @@ export function ProjectGovernance({
           {!!mine.length && (
             <>
               <Text accessibilityRole="header" style={heading}>
-                Asked of this orchestrator
+                Asked of this lead
               </Text>
               <Text style={muted}>
                 These are requests published to the seat. A request is not a session; work appears
@@ -408,7 +408,7 @@ export function ProjectGovernance({
           )}
           {requests.data && !requests.data.available && (
             <Text style={muted}>
-              Outstanding requests could not be read, so whether this seat has been asked for work
+              Outstanding requests could not be read, so whether this role has been asked for work
               is unknown here.
             </Text>
           )}
@@ -459,12 +459,12 @@ export function ProjectGovernance({
                         if (request) void runAdopt(s.sessionId, request);
                       }}
                     >
-                      Adopt into the seat
+                      Adopt into the role
                     </WorkButton>
                   ) : (
                     <Text style={muted}>
                       Adoption names the record this session was created under, and that record is
-                      not visible here — it was not created through a request to this seat. Adopt it
+                      not visible here — it was not created through a request to this role. Adopt it
                       from a surface that can name its creation record.
                     </Text>
                   ))}
@@ -485,8 +485,8 @@ export function ProjectGovernance({
           })}
           {owned.data && (
             <Text style={muted}>
-              Adoption is an operator act: a seat cannot grow its own ownership, and adopting spends
-              the seat's session allowance just as asking for one does.
+              Adoption is an operator act: a role cannot grow its own ownership, and adopting spends
+              the role's session allowance just as asking for one does.
             </Text>
           )}
           {adoptResult && (
@@ -497,12 +497,12 @@ export function ProjectGovernance({
 
           {/* Starting work. Routed through the seat, or an explicit way to fill the seat first. */}
           <Text accessibilityRole="header" style={heading}>
-            Ask the orchestrator for work
+            Ask the lead for work
           </Text>
           {!seated ? (
             <>
               <Text style={text}>
-                This project has no assigned orchestrator, so work cannot be routed through one.
+                This project has no assigned lead, so work cannot be routed through one.
                 Recording one is the next step — it states who is accountable and grants no
                 authority.
               </Text>
@@ -511,26 +511,26 @@ export function ProjectGovernance({
                 label={`Assign a lead for ${project.name}`}
                 onPress={onAssign}
               >
-                Assign an orchestrator
+                Assign a lead
               </WorkButton>
             </>
           ) : (
             <>
               <Text style={muted}>
-                This asks the orchestrator seat to do the work. The controller publishes a request
+                This asks the lead role to do the work. The controller publishes a request
                 and wakes the seat; no session exists until the seat fulfils it. The seat gains no
                 authority over the result.
               </Text>
               {/* Say why a seat will refuse before asking the operator to write a reason. */}
               {allowances.data && !allowances.data.available && (
                 <Text style={muted}>
-                  This seat's session allowance could not be read, so whether it can accept work is
+                  This role's session allowance could not be read, so whether it can accept work is
                   unknown here.
                 </Text>
               )}
               {allowance === null && allowances.data?.available && (
                 <Text accessibilityLiveRegion="polite" style={text}>
-                  No operator session allowance is recorded for this seat, so it will refuse until
+                  No operator session allowance is recorded for this role, so it will refuse until
                   one is granted. Asking is still possible; the refusal will say the same.
                 </Text>
               )}
@@ -543,7 +543,7 @@ export function ProjectGovernance({
               )}
               {stalePin && (
                 <Text accessibilityLiveRegion="polite" style={text}>
-                  This allowance is pinned to a seat revision this seat no longer has. Replacing a
+                  This allowance is pinned to a role revision this role no longer has. Replacing a
                   leader resets the count while the project still lists the sessions the previous
                   holder owned, so the successor can do nothing until an operator grants a fresh
                   allowance. That is operator-in-the-loop by design, not a fault.
@@ -551,7 +551,7 @@ export function ProjectGovernance({
               )}
               {exhausted && (
                 <Text accessibilityLiveRegion="polite" style={text}>
-                  This seat has no remaining session allowance, so it will refuse both new requests
+                  This role has no remaining session allowance, so it will refuse both new requests
                   and adoptions until an operator grants more.
                 </Text>
               )}
@@ -581,7 +581,7 @@ export function ProjectGovernance({
                     Grant allowance
                   </WorkButton>
                   <Text style={muted}>
-                    A grant is pinned to the seat's current revision and uses the reason written
+                    A grant is pinned to the role's current revision and uses the reason written
                     below. It grants no authority.
                   </Text>
                 </>
@@ -661,7 +661,7 @@ export function ProjectGovernance({
                   void run();
                 }}
               >
-                Ask the orchestrator for a session
+                Ask the lead for a session
               </WorkButton>
               <Text style={muted}>
                 {short

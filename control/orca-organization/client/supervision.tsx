@@ -166,7 +166,7 @@ export function SupervisionPanel({
       {!roles.length && (
         <Text style={muted}>
           {fresh
-            ? "No supervisor roles recorded. Create a session and delegate it as a supervisor below."
+            ? "No supervisor roles recorded. Create a session and give it control as a supervisor below."
             : "No saved supervisor observation is available."}
         </Text>
       )}
