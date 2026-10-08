@@ -35,6 +35,7 @@ hub:
 
 server:
   - "plugins/**"
+  - "control/**"
   - "packages/server/**"
   - "packages/app/e2e/support/fixtures/recording.*"
 
