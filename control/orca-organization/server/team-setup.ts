@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 import {
   MAIN_SEAT,
   mainAssistant,
+  primeName,
   teamChatsRpc,
   teamSetupRpc,
   type TeamChats,
   type TeamSetupResult,
 } from "../shared/team";
-import { primeName } from "../client/organisation-model";
 
 // Fulcra 0.2.8: one step per team change, built from the controller's own owner-only methods. Each step is a separate
 // controller write; when a later step is refused, the steps already done stay done and the reply says which ran

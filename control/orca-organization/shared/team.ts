@@ -92,3 +92,14 @@ export const teamChatsRpc = defineContract({
     .strict(),
 });
 export type TeamChats = z.infer<typeof teamChatsRpc.output>;
+
+/** A seat's plain name: "main" reads "Main assistant", "research" reads "Research main assistant". */
+export function primeName(seat: string) {
+  const words = seat
+    .replace(/-/g, " ")
+    .replace(/\b(main|prime|assistant)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!words) return "Main assistant";
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)} main assistant`;
+}
