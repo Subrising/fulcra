@@ -48,7 +48,7 @@ const seatRow = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-test("an unreadable binding table reports itself unreadable rather than as an empty seat", async () => {
+test("an unreadable binding table reports itself unreadable rather than as an empty role", async () => {
   const read = createRoleDirectoryReader(async () => {
     throw new Error("Unknown method bindings-status");
   }, now);
@@ -62,7 +62,7 @@ test("an unreadable binding table reports itself unreadable rather than as an em
   assert.doesNotMatch(d.note, /no orchestrator is assigned/i);
 });
 
-test("a project read failure leaves the orchestrator unknown, not unassigned", async () => {
+test("a project read failure leaves the lead unknown, not unassigned", async () => {
   const read = createRoleProjectReader(async () => {
     throw new Error("Control timed out");
   }, now);
@@ -73,7 +73,7 @@ test("a project read failure leaves the orchestrator unknown, not unassigned", a
   assert.match(d.note, /unknown rather than absent/);
 });
 
-test("seat reads never carry the bound session working directory or any unlisted field", async () => {
+test("role reads never carry the bound session working directory or any unlisted field", async () => {
   const read = createRoleDirectoryReader(
     async () => ({
       bindings: [seatRow(), { ...seatRow(), role: "prime", seat: "orca", projectId: null }],
@@ -98,7 +98,7 @@ test("seat reads never carry the bound session working directory or any unlisted
   assert.equal(d.projectSeats[0].revision, 3);
 });
 
-test("an unexpected extra controller field cannot reach the renderer through a seat", async () => {
+test("an unexpected extra controller field cannot reach the renderer through a role", async () => {
   const read = createRoleDirectoryReader(
     async () => ({
       bindings: [{ ...seatRow(), capability: "role-token-abc", operator: "operator-secret-xyz" }],
@@ -143,7 +143,7 @@ test("a project view carries the real leader, needs and blockers without inventi
         truncated: false,
         basis: "Journal activity, not work accepted.",
       },
-      needed: [{ kind: "no-prime", detail: "No prime seat is filled" }],
+      needed: [{ kind: "no-prime", detail: "No main assistant role is filled" }],
       blockers: [
         {
           kind: "unresolved-delivery",
@@ -252,7 +252,7 @@ test("vacate uses the release fence only and never names a session", async () =>
     role: "project-orchestrator",
     seat: PROJECT,
     expectedRevision: 3,
-    reason: "Handing the seat back",
+    reason: "Handing the role back",
   });
   assert.equal(d.status, "vacated");
   assert.equal(d.sessionId, null);
@@ -315,7 +315,7 @@ const requestInput = {
   reason: "Owned by the shared memory project",
 };
 
-test("a seat request sends exactly the validator's accepted key set and nothing else", async () => {
+test("a role request sends exactly the validator's accepted key set and nothing else", async () => {
   const sent: any[] = [];
   const ask = createSessionRequest(async (method: string, input: any) => {
     sent.push([method, input]);
@@ -354,11 +354,11 @@ test("a request is reported as a request, never as a created session", async () 
   assert.equal("sessionId" in d, false);
 });
 
-test("both independent seat refusals are surfaced verbatim and never retried", async () => {
+test("both independent role refusals are surfaced verbatim and never retried", async () => {
   const calls: string[] = [];
   for (const refusal of [
-    "The seat changed; refresh before requesting a session from it",
-    "That seat has no remaining operator session allowance",
+    "The role changed; refresh before requesting a session from it",
+    "That role has no remaining operator session allowance",
   ]) {
     const ask = createSessionRequest(async (m: string) => {
       calls.push(m);
@@ -376,7 +376,7 @@ test("both independent seat refusals are surfaced verbatim and never retried", a
   assert.deepEqual(calls, ["roles-request-session", "roles-request-session"]);
 });
 
-test("a controller without seat requests reports unavailable rather than refusal", async () => {
+test("a controller without role requests reports unavailable rather than refusal", async () => {
   const ask = createSessionRequest(async () => {
     throw new Error("Unknown method roles-request-session");
   }, now);
@@ -400,7 +400,7 @@ test("outstanding requests are read, and an unreadable list is unavailable not e
           state: "notified",
           sessionId: null,
           at: now(),
-          detail: "The seat has been woken",
+          detail: "The role has been woken",
         },
       ],
     }),
@@ -446,7 +446,7 @@ test("the app ownership seam resolves names the controller does not return", asy
           projectId: PROJECT,
           seat: PROJECT,
           seatRole: "project-orchestrator",
-          detail: "An operator adopted this session into the seat.",
+          detail: "An operator adopted this session into the role.",
         };
       return {
         sessionId: input,
@@ -467,7 +467,7 @@ test("the app ownership seam resolves names the controller does not return", asy
   assert.equal(owned.taskTitle, "Shared memory format");
   assert.equal(owned.leaderAgentId, "agent-leader");
   assert.equal(owned.leaderTitle, "Memory lead");
-  assert.equal(owned.detail, "An operator adopted this session into the seat.");
+  assert.equal(owned.detail, "An operator adopted this session into the role.");
   // Unknown is a RECORD with null project fields, never null: null means "not a controller
   // session I could resolve", which is a different fact the app must not conflate with unknown.
   const unknown = d.ownership["agent-unknown"]!;
@@ -514,7 +514,7 @@ test("adoption is operator-only, fenced, and reports the allowance it spent", as
     seat: PROJECT,
     expectedRevision: 3,
     request: uuid(70),
-    reason: "Placing it under the memory seat",
+    reason: "Placing it under the memory role",
   });
   assert.equal(d.status, "adopted");
   assert.equal(d.remaining, 2);
@@ -534,12 +534,12 @@ test("adoption refusals and an absent method stay distinct and are never retried
   const calls: string[] = [];
   const refused = await createRoleAdopt(async (m: string) => {
     calls.push(m);
-    throw new Error("That seat has no remaining operator session allowance");
+    throw new Error("That role has no remaining operator session allowance");
   }, now)({
     seat: PROJECT,
     expectedRevision: 3,
     request: uuid(70),
-    reason: "Placing it under the memory seat",
+    reason: "Placing it under the memory role",
   });
   assert.equal(refused.status, "refused");
   assert.match(refused.message, /no remaining operator session allowance/);
@@ -551,7 +551,7 @@ test("adoption refusals and an absent method stay distinct and are never retried
     seat: PROJECT,
     expectedRevision: 3,
     request: uuid(70),
-    reason: "Placing it under the memory seat",
+    reason: "Placing it under the memory role",
   });
   assert.equal(missing.status, "unavailable");
   assert.match(missing.message, /does not expose adoption yet/);
@@ -720,7 +720,7 @@ test("placement is exhaustive and fails closed", () => {
   );
 });
 
-test("a recorded session resolves its seat leader exactly as an adopted one does", async () => {
+test("a recorded session resolves its role leader exactly as an adopted one does", async () => {
   // `recorded` already carries `seat`, so leader resolution needs no special case.
   for (const state of ["recorded", "adopted"]) {
     const read = createSessionOwnershipReader(
@@ -758,7 +758,7 @@ test("an unknown controller method is announced differently from a refusal, once
   assert.equal(
     announceControllerFailure(
       "roles-adopt",
-      "That seat has no remaining operator session allowance",
+      "That role has no remaining operator session allowance",
       write,
     ),
     "refused",
@@ -771,7 +771,7 @@ test("an unknown controller method is announced differently from a refusal, once
   announceControllerFailure("roles-ownership", "Unknown method roles-ownership", write);
   announceControllerFailure(
     "roles-adopt",
-    "That seat has no remaining operator session allowance",
+    "That role has no remaining operator session allowance",
     write,
   );
   assert.equal(lines.length, 2, "repeat failures must not re-announce");
@@ -788,8 +788,8 @@ test("failure classification separates not-built-yet from built-and-said-no", ()
     assert.equal(classifyControllerFailure(text), "unavailable", text);
   }
   for (const text of [
-    "The seat changed; refresh before requesting a session from it",
-    "That seat has no remaining operator session allowance",
+    "The role changed; refresh before requesting a session from it",
+    "That role has no remaining operator session allowance",
     "Control timed out; inspect delivery before retrying",
   ]) {
     assert.equal(classifyControllerFailure(text), "refused", text);

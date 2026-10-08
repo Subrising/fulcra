@@ -100,7 +100,7 @@ const fleet = {
       title: "CC R-V11B: adversarial security review of the channel",
     }),
     node(2, "idle", iso(3600000), { title: "Tracker refresh" }),
-    node(3, "idle", iso(40 * 3600000), { title: "Command Centre project orchestrator" }),
+    node(3, "idle", iso(40 * 3600000), { title: "Command Centre project lead" }),
   ],
 };
 const brief = {
@@ -133,7 +133,7 @@ const inbox = {
       key: `decision-${DEC}`,
       source: "decision",
       ref: `decision:${DEC}`,
-      title: "How should a tired orchestrator be refreshed?",
+      title: "How should a tired lead be refreshed?",
       summary: "Pick how a worn-out lead hands over.",
       projectId: P,
       urgency: "now",
@@ -160,7 +160,7 @@ const packet = {
   taskId: null,
   askedBy: { seat: "delivery", sessionId: sid(99) },
   askedOf: "human",
-  title: "How should a tired orchestrator be refreshed?",
+  title: "How should a tired lead be refreshed?",
   situation: "Long sessions get forgetful.",
   options: [
     {

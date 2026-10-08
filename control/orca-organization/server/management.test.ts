@@ -654,7 +654,7 @@ test("organization handback binds selected generations and task, with no credent
   assert.equal(uncertain.messageId, id);
 });
 
-test("leadership binds both seats and worker generations and reports transfer separately from consumption", async () => {
+test("leadership binds both roles and worker generations and reports transfer separately from consumption", async () => {
   const worker = "33333333-3333-4333-8333-333333333333",
     calls: any[] = [];
   const rows = [enrolled, { ...enrolled, id, mode: "human" }, { ...enrolled, id: worker }];
