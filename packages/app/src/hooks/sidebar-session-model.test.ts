@@ -44,6 +44,22 @@ describe("reportingLeadLine", () => {
     expect(reportingLeadLine({}, "mini", sessions)).toBeNull();
     expect(reportingLeadLine({ "fulcra.reports-to": "  " }, "mini", sessions)).toBeNull();
   });
+
+  it("falls back to the parent label, as the daemon does", () => {
+    expect(reportingLeadLine({ "fulcra.parent-session": "lead-1" }, "mini", sessions)).toBe(
+      "Reports to Fulcra lead",
+    );
+    expect(reportingLeadLine({ "paseo.parent-agent-id": "lead-1" }, "mini", sessions)).toBe(
+      "Reports to Fulcra lead",
+    );
+    expect(
+      reportingLeadLine(
+        { "fulcra.reports-to": "owner", "paseo.parent-agent-id": "lead-1" },
+        "mini",
+        sessions,
+      ),
+    ).toBe("Reports to you");
+  });
 });
 
 describe("selectSidebarSessionRows", () => {

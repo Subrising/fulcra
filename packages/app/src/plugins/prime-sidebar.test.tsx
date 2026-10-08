@@ -476,3 +476,23 @@ it("forgets a computer's main assistant when that computer says it has none", as
   await vi.waitFor(() => expect(useMainAssistantMemory.getState().byHost.mini).toBeUndefined());
   expect(screen.queryByRole("button")).toBeNull();
 });
+
+it("says it is still finding the main assistant while another computer's read is pending", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "MacBook Pro" },
+    { serverId: "other", label: "Mac-mini.local" },
+  ];
+  let answer: (value: unknown) => void = () => undefined;
+  f.read.mockResolvedValue({ available: true, primes: [] });
+  f.remote = {
+    mini: { directory: { available: true, primes: [] } },
+    other: { directory: new Promise((resolve) => (answer = resolve)) },
+  };
+  mount();
+  expect(await screen.findByText("Finding your main assistant…")).toBeTruthy();
+  expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
+  answer({ available: true, primes: [prime({ sessionId: "remote" })] });
+  expect(
+    await screen.findByRole("button", { name: "Use the main assistant on Mac-mini.local" }),
+  ).toBeTruthy();
+});

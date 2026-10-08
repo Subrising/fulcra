@@ -229,7 +229,9 @@ function useAllMainAssistants() {
   );
   const label = (serverId: string) =>
     hosts.find((host) => host.serverId === serverId)?.label ?? "another computer";
-  return { shown, label };
+  // Still asking a connected computer, with nothing remembered: do not say "No main assistant yet" yet.
+  const finding = reads === null && shown.length === 0;
+  return { shown, label, finding };
 }
 
 /**
@@ -380,7 +382,7 @@ function MainAssistantChoice({
   serverId: string;
   leadership: () => void;
 }) {
-  const { shown, label } = useAllMainAssistants();
+  const { shown, label, finding } = useAllMainAssistants();
   const chooseCompany = useOrganizationIntakePreferences((state) => state.chooseCompany);
   const elsewhere = shown.find((entry) => entry.serverId !== serverId) ?? null;
   const useElsewhere = useCallback(() => {
@@ -396,12 +398,18 @@ function MainAssistantChoice({
         />
       ) : null}
       <ChoiceRow
-        label={elsewhere ? "Make a chat the main assistant" : "No main assistant yet · Set up"}
+        label={setUpLabel(Boolean(elsewhere), finding)}
         onPress={leadership}
         testID="sidebar-set-up-main-assistant"
       />
     </>
   );
+}
+
+function setUpLabel(elsewhere: boolean, finding: boolean): string {
+  if (elsewhere) return "Make a chat the main assistant";
+  if (finding) return "Finding your main assistant…";
+  return "No main assistant yet · Set up";
 }
 
 /** A one-line sidebar choice with a 48 px target, the same height as the main assistant rows. */

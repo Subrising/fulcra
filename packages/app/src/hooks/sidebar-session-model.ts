@@ -1,5 +1,6 @@
 import {
   MAIN_ASSISTANT_REF,
+  PARENT_AGENT_ID_LABEL,
   REPORTS_TO_LABEL,
   REPORTS_TO_OWNER,
 } from "@getpaseo/protocol/agent-labels";
@@ -23,6 +24,8 @@ export interface SidebarSessionRow {
   lead: string | null;
 }
 
+const CONTROLLER_PARENT_LABEL = "fulcra.parent-session";
+
 type Sessions = Record<string, { agents: ReadonlyMap<string, Agent> } | undefined>;
 
 /**
@@ -34,7 +37,12 @@ export function reportingLeadLine(
   serverId: string,
   sessions: Sessions,
 ): string | null {
-  const line = labels?.[REPORTS_TO_LABEL]?.trim();
+  // The same order as the daemon's reportsTo (packages/server/src/server/reporting-lines.ts): the recorded line,
+  // then the parent the controller or the creating chat recorded.
+  const line =
+    labels?.[REPORTS_TO_LABEL]?.trim() ||
+    labels?.[CONTROLLER_PARENT_LABEL]?.trim() ||
+    labels?.[PARENT_AGENT_ID_LABEL]?.trim();
   if (!line) return null;
   if (line === REPORTS_TO_OWNER) return "Reports to you";
   if (line === MAIN_ASSISTANT_REF) return "Reports to Main assistant";
