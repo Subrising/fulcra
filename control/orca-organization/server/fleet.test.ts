@@ -19,7 +19,8 @@ after(() => {
   if (previousHome === undefined) delete process.env.ORCA_HOME;
   else process.env.ORCA_HOME = previousHome;
 });
-const { readFleet, readActivity, projectActivity, readFleetHosts } = await import("./fleet");
+const { readFleet, readActivity, projectActivity, readFleetHosts, chooseRows, leadSessions } =
+  await import("./fleet");
 const { readNativeHostBindings } = await import("./host-binding");
 const id = (n: number) => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`,
   task = id(9),
@@ -1009,4 +1010,34 @@ test("Sessions account labels survive strict fleet projection and follow A to B 
     attachOwnership([node], [], [{ agent: { id: node.id } }], "This Mac", () => null);
     assert.equal(fleetNode.parse(node).account, null, "removed assignments clear the old label");
   }
+});
+
+// FULCRA(lead-status): after a daemon restart no session is working or recently active, so the newest sessions filled
+// the 64-row cap and the oldest ones -- the main assistant and project leads -- fell out ("Status unknown").
+test("lead sessions stay in the capped fleet when nothing is working or recently active", () => {
+  const rows = Array.from({ length: 70 }, (_, i) => ({ id: `s${i}` }));
+  const ids = (picked: { id: string }[]) => new Set(picked.map((r) => r.id));
+  const plain = ids(chooseRows(rows, []));
+  assert.equal(plain.size, 64);
+  assert.equal(plain.has("s0"), false, "without pinning, the oldest session drops out");
+  const pinned = ids(chooseRows(rows, [], 64, new Set(["s0", "s3"])));
+  assert.equal(pinned.size, 64);
+  assert.ok(pinned.has("s0") && pinned.has("s3"), "lead sessions are always kept");
+  assert.deepEqual(
+    [
+      ...leadSessions({
+        status: "fulfilled",
+        value: {
+          bindings: [
+            { role: "prime", state: "assigned", sessionId: "s0" },
+            { role: "project-orchestrator", state: "assigned", sessionId: "s3" },
+            { role: "project-orchestrator", state: "vacant", sessionId: null },
+            { role: "manager", state: "assigned", sessionId: "s9" },
+          ],
+        },
+      }),
+    ],
+    ["s0", "s3"],
+  );
+  assert.equal(leadSessions({ status: "rejected", reason: new Error("down") }).size, 0);
 });
