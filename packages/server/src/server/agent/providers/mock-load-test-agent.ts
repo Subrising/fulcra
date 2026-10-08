@@ -957,7 +957,9 @@ export class MockLoadTestAgentSession implements AgentSession {
 
   // The app rejects slash commands the provider does not list, so the mock lists its own.
   async listCommands(): Promise<AgentSlashCommand[]> {
-    return [{ name: "mock", description: "Mock daemon-handled command", argumentHint: "handled-command" }];
+    return [
+      { name: "mock", description: "Mock daemon-handled command", argumentHint: "handled-command" },
+    ];
   }
 
   tryHandleOutOfBand(
