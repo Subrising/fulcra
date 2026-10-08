@@ -351,6 +351,19 @@ test("a stale holder is cleared before the holder is set; a failed clear never l
   assert.equal(failing.labels[main], undefined); // the new holder is not set while the old one still has it
 });
 
+test("two syncs at once run one after the other, so the later one sees the newer seat", async (t) => {
+  const a = randomUUID(),
+    b = randomUUID();
+  const w = world(t, { snapshots: { [a]: chat(), [b]: chat() } });
+  await seatMain(w, a);
+  const first = w.control.team.syncSeat("timer");
+  await seatMain(w, b); // the owner moves the seat while the timer pass is running
+  const second = w.control.team.syncSeat("setup");
+  await Promise.all([first, second]);
+  assert.equal(w.labels[b]["fulcra.seat"], "main-assistant");
+  assert.equal(w.labels[a]["fulcra.seat"], "");
+});
+
 test("no seat holder: every label is cleared; not connected: nothing is written", async (t) => {
   const stale = randomUUID();
   const w = world(t, { labels: { [stale]: { "fulcra.seat": "main-assistant" } } });

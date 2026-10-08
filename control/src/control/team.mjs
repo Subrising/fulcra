@@ -102,7 +102,17 @@ export class Team {
    * a main assistant seated before 0.2.8 gets the label with no manual step), every minute, and after each seat
    * change. Idempotent. Stale holders are cleared before the holder is set, so a failed clear never leaves two.
    */
-  async syncSeat(reason = "sync") {
+  /**
+   * One sync at a time: the 60 s timer and a team-setup change can both call this. Run in order, a later call
+   * always reads the bindings after the earlier one has written its labels, so it cannot undo a seat change.
+   */
+  syncSeat(reason = "sync") {
+    const run = (this.seatSyncChain ?? Promise.resolve()).then(() => this.syncSeatOnce(reason));
+    this.seatSyncChain = run.catch(() => undefined);
+    return run;
+  }
+
+  async syncSeatOnce(reason) {
     const native = this.control.native;
     if (typeof native?.labelled !== "function" || typeof native?.setLabels !== "function")
       return {

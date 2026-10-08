@@ -19,7 +19,11 @@ import type {
   ImportAgentRequestMessageSchema,
   RecentProviderSessionDescriptorPayload,
 } from "@getpaseo/protocol/messages";
-import { getParentAgentIdFromLabels, PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
+import {
+  getParentAgentIdFromLabels,
+  PARENT_AGENT_ID_LABEL,
+  SEAT_LABEL,
+} from "@getpaseo/protocol/agent-labels";
 import { createRealpathAwarePathMatcher } from "../../utils/path.js";
 
 type ImportAgentRequestMessage = z.infer<typeof ImportAgentRequestMessageSchema>;
@@ -200,12 +204,23 @@ export async function importProviderSession(
   });
 }
 
+function withoutSeatLabel(
+  labels: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!labels || !Object.hasOwn(labels, SEAT_LABEL)) return labels;
+  const { [SEAT_LABEL]: _dropped, ...rest } = labels;
+  return rest;
+}
+
 async function importProviderSessionNow(
   input: ImportProviderSessionInput,
   cwd: string,
   workspaceId: string,
 ): Promise<ImportedProviderSession> {
-  const { provider, providerHandleId, labels } = input.request;
+  const { provider, providerHandleId } = input.request;
+  // FULCRA(orchestration): only the controller gives a chat the main assistant label, so an import never brings it,
+  // and a restored chat loses one it held before it was archived. The controller sets it on the seat holder.
+  const labels = withoutSeatLabel(input.request.labels);
 
   const matchingRecords = await input.agentStorage.listByProviderSession(
     provider,
@@ -220,14 +235,15 @@ async function importProviderSessionNow(
     if (!createRealpathAwarePathMatcher(cwd)(archivedRecord.cwd)) {
       throw new Error(`Provider session cwd does not match import cwd: ${providerHandleId}`);
     }
-    const requestedParentAgentId = getParentAgentIdFromLabels(input.request.labels);
-    const labelPatch: Record<string, string | null> = { ...input.request.labels };
+    const requestedParentAgentId = getParentAgentIdFromLabels(labels);
+    const labelPatch: Record<string, string | null> = { ...labels };
     if (
       Object.hasOwn(archivedRecord.labels, PARENT_AGENT_ID_LABEL) ||
-      Object.hasOwn(input.request.labels ?? {}, PARENT_AGENT_ID_LABEL)
+      Object.hasOwn(labels ?? {}, PARENT_AGENT_ID_LABEL)
     ) {
       labelPatch[PARENT_AGENT_ID_LABEL] = requestedParentAgentId;
     }
+    if (Object.hasOwn(archivedRecord.labels, SEAT_LABEL)) labelPatch[SEAT_LABEL] = null;
     await unarchiveAgentState(input.agentStorage, input.agentManager, archivedRecord.id, {
       workspaceId,
       labels: Object.keys(labelPatch).length > 0 ? labelPatch : undefined,
