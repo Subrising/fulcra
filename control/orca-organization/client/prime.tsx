@@ -288,7 +288,9 @@ function LeaderCard({
         {leader.leads.length
           ? ` ${leader.leads.length} of them ${leader.leads.length === 1 ? "leads" : "lead"} work of their own.`
           : ""}
-        {leader.active ? "" : " Lead control is paused. Check who controls this before you continue."}
+        {leader.active
+          ? ""
+          : " Lead control is paused. Check who controls this before you continue."}
       </Text>
       {leader.waitingAcknowledgement > 0 && (
         <Text style={text}>
@@ -796,8 +798,8 @@ export function PrimeSurface(props: Props) {
                     </Text>
                     {!x.byRemit && (
                       <Text style={muted}>
-                        Which main assistant owns which project could not be read, so every project is
-                        listed.
+                        Which main assistant owns which project could not be read, so every project
+                        is listed.
                       </Text>
                     )}
                     <Text style={text}>

@@ -538,8 +538,8 @@ export function ManagementPanel({
             {row.mode === "human" && (
               <View style={{ gap: 8 }}>
                 <Text style={muted}>
-                  Give a newly created session control as a supervisor. It may create this many workers
-                  over its lifetime. Use Give control back to the lead above for an existing
+                  Give a newly created session control as a supervisor. It may create this many
+                  workers over its lifetime. Use Give control back to the lead above for an existing
                   organization.
                 </Text>
                 <TextInput

@@ -16,14 +16,21 @@ export async function startWithBookFixture() {
   const record =
     (name) =>
     (command, ...rest) => {
-      processes.push({ via: name, command: String(command), args: Array.isArray(rest[0]) ? rest[0] : [] });
+      processes.push({
+        via: name,
+        command: String(command),
+        args: Array.isArray(rest[0]) ? rest[0] : [],
+      });
       return realChild[name](command, ...rest);
     };
   mock.module("node:child_process", {
     namedExports: {
       ...realChild,
       ...Object.fromEntries(
-        ["spawn", "spawnSync", "execFile", "execFileSync", "exec", "execSync", "fork"].map((n) => [n, record(n)]),
+        ["spawn", "spawnSync", "execFile", "execFileSync", "exec", "execSync", "fork"].map((n) => [
+          n,
+          record(n),
+        ]),
       ),
     },
     defaultExport: realChild.default,

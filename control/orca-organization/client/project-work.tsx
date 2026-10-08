@@ -256,8 +256,8 @@ export function ProjectGovernance({
   if (!grouped)
     return (
       <Text style={muted}>
-        Work without a recorded project has no lead and no project goal. A project
-        lead is bound to a registered project, never to a task.
+        Work without a recorded project has no lead and no project goal. A project lead is bound to
+        a registered project, never to a task.
       </Text>
     );
 
@@ -268,8 +268,8 @@ export function ProjectGovernance({
       )}
       {d && !d.available && (
         <Text accessibilityLiveRegion="polite" style={text}>
-          This project's recorded leadership and progress could not be read, so its goal,
-          lead and needs are unknown rather than absent.
+          This project's recorded leadership and progress could not be read, so its goal, lead and
+          needs are unknown rather than absent.
           {d.unavailable ? ` Controller reported: ${d.unavailable}` : ""}
         </Text>
       )}
@@ -502,9 +502,8 @@ export function ProjectGovernance({
           {!seated ? (
             <>
               <Text style={text}>
-                This project has no assigned lead, so work cannot be routed through one.
-                Recording one is the next step — it states who is accountable and grants no
-                authority.
+                This project has no assigned lead, so work cannot be routed through one. Recording
+                one is the next step — it states who is accountable and grants no authority.
               </Text>
               <WorkButton
                 theme={props.theme}
@@ -517,9 +516,9 @@ export function ProjectGovernance({
           ) : (
             <>
               <Text style={muted}>
-                This asks the lead role to do the work. The controller publishes a request
-                and wakes the seat; no session exists until the seat fulfils it. The seat gains no
-                authority over the result.
+                This asks the lead role to do the work. The controller publishes a request and wakes
+                the seat; no session exists until the seat fulfils it. The seat gains no authority
+                over the result.
               </Text>
               {/* Say why a seat will refuse before asking the operator to write a reason. */}
               {allowances.data && !allowances.data.available && (

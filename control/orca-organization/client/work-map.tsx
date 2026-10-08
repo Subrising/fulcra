@@ -787,8 +787,8 @@ function Legend({ theme }: Pick<PluginSurfaceProps, "theme">) {
       </Text>
       <Text style={line}>Control: Fulcra controls this · you control this · changing</Text>
       <Text style={line}>
-        Lead: assigned · none yet · held by you · session gone · restarted since it was
-        assigned · moved to other work
+        Lead: assigned · none yet · held by you · session gone · restarted since it was assigned ·
+        moved to other work
       </Text>
       <Text style={line}>
         Recorded responsibility is distinct from a message channel and creation ancestry. Unassigned

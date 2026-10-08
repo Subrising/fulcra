@@ -667,7 +667,10 @@ test("inactive human-owned sessions cannot be delegated even with a complete rea
     target: { value: "Complete but unauthorized delegation reason" },
   });
   assert.equal(screen.getByRole("button", { name: "Let Fulcra control this" }).disabled, true);
-  assert.equal(screen.getByRole("button", { name: "Let Fulcra control this as a lead" }).disabled, true);
+  assert.equal(
+    screen.getByRole("button", { name: "Let Fulcra control this as a lead" }).disabled,
+    true,
+  );
   assert.equal(screen.getByRole("button", { name: "Take control" }).disabled, false);
 });
 test("failed management and usage reads become visible and do not retry automatically", async () => {
@@ -3920,9 +3923,7 @@ test("main assistant leadership names the actual seated lead and opens its real 
   assert.equal(screen.queryByText("Unassigned"), null);
   assert.equal(screen.queryByText("Unknown"), null);
   assert(
-    screen.getByText(
-      /A recorded controller role binding names this session as the project lead/,
-    ),
+    screen.getByText(/A recorded controller role binding names this session as the project lead/),
   );
   assert(
     screen.getByText(
@@ -4481,7 +4482,8 @@ test("clicking a project shows its goal, progress and needs, and asks the lead f
     needed: [
       {
         kind: "no-prime",
-        detail: "No main assistant role is filled, so this project has no recorded escalation address",
+        detail:
+          "No main assistant role is filled, so this project has no recorded escalation address",
         taskId: null,
         sessionId: null,
         at: null,
@@ -4656,9 +4658,7 @@ test("clicking a project shows its goal, progress and needs, and asks the lead f
   fireEvent.change(screen.getByRole("textbox", { name: "Why this work belongs to this project" }), {
     target: { value: "Owned by the shared memory project" },
   });
-  fireEvent.click(
-    screen.getByRole("button", { name: "Ask this project's lead for a session" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Ask this project's lead for a session" }));
   await screen.findByText(/does not expose role session requests yet/);
   assert.equal(sent.length, 1);
   // The app names the seat and workstream only; it mints no identity and claims no ownership.
@@ -5273,7 +5273,12 @@ test("empty workspace intake retains ownership without spending a main assistant
   f.update({
     action: "create-workspace",
     name: "Empty planning workspace",
-    prime: { serverId: "srv_example_mini", agentId: S, seat: "delivery", label: "Delivery main assistant" },
+    prime: {
+      serverId: "srv_example_mini",
+      agentId: S,
+      seat: "delivery",
+      label: "Delivery main assistant",
+    },
   });
   const workspaceId = f.store.read().workspaces[1].id;
   mount(

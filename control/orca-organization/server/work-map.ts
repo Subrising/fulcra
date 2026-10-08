@@ -213,11 +213,9 @@ export function createWorkMapReader({
     for (const p of projectsOut) {
       if (seats && p.seat?.state !== "assigned")
         notes.push(
-          attention(
-            "no-project-orchestrator",
-            `${p.name ?? "This project"} needs a lead.`,
-            { projectId: p.projectId },
-          ),
+          attention("no-project-orchestrator", `${p.name ?? "This project"} needs a lead.`, {
+            projectId: p.projectId,
+          }),
         );
       else if (p.seat && !p.seat.sessionPresent)
         notes.push(

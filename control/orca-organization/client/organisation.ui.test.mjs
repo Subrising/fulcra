@@ -471,7 +471,8 @@ test("U6: a project with no main assistant gets its own remit; a refusal is show
   serve({
     "organization.remit-assign": () => ({
       ok: false,
-      message: "Changed since you looked; refresh: it already has a main assistant, so move it instead",
+      message:
+        "Changed since you looked; refresh: it already has a main assistant, so move it instead",
       observedAt: iso(),
       remit: null,
     }),
@@ -559,9 +560,7 @@ test("a project session opens step-through directly", async () => {
   mount();
   fireEvent.click(await screen.findByTestId(`org-project-${TALLY}`));
   fireEvent.click(screen.getByRole("button", { name: /Show saved conversations/ }));
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Read activity history: Tally lead" }),
-  );
+  fireEvent.click(await screen.findByRole("button", { name: "Read activity history: Tally lead" }));
   await waitFor(() =>
     assert(
       calls.some((c) => c.name === "organization.session-turns" && c.input.sessionId === LEAD),

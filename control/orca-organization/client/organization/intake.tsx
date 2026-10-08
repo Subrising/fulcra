@@ -239,7 +239,9 @@ export function IntakeSurface(props: Props) {
         {responsible
           ? `Responsible intake: ${responsible.label ?? responsible.seat ?? "recorded receiver"}`
           : "Responsible intake: you"}
-        {responsible?.kind === "human-session" ? " · human-held; no automated main assistant routing" : ""}
+        {responsible?.kind === "human-session"
+          ? " · human-held; no automated main assistant routing"
+          : ""}
       </Text>
       {responsible && (
         <WorkButton
