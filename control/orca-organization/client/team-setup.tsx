@@ -81,7 +81,7 @@ export function SetupResult({ theme, result }: { theme: Theme; result: TeamSetup
     <View accessibilityLiveRegion="polite" testID="team-setup-result" style={{ gap: 4 }}>
       <Text
         style={{
-          color: failed ? (c.statusDanger) : c.foreground,
+          color: failed ? c.statusDanger : c.foreground,
           fontWeight: "600",
         }}
       >
@@ -340,11 +340,12 @@ export function TeamRolePanel({
   );
 }
 
-type Mode = "main" | "lead" | "workers" | "archive" | null;
+type Mode = "main" | "lead" | "workers" | "link" | "archive" | null;
 const MODES: { mode: Exclude<Mode, null>; label: string }[] = [
   { mode: "main", label: "Make main assistant" },
   { mode: "lead", label: "Make lead of project…" },
   { mode: "workers", label: "Adopt existing chats" },
+  { mode: "link", label: "Allow a direct link" },
   { mode: "archive", label: "Archive a project" },
 ];
 
@@ -383,6 +384,7 @@ function ModeBody({
         />
       </View>
     );
+  if (mode === "link") return <DirectLink props={props} write={write} />;
   if (mode === "workers")
     return (
       <View style={{ gap: 8 }}>
@@ -448,6 +450,66 @@ function ModeBody({
           else if (lead) void write.run(lead);
         }}
       />
+    </View>
+  );
+}
+
+/** A chat may message one chat outside its reporting line, when you allow it. */
+function DirectLink({
+  props,
+  write,
+}: {
+  props: PluginSurfaceProps;
+  write: ReturnType<typeof useTeamWrite>;
+}) {
+  const theme = props.theme;
+  const [from, setFrom] = useState<string[]>([]);
+  const [to, setTo] = useState<string[]>([]);
+  const muted = { color: theme.colors.foregroundMuted };
+  const sessionId = from[0] ?? null;
+  const linked = to[0] ?? null;
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={muted}>
+        A chat sends only to its lead and its own chats. Allow one more chat it can message
+        directly.
+      </Text>
+      <Text style={muted}>Choose the chat.</Text>
+      <ChatPicker
+        theme={theme}
+        hostId={props.host?.id}
+        selected={from}
+        multi={false}
+        onChange={setFrom}
+      />
+      <Text style={muted}>Choose the chat it can also message.</Text>
+      <ChatPicker
+        theme={theme}
+        hostId={props.host?.id}
+        selected={to}
+        multi={false}
+        onChange={setTo}
+      />
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        <WorkButton
+          theme={theme}
+          label="Allow direct link"
+          disabled={write.busy || !sessionId || !linked || sessionId === linked}
+          onPress={() =>
+            sessionId &&
+            linked &&
+            void write.run({ action: "direct-link", sessionId, linkedSessionId: linked })
+          }
+        />
+        <WorkButton
+          theme={theme}
+          label="Remove its direct link"
+          disabled={write.busy || !sessionId}
+          onPress={() =>
+            sessionId && void write.run({ action: "direct-link", sessionId, linkedSessionId: null })
+          }
+        />
+      </View>
     </View>
   );
 }

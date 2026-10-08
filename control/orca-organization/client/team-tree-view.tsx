@@ -42,6 +42,9 @@ function Card({
   const c = theme.colors;
   const colour = stateColour(card.state, c);
   const relation = parent ? (card.role === "worker" ? "runs" : "leads") : null;
+  let reports = "Reports to you";
+  if (parent) reports = `Reports to ${parent.roleLabel}`;
+  else if (card.noLine) reports = "No reporting line";
   return (
     <View style={{ gap: 6 }}>
       {relation && (
@@ -75,10 +78,15 @@ function Card({
         <Text testID="team-card-now" style={{ color: c.foregroundMuted }}>
           {card.now}
         </Text>
+        {card.noLine && card.sessions === 1 && (
+          <Text testID="team-card-no-line" style={{ color: c.statusWarning }}>
+            No reporting line. Set one in team setup.
+          </Text>
+        )}
         {open && (
           <View testID="team-card-detail" style={{ gap: 4, marginTop: 6 }}>
             <Text style={{ color: c.foregroundMuted }}>
-              {parent ? `Reports to ${parent.roleLabel}` : "Reports to you"}
+              {reports}
               {card.children.length
                 ? ` · ${card.role === "main" ? "leads" : "runs"} ${card.children.length}`
                 : ""}
@@ -86,6 +94,9 @@ function Card({
             <Text style={{ color: c.foregroundMuted }}>
               {card.sessions > 1 ? `${card.sessions} sessions on ${card.host}` : `On ${card.host}`}
             </Text>
+            {card.directLink && (
+              <Text style={{ color: c.foregroundMuted }}>{`Direct link: ${card.directLink}`}</Text>
+            )}
             {openAgent && card.agentId && card.serverId && (
               <View style={{ flexDirection: "row" }}>
                 <WorkButton
