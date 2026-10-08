@@ -146,7 +146,18 @@ import { loadPersistedConfig } from "./persisted-config.js";
 import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-registry.js";
 import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-utils";
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
-import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
+import {
+  getParentAgentIdFromLabels,
+  MAIN_ASSISTANT_REF,
+  MAIN_ASSISTANT_ROLE,
+  REPORTS_TO_OWNER,
+} from "@getpaseo/protocol/agent-labels";
+import {
+  checkReportingLine,
+  findRoleHolder,
+  reportsTo,
+  resolveLineRef,
+} from "./reporting-lines.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
@@ -1032,6 +1043,7 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.workspaceAutoName = workspaceAutoName;
+    this.localServerId = serverId;
     this.workspaceProvisioning = createWorkspaceProvisioningService({
       lifecycle: this.pluginRuntime,
       serverId,
@@ -9626,6 +9638,66 @@ export class Session {
     }
   }
 
+  // FULCRA(orchestration): this computer's server id, for reporting lines across computers.
+  private localServerId: string | undefined;
+
+  /** FULCRA(orchestration): a stamped send outside the sender's reporting line is refused; see reporting-lines.ts. */
+  private async reportingLineRefusal(
+    sender: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>["sender"],
+    targetId: string,
+  ): Promise<string | null> {
+    if (!sender) return null;
+    const read = async (id: string) =>
+      (await this.agentStorage.get(id).catch(() => null)) ?? this.agentManager.getAgent(id) ?? null;
+    const remote = Boolean(sender.serverId && sender.serverId !== this.localServerId);
+    const target = await read(targetId);
+    if (!target) return null;
+    const senderAgent = remote ? null : await read(sender.agentId);
+    const mainAssistantId = await this.mainAssistantHolderId();
+    const parentRef = resolveLineRef(reportsTo(senderAgent), mainAssistantId);
+    const senderParent =
+      parentRef && parentRef !== REPORTS_TO_OWNER ? await read(parentRef.split("@", 1)[0]!) : null;
+    const decision = checkReportingLine({
+      sender,
+      senderAgent,
+      target,
+      senderParent,
+      localServerId: this.localServerId ?? null,
+      mainAssistantId,
+    });
+    this.sessionLogger.info(
+      {
+        sender: sender.agentId,
+        senderServer: sender.serverId ?? null,
+        target: targetId,
+        allowed: decision.allowed,
+        why: decision.allowed ? decision.why : decision.reason,
+      },
+      "reporting_line.checked",
+    );
+    return decision.allowed ? null : decision.reason;
+  }
+
+  /** FULCRA(orchestration): the chat that holds the main assistant role now, read at delivery time. */
+  private async mainAssistantHolderId(): Promise<string | null> {
+    const records = (await this.agentStorage.list()).filter((record) => !record.internal);
+    return findRoleHolder(records, MAIN_ASSISTANT_ROLE)?.id ?? null;
+  }
+
+  /** FULCRA(orchestration): "role:main-assistant" names the chat that holds the role at delivery time. */
+  private async resolveSendTarget(
+    identifier: string,
+  ): Promise<{ ok: true; agentId: string } | { ok: false; notFound: boolean; error: string }> {
+    if (identifier.trim() !== MAIN_ASSISTANT_REF) return this.resolveAgentIdentifier(identifier);
+    const holder = await this.mainAssistantHolderId();
+    if (holder) return { ok: true, agentId: holder };
+    return {
+      ok: false,
+      notFound: true,
+      error: "No chat is the main assistant now. Ask David to set one.",
+    };
+  }
+
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
@@ -9633,7 +9705,8 @@ export class Session {
     const nativePermissionEpoch = this.nativeMessagePermissionEpoch;
     const publicationSignal = msg.nativeQueue ? this.delivery.requestSignal : undefined;
     if (msg.nativeQueue) msg = structuredClone(msg);
-    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    // FULCRA(orchestration): a send to the main assistant role reaches the chat that holds it now.
+    const resolved = await this.resolveSendTarget(msg.agentId);
     if (!resolved.ok) {
       this.emit({
         type: "send_agent_message_response",
@@ -9649,6 +9722,14 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
+      const refusal = await this.reportingLineRefusal(msg.sender, agentId);
+      if (refusal) {
+        this.emit({
+          type: "send_agent_message_response",
+          payload: { requestId: msg.requestId, agentId, accepted: false, error: refusal },
+        });
+        return;
+      }
 
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {

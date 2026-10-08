@@ -58,6 +58,34 @@ export class Team {
     return at;
   }
 
+  /**
+   * Record a chat's reporting line on the chat itself, as labels the daemon reads when a chat sends: who it reports
+   * to, whether it holds the main assistant seat, and its one direct link. Writing a label is not a seat change.
+   */
+  async line(a, principal) {
+    const labels = {};
+    if (a.reportsTo !== undefined) labels["fulcra.reports-to"] = a.reportsTo;
+    if (a.seat !== undefined) labels["fulcra.seat"] = a.seat;
+    if (a.directLink !== undefined) labels["fulcra.direct-link"] = a.directLink;
+    if (!Object.keys(labels).length) refuse("Say which line to set.");
+    if (a.reportsTo === a.sessionId || a.directLink === a.sessionId)
+      refuse("A chat cannot report to itself or link to itself.");
+    const native = this.control.native;
+    if (typeof native?.setLabels !== "function")
+      refuse("Fulcra is not connected to this computer's chats. Try again in a moment.");
+    const snapshot = await native.snapshot?.(a.sessionId).catch(() => null);
+    if (native.snapshot && !snapshot) refuse("That chat is not on this computer.");
+    await native.setLabels(a.sessionId, labels);
+    const at = this.record(
+      "line",
+      a.sessionId,
+      null,
+      actorOf(principal),
+      `${a.note} ${JSON.stringify(labels)}`.slice(0, 2000),
+    );
+    return { sessionId: a.sessionId, labels, at };
+  }
+
   history(limit = 50) {
     return this.db
       .prepare("SELECT kind,subject,task,actor,note,at FROM team_changes ORDER BY at DESC LIMIT ?")

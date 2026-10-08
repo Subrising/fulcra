@@ -190,6 +190,7 @@ export const RPC_METHODS = Object.freeze(
     "task-index",
     "team-enrol",
     "team-history",
+    "team-line",
     "team-project-anchor",
     "team-project-archive",
     "team-project-create",
@@ -513,6 +514,7 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
       }
       case "team-enrol":
       case "team-history":
+      case "team-line":
       case "team-project-anchor":
       case "team-project-archive":
       case "team-project-create":
@@ -1029,6 +1031,7 @@ function recordManagementCall(db, parsed, principal) {
 const TEAM_METHODS = new Set([
   "team-enrol",
   "team-history",
+  "team-line",
   "team-project-anchor",
   "team-project-archive",
   "team-project-create",
@@ -1043,6 +1046,7 @@ function teamCommand(control, method, a, principal) {
   const t = team(control);
   if (method === "team-history") return t.history(a?.limit ?? 50);
   if (method === "team-enrol") return t.enrol(a, principal);
+  if (method === "team-line") return t.line(a, principal);
   if (method === "team-project-create") return t.createProject(a, principal);
   if (method === "team-project-anchor") return t.anchor(a, principal);
   return t.archiveProject(a, principal);

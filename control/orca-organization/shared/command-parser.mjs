@@ -497,6 +497,28 @@ methods(
 );
 methods("team-project-anchor team-project-archive", object({ note: reason, projectId: uuid }));
 methods("team-history", either(none, object({ limit: num(1, 200) })));
+// Reporting lines: who a chat reports to ("owner", the main assistant role, or a chat here or on another computer),
+// the main assistant seat label, and the one direct link a lead allows. "" clears a label.
+const lineRef = check(
+  (v) =>
+    typeof v === "string" &&
+    /^(owner|role:main-assistant|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(@[A-Za-z0-9._:-]{1,120})?)$/.test(
+      v,
+    ),
+);
+methods(
+  "team-line",
+  refinement(
+    object({
+      directLink: opt(either(one(""), uuid)),
+      note: reason,
+      reportsTo: opt(either(one(""), lineRef)),
+      seat: opt(one("", "main-assistant")),
+      sessionId: uuid,
+    }),
+    (v) => v.reportsTo !== undefined || v.seat !== undefined || v.directLink !== undefined,
+  ),
+);
 methods("roles-allowance-set", seatCommand({ ...roleChange, maxSessions: num(0, 32), role, seat }));
 methods(
   "trackers-map",

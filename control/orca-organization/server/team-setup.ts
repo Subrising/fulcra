@@ -15,6 +15,9 @@ import { primeName } from "../client/organisation-model";
 
 type Call = (method: string, input?: unknown) => Promise<any>;
 const NOTE = "Set up from Fulcra by its owner";
+// Reporting lines (shared with packages/protocol agent-labels): a lead reports to the main assistant role, so a new
+// main assistant needs no change in any lead.
+const MAIN_ASSISTANT_REF = "role:main-assistant";
 
 interface Seat {
   role: string;
@@ -38,6 +41,24 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
   const seats = async (): Promise<Seat[]> => (await call("bindings-status")).bindings ?? [];
   const enrol = (sessionId: string, taskId: string) =>
     call("team-enrol", { sessionId, taskId, note: NOTE });
+
+  /** Write a chat's reporting line. A line that cannot be written is a step that did not run, not a lost seat. */
+  async function line(
+    sessionId: string,
+    labels: { reportsTo?: string; seat?: string; directLink?: string },
+    steps: string[],
+    done?: string,
+  ) {
+    try {
+      await call("team-line", { sessionId, ...labels, note: NOTE });
+      if (done) steps.push(done);
+    } catch (error) {
+      steps.push(`Reporting line not set for ${sessionId.slice(0, 8)}: ${reason(error)}`);
+      throw Object.assign(Error("The seat is set, but a reporting line is not."), {
+        partial: true,
+      });
+    }
+  }
 
   async function seat(role: string, seatKey: string, sessionId: string, generation: number) {
     const current = (await seats()).find((s) => s.role === role && s.seat === seatKey);
@@ -91,8 +112,23 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
       );
       if (held)
         return { message: `This chat is already the ${primeName(held.seat)}.`, projectId: null };
+      const before = all.find(
+        (s) => s.role === "prime" && s.seat === MAIN_SEAT && s.state === "assigned",
+      )?.sessionId;
       await seat("prime", MAIN_SEAT, input.sessionId, enrolled.generation);
       steps.push("The chat is now the main assistant.");
+      await line(
+        input.sessionId,
+        { seat: "main-assistant", reportsTo: "owner" },
+        steps,
+        "It reports to you. Leads now send to it.",
+      );
+      if (before && before !== input.sessionId) await line(before, { seat: "" }, steps);
+      // Leads seated before reporting lines existed point at the role from now on.
+      for (const lead of all.filter(
+        (s) => s.role === "project-orchestrator" && s.state === "assigned" && s.sessionId,
+      ))
+        await line(lead.sessionId!, { reportsTo: MAIN_ASSISTANT_REF }, steps);
       return { message: "This chat is now your main assistant.", projectId: null };
     }
     if (input.action === "project-lead") {
@@ -109,6 +145,12 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
       else if (enrolled.action === "enrolled") steps.push("The chat joined the project.");
       await seat("project-orchestrator", projectId, input.sessionId, enrolled.generation);
       steps.push("The chat is now the lead of the project.");
+      await line(
+        input.sessionId,
+        { reportsTo: MAIN_ASSISTANT_REF },
+        steps,
+        "It reports to the main assistant.",
+      );
       const main = mainSeat(await seats());
       if (main) await own(projectId, main.seat, steps);
       else steps.push("No main assistant yet, so the project is not under one.");
@@ -119,21 +161,49 @@ export function createTeamSetup(call: Call, now = () => new Date().toISOString()
         projectId: input.projectId,
         note: NOTE,
       });
+      const lead = (await seats()).find(
+        (s) =>
+          s.role === "project-orchestrator" &&
+          s.seat === input.projectId &&
+          s.state === "assigned" &&
+          s.sessionId,
+      )?.sessionId;
       let added = 0;
       const refused: string[] = [];
       for (const sessionId of input.sessionIds) {
         try {
           const r = await enrol(sessionId, taskId);
           if (r.action !== "already") added++;
+          if (lead && lead !== sessionId)
+            await call("team-line", { sessionId, reportsTo: lead, note: NOTE });
         } catch (error) {
           refused.push(`${sessionId.slice(0, 8)}: ${reason(error)}`);
         }
       }
       steps.push(`${added} ${added === 1 ? "chat" : "chats"} joined the project.`);
+      steps.push(
+        lead
+          ? "They report to the project's lead."
+          : "The project has no lead yet, so they report to no one. Make a lead first.",
+      );
       for (const line of refused) steps.push(`Not added: ${line}`);
       if (refused.length)
         throw Object.assign(Error("Some chats could not join."), { partial: true });
       return { message: "The chats are now workers in the project.", projectId: input.projectId };
+    }
+    if (input.action === "direct-link") {
+      await line(
+        input.sessionId,
+        { directLink: input.linkedSessionId ?? "" },
+        steps,
+        input.linkedSessionId
+          ? "The two chats can now message each other directly."
+          : "The direct link is removed.",
+      );
+      return {
+        message: input.linkedSessionId ? "Direct link set." : "Direct link removed.",
+        projectId: null,
+      };
     }
     if (input.action === "archive-project") {
       await call("team-project-archive", { projectId: input.projectId, note: NOTE });

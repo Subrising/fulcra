@@ -42,8 +42,12 @@ function world(t, { snapshots = {} } = {}) {
   const read = () => JSON.parse(fs.readFileSync(tasks, "utf8"));
   const store = new ControlStore(path.join(dir, "journal.sqlite"));
   t.after(() => store.db.close());
+  const labelWrites = [];
   const native = {
     route: () => undefined,
+    setLabels: async (id, labels) => {
+      labelWrites.push({ id, labels });
+    },
     snapshot: async (id) => {
       if (snapshots[id] === undefined) throw Error("Native snapshot unavailable");
       return snapshots[id];
@@ -63,7 +67,7 @@ function world(t, { snapshots = {} } = {}) {
     config: { tasks, authority: { issueApi: null, companyId: COMPANY, programmeId: PROGRAMME } },
   });
   const dispatch = (method, input) => managementDispatcher(control)({ method, input }, owner);
-  return { dir, store, control, dispatch, read };
+  return { dir, store, control, dispatch, read, labelWrites };
 }
 const chat = (cwd = "/tmp/chat") => ({ cwd, provider: "claude", archivedAt: null });
 
@@ -215,4 +219,42 @@ test("a seat credential cannot change the team", async (t) => {
     }),
     /Only David or the main assistant can change the team/,
   );
+});
+
+test("a reporting line is written on the chat as labels and recorded with who asked", async (t) => {
+  const lead = randomUUID();
+  const w = world(t, { snapshots: { [lead]: chat() } });
+  const r = await w.dispatch("team-line", {
+    sessionId: lead,
+    reportsTo: "role:main-assistant",
+    note: NOTE,
+  });
+  assert.deepEqual(r.labels, { "fulcra.reports-to": "role:main-assistant" });
+  assert.deepEqual(w.labelWrites, [
+    { id: lead, labels: { "fulcra.reports-to": "role:main-assistant" } },
+  ]);
+  const [change] = w.control.team.history();
+  assert.equal(change.kind, "line");
+  assert.equal(change.subject, lead);
+  assert.equal(change.actor.principal, "owner");
+  await assert.rejects(
+    w.dispatch("team-line", { sessionId: lead, reportsTo: lead, note: NOTE }),
+    /cannot report to itself/,
+  );
+  await assert.rejects(
+    w.dispatch("team-line", { sessionId: randomUUID(), seat: "main-assistant", note: NOTE }),
+    /not on this computer/,
+  );
+  await assert.rejects(
+    rpc(
+      w.control,
+      "test-operator",
+    )({
+      method: "team-line",
+      input: { sessionId: lead, reportsTo: "owner", note: NOTE },
+      capability: "role.abc",
+    }),
+    /Only David or the main assistant can change the team/,
+  );
+  assert.equal(w.labelWrites.length, 1);
 });

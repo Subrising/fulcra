@@ -86,6 +86,14 @@ Only the owner can change the team: the app, a paired phone, or the owner's own 
 
 Archiving hides a project from every list. Its tasks, chats, seats and history stay in the project source.
 
+### Reporting lines
+
+Each chat reports to one parent: a worker to its lead, a lead to the main assistant, the main assistant to you. Team setup records the line on the chat (`fulcra.reports-to`). A lead reports to the main assistant role (`role:main-assistant`), not to one chat, so a new main assistant needs no change in any lead. A chat started with `paseo run` from another chat reports to that chat.
+
+A chat sends only to its parent, to its own chats and to one direct link that you allow in team setup. Other sends are refused with the right recipient, for example "Send this to your lead, Fulcra lead (4c111479)". `paseo send role:main-assistant "…"` reaches the chat that holds the role now.
+
+Sends from you (the app, the phone, your own `fulcra` command) are never refused. A send from inside a chat that has lost its identity (`PASEO_AGENT_ID`) is refused, so a chat cannot pass as you. These are cooperative rules: every chat on the host runs as you, so they keep chats in line but are not a security boundary.
+
 ## Compatibility names
 
 Fulcra keeps `@getpaseo/*` imports and package names, the `dev.orca.workspace.desktop` bundle identity, the macOS `~/Library/Application Support/Orca` directory, existing Keychain services and runtime variables. Do not rename or migrate them by editing a branding document. Machine-specific config belongs under ignored `local/`; credentials, pairing offers and private runtime evidence never belong in a public commit.
