@@ -2254,7 +2254,8 @@ export const ar: TranslationResources = {
         },
         riskExplain: {
           LOW: "خطر منخفض: اختبارات أو توثيق أو إعدادات.",
-          NORMAL: "خطر عادي: كود تصل إليه اختبارات ({{tests}}).",
+          NORMAL_one: "خطر عادي: كود تصل إليه اختبارات ({{count}}).",
+          NORMAL_other: "خطر عادي: كود تصل إليه اختبارات ({{count}}).",
           HIGH: "خطر مرتفع: كود لا يصل إليه أي اختبار، أو كود يحذفه هذا التغيير.",
         },
         plain: en.panels.architectureMap.review.plain,
