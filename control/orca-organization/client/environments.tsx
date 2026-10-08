@@ -81,8 +81,9 @@ export function EnvironmentsSurface({
   theme,
   layout,
   host,
+  navigation,
   openPlanId = null,
-}: Pick<PluginSurfaceProps, "theme" | "layout" | "host"> & {
+}: Pick<PluginSurfaceProps, "theme" | "layout" | "host" | "navigation"> & {
   // The local-only Radius scratch simulation is superseded by Deploy; the owner adapter is no longer read here.
   radiusScratchOwner?: RadiusScratchOwnerAdapter;
   openPlanId?: string | null;
@@ -192,7 +193,13 @@ export function EnvironmentsSurface({
         Where each version of your work is running. Changes move one step at a time, and only when
         you approve.
       </Text>
-      <DeploySection theme={theme} layout={layout} host={host} openPlanId={openPlanId} />
+      <DeploySection
+        theme={theme}
+        layout={layout}
+        host={host}
+        navigation={navigation}
+        openPlanId={openPlanId}
+      />
       <Text accessibilityRole="header" style={{ ...text, fontSize: 20, fontWeight: "700" }}>
         Promotion paths
       </Text>
