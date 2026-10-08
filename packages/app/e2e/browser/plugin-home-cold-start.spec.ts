@@ -10,7 +10,7 @@ import { getServerId } from "../support/helpers/server-id";
 // before the catalog that contains it has arrived. Redirect is permanent, so deciding early
 // sends a host that DOES have Orca home to the fallback with no way back. Every other spec
 // here runs without this plugin installed, so the present-plugin path had no coverage at all.
-const PLUGIN_ID = "orca-organization";
+const PLUGIN_ID = "orca-organization-next";
 const SIDEBAR_ID = "organization";
 const SURFACE_MARKER = "Orca home surface mounted";
 
