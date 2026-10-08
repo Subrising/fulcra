@@ -46,7 +46,7 @@ interface PrivateRoot {
   fd: number;
   dev: number;
   ino: number;
-  files: Map<string, { dev: number; ino: number; size: number }>;
+  files: Map<string, { dev: number; ino: number; size: number; mtimeMs: number }>;
   bytes: number;
   ancestors: Array<{ path: string; dev: number; ino: number }>;
 }
@@ -150,8 +150,14 @@ function evictOldest(root: PrivateRoot): void {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   // A replaced entry is never deleted (it is not the file this run wrote); it is only forgotten, so one
-  // replaced file cannot stop every later image at the cap.
-  const ours = current?.isFile() && current.dev === known.dev && current.ino === known.ino;
+  // replaced file cannot stop every later image at the cap. Linux reuses a freed inode number at once,
+  // so size and modification time must also match the file this run wrote.
+  const ours =
+    current?.isFile() &&
+    current.dev === known.dev &&
+    current.ino === known.ino &&
+    current.size === known.size &&
+    current.mtimeMs === known.mtimeMs;
   if (ours) fsSync.unlinkSync(entryPath);
   root.files.delete(name);
   root.bytes -= known.size;
@@ -194,7 +200,7 @@ function normalizeImageData(mimeType: string, data: string): { mimeType: string;
 function validateDestination(
   before: fsSync.Stats,
   created: boolean,
-  known: { dev: number; ino: number; size: number } | undefined,
+  known: { dev: number; ino: number; size: number; mtimeMs: number } | undefined,
 ): void {
   if (
     !before.isFile() ||
@@ -268,7 +274,12 @@ export function materializeProviderImage(image: {
     // Exclusive new inode only. Reuse is read-only; never truncate/chmod an existing path.
     if (!known) {
       root.bytes += bytes.length;
-      root.files.set(name, { dev: before.dev, ino: before.ino, size: bytes.length });
+      root.files.set(name, {
+        dev: before.dev,
+        ino: before.ino,
+        size: bytes.length,
+        mtimeMs: before.mtimeMs,
+      });
     }
     if (created) fsSync.writeFileSync(descriptor, bytes);
     const after = fsSync.fstatSync(descriptor),
@@ -286,7 +297,12 @@ export function materializeProviderImage(image: {
     // Reuse moves the image to the newest end (Map order is the eviction order), so an image shown
     // again, for example on history replay, is not the next one deleted.
     root.files.delete(name);
-    root.files.set(name, { dev: after.dev, ino: after.ino, size: after.size });
+    root.files.set(name, {
+      dev: after.dev,
+      ino: after.ino,
+      size: after.size,
+      mtimeMs: after.mtimeMs,
+    });
     const result = { path: filePath };
     materializedFacts.set(result, { sha256: hash, size: bytes.length });
     return result;

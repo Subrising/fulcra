@@ -1781,7 +1781,16 @@ async function expectWorkingComparisonFiles(
   await expect(tree.locator('[data-testid^="diff-tree-file-"][data-testid$="-name"]')).toHaveText(
     paths,
   );
+  const scroller = panel.getByTestId("git-diff-scroll");
   for (const fileName of paths) {
+    // The canvas mounts only the headers near the viewport, so bring each file into range.
+    await scroller.evaluate(
+      (element, last) => {
+        element.scrollTop = last ? element.scrollHeight : 0;
+        element.dispatchEvent(new Event("scroll", { bubbles: false }));
+      },
+      fileName === paths[paths.length - 1],
+    );
     await expect(diffHeaderForPath(panel, `${comparison}/${fileName}`)).toBeAttached();
   }
 }

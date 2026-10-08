@@ -1,6 +1,4 @@
 import { test, expect } from "../support/fixtures";
-import { openSettings } from "../support/helpers/app";
-import { expectAppRoute } from "../support/helpers/route-assertions";
 import {
   buildPairingLink,
   cancelHostConfirmation,
@@ -13,31 +11,36 @@ import {
   type LinkedHost,
 } from "../support/helpers/host-confirmation";
 
-// An unreachable relay: the link saves the host without connecting first.
+// An unreachable relay: Fulcra claims the pairing on the relay after the answer, so a link that
+// is accepted ends on the pairing error page and saves nothing.
 const linkedHost: LinkedHost = {
   serverId: "srv_link_confirmation",
   relayEndpoint: "127.0.0.1:59998",
-  daemonPublicKeyB64: "bGlua0NvbmZpcm1hdGlvbktleQ",
+  // Fulcra shows a fingerprint of the key, so it must be a real 32-byte public key.
+  daemonPublicKeyB64: Buffer.alloc(32, 7).toString("base64"),
 };
+
+const PAIRING_ERROR_ROUTE = /\/pair\?error=/;
 
 test("a pairing link for a new host asks before saving it", async ({ page }) => {
   const link = buildPairingLink(linkedHost);
 
-  await test.step("Cancel saves nothing and stays on the page", async () => {
+  await test.step("Cancel saves nothing", async () => {
     await openPairingLink(page, link);
     await expectHostConfirmationFor(page, linkedHost);
     await cancelHostConfirmation(page);
-    await expectAppRoute(page, "/settings/general");
+    await expect(page).toHaveURL(PAIRING_ERROR_ROUTE);
+    await page.goto("/settings/general");
     await expectHostInHostPicker(page, linkedHost.serverId, "not listed");
   });
 
-  await test.step("Connect saves the host and opens a project", async () => {
+  await test.step("Connect closes the question and saves nothing while the relay is unreachable", async () => {
     await openPairingLink(page, link);
     await expectHostConfirmationFor(page, linkedHost);
     await connectToConfirmedHost(page);
-    await expectAppRoute(page, "/open-project");
-    await openSettings(page);
-    await expectHostInHostPicker(page, linkedHost.serverId, "listed");
+    await expect(page).toHaveURL(PAIRING_ERROR_ROUTE, { timeout: 30_000 });
+    await page.goto("/settings/general");
+    await expectHostInHostPicker(page, linkedHost.serverId, "not listed");
   });
 });
 
@@ -46,6 +49,7 @@ test("a pairing link for a saved host connects without asking", async ({ page })
 
   await openPairingLink(page, buildPairingLink(linkedHost));
 
-  await expectAppRoute(page, "/open-project", { timeout: 30_000 });
+  // No question: the link goes straight to the relay claim, which fails on the unreachable relay.
+  await expect(page).toHaveURL(PAIRING_ERROR_ROUTE, { timeout: 30_000 });
   await expect(hostConfirmation(page)).toHaveCount(0);
 });
