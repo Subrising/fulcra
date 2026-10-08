@@ -239,7 +239,7 @@ export function createWorkMapReader({
         notes.push(
           attention(
             "generation-changed",
-            `Main assistant ${prime.seat}: this lead was restarted since it was assigned.`,
+            `Main assistant ${prime.seat}: this main assistant was restarted since it was assigned.`,
             { sessionId: prime.sessionId ?? undefined },
           ),
         );

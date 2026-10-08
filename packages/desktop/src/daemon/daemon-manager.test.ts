@@ -919,6 +919,17 @@ describe("owned startup and Settings recovery", () => {
       expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
       expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
     });
+    it.each([
+      { ...silent, connectedDaemon: "auth_required" },
+      { ...silent, connectedDaemon: "auth_failed" },
+      { ...silent, localDaemon: "not_ready", connectedDaemon: "not_probed" },
+    ])("is not awaited or replaced when the probe got another answer: %j", async (payload) => {
+      mocks.runExternalCliJsonCommand.mockResolvedValue(payload);
+      await manager.createDaemonCommandHandlers().start_desktop_daemon();
+      expect(mocks.runExternalCliJsonCommand).toHaveBeenCalledTimes(1);
+      expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
+      expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
+    });
     it("is never stopped when this app does not own it; the launch refuses", async () => {
       mocks.runExternalCliJsonCommand.mockResolvedValue(silent);
       await expect(manager.createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
