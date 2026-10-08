@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -6,9 +6,15 @@ import { useFetchQuery } from "@/data/query";
 import { Crown, Network, Plus, RefreshCw, Users } from "lucide-react-native";
 import { router } from "expo-router";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
-import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
+import {
+  useHostRegistryLoaded,
+  useHostRuntimeClient,
+  useHostRuntimeConnectionStatuses,
+  useHosts,
+} from "@/runtime/host-runtime";
+import { useMainAssistantMemory } from "@/stores/main-assistant-memory-store";
 import { useOrganizationIntakePreferences } from "@/stores/organization-intake-preferences-store";
-import { preferredMainAssistant, useMainAssistantSeats } from "./home-computer";
+import { mergeMainAssistants, useMainAssistantReads } from "./home-computer";
 import { mainAssistant } from "../../../../control/orca-organization/shared/team";
 import { useSessionStore } from "@/stores/session-store";
 import { pluginRegistry, useControllerPlugin } from "./registry";
@@ -186,30 +192,84 @@ export function PrimeSidebarRows({
 
 function useAllMainAssistants() {
   const hosts = useHosts();
+  const registryLoaded = useHostRegistryLoaded();
   const companyHost = useOrganizationIntakePreferences((state) => state.companyHost);
   const ids = useMemo(() => hosts.map((host) => host.serverId), [hosts]);
-  const found = useMainAssistantSeats<Seat>(ids, mainAssistant);
+  const statuses = useHostRuntimeConnectionStatuses(ids);
+  const onlineIds = useMemo(
+    () => ids.filter((id) => statuses.get(id) === "online"),
+    [ids, statuses],
+  );
+  const reads = useMainAssistantReads<Seat>(onlineIds, mainAssistant);
+  const remembered = useMainAssistantMemory((state) => state.byHost);
+  const remember = useMainAssistantMemory((state) => state.remember);
+  const forget = useMainAssistantMemory((state) => state.forget);
+  useEffect(() => {
+    for (const read of reads ?? []) {
+      if (read.status === "found" && read.seat.sessionId)
+        remember(read.serverId, { seat: read.seat.seat, sessionId: read.seat.sessionId });
+      else if (read.status === "none") forget(read.serverId);
+    }
+  }, [reads, remember, forget]);
+  useEffect(() => {
+    // A computer removed from this app takes its remembered main assistant with it.
+    if (!registryLoaded) return;
+    for (const serverId of Object.keys(remembered)) if (!ids.includes(serverId)) forget(serverId);
+  }, [registryLoaded, ids, remembered, forget]);
+  const shown = useMemo(
+    () =>
+      mergeMainAssistants({
+        hostIds: ids,
+        online: new Set(onlineIds),
+        reads,
+        remembered,
+        homeServerId: companyHost,
+      }),
+    [ids, onlineIds, reads, remembered, companyHost],
+  );
   const label = (serverId: string) =>
     hosts.find((host) => host.serverId === serverId)?.label ?? "another computer";
-  return { found, companyHost, label };
+  return { shown, label };
 }
 
 /**
- * Fulcra 0.2.8: the main assistant, pinned at the top of the sidebar on every device, with the computer it runs on.
- * It comes from any connected computer, so the MacBook app shows the main assistant that runs on the Mac mini.
+ * Fulcra 0.2.8: every known main assistant, pinned at the top of the sidebar on every device, each with the computer
+ * it runs on. The MacBook app shows the main assistant that runs on the Mac mini. When that computer is away the row
+ * stays, marked offline; its chat says the computer is offline. Two computers with one each both show.
  */
 export function PinnedMainAssistant({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
-  const { found, companyHost, label } = useAllMainAssistants();
-  const chosen = preferredMainAssistant(found, companyHost);
-  if (!chosen) return null;
+  const { shown, label } = useAllMainAssistants();
   return (
-    <PinnedRow
-      serverId={chosen.serverId}
-      seat={chosen.seat}
-      node={(chosen.node ?? undefined) as FleetNode | undefined}
-      hostLabel={label(chosen.serverId)}
-      onBeforeNavigate={onBeforeNavigate}
-    />
+    <>
+      {shown.map((entry, index) => {
+        const testID =
+          index === 0
+            ? "sidebar-pinned-main-assistant"
+            : `sidebar-pinned-main-assistant-${entry.serverId}`;
+        const hostLabel = label(entry.serverId);
+        return entry.seat && !entry.offline ? (
+          <PinnedRow
+            key={entry.serverId}
+            serverId={entry.serverId}
+            seat={entry.seat}
+            node={(entry.node ?? undefined) as FleetNode | undefined}
+            hostLabel={hostLabel}
+            onBeforeNavigate={onBeforeNavigate}
+            testID={testID}
+          />
+        ) : (
+          <RememberedMainAssistantRow
+            key={entry.serverId}
+            serverId={entry.serverId}
+            sessionId={entry.sessionId}
+            hostLabel={hostLabel}
+            offline={entry.offline}
+            onBeforeNavigate={onBeforeNavigate}
+            testID={testID}
+          />
+        );
+      })}
+    </>
   );
 }
 
@@ -219,12 +279,14 @@ function PinnedRow({
   node,
   hostLabel,
   onBeforeNavigate,
+  testID,
 }: {
   serverId: string;
   seat: Seat;
   node: FleetNode | undefined;
   hostLabel: string;
   onBeforeNavigate?: () => void;
+  testID: string;
 }) {
   const navigation = usePluginHostNavigation(serverId);
   const leadership = useCallback(() => {
@@ -239,20 +301,77 @@ function PinnedRow({
   return (
     <LeadRow
       seat={seat}
-      title="Main assistant"
+      title={`Main assistant · ${hostLabel}`}
       node={node}
-      hostLabel={hostLabel}
+      unavailableText="Not connected"
       navigation={navigation}
       leadership={leadership}
       onBeforeNavigate={onBeforeNavigate}
-      testID="sidebar-pinned-main-assistant"
+      testID={testID}
     />
   );
 }
 
 /**
- * This computer has no main assistant. When another connected computer has one, the first choice is to use it (it
- * becomes Fulcra's home computer in this app); setting one up here comes second.
+ * A main assistant known from that computer's last answer: it is offline, or this app could not read it just now.
+ * A press opens its chat, which says plainly when the computer is offline and offers Retry.
+ */
+function RememberedMainAssistantRow({
+  serverId,
+  sessionId,
+  hostLabel,
+  offline,
+  onBeforeNavigate,
+  testID,
+}: {
+  serverId: string;
+  sessionId: string;
+  hostLabel: string;
+  offline: boolean;
+  onBeforeNavigate?: () => void;
+  testID: string;
+}) {
+  const navigation = usePluginHostNavigation(serverId);
+  const title = offline
+    ? `Main assistant · ${hostLabel} · offline`
+    : `Main assistant · ${hostLabel}`;
+  const open = useCallback(() => {
+    if (navigation.openAgentOnHost?.({ serverId, agentId: sessionId }) === "requested")
+      onBeforeNavigate?.();
+  }, [navigation, onBeforeNavigate, serverId, sessionId]);
+  return (
+    <View style={styles.row}>
+      <View style={styles.line}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            offline
+              ? `Open Main assistant conversation. ${hostLabel} is offline.`
+              : `Open Main assistant conversation on ${hostLabel}`
+          }
+          onPress={open}
+          testID={testID}
+          style={styles.main}
+        >
+          <ThemedCrown size={14} uniProps={mutedColor} />
+          <View style={styles.text}>
+            <Text style={styles.title} numberOfLines={2}>
+              {title}
+            </Text>
+            <Text style={styles.status} numberOfLines={1}>
+              {offline ? "Not connected" : "Status unknown"}
+            </Text>
+          </View>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * This computer has no main assistant. When another computer has one, the first choice is to use it (it becomes
+ * Fulcra's home computer in this app); setting one up here comes second. "No main assistant yet" shows only when no
+ * computer has one.
  */
 function MainAssistantChoice({
   serverId,
@@ -261,31 +380,55 @@ function MainAssistantChoice({
   serverId: string;
   leadership: () => void;
 }) {
-  const { found, label } = useAllMainAssistants();
+  const { shown, label } = useAllMainAssistants();
   const chooseCompany = useOrganizationIntakePreferences((state) => state.chooseCompany);
-  const elsewhere = (found ?? []).find((f) => f.serverId !== serverId) ?? null;
+  const elsewhere = shown.find((entry) => entry.serverId !== serverId) ?? null;
   const useElsewhere = useCallback(() => {
     if (elsewhere) chooseCompany(elsewhere.serverId);
   }, [chooseCompany, elsewhere]);
   return (
     <>
       {elsewhere ? (
-        <SidebarHeaderRow
-          icon={Crown}
+        <ChoiceRow
           label={`Use the main assistant on ${label(elsewhere.serverId)}`}
-          variant="compact"
           onPress={useElsewhere}
           testID="sidebar-use-remote-main-assistant"
         />
       ) : null}
-      <SidebarHeaderRow
-        icon={Crown}
-        label={elsewhere ? "Set up a main assistant here" : "No main assistant yet · Set up"}
-        variant="compact"
+      <ChoiceRow
+        label={elsewhere ? "Make a chat the main assistant" : "No main assistant yet · Set up"}
         onPress={leadership}
         testID="sidebar-set-up-main-assistant"
       />
     </>
+  );
+}
+
+/** A one-line sidebar choice with a 48 px target, the same height as the main assistant rows. */
+function ChoiceRow({
+  label,
+  onPress,
+  testID,
+}: {
+  label: string;
+  onPress: () => void;
+  testID: string;
+}) {
+  return (
+    <View style={styles.row}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        onPress={onPress}
+        testID={testID}
+        style={styles.main}
+      >
+        <ThemedCrown size={14} uniProps={mutedColor} />
+        <Text style={[styles.title, styles.text]} numberOfLines={2}>
+          {label}
+        </Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -294,11 +437,11 @@ export function leadStatusLine(
   seat: Seat,
   node: FleetNode | undefined,
   canOpen: boolean,
-  hostLabel?: string,
+  unavailableText = "Unavailable",
 ): string {
   if (seat.state === "vacant") return "Empty slot";
-  if (!canOpen) return hostLabel ? `Not connected · ${hostLabel}` : "Unavailable";
-  if (!node) return hostLabel ?? "Status unknown";
+  if (!canOpen) return unavailableText;
+  if (!node) return "Status unknown";
   return `${STATE_LABEL[stateOf(node)]} · ${node.host}`;
 }
 
@@ -310,7 +453,7 @@ function LeadRow({
   leadership,
   onBeforeNavigate,
   testID,
-  hostLabel,
+  unavailableText,
 }: {
   seat: Seat;
   title: string;
@@ -319,8 +462,8 @@ function LeadRow({
   leadership: () => void;
   onBeforeNavigate?: () => void;
   testID: string;
-  /** The computer the chat runs on, shown when this app has no live status for it. */
-  hostLabel?: string;
+  /** What the status line says when the chat cannot be opened from here. */
+  unavailableText?: string;
 }) {
   // A role-message dispatch address is not an app host identity. Open only on the host
   // that actually owns this saved agent; an unloaded or ambiguous identity stays in Leadership.
@@ -333,7 +476,7 @@ function LeadRow({
   const canOpen = Boolean(
     seat.state === "assigned" && seat.sessionPresent && seat.sessionId && agentServerId,
   );
-  const status = leadStatusLine(seat, node, canOpen, hostLabel);
+  const status = leadStatusLine(seat, node, canOpen, unavailableText);
   const label = canOpen ? title : `${title} · ${status}`;
   const [composing, setComposing] = useState(false);
   const open = useCallback(() => {
@@ -363,7 +506,7 @@ function LeadRow({
         >
           <Icon size={14} uniProps={mutedColor} />
           <View style={styles.text}>
-            <Text style={styles.title} numberOfLines={1}>
+            <Text style={styles.title} numberOfLines={2}>
               {title}
             </Text>
             <Text style={styles.status} numberOfLines={1}>
@@ -470,6 +613,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
+    minHeight: 48,
     paddingVertical: theme.spacing[1],
     paddingHorizontal: theme.spacing[2],
     borderRadius: theme.borderRadius.lg,
@@ -477,7 +621,13 @@ const styles = StyleSheet.create((theme) => ({
   text: { flex: 1, minWidth: 0 },
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
   status: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm - 1 },
-  plus: { padding: theme.spacing[1], borderRadius: theme.borderRadius.md },
+  plus: {
+    minWidth: 48,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.borderRadius.md,
+  },
   compose: {
     gap: theme.spacing[1],
     paddingLeft: theme.spacing[6],
@@ -493,5 +643,10 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
   },
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: theme.spacing[2] },
-  action: { paddingVertical: theme.spacing[1], paddingHorizontal: theme.spacing[2] },
+  action: {
+    minHeight: 48,
+    justifyContent: "center",
+    paddingVertical: theme.spacing[1],
+    paddingHorizontal: theme.spacing[2],
+  },
 }));
