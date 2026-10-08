@@ -1767,7 +1767,7 @@ export const zhCN: TranslationResources = {
       label: "角色",
       none: "无",
       planning: "规划",
-      orchestration: "编排",
+      orchestration: "负责人",
       implementation: "实现",
       usesDefault: "使用{{role}}默认值：{{model}}，推理强度 {{effort}}",
       usesDefaultModel: "使用{{role}}默认值：{{model}}",

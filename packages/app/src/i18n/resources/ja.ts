@@ -1816,7 +1816,7 @@ export const ja: TranslationResources = {
       label: "役割",
       none: "なし",
       planning: "計画",
-      orchestration: "オーケストレーション",
+      orchestration: "リード",
       implementation: "実装",
       usesDefault: "{{role}}の既定値を使用: {{model}}、推論量 {{effort}}",
       usesDefaultModel: "{{role}}の既定値を使用: {{model}}",

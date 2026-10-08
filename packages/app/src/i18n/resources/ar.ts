@@ -1790,7 +1790,7 @@ export const ar: TranslationResources = {
       label: "الدور",
       none: "بلا",
       planning: "التخطيط",
-      orchestration: "التنسيق",
+      orchestration: "القائد",
       implementation: "التنفيذ",
       usesDefault: "يستخدم الإعداد الافتراضي لـ{{role}}: {{model}}، بجهد {{effort}}",
       usesDefaultModel: "يستخدم الإعداد الافتراضي لـ{{role}}: {{model}}",

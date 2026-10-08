@@ -17,7 +17,7 @@ type SessionRole = "planning" | "orchestration" | "implementation";
 const ROLE_CHOICES: ReadonlyArray<readonly [SessionRole | null, string]> = [
   [null, "Default"],
   ["planning", "Planning"],
-  ["orchestration", "Orchestration"],
+  ["orchestration", "Lead"],
   ["implementation", "Implementation"],
 ];
 // Correlation IDs convey no authority; a collision is rejected by the controller's body check.
