@@ -4,6 +4,7 @@ export const DEFAULT_ROLES: readonly [
   "review",
   "implementation",
   "research",
+  "light",
 ];
 export const LEAD_ROLES: readonly ["orchestration", "planning", "review"];
 export interface Selection {

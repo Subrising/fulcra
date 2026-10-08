@@ -30,8 +30,15 @@ const PRIVATE_ATTACHMENT_DIR_MODE = 0o700;
 const MATERIALIZED_IMAGE_FILE_MODE = 0o600;
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
-const MAX_PRIVATE_BYTES = 64 * 1024 * 1024;
-const MAX_PRIVATE_FILES = 256;
+// FULCRA(image-retention): retention is a rolling window. At the cap the least recently written images
+// are deleted to make room, instead of refusing every new image for the rest of the daemon run.
+export const MAX_PRIVATE_BYTES = 1024 * 1024 * 1024;
+export const MAX_PRIVATE_FILES = 2000;
+/** Shown for an image that was deleted to make room; other missing files keep their own error. */
+export const EVICTED_PROVIDER_IMAGE_MESSAGE = "Image no longer kept";
+// Names of images deleted to make room, oldest first; bounded so a long run cannot grow it forever.
+const MAX_EVICTED_NAMES = 100_000;
+const evictedNames = new Set<string>();
 // Darwin's O_NOFOLLOW_ANY rejects symlinks in every path component, not just the leaf.
 const noFollowAny = process.platform === "darwin" ? 0x20000000 : 0;
 interface PrivateRoot {
@@ -73,13 +80,15 @@ function getPrivateRoot(): PrivateRoot {
       return privateRoot;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      // A missing pathname may be a still-live renamed directory. Never release its pool.
+      // A missing pathname may be a still-live renamed directory. Never release its pool while
+      // it may still hold images. Linux reports a removed directory with nlink 0. FULCRA(image-retention):
+      // APFS reports nlink 2 + entries, so on macOS nlink 2 means the directory is empty (removed,
+      // or renamed and empty): releasing its pool loses no image. Otherwise every later image
+      // failed after macOS cleared its temporary folder.
       const retained = fsSync.fstatSync(privateRoot.fd);
-      if (
-        retained.dev !== privateRoot.dev ||
-        retained.ino !== privateRoot.ino ||
-        retained.nlink !== 0
-      )
+      const released =
+        retained.nlink === 0 || (process.platform === "darwin" && retained.nlink <= 2);
+      if (retained.dev !== privateRoot.dev || retained.ino !== privateRoot.ino || !released)
         throw new Error("Private image root moved or deletion unproved", { cause: error });
       fsSync.closeSync(privateRoot.fd);
       privateRoot = undefined;
@@ -118,6 +127,40 @@ function getPrivateRoot(): PrivateRoot {
   checkRoot(root);
   privateRoot = root;
   return root;
+}
+function rememberEvicted(name: string): void {
+  evictedNames.add(name);
+  if (evictedNames.size > MAX_EVICTED_NAMES) {
+    const oldest = evictedNames.values().next().value;
+    if (oldest !== undefined) evictedNames.delete(oldest);
+  }
+}
+// Deletes the least recently written image (Map order is write order). Only the exact inode this
+// run wrote is removed; a replaced or missing one is just forgotten.
+function evictOldest(root: PrivateRoot): void {
+  const oldest = root.files.entries().next().value;
+  if (!oldest) return;
+  const [name, known] = oldest;
+  const entryPath =
+    process.platform === "linux" ? `/proc/self/fd/${root.fd}/${name}` : path.join(root.path, name);
+  let current: fsSync.Stats | undefined;
+  try {
+    current = fsSync.lstatSync(entryPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  // A replaced entry is never deleted (it is not the file this run wrote); it is only forgotten, so one
+  // replaced file cannot stop every later image at the cap.
+  const ours = current?.isFile() && current.dev === known.dev && current.ino === known.ino;
+  if (ours) fsSync.unlinkSync(entryPath);
+  root.files.delete(name);
+  root.bytes -= known.size;
+  if (ours || !current) rememberEvicted(name);
+}
+/** True when `filePath` is a provider image this daemon run deleted to make room for newer ones. */
+export function isEvictedProviderImage(filePath: string): boolean {
+  if (!privateRoot || path.dirname(filePath) !== privateRoot.path) return false;
+  return evictedNames.has(path.basename(filePath));
 }
 function getImageExtension(mimeType: string): string {
   switch (mimeType) {
@@ -189,11 +232,14 @@ export function materializeProviderImage(image: {
   const root = getPrivateRoot();
   checkRoot(root);
   const known = root.files.get(name);
-  if (
-    !known &&
-    (root.files.size >= MAX_PRIVATE_FILES || root.bytes + bytes.length > MAX_PRIVATE_BYTES)
-  )
-    throw new Error("Private image retention exhausted");
+  if (!known) {
+    while (
+      root.files.size > 0 &&
+      (root.files.size >= MAX_PRIVATE_FILES || root.bytes + bytes.length > MAX_PRIVATE_BYTES)
+    )
+      evictOldest(root);
+    evictedNames.delete(name);
+  }
   const filePath = path.join(root.path, name);
   const openPath = process.platform === "linux" ? `/proc/self/fd/${root.fd}/${name}` : filePath;
   let descriptor: number,
@@ -237,6 +283,9 @@ export function materializeProviderImage(image: {
       !observed.equals(bytes)
     )
       throw new Error("Native image materialization changed");
+    // Reuse moves the image to the newest end (Map order is the eviction order), so an image shown
+    // again, for example on history replay, is not the next one deleted.
+    root.files.delete(name);
     root.files.set(name, { dev: after.dev, ino: after.ino, size: after.size });
     const result = { path: filePath };
     materializedFacts.set(result, { sha256: hash, size: bytes.length });

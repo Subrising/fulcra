@@ -35,6 +35,7 @@ const ROLE_LABEL: Record<DefaultRole, string> = {
   review: "Reviewers",
   implementation: "Implementers",
   research: "Research",
+  light: "Light work: summaries, searches, test runs and monitors",
 };
 const PROVIDER_LABEL = { claude: "Claude", codex: "Codex" } as const;
 // Update-7 W3: plain names for the permission modes Settings offers (bypassPermissions is never offered).

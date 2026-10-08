@@ -17,7 +17,8 @@ export function createProviderCommand(): Command {
       .command("models")
       .description("List models for a provider")
       .argument("<provider>", "Provider name (claude, codex, opencode)")
-      .option("--thinking", "Include thinking option IDs for each model"),
+      .option("--thinking", "Include thinking option IDs for each model")
+      .option("--refresh", "Read the provider's models again before listing (no daemon restart)"),
   ).action(withOutput(runModelsCommand));
 
   addJsonAndDaemonHostOptions(

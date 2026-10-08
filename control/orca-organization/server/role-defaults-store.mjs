@@ -16,11 +16,13 @@ export const DEFAULT_ROLES = Object.freeze([
   "review",
   "implementation",
   "research",
+  "light",
 ]);
 export const LEAD_ROLES = Object.freeze(["orchestration", "planning", "review"]);
 const sel = (model, thinkingOptionId) => ({ model, thinkingOptionId });
 // The owner's rule (update-7 W3): leads (prime, orchestrator, planner, reviewer) Opus 5.5 medium; implementers Sonnet 5.5
 // medium, or Codex gpt-6.1-sol medium. High is what a task asks for (a per-call effort), not what every lead pays for.
+// FULCRA(claude-only, David 7 Oct 2026): every role's default provider is Claude; Codex stays a choice.
 export const SEED = Object.freeze({
   orchestration: {
     provider: "claude",
@@ -38,13 +40,20 @@ export const SEED = Object.freeze({
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   implementation: {
-    provider: "codex",
+    provider: "claude",
     claude: sel("claude/claude-sonnet-5-5", "medium"),
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },
   research: {
-    provider: "codex",
+    provider: "claude",
     claude: sel("claude/claude-sonnet-5-5", "medium"),
+    codex: sel("codex/gpt-6.1-sol", "medium"),
+  },
+  // FULCRA(light-role): summaries, digests, searches, test runs, simulated users and monitors. Only this store and the
+  // seed name it, never the shared config, whose closed role list older builds validate.
+  light: {
+    provider: "claude",
+    claude: sel("claude/claude-haiku-5-5", "medium"),
     codex: sel("codex/gpt-6.1-sol", "medium"),
   },
 });
@@ -105,8 +114,15 @@ export function readRoleDefaults(root, configRoles = null, configModes = null) {
 }
 // Startup initializes only an absent installation table. An existing (including migrated)
 // Settings file is left byte-identical; an explicit config choice wins over the seed.
+// FULCRA(light-role): roles newer than the builds that may still read this file are not written here; the seed supplies
+// them, and a Settings save is the first write that names them.
+const INITIAL_ROLES = Object.freeze(DEFAULT_ROLES.filter((role) => role !== "light"));
 export function initializeRoleDefaults(root, configRoles = null, configModes = null) {
-  const table = readRoleDefaults(root, configRoles, configModes);
+  const read = readRoleDefaults(root, configRoles, configModes);
+  const table = {
+    ...read,
+    roles: Object.fromEntries(INITIAL_ROLES.map((role) => [role, read.roles[role]])),
+  };
   const dir = accountsDir(root);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `.defaults-${randomUUID()}.json`);

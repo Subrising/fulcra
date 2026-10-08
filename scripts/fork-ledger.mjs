@@ -14,6 +14,14 @@ import { fileURLToPath } from "node:url";
 
 export const PATCHES = [
   {
+    id: "image-retention",
+    owner: "Fulcra prime (platform)",
+    reason:
+      "Agent image files: confined private storage and a rolling retention window. At about 2,000 files or 1 GB the least recently written images are deleted to make room, and a deleted image reads as 'Image no longer kept'. Paseo refused every new image after 256 files or 64 MB per daemon run.",
+    path: /provider-image-output/i,
+    words: /EvictedProviderImage|EVICTED_PROVIDER_IMAGE|evictOldest|evictedNames/,
+  },
+  {
     id: "orchestration",
     owner: "Fulcra prime (orchestration)",
     reason:

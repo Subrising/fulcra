@@ -23,6 +23,7 @@ import {
 } from "@/hooks/use-acp-provider-catalog";
 import { ProviderCatalogList } from "@/components/provider-catalog-list";
 import { useProviderIcon } from "@/components/provider-icons";
+import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -327,7 +328,7 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
   const { t } = useTranslation();
   const isConnected = useHostRuntimeIsConnected(serverId);
   const supportsProviderRemoval = useHostFeature(serverId, "providerRemoval");
-  const { entries, isLoading, refresh } = useProvidersSnapshot(serverId);
+  const { entries, isLoading, isRefreshing, refresh } = useProvidersSnapshot(serverId);
   const { patchConfig } = useDaemonConfig(serverId);
   const openProviderSettings = useProviderSettingsStore((state) => state.open);
   const [pendingProviderId, setPendingProviderId] = useState<string | null>(null);
@@ -413,10 +414,37 @@ export function ProvidersSection({ serverId }: ProvidersSectionProps) {
     [installingProviderId, patchConfig, refresh, t],
   );
 
+  // FULCRA(model-refresh): asks the host to read each provider's models again, so a model that a
+  // provider update adds (for example Haiku 5.5) shows without a daemon restart.
+  const handleRefreshModels = useCallback(() => {
+    void refresh().catch((error: unknown) => {
+      Alert.alert(
+        t("settings.providers.refreshModels"),
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+  }, [refresh, t]);
+  const refreshModelsButton = useMemo(
+    () =>
+      hasServer && isConnected ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onPress={handleRefreshModels}
+          loading={isRefreshing}
+          testID="providers-refresh-models"
+        >
+          {t("settings.providers.refreshModels")}
+        </Button>
+      ) : undefined,
+    [handleRefreshModels, hasServer, isConnected, isRefreshing, t],
+  );
+
   return (
     <>
       <SettingsSection
         title={t("settings.providers.title")}
+        trailing={refreshModelsButton}
         testID="host-page-providers-card"
         style={styles.sectionSpacing}
       >

@@ -2254,7 +2254,8 @@ export const ar: TranslationResources = {
         },
         riskExplain: {
           LOW: "خطر منخفض: اختبارات أو توثيق أو إعدادات.",
-          NORMAL: "خطر عادي: كود تصل إليه اختبارات ({{tests}}).",
+          NORMAL_one: "خطر عادي: كود تصل إليه اختبارات ({{count}}).",
+          NORMAL_other: "خطر عادي: كود تصل إليه اختبارات ({{count}}).",
           HIGH: "خطر مرتفع: كود لا يصل إليه أي اختبار، أو كود يحذفه هذا التغيير.",
         },
         plain: en.panels.architectureMap.review.plain,
@@ -3139,6 +3140,7 @@ export const ar: TranslationResources = {
     providers: {
       title: "مقدمي الخدمات",
       addProvider: "إضافة مزود",
+      refreshModels: "تحديث النماذج",
       providerDetails: "تفاصيل مزود{{name}}",
       enableProvider: "تمكين{{name}}",
       unavailable: "اتصل بهذا المضيف لرؤية مقدمي الخدمة",

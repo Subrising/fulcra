@@ -335,3 +335,23 @@ export function nearestOnly(selection: Selection): Selection {
 export function callersOnly(selection: Selection): Selection {
   return { ...selection, usesDirect: [], usesAll: new Set(), oneHop: false, callersOnly: true };
 }
+
+const ENTRY_NAMES = ["index", "main", "mod", "lib", "app", "server", "cli"];
+const CODE_FILE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+const TEST_FILE = /(?:\.|_)(?:test|spec)\.[^/]+$|(?:^|\/)__tests__\//;
+
+/** The file "Open code" opens for a folder: its main source file, never package.json first. */
+export function entryFile(files: readonly string[], folder: string): string | null {
+  const prefix = folder && folder !== "." ? `${folder.replace(/\/+$/, "")}/` : "";
+  const relative = (file: string) => (file.startsWith(prefix) ? file.slice(prefix.length) : file);
+  const code = files.filter((f) => CODE_FILE.test(f) && !TEST_FILE.test(f) && !f.endsWith(".d.ts"));
+  const rank = (file: string) => {
+    const rel = relative(file);
+    const name = rel.replace(/^src\//, "").replace(CODE_FILE, "");
+    const named = ENTRY_NAMES.indexOf(name);
+    if (named >= 0) return (rel.startsWith("src/") ? 0 : 1) * ENTRY_NAMES.length + named;
+    return 2 * ENTRY_NAMES.length + (rel.startsWith("src/") ? 0 : 1) * 1000 + rel.split("/").length;
+  };
+  const best = [...code].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))[0];
+  return best ?? files[0] ?? null;
+}
