@@ -18,6 +18,7 @@ const f = vi.hoisted(() => ({
   remote: {} as Record<string, { directory: unknown; fleet?: unknown }>,
   companyHost: null as string | null,
   chooseCompany: vi.fn(),
+  offline: new Set<string>(),
 }));
 vi.mock("expo-router", () => ({ router: { push: f.push } }));
 vi.mock("./host-navigation-model", () => ({ createPluginHostNavigation: () => ({}) }));
@@ -54,6 +55,9 @@ vi.mock("./registry", () => ({
 vi.mock("@/runtime/host-runtime", () => ({
   useHostRuntimeClient: () => ({ sendAgentMessage: f.send }),
   useHosts: () => f.hosts,
+  useHostRegistryLoaded: () => true,
+  useHostRuntimeConnectionStatuses: (ids: readonly string[]) =>
+    new Map(ids.map((id) => [id, f.offline.has(id) ? "offline" : "online"])),
   getHostRuntimeStore: () => ({
     getHostRegistryStatus: () => (f.registryReady ? "ready" : "loading"),
     getHosts: () => (f.registeredHost && f.host ? [{ serverId: f.host }] : []),
@@ -75,6 +79,29 @@ vi.mock("@/stores/organization-intake-preferences-store", () => ({
     select: (state: { companyHost: string | null; chooseCompany: (id: string) => void }) => unknown,
   ) => select({ companyHost: f.companyHost, chooseCompany: f.chooseCompany }),
 }));
+vi.mock("@/stores/main-assistant-memory-store", async () => {
+  const { create } = await import("zustand");
+  type Memory = Record<string, { seat: string; sessionId: string }>;
+  const useMainAssistantMemory = create<{
+    byHost: Memory;
+    remember: (id: string, v: { seat: string; sessionId: string }) => void;
+    forget: (id: string) => void;
+  }>()((set, get) => ({
+    byHost: {},
+    remember: (id, v) => {
+      const c = get().byHost[id];
+      if (c?.seat !== v.seat || c?.sessionId !== v.sessionId)
+        set({ byHost: { ...get().byHost, [id]: v } });
+    },
+    forget: (id) => {
+      if (!(id in get().byHost)) return;
+      const next = { ...get().byHost };
+      delete next[id];
+      set({ byHost: next });
+    },
+  }));
+  return { useMainAssistantMemory };
+});
 vi.mock("./installation-provider", () => ({ PluginInstallationProvider: () => null }));
 vi.mock("../../../../control/orca-organization/client/use-contract", () => ({
   useContract: (contract: { name: string }) =>
@@ -97,6 +124,7 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
   ),
 }));
 import { PinnedMainAssistant, PrimeSidebarRows } from "./prime-sidebar";
+import { useMainAssistantMemory } from "@/stores/main-assistant-memory-store";
 const clients: QueryClient[] = [];
 const fastRetry = () => 1;
 function mount() {
@@ -130,6 +158,8 @@ beforeEach(() => {
   f.hosts = [{ serverId: "mini", label: "Mac-mini.local" }];
   f.remote = {};
   f.companyHost = null;
+  f.offline = new Set();
+  useMainAssistantMemory.setState({ byHost: {} });
   f.chooseCompany.mockReset();
   f.open.mockClear();
   f.push.mockClear();
@@ -154,7 +184,11 @@ it("pins the main assistant at the top with its status and computer, and opens i
     fleet: { nodes: [{ id: "original-prime", host: "Mac mini", status: "running", pending: 0 }] },
   };
   mountPinned();
-  fireEvent.click(await screen.findByRole("button", { name: "Open Main assistant conversation" }));
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Open Main assistant · Mac-mini.local conversation",
+    }),
+  );
   expect(screen.getByText("Working · Mac mini")).toBeTruthy();
   expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "original-prime" });
   expect(screen.queryByText(/Research/)).toBeNull();
@@ -172,8 +206,12 @@ it("shows the main assistant of another computer on this device, with that compu
     mini: { directory: { available: true, primes: [prime()] } },
   };
   mountPinned();
-  expect(await screen.findByText("Mac-mini.local")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Open Main assistant conversation" }));
+  expect(await screen.findByText("Main assistant · Mac-mini.local")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Open Main assistant · Mac-mini.local conversation",
+    }),
+  );
   expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "original-prime" });
 });
 
@@ -183,7 +221,7 @@ it("an unreachable main assistant chat says so and opens Leads instead", async (
   mountPinned();
   fireEvent.click(
     await screen.findByRole("button", {
-      name: "Manage Main assistant · Not connected · Mac-mini.local",
+      name: "Manage Main assistant · Mac-mini.local · Not connected",
     }),
   );
   expect(f.open).not.toHaveBeenCalled();
@@ -232,7 +270,7 @@ it("offers the main assistant on another computer as the first setup choice", as
   });
   const buttons = screen.getAllByRole("button").map((b) => b.textContent);
   expect(buttons.indexOf(use.textContent)).toBeLessThan(
-    buttons.indexOf("Set up a main assistant here"),
+    buttons.indexOf("Make a chat the main assistant"),
   );
   fireEvent.click(use);
   expect(f.chooseCompany).toHaveBeenCalledWith("other");
@@ -363,4 +401,78 @@ it("Retry reads the lead status again, not only the main assistant list", async 
   await vi.waitFor(() => expect(f.fleet.mock.calls.length).toBeGreaterThan(fleetCalls));
   expect(await screen.findByText(/Idle · MacBook Pro/)).toBeTruthy();
   expect(screen.queryByText(/Status unknown/)).toBeNull();
+});
+
+it("keeps an offline computer's main assistant, marked offline, and opens its chat", async () => {
+  f.hosts = [
+    { serverId: "book", label: "MacBook Pro" },
+    { serverId: "mini", label: "Mac-mini.local" },
+  ];
+  f.remote = {
+    book: { directory: { available: true, primes: [] } },
+    mini: { directory: { available: true, primes: [prime()] } },
+  };
+  mountPinned();
+  await screen.findByText("Main assistant · Mac-mini.local");
+  expect(useMainAssistantMemory.getState().byHost.mini).toEqual({
+    seat: "main",
+    sessionId: "original-prime",
+  });
+  cleanup();
+  f.offline = new Set(["mini"]);
+  mountPinned();
+  const row = await screen.findByRole("button", {
+    name: "Open Main assistant conversation. Mac-mini.local is offline.",
+  });
+  expect(screen.getByText("Main assistant · Mac-mini.local · offline")).toBeTruthy();
+  expect(screen.queryByText(/No main assistant yet/)).toBeNull();
+  fireEvent.click(row);
+  expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "original-prime" });
+});
+
+it("an offline computer's main assistant hides 'No main assistant yet' in Set up", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "MacBook Pro" },
+    { serverId: "other", label: "Mac-mini.local" },
+  ];
+  f.offline = new Set(["other"]);
+  useMainAssistantMemory.setState({
+    byHost: { other: { seat: "main", sessionId: "remote" } },
+  });
+  f.read.mockResolvedValue({ available: true, primes: [] });
+  f.remote = { mini: { directory: { available: true, primes: [] } } };
+  mount();
+  expect(
+    await screen.findByRole("button", { name: "Use the main assistant on Mac-mini.local" }),
+  ).toBeTruthy();
+  expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
+});
+
+it("shows both main assistants when two computers have one, each with its computer", async () => {
+  f.host = "mini";
+  f.hosts = [
+    { serverId: "book", label: "MacBook Pro" },
+    { serverId: "mini", label: "Mac-mini.local" },
+  ];
+  f.companyHost = "mini";
+  f.remote = {
+    book: { directory: { available: true, primes: [prime({ sessionId: "remote" })] } },
+    mini: { directory: { available: true, primes: [prime()] } },
+  };
+  mountPinned();
+  await screen.findByText("Main assistant · Mac-mini.local");
+  expect(await screen.findByText("Main assistant · MacBook Pro")).toBeTruthy();
+  const titles = screen.getAllByText(/^Main assistant · /).map((node) => node.textContent);
+  expect(titles).toEqual([
+    "Main assistant · Mac-mini.local",
+    "Main assistant · MacBook Pro",
+  ]);
+});
+
+it("forgets a computer's main assistant when that computer says it has none", async () => {
+  useMainAssistantMemory.setState({ byHost: { mini: { seat: "main", sessionId: "gone" } } });
+  f.remote.mini = { directory: { available: true, primes: [] } };
+  mountPinned();
+  await vi.waitFor(() => expect(useMainAssistantMemory.getState().byHost.mini).toBeUndefined());
+  expect(screen.queryByRole("button")).toBeNull();
 });
