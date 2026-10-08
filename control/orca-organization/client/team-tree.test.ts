@@ -157,3 +157,24 @@ test("a team set up from existing chats shows the main assistant above every lea
     { role: "Worker", state: "Idle" },
   ]);
 });
+
+test("reporting lines place chats, follow the main assistant role, and mark a chat with no line", () => {
+  const main = node({ title: "Main assistant" });
+  const lead = node({ title: "Mac ops", reportsTo: "role:main-assistant" });
+  const worker = node({ title: "Installer", reportsTo: lead.id, directLink: main.id });
+  const loose = node({ title: "Scratch" });
+  const tree = buildTeamTree({
+    nodes: [main, lead, worker, loose],
+    mainSessionIds: new Set([main.id]),
+    mainSessionId: main.id,
+  });
+  const top = tree.roots.find((c) => c.id === main.id)!;
+  assert.equal(top.noLine, false);
+  const leadCard = top.children.find((c) => c.id === lead.id)!;
+  assert.equal(leadCard.noLine, false);
+  const workerCard = leadCard.children.find((c) => c.id === worker.id)!;
+  assert.equal(workerCard.noLine, false);
+  assert.equal(workerCard.directLink, "Main assistant");
+  const looseCard = tree.roots.find((c) => c.id === loose.id)!;
+  assert.equal(looseCard.noLine, true);
+});

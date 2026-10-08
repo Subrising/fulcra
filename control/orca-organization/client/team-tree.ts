@@ -24,6 +24,10 @@ export interface TeamCard {
   agentId: string | null;
   /** "Claude · Opus 5.5", when the host recorded it. */
   runs: string | null;
+  /** No reporting line is recorded for this chat (Fulcra 0.2.8): the Team map marks it. */
+  noLine: boolean;
+  /** The title of the one chat this chat may also message directly. */
+  directLink: string | null;
   /** How many sessions a merged offline card stands for; 1 otherwise. */
   sessions: number;
   children: TeamCard[];
@@ -134,15 +138,21 @@ export function buildTeamTree(input: TeamTreeInput): TeamTree {
   const formatTime = input.formatTime ?? defaultTime;
   const byId = new Map(input.nodes.map((node) => [node.id, node]));
   const parentOf = new Map<string, string>();
+  const main = input.mainSessionId && byId.has(input.mainSessionId) ? input.mainSessionId : null;
+  // The recorded reporting line wins: the main assistant role is whoever holds it now.
+  for (const node of input.nodes) {
+    const line = node.reportsTo === "role:main-assistant" ? main : node.reportsTo?.split("@", 1)[0];
+    if (line && byId.has(line) && line !== node.id) parentOf.set(node.id, line);
+  }
+  const recorded = (node: FleetNode) => Boolean(node.reportsTo || node.parent);
   for (const node of input.nodes)
-    if (node.parent && byId.has(node.parent) && node.parent !== node.id)
+    if (!parentOf.has(node.id) && node.parent && byId.has(node.parent) && node.parent !== node.id)
       parentOf.set(node.id, node.parent);
   for (const edge of input.edges ?? [])
     if (!parentOf.has(edge.to) && byId.has(edge.from) && byId.has(edge.to) && edge.from !== edge.to)
       parentOf.set(edge.to, edge.from);
   // The team as it was set up: a lead answers to the main assistant, a worker to its project's lead. Recorded
   // supervision above wins; this only places chats that have no recorded leader.
-  const main = input.mainSessionId && byId.has(input.mainSessionId) ? input.mainSessionId : null;
   for (const node of input.nodes) {
     if (parentOf.has(node.id) || node.id === main || input.mainSessionIds?.has(node.id)) continue;
     if (input.leadSessionIds?.has(node.id)) {
@@ -202,6 +212,8 @@ export function buildTeamTree(input: TeamTreeInput): TeamTree {
       serverId: node.serverId ?? null,
       agentId: node.agentId,
       runs: runsLabel(node),
+      noLine: role !== "main" && !recorded(node),
+      directLink: node.directLink ? (byId.get(node.directLink)?.title ?? "a chat") : null,
       sessions: 1,
       children: sortCards(children),
     };

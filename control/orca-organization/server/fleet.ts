@@ -104,6 +104,18 @@ export const FLEET_NODE_LIMIT = 64;
 // Update-7: ownership on every create path. The parent a session's labels name: a controller create records
 // fulcra.parent-session; a create from inside a session (`paseo run`, an MCP create) records paseo.parent-agent-id.
 const UUID = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+/** The reporting line a session's labels record (fulcra.reports-to), or null. */
+export function labelLine(labels: Record<string, string> | undefined | null): {
+  reportsTo: string | null;
+  directLink: string | null;
+} {
+  const line = labels?.["fulcra.reports-to"]?.trim();
+  const link = labels?.["fulcra.direct-link"]?.trim();
+  return {
+    reportsTo: line ? line.slice(0, 200) : null,
+    directLink: link && UUID.test(link) ? link : null,
+  };
+}
 export function labelParent(labels: Record<string, string> | undefined | null): string | null {
   const p = labels?.["fulcra.parent-session"] ?? labels?.["paseo.parent-agent-id"];
   return typeof p === "string" && UUID.test(p) ? p : null;
@@ -140,6 +152,7 @@ export function attachOwnership(
       n.role ??=
         typeof a.labels?.["fulcra.role"] === "string" ? a.labels["fulcra.role"].slice(0, 40) : null;
       n.account = accountLabel(n.id);
+      Object.assign(n, labelLine(a.labels));
     }
     if (
       n.parent &&
@@ -190,6 +203,7 @@ export function attachOwnership(
             : null,
         origin: "spawned",
         account: accountLabel(a.id),
+        ...labelLine(a.labels),
       };
       nodes.push(n);
       byId.set(n.id, n);
