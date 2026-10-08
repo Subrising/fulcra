@@ -105,7 +105,7 @@ function SessionItem({
     <View style={styles.row} testID={`sidebar-session-${row.serverId}-${row.agentId}`}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={row.title}
+        accessibilityLabel={row.lead ? `${row.title}. ${row.lead}` : row.title}
         testID={`sidebar-session-open-${row.serverId}-${row.agentId}`}
         style={styles.open}
         onPress={openSession}
@@ -117,6 +117,15 @@ function SessionItem({
           {statusLabel(row)}
           {hostName ? ` · ${hostName}` : ""}
         </Text>
+        {row.lead ? (
+          <Text
+            numberOfLines={1}
+            style={styles.metadata}
+            testID={`sidebar-session-lead-${row.agentId}`}
+          >
+            {row.lead}
+          </Text>
+        ) : null}
       </Pressable>
       <SessionAccountInfo
         account={row.account}
