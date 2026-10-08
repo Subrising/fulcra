@@ -305,6 +305,12 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       verifyActivation();
       await daemon.updateAgent(id, { labels });
     },
+    // The chat stops being a child of the chat that created it, through the daemon's own detach (which keeps the
+    // open-tab and archive bookkeeping right). Does nothing for a chat with no parent.
+    detach: async (id) => {
+      verifyActivation();
+      await daemon.detachAgent(id);
+    },
     // The live chats here that carry one label value (archived chats are left out). Bounded to one page.
     labelled: async (key, value) => {
       verifyActivation();

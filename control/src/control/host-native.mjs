@@ -140,6 +140,12 @@ export class HostNative {
       throw Error("This native adapter cannot write labels");
     return this.local.setLabels(id, labels);
   }
+  detach(id) {
+    if (this.route(id)) throw Error("A chat on another computer is changed on its own host");
+    if (typeof this.local.detach !== "function")
+      throw Error("This native adapter cannot detach a chat");
+    return this.local.detach(id);
+  }
   labelled(key, value) {
     if (typeof this.local.labelled !== "function")
       throw Error("This native adapter cannot list labels");

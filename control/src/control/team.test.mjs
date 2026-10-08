@@ -44,13 +44,21 @@ function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
   const store = new ControlStore(path.join(dir, "journal.sqlite"));
   t.after(() => store.db.close());
   const labelWrites = [];
+  const detaches = [];
   const native = {
     route: () => undefined,
     setLabels: async (id, patch) => {
+      // As the real daemon does: a label update never changes a parent (use detach).
+      if (Object.hasOwn(patch, "paseo.parent-agent-id"))
+        throw Error("Use native owner parent adoption to change parent metadata");
       if (failClear === id && patch["fulcra.seat"] === "")
         throw Error("That chat cannot be changed now");
       labelWrites.push({ id, labels: patch });
       labels[id] = { ...labels[id], ...patch };
+    },
+    detach: async (id) => {
+      detaches.push(id);
+      if (labels[id]) delete labels[id]["paseo.parent-agent-id"];
     },
     labelled: async (key, value) =>
       Object.entries(labels)
@@ -75,7 +83,7 @@ function world(t, { snapshots = {}, labels = {}, failClear = null } = {}) {
     config: { tasks, authority: { issueApi: null, companyId: COMPANY, programmeId: PROGRAMME } },
   });
   const dispatch = (method, input) => managementDispatcher(control)({ method, input }, owner);
-  return { dir, store, control, dispatch, read, labelWrites, labels };
+  return { dir, store, control, dispatch, read, labelWrites, labels, detaches };
 }
 const chat = (cwd = "/tmp/chat") => ({ cwd, provider: "claude", archivedAt: null });
 
@@ -292,8 +300,8 @@ test("upgrade: a main assistant seated before 0.2.8 gets the label at the first 
   assert.deepEqual(w.labels[main], {
     "fulcra.seat": "main-assistant",
     "fulcra.reports-to": "owner",
-    "paseo.parent-agent-id": "",
   });
+  assert.deepEqual(w.detaches, [main]);
   const changes = w.control.team.history().filter((c) => c.kind.startsWith("seat-"));
   assert.equal(changes.length, 1);
   assert.equal(changes[0].kind, "seat-set");
@@ -315,7 +323,8 @@ test("a main assistant created by another chat reports to the owner and loses th
   });
   await seatMain(w, main);
   await w.control.team.syncSeat("start");
-  assert.equal(w.labels[main]["paseo.parent-agent-id"], "");
+  assert.deepEqual(w.detaches, [main]); // through detach: the label update itself never names the parent
+  assert.equal(w.labels[main]["paseo.parent-agent-id"], undefined);
   assert.equal(w.labels[main]["fulcra.reports-to"], "owner");
   assert.equal(w.labels[main]["fulcra.seat"], "main-assistant");
   assert.equal(w.labels[main].role, "main"); // other labels are left alone
@@ -416,6 +425,7 @@ test("the real host adapter passes label writes and label reads to this computer
     local: {
       setLabels: async (id, labels) => writes.push({ id, labels }),
       labelled: async (key, value) => [`${key}=${value}`],
+      detach: async (id) => writes.push({ id, detach: true }),
     },
   });
   const id = randomUUID();
@@ -424,6 +434,9 @@ test("the real host adapter passes label writes and label reads to this computer
   assert.deepEqual(await native.labelled("fulcra.seat", "main-assistant"), [
     "fulcra.seat=main-assistant",
   ]);
+  await native.detach(id);
+  assert.deepEqual(writes.at(-1), { id, detach: true });
   const bare = new HostNative({ store, local: {} });
   assert.throws(() => bare.setLabels(id, {}), /cannot write labels/);
+  assert.throws(() => bare.detach(id), /cannot detach a chat/);
 });
