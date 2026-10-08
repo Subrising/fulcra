@@ -889,25 +889,31 @@ describe("owned startup and Settings recovery", () => {
       manager.DESKTOP_STARTUP_ANSWER_WAIT.stepMs = 5;
       mocks.readInstance.mockResolvedValue(instance);
     });
-    it("is awaited while it shuts down, then a new daemon starts", async () => {
+    // The first two probes see the silent daemon; later probes see the result.
+    function probesThen(after: () => unknown) {
       let probes = 0;
       mocks.runExternalCliJsonCommand.mockImplementation(async () => {
         probes += 1;
-        if (probes < 3) return silent;
-        mocks.readInstance.mockResolvedValue(null);
-        return stopped;
+        return probes < 3 ? silent : after();
       });
+      return () => probes;
+    }
+    function exited() {
+      mocks.readInstance.mockResolvedValue(null);
+      return stopped;
+    }
+    function answers() {
+      return { ...silent, connectedDaemon: "reachable" };
+    }
+    it("is awaited while it shuts down, then a new daemon starts", async () => {
+      const probes = probesThen(exited);
       await manager.createDaemonCommandHandlers().start_desktop_daemon();
-      expect(probes).toBeGreaterThanOrEqual(3);
+      expect(probes()).toBeGreaterThanOrEqual(3);
       expect(mocks.stopDaemonInstance).not.toHaveBeenCalled();
       expect(mocks.startDaemonInstance).toHaveBeenCalledTimes(1);
     });
     it("is used, not replaced, when it starts to answer", async () => {
-      let probes = 0;
-      mocks.runExternalCliJsonCommand.mockImplementation(async () => {
-        probes += 1;
-        return probes < 3 ? silent : { ...silent, connectedDaemon: "reachable" };
-      });
+      probesThen(answers);
       const status = await manager.createDaemonCommandHandlers().start_desktop_daemon();
       expect(status).toMatchObject({ status: "running", answering: true });
       expect(mocks.startDaemonInstance).not.toHaveBeenCalled();
