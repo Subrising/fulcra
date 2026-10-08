@@ -6,7 +6,6 @@ import test from "node:test";
 const repoRoot = new URL("../", import.meta.url);
 const ciWorkflowPath = new URL(".github/workflows/ci.yml", repoRoot);
 const dockerWorkflowPath = new URL(".github/workflows/docker.yml", repoRoot);
-const nixWorkflowPath = new URL(".github/workflows/nix.yml", repoRoot);
 const filtersPath = new URL(".github/ci-paths.yml", repoRoot);
 const serverTsconfigPath = new URL("packages/server/tsconfig.server.json", repoRoot);
 const desktopPackagePath = new URL("packages/desktop/package.json", repoRoot);
@@ -16,10 +15,8 @@ const gatedCiJobs = new Map([
   ["lint", { name: "lint", contract: "quality" }],
   ["typecheck", { name: "typecheck", contract: "quality" }],
   ["server-tests-ubuntu", { name: "server-tests (ubuntu-latest)", contracts: ["server", "hub"] }],
-  ["server-tests-windows", { name: "server-tests (windows-latest)", contracts: ["server", "hub"] }],
   ["server-tests-macos", { name: "server-tests (macos-14, file observation)", contract: "server" }],
   ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
-  ["desktop-tests-windows", { name: "desktop-tests (windows-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
   ["sdk-tests", { name: "sdk-tests", contract: "sdk" }],
   ["playwright-1", { name: "playwright (shard 1/4)", contract: "browser" }],
@@ -100,7 +97,7 @@ test("gated checks are statically named jobs with real job-level gating", () => 
 });
 
 test("change gating allows superseded workflow runs to cancel", () => {
-  for (const workflowPath of [ciWorkflowPath, dockerWorkflowPath, nixWorkflowPath]) {
+  for (const workflowPath of [ciWorkflowPath, dockerWorkflowPath]) {
     const source = readFileSync(workflowPath, "utf8");
     assert.doesNotMatch(
       source,
@@ -299,7 +296,7 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
 });
 
 test("packaging runs on main without allocating pull-request runners", () => {
-  for (const workflowPath of [dockerWorkflowPath, nixWorkflowPath]) {
+  for (const workflowPath of [dockerWorkflowPath]) {
     const source = readFileSync(workflowPath, "utf8");
     const trigger = source.split("jobs:", 1)[0];
     assert.match(trigger, /push:\s*\n\s+branches: \[main\]/);
@@ -308,14 +305,3 @@ test("packaging runs on main without allocating pull-request runners", () => {
   }
 });
 
-test("desktop packaging smokes main pushes and only the pull requests that touch packaging", () => {
-  const source = readFileSync(new URL(".github/workflows/desktop-packages.yml", repoRoot), "utf8");
-  const trigger = source.split("jobs:", 1)[0];
-  assert.match(trigger, /push:\s*\n\s+branches: \[main\]/);
-  assert.match(trigger, /pull_request:\s*\n\s+branches: \[main\]\s*\n\s+paths:/);
-  assert.match(trigger, /- "packages\/desktop\/\*\*"/);
-  assert.doesNotMatch(source, /dorny\/paths-filter/);
-  for (const action of ["actions/checkout", "actions/setup-node", "actions/upload-artifact"]) {
-    assert.match(source, new RegExp(`${action}@[0-9a-f]{40} # v\\d+\\.\\d+\\.\\d+`));
-  }
-});
