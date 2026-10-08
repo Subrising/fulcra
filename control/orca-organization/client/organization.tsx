@@ -188,6 +188,7 @@ export function OrganizationSurface(
         layout={props.layout}
         host={props.host}
         radiusScratchOwner={props.radiusScratchOwner}
+        navigation={props.navigation}
         openPlanId={deployPlan}
       />
     ) : pillar === "settings" ? (

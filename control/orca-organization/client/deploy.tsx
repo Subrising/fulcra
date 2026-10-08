@@ -578,10 +578,14 @@ function PlanPicker({
   theme,
   environment,
   onPlanned,
+  host,
+  navigation,
 }: {
   theme: Theme;
   environment: DeployEnvironment;
   onPlanned: (plan: DeployPlan) => void;
+  host?: PluginSurfaceProps["host"];
+  navigation?: PluginSurfaceProps["navigation"];
 }) {
   const c = theme.colors;
   const readSources = useContract(deploySourcesRpc),
@@ -600,6 +604,16 @@ function PlanPicker({
   const source = list.find((s) => s.id === sourceId) ?? list[0];
   const projects = [...new Map(list.map((s) => [s.project, s])).values()];
   const ref = value.trim() || (kind === "branch" ? (source?.branch ?? "") : "");
+  const openMap = navigation?.openArchitectureMap;
+  function showMap() {
+    if (!source || !openMap) return;
+    try {
+      openMap({ workspaceId: source.id, serverId: host?.id });
+      setProblem(null);
+    } catch {
+      setProblem("The architecture map could not be opened. Check that the project is open in Fulcra.");
+    }
+  }
   async function plan() {
     if (!source) return;
     setBusy(true);
@@ -703,7 +717,7 @@ function PlanPicker({
         style={input}
       />
       {problem && <Text style={{ color: c.statusDanger ?? c.foreground }}>{problem}</Text>}
-      <View style={{ flexDirection: "row" }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
         <WorkButton
           theme={theme}
           label="Preview changes"
@@ -713,6 +727,14 @@ function PlanPicker({
         >
           {busy ? "Working out what changes…" : "Preview changes"}
         </WorkButton>
+        {openMap && (
+          <WorkButton
+            theme={theme}
+            label="Open architecture map"
+            disabled={!source}
+            onPress={showMap}
+          />
+        )}
       </View>
     </Card>
   );
@@ -842,8 +864,11 @@ export function DeploySection({
   theme,
   layout,
   host,
+  navigation,
   openPlanId = null,
-}: Pick<PluginSurfaceProps, "theme" | "layout" | "host"> & { openPlanId?: string | null }) {
+}: Pick<PluginSurfaceProps, "theme" | "layout" | "host" | "navigation"> & {
+  openPlanId?: string | null;
+}) {
   const c = theme.colors;
   const queryClient = useQueryClient();
   const readOverview = useContract(deployOverviewRpc),
@@ -950,7 +975,13 @@ export function DeploySection({
               onRollBack={() => void startRollback(e)}
               onJob={setJob}
             />
-            {picking === e.id && <PlanPicker theme={theme} environment={e} onPlanned={setPlan} />}
+            {picking === e.id && <PlanPicker
+                theme={theme}
+                environment={e}
+                onPlanned={setPlan}
+                host={host}
+                navigation={navigation}
+              />}
           </View>
         ))}
       {d?.available && !plan && (!envs.length || connecting) && (
