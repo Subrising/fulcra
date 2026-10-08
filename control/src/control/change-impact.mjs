@@ -365,10 +365,28 @@ export function readBatch(output, names) {
     at = nl + 1;
     if (/ (missing|ambiguous)$/.test(header)) continue;
     const size = Number(header.slice(header.lastIndexOf(" ") + 1));
-    texts.set(name, output.subarray(at, at + size).toString("utf8"));
+    if (size <= MAX_SOURCE_BYTES) texts.set(name, output.subarray(at, at + size).toString("utf8"));
     at += size + 1;
   }
   return texts;
+}
+// Sizes of blobs in the local object store, never fetching (git 2.45+ `--no-lazy-fetch`; older git fetches).
+function localSizes(git, oids) {
+  const sizes = new Map();
+  const unique = [...new Set(oids)];
+  if (!unique.length) return sizes;
+  const input = unique.join("\n") + "\n";
+  let out;
+  try {
+    out = git(["--no-lazy-fetch", "cat-file", "--batch-check"], input);
+  } catch {
+    out = git(["cat-file", "--batch-check"], input);
+  }
+  for (const line of out.toString("utf8").split("\n")) {
+    const [oid, type, size] = line.split(" ");
+    if (type === "blob") sizes.set(oid, Number(size));
+  }
+  return sizes;
 }
 /** Files changed, production code that can feel them, and tests that reach them, for any repository. */
 export function measureImpact({ root, range = "HEAD~1..HEAD", git = gitRunner(root) }) {
@@ -397,16 +415,24 @@ export function measureImpact({ root, range = "HEAD~1..HEAD", git = gitRunner(ro
       ...classify(status[i + 1], status[i][0]),
     });
   // Every tracked JS/TS file at head, with its size so a generated bundle does not swamp the walk.
-  const tree = git(["ls-tree", "-r", "-l", "-z", head])
+  // FULCRA(partial-clone): `ls-tree -l` fetched every missing blob of a partial clone (--filter=blob:none) one at a
+  // time to report its size (more than 30 s). The listing has no sizes; sizes come from the local store only.
+  const listed = git(["ls-tree", "-r", "-z", head])
     .toString("utf8")
     .split("\0")
     .filter(Boolean)
     .map((line) => {
       const tab = line.indexOf("\t"),
         meta = line.slice(0, tab).split(/\s+/);
-      return { path: line.slice(tab + 1), type: meta[1], size: Number(meta[3]) };
+      return { path: line.slice(tab + 1), type: meta[1], oid: meta[2] };
     })
     .filter((e) => e.type === "blob" && !e.path.includes("\n"));
+  const sizes = localSizes(
+    git,
+    listed.filter((e) => SOURCE.test(e.path)).map((e) => e.oid),
+  );
+  // A blob missing locally has no known size; it is read below and then size-checked.
+  const tree = listed.map((e) => ({ ...e, size: sizes.get(e.oid) ?? 0 }));
   const skipped = tree
     .filter((e) => SOURCE.test(e.path) && e.size > MAX_SOURCE_BYTES)
     .map((e) => e.path);
