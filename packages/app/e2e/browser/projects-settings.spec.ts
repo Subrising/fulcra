@@ -45,7 +45,7 @@ import {
   unblockPaseoConfigWrites,
 } from "../support/helpers/project-settings";
 import { gotoAppShell } from "../support/helpers/app";
-import { openCompactSettings } from "../support/helpers/settings";
+import { openCompactSettings, openSettingsAdvanced } from "../support/helpers/settings";
 import {
   addProjectFlowInput,
   chooseAddProjectMethod,
@@ -337,7 +337,8 @@ test.describe("Projects settings — compact navigation", () => {
   }) => {
     await gotoAppShell(page);
     await openCompactSettings(page, buildOpenProjectRoute());
-    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await openSettingsAdvanced(page);
+    await page.getByTestId("settings-host-section-projects").click();
     await expect(page).toHaveURL(buildProjectsSettingsRoute(getServerId()));
 
     await openProjectSettings(page, editableProject.name);

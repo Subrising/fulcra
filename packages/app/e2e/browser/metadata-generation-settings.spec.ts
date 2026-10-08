@@ -14,7 +14,7 @@ async function openMetadataGenerationSettings(page: Page) {
   await openSettings(page);
   await openSettingsHost(page, serverId);
   await openHostSection(page, serverId, "metadata");
-  await expectSettingsHeader(page, "Metadata");
+  await expectSettingsHeader(page, "Auto titles & messages");
 }
 
 async function openManualMetadataModelPicker(page: Page) {
