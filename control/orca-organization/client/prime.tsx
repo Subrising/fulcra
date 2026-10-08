@@ -972,7 +972,7 @@ export function PrimeSurface(props: Props) {
       )}
       {!chosen && !!h.projects.length && (
         <Text style={muted}>
-          Choose a project to see its orchestrator, what is happening and what is needed.
+          Choose a project to see what is happening and what is needed.
         </Text>
       )}
       {chosen && (
