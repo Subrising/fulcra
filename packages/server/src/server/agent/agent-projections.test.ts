@@ -568,8 +568,7 @@ it.runIf(process.platform === "darwin")(
     const { execFileSync } = await import("node:child_process");
     const { createHash } = await import("node:crypto");
     const app =
-      process.env.FULCRA_USAGE_OLD_APP ??
-      "/Users/owner/fulcra-releases/candidate/app/Fulcra.app";
+      process.env.FULCRA_USAGE_OLD_APP ?? "/Users/owner/fulcra-releases/candidate/app/Fulcra.app";
     const expected =
       process.env.FULCRA_USAGE_OLD_ASAR_SHA256 ??
       "c45c1ff45c6916620560140fa229a5157016a13031bc9011caac7d52f96d9114";

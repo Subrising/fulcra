@@ -1,4 +1,5 @@
 import { buildHostAgentDetailRoute, buildHostWorkspaceRoute } from "@/utils/host-routes";
+import { openSettingsSection } from "../support/helpers/settings";
 import { expect, test } from "../support/fixtures";
 import { createMockIdleAgent, openWorkspaceWithAgents } from "../support/helpers/archive-tab";
 import { waitForTabBar, expectAgentTabActive } from "../support/helpers/launcher";
@@ -121,6 +122,7 @@ test.describe("Settings toggle tab regression", () => {
 
       await pressSettingsToggleShortcut(page);
       await expect(page).toHaveURL(/\/settings\/general$/);
+      await openSettingsSection(page, "behaviour");
 
       const defaultSendTrigger = page.getByRole("button", {
         name: "Default send: Steer",

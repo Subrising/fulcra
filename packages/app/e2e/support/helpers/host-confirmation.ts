@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { openSettingsAdvanced } from "./settings";
 
 const EXTRA_HOSTS_KEY = "@paseo:e2e-extra-hosts";
 
@@ -15,10 +16,16 @@ export interface LinkedHost {
  */
 export function buildPairingLink(host: LinkedHost): string {
   const offer = {
-    v: 2,
+    v: 3,
     serverId: host.serverId,
     daemonPublicKeyB64: host.daemonPublicKeyB64,
     relay: { endpoint: host.relayEndpoint, useTls: false },
+    // Fulcra claims the pairing on the relay after the confirmation, so every offer carries one.
+    pairing: {
+      id: "A".repeat(22),
+      secret: "B".repeat(43),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    },
   };
   const encoded = Buffer.from(JSON.stringify(offer), "utf8").toString("base64url");
   return `/settings/general#offer=${encoded}`;
@@ -87,6 +94,7 @@ export async function expectHostInHostPicker(
   serverId: string,
   expected: "listed" | "not listed",
 ): Promise<void> {
+  await openSettingsAdvanced(page);
   await page.getByTestId("settings-host-picker").click();
   await expect(page.getByTestId(`settings-host-picker-item-${serverId}`)).toHaveCount(
     expected === "listed" ? 1 : 0,
