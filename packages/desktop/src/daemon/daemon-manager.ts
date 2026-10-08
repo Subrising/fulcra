@@ -480,11 +480,16 @@ async function assertDesktopStopCompleted(
 // MacBook app restarted 5 s after the old daemon got SIGTERM, saw the old supervisor still "running", started nothing,
 // and showed "Connecting" after the old one exited. A running or starting daemon that does not answer is now
 // awaited: when it answers it is used, when it exits a new one starts, and when it never answers within the wait an
-// owned one is stopped and replaced. A daemon this app does not own is never stopped; that case still refuses.
+// owned one is stopped and replaced. Only desktop-managed daemons are awaited. A daemon this app does not own is
+// never stopped; when it never answers, the launch refuses (retryable).
 export const DESKTOP_STARTUP_ANSWER_WAIT = { totalMs: 20_000, stepMs: 500 };
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function settleExistingDaemon(current: DesktopDaemonStatus): Promise<DesktopDaemonStatus> {
-  if ((current.status !== "running" && current.status !== "starting") || current.answering)
+  if (
+    (current.status !== "running" && current.status !== "starting") ||
+    current.answering ||
+    !current.desktopManaged
+  )
     return current;
   logDesktopDaemonLifecycle("existing daemon does not answer; waiting", {
     status: current.status,
