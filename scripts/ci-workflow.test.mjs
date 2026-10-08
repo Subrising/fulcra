@@ -304,4 +304,3 @@ test("packaging runs on main without allocating pull-request runners", () => {
     assert.doesNotMatch(source, /dorny\/paths-filter/);
   }
 });
-
