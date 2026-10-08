@@ -1,5 +1,6 @@
 // With no profile at <ORCA_HOME>/book-transport.json the controller is local-only and says the Book transport is
 // retired; a Book creation is refused cleanly and records no route. Any profile is ignored without being read.
+import "./state-root.fixture.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
