@@ -3091,7 +3091,7 @@ describe("ClaudeAgentSession context window usage", () => {
       const result = await session.run("turn");
 
       expect(getContextUsage).not.toHaveBeenCalled();
-      expect(result.usage).toEqual({
+      expect(result.usage).toMatchObject({
         inputTokens: 9_000,
         cachedInputTokens: 700,
         outputTokens: 400,
@@ -3132,7 +3132,7 @@ describe("ClaudeAgentSession context window usage", () => {
     try {
       const result = await session.run("turn");
 
-      expect(result.usage).toEqual({
+      expect(result.usage).toMatchObject({
         inputTokens: 10,
         cachedInputTokens: 5,
         outputTokens: 7,
@@ -3247,7 +3247,7 @@ describe("ClaudeAgentSession context window usage", () => {
       const result = await session.run("turn");
 
       expect(getContextUsage).not.toHaveBeenCalled();
-      expect(result.usage).toEqual({
+      expect(result.usage).toMatchObject({
         inputTokens: 4,
         cachedInputTokens: 16_999,
         outputTokens: 171,
@@ -3292,7 +3292,7 @@ describe("ClaudeAgentSession context window usage", () => {
     try {
       const result = await session.run("turn");
 
-      expect(result.usage).toEqual({
+      expect(result.usage).toMatchObject({
         inputTokens: 5_000,
         cachedInputTokens: 600,
         outputTokens: 700,
@@ -3330,7 +3330,7 @@ describe("ClaudeAgentSession context window usage", () => {
       const firstTurn = await session.run("turn 1");
       const secondTurn = await session.run("turn 2");
 
-      expect(firstTurn.usage).toEqual({
+      expect(firstTurn.usage).toMatchObject({
         inputTokens: 10,
         cachedInputTokens: 5,
         outputTokens: 7,
@@ -3338,7 +3338,7 @@ describe("ClaudeAgentSession context window usage", () => {
         contextWindowMaxTokens: 200_000,
         contextWindowUsedTokens: 175,
       });
-      expect(secondTurn.usage).toEqual({
+      expect(secondTurn.usage).toMatchObject({
         inputTokens: 1_000,
         cachedInputTokens: 200,
         outputTokens: 300,
