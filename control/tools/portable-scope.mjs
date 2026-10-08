@@ -32,7 +32,6 @@ export const cutoverBookInputs = new Set([
   "src/control/host-native.mjs",
   "src/control/remote-permissions.mjs",
   "src/control/remote-resumption.mjs",
-  "src/book/transport.mjs",
   "src/book/protocol.mjs",
   "src/book/activity.mjs",
   "src/book/activity-page.mjs",
