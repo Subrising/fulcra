@@ -567,7 +567,9 @@ export class RoleSessions {
       throw Error("Invalid project session request");
     const role = a.role ?? "implementation";
     if (!SEAT_START_ROLES.includes(role))
-      throw Error("A project session starts as implementation, planning, review or research");
+      throw Error(
+        "A project session starts as implementation, planning, review, research or light",
+      );
     const { role: _role, model, effort, ...fields } = a;
     // Update-7 W3 (gap a): the role default's provider when none is chosen, checked before the allowance is reserved.
     if (fields.provider === undefined)
