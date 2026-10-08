@@ -44,6 +44,10 @@ export interface TeamTreeInput {
   /** Sessions bound to a project-orchestrator seat. */
   leadSessionIds?: ReadonlySet<string>;
   projectNames?: ReadonlyMap<string, string>;
+  /** The main assistant every view shows (Fulcra 0.2.8): leads without a recorded leader sit under it. */
+  mainSessionId?: string | null;
+  /** Each project's lead: the project's workers without a recorded leader sit under it. */
+  leadByProject?: ReadonlyMap<string, string>;
   /** Hosts this app could not reach, by name. */
   offlineHosts?: ReadonlySet<string>;
   /** For "checks again at 14:20"; injected so tests are stable. */
@@ -136,6 +140,18 @@ export function buildTeamTree(input: TeamTreeInput): TeamTree {
   for (const edge of input.edges ?? [])
     if (!parentOf.has(edge.to) && byId.has(edge.from) && byId.has(edge.to) && edge.from !== edge.to)
       parentOf.set(edge.to, edge.from);
+  // The team as it was set up: a lead answers to the main assistant, a worker to its project's lead. Recorded
+  // supervision above wins; this only places chats that have no recorded leader.
+  const main = input.mainSessionId && byId.has(input.mainSessionId) ? input.mainSessionId : null;
+  for (const node of input.nodes) {
+    if (parentOf.has(node.id) || node.id === main || input.mainSessionIds?.has(node.id)) continue;
+    if (input.leadSessionIds?.has(node.id)) {
+      if (main) parentOf.set(node.id, main);
+      continue;
+    }
+    const lead = node.project ? input.leadByProject?.get(node.project) : undefined;
+    if (lead && lead !== node.id && byId.has(lead)) parentOf.set(node.id, lead);
+  }
   const childrenOf = new Map<string, string[]>();
   for (const [child, parent] of parentOf)
     childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), child]);

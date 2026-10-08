@@ -9,6 +9,7 @@ import { WorkButton } from "./work-button";
 import { fleetRpc } from "../shared/fleet";
 import { projectsRpc } from "../shared/projects";
 import { roleDirectoryRpc } from "../shared/roles";
+import { mainAssistant } from "../shared/team";
 import { buildTeamTree, type TeamCard, type TeamState } from "./team-tree";
 import { FreshStartButton } from "./fresh-start-view";
 import { PendingQuestions, questionServerId } from "./pending-questions";
@@ -222,6 +223,11 @@ export function TeamTreeSection(props: Pick<PluginSurfaceProps, "theme" | "host"
     new Set(
       (seats ?? []).flatMap((s) => (s.state === "assigned" && s.sessionId ? [s.sessionId] : [])),
     );
+  const projectNames = new Map((projects.data?.projects ?? []).map((p) => [p.id, p.name]));
+  // Seats of archived projects are not shown: their project is hidden from every list.
+  const leadSeats = (roles.data?.available ? roles.data.projectSeats : []).filter(
+    (s) => s.state === "assigned" && s.sessionId && s.projectId && projectNames.has(s.projectId),
+  );
   const tree = buildTeamTree({
     // Unbound sessions belong to the host this screen is connected to (see questionServerId).
     nodes: fleet.data.nodes.map((n) =>
@@ -229,8 +235,10 @@ export function TeamTreeSection(props: Pick<PluginSurfaceProps, "theme" | "host"
     ),
     edges: fleet.data.edges,
     mainSessionIds: roles.data?.available ? assigned(roles.data.primes) : undefined,
-    leadSessionIds: roles.data?.available ? assigned(roles.data.projectSeats) : undefined,
-    projectNames: new Map((projects.data?.projects ?? []).map((p) => [p.id, p.name])),
+    mainSessionId: roles.data?.available ? mainAssistant(roles.data.primes)?.sessionId : null,
+    leadSessionIds: roles.data?.available ? assigned(leadSeats) : undefined,
+    leadByProject: new Map(leadSeats.map((s) => [s.projectId!, s.sessionId!])),
+    projectNames,
   });
   const navigation = props.navigation;
   const openAgent = navigation?.openAgentOnHost

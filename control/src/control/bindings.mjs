@@ -8,6 +8,7 @@ import { assertColumns } from "./schema.mjs";
 import { localHostName } from "./portable-host.mjs";
 const bookProvider = (creation) => creation.provider;
 import { readProjectDirectory } from "./projects.mjs";
+import { managementRefusal } from "./management-refusal.mjs";
 const keys = (a, names) =>
   a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).sort().join() === names;
 const SEAT = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -28,6 +29,27 @@ export function seatIdentity(role, seat) {
   if (role !== "project-orchestrator") throw Error("Unknown role");
   if (!uuid(seat)) throw Error("A project orchestrator seat is a registered project ID");
   return { role, seat, projectId: seat };
+}
+// Fulcra 0.2.8: a seat change is checked, then written in one journal transaction that rolls back on any throw. So a
+// failure up to and including that transaction wrote nothing, and its reason is safe to show: it is a refusal, not an
+// uncertain outcome. Only an unresolved rollback stays unclassified.
+const asRefusal = (error) =>
+  String(error?.message).startsWith("Journal transaction outcome unresolved")
+    ? error
+    : managementRefusal(String(error?.message ?? error).slice(0, 2000));
+async function refusing(run) {
+  try {
+    return await run();
+  } catch (error) {
+    throw asRefusal(error);
+  }
+}
+function refusingSync(run) {
+  try {
+    return run();
+  } catch (error) {
+    throw asRefusal(error);
+  }
 }
 export class Bindings {
   constructor(
@@ -614,159 +636,165 @@ export class Bindings {
     return d;
   }
   async assign(a) {
-    if (
-      !(
-        keys(a, "expectedRevision,expectedSessionGeneration,note,role,seat,sessionId") ||
-        (keys(a, "expectedRevision,expectedSessionGeneration,manager,note,role,seat,sessionId") &&
-          a.role === "project-orchestrator" &&
-          keys(a.manager, "maxWorkers,reason"))
-      ) ||
-      !ROLES.includes(a.role) ||
-      !uuid(a.sessionId) ||
-      !Number.isSafeInteger(a.expectedRevision) ||
-      a.expectedRevision < 0 ||
-      !Number.isSafeInteger(a.expectedSessionGeneration) ||
-      a.expectedSessionGeneration < 1 ||
-      typeof a.note !== "string" ||
-      a.note.trim().length < 12 ||
-      a.note.length > 2000
-    )
-      throw Error("Invalid role assignment");
-    const identity = seatIdentity(a.role, a.seat),
-      note = a.note.trim(),
-      session = this.store.get(a.sessionId);
-    if (!session) throw Error("Role assignment requires a saved session identity");
-    if (session.generation !== a.expectedSessionGeneration)
-      throw Error("Session control changed; refresh before assigning");
-    // A prime seat is board level over the programme root and holds no project identity.
-    if (a.role === "prime" && session.task !== PROGRAMME)
-      throw Error("A prime seat is held by a session enrolled on the programme root");
-    // A Book seat is only an explicitly receiver-enrolled Claude session. An observation-only Book session
-    // is not in this journal at all and is refused above; it is never adopted by seating it. Unreadable
-    // routing is unknown routing here too: without it the provider cannot be established, so the gate
-    // refuses rather than being skipped, exactly as dispatch() refuses rather than assuming local.
-    const routes = this.control.native?.route;
-    if (typeof routes !== "function") throw Error(this.dispatch(a.sessionId).reason);
-    const route = routes.call(this.control.native, a.sessionId);
-    if (route && bookProvider(JSON.parse(route.creation)) !== "claude")
-      throw Error("Only an explicitly enrolled Book Claude session may hold a role seat");
-    const membership = identity.projectId
-      ? await this.verifyMembership(identity.projectId, session.task, undefined)
-      : null;
-    // Distinct from project membership: the holder's own task must still be inside the delegated ancestry.
-    await this.control.authority(session.task);
-    const outcome = this.store.atomic(() => {
-      const current = this.row(a.role, a.seat),
-        revision = current?.revision ?? 0;
-      if (revision !== a.expectedRevision)
-        throw Error("Role binding revision changed; refresh before assigning");
-      const fresh = this.store.get(a.sessionId);
-      if (!fresh || fresh.task !== session.task || fresh.generation !== a.expectedSessionGeneration)
-        throw Error(
-          "Session control or enrollment changed during assignment; refresh before assigning",
-        );
-      if (!current && this.db.prepare("SELECT count(*) n FROM role_bindings").get().n >= 512)
-        throw Error("Role binding capacity reached");
-      if (this.db.prepare("SELECT count(*) n FROM role_binding_history").get().n >= 5000)
-        throw Error("Role binding history capacity reached");
-      const next = revision + 1,
-        at = new Date().toISOString();
-      const action =
-        current?.state === "assigned"
-          ? current.session === a.sessionId
-            ? "reaffirm"
-            : "replace"
-          : "assign";
-      this.db
-        .prepare("INSERT OR REPLACE INTO role_bindings VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-        .run(
-          a.role,
-          a.seat,
-          identity.projectId,
-          fresh.task,
-          a.sessionId,
-          fresh.generation,
-          next,
-          "assigned",
-          note,
-          membership?.observedAt ?? null,
-          at,
-        );
-      this.db
-        .prepare("INSERT INTO role_binding_history VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-        .run(
-          randomUUID(),
-          a.role,
-          a.seat,
-          identity.projectId,
-          fresh.task,
-          action,
-          current?.session ?? null,
-          a.sessionId,
-          revision,
-          next,
-          note,
-          at,
-        );
-      const carried =
-        action === "reaffirm"
-          ? this.carryForward(a.role, a.seat, a.sessionId, revision, next)
-          : null;
-      const released =
-        current?.session && current.session !== a.sessionId
-          ? this.releaseCredential(current.session)
-          : null;
-      const managerReleased =
-        current?.session && current.session !== a.sessionId
-          ? this.releaseSeatManager(current.session, a.role, a.seat)
-          : null;
-      // PROPOSAL.md §1 and §2, approved. Seating a project orchestrator confers its routine defaults in the
-      // SAME transaction as the seating itself, so there is never a window where a seat exists without them
-      // and a seating that rolls back confers nothing.
-      //
-      // Every conferral is individually fenced: a default that cannot be conferred records WHY and the
-      // seating still succeeds. A default must never be able to block a seat assignment -- an unavailable
-      // project source, a missing prime or a spent conferral budget are all ordinary states, and an operator
-      // must still be able to seat an orchestrator in every one of them.
-      const defaults = { sessionAllowance: null, channel: null };
-      if (a.role === "project-orchestrator" && action !== "reaffirm") {
-        const seat = this.describe(a.role, a.seat);
-        try {
-          defaults.sessionAllowance = this.control.roleSessions.conferSeatingAllowance(
-            a.seat,
-            next,
+    const outcome = await refusing(async () => {
+      if (
+        !(
+          keys(a, "expectedRevision,expectedSessionGeneration,note,role,seat,sessionId") ||
+          (keys(a, "expectedRevision,expectedSessionGeneration,manager,note,role,seat,sessionId") &&
+            a.role === "project-orchestrator" &&
+            keys(a.manager, "maxWorkers,reason"))
+        ) ||
+        !ROLES.includes(a.role) ||
+        !uuid(a.sessionId) ||
+        !Number.isSafeInteger(a.expectedRevision) ||
+        a.expectedRevision < 0 ||
+        !Number.isSafeInteger(a.expectedSessionGeneration) ||
+        a.expectedSessionGeneration < 1 ||
+        typeof a.note !== "string" ||
+        a.note.trim().length < 12 ||
+        a.note.length > 2000
+      )
+        throw Error("Invalid role assignment");
+      const identity = seatIdentity(a.role, a.seat),
+        note = a.note.trim(),
+        session = this.store.get(a.sessionId);
+      if (!session) throw Error("Role assignment requires a saved session identity");
+      if (session.generation !== a.expectedSessionGeneration)
+        throw Error("Session control changed; refresh before assigning");
+      // A prime seat is board level over the programme root and holds no project identity.
+      if (a.role === "prime" && session.task !== PROGRAMME)
+        throw Error("A prime seat is held by a session enrolled on the programme root");
+      // A Book seat is only an explicitly receiver-enrolled Claude session. An observation-only Book session
+      // is not in this journal at all and is refused above; it is never adopted by seating it. Unreadable
+      // routing is unknown routing here too: without it the provider cannot be established, so the gate
+      // refuses rather than being skipped, exactly as dispatch() refuses rather than assuming local.
+      const routes = this.control.native?.route;
+      if (typeof routes !== "function") throw Error(this.dispatch(a.sessionId).reason);
+      const route = routes.call(this.control.native, a.sessionId);
+      if (route && bookProvider(JSON.parse(route.creation)) !== "claude")
+        throw Error("Only an explicitly enrolled Book Claude session may hold a role seat");
+      const membership = identity.projectId
+        ? await this.verifyMembership(identity.projectId, session.task, undefined)
+        : null;
+      // Distinct from project membership: the holder's own task must still be inside the delegated ancestry.
+      await this.control.authority(session.task);
+      return this.store.atomic(() => {
+        const current = this.row(a.role, a.seat),
+          revision = current?.revision ?? 0;
+        if (revision !== a.expectedRevision)
+          throw Error("Role binding revision changed; refresh before assigning");
+        const fresh = this.store.get(a.sessionId);
+        if (
+          !fresh ||
+          fresh.task !== session.task ||
+          fresh.generation !== a.expectedSessionGeneration
+        )
+          throw Error(
+            "Session control or enrollment changed during assignment; refresh before assigning",
           );
-        } catch (e) {
-          defaults.sessionAllowance = { conferred: false, blocked: e.message };
+        if (!current && this.db.prepare("SELECT count(*) n FROM role_bindings").get().n >= 512)
+          throw Error("Role binding capacity reached");
+        if (this.db.prepare("SELECT count(*) n FROM role_binding_history").get().n >= 5000)
+          throw Error("Role binding history capacity reached");
+        const next = revision + 1,
+          at = new Date().toISOString();
+        const action =
+          current?.state === "assigned"
+            ? current.session === a.sessionId
+              ? "reaffirm"
+              : "replace"
+            : "assign";
+        this.db
+          .prepare("INSERT OR REPLACE INTO role_bindings VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+          .run(
+            a.role,
+            a.seat,
+            identity.projectId,
+            fresh.task,
+            a.sessionId,
+            fresh.generation,
+            next,
+            "assigned",
+            note,
+            membership?.observedAt ?? null,
+            at,
+          );
+        this.db
+          .prepare("INSERT INTO role_binding_history VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+          .run(
+            randomUUID(),
+            a.role,
+            a.seat,
+            identity.projectId,
+            fresh.task,
+            action,
+            current?.session ?? null,
+            a.sessionId,
+            revision,
+            next,
+            note,
+            at,
+          );
+        const carried =
+          action === "reaffirm"
+            ? this.carryForward(a.role, a.seat, a.sessionId, revision, next)
+            : null;
+        const released =
+          current?.session && current.session !== a.sessionId
+            ? this.releaseCredential(current.session)
+            : null;
+        const managerReleased =
+          current?.session && current.session !== a.sessionId
+            ? this.releaseSeatManager(current.session, a.role, a.seat)
+            : null;
+        // PROPOSAL.md §1 and §2, approved. Seating a project orchestrator confers its routine defaults in the
+        // SAME transaction as the seating itself, so there is never a window where a seat exists without them
+        // and a seating that rolls back confers nothing.
+        //
+        // Every conferral is individually fenced: a default that cannot be conferred records WHY and the
+        // seating still succeeds. A default must never be able to block a seat assignment -- an unavailable
+        // project source, a missing prime or a spent conferral budget are all ordinary states, and an operator
+        // must still be able to seat an orchestrator in every one of them.
+        const defaults = { sessionAllowance: null, channel: null };
+        if (a.role === "project-orchestrator" && action !== "reaffirm") {
+          const seat = this.describe(a.role, a.seat);
+          try {
+            defaults.sessionAllowance = this.control.roleSessions.conferSeatingAllowance(
+              a.seat,
+              next,
+            );
+          } catch (e) {
+            defaults.sessionAllowance = { conferred: false, blocked: e.message };
+          }
+          try {
+            defaults.channel = this.control.channels.conferSeatingChannel(a.seat, seat);
+          } catch (e) {
+            defaults.channel = { conferred: false, blocked: e.message };
+          }
         }
-        try {
-          defaults.channel = this.control.channels.conferSeatingChannel(a.seat, seat);
-        } catch (e) {
-          defaults.channel = { conferred: false, blocked: e.message };
-        }
-      }
-      return {
-        released,
-        managerReleased,
-        result: {
-          role: a.role,
-          seat: a.seat,
-          projectId: identity.projectId,
-          task: fresh.task,
-          sessionId: a.sessionId,
-          previousSessionId: current?.session ?? null,
-          revision: next,
-          action,
-          at,
-          membershipAt: membership?.observedAt ?? null,
-          membershipPartial: membership?.partial ?? null,
-          defaults,
-          ...(carried ? { carried } : {}),
-          sessionGeneration: fresh.generation,
-          grantsAuthority: false,
-          note: NO_AUTHORITY,
-        },
-      };
+        return {
+          released,
+          managerReleased,
+          result: {
+            role: a.role,
+            seat: a.seat,
+            projectId: identity.projectId,
+            task: fresh.task,
+            sessionId: a.sessionId,
+            previousSessionId: current?.session ?? null,
+            revision: next,
+            action,
+            at,
+            membershipAt: membership?.observedAt ?? null,
+            membershipPartial: membership?.partial ?? null,
+            defaults,
+            ...(carried ? { carried } : {}),
+            sessionGeneration: fresh.generation,
+            grantsAuthority: false,
+            note: NO_AUTHORITY,
+          },
+        };
+      });
     });
     this.unlinkGrant(outcome.released);
     this.unlinkGrant(outcome.managerReleased);
@@ -875,69 +903,71 @@ export class Bindings {
   }
   // Vacating a seat must stay possible while the project source is unavailable, so it reads neither.
   unassign(a) {
-    if (
-      !keys(a, "expectedRevision,note,role,seat") ||
-      !ROLES.includes(a.role) ||
-      !Number.isSafeInteger(a.expectedRevision) ||
-      a.expectedRevision < 1 ||
-      typeof a.note !== "string" ||
-      a.note.trim().length < 12 ||
-      a.note.length > 2000
-    )
-      throw Error("Invalid role release");
-    const identity = seatIdentity(a.role, a.seat),
-      note = a.note.trim();
-    const outcome = this.store.atomic(() => {
-      const current = this.row(a.role, a.seat);
-      if (!current || current.state !== "assigned")
-        throw Error("That seat holds no current role binding");
-      if (current.revision !== a.expectedRevision)
-        throw Error("Role binding revision changed; refresh before releasing");
-      if (this.db.prepare("SELECT count(*) n FROM role_binding_history").get().n >= 5000)
-        throw Error("Role binding history capacity reached");
-      const next = current.revision + 1,
-        at = new Date().toISOString();
-      // The row is retained vacant so the revision counter never restarts and a stale writer stays refused.
-      this.db
-        .prepare(
-          "UPDATE role_bindings SET session=NULL,sessionGeneration=NULL,task=NULL,membershipAt=NULL,revision=?,state='vacant',note=?,at=? WHERE role=? AND seat=?",
-        )
-        .run(next, note, at, a.role, a.seat);
-      this.db
-        .prepare("INSERT INTO role_binding_history VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-        .run(
-          randomUUID(),
-          a.role,
-          a.seat,
-          identity.projectId,
-          current.task,
-          "unassign",
-          current.session,
-          null,
-          current.revision,
-          next,
-          note,
-          at,
-        );
-      const released = this.releaseCredential(current.session),
-        managerReleased = this.releaseSeatManager(current.session, a.role, a.seat);
-      return {
-        released,
-        managerReleased,
-        result: {
-          role: a.role,
-          seat: a.seat,
-          projectId: identity.projectId,
-          task: null,
-          sessionId: null,
-          previousSessionId: current.session,
-          revision: next,
-          action: "unassign",
-          at,
-          grantsAuthority: false,
-          note: NO_AUTHORITY,
-        },
-      };
+    const outcome = refusingSync(() => {
+      if (
+        !keys(a, "expectedRevision,note,role,seat") ||
+        !ROLES.includes(a.role) ||
+        !Number.isSafeInteger(a.expectedRevision) ||
+        a.expectedRevision < 1 ||
+        typeof a.note !== "string" ||
+        a.note.trim().length < 12 ||
+        a.note.length > 2000
+      )
+        throw Error("Invalid role release");
+      const identity = seatIdentity(a.role, a.seat),
+        note = a.note.trim();
+      return this.store.atomic(() => {
+        const current = this.row(a.role, a.seat);
+        if (!current || current.state !== "assigned")
+          throw Error("That seat holds no current role binding");
+        if (current.revision !== a.expectedRevision)
+          throw Error("Role binding revision changed; refresh before releasing");
+        if (this.db.prepare("SELECT count(*) n FROM role_binding_history").get().n >= 5000)
+          throw Error("Role binding history capacity reached");
+        const next = current.revision + 1,
+          at = new Date().toISOString();
+        // The row is retained vacant so the revision counter never restarts and a stale writer stays refused.
+        this.db
+          .prepare(
+            "UPDATE role_bindings SET session=NULL,sessionGeneration=NULL,task=NULL,membershipAt=NULL,revision=?,state='vacant',note=?,at=? WHERE role=? AND seat=?",
+          )
+          .run(next, note, at, a.role, a.seat);
+        this.db
+          .prepare("INSERT INTO role_binding_history VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+          .run(
+            randomUUID(),
+            a.role,
+            a.seat,
+            identity.projectId,
+            current.task,
+            "unassign",
+            current.session,
+            null,
+            current.revision,
+            next,
+            note,
+            at,
+          );
+        const released = this.releaseCredential(current.session),
+          managerReleased = this.releaseSeatManager(current.session, a.role, a.seat);
+        return {
+          released,
+          managerReleased,
+          result: {
+            role: a.role,
+            seat: a.seat,
+            projectId: identity.projectId,
+            task: null,
+            sessionId: null,
+            previousSessionId: current.session,
+            revision: next,
+            action: "unassign",
+            at,
+            grantsAuthority: false,
+            note: NO_AUTHORITY,
+          },
+        };
+      });
     });
     this.unlinkGrant(outcome.released);
     this.unlinkGrant(outcome.managerReleased);

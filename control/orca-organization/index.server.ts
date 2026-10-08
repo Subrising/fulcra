@@ -195,6 +195,8 @@ import { accountHttp, type HostRequest } from "./server/connectors/http.mjs";
 import { createGitRunner } from "./server/connectors/git.mjs";
 import { scanProject } from "./server/connectors/provenance.mjs";
 import { listAgents } from "./server/fleet";
+import { teamChatsRpc, teamSetupRpc } from "./shared/team";
+import { createTeamChats, createTeamSetup } from "./server/team-setup";
 // J3: tracker credentials come only from the host's per-plugin keychain namespace. A host that predates
 // ctx.secrets has none, so keychain mode reports auth-required; the opt-in gh mode still works.
 const noSecrets = {
@@ -377,6 +379,33 @@ export default function contribute(
     allowanceSet = createAllowanceSet(),
     adopt = createRoleAdopt();
   handleRead(roleDirectoryRpc, () => roleDirectory());
+  // Fulcra 0.2.8: one-step team setup from chats that already exist. Owner-only, like every management write.
+  const teamSetup = createTeamSetup(localCall);
+  handle(teamSetupRpc, (input) =>
+    authError
+      ? {
+          status: "refused" as const,
+          message: authError,
+          steps: [],
+          projectId: null,
+          observedAt: new Date().toISOString(),
+        }
+      : teamSetup(input).finally(() => {
+          // A new or archived project must show at once, not after the 30 s directory cache.
+          projects = undefined;
+        }),
+  );
+  handleRead(teamChatsRpc, (_input, { paseo }) => {
+    if (authError) throw new Error(authError);
+    return createTeamChats(
+      localCall,
+      () => listAgents(paseo, 8000),
+      () => {
+        projects ??= singleFlight(() => readProjects());
+        return projects();
+      },
+    )();
+  });
   handleRead(roleProjectRpc, (input) => roleProject(input));
   // A write still requires the verified daemon, exactly like every other management action.
   handle(roleAssignRpc, (input) =>
