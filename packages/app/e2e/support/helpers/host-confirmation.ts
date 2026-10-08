@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { openSettingsAdvanced } from "./settings";
 
 const EXTRA_HOSTS_KEY = "@paseo:e2e-extra-hosts";
 
@@ -93,6 +94,7 @@ export async function expectHostInHostPicker(
   serverId: string,
   expected: "listed" | "not listed",
 ): Promise<void> {
+  await openSettingsAdvanced(page);
   await page.getByTestId("settings-host-picker").click();
   await expect(page.getByTestId(`settings-host-picker-item-${serverId}`)).toHaveCount(
     expected === "listed" ? 1 : 0,
