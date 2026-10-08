@@ -306,8 +306,8 @@ test("§5.2 only the operator path edits remits; agents, unknown primes and bad 
     /Only the operator/,
   );
   // The prime must be a recorded prime seat: no hard-coded name.
-  await assert.rejects(f.assign("orca", project(P(1))), /no prime seat with that name/);
-  await assert.rejects(f.assign(P(1), project(P(1))), /no prime seat with that name/);
+  await assert.rejects(f.assign("orca", project(P(1))), /no main assistant with that name/);
+  await assert.rejects(f.assign(P(1), project(P(1))), /no main assistant with that name/);
   await assert.rejects(
     f.assign("delivery", project(P(1)), { note: "too short" }),
     /reason of 12 to 500/,

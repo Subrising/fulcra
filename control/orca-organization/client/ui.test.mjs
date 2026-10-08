@@ -4659,7 +4659,7 @@ test("clicking a project shows its goal, progress and needs, and asks the lead f
   fireEvent.click(
     screen.getByRole("button", { name: "Ask this project's lead for a session" }),
   );
-  await screen.findByText(/does not expose seat session requests yet/);
+  await screen.findByText(/does not expose role session requests yet/);
   assert.equal(sent.length, 1);
   // The app names the seat and workstream only; it mints no identity and claims no ownership.
   assert.equal(sent[0].seat, B);

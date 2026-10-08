@@ -59,7 +59,7 @@ test("an unreadable binding table reports itself unreadable rather than as an em
   assert.deepEqual(d.projectSeats, []);
   // The wording must not let a failed read read as an established absence.
   assert.match(d.note, /could not be read/);
-  assert.doesNotMatch(d.note, /no orchestrator is assigned/i);
+  assert.doesNotMatch(d.note, /no (orchestrator|lead) is assigned/i);
 });
 
 test("a project read failure leaves the lead unknown, not unassigned", async () => {
@@ -382,7 +382,7 @@ test("a controller without role requests reports unavailable rather than refusal
   }, now);
   const d = await ask(requestInput);
   assert.equal(d.status, "unavailable");
-  assert.match(d.message, /does not expose seat session requests yet/);
+  assert.match(d.message, /does not expose role session requests yet/);
   assert.match(d.message, /Nothing was requested/);
 });
 
@@ -520,7 +520,7 @@ test("adoption is operator-only, fenced, and reports the allowance it spent", as
   assert.equal(d.remaining, 2);
   assert.equal(d.grantsAuthority, false);
   assert.match(d.message, /Adoption spends allowance/);
-  assert.match(d.message, /grants the seat no authority/);
+  assert.match(d.message, /grants the role no authority/);
   const [method, body] = sent[0];
   assert.equal(method, "roles-adopt");
   // The controller keys adoption by the CREATION RECORD, not the session id.
