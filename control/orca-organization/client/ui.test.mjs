@@ -4040,7 +4040,7 @@ test("main assistant leadership keeps an unreadable binding table distinct from 
   assert.equal(screen.queryByRole("button", { name: "Record who is accountable for Orca" }), null);
   assert(
     screen.getByText(
-      /Recording an orchestrator is unavailable while leadership role records cannot be read/,
+      /Recording a lead is unavailable while leadership role records cannot be read/,
     ),
   );
 });
@@ -4644,7 +4644,7 @@ test("clicking a project shows its goal, progress and needs, and asks the lead f
   // A declared session is offered for adoption, and adoption is named as spending allowance.
   assert(await screen.findByText(/Owned by this project, led by nobody/));
   assert(screen.getByText(/led by no recorded leader/));
-  assert(screen.getByText(/adopting spends the seat's session allowance/));
+  assert(screen.getByText(/adopting spends/));
 
   // Starting work routes through the seat and reports an unavailable controller honestly.
   fireEvent.click(

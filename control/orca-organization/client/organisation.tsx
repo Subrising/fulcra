@@ -304,8 +304,8 @@ export function OrganisationSurface(
       )}
       {remits.data && !tree.ownersKnown && (
         <Notice colors={c} tone="warning">
-          Which prime owns which project could not be read, so every project is listed under "No
-          prime yet" for now.
+          Which main assistant owns which project could not be read, so every project is listed
+          under "No main assistant yet" for now.
         </Notice>
       )}
       {(map.data || remits.data) && !tree.primes.length && (
