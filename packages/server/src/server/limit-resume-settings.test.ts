@@ -193,8 +193,7 @@ test("malformed legacy/future main config is not cleaned up or allowed to enable
 });
 
 const oldApp =
-  process.env.FULCRA_ROLLBACK_OLD_APP ??
-  "/Users/owner/fulcra-releases/candidate/app/Fulcra.app";
+  process.env.FULCRA_ROLLBACK_OLD_APP ?? "/Users/owner/fulcra-releases/candidate/app/Fulcra.app";
 const oldExecutable = path.join(oldApp, "Contents/MacOS/Fulcra");
 test.runIf(process.platform === "darwin" && existsSync(oldExecutable))(
   "exact candidate13 reader accepts all six combined preferences and binary rollback/return",

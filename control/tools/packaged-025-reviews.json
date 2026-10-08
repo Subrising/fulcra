@@ -5155,33 +5155,25 @@
   {
     "file": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
     "sha256": "f8e5717bbe6280dd0268c97e99eb99794992265051213d5dea36cda6e94dece8",
-    "patterns": [
-      "/Users/"
-    ],
+    "patterns": ["/Users/"],
     "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration. Rebound to the 0.2.5 signed bytes: same package version and integrity as 0.2.3, byte-identical to the installed 0.2.3 file after signature removal."
   },
   {
     "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.1.23.2.dylib",
     "sha256": "8fe09cc34efe5a4fb5f6d096f86c1b910348a967c5abced5e13b252400ea4846",
-    "patterns": [
-      "/Users/"
-    ],
+    "patterns": ["/Users/"],
     "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration. Rebound to the 0.2.5 signed bytes: same package version and integrity as 0.2.3, byte-identical to the installed 0.2.3 file after signature removal."
   },
   {
     "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib",
     "sha256": "8fe09cc34efe5a4fb5f6d096f86c1b910348a967c5abced5e13b252400ea4846",
-    "patterns": [
-      "/Users/"
-    ],
+    "patterns": ["/Users/"],
     "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration. Rebound to the 0.2.5 signed bytes: same package version and integrity as 0.2.3, byte-identical to the installed 0.2.3 file after signature removal."
   },
   {
     "file": "Contents/Resources/app.asar.unpacked/node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib",
     "sha256": "e98119f9c45e587622f255adc45666f105e5a6bc1148dab05c3e29211d022ab1",
-    "patterns": [
-      "/Users/"
-    ],
+    "patterns": ["/Users/"],
     "justification": "Published native dependency contains upstream CI runner source paths in compiled diagnostics/debug metadata; not Fulcra runtime configuration. Rebound to the 0.2.5 signed bytes: same package version and integrity as 0.2.3, byte-identical to the installed 0.2.3 file after signature removal."
   }
 ]
