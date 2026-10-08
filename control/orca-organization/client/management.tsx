@@ -241,7 +241,7 @@ export function ManagementPanel({
       <Text style={muted}>
         Anyone authenticated to this private Fulcra host can manage enrolled sessions. Typing,
         stopping or answering a permission prompt in the native conversation takes control back;
-        instructions sent here retain delegation.
+        instructions sent here keep the lead in control.
       </Text>
       {list.data?.permissionError && (
         <Text style={text}>Routine permission handler: {list.data.permissionError}</Text>
@@ -538,8 +538,8 @@ export function ManagementPanel({
             {row.mode === "human" && (
               <View style={{ gap: 8 }}>
                 <Text style={muted}>
-                  Delegate a newly created session as a supervisor. It may create this many workers
-                  over its lifetime. Use Restore saved delegation above for an existing
+                  Give a newly created session control as a supervisor. It may create this many workers
+                  over its lifetime. Use Give control back to the lead above for an existing
                   organization.
                 </Text>
                 <TextInput

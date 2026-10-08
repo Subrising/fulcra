@@ -468,7 +468,7 @@ export function WorkMapSurface({ theme, layout, host, navigation, fleet, remits 
       )}
       {d && d.available && d.primes.length === 0 && d.projects.every((p) => !p.seat) && (
         <Text style={text}>
-          No prime or project orchestrator is recorded yet. Seats are assigned in Leadership.
+          No main assistant or project lead is recorded yet. Roles are assigned in Leadership.
         </Text>
       )}
       {d && !d.sources.projects.available && (
@@ -787,7 +787,7 @@ function Legend({ theme }: Pick<PluginSurfaceProps, "theme">) {
       </Text>
       <Text style={line}>Control: Fulcra controls this · you control this · changing</Text>
       <Text style={line}>
-        Orchestrator: assigned · none yet · held by you · session gone · restarted since it was
+        Lead: assigned · none yet · held by you · session gone · restarted since it was
         assigned · moved to other work
       </Text>
       <Text style={line}>

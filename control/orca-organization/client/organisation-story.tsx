@@ -95,7 +95,7 @@ export function ProjectStory({
         <View style={card}>
           <Text style={{ ...text, fontWeight: "600" }}>No update has been written yet.</Text>
           <Text style={muted}>
-            The project's orchestrator writes one whenever something changes, and at least once a
+            The project's lead writes one whenever something changes, and at least once a
             day while work is going on.
           </Text>
         </View>

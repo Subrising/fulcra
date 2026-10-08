@@ -278,7 +278,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
                       </Text>
                       {!role.workers.length && (
                         <Text style={muted}>
-                          No workers recorded yet. This orchestrator can still lead the work.
+                          No workers recorded yet. This lead can still lead the work.
                         </Text>
                       )}
                       {role.workers.map((worker) => {
@@ -386,8 +386,8 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
               {showUnassigned && (
                 <>
                   <Text style={muted}>
-                    No orchestrator is recorded for these tasks. Opening a task does not delegate
-                    it.
+                    No lead is recorded for these tasks. Opening a task does not give control
+                    of it to a lead.
                   </Text>
                   {unassigned.slice(0, limit).map((task) => (
                     <WorkButton

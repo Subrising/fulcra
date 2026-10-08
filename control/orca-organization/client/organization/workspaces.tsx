@@ -148,7 +148,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
                     onChangeText={setReceiverSearch}
                   />
                   <Text style={{ color: c.foregroundMuted }}>
-                    This records a human-held intake reference. It creates no prime seat, grants no
+                    This records a human-held intake reference. It creates no main assistant role, grants no
                     control and sends no instruction.
                   </Text>
                   {catalog.sessions
@@ -187,7 +187,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
               )}
               {!roles.data?.available && (
                 <Text style={{ color: c.foregroundMuted }}>
-                  Prime records are unavailable. Human-owned chats still use an existing project
+                  Main assistant records are unavailable. Human-owned chats still use an existing project
                   context.
                 </Text>
               )}
@@ -297,7 +297,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
             )}
             {configureWorkspaceId === workspace.id && (
               <Text style={{ color: c.foregroundMuted }}>
-                Choose the receiving prime in Company settings above, then apply it here. This
+                Choose the receiving main assistant in Company settings above, then apply it here. This
                 records routing responsibility only.
               </Text>
             )}

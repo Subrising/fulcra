@@ -796,7 +796,7 @@ export function PrimeSurface(props: Props) {
                     </Text>
                     {!x.byRemit && (
                       <Text style={muted}>
-                        Which prime owns which project could not be read, so every project is
+                        Which main assistant owns which project could not be read, so every project is
                         listed.
                       </Text>
                     )}
@@ -901,7 +901,7 @@ export function PrimeSurface(props: Props) {
         <>
           <Text style={muted}>
             These orchestrators lead other orchestrators. That shows who supervises whom; it does
-            not make anyone a prime.
+            not make anyone a main assistant.
           </Text>
           {h.primes.map((prime) => (
             <LeaderCard
@@ -1008,7 +1008,7 @@ export function PrimeSurface(props: Props) {
       )}
       {chosen && !h.rolesAvailable && (
         <Text style={muted}>
-          Recording an orchestrator is unavailable while leadership role records cannot be read.
+          Recording a lead is unavailable while leadership role records cannot be read.
         </Text>
       )}
       {h.supervisionAvailable && h.tasksWithoutLeader > 0 && (
@@ -1016,7 +1016,7 @@ export function PrimeSurface(props: Props) {
           {h.tasksWithoutLeaderComplete ? "" : "At least "}
           {h.tasksWithoutLeader} recorded{" "}
           {h.tasksWithoutLeader === 1 ? "workstream has" : "workstreams have"} no leader. Opening
-          one does not delegate it.
+          one does not give control of it to a lead.
         </Text>
       )}
       <WorkButton
