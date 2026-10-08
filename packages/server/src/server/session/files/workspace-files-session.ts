@@ -2,6 +2,11 @@ import type pino from "pino";
 import type { SessionDelivery } from "../owned-subscriptions/index.js";
 import type { FileVersion } from "@getpaseo/protocol/messages";
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
+import path from "node:path";
+import {
+  EVICTED_PROVIDER_IMAGE_MESSAGE,
+  isEvictedProviderImage,
+} from "../../agent/providers/provider-image-output.js";
 import {
   encodeFileTransferFrame,
   FileTransferOpcode,
@@ -365,7 +370,7 @@ export class WorkspaceFilesSession {
             mode,
             directory: null,
             file: null,
-            error: getErrorMessage(error),
+            error: fileReadErrorMessage(error, cwd, requestedPath),
             requestId,
           },
         },
@@ -494,4 +499,11 @@ export class WorkspaceFilesSession {
       });
     }
   }
+}
+
+// FULCRA(image-retention): an agent image deleted to make room for newer ones says so plainly.
+function fileReadErrorMessage(error: unknown, cwd: string, requestedPath: string): string {
+  return isEvictedProviderImage(path.resolve(cwd, requestedPath))
+    ? EVICTED_PROVIDER_IMAGE_MESSAGE
+    : getErrorMessage(error);
 }

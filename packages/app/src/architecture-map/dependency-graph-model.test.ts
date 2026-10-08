@@ -3,6 +3,7 @@ import type { ArchitectureGraph } from "@getpaseo/protocol/messages";
 import {
   callersOnly,
   drawnEdges,
+  entryFile,
   expandInPlace,
   facets,
   nearestOnly,
@@ -200,5 +201,27 @@ describe("code dependency map model", () => {
       .map(({ edge }) => `${edge.from}>${edge.to}`)
       .sort();
     expect(lit).toEqual(["hooks>client", "screen>hooks"]);
+  });
+});
+
+describe("entryFile", () => {
+  it("opens the main source file before package.json", () => {
+    const files = [
+      "packages/cli/README.md",
+      "packages/cli/package.json",
+      "packages/cli/src/commands/run.ts",
+      "packages/cli/src/index.test.ts",
+      "packages/cli/src/index.ts",
+      "packages/cli/tsconfig.json",
+    ];
+    expect(entryFile(files, "packages/cli")).toBe("packages/cli/src/index.ts");
+  });
+
+  it("falls back to the shallowest source file, then to the first file", () => {
+    expect(
+      entryFile(["lib/package.json", "lib/src/deep/a.ts", "lib/src/b.ts", "lib/b.test.ts"], "lib"),
+    ).toBe("lib/src/b.ts");
+    expect(entryFile(["docs/package.json", "docs/README.md"], "docs")).toBe("docs/package.json");
+    expect(entryFile([], "docs")).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ export const DEFAULT_ROLES = [
   "review",
   "implementation",
   "research",
+  "light",
 ] as const;
 export type DefaultRole = (typeof DEFAULT_ROLES)[number];
 const provider = z.enum(POOL_PROVIDERS);

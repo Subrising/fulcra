@@ -2293,7 +2293,8 @@ export const ru: TranslationResources = {
         },
         riskExplain: {
           LOW: "Низкий риск: тесты, документация или настройки.",
-          NORMAL: "Обычный риск: код, до которого доходят тесты ({{tests}}).",
+          NORMAL_one: "Обычный риск: код, до которого доходят тесты ({{count}}).",
+          NORMAL_other: "Обычный риск: код, до которого доходят тесты ({{count}}).",
           HIGH: "Высокий риск: код, до которого не доходит ни один тест, или код, который удаляет это изменение.",
         },
         plain: en.panels.architectureMap.review.plain,
@@ -3200,6 +3201,7 @@ export const ru: TranslationResources = {
     providers: {
       title: "Провайдеры",
       addProvider: "Добавить провайдера",
+      refreshModels: "Обновить модели",
       providerDetails: "Сведения о провайдере {{name}}",
       enableProvider: "Включить {{name}}",
       unavailable: "Подключитесь к этому хосту, чтобы увидеть провайдеров",

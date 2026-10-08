@@ -2345,7 +2345,8 @@ export const en = {
         },
         riskExplain: {
           LOW: "Low risk: tests, docs or configuration.",
-          NORMAL: "Normal risk: code that {{tests}} tests reach.",
+          NORMAL_one: "Normal risk: code that {{count}} test reaches.",
+          NORMAL_other: "Normal risk: code that {{count}} tests reach.",
           HIGH: "High risk: code no test reaches, or code this change removes.",
         },
         plain: {
@@ -2356,7 +2357,8 @@ export const en = {
           deleted: "Removes this file",
           changedTest: "Changes tests",
           changedCodeUntested: "Changes code no test reaches",
-          changedCodeTested: "Changes code that {{tests}} tests reach",
+          changedCodeTested_one: "Changes code that {{count}} test reaches",
+          changedCodeTested_other: "Changes code that {{count}} tests reach",
           changedOther: "Changes docs or settings",
           lookHere: "Look here",
           nothingFlagged: "Nothing here matches the look-here rules.",
@@ -3422,6 +3424,7 @@ export const en = {
     providers: {
       title: "Providers",
       addProvider: "Add provider",
+      refreshModels: "Refresh models",
       providerDetails: "{{name}} provider details",
       enableProvider: "Enable {{name}}",
       unavailable: "Connect to this host to see providers",

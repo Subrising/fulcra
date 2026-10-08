@@ -1013,3 +1013,54 @@ test("small numbers read as words", () => {
   );
   assert.equal(say(1, 0, 0), "Touches 1 file; it is not code that tests could cover.");
 });
+
+// FULCRA(partial-clone): a --filter=blob:none clone must not fetch every blob to size the tree.
+test("partial clone: measures the change without fetching blobs it does not read", () => {
+  const repo = productRepo();
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), "j7-impact-clone-"));
+  try {
+    repo.git("config", "uploadpack.allowFilter", "true");
+    repo.git("config", "uploadpack.allowAnySHA1InWant", "true");
+    repo.write("src/price.ts", "export const price = 1;\n");
+    repo.write("src/price.test.ts", "import { price } from './price';\n");
+    const base = repo.commit();
+    repo.write("src/price.ts", "export const price = 2;\n");
+    for (let i = 0; i < 5; i++) repo.write(`src/part${i}.ts`, `export const p${i} = ${i};\n`);
+    repo.write("assets/picture.png", Buffer.alloc(2 * 1024 * 1024, 7));
+    const head = repo.commit();
+    const picture = repo.git("rev-parse", `${head}:assets/picture.png`);
+    execFileSync("git", [
+      "clone",
+      "-q",
+      "--filter=blob:none",
+      "--no-checkout",
+      `file://${repo.dir}`,
+      clone,
+    ]);
+    const local = (oid) => {
+      try {
+        execFileSync("git", ["cat-file", "-e", oid], {
+          cwd: clone,
+          env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+          stdio: "ignore",
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    assert.equal(local(picture), false);
+    const packs = () =>
+      fs.readdirSync(path.join(clone, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"))
+        .length;
+    const packsBefore = packs();
+    const impact = measureImpact({ root: clone, range: `${base}..${head}` });
+    assert.equal(packs(), packsBefore + 1, "missing source blobs arrive in one fetch");
+    assert.equal(impact.counts.changed, 7);
+    assert.equal(impact.counts.covered, 1);
+    assert.equal(local(picture), false, "the picture blob was fetched");
+  } finally {
+    repo.done();
+    fs.rmSync(clone, { recursive: true, force: true });
+  }
+});

@@ -162,12 +162,14 @@ test("genuine deleted root releases pool only with descriptor proof otherwise fa
       data: Buffer.from("fresh-after-deletion").toString("base64"),
       mimeType: "image/png",
     };
-    if (fstatSync(fd).nlink === 0) {
+    // Linux reports nlink 0; APFS reports 2 for a removed (necessarily empty) directory.
+    const { nlink } = fstatSync(fd);
+    if (nlink === 0 || (process.platform === "darwin" && nlink <= 2)) {
       const next = materializeProviderImage(nextInput);
       expect(path.dirname(next.path)).not.toBe(root);
       expect(readFileSync(next.path, "utf8")).toBe("fresh-after-deletion");
     } else {
-      // Darwin/APFS retains a nonzero descriptor link count even after removal: no proof, no reset.
+      // No deletion proof: no reset.
       expect(() => materializeProviderImage(nextInput)).toThrow("moved or deletion unproved");
       expect(existsSync(root)).toBe(false);
     }

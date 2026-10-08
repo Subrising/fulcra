@@ -2301,7 +2301,8 @@ export const ptBR: TranslationResources = {
         },
         riskExplain: {
           LOW: "Risco baixo: testes, documentação ou configuração.",
-          NORMAL: "Risco normal: código alcançado por {{tests}} testes.",
+          NORMAL_one: "Risco normal: código alcançado por {{count}} testes.",
+          NORMAL_other: "Risco normal: código alcançado por {{count}} testes.",
           HIGH: "Risco alto: código que nenhum teste alcança, ou código que esta mudança remove.",
         },
         plain: en.panels.architectureMap.review.plain,
@@ -3202,6 +3203,7 @@ export const ptBR: TranslationResources = {
     providers: {
       title: "Provedores",
       addProvider: "Adicionar provedor",
+      refreshModels: "Atualizar modelos",
       providerDetails: "Detalhes do provedor {{name}}",
       enableProvider: "Ativar {{name}}",
       unavailable: "Conecte-se a este host para ver provedores",

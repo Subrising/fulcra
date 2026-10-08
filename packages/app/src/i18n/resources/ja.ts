@@ -2288,7 +2288,8 @@ export const ja: TranslationResources = {
         },
         riskExplain: {
           LOW: "低リスク: テスト、ドキュメント、設定。",
-          NORMAL: "通常リスク: {{tests}} 件のテストが届くコード。",
+          NORMAL_one: "通常リスク: {{count}} 件のテストが届くコード。",
+          NORMAL_other: "通常リスク: {{count}} 件のテストが届くコード。",
           HIGH: "高リスク: どのテストも届かないコード、またはこの変更が削除するコード。",
         },
         plain: en.panels.architectureMap.review.plain,
@@ -3188,6 +3189,7 @@ export const ja: TranslationResources = {
     providers: {
       title: "プロバイダー",
       addProvider: "プロバイダーを追加",
+      refreshModels: "モデルを更新",
       providerDetails: "{{name}}プロバイダーの詳細",
       enableProvider: "{{name}}を有効にする",
       unavailable: "プロバイダーを見るにはこのホストに接続してください",

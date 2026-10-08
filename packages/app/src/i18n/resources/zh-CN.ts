@@ -2225,7 +2225,8 @@ export const zhCN: TranslationResources = {
         },
         riskExplain: {
           LOW: "低风险：测试、文档或配置。",
-          NORMAL: "正常风险：有 {{tests}} 个测试覆盖的代码。",
+          NORMAL_one: "正常风险：有 {{count}} 个测试覆盖的代码。",
+          NORMAL_other: "正常风险：有 {{count}} 个测试覆盖的代码。",
           HIGH: "高风险：没有测试覆盖的代码，或此变更删除的代码。",
         },
         plain: en.panels.architectureMap.review.plain,
@@ -3097,6 +3098,7 @@ export const zhCN: TranslationResources = {
     providers: {
       title: "Providers",
       addProvider: "添加 Provider",
+      refreshModels: "刷新模型",
       providerDetails: "{{name}} Provider 详情",
       enableProvider: "启用 {{name}}",
       unavailable: "连接到这个 Host 以查看 Providers",

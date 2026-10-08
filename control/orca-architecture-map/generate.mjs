@@ -72,20 +72,76 @@ const git = (root, args, input) => {
   return out.stdout;
 };
 
-/** Every tracked file at `commit` as { path, blob, size }, read from git objects only. */
+/** Every tracked file at `commit` as { path, blob }, read from git objects only. */
+// FULCRA(partial-clone): no `--long`. In a partial clone (--filter=blob:none) it fetched every missing blob one at
+// a time to report its size (more than 30 s). Sizes come from localBlobSizes, which never fetches.
 export function listCommitFiles(root, commit) {
   if (!COMMIT.test(commit)) throw new Error("A full commit id is required");
-  const raw = git(root, ["ls-tree", "-r", "-z", "--long", "--full-tree", commit]).toString("utf8");
+  const raw = git(root, ["ls-tree", "-r", "-z", "--full-tree", commit]).toString("utf8");
   const files = [];
   for (const entry of raw.split("\0")) {
-    // "<mode> blob <oid> <size>\t<path>"
+    // "<mode> blob <oid>\t<path>"
     const tab = entry.indexOf("\t");
     if (tab < 0) continue;
-    const [mode, type, blob, size] = entry.slice(0, tab).trim().split(/\s+/);
+    const [mode, type, blob] = entry.slice(0, tab).trim().split(/\s+/);
     if (type !== "blob" || mode === "120000") continue;
-    files.push({ path: entry.slice(tab + 1), blob, size: Number(size) || 0 });
+    files.push({ path: entry.slice(tab + 1), blob });
   }
   return files;
+}
+
+/** One fetch of many missing blobs from the partial clone's promisor remote (what a lazy fetch requests, batched). */
+export function fetchMissingBlobs(root, blobs) {
+  let remote;
+  try {
+    remote = git(root, ["config", "--get-regexp", "^remote\\..*\\.promisor$"])
+      .toString("utf8")
+      .split("\n")
+      .map((line) => /^remote\.(.+)\.promisor\s+true$/i.exec(line.trim())?.[1])
+      .find((name) => name !== undefined && /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(name));
+  } catch {
+    return false; // no promisor remote
+  }
+  if (!remote) return false;
+  try {
+    git(
+      root,
+      [
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--filter=blob:none",
+        "--stdin",
+        remote,
+      ],
+      `${blobs.join("\n")}\n`,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Sizes of blobs in the local object store, never fetching (git 2.45+; older git fetches). */
+export function localBlobSizes(root, blobs) {
+  const sizes = new Map();
+  const unique = [...new Set(blobs)];
+  if (unique.length === 0) return sizes;
+  const input = `${unique.join("\n")}\n`;
+  let out;
+  try {
+    out = git(root, ["--no-lazy-fetch", "cat-file", "--batch-check"], input);
+  } catch {
+    out = git(root, ["cat-file", "--batch-check"], input);
+  }
+  for (const line of out.toString("utf8").split("\n")) {
+    const [oid, type, size] = line.split(" ");
+    if (type === "blob") sizes.set(oid, Number(size));
+  }
+  return sizes;
 }
 
 /** The contents of many blobs in one `git cat-file --batch` call. */
@@ -111,16 +167,22 @@ export function readBlobs(root, blobs) {
 /** A commit as the generator sees it: its files and a text reader for the ones it parses. */
 export function readCommit(root, commit) {
   const files = listCommitFiles(root, commit).filter((f) => !ignored(f.path));
-  const wanted = files.filter(
-    (f) =>
-      f.size <= MAX_PARSE_BYTES &&
-      (isCode(f.path) || /(^|\/)(package|tsconfig)\.json$/.test(f.path)),
+  const candidates = files.filter(
+    (f) => isCode(f.path) || /(^|\/)(package|tsconfig)\.json$/.test(f.path),
   );
+  const unique = [...new Set(candidates.map((f) => f.blob))];
+  let sizes = localBlobSizes(root, unique);
+  // Blobs missing locally come in ONE fetch, then are sized like the rest; if that fails, a missing blob is read
+  // (lazily fetched) and then size-checked.
+  const missing = unique.filter((blob) => !sizes.has(blob));
+  if (missing.length > 0 && fetchMissingBlobs(root, missing)) sizes = localBlobSizes(root, unique);
+  const wanted = candidates.filter((f) => (sizes.get(f.blob) ?? 0) <= MAX_PARSE_BYTES);
   const blobs = readBlobs(
     root,
     wanted.map((f) => f.blob),
   );
-  const texts = new Map(wanted.map((f) => [f.path, blobs.get(f.blob)?.toString("utf8") ?? ""]));
+  const text = (blob) => (blob && blob.length <= MAX_PARSE_BYTES ? blob.toString("utf8") : "");
+  const texts = new Map(wanted.map((f) => [f.path, text(blobs.get(f.blob))]));
   return { commit, files: files.map((f) => ({ path: f.path, blob: f.blob })), texts };
 }
 

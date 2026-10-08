@@ -398,6 +398,14 @@ export function TodaySurface({
       ...poll,
     })),
   });
+  // Sessions outside every project (a main assistant) also ask questions: the whole host's fleet, read under the
+  // Team map's query key so both screens share one poll.
+  const hostFleet = useQuery({
+    queryKey: ["orca-fleet", hostId],
+    queryFn: () => readFleet({}),
+    refetchInterval: 30000,
+    ...poll,
+  });
   const briefs = useQueries({
     queries: ids.map((projectId) => ({
       queryKey: ["orca-organisation", hostId, "brief", projectId],
@@ -502,8 +510,8 @@ export function TodaySurface({
     { id: string; title: string; serverId: string; agentId: string }
   >();
   if (questionCardsSupported)
-    for (const f of fleets)
-      for (const n of f.data?.nodes ?? []) {
+    for (const data of [...fleets.map((f) => f.data), hostFleet.data])
+      for (const n of data?.nodes ?? []) {
         const serverId = questionServerId(n, hostId);
         if ((n.pending ?? 0) > 0 && serverId && n.agentId)
           questions.set(n.id, {

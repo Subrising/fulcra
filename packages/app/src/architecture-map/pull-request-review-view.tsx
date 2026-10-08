@@ -341,7 +341,7 @@ function FileRow(props: {
           ) : null}
         </Text>
         <Text style={styles.muted} numberOfLines={1}>
-          {t(`${K}.plain.${plainFileKey(file)}`, { tests: file.tests })}
+          {t(`${K}.plain.${plainFileKey(file)}`, { count: file.tests })}
           {folder ? ` · ${folder}` : ""}
         </Text>
       </View>
@@ -407,7 +407,7 @@ function FilePane(props: {
     <View style={styles.pane} testID="pull-request-review-diff">
       <Text style={styles.sectionTitle}>{props.file.path}</Text>
       <Text style={styles.muted}>
-        {t(`${K}.riskExplain.${props.file.risk}`, { tests: props.file.tests })}
+        {t(`${K}.riskExplain.${props.file.risk}`, { count: props.file.tests })}
       </Text>
       <PlainWords
         serverId={props.serverId}

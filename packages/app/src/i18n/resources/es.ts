@@ -2313,7 +2313,8 @@ export const es: TranslationResources = {
         },
         riskExplain: {
           LOW: "Riesgo bajo: pruebas, documentación o configuración.",
-          NORMAL: "Riesgo normal: código que alcanzan {{tests}} pruebas.",
+          NORMAL_one: "Riesgo normal: código que alcanzan {{count}} pruebas.",
+          NORMAL_other: "Riesgo normal: código que alcanzan {{count}} pruebas.",
           HIGH: "Riesgo alto: código que ninguna prueba alcanza, o código que este cambio elimina.",
         },
         plain: en.panels.architectureMap.review.plain,
@@ -3217,6 +3218,7 @@ export const es: TranslationResources = {
     providers: {
       title: "Proveedores",
       addProvider: "Agregar proveedor",
+      refreshModels: "Actualizar modelos",
       providerDetails: "Detalles del proveedor{{name}}",
       enableProvider: "Habilitar{{name}}",
       unavailable: "Conéctese a este host para ver proveedores",

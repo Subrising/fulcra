@@ -1,6 +1,7 @@
 // DESIGN-NEXT-BUILD A3 (C8): every control creation path carries what the session is for. A manager's worker is
 // `implementation`; a seat starts `implementation` or `planning`; an operator may name any role; an omitted provider is
 // the role's configured one (prime Q1); a creation journaled before roles existed keeps its identity when retried.
+import "./state-root.fixture.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -254,7 +255,7 @@ test("a seat starts implementation by default or planning when asked; orchestrat
   assert.equal(f.created.at(-1).role, "planning");
   await assert.rejects(
     f.start({ role: "orchestration" }),
-    /implementation, planning, review or research/,
+    /implementation, planning, review, research or light/,
   );
   const owned = () => f.store.db.prepare("SELECT count(*) n FROM session_ownership").get().n,
     before = [f.created.length, owned()];
@@ -488,6 +489,21 @@ test("W3-4: a seat starts review and research sessions with their own role", asy
   assert.equal(f.created.at(-1).role, "research");
   await assert.rejects(
     f.start({ role: "orchestration" }),
-    /implementation, planning, review or research/,
+    /implementation, planning, review, research or light/,
   );
+});
+
+// FULCRA(light-role): a lead starts a light session (summaries, searches, test runs, monitors); with no provider chosen
+// for the role, the seed's provider (claude) is used when this host offers it.
+test("light role: a seat and an operator start light sessions; the role's default provider is claude", async (t) => {
+  const f = await seat(t);
+  await f.start({ role: "light", title: "Summarise the release notes" }, true);
+  assert.deepEqual([f.created.at(-1).role, f.created.at(-1).provider], ["light", "claude"]);
+  const w = world(t);
+  await w.request({
+    method: "create",
+    operator: "test-operator",
+    input: { messageId: randomUUID(), taskId: T(1), title: "Watch the build", role: "light" },
+  });
+  assert.deepEqual([w.created.at(-1).role, w.created.at(-1).provider], ["light", "claude"]);
 });

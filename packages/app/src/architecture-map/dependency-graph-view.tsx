@@ -10,6 +10,7 @@ import type { Theme } from "@/styles/theme";
 import {
   callersOnly,
   drawnEdges,
+  entryFile,
   expandInPlace,
   facets,
   isPackageNode,
@@ -801,7 +802,7 @@ function SelectionCard(props: {
       <CardHead
         node={node}
         changed={props.changed}
-        entry={onOpenFile ? (part.files[0] ?? null) : null}
+        entry={onOpenFile ? entryFile(part.files, node.folder) : null}
         onOpenFile={onOpenFile}
         onClear={props.onClear}
       />

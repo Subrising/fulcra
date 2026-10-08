@@ -11,7 +11,8 @@ export const SESSION_ROLE_NAMES = [
   "implementation",
   "review",
   "research",
-] as const; // update-7: review, research
+  "light",
+] as const; // update-7: review, research; light (summaries, digests, searches, tests, monitors)
 export type SessionRoleName = (typeof SESSION_ROLE_NAMES)[number];
 const selection = z
   .object({
@@ -45,6 +46,7 @@ export const sessionDefaultsRpc = defineContract({
           implementation: roleRow.optional(),
           review: roleRow.optional(),
           research: roleRow.optional(),
+          light: roleRow.optional(),
         })
         .strict(),
       modes: z
