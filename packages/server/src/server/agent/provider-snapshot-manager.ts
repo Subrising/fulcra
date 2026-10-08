@@ -387,6 +387,12 @@ export class ProviderSnapshotManager {
     this.warnUnknownProviderOverrides();
   }
 
+  // Readers that do not wait (for example `provider ls`) otherwise see "loading" until
+  // something first asks, which can be minutes after the daemon starts.
+  warmUpGlobalSnapshot(providers?: AgentProvider[]): Promise<void> {
+    return this.warmUp(createGlobalSnapshotTarget(), providers);
+  }
+
   private warnUnknownProviderOverrides(): void {
     if (!this.pluginProvidersSettled) return;
     for (const [provider, override] of Object.entries(this.providerOverrides ?? {})) {
