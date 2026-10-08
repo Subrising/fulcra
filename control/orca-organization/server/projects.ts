@@ -9,6 +9,19 @@ const issue = z.object({
   companyId: z.literal(COMPANY),
   projectId: z.string().uuid().nullable(),
 });
+/** Fulcra 0.2.8: an archived project is hidden from every list. Its rows stay in the source. */
+export function isArchivedProject(raw: unknown) {
+  if (!raw || typeof raw !== "object") return false;
+  const row = raw as { archivedAt?: unknown; status?: unknown };
+  return (row.archivedAt !== undefined && row.archivedAt !== null) || row.status === "archived";
+}
+const archivedIds = (rows: unknown[]) =>
+  new Set(
+    rows
+      .filter(isArchivedProject)
+      .map((r) => (r as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === "string"),
+  );
 const localTask = z.object({
   id: z.string().uuid(),
   companyId: z.literal(COMPANY),
@@ -32,13 +45,15 @@ export function localProjectDirectory(
     if (!Array.isArray(rows) || rows.length > 1000)
       throw new Error("Local task coverage exceeds bound");
     let partial = false;
-    const known = new Map<string, z.infer<typeof project>>();
+    const known = new Map<string, z.infer<typeof project>>(),
+      archived = new Set<string>();
     if (readProjectRows) {
       const projectRows = readProjectRows();
       if (!Array.isArray(projectRows) || projectRows.length > 64)
         throw new Error("Local project coverage exceeds bound");
+      for (const id of archivedIds(projectRows)) archived.add(id);
       const seen = new Set<string>();
-      for (const raw of projectRows) {
+      for (const raw of projectRows.filter((r) => !isArchivedProject(r))) {
         const parsed = project.safeParse(raw);
         // A foreign or malformed row is dropped and the read says so; it never becomes a project.
         if (!parsed.success) {
@@ -73,7 +88,7 @@ export function localProjectDirectory(
       // is never presented as membership — it is the same class of claim as a capped page.
       if (projectId != null && known.has(projectId)) tasks.set(id, projectId);
       else {
-        if (projectId != null) partial = true;
+        if (projectId != null && !archived.has(projectId)) partial = true;
         tasks.set(id, null);
       }
     }
@@ -148,9 +163,14 @@ export async function readProjects(
   if (local) return localProjectDirectory(local, localProjectRows);
   const observedAt = new Date().toISOString();
   try {
-    const [rawProjects, rawIssues] = await Promise.all([read("projects"), read("issues")]);
-    if (rawProjects.length > 64 || rawIssues.length > 1000)
+    const [allProjects, allIssues] = await Promise.all([read("projects"), read("issues")]);
+    if (allProjects.length > 64 || allIssues.length > 1000)
       throw new Error("Project coverage exceeds bound");
+    const archived = archivedIds(allProjects);
+    const rawProjects = allProjects.filter((r) => !isArchivedProject(r));
+    const rawIssues = allIssues.filter(
+      (r) => !archived.has((r as { projectId?: unknown } | null)?.projectId as string),
+    );
     let partial = false;
     function unique<T extends { id: string }>(rows: unknown[], schema: z.ZodType<T>) {
       const found = new Map<string, T>(),

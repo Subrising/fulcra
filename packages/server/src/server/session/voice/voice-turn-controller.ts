@@ -9,7 +9,10 @@ import type {
   StreamingTranscriptionEvent,
   StreamingTranscriptionSession,
 } from "../../speech/speech-provider.js";
-import type { TurnDetectionProvider } from "../../speech/turn-detection-provider.js";
+import {
+  type TurnDetectionProvider,
+  VOICE_TURN_PAUSE_MS,
+} from "../../speech/turn-detection-provider.js";
 
 const VOICE_FINAL_TRANSCRIPT_TIMEOUT_MS = 10_000;
 
@@ -93,12 +96,15 @@ interface FinalizingVoiceTurn {
 export function createVoiceTurnController(params: {
   logger: Logger;
   turnDetection: TurnDetectionProvider;
+  /** FULCRA(core-fixes): silence that ends a turn, in ms. */
+  turnPauseMs?: number;
   stt: SpeechToTextProvider;
   sttLanguage?: string;
   callbacks: VoiceTurnControllerCallbacks;
 }): VoiceTurnController {
   const detector = params.turnDetection.createSession({
     logger: params.logger.child({ component: "turn-detection" }),
+    silenceMs: params.turnPauseMs ?? VOICE_TURN_PAUSE_MS,
   });
 
   let state: VoiceInputState = { status: "idle" };

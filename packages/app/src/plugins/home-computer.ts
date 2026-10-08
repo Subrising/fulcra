@@ -98,3 +98,67 @@ export function useMainAssistantHosts(serverIds: readonly string[], enabled: boo
     return data ? new Set(data) : null;
   }, [enabled, data]);
 }
+
+export interface HostMainAssistant<S> {
+  serverId: string;
+  seat: S;
+  /** The main assistant's chat in that computer's fleet read, for its live status; null when not read. */
+  node: { id: string; host: string; status: string; pending?: number } | null;
+}
+
+/**
+ * Fulcra 0.2.8: the main assistant of every connected computer, so each device shows it even when this app's home
+ * computer is another one (the MacBook app with the main assistant on the Mac mini). An unreachable computer, or one
+ * without Fulcra, is left out. Shares the role-directory read with the home-computer choice above.
+ */
+export function useMainAssistantSeats<
+  S extends { seat: string; state: string; sessionId: string | null },
+>(serverIds: readonly string[], pick: (primes: readonly S[] | undefined) => S | null) {
+  const key = useMemo(() => [...serverIds].sort().join(","), [serverIds]);
+  const query = useFetchQuery({
+    queryKey: ["fulcra-main-assistants", key],
+    queryFn: async () => {
+      const results = await Promise.all(
+        key.split(",").map(async (serverId) => {
+          const client = getHostRuntimeStore().getSnapshot(serverId)?.client;
+          if (!client) return null;
+          try {
+            const reply = (await client.invokePluginRpc(
+              pluginRegistry.controllerPluginId(serverId),
+              "organization.role-directory",
+              {},
+            )) as { available?: boolean; primes?: S[] } | null;
+            const seat = reply?.available ? pick(reply.primes) : null;
+            if (!seat) return null;
+            const fleet = (await client
+              .invokePluginRpc(
+                pluginRegistry.controllerPluginId(serverId),
+                "organization.fleet",
+                {},
+              )
+              .catch(() => null)) as { nodes?: HostMainAssistant<S>["node"][] } | null;
+            const node = fleet?.nodes?.find((n) => n?.id === seat.sessionId) ?? null;
+            return { serverId, seat, node };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return results.filter((r): r is HostMainAssistant<S> => r !== null);
+    },
+    enabled: key.length > 0,
+    staleTimeMs: 30_000,
+    dataShape: "value",
+    retry: 2,
+  });
+  return query.data ?? null;
+}
+
+/** Which main assistant to show: the home computer's first, else the first computer that has one. */
+export function preferredMainAssistant<S>(
+  found: readonly HostMainAssistant<S>[] | null,
+  homeServerId: string | null,
+): HostMainAssistant<S> | null {
+  if (!found?.length) return null;
+  return found.find((f) => f.serverId === homeServerId) ?? found[0]!;
+}

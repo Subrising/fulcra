@@ -37,6 +37,8 @@ export type LocalSpeechWorkerRequest =
       config: LocalSpeechWorkerConfig;
       sessionId: string;
       kind: LocalSpeechSessionKind;
+      /** FULCRA(core-fixes): silence that ends a turn, for a "vad" session. */
+      silenceMs?: number;
     }
   | {
       type: "session.append";

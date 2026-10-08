@@ -139,6 +139,8 @@ const FeatureVoiceModeSchema = z
     turnDetection: z
       .object({
         provider: SpeechProviderIdSchema.optional(),
+        // FULCRA(core-fixes): silence that ends a spoken turn, in ms. Default 4000 (VOICE_TURN_PAUSE_MS).
+        pauseMs: z.number().int().min(500).max(15000).optional(),
       })
       .strict()
       .optional(),

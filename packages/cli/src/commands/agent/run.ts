@@ -4,6 +4,7 @@ import {
   StructuredAgentResponseError,
 } from "@getpaseo/server/agent-response";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
+import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
@@ -614,6 +615,7 @@ export async function runRunCommand(
     const requestEnv = Object.keys(env).length > 0 ? env : undefined;
 
     const callerAgentId = await resolveRunCallerAgentId(client);
+    addReportingLine(labels, callerAgentId);
     const workspace = await resolveRunWorkspace(client, options, cwd, callerAgentId);
     const workspaceId = workspace.id;
     const runCwd = workspace.cwd;
@@ -703,7 +705,7 @@ export async function runRunCommand(
       modeId: options.mode,
       model: resolvedProviderModel.model,
       thinkingOptionId,
-      initialPrompt: prompt,
+      initialPrompt: withReportingLine(prompt, callerAgentId),
       images,
       env: requestEnv,
       labels: Object.keys(labels).length > 0 ? labels : undefined,
@@ -745,6 +747,17 @@ export async function runRunCommand(
     };
     throw error;
   }
+}
+
+// FULCRA(orchestration): a chat started by a chat reports to it, and its first message says so.
+function addReportingLine(labels: Record<string, string>, callerAgentId: string | undefined): void {
+  if (callerAgentId && !labels[REPORTS_TO_LABEL]) labels[REPORTS_TO_LABEL] = callerAgentId;
+}
+
+/** The first message of a chat started by a chat names the chat it reports to. */
+export function withReportingLine(prompt: string, callerAgentId: string | undefined): string {
+  if (!callerAgentId) return prompt;
+  return `You report to chat ${callerAgentId}. Send your reports and questions to it.\n\n${prompt}`;
 }
 
 export interface RunCallerLookupClient {

@@ -10,6 +10,7 @@ import type {
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { listAccounts, switchAccountSession } from "../account.js";
+import { resolveSender } from "../../utils/send-sender.js";
 
 /** Result type for agent send command */
 export interface AgentSendResult {
@@ -49,6 +50,7 @@ export interface AgentSendOptions extends CommandOptions {
   image?: string[];
   prompt?: string;
   promptFile?: string;
+  from?: string;
 }
 
 export function addSendOptions(cmd: Command): Command {
@@ -66,6 +68,10 @@ export function addSendOptions(cmd: Command): Command {
     .option(
       "--message-id <id>",
       "Stable message ID required by --native-queue; retain it on uncertainty",
+    )
+    .option(
+      "--from <chat>",
+      "The chat this message comes from, as <chat id> or <chat id>@<server id>, for a send relayed from another computer",
     )
     .option("--no-wait", "Return immediately without waiting for completion");
 }
@@ -292,6 +298,8 @@ export async function runSendCommand(
       message: "Native queue does not accept slash commands",
     } satisfies CommandError;
   }
+  // FULCRA(orchestration): reporting lines. Stamp the sending chat; a send with no stamp is the owner.
+  const sender = resolveSender({ from: options.from });
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
@@ -318,7 +326,10 @@ export async function runSendCommand(
     if (slashResult) return { type: "single", data: slashResult, schema: agentSendSchema };
 
     // Send the message
-    await client.sendAgentMessage(agentIdArg, promptInput, { images });
+    await client.sendAgentMessage(agentIdArg, promptInput, {
+      images,
+      ...(sender ? { sender } : {}),
+    });
 
     // If --no-wait, return immediately
     if (options.wait === false) {

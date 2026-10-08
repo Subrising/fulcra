@@ -78,6 +78,22 @@ Use **Settings → Accounts & Defaults** for host accounts, priorities, models a
 
 In **Settings → your host → Agents → Orchestration skills**, include **fulcra** and install/update the selection. The bundled source is [skills/fulcra](../skills/fulcra/SKILL.md). Claude uses `~/.claude/skills/fulcra`; Codex discovers the shared `~/.agents/skills/fulcra` copy. Do not add a second `.codex/skills` copy: Codex should discover one `/fulcra` entry. Selecting/installing the skill does not grant a prime/manager seat or controller authority. Other upstream skill directories remain their own preserved catalog.
 
+## Set up your team
+
+Use chats you already have. Open a chat's menu and choose **Make main assistant** or **Make lead of project…**, or use **Leads → Set up your team**, which also adds workers to a project (**Adopt existing chats**), archives a project and removes an old main assistant record. Each choice is one step: Fulcra adds the chat to its task list, gives it the seat and puts the project under the main assistant.
+
+Only the owner can change the team: the app, a paired phone, or the owner's own `fulcra` command. A lead or a worker cannot. Each change is recorded with who asked for it (`team_changes` in the controller journal). A chat that runs on another computer joins from the Fulcra app on that computer. Every device shows the main assistant at the top of the sidebar, with the computer it runs on.
+
+Archiving hides a project from every list. Its tasks, chats, seats and history stay in the project source.
+
+### Reporting lines
+
+Each chat reports to one parent: a worker to its lead, a lead to the main assistant, the main assistant to you. Team setup records the line on the chat (`fulcra.reports-to`). A lead reports to the main assistant role (`role:main-assistant`), not to one chat, so a new main assistant needs no change in any lead. A chat started with `paseo run` from another chat reports to that chat.
+
+A chat sends only to its parent, to its own chats and to one direct link that you allow in team setup. Other sends are refused with the right recipient, for example "Send this to your lead, Fulcra lead (4c111479)". `paseo send role:main-assistant "…"` reaches the chat that holds the role now.
+
+Sends from you (the app, the phone, your own `fulcra` command) are never refused. A send from inside a chat that has lost its identity (`PASEO_AGENT_ID`) is refused, so a chat cannot pass as you. These are cooperative rules: every chat on the host runs as you, so they keep chats in line but are not a security boundary.
+
 ## Compatibility names
 
 Fulcra keeps `@getpaseo/*` imports and package names, the `dev.orca.workspace.desktop` bundle identity, the macOS `~/Library/Application Support/Orca` directory, existing Keychain services and runtime variables. Do not rename or migrate them by editing a branding document. Machine-specific config belongs under ignored `local/`; credentials, pairing offers and private runtime evidence never belong in a public commit.

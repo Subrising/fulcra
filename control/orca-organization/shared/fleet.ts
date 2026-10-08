@@ -54,6 +54,10 @@ export const fleetNode = z.object({
   project: id.nullable().optional(),
   role: text.nullable().optional(),
   origin: z.enum(["enrolled", "spawned"]).optional(),
+  // Fulcra 0.2.8 reporting lines, from the session's labels: who it reports to ("owner", "role:main-assistant", a
+  // session id, or id@server) and its one direct link.
+  reportsTo: z.string().max(200).nullable().optional(),
+  directLink: id.nullable().optional(),
   account: z
     .object({ name: z.string().max(60), provider: z.string().max(20) })
     .strict()

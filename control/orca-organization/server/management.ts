@@ -157,9 +157,12 @@ export function createManagement(
             const { boot: _boot, grantedAt: _grantedAt, ...safe } = h;
             return handoffSchema.parse(safe);
           });
+        // Fulcra 0.2.8: the reply shows at most 32 sessions, so every per-session list follows the same 32. A task
+        // with more sessions than that (the programme root) used to fail the whole read on its permission rows.
+        const shown = enrolled.slice(0, 32);
         const permissionState = await call("permissions-status");
         const permissions = (permissionState?.grants ?? [])
-          .filter((g: any) => enrolled.some((s) => s.id === g.sessionId))
+          .filter((g: any) => shown.some((s) => s.id === g.sessionId))
           .map((g: any) => ({
             sessionId: g.sessionId,
             active: g.active,
@@ -174,9 +177,7 @@ export function createManagement(
             })),
           }));
         return reply("observed", "Saved control modes; native runtime state is shown separately.", {
-          sessions: enrolled
-            .slice(0, 32)
-            .map(({ id, task, mode, generation }) => ({ id, task, mode, generation })),
+          sessions: shown.map(({ id, task, mode, generation }) => ({ id, task, mode, generation })),
           partial: enrolled.length > 32 || roleRead.issues.unreadable > 0,
           deliveries: await call("history", task),
           supervisors,
@@ -184,7 +185,7 @@ export function createManagement(
           handoffs,
           leadershipCapacity: leadership?.capacity,
           leadershipCandidates: (leadership?.candidates ?? []).filter((id: string) =>
-            enrolled.some((s) => s.id === id),
+            shown.some((s) => s.id === id),
           ),
           leadershipError: null,
           permissions,

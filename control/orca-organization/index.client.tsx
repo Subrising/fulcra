@@ -8,6 +8,7 @@ import { AccountsSurface } from "./client/accounts";
 import { IntegrationsScreen } from "./client/integrations";
 import { AgentStepThroughPanel } from "./client/step-through-panel";
 import { registerAccountSwitch } from "./client/switch-account";
+import { registerTeamRole } from "./client/team-setup";
 import { CleanupSurface } from "./client/worktree-lifecycle";
 import { CleanupNowSection } from "./client/cleanup-now-view";
 import { DevicesSurface } from "./client/devices";
@@ -113,8 +114,11 @@ export default function contribute(client: PluginClientContext) {
       : () => {};
   // W1: "Switch account…" in a session's menu and /account in its chat.
   const accountSwitch = registerAccountSwitch(client);
+  // Fulcra 0.2.8: "Make main assistant" and "Make lead of project…" from any chat.
+  const teamRole = registerTeamRole(client);
   return () => {
     accountSwitch();
+    teamRole();
     whatItDidCommand();
     whatItDidFooter();
     panel();

@@ -54,3 +54,4 @@ yarn-error.log
 
 examples/*/ios
 examples/*/android
+.swift-test/

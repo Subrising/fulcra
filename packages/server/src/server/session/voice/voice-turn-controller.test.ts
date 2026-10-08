@@ -532,3 +532,35 @@ describe("voice turn controller", () => {
     expect(harness.sttSessions[1]?.connectCount).toBe(1);
   });
 });
+
+describe("voice turn pause", () => {
+  function pauseFor(turnPauseMs?: number) {
+    const seen: (number | undefined)[] = [];
+    const detector = new FakeTurnDetectionSession();
+    createVoiceTurnController({
+      logger: pino({ level: "silent" }),
+      turnDetection: {
+        id: "local",
+        createSession(params) {
+          seen.push(params.silenceMs);
+          return detector;
+        },
+      },
+      ...(turnPauseMs ? { turnPauseMs } : {}),
+      stt: createFakeSttProvider([]),
+      callbacks: {
+        onSpeechStarted: vi.fn(),
+        onSpeechStopped: vi.fn(),
+        onPartialTranscript: vi.fn(),
+        onFinalTranscript: vi.fn(),
+        onError: vi.fn(),
+      },
+    });
+    return seen[0];
+  }
+
+  it("ends a spoken turn after 4 s of silence by default, or after the configured pause", () => {
+    expect(pauseFor()).toBe(4000);
+    expect(pauseFor(6000)).toBe(6000);
+  });
+});

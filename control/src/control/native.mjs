@@ -299,6 +299,12 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
         lastUserMessageAt: snapshot.lastUserMessageAt ?? null,
       };
     },
+    // Fulcra 0.2.8 reporting lines: write a chat's line labels (fulcra.reports-to, fulcra.seat, fulcra.direct-link).
+    // An empty value clears a label. Never the product's parent label.
+    setLabels: async (id, labels) => {
+      verifyActivation();
+      await daemon.updateAgent(id, { labels });
+    },
     // H6 item 6: the session's state and the newest timeline entries, for usage-limit detection. Read-only.
     limitTail: async (id) => {
       verifyActivation();

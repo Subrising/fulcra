@@ -4,6 +4,8 @@ import { addSendOptions, runSendCommand } from "./send";
 
 const connection = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/client.js", () => ({ connectToDaemon: connection }));
+const senderStamp = vi.hoisted(() => vi.fn((): { agentId: string } | null => null));
+vi.mock("../../utils/send-sender.js", () => ({ resolveSender: senderStamp }));
 const daemonTarget = { kind: "endpoint" as const, host: "fixture.test:1234" };
 const messageId = "native-message-1";
 let client: ReturnType<typeof fakeClient>;
@@ -209,4 +211,30 @@ describe("send explicit native queue", () => {
       expect(client.waitForFinish).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("send reporting lines", () => {
+  it("passes the sending chat to the daemon, and sends nothing extra for the owner", async () => {
+    senderStamp.mockReturnValueOnce({ agentId: "lead-1" });
+    await parsedSend(["target", "hello", "--no-wait"]);
+    expect(client.sendAgentMessage).toHaveBeenLastCalledWith("target", "hello", {
+      images: undefined,
+      sender: { agentId: "lead-1" },
+    });
+    await parsedSend(["target", "hello", "--no-wait"]);
+    expect(client.sendAgentMessage).toHaveBeenLastCalledWith("target", "hello", {
+      images: undefined,
+    });
+  });
+
+  it("does not connect when the sender is refused", async () => {
+    senderStamp.mockImplementationOnce(() => {
+      throw {
+        code: "SENDER_UNKNOWN",
+        message: "This send comes from a chat with no identity; send it from your own chat",
+      };
+    });
+    await expect(parsedSend(["target", "hello"])).rejects.toMatchObject({ code: "SENDER_UNKNOWN" });
+    expect(connection).not.toHaveBeenCalled();
+  });
 });

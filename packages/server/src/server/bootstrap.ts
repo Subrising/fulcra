@@ -395,6 +395,8 @@ export interface PaseoSpeechSttLanguages {
 export interface PaseoSpeechConfig {
   providers: RequestedSpeechProviders;
   sttLanguages?: PaseoSpeechSttLanguages;
+  /** FULCRA(core-fixes): silence that ends a voice-mode turn, in ms. */
+  voiceTurnPauseMs?: number;
   local?: PaseoLocalSpeechConfig;
 }
 
