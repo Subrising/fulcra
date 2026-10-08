@@ -1312,8 +1312,8 @@ plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
 plugin-host	A	181	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
-plugin-host	A	290	0	packages/app/src/plugins/prime-sidebar.test.tsx
-plugin-host	A	378	0	packages/app/src/plugins/prime-sidebar.tsx
+plugin-host	A	352	0	packages/app/src/plugins/prime-sidebar.test.tsx
+plugin-host	A	399	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
 plugin-host	A	138	0	packages/app/src/plugins/radius-scratch-owner.ts
 plugin-host	A	290	0	packages/app/src/plugins/react-native/pan-surface.test.tsx
