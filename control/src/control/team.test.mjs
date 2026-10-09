@@ -403,6 +403,41 @@ test("an old holder the labelled list leaves out is still cleared after a change
   assert.equal(w.labelWrites.length, writes);
 });
 
+test("an old holder loses reports-to=owner with the seat; another reporting line is kept", async (t) => {
+  const first = randomUUID(),
+    second = randomUUID();
+  const w = world(t, { snapshots: { [first]: chat(), [second]: chat() } });
+  await seatMain(w, first);
+  await w.control.team.syncSeat("start");
+  assert.equal(w.labels[first]["fulcra.reports-to"], "owner");
+  await seatMain(w, second);
+  await w.control.team.syncSeat("setup");
+  assert.equal(w.labels[first]["fulcra.seat"], "");
+  assert.equal(w.labels[first]["fulcra.reports-to"], "");
+  assert.equal(w.labels[second]["fulcra.reports-to"], "owner");
+  // The clear is one write, not two.
+  assert.equal(
+    w.labelWrites.filter((x) => x.id === first && x.labels["fulcra.seat"] === "").length,
+    1,
+  );
+  assert.ok(
+    w.labelWrites.some(
+      (x) =>
+        x.id === first && x.labels["fulcra.reports-to"] === "" && x.labels["fulcra.seat"] === "",
+    ),
+  );
+  // A holder that was made a lead keeps the lead's line.
+  const third = randomUUID();
+  const v = world(t, { snapshots: { [first]: chat(), [third]: chat() } });
+  await seatMain(v, first);
+  await v.control.team.syncSeat("start");
+  v.labels[first]["fulcra.reports-to"] = third;
+  await seatMain(v, third);
+  await v.control.team.syncSeat("setup");
+  assert.equal(v.labels[first]["fulcra.seat"], "");
+  assert.equal(v.labels[first]["fulcra.reports-to"], third);
+});
+
 test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {
   const main = randomUUID(),
     stale = randomUUID(),

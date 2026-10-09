@@ -143,7 +143,14 @@ export class Team {
       }
     const cleared = [];
     for (const id of stale) {
-      await native.setLabels(id, { [SEAT_LABEL]: "" });
+      // The seat sync wrote "reports to the owner" with the seat, so it is cleared with the seat. A chat that
+      // reports to anyone else keeps its line.
+      const record =
+        typeof native.snapshot === "function" ? await native.snapshot(id).catch(() => null) : null;
+      await native.setLabels(id, {
+        [SEAT_LABEL]: "",
+        ...(record?.labels?.["fulcra.reports-to"] === "owner" ? { "fulcra.reports-to": "" } : {}),
+      });
       cleared.push(id);
       this.record(
         "seat-cleared",
