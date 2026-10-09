@@ -927,9 +927,12 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
       pathname === "/new" ||
       pathname === "/sessions" ||
       pathname === "/schedules" ||
+<<<<<<< HEAD
       pathname === "/insights" ||
       pathname === "/automations" ||
       pathname === "/usage" ||
+=======
+>>>>>>> refs/tags/v0.11.1
       routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
@@ -965,9 +968,12 @@ function RootStack() {
         <Stack.Screen name="open-project" />
         <Stack.Screen name="sessions" />
         <Stack.Screen name="schedules" />
+<<<<<<< HEAD
         <Stack.Screen name="insights" />
         <Stack.Screen name="automations" />
         <Stack.Screen name="usage" />
+=======
+>>>>>>> refs/tags/v0.11.1
         <Stack.Screen name="pair-scan" />
         <Stack.Screen name="oauth/[flowId]" />
       </Stack.Protected>

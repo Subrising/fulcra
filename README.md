@@ -23,6 +23,7 @@
   <a href="#permissions-and-trust">Trust &amp; limits</a>
 </p>
 
+<<<<<<< HEAD
 Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives you one place to lead them. Each session keeps its conversation, its own Git worktree and its diffs. The Command Centre shows what needs you, a prime and project leads organise the work, and your phone picks up the same chat while the Mac keeps working. Your code, providers and credentials stay on the host.
 
 ## Features
@@ -60,6 +61,35 @@ Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives y
 | **Plan environments**               | Radius-derived structural planning and scratch simulation. Persistent runs are default-off; native Bicep is **not included** or bundled. Real deployment and teardown remain held.                                                                           |
 | **Work across devices**             | Desktop, web and compatible source-built mobile clients connect directly or through the encrypted relay. Pair and trust each host. This source-only release has no Fulcra store binary.                                                                      |
 | **Guide the agents**                | Bundled Fulcra orchestration skill: one Claude copy and one shared Codex-discovered copy. Installing a skill grants no role or controller authority.                                                                                                         |
+=======
+Paseo is a desktop, mobile, web, and CLI app for coding agents. Open the desktop app and work: agents, editor, terminals, diffs, pull requests, and a browser in one window. Run many agents at once, each in its own worktree, on one machine or several. The mobile app is the full app, native on iOS and Android.
+
+- **Parallel agents:** Run many agents at once, each in its own worktree.
+- **Built-in orchestration:** Agents in Paseo can create worktrees, launch other agents, and talk to them, across providers.
+- **Full IDE:** Edit files, review diffs, open pull requests, and run terminals, in split panes you arrange how you want.
+- **Self-hosted:** Agents run on your machine with your full dev environment. Use your tools, your configs, and your skills.
+- **Multi-provider:** Claude Code, Codex, Copilot, OpenCode, Pi, Antigravity, and Muse Code through the same interface. Pick the right model for each job.
+- **Voice control:** Dictate tasks or talk through problems in voice mode. Hands-free when you need it.
+- **Cross-device:** iOS, Android, desktop, web, and CLI. Start work at your desk, check in from your phone, script it from the terminal.
+- **Privacy-first:** Paseo doesn't have any telemetry, tracking, or forced log-ins.
+
+[Run parallel tasks in Paseo](https://paseo.sh/docs/parallel-development): start agents in separate worktrees, review their diffs, run each app, and check it in the built-in browser.
+
+## Plugins
+
+Plugins run on the daemon and show up in every client you connect, with the same UI on desktop, web,
+iOS, and Android. Write a plugin once and it is on your phone.
+
+- **UI:** screens, sidebar items, workspace panels, Command Center items, slash commands, composer pills, attachment sources, timeline items, themes.
+- **Agent lifecycle:** change configuration, environment, and MCP servers, answer permissions, follow up when a turn ends.
+- **Providers:** add a coding agent as a provider.
+
+Install from the registry with `paseo plugin add owner/slug`, or from Git or a local directory.
+
+**[Browse plugins](https://paseo.sh/plugins)** · **[Plugin docs](https://paseo.sh/docs/plugins)**
+
+Plugins run with access to your daemon machine and inside connected clients; install only code you trust.
+>>>>>>> refs/tags/v0.11.1
 
 </details>
 
@@ -96,6 +126,7 @@ Fulcra keeps your Claude Code and Codex sessions running on your Mac and gives y
 
 ## How it works
 
+<<<<<<< HEAD
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.png">
@@ -165,6 +196,11 @@ Fulcra has no public app download. You build and package your own copy from sour
 - The provider CLIs that you want to use, for example Claude Code or Codex. Install each one and sign in to it before you start Fulcra.
 
 **1. Clone the source**
+=======
+### Server
+
+For a server, a VM, or any machine without the desktop app. Install the CLI and start the daemon:
+>>>>>>> refs/tags/v0.11.1
 
 ```bash
 git clone https://github.com/Subrising/fulcra.git
@@ -172,7 +208,21 @@ cd fulcra
 git checkout v0.2.8
 ```
 
+<<<<<<< HEAD
 **2. Install the dependencies**
+=======
+Paseo starts, then asks whether to enable the end-to-end encrypted relay for device pairing. If you decline, connect directly over TCP, Tailscale, or another VPN. The desktop, mobile, and web apps connect to this daemon like any other host.
+
+For full setup and configuration, see:
+
+- [Docs](https://paseo.sh/docs)
+- [Connectivity guide](https://paseo.sh/docs/connectivity)
+- [Configuration reference](https://paseo.sh/docs/configuration)
+
+### Docker
+
+Run the Paseo daemon and self-hosted web UI in Docker:
+>>>>>>> refs/tags/v0.11.1
 
 ```bash
 npm ci
@@ -269,7 +319,11 @@ node packages/cli/bin/paseo ls
 
 The executable is still named `paseo`; there is no separate Fulcra npm install. Select the intended host or home rather than assuming the standalone CLI uses the desktop-managed daemon. [CLI tasks and pairing](docs/getting-started.md#use-the-actual-cli) covers explicit tasks and host selection.
 
+<<<<<<< HEAD
 ### Fulcra orchestration skill
+=======
+Paseo is an independent project used by tens of thousands of developers daily, built by one person and funded by the people who use it. Support the work on [GitHub Sponsors](https://github.com/sponsors/boudra). Companies can [sponsor Paseo](https://paseo.sh/sponsor#spot) monthly and have their logo shown here and on the paseo.sh homepage.
+>>>>>>> refs/tags/v0.11.1
 
 Open **Settings → your host → Agents → Orchestration skills**, include **fulcra**, then install or update the selection. The bundled [Fulcra skill](skills/fulcra/SKILL.md) guides persistent sessions, delegation, messages, accounts and usage.
 

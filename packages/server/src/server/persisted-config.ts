@@ -317,7 +317,6 @@ export const PersistedConfigSchema = z
 
     providers: ProvidersSchema.optional(),
     pluginRegistries: PluginRegistriesSchema.optional(),
-    pluginRegistryEnabled: z.boolean().optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
     // Shared credential store sign-in. OAuth client ids are public identifiers, never secrets; a

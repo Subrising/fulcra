@@ -358,6 +358,7 @@ test.skipIf(process.platform === "win32").each([["start"], ["daemon", "run"]])(
         stdio: "ignore",
       });
       const exited = new Promise((resolve) => child!.once("exit", resolve));
+<<<<<<< HEAD
       // The lock is created empty and then written (exclusive create), so wait for a whole lock,
       // not only for the file. The daemon's own reader retries the same way.
       const seen: { lock: { pid?: unknown } | null } = { lock: null };
@@ -378,6 +379,23 @@ test.skipIf(process.platform === "win32").each([["start"], ["daemon", "run"]])(
       child.kill("SIGINT");
       await exited;
       expect(() => process.kill(seen.lock!.pid as number, 0)).toThrow();
+=======
+      // The lock file exists before its contents identify the supervisor.
+      let supervisorPid: number | undefined;
+      await expect
+        .poll(
+          async () => {
+            supervisorPid = (await readDaemonInstance(home))?.pid;
+            return supervisorPid;
+          },
+          { timeout: 10_000 },
+        )
+        .toBeTypeOf("number");
+      await f.ok(["status", "--home", home]);
+      child.kill("SIGINT");
+      await exited;
+      expect(() => process.kill(supervisorPid!, 0)).toThrow();
+>>>>>>> refs/tags/v0.11.1
       expect((await f.ok(["status", "--home", home])).localDaemon).toBe("stopped");
     } finally {
       child?.kill("SIGTERM");

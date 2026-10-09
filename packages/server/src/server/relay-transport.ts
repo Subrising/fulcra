@@ -429,6 +429,10 @@ async function attachEncryptedSocket(
   deviceGate: RelayDeviceGate,
   serverId: string,
 ): Promise<void> {
+  const handshakeTimeout = setTimeout(() => {
+    logger.warn("relay_e2ee_handshake_timeout_terminating");
+    socket.terminate();
+  }, 15_000);
   try {
     const relayTransport = createRelayTransportAdapter(socket, logger);
     const emitter = new EventEmitter();
@@ -487,9 +491,15 @@ async function attachEncryptedSocket(
         onclose: (code, reason) => emitter.emit("close", code, reason),
         onerror: () => socket.close(4403, "Not paired"),
       },
+<<<<<<< HEAD
       serverId,
     );
     encryptedSocket = createEncryptedRelaySocket({
+=======
+    });
+    clearTimeout(handshakeTimeout);
+    const encryptedSocket = createEncryptedRelaySocket({
+>>>>>>> refs/tags/v0.11.1
       channel,
       emitter,
       getTransportBufferedAmount: () => socket.bufferedAmount,
@@ -503,6 +513,8 @@ async function attachEncryptedSocket(
     } catch {
       // ignore
     }
+  } finally {
+    clearTimeout(handshakeTimeout);
   }
 }
 

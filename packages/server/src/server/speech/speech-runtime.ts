@@ -1,14 +1,13 @@
+<<<<<<< HEAD
 import { hasCompleteModelFiles } from "./providers/local/sherpa/model-integrity.js";
 import { hasCompleteSileroVadModel } from "./providers/local/sherpa/silero-vad-provider.js";
+=======
+>>>>>>> refs/tags/v0.11.1
 import type { Logger } from "pino";
 
 import type { PaseoOpenAIConfig, PaseoSpeechConfig } from "../bootstrap.js";
 import type { LocalSpeechModelId } from "./providers/local/config.js";
-import {
-  ensureLocalSpeechModels,
-  getLocalSpeechModelDir,
-  listLocalSpeechModels,
-} from "./providers/local/models.js";
+import { ensureLocalSpeechModels, listMissingLocalSpeechModels } from "./providers/local/models.js";
 import { initializeLocalSpeechServices } from "./providers/local/runtime.js";
 import {
   getOpenAiSpeechAvailability,
@@ -76,6 +75,7 @@ function resolveRequestedSpeechProviders(
   };
 }
 
+<<<<<<< HEAD
 export async function findMissingRequiredLocalModels(params: {
   modelsDir: string | null;
   requiredModelIds: LocalSpeechModelId[];
@@ -107,6 +107,8 @@ export async function findMissingRequiredLocalModels(params: {
   return Array.from(missing);
 }
 
+=======
+>>>>>>> refs/tags/v0.11.1
 function joinModelIds(modelIds: LocalSpeechModelId[]): string {
   if (modelIds.length === 0) {
     return "none";
@@ -484,10 +486,12 @@ export function createSpeechService(params: {
   };
 
   const refreshMissingLocalModels = async (): Promise<void> => {
-    missingLocalModelIds = await findMissingRequiredLocalModels({
-      modelsDir: localModelConfig?.modelsDir ?? null,
-      requiredModelIds: localModelConfig?.defaultModelIds ?? [],
-    });
+    missingLocalModelIds = localModelConfig
+      ? await listMissingLocalSpeechModels({
+          modelsDir: localModelConfig.modelsDir,
+          modelIds: localModelConfig.defaultModelIds,
+        })
+      : [];
   };
 
   const reconcileServices = async (): Promise<void> => {

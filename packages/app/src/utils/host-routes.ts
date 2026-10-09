@@ -428,6 +428,7 @@ export function buildSchedulesRoute() {
   return "/schedules" as const;
 }
 
+<<<<<<< HEAD
 export function buildAutomationsRoute() {
   return "/automations" as const;
 }
@@ -440,6 +441,8 @@ export function buildUsageRoute() {
   return "/usage" as const;
 }
 
+=======
+>>>>>>> refs/tags/v0.11.1
 export function buildOpenProjectRoute() {
   return "/open-project" as const;
 }

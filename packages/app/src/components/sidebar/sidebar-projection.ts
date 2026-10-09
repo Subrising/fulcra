@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { buildStatusGroups } from "@/hooks/sidebar-status-view-model";
 import {
   splitPinnedSidebarGroups,
@@ -56,6 +57,7 @@ export interface SidebarProjectionInput {
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
+  t: TFunction;
 }
 
 export function buildSidebarProjection(input: SidebarProjectionInput): SidebarProjection {
@@ -110,7 +112,13 @@ function buildWorkspaceGroups(
     case "project":
       return [];
     case "status":
+<<<<<<< HEAD
       return buildStatusModeGroups(input, unpinnedWorkspaces);
+=======
+      return statusWorkspaceGroups(
+        buildStatusGroups(unpinnedWorkspaces, input.projectNamesByViewKey, input.t),
+      );
+>>>>>>> refs/tags/v0.11.1
   }
 }
 
