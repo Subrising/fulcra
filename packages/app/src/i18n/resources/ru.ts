@@ -4,14 +4,8 @@ import { pluginSettings } from "./plugin-settings";
 
 export const ru: TranslationResources = {
   plugins: {
-    commandCentreRelay: {
-      title: "Command Centre нужно прямое подключение к этому Mac",
-      why: "Это устройство подключено к Mac через зашифрованный ретранслятор. Через ретранслятор Command Centre открыть нельзя, поэтому эти экраны пусты, пока вы не подключитесь напрямую.",
-      todo: "Чтобы подключиться напрямую, откройте этот хост, выберите «Добавить подключение» → «Прямое подключение» и введите адрес Mac в Tailscale или локальной сети и пароль хоста. Приложение само переключится, как только сможет до него достучаться.",
-      meanwhile: "Сеансы и чат продолжают работать через ретранслятор.",
-      error:
-        "Command Centre нужно прямое подключение к этому Mac. Добавьте для этого хоста прямое подключение (Tailscale или локальная сеть).",
-    },
+    // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
+    commandCentreRelay: en.plugins.commandCentreRelay,
   },
   sessionOwnership: {
     noLeaderYet: "Руководитель ещё не назначен",

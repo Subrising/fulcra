@@ -115,7 +115,10 @@ export function PairDeviceSection({ serverId, onClose }: PairDeviceSectionProps)
     dataShape: "value",
     staleTimeMs: 0,
     retry: 1,
+    // Fulcra 0.2.9: while a pairing code is shown, a device that pairs appears here with its Command Centre choice.
+    refetchInterval: justPairedRefresh(pairingQuery.data),
   });
+  const known = useKnownDevices(devicesQuery.data);
   const invites = useDeviceInvites(client, devicesQuery.refetch);
   const commandCentre = useDeviceCommandCentre(client, devicesQuery.refetch);
   const accountsManage = useDeviceAccountsManage(client, devicesQuery.refetch);
@@ -232,6 +235,7 @@ export function PairDeviceSection({ serverId, onClose }: PairDeviceSectionProps)
         <PairedDeviceRow
           key={device.deviceId}
           device={device}
+          justPaired={isJustPaired(known, device.deviceId)}
           removing={removeDevice.isPending}
           onRemove={handleRemoveDevice}
           invites={invites}
@@ -680,7 +684,23 @@ function OfferExpiry({ minutesLeft }: { minutesLeft: number | null }) {
   );
 }
 
+const JUST_PAIRED_REFRESH_MS = 5000;
+const justPairedRefresh = (offer: { url?: string | null } | undefined) =>
+  offer?.url ? JUST_PAIRED_REFRESH_MS : false;
+/** The devices in the list when this screen first loaded; null until the list arrives. */
+function useKnownDevices(list: { devices: readonly { deviceId: string }[] } | undefined) {
+  const known = useRef<ReadonlySet<string> | null>(null);
+  if (list && !known.current)
+    known.current = new Set(list.devices.map((device) => device.deviceId));
+  return known.current;
+}
+/** A device that was not in the list when this screen first loaded paired while it was open. */
+export function isJustPaired(known: ReadonlySet<string> | null, deviceId: string): boolean {
+  return known !== null && !known.has(deviceId);
+}
+
 function PairedDeviceRow(props: {
+  justPaired?: boolean;
   device: {
     deviceId: string;
     name: string;
@@ -734,6 +754,11 @@ function PairedDeviceRow(props: {
           {t("pairing.device.remove")}
         </Button>
       </View>
+      {props.justPaired && props.commandCentre && device.commandCentre !== true ? (
+        <Text style={styles.grantWarning} testID={`paired-device-just-paired-${device.deviceId}`}>
+          {t("pairing.device.justPaired")}
+        </Text>
+      ) : null}
       {props.commandCentre ? (
         <DeviceCommandCentreSwitch
           deviceId={device.deviceId}

@@ -38,7 +38,9 @@ describe("L46: Command Centre over the relay", () => {
     const runtime = createPluginSurfaceRuntime(client, plugin(COMMAND_CENTRE_PLUGIN_ID))!;
     const read = runtime.invoke("organization.session-defaults", {});
     await expect(read).rejects.toBeInstanceOf(CommandCentreNeedsDirectConnectionError);
-    await expect(read).rejects.toThrow("Command Centre needs a direct connection to this Mac.");
+    await expect(read).rejects.toThrow(
+      "Command Centre is off for this device. On the Mac, turn on Allow Command Centre for it",
+    );
     await expect(read).rejects.not.toThrow(/Management unavailable/);
     expect(invokePluginRpc).not.toHaveBeenCalled();
   });

@@ -6,11 +6,10 @@ import { getHostRuntimeStore, type ActiveConnection } from "@/runtime/host-runti
 import { pluginRegistry } from "./registry";
 
 /**
- * L46: the daemon authenticates Command Centre management only on a direct (password) connection. A relay
- * session never carries a management principal (MANAGEMENT.md: the paired-device producer is not built), so
- * every Command Centre read over the relay would fail with a bare "Management unavailable". Over the relay the
- * app sends none and says plainly what the user can do; the host runtime switches to a direct connection
- * whenever one is reachable (connection-selection.ts).
+ * L46: the daemon serves Command Centre over the relay only to a paired device that this Mac's owner allowed ("Allow
+ * Command Centre", L46 option 5); a direct connection signs in with the host password. Over the relay without that
+ * grant the app sends no Command Centre read and names the switch instead. The host runtime still switches to a
+ * direct connection whenever one is configured and reachable (connection-selection.ts).
  */
 export const COMMAND_CENTRE_PLUGIN_ID = LEGACY_CONTROLLER_PLUGIN_ID;
 
