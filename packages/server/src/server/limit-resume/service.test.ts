@@ -1,9 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HANDOFF_MS,
+  INTERRUPTED_RESUME_PROMPT,
+  INTERRUPTED_SETTLE_MS,
   LimitResumeService,
   MAX_CHAIN,
   NETWORK_BACKOFF_MS,
@@ -25,6 +27,11 @@ const completed = (agentId: string, turnId = "t1"): LimitResumeEvent => ({
   type: "agent_stream",
   agentId,
   event: { type: "turn_completed", turnId },
+});
+const userMessage = (agentId: string): LimitResumeEvent => ({
+  type: "agent_stream",
+  agentId,
+  event: { type: "timeline", item: { type: "user_message" } },
 });
 const started = (agentId: string): LimitResumeEvent => ({
   type: "agent_stream",
@@ -440,5 +447,117 @@ describe("LimitResumeService", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(sent).toEqual([]);
     svc.stop();
+  });
+
+  describe("interrupted by a daemon restart", () => {
+    const running = () =>
+      (JSON.parse(readFileSync(limitResumeFilePath(home), "utf8")) as { running: object }).running;
+    /** One turn runs on the first daemon, which then stops mid-turn; the second daemon boots later. */
+    const interruptedRestart = async () => {
+      const first = make();
+      first.start();
+      await first.onAgentEvent(started("a"));
+      const recorded = first.onAgentEvent(userMessage("a"));
+      await vi.advanceTimersByTimeAsync(1);
+      await recorded;
+      first.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const second = make();
+      second.start();
+      return second;
+    };
+
+    it("keeps the running turn's binding on disk and drops it when the turn ends", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(started("a"));
+      expect(Object.keys(running())).toEqual(["a"]);
+      await svc.onAgentEvent(completed("a"));
+      expect(running()).toEqual({});
+    });
+
+    it("resumes an interrupted session once, after the settle delay, with the restart prompt", async () => {
+      agents.set("a", idle());
+      const svc = await interruptedRestart();
+      await svc.enqueueInterrupted("boot-2");
+      const due = Date.now() + INTERRUPTED_SETTLE_MS;
+      expect(markers.get("a")).toBe(new Date(due).toISOString());
+      expect(running()).toEqual({});
+
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS - 1_000);
+      expect(sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sent).toEqual([{ agentId: "a", prompt: INTERRUPTED_RESUME_PROMPT, at: due }]);
+      expect(markers.get("a")).toBeNull();
+
+      await svc.enqueueInterrupted("boot-2");
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS * 4);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("never resumes a session whose binding changed while the daemon was down", async () => {
+      agents.set("a", idle());
+      const svc = await interruptedRestart();
+      await svc.enqueueInterrupted("boot-2");
+      agents.set("a", { ...idle(), binding: `v1:${"b".repeat(64)}` });
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS + 2_000);
+      expect(sent).toEqual([]);
+      expect(markers.get("a")).toBeNull();
+    });
+
+    it("does not queue a session without a record, an opted-out session, or when auto-resume is off", async () => {
+      agents.set("a", idle());
+      const svc = await interruptedRestart();
+      enabled = false;
+      await svc.enqueueInterrupted("boot-2");
+      expect(queued()).toEqual([]);
+
+      enabled = true;
+      agents.set("c", { ...idle(), labels: { "fulcra.limit-resume": "off" } });
+      const again = make();
+      again.start();
+      await again.onAgentEvent(started("c"));
+      again.stop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      const third = make();
+      third.start();
+      await third.enqueueInterrupted("boot-3");
+      expect(queued()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS * 4);
+      expect(sent).toEqual([]);
+    });
+
+    it("keeps a record written after this boot started and does not queue it", async () => {
+      agents.set("a", idle());
+      const svc = make();
+      svc.start();
+      await svc.onAgentEvent(started("a"));
+      await svc.enqueueInterrupted("boot-1");
+      expect(queued()).toEqual([]);
+      expect(Object.keys(running())).toEqual(["a"]);
+    });
+
+    it("reads a queue file written before running turns were recorded", async () => {
+      agents.set("a", idle());
+      mkdirSync(path.dirname(limitResumeFilePath(home)), { recursive: true });
+      const binding = idle().binding!;
+      const entry = { agentId: "a", limitId: "a:t1", detectedAt: T0, resumeAt: T0 + 60_000 };
+      writeFileSync(
+        limitResumeFilePath(home),
+        JSON.stringify({
+          v: 1,
+          entries: [{ ...entry, attempt: 0, epoch: 0, source: "reset", unscoped: true, binding }],
+          recent: {},
+        }),
+      );
+      const svc = make();
+      svc.start();
+      expect(svc.pendingResumeAt("a")).toBe(T0 + 60_000);
+      await svc.onAgentEvent(completed("b"));
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.prompt).toBe(RESUME_PROMPT);
+    });
   });
 });

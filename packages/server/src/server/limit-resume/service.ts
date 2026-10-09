@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  INTERRUPTED_RESUME_PROMPT,
   LIMIT_RESUME_AT_LABEL,
   LIMIT_RESUME_OPT_OUT_LABEL,
   LIMIT_RESUME_PROMPT,
@@ -30,6 +31,11 @@ import { backoffMs } from "./parse-reset.js";
 // - The queue is a file under $PASEO_HOME/limit-resume, so a daemon restart keeps it.
 // - The global toggle, the per-session opt-out label, busy state and the turn epoch are checked again immediately
 //   before the prompt is admitted.
+//
+// Interrupted turns use the same queue and the same binding rule. While a turn runs, its binding is kept in the
+// queue file (refreshed on each non-text timeline item, written only when it changes). A daemon that stops mid-turn (restart or crash)
+// leaves that record; at the next boot each such session is queued once with that recorded binding, and it is
+// resumed only if the reloaded session still has the same binding. A session without a record is never resumed.
 
 export const RESUME_PROMPT = LIMIT_RESUME_PROMPT;
 export { LIMIT_RESUME_AT_LABEL, LIMIT_RESUME_OPT_OUT_LABEL };
@@ -40,8 +46,14 @@ export const MAX_JITTER_MS = 60_000;
 export const HANDOFF_MS = 150_000;
 export const MAX_CHAIN = 4;
 export const NETWORK_BACKOFF_MS = [30_000, 120_000, 600_000];
-export { NETWORK_RESUME_PROMPT };
+export { NETWORK_RESUME_PROMPT, INTERRUPTED_RESUME_PROMPT };
+/** After a daemon restart: lets providers, relay and the account pool come back before sessions are woken. */
+export const INTERRUPTED_SETTLE_MS = 45_000;
 const CHAIN_WINDOW_MS = 6 * 60 * 60 * 1000;
+const RESUME_PROMPTS: Partial<Record<string, string>> = {
+  network: NETWORK_RESUME_PROMPT,
+  interrupted: INTERRUPTED_RESUME_PROMPT,
+};
 const STALE_AFTER_MS = 12 * 60 * 60 * 1000;
 
 interface QueueEntry {
@@ -54,24 +66,33 @@ interface QueueEntry {
   /** The session's turn epoch when the stop was seen; a newer turn invalidates the entry. */
   epoch: number;
   /** "reset" when the provider named a reset time, "backoff" when the wait is our own estimate. */
-  source: "reset" | "backoff" | "network";
+  source: ResumeSource;
   /** Captured at the stop: a later removal of the ownership observer never grants fallback. */
   unscoped?: boolean;
   /** Original stop fingerprint only; never replaced with a later observation. */
   binding?: string;
 }
 
+type ResumeSource = "reset" | "backoff" | "network" | "interrupted";
+
 interface RecentResume {
   resumedAt: number;
   attempt: number;
   limitId: string;
-  source?: "reset" | "backoff" | "network";
+  source?: ResumeSource;
+}
+
+/** The binding of a turn that is running now; left behind only when the daemon stops mid-turn. */
+interface RunningTurn {
+  binding: string;
+  at: number;
 }
 
 interface QueueFile {
   v: 1;
   entries: QueueEntry[];
   recent: Record<string, RecentResume>;
+  running: Record<string, RunningTurn>;
 }
 
 export interface LimitResumeAgent {
@@ -94,7 +115,7 @@ export interface LimitResumeDeps {
   setMarker: (
     agentId: string,
     resumeAtIso: string | null,
-    reason?: "network" | "usage",
+    reason?: "network" | "usage" | "interrupted",
   ) => Promise<void>;
   /**
    * Starts the resume turn with repeatable refusal-only `stillWanted` checks after all preparation awaits.
@@ -109,6 +130,8 @@ export interface LimitResumeDeps {
     originalBinding: string,
   ) => Promise<void>;
   onError: (error: unknown) => void;
+  /** Says why a due resume was dropped without a turn (operators read this in the daemon log). */
+  onSkip?: (agentId: string, reason: string) => void;
   now?: () => number;
   random?: () => number;
 }
@@ -122,6 +145,7 @@ export interface LimitResumeEvent {
     code?: unknown;
     diagnostic?: unknown;
     turnId?: unknown;
+    item?: { type?: unknown };
   };
 }
 
@@ -130,7 +154,7 @@ export function limitResumeFilePath(paseoHome: string): string {
 }
 
 function emptyQueue(): QueueFile {
-  return { v: 1, entries: [], recent: {} };
+  return { v: 1, entries: [], recent: {}, running: {} };
 }
 
 function loadQueue(file: string): QueueFile {
@@ -147,7 +171,13 @@ function loadQueue(file: string): QueueFile {
         Number.isFinite(e.epoch),
     );
     const recent = parsed.recent && typeof parsed.recent === "object" ? parsed.recent : {};
-    return { v: 1, entries, recent };
+    const running: Record<string, RunningTurn> = {};
+    if (parsed.running && typeof parsed.running === "object") {
+      for (const [agentId, turn] of Object.entries(parsed.running)) {
+        if (validBinding(turn?.binding) && Number.isFinite(turn.at)) running[agentId] = turn;
+      }
+    }
+    return { v: 1, entries, recent, running };
   } catch {
     return emptyQueue();
   }
@@ -161,6 +191,17 @@ function eligibleBinding(agent: LimitResumeAgent, binding: string | null): boole
   return agent.unscopedResumeAllowed && validBinding(binding) && agent.binding === binding;
 }
 
+/** Why a loaded session may not take its queued resume, or null when it may. */
+function refusalOf(agent: LimitResumeAgent | null, binding: string): string | null {
+  if (!agent) return "session not found";
+  if (agent.archived) return "archived";
+  if (agent.busy) return "busy";
+  if (agent.binding === null) return "no binding after load";
+  if (agent.binding !== binding) return "binding changed";
+  if (agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
+  return null;
+}
+
 export class LimitResumeService {
   private readonly file: string;
   private readonly now: () => number;
@@ -172,6 +213,7 @@ export class LimitResumeService {
   private nextSlotAt = 0;
   private ticking = false;
   private stopped = false;
+  private startedAt = 0;
   private unsubscribe: (() => void) | null = null;
 
   constructor(private readonly deps: LimitResumeDeps) {
@@ -181,6 +223,7 @@ export class LimitResumeService {
   }
 
   start(): void {
+    this.startedAt = this.now();
     this.queue = loadQueue(this.file);
     const refused = this.queue.entries.filter(
       (entry) => entry.unscoped !== true || !validBinding(entry.binding),
@@ -234,16 +277,31 @@ export class LimitResumeService {
     const kind = input.event.type;
     if (kind === "turn_started") {
       // Synchronous: the epoch moves before any pending handler can resume from an older stop.
-      this.epochs.set(agentId, this.epochOf(agentId) + 1);
+      const epoch = this.epochOf(agentId) + 1;
+      this.epochs.set(agentId, epoch);
       await this.cancel(agentId);
+      await this.recordRunning(agentId, epoch);
       return;
     }
+    const item = input.event.item?.type;
+    if (kind === "timeline" && item !== "assistant_message" && item !== "reasoning") {
+      // A new session's binding becomes readable only once it is set up, and the turn's user message moves its
+      // message time just after this event. So each non-text timeline item (user message, tool call, ...)
+      // refreshes the record; streamed text is skipped, and the file is written only on change.
+      const epoch = this.epochOf(agentId);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await this.recordRunning(agentId, epoch);
+      return;
+    }
+    if (kind === "turn_canceled") await this.clearRunning(agentId);
     if (kind !== "turn_failed" && kind !== "turn_completed") return;
 
+    // Captured synchronously at the stop, before any await.
     const binding = this.deps.captureBinding(agentId);
     const epoch = this.epochOf(agentId);
     const turnId = typeof input.event.turnId === "string" ? input.event.turnId : null;
     const now = this.now();
+    await this.clearRunning(agentId);
     let stop: LimitStop | null;
     if (kind === "turn_failed") {
       const text = [input.event.error, input.event.code, input.event.diagnostic]
@@ -344,6 +402,77 @@ export class LimitResumeService {
     };
   }
 
+  /** Keeps the running turn's binding on disk, so a restart in the middle of it can be resumed safely. */
+  private recordRunning(agentId: string, epoch: number): Promise<void> {
+    return this.locked(async () => {
+      if (this.stopped || this.epochOf(agentId) !== epoch) return;
+      const binding = this.deps.captureBinding(agentId);
+      const current = this.queue.running[agentId];
+      if (!validBinding(binding)) {
+        if (!current) return;
+        delete this.queue.running[agentId];
+      } else {
+        if (current?.binding === binding) return;
+        this.queue.running[agentId] = { binding, at: this.now() };
+      }
+      this.save();
+    });
+  }
+
+  private clearRunning(agentId: string): Promise<void> {
+    return this.locked(async () => {
+      if (!this.queue.running[agentId]) return;
+      delete this.queue.running[agentId];
+      this.save();
+    });
+  }
+
+  /**
+   * Queues, once each, the sessions whose turn was still running when the previous daemon stopped: a record from
+   * before this boot means the service stopped (or the process died) before that turn ended. This covers a graceful
+   * restart, which saves the cut-off turn as stopped, as well as a crash. `bootId` names this boot.
+   */
+  enqueueInterrupted(bootId: string): Promise<void> {
+    return this.locked(async () => {
+      const recorded = this.queue.running;
+      this.queue.running = {};
+      for (const [agentId, turn] of Object.entries(recorded)) {
+        if (turn.at >= this.startedAt) this.queue.running[agentId] = turn;
+        else await this.admitInterrupted(agentId, `${agentId}:interrupted:${bootId}`, turn.binding);
+      }
+      this.save();
+    });
+  }
+
+  private async admitInterrupted(agentId: string, limitId: string, binding: string): Promise<void> {
+    const epoch = this.epochOf(agentId);
+    const agent = await this.admissionAgent(agentId, limitId, epoch);
+    if (!agent) return;
+    const now = this.now();
+    const recent = this.queue.recent[agentId];
+    const attempt =
+      recent && recent.source === "interrupted" && now - recent.resumedAt < CHAIN_WINDOW_MS
+        ? recent.attempt + 1
+        : 0;
+    if (attempt >= MAX_CHAIN) return;
+    const entry: QueueEntry = {
+      agentId,
+      limitId,
+      detectedAt: now,
+      resumeAt: now + INTERRUPTED_SETTLE_MS + Math.floor(this.random() * MAX_JITTER_MS),
+      attempt,
+      epoch,
+      source: "interrupted",
+      unscoped: true,
+      binding,
+    };
+    this.queue.entries.push(entry);
+    await this.deps
+      .setMarker(agentId, new Date(entry.resumeAt).toISOString(), "interrupted")
+      .catch(this.deps.onError);
+    this.arm();
+  }
+
   private async clearStaleMarker(agentId: string, agent: LimitResumeAgent): Promise<void> {
     if (agent.labels[LIMIT_RESUME_AT_LABEL])
       await this.deps.setMarker(agentId, null).catch(this.deps.onError);
@@ -413,18 +542,15 @@ export class LimitResumeService {
       !unchanged() ||
       this.now() - entry.resumeAt > STALE_AFTER_MS
     ) {
+      this.deps.onSkip?.(entry.agentId, "entry no longer valid");
       await this.cancel(entry.agentId);
       return;
     }
     const agent = await this.deps.getAgent(entry.agentId, true);
     if (this.stopped) return;
-    if (
-      !agent ||
-      agent.archived ||
-      agent.busy ||
-      agent.binding !== entry.binding ||
-      agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off"
-    ) {
+    const refusal = refusalOf(agent, entry.binding!);
+    if (refusal) {
+      this.deps.onSkip?.(entry.agentId, refusal);
       await this.cancel(entry.agentId);
       return;
     }
@@ -439,7 +565,7 @@ export class LimitResumeService {
     await this.deps
       .sendResume(
         entry.agentId,
-        entry.source === "network" ? NETWORK_RESUME_PROMPT : RESUME_PROMPT,
+        RESUME_PROMPTS[entry.source] ?? RESUME_PROMPT,
         stillWanted,
         () => {
           if (!stillWanted()) throw new Error("Limit resume no longer wanted");
@@ -465,6 +591,7 @@ export class LimitResumeService {
       await this.deps.setMarker(entry.agentId, null).catch(this.deps.onError);
     } else if (!this.stopped) {
       // A final loading/admission guard refused. Do not spin an already-due timer.
+      this.deps.onSkip?.(entry.agentId, "refused at the final send check");
       await this.cancel(entry.agentId);
     }
   }

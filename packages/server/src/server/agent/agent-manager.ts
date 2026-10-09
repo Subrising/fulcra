@@ -4495,7 +4495,7 @@ export class AgentManager {
   async updateLimitResumeMarker(
     agentId: string,
     resumeAtIso: string | null,
-    reason: "network" | "usage" = "usage",
+    reason: "network" | "usage" | "interrupted" = "usage",
   ): Promise<void> {
     if (resumeAtIso !== null && !Number.isFinite(Date.parse(resumeAtIso)))
       throw new Error("Invalid limit resume status time");

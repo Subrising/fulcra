@@ -138,18 +138,21 @@ it("qualifies eligible standalone continuation and preserves owner controls with
   f.currentFeatures = f.features;
   render(<AutoResumeOnLimitCard serverId="host" />);
   expect(
-    screen.getByText("Auto-resume eligible sessions after usage limits reset").textContent,
-  ).toBe("Auto-resume eligible sessions after usage limits reset");
+    screen.getByText("Auto-resume eligible sessions after usage limits reset or a restart")
+      .textContent,
+  ).toBe("Auto-resume eligible sessions after usage limits reset or a restart");
   expect(
     screen.getByText(
-      "Eligible standalone sessions may resume after a usage limit resets if their setup is unchanged. Sessions managed by a prime or another owner use that owner’s controls. Turning this on does not grant permission to continue.",
+      "Eligible standalone sessions may resume after a usage limit resets, or after this host restarts during their turn, if their setup is unchanged. Sessions managed by a prime or another owner use that owner’s controls. Turning this on does not grant permission to continue.",
     ).textContent,
   ).toBe(
-    "Eligible standalone sessions may resume after a usage limit resets if their setup is unchanged. Sessions managed by a prime or another owner use that owner’s controls. Turning this on does not grant permission to continue.",
+    "Eligible standalone sessions may resume after a usage limit resets, or after this host restarts during their turn, if their setup is unchanged. Sessions managed by a prime or another owner use that owner’s controls. Turning this on does not grant permission to continue.",
   );
   expect(
     screen
-      .getByRole("switch", { name: "Auto-resume eligible sessions after usage limits reset" })
+      .getByRole("switch", {
+        name: "Auto-resume eligible sessions after usage limits reset or a restart",
+      })
       .getAttribute("aria-checked"),
   ).toBe("true");
   expect(
