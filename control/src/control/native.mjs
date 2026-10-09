@@ -311,11 +311,13 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       verifyActivation();
       await daemon.detachAgent(id);
     },
-    // The live chats here that carry one label value (archived chats are left out). Bounded to one page.
+    // The chats here that carry one label value (archived chats are left out). Bounded to one page. The history read
+    // also lists a stored chat whose provider is not available right now, as the daemon's routing does; the live list
+    // leaves it out, so a holder would be relabelled every minute and a stale holder never cleared.
     labelled: async (key, value) => {
       verifyActivation();
-      const page = await daemon.fetchAgents({
-        filter: { labels: { [key]: value } },
+      const page = await daemon.fetchAgentHistory({
+        filter: { labels: { [key]: value }, includeArchived: false },
         page: { limit: 50 },
       });
       return (page.entries ?? [])
