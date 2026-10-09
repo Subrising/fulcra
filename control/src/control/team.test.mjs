@@ -386,6 +386,23 @@ test("a holder the labelled list leaves out is not written again when its own re
   assert.equal(w.control.team.history().filter((c) => c.kind === "seat-set").length, 1);
 });
 
+test("an old holder the labelled list leaves out is still cleared after a change of main assistant", async (t) => {
+  const first = randomUUID(),
+    second = randomUUID();
+  const w = world(t, { snapshots: { [first]: chat(), [second]: chat() } });
+  w.control.native.labelled = async () => []; // the daemon directory drops both chats (no project records)
+  await seatMain(w, first);
+  await w.control.team.syncSeat("start");
+  assert.equal(w.labels[first]["fulcra.seat"], "main-assistant");
+  await seatMain(w, second); // the owner makes another chat the main assistant
+  await w.control.team.syncSeat("setup");
+  assert.equal(w.labels[second]["fulcra.seat"], "main-assistant");
+  assert.equal(w.labels[first]["fulcra.seat"], ""); // found through the controller's own record of holders
+  const writes = w.labelWrites.length;
+  await w.control.team.syncSeat("timer"); // nothing more to do
+  assert.equal(w.labelWrites.length, writes);
+});
+
 test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {
   const main = randomUUID(),
     stale = randomUUID(),

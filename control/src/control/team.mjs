@@ -127,8 +127,22 @@ export class Team {
     const seat = held.find((b) => b.seat === "main") ?? held[0] ?? null;
     const holder = seat && !native.route?.(seat.sessionId) ? seat.sessionId : null;
     const marked = await native.labelled(SEAT_LABEL, MAIN_ASSISTANT);
+    // The labelled list can leave a chat out (the daemon's directory drops a chat whose project or workspace record
+    // is missing). Every chat this controller ever labelled is checked by its own record too, so an old holder that
+    // the list leaves out is still cleared, and the role never stays with two chats.
+    const stale = marked.filter((id) => id !== holder);
+    const known = this.db
+      .prepare("SELECT DISTINCT subject FROM team_changes WHERE kind='seat-set'")
+      .all()
+      .map((r) => r.subject)
+      .filter((id) => id !== holder && !stale.includes(id) && !native.route?.(id));
+    if (typeof native.snapshot === "function")
+      for (const id of known) {
+        const record = await native.snapshot(id).catch(() => null);
+        if (record?.labels?.[SEAT_LABEL] === MAIN_ASSISTANT) stale.push(id);
+      }
     const cleared = [];
-    for (const id of marked.filter((id) => id !== holder)) {
+    for (const id of stale) {
       await native.setLabels(id, { [SEAT_LABEL]: "" });
       cleared.push(id);
       this.record(
