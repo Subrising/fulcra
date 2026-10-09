@@ -17,3 +17,16 @@ export function managementFailure(failure: unknown) {
     error = failure.publicMessage;
   return { code, error };
 }
+/**
+ * Fulcra 0.2.9: the real reason for the daemon log only. Clients still get the plain outcome code above; the log
+ * needs the reason, or "Management refused" hides a stopped controller.
+ */
+export function managementReason(failure: unknown): string {
+  const message = failure instanceof Error ? failure.message : String(failure);
+  return message.slice(0, 300);
+}
+/** The command's method name for the log, or null. */
+export function managementMethod(command: unknown): string | null {
+  const method = (command as { method?: unknown } | null)?.method;
+  return typeof method === "string" ? method.slice(0, 80) : null;
+}

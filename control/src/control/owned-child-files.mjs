@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { socketLocation, validateSocketDirectory } from "./socket-location.mjs";
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
@@ -86,4 +87,34 @@ export function recoverOwnedFiles(owner, { exited }) {
     }
   }
   owners.delete(owner);
+}
+
+/** When this computer last started, in ms. */
+export const systemBootMs = () => Date.now() - os.uptime() * 1000;
+/**
+ * Fulcra 0.2.9: a controller lock written before this computer last started cannot belong to a running controller, so
+ * the host may recover it. After a restart, the lock of the killed controller stayed and every new controller refused
+ * to start. A lock written since the start is never touched here. The margin covers the rounding of the boot time.
+ * Returns true when it removed the lock (and the lock's socket).
+ */
+export function recoverPreBootLock(home, { bootMs = systemBootMs(), marginMs = 5000 } = {}) {
+  const lock = path.join(home, "process.lock");
+  const found = stat(lock);
+  if (!found) return false;
+  if (!found.isFile() || found.size > 1024 || found.mtimeMs >= bootMs - marginMs) return false;
+  let value;
+  try {
+    const fd = fs.openSync(lock, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      value = JSON.parse(fs.readFileSync(fd, "utf8"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    throw Error("Unreadable controller lock from before the restart");
+  }
+  // The same identity and file checks as a recovery after an observed exit.
+  const owner = captureOwnedFiles(home, { pid: value?.pid, epoch: value?.epoch });
+  recoverOwnedFiles(owner, { exited: true });
+  return true;
 }

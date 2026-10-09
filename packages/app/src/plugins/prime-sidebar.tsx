@@ -65,10 +65,26 @@ type FleetNode = Fleet["nodes"][number];
 // "Couldn't load", instead of waiting for someone to press Retry.
 export const SIDEBAR_READ_RETRIES = 6;
 export const sidebarRetryDelay = (attempt: number) => Math.min(1000 * 2 ** attempt, 10_000);
-async function availableDirectory<T extends { available?: boolean }>(read: Promise<T>): Promise<T> {
+async function availableDirectory<T extends { available?: boolean; unavailable?: string | null }>(
+  read: Promise<T>,
+): Promise<T> {
   const directory = await read;
-  if (directory?.available !== true) throw new Error("Role records unavailable");
+  if (directory?.available !== true)
+    throw new Error(directory?.unavailable?.trim() || "Role records unavailable");
   return directory;
+}
+
+// Fulcra 0.2.9: "Loading leads…" stayed for about 35 s of silent retries and then said only "Couldn't load leads",
+// while the Mac mini's controller was stopped. The row now gives the reason from the first failed reply; the
+// automatic retries go on behind it.
+const GENERIC_FAILURE = /^(Management \w+|Role records unavailable|Controller \w+)$/;
+export function leadsFailureLabel(error: unknown, hostLabel: string): string {
+  const message = error instanceof Error ? error.message.trim() : "";
+  const reason =
+    !message || GENERIC_FAILURE.test(message)
+      ? `Command Centre is not answering on ${hostLabel}`
+      : message.slice(0, 120);
+  return `Couldn't load leads: ${reason} · Retry`;
 }
 
 export function PrimeSidebarRows({
@@ -86,6 +102,7 @@ export function PrimeSidebarRows({
   const readFleet = useContract(fleetRpc);
   const readProjects = useContract(projectsRpc);
   const navigation = usePluginHostNavigation(serverId);
+  const hostLabel = useHosts().find((host) => host.serverId === serverId)?.label ?? "this computer";
   const query = useFetchQuery({
     queryKey: ["orca-role-directory", serverId],
     queryFn: () => availableDirectory(read({})),
@@ -166,7 +183,11 @@ export function PrimeSidebarRows({
       {available ? null : (
         <SidebarHeaderRow
           icon={RefreshCw}
-          label={query.isPending ? "Loading leads…" : "Couldn't load leads · Retry"}
+          label={
+            (query.error ?? query.failureReason)
+              ? leadsFailureLabel(query.error ?? query.failureReason, hostLabel)
+              : "Loading leads…"
+          }
           variant="compact"
           onPress={retry}
         />
