@@ -512,6 +512,8 @@ export interface SendMessageOptions {
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: SendAgentMessageRequest["attachments"];
+  /** FULCRA(orchestration): the chat that sends (reporting lines). Omit for the owner. */
+  sender?: SendAgentMessageRequest["sender"];
 }
 
 export type NativeQueueReceipt = NonNullable<
@@ -3915,6 +3917,7 @@ export class DaemonClient {
       ...(options?.activeTurnBehavior ? { activeTurnBehavior: options.activeTurnBehavior } : {}),
       ...(options?.images ? { images: options.images } : {}),
       ...(options?.attachments ? { attachments: options.attachments } : {}),
+      ...(options?.sender ? { sender: options.sender } : {}),
     });
     const payload = await this.sendRequest({
       requestId,

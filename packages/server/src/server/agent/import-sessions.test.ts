@@ -833,6 +833,36 @@ test("importProviderSession restores an archived session as the same standalone 
   expect(harness.freshImports).toEqual([]);
 });
 
+test("an import never brings the main assistant label, and a restore drops an old one", async () => {
+  const fresh = await ProviderImportHarness.create({ sessionId: "thread-claim" });
+  await fresh.import({
+    providerHandleId: "thread-claim",
+    cwd: fresh.snapshot.cwd,
+    labels: { "fulcra.seat": "main-assistant", source: "import" },
+  });
+  expect((fresh.freshImports.at(-1) as { labels?: unknown } | undefined)?.labels).toEqual({
+    source: "import",
+  });
+
+  const restore = await ProviderImportHarness.create({ sessionId: "thread-old-main" });
+  await restore.seed(
+    makeStoredProviderSession({
+      id: restore.snapshot.id,
+      cwd: restore.snapshot.cwd,
+      sessionId: "thread-old-main",
+      labels: { "fulcra.seat": "main-assistant", existing: "label" },
+    }),
+  );
+  await restore.import({
+    providerHandleId: "thread-old-main",
+    cwd: restore.snapshot.cwd,
+    labels: { "fulcra.seat": "main-assistant" },
+  });
+  const labels = (await restore.storage.get(restore.snapshot.id))?.labels;
+  expect(labels).toMatchObject({ existing: "label" });
+  expect(labels).not.toHaveProperty("fulcra.seat");
+});
+
 test("importProviderSession rejects an archived session from a different cwd before restoring", async () => {
   const harness = await ProviderImportHarness.create({ sessionId: "thread-other-cwd" });
   const archived = makeStoredProviderSession({

@@ -5,6 +5,7 @@ import { parseControllerCommand, READ_METHODS } from "./command-parser.mjs";
 import { operatorArtifacts } from "./artifacts.mjs";
 import { timingSafeEqual, randomBytes, createHash } from "node:crypto";
 import { requireManagementPrincipal } from "./management-principal.mjs";
+import { team } from "./team.mjs";
 import { hash } from "./store.mjs";
 import { uuid } from "./authority.mjs";
 import { sessionDefaults, REFUSED, configuredDefaults } from "./provider-mode.mjs";
@@ -187,6 +188,13 @@ export const RPC_METHODS = Object.freeze(
     "task-allowance-set",
     "task-authority",
     "task-index",
+    "team-enrol",
+    "team-history",
+    "team-line",
+    "team-project-anchor",
+    "team-project-archive",
+    "team-project-create",
+    "team-seat-sync",
     "trackers-directory",
     "trackers-history",
     "trackers-link",
@@ -447,6 +455,11 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
       control.store.check(a, request.capability);
       return control.inspect(a);
     }
+    // Fulcra 0.2.8: a seat credential (a lead or a worker) can never change who is on the team.
+    if (TEAM_METHODS.has(request.method) && !Object.hasOwn(request, "operator"))
+      throw managementRefusal(
+        "Only the owner or the main assistant can change the team. A lead or a worker cannot.",
+      );
     if (
       !timingSafeEqual(
         Buffer.from(hash(typeof request.operator === "string" ? request.operator : "")),
@@ -500,6 +513,15 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
           error: control.leadership.lastError ?? null,
         };
       }
+      case "team-enrol":
+      case "team-history":
+      case "team-line":
+      case "team-project-anchor":
+      case "team-project-archive":
+      case "team-project-create":
+      case "team-seat-sync":
+        // The operator-secret lane has no host principal; the host lane is handled in managementDispatcher.
+        return teamCommand(control, request.method, a, OPERATOR_SECRET_PRINCIPAL);
       case "bindings-assign":
         return control.bindings.assign(a);
       case "bindings-unassign":
@@ -1008,6 +1030,31 @@ function recordManagementCall(db, parsed, principal) {
       .prepare("UPDATE management_calls SET outcome=? WHERE id=?")
       .run(String(outcome).slice(0, 500), id);
 }
+const TEAM_METHODS = new Set([
+  "team-enrol",
+  "team-history",
+  "team-line",
+  "team-project-anchor",
+  "team-project-archive",
+  "team-project-create",
+  "team-seat-sync",
+]);
+const OPERATOR_SECRET_PRINCIPAL = Object.freeze({
+  id: "operator-secret",
+  authentication: "operator-secret",
+  deviceId: null,
+});
+// Team changes record the principal the host admitted (the owner's app, his paired phone, or his Fulcra command).
+function teamCommand(control, method, a, principal) {
+  const t = team(control);
+  if (method === "team-history") return t.history(a?.limit ?? 50);
+  if (method === "team-enrol") return t.enrol(a, principal);
+  if (method === "team-line") return t.line(a, principal);
+  if (method === "team-seat-sync") return t.syncSeat("team setup");
+  if (method === "team-project-create") return t.createProject(a, principal);
+  if (method === "team-project-anchor") return t.anchor(a, principal);
+  return t.archiveProject(a, principal);
+}
 // Only the host-owned management channel calls this entry point. A fresh private
 // in-memory gate reaches the existing dispatcher without loading operator.secret.
 export function managementDispatcher(control) {
@@ -1049,7 +1096,9 @@ export function managementDispatcher(control) {
     const done = recordManagementCall(control.store.db, parsed, principal);
     let result;
     try {
-      result = dispatch({ ...parsed, operator: gate });
+      result = TEAM_METHODS.has(parsed.method)
+        ? teamCommand(control, parsed.method, parsed.input, principal)
+        : dispatch({ ...parsed, operator: gate });
     } catch (e) {
       done("error: " + e.message);
       throw e;

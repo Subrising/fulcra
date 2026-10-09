@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 // Private test configuration first: some plugin modules read it when they load.
 import "./portable.fixture";
-import { readProjectList, readProjects } from "./projects";
+import { localProjectDirectory, readProjectList, readProjects } from "./projects";
 import { COMPANY } from "./tasks";
 const id = (n: number) => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`;
 const p = (n = 1) => ({
@@ -225,4 +225,29 @@ test("a local project catalog grants membership only for projects it confirms", 
   );
   assert.equal(broken.available, false);
   assert.match(broken.note, /membership is unknown/);
+});
+test("an archived project is hidden with its tasks; nothing about it reads as partial", async () => {
+  const board = await read(
+    [p(), { ...p(4), name: "Old", archivedAt: "2026-10-08T00:00:00.000Z" }],
+    [i(), i(3, id(4))],
+  );
+  assert.equal(board.partial, false);
+  assert.deepEqual(
+    board.projects.map((x) => x.id),
+    [id(1)],
+  );
+  assert.deepEqual(board.membership, [{ taskId: id(2), projectId: id(1) }]);
+  const local = localProjectDirectory(
+    () => [i(), i(3, id(4))],
+    () => [p(), { ...p(4), name: "Old", status: "archived" }],
+  );
+  assert.equal(local.partial, false);
+  assert.deepEqual(
+    local.projects.map((x) => x.id),
+    [id(1)],
+  );
+  assert.deepEqual(local.membership, [
+    { taskId: id(2), projectId: id(1) },
+    { taskId: id(3), projectId: null },
+  ]);
 });

@@ -299,6 +299,31 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
         lastUserMessageAt: snapshot.lastUserMessageAt ?? null,
       };
     },
+    // Fulcra 0.2.8 reporting lines: write a chat's line labels (fulcra.reports-to, fulcra.seat, fulcra.direct-link).
+    // An empty value clears a label. Never the product's parent label.
+    setLabels: async (id, labels) => {
+      verifyActivation();
+      await daemon.updateAgent(id, { labels });
+    },
+    // The chat stops being a child of the chat that created it, through the daemon's own detach (which keeps the
+    // open-tab and archive bookkeeping right). Does nothing for a chat with no parent.
+    detach: async (id) => {
+      verifyActivation();
+      await daemon.detachAgent(id);
+    },
+    // The chats here that carry one label value (archived chats are left out). Bounded to one page. The history read
+    // also lists a stored chat whose provider is not available right now, as the daemon's routing does; the live list
+    // leaves it out, so a holder would be relabelled every minute and a stale holder never cleared.
+    labelled: async (key, value) => {
+      verifyActivation();
+      const page = await daemon.fetchAgentHistory({
+        filter: { labels: { [key]: value }, includeArchived: false },
+        page: { limit: 50 },
+      });
+      return (page.entries ?? [])
+        .map((entry) => entry?.agent?.id)
+        .filter((id) => typeof id === "string");
+    },
     // H6 item 6: the session's state and the newest timeline entries, for usage-limit detection. Read-only.
     limitTail: async (id) => {
       verifyActivation();

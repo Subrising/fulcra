@@ -6,6 +6,7 @@ import { View, type StyleProp, type ViewStyle } from "react-native";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { PluginSidebarItem } from "@/plugins/sidebar-items";
+import { PinnedMainAssistant } from "@/plugins/prime-sidebar";
 import { canCreateWorktreeForProjectKind } from "@/projects/host-projects";
 import { useHostFeature } from "@/runtime/host-features";
 import {
@@ -45,10 +46,13 @@ export function SidebarNavRows({ style, onBeforeNavigate }: SidebarNavRowsProps)
   const visibleItems = useMemo(() => items.filter((item) => item.visible), [items]);
   const groupRef = useRef<View | null>(null);
 
-  if (visibleItems.length === 0) return null;
+  // Fulcra 0.2.8: the main assistant is pinned first, on every device, whichever computer it runs on.
+  // With every item hidden there is no bordered group, so the pinned row stands alone.
+  if (visibleItems.length === 0) return <PinnedMainAssistant onBeforeNavigate={onBeforeNavigate} />;
 
   return (
     <View ref={groupRef} collapsable={false} style={style}>
+      <PinnedMainAssistant onBeforeNavigate={onBeforeNavigate} />
       <SidebarNewChatRow onBeforeNavigate={onBeforeNavigate} />
       {visibleItems.map((item) => {
         if (item.kind === "plugin") {

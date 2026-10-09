@@ -3934,6 +3934,44 @@ describe("send_agent_prompt MCP tool", () => {
     );
   });
 
+  it("refuses a prompt outside the calling chat's reporting line, before anything is sent", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const worker = {
+      id: "worker-agent",
+      cwd: existingCwd,
+      labels: { "fulcra.reports-to": "lead-agent" },
+      config: { title: "Worker" },
+    } as unknown as ManagedAgent;
+    const lead = { id: "lead-agent", cwd: existingCwd, labels: {}, config: { title: "Lead" } };
+    const otherLead = {
+      id: "other-lead",
+      cwd: existingCwd,
+      lifecycle: "idle",
+      labels: { "fulcra.reports-to": "role:main-assistant" },
+      config: { title: "Other lead" },
+    };
+    spies.agentManager.getAgent.mockImplementation(
+      (agentId: string) =>
+        ({ "worker-agent": worker, "lead-agent": lead, "other-lead": otherLead })[agentId] ?? null,
+    );
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "worker-agent",
+      logger,
+    });
+    const tool = registeredTool(server, "send_agent_prompt");
+    const parsed = await tool.inputSchema.safeParseAsync({ agentId: "other-lead", prompt: "Hi" });
+    if (!parsed.success) throw new Error("Expected send_agent_prompt input to parse");
+
+    await expect(tool.handler(parsed.data as Record<string, unknown>)).rejects.toThrow(
+      "Send this to your lead, Lead (lead-age).",
+    );
+    expect(spies.agentManager.waitForAgentEvent).not.toHaveBeenCalled();
+    expect(spies.agentManager.subscribe).not.toHaveBeenCalled();
+  });
+
   it("keeps top-level prompts blocking by default", async () => {
     const { agentManager, agentStorage, spies } = createTestDeps();
     spies.agentManager.getAgent.mockReturnValue({

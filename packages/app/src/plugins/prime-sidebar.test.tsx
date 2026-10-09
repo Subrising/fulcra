@@ -13,6 +13,12 @@ const f = vi.hoisted(() => ({
   host: "mini" as string | null,
   registryReady: true,
   registeredHost: true,
+  // Fulcra 0.2.8: each connected computer's role directory and fleet, for the pinned main assistant.
+  hosts: [] as { serverId: string; label: string }[],
+  remote: {} as Record<string, { directory: unknown; fleet?: unknown }>,
+  companyHost: null as string | null,
+  chooseCompany: vi.fn(),
+  offline: new Set<string>(),
 }));
 vi.mock("expo-router", () => ({ router: { push: f.push } }));
 vi.mock("./host-navigation-model", () => ({ createPluginHostNavigation: () => ({}) }));
@@ -48,11 +54,54 @@ vi.mock("./registry", () => ({
 }));
 vi.mock("@/runtime/host-runtime", () => ({
   useHostRuntimeClient: () => ({ sendAgentMessage: f.send }),
+  useHosts: () => f.hosts,
+  useHostRegistryLoaded: () => true,
+  useHostRuntimeConnectionStatuses: (ids: readonly string[]) =>
+    new Map(ids.map((id) => [id, f.offline.has(id) ? "offline" : "online"])),
   getHostRuntimeStore: () => ({
     getHostRegistryStatus: () => (f.registryReady ? "ready" : "loading"),
     getHosts: () => (f.registeredHost && f.host ? [{ serverId: f.host }] : []),
+    getSnapshot: (serverId: string) =>
+      f.remote[serverId]
+        ? {
+            client: {
+              invokePluginRpc: async (_plugin: string, method: string) =>
+                method === "organization.fleet"
+                  ? f.remote[serverId]!.fleet
+                  : f.remote[serverId]!.directory,
+            },
+          }
+        : undefined,
   }),
 }));
+vi.mock("@/stores/organization-intake-preferences-store", () => ({
+  useOrganizationIntakePreferences: (
+    select: (state: { companyHost: string | null; chooseCompany: (id: string) => void }) => unknown,
+  ) => select({ companyHost: f.companyHost, chooseCompany: f.chooseCompany }),
+}));
+vi.mock("@/stores/main-assistant-memory-store", async () => {
+  const { create } = await import("zustand");
+  type Memory = Record<string, { seat: string; sessionId: string }>;
+  const useMainAssistantMemory = create<{
+    byHost: Memory;
+    remember: (id: string, v: { seat: string; sessionId: string }) => void;
+    forget: (id: string) => void;
+  }>()((set, get) => ({
+    byHost: {},
+    remember: (id, v) => {
+      const c = get().byHost[id];
+      if (c?.seat !== v.seat || c?.sessionId !== v.sessionId)
+        set({ byHost: { ...get().byHost, [id]: v } });
+    },
+    forget: (id) => {
+      if (!(id in get().byHost)) return;
+      const next = { ...get().byHost };
+      delete next[id];
+      set({ byHost: next });
+    },
+  }));
+  return { useMainAssistantMemory };
+});
 vi.mock("./installation-provider", () => ({ PluginInstallationProvider: () => null }));
 vi.mock("../../../../control/orca-organization/client/use-contract", () => ({
   useContract: (contract: { name: string }) =>
@@ -74,7 +123,8 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
     </button>
   ),
 }));
-import { PrimeSidebarRows } from "./prime-sidebar";
+import { PinnedMainAssistant, PrimeSidebarRows } from "./prime-sidebar";
+import { useMainAssistantMemory } from "@/stores/main-assistant-memory-store";
 const clients: QueryClient[] = [];
 const fastRetry = () => 1;
 function mount() {
@@ -86,7 +136,31 @@ function mount() {
     </QueryClientProvider>,
   );
 }
+function mountPinned() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  render(
+    <QueryClientProvider client={client}>
+      <PinnedMainAssistant />
+    </QueryClientProvider>,
+  );
+}
+const prime = (over: Record<string, unknown> = {}) => ({
+  seat: "main",
+  role: "prime",
+  state: "assigned",
+  sessionPresent: true,
+  sessionId: "original-prime",
+  dispatch: { supported: true },
+  ...over,
+});
 beforeEach(() => {
+  f.hosts = [{ serverId: "mini", label: "Mac-mini.local" }];
+  f.remote = {};
+  f.companyHost = null;
+  f.offline = new Set();
+  useMainAssistantMemory.setState({ byHost: {} });
+  f.chooseCompany.mockReset();
   f.open.mockClear();
   f.push.mockClear();
   f.read.mockReset();
@@ -101,42 +175,77 @@ afterEach(() => {
   cleanup();
   clients.splice(0).forEach((c) => c.clear());
 });
-it("opens the recorded main assistant identity and manages vacant slots through Leadership", async () => {
-  f.read.mockResolvedValue({
-    available: true,
-    primes: [
-      {
-        seat: "delivery",
-        state: "assigned",
-        sessionPresent: true,
-        sessionId: "original-prime",
-        dispatch: { supported: true },
-      },
-      { seat: "research", state: "vacant", sessionId: null },
-    ],
-  });
-  mount();
+it("pins the main assistant at the top with its status and computer, and opens its chat", async () => {
+  f.remote.mini = {
+    directory: {
+      available: true,
+      primes: [prime(), prime({ seat: "research", state: "vacant", sessionId: null })],
+    },
+    fleet: { nodes: [{ id: "original-prime", host: "Mac mini", status: "running", pending: 0 }] },
+  };
+  mountPinned();
   fireEvent.click(
-    await screen.findByRole("button", { name: "Open Delivery main assistant conversation" }),
+    await screen.findByRole("button", {
+      name: "Open Main assistant · Mac-mini.local conversation",
+    }),
+  );
+  expect(screen.getByText("Working · Mac mini")).toBeTruthy();
+  expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "original-prime" });
+  expect(screen.queryByText(/Research/)).toBeNull();
+});
+
+it("shows the main assistant of another computer on this device, with that computer's name", async () => {
+  f.host = "mini";
+  f.hosts = [
+    { serverId: "book", label: "MacBook Pro" },
+    { serverId: "mini", label: "Mac-mini.local" },
+  ];
+  f.companyHost = "book";
+  f.remote = {
+    book: { directory: { available: true, primes: [] } },
+    mini: { directory: { available: true, primes: [prime()] } },
+  };
+  mountPinned();
+  expect(await screen.findByText("Main assistant · Mac-mini.local")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Open Main assistant · Mac-mini.local conversation",
+    }),
   );
   expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "original-prime" });
-  fireEvent.click(
-    screen.getByRole("button", { name: "Manage Research main assistant · Empty slot" }),
-  );
-  expect(f.push).toHaveBeenCalledWith("/h/mini/plugin/orca-organization-next/surface/leadership");
-  expect(f.read).toHaveBeenCalledWith({});
 });
+
+it("an unreachable main assistant chat says so and opens Leads instead", async () => {
+  f.host = null;
+  f.remote.mini = { directory: { available: true, primes: [prime({ sessionPresent: false })] } };
+  mountPinned();
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Manage Main assistant · Mac-mini.local · Not connected",
+    }),
+  );
+  expect(f.open).not.toHaveBeenCalled();
+  expect(f.push).toHaveBeenCalledWith("/h/mini/plugin/orca-organization-next/surface/leadership");
+});
+
+it("shows nothing pinned when no connected computer has a main assistant", async () => {
+  f.remote.mini = { directory: { available: true, primes: [] } };
+  mountPinned();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
 it("distinguishes unavailable role records from an empty directory and allows retry", async () => {
   f.read.mockResolvedValue({ available: false, primes: [] });
   mount();
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Couldn't load main assistants · Retry" }),
-  );
+  fireEvent.click(await screen.findByRole("button", { name: "Couldn't load leads · Retry" }));
   expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
   expect(f.open).not.toHaveBeenCalled();
 });
-it("keeps top main assistants and setup reachable for an empty organization", async () => {
+
+it("keeps setup reachable for an empty organization", async () => {
   f.read.mockResolvedValue({ available: true, primes: [] });
+  f.remote.mini = { directory: { available: true, primes: [] } };
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "No main assistant yet · Set up" }));
   expect(
@@ -144,85 +253,28 @@ it("keeps top main assistants and setup reachable for an empty organization", as
   ).toBeTruthy();
   expect(f.push).toHaveBeenCalledOnce();
 });
-it("does not open a missing or unloaded identity on the controller host", async () => {
-  f.host = null;
-  f.read.mockResolvedValue({
-    available: true,
-    primes: [
-      {
-        seat: "delivery",
-        state: "assigned",
-        sessionPresent: false,
-        sessionId: "old",
-        dispatch: { supported: true },
-      },
-      {
-        seat: "research",
-        state: "assigned",
-        sessionPresent: true,
-        sessionId: "remote",
-        dispatch: { supported: false },
-      },
-    ],
-  });
-  mount();
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Manage Delivery main assistant · Unavailable" }),
-  );
-  fireEvent.click(
-    screen.getByRole("button", { name: "Manage Research main assistant · Unavailable" }),
-  );
-  expect(f.open).not.toHaveBeenCalled();
-  expect(f.push).toHaveBeenCalledTimes(2);
-});
 
-it("opens a Book main assistant on its original host instead of the controller", async () => {
-  f.host = "book";
-  f.read.mockResolvedValue({
-    available: true,
-    primes: [
-      {
-        seat: "research",
-        state: "assigned",
-        sessionPresent: true,
-        sessionId: "remote",
-        dispatch: { supported: true },
-      },
-    ],
-  });
+it("offers the main assistant on another computer as the first setup choice", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "MacBook Pro" },
+    { serverId: "other", label: "Mac-mini.local" },
+  ];
+  f.read.mockResolvedValue({ available: true, primes: [] });
+  f.remote = {
+    mini: { directory: { available: true, primes: [] } },
+    other: { directory: { available: true, primes: [prime()] } },
+  };
   mount();
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Open Research main assistant conversation" }),
-  );
-  expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: "remote" });
-});
-
-for (const refusal of ["missing-host", "registry-not-ready"] as const) {
-  it(`retains the cached Book main assistant identity and opens Leadership when ${refusal}`, async () => {
-    f.host = "book";
-    f.registeredHost = refusal !== "missing-host";
-    f.registryReady = refusal !== "registry-not-ready";
-    f.read.mockResolvedValue({
-      available: true,
-      primes: [
-        {
-          seat: "research",
-          state: "assigned",
-          sessionPresent: true,
-          sessionId: "remote",
-          dispatch: { supported: true },
-        },
-      ],
-    });
-    mount();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Open Research main assistant conversation" }),
-    );
-    expect(f.open).not.toHaveBeenCalled();
-    expect(f.push).toHaveBeenCalledWith("/h/mini/plugin/orca-organization-next/surface/leadership");
-    expect(f.push).toHaveBeenCalledTimes(1);
+  const use = await screen.findByRole("button", {
+    name: "Use the main assistant on Mac-mini.local",
   });
-}
+  const buttons = screen.getAllByRole("button").map((b) => b.textContent);
+  expect(buttons.indexOf(use.textContent)).toBeLessThan(
+    buttons.indexOf("Make a chat the main assistant"),
+  );
+  fireEvent.click(use);
+  expect(f.chooseCompany).toHaveBeenCalledWith("other");
+});
 
 it("pins project leads with a plain status and computer, and + sends new work then opens the chat", async () => {
   f.read.mockResolvedValue({
@@ -264,16 +316,15 @@ it("pins project leads with a plain status and computer, and + sends new work th
   f.send.mockResolvedValue(undefined);
   mount();
   const lead = await screen.findByRole("button", {
-    name: "Open Project lead · weather-cli conversation",
+    name: "Open Lead · weather-cli conversation",
   });
   expect(await screen.findByText("Waiting for you · MacBook Pro")).toBeTruthy();
-  expect(screen.getByText("Working · Mac mini")).toBeTruthy();
   expect(screen.queryByText(/proj-2/)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "New work for Project lead · weather-cli" }));
+  fireEvent.click(screen.getByRole("button", { name: "New work for Lead · weather-cli" }));
   fireEvent.change(screen.getByTestId("sidebar-new-work-input"), {
     target: { value: "Add a --days flag" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Send to Project lead · weather-cli" }));
+  fireEvent.click(screen.getByRole("button", { name: "Send to Lead · weather-cli" }));
   await vi.waitFor(() => expect(f.send).toHaveBeenCalledWith("remote", "Add a --days flag"));
   await vi.waitFor(() =>
     expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "remote" }),
@@ -292,17 +343,19 @@ it("Team map is one click from the sidebar", async () => {
 
 // FULCRA(sidebar-retry): after a daemon restart the first reads fail; the sidebar must load without a Retry press.
 it("retries the first load by itself after a restart", async () => {
-  const delivery = {
-    seat: "delivery",
-    role: "prime",
+  const lead = {
+    seat: "p1",
+    role: "project-orchestrator",
+    projectId: "proj-1",
     state: "assigned",
     sessionPresent: true,
     sessionId: "original-prime",
   };
+  f.projects.mockResolvedValue({ projects: [{ id: "proj-1", name: "weather-cli" }] });
   f.read
     .mockRejectedValueOnce(new Error("plugin not ready"))
     .mockResolvedValueOnce({ available: false, primes: [] })
-    .mockResolvedValue({ available: true, primes: [delivery] });
+    .mockResolvedValue({ available: true, primes: [prime()], projectSeats: [lead] });
   f.fleet
     .mockReset()
     .mockRejectedValueOnce(new Error("plugin not ready"))
@@ -313,9 +366,9 @@ it("retries the first load by itself after a restart", async () => {
     });
   mount();
   expect(
-    await screen.findByRole("button", { name: "Open Delivery main assistant conversation" }),
+    await screen.findByRole("button", { name: "Open Lead · weather-cli conversation" }),
   ).toBeTruthy();
-  expect(screen.queryByText("Couldn't load main assistants · Retry")).toBeNull();
+  expect(screen.queryByText("Couldn't load leads · Retry")).toBeNull();
   expect(f.read).toHaveBeenCalledTimes(3);
   expect(f.fleet).toHaveBeenCalledTimes(2);
 });
@@ -324,9 +377,7 @@ it("Retry reads the lead status again, not only the main assistant list", async 
   f.read.mockResolvedValue({ available: false, primes: [] });
   f.fleet.mockReset().mockRejectedValue(new Error("plugin not ready"));
   mount();
-  const retry = await screen.findByRole("button", {
-    name: "Couldn't load main assistants · Retry",
-  });
+  const retry = await screen.findByRole("button", { name: "Couldn't load leads · Retry" });
   const fleetCalls = f.fleet.mock.calls.length;
   f.read.mockResolvedValue({
     available: true,
@@ -345,8 +396,100 @@ it("Retry reads the lead status again, not only the main assistant list", async 
   f.fleet.mockResolvedValue({
     nodes: [{ id: "remote", host: "MacBook Pro", status: "idle", pending: 0, title: "Lead" }],
   });
+  f.projects.mockResolvedValue({ projects: [{ id: "proj-1", name: "weather-cli" }] });
   fireEvent.click(retry);
   await vi.waitFor(() => expect(f.fleet.mock.calls.length).toBeGreaterThan(fleetCalls));
   expect(await screen.findByText(/Idle · MacBook Pro/)).toBeTruthy();
   expect(screen.queryByText(/Status unknown/)).toBeNull();
+});
+
+it("keeps an offline computer's main assistant, marked offline, and opens its chat", async () => {
+  f.hosts = [
+    { serverId: "book", label: "MacBook Pro" },
+    { serverId: "mini", label: "Mac-mini.local" },
+  ];
+  f.remote = {
+    book: { directory: { available: true, primes: [] } },
+    mini: { directory: { available: true, primes: [prime()] } },
+  };
+  mountPinned();
+  await screen.findByText("Main assistant · Mac-mini.local");
+  expect(useMainAssistantMemory.getState().byHost.mini).toEqual({
+    seat: "main",
+    sessionId: "original-prime",
+  });
+  cleanup();
+  f.offline = new Set(["mini"]);
+  mountPinned();
+  const row = await screen.findByRole("button", {
+    name: "Open Main assistant conversation. Mac-mini.local is offline.",
+  });
+  expect(screen.getByText("Main assistant · Mac-mini.local · offline")).toBeTruthy();
+  expect(screen.queryByText(/No main assistant yet/)).toBeNull();
+  fireEvent.click(row);
+  expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "original-prime" });
+});
+
+it("an offline computer's main assistant hides 'No main assistant yet' in Set up", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "MacBook Pro" },
+    { serverId: "other", label: "Mac-mini.local" },
+  ];
+  f.offline = new Set(["other"]);
+  useMainAssistantMemory.setState({
+    byHost: { other: { seat: "main", sessionId: "remote" } },
+  });
+  f.read.mockResolvedValue({ available: true, primes: [] });
+  f.remote = { mini: { directory: { available: true, primes: [] } } };
+  mount();
+  expect(
+    await screen.findByRole("button", { name: "Use the main assistant on Mac-mini.local" }),
+  ).toBeTruthy();
+  expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
+});
+
+it("shows both main assistants when two computers have one, each with its computer", async () => {
+  f.host = "mini";
+  f.hosts = [
+    { serverId: "book", label: "MacBook Pro" },
+    { serverId: "mini", label: "Mac-mini.local" },
+  ];
+  f.companyHost = "mini";
+  f.remote = {
+    book: { directory: { available: true, primes: [prime({ sessionId: "remote" })] } },
+    mini: { directory: { available: true, primes: [prime()] } },
+  };
+  mountPinned();
+  await screen.findByText("Main assistant · Mac-mini.local");
+  expect(await screen.findByText("Main assistant · MacBook Pro")).toBeTruthy();
+  const titles = screen.getAllByText(/^Main assistant · /).map((node) => node.textContent);
+  expect(titles).toEqual(["Main assistant · Mac-mini.local", "Main assistant · MacBook Pro"]);
+});
+
+it("forgets a computer's main assistant when that computer says it has none", async () => {
+  useMainAssistantMemory.setState({ byHost: { mini: { seat: "main", sessionId: "gone" } } });
+  f.remote.mini = { directory: { available: true, primes: [] } };
+  mountPinned();
+  await vi.waitFor(() => expect(useMainAssistantMemory.getState().byHost.mini).toBeUndefined());
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
+it("says it is still finding the main assistant while another computer's read is pending", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "MacBook Pro" },
+    { serverId: "other", label: "Mac-mini.local" },
+  ];
+  let answer: (value: unknown) => void = () => undefined;
+  f.read.mockResolvedValue({ available: true, primes: [] });
+  f.remote = {
+    mini: { directory: { available: true, primes: [] } },
+    other: { directory: new Promise((resolve) => (answer = resolve)) },
+  };
+  mount();
+  expect(await screen.findByText("Finding your main assistant…")).toBeTruthy();
+  expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
+  answer({ available: true, primes: [prime({ sessionId: "remote" })] });
+  expect(
+    await screen.findByRole("button", { name: "Use the main assistant on Mac-mini.local" }),
+  ).toBeTruthy();
 });

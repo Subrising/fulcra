@@ -1,3 +1,9 @@
+import {
+  MAIN_ASSISTANT_REF,
+  PARENT_AGENT_ID_LABEL,
+  REPORTS_TO_LABEL,
+  REPORTS_TO_OWNER,
+} from "@getpaseo/protocol/agent-labels";
 import type { Agent } from "@/stores/session-store";
 import {
   SESSION_ACCOUNT_LABEL,
@@ -14,11 +20,42 @@ export interface SidebarSessionRow {
   status: Agent["status"];
   pendingPermissionCount: number;
   account: SessionAccount | null;
+  /** Fulcra 0.2.8: the chat's lead in plain words ("Reports to …"), or null when it has no reporting line. */
+  lead: string | null;
+}
+
+const CONTROLLER_PARENT_LABEL = "fulcra.parent-session";
+
+type Sessions = Record<string, { agents: ReadonlyMap<string, Agent> } | undefined>;
+
+/**
+ * The line under a chat's name: who it reports to, from its fulcra.reports-to label. A chat ID names that chat
+ * (on this computer, or "<id>@<serverId>" on another one); an unknown ID says so instead of showing the ID.
+ */
+export function reportingLeadLine(
+  labels: Record<string, string> | undefined,
+  serverId: string,
+  sessions: Sessions,
+): string | null {
+  // The same order as the daemon's reportsTo (packages/server/src/server/reporting-lines.ts): the recorded line,
+  // then the parent the controller or the creating chat recorded.
+  const line =
+    labels?.[REPORTS_TO_LABEL]?.trim() ||
+    labels?.[CONTROLLER_PARENT_LABEL]?.trim() ||
+    labels?.[PARENT_AGENT_ID_LABEL]?.trim();
+  if (!line) return null;
+  if (line === REPORTS_TO_OWNER) return "Reports to you";
+  if (line === MAIN_ASSISTANT_REF) return "Reports to Main assistant";
+  const at = line.lastIndexOf("@");
+  const agentId = at > 0 ? line.slice(0, at) : line;
+  const host = at > 0 ? line.slice(at + 1) : serverId;
+  const title = sessions[host]?.agents.get(agentId)?.title?.trim();
+  return title ? `Reports to ${title}` : "Reports to a chat that is not loaded";
 }
 
 /** Session identity is independent of workspace aggregation and native parentage. */
 export function selectSidebarSessionRows(
-  sessions: Record<string, { agents: ReadonlyMap<string, Agent> } | undefined>,
+  sessions: Sessions,
   serverIds: readonly string[],
 ): SidebarSessionRow[] {
   const rows = new Map<string, SidebarSessionRow>();
@@ -38,6 +75,7 @@ export function selectSidebarSessionRows(
           provider: agent.provider,
           labels: { [SESSION_ACCOUNT_LABEL]: agent.labels?.[SESSION_ACCOUNT_LABEL] ?? "" },
         }),
+        lead: reportingLeadLine(agent.labels, serverId, sessions),
       });
     }
   }
@@ -66,6 +104,7 @@ export function equalSidebarSessionRows(
         row.title === other.title &&
         row.status === other.status &&
         row.pendingPermissionCount === other.pendingPermissionCount &&
+        row.lead === other.lead &&
         row.account?.name === other.account?.name &&
         row.account?.providerLabel === other.account?.providerLabel
       );

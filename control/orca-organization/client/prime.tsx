@@ -27,6 +27,7 @@ import { WorkButton } from "./work-button";
 import { WorkBrief } from "./work-brief";
 import { Activity } from "./fleet";
 import { lastGood } from "./last-good";
+import { TeamSetupCard } from "./team-setup";
 
 /**
  * The top of Orca: recorded prime orchestrators, then a project, then sessions as a drill-down.
@@ -694,6 +695,7 @@ export function PrimeSurface(props: Props) {
           Main assistants first, then each project's lead, then the individual chats.
         </Text>
       </View>
+      <TeamSetupCard {...props} />
       {session && !node && (
         <Text style={text}>
           That conversation is no longer in the current observation. Its history has not been

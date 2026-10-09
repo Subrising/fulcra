@@ -124,6 +124,7 @@ import {
   sendBoundedPhysicalFrame,
   sendBoundedPhysicalFrameAndWait,
 } from "./websocket/physical-socket.js";
+import { VOICE_TURN_PAUSE_MS } from "./speech/turn-detection-provider.js";
 
 const WS_CLOSE_DAEMON_AUTH_FAILED = 4401;
 
@@ -1724,6 +1725,7 @@ export class VoiceAssistantWebSocketServer {
       resolveScriptHealth: this.resolveScriptHealth ?? undefined,
       voice: {
         turnDetection: () => this.speech?.resolveTurnDetection() ?? null,
+        turnPauseMs: () => this.speech?.resolveVoiceTurnPauseMs() ?? VOICE_TURN_PAUSE_MS,
       },
       voiceBridge: {
         registerVoiceSpeakHandler: (agentId, handler) => {

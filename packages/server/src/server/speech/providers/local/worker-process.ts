@@ -206,7 +206,7 @@ async function createSession(
       logger.warn({ err }, "Failed to provision Silero VAD model, falling back to bundled");
     }
     const provider = new SherpaSileroTurnDetectionProvider({ modelPath: vadModelPath }, logger);
-    const session = provider.createSession({ logger });
+    const session = provider.createSession({ logger, silenceMs: message.silenceMs });
     trackTurnDetectionSession(message.sessionId, session);
     await session.connect();
     sessions.set(message.sessionId, session);

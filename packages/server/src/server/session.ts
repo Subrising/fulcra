@@ -147,6 +147,7 @@ import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-regist
 import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-utils";
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
+import { decideSend, lineStoreOf, resolveRoleTarget, type LineStore } from "./reporting-lines.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
@@ -654,6 +655,8 @@ export interface SessionOptions {
   resolveScriptHealth?: (hostname: string) => ScriptHealthState | null;
   voice?: {
     turnDetection?: Resolvable<TurnDetectionProvider | null>;
+    // FULCRA(core-fixes): silence that ends a voice-mode turn, in ms.
+    turnPauseMs?: Resolvable<number>;
   };
   voiceBridge?: {
     registerVoiceSpeakHandler?: (agentId: string, handler: VoiceSpeakHandler) => void;
@@ -1030,6 +1033,7 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.workspaceAutoName = workspaceAutoName;
+    this.localServerId = serverId;
     this.workspaceProvisioning = createWorkspaceProvisioningService({
       lifecycle: this.pluginRuntime,
       serverId,
@@ -4636,7 +4640,7 @@ export class Session {
     try {
       const result = await updateAgentCommand(
         { agentManager: this.agentManager },
-        { agentId, name, labels },
+        { agentId, name, labels, seatWriter: this.isControllerSession() },
       );
 
       if (!result.accepted) {
@@ -9624,6 +9628,55 @@ export class Session {
     }
   }
 
+  // FULCRA(orchestration): this computer's server id, for reporting lines across computers.
+  private localServerId: string | undefined;
+
+  /** FULCRA(orchestration): the owned controller's own plugin session; the only writer of SEAT_LABEL. */
+  private isControllerSession(): boolean {
+    const controller = this.agentManager.trustedPlugins?.controllerPluginId;
+    return Boolean(controller && this.pluginOriginId === controller);
+  }
+
+  /** FULCRA(orchestration): this computer's chats, for reporting lines. */
+  private lineStore(): LineStore {
+    return lineStoreOf({ agentManager: this.agentManager, agentStorage: this.agentStorage });
+  }
+
+  /** FULCRA(orchestration): a stamped send outside the sender's reporting line is refused; see reporting-lines.ts. */
+  private async reportingLineRefusal(
+    sender: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>["sender"],
+    targetId: string,
+  ): Promise<string | null> {
+    if (!sender) return null;
+    const decision = await decideSend(
+      this.lineStore(),
+      sender,
+      targetId,
+      this.localServerId ?? null,
+    );
+    if (!decision) return null;
+    this.sessionLogger.info(
+      {
+        sender: sender.agentId,
+        senderServer: sender.serverId ?? null,
+        target: targetId,
+        allowed: decision.allowed,
+        why: decision.allowed ? decision.why : decision.reason,
+      },
+      "reporting_line.checked",
+    );
+    return decision.allowed ? null : decision.reason;
+  }
+
+  /** FULCRA(orchestration): "role:main-assistant" names the chat that holds the role at delivery time. */
+  private async resolveSendTarget(
+    identifier: string,
+  ): Promise<{ ok: true; agentId: string } | { ok: false; notFound: boolean; error: string }> {
+    const role = await resolveRoleTarget(this.lineStore(), identifier);
+    if (!role) return this.resolveAgentIdentifier(identifier);
+    return role.ok ? role : { ok: false, notFound: true, error: role.error };
+  }
+
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
@@ -9631,7 +9684,8 @@ export class Session {
     const nativePermissionEpoch = this.nativeMessagePermissionEpoch;
     const publicationSignal = msg.nativeQueue ? this.delivery.requestSignal : undefined;
     if (msg.nativeQueue) msg = structuredClone(msg);
-    const resolved = await this.resolveAgentIdentifier(msg.agentId);
+    // FULCRA(orchestration): a send to the main assistant role reaches the chat that holds it now.
+    const resolved = await this.resolveSendTarget(msg.agentId);
     if (!resolved.ok) {
       this.emit({
         type: "send_agent_message_response",
@@ -9647,6 +9701,14 @@ export class Session {
 
     try {
       const agentId = resolved.agentId;
+      const refusal = await this.reportingLineRefusal(msg.sender, agentId);
+      if (refusal) {
+        this.emit({
+          type: "send_agent_message_response",
+          payload: { requestId: msg.requestId, agentId, accepted: false, error: refusal },
+        });
+        return;
+      }
 
       const prompt = buildAgentPrompt(msg.text, msg.images, msg.attachments);
       if (msg.nativeQueue) {

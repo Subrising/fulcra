@@ -2,6 +2,7 @@ import type { WorkMapOverview } from "../shared/work-map";
 import type { RemitsView, Owner, RemitHistoryEntry, Remit } from "../shared/cc/remit";
 import type { Fleet } from "../shared/fleet";
 import { workName } from "./work-labels";
+import { primeName } from "../shared/team";
 
 /**
  * The Organisation tree: prime → projects → orchestrator → live session count. A pure join of three reads the
@@ -41,15 +42,8 @@ const UNASSIGNED: Owner = { kind: "unassigned", primeSeat: null, remitId: null }
 
 /** "delivery" → "Delivery main assistant"; "north-america" → "North america main assistant". A seat slug is not a person. */
 /** "delivery" reads "Delivery main assistant"; a seat already named main or prime reads "Main assistant". */
-export function primeName(seat: string) {
-  const words = seat
-    .replace(/-/g, " ")
-    .replace(/\b(main|prime|assistant)\b/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!words) return "Main assistant";
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)} main assistant`;
-}
+// The plugin server also names seats (team setup), and it cannot import client modules.
+export { primeName } from "../shared/team";
 
 function list(names: string[]) {
   if (names.length <= 2) return names.join(" and ");

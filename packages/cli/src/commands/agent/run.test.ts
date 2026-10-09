@@ -233,6 +233,17 @@ describe("explicit run cwd workspace precedence", () => {
     );
     expect(client.close).toHaveBeenCalledOnce();
   });
+  it("records the calling chat as the new chat's reporting line and names it in the first message", async () => {
+    const client = fakeClient();
+    await parsedRun([]);
+    expect(client.createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        labels: { "fulcra.reports-to": "caller-agent" },
+        initialPrompt:
+          "You report to chat caller-agent. Send your reports and questions to it.\n\nfixture prompt",
+      }),
+    );
+  });
   it("honors --cwd over an ambient workspace without a caller", async () => {
     delete process.env.PASEO_AGENT_ID;
     const client = fakeClient();

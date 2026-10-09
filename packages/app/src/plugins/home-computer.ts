@@ -98,3 +98,117 @@ export function useMainAssistantHosts(serverIds: readonly string[], enabled: boo
     return data ? new Set(data) : null;
   }, [enabled, data]);
 }
+
+/** One computer's answer to "who is your main assistant?". */
+export type HostMainAssistantRead<S> =
+  | { serverId: string; status: "found"; seat: S; node: MainAssistantNode | null }
+  | { serverId: string; status: "none" }
+  | { serverId: string; status: "failed" };
+
+export interface MainAssistantNode {
+  id: string;
+  host: string;
+  status: string;
+  pending?: number;
+}
+
+/** A main assistant row for the sidebar. `seat` is null when it comes from memory only. */
+export interface ShownMainAssistant<S> {
+  serverId: string;
+  seatName: string;
+  sessionId: string;
+  seat: S | null;
+  node: MainAssistantNode | null;
+  offline: boolean;
+}
+
+/**
+ * Fulcra 0.2.8: every main assistant the app knows, one per computer, the home computer first.
+ * A fresh read wins. A computer that is offline, not read yet, or whose read failed shows the main
+ * assistant it last reported, marked offline when it is not connected. A computer that said "none"
+ * shows nothing. Two computers with one each both show; none is picked silently.
+ */
+export function mergeMainAssistants<S extends { seat: string; sessionId: string | null }>(input: {
+  hostIds: readonly string[];
+  online: ReadonlySet<string>;
+  reads: readonly HostMainAssistantRead<S>[] | null;
+  remembered: Readonly<Record<string, { seat: string; sessionId: string }>>;
+  homeServerId: string | null;
+}): ShownMainAssistant<S>[] {
+  const reads = new Map((input.reads ?? []).map((read) => [read.serverId, read]));
+  const shown: ShownMainAssistant<S>[] = [];
+  for (const serverId of input.hostIds) {
+    const read = reads.get(serverId);
+    if (read?.status === "found" && read.seat.sessionId) {
+      shown.push({
+        serverId,
+        seatName: read.seat.seat,
+        sessionId: read.seat.sessionId,
+        seat: read.seat,
+        node: read.node,
+        offline: false,
+      });
+      continue;
+    }
+    if (read?.status === "none") continue;
+    const memory = input.remembered[serverId];
+    if (!memory) continue;
+    shown.push({
+      serverId,
+      seatName: memory.seat,
+      sessionId: memory.sessionId,
+      seat: null,
+      node: null,
+      offline: !input.online.has(serverId),
+    });
+  }
+  const home = shown.findIndex((entry) => entry.serverId === input.homeServerId);
+  if (home > 0) shown.unshift(...shown.splice(home, 1));
+  return shown;
+}
+
+/**
+ * Reads the main assistant of every connected computer, so each device shows it even when this app's home computer
+ * is another one (the MacBook app with the main assistant on the Mac mini). Only online computers are asked.
+ */
+export function useMainAssistantReads<
+  S extends { seat: string; state: string; sessionId: string | null },
+>(onlineIds: readonly string[], pick: (primes: readonly S[] | undefined) => S | null) {
+  const key = useMemo(() => [...onlineIds].sort().join(","), [onlineIds]);
+  const query = useFetchQuery({
+    queryKey: ["fulcra-main-assistants", key],
+    queryFn: async (): Promise<HostMainAssistantRead<S>[]> =>
+      Promise.all(
+        key.split(",").map(async (serverId): Promise<HostMainAssistantRead<S>> => {
+          const client = getHostRuntimeStore().getSnapshot(serverId)?.client;
+          if (!client) return { serverId, status: "failed" };
+          try {
+            const reply = (await client.invokePluginRpc(
+              pluginRegistry.controllerPluginId(serverId),
+              "organization.role-directory",
+              {},
+            )) as { available?: boolean; primes?: S[] } | null;
+            if (!reply?.available) return { serverId, status: "failed" };
+            const seat = pick(reply.primes);
+            if (!seat) return { serverId, status: "none" };
+            const fleet = (await client
+              .invokePluginRpc(
+                pluginRegistry.controllerPluginId(serverId),
+                "organization.fleet",
+                {},
+              )
+              .catch(() => null)) as { nodes?: (MainAssistantNode | null)[] } | null;
+            const node = fleet?.nodes?.find((n) => n?.id === seat.sessionId) ?? null;
+            return { serverId, status: "found", seat, node };
+          } catch {
+            return { serverId, status: "failed" };
+          }
+        }),
+      ),
+    enabled: key.length > 0,
+    staleTimeMs: 30_000,
+    dataShape: "value",
+    retry: 2,
+  });
+  return key.length > 0 ? (query.data ?? null) : [];
+}

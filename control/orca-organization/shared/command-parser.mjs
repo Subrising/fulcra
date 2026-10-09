@@ -489,6 +489,37 @@ methods(
   object({ ...roleChange, provider, seat: uuid, taskId: uuid, title: str(120, 3) }),
 );
 methods("roles-adopt", object({ ...roleChange, request: uuid, seat: uuid }));
+// Fulcra 0.2.8: build the team from chats that already exist (src/control/team.mjs). Owner-only writes.
+methods("team-enrol", object({ note: reason, sessionId: uuid, taskId: uuid }));
+methods(
+  "team-project-create",
+  object({ description: opt(nullable(str(2000))), name: str(160), note: reason }),
+);
+methods("team-project-anchor team-project-archive", object({ note: reason, projectId: uuid }));
+methods("team-history", either(none, object({ limit: num(1, 200) })));
+// The main assistant label follows the seat bindings (team.mjs syncSeat); no input.
+methods("team-seat-sync", none);
+// Reporting lines: who a chat reports to ("owner", the main assistant role, or a chat here or on another computer),
+// the main assistant seat label, and the one direct link a lead allows. "" clears a label.
+const lineRef = check(
+  (v) =>
+    typeof v === "string" &&
+    /^(owner|role:main-assistant|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(@[A-Za-z0-9._:-]{1,120})?)$/.test(
+      v,
+    ),
+);
+methods(
+  "team-line",
+  refinement(
+    object({
+      directLink: opt(either(one(""), uuid)),
+      note: reason,
+      reportsTo: opt(either(one(""), lineRef)),
+      sessionId: uuid,
+    }),
+    (v) => v.reportsTo !== undefined || v.directLink !== undefined,
+  ),
+);
 methods("roles-allowance-set", seatCommand({ ...roleChange, maxSessions: num(0, 32), role, seat }));
 methods(
   "trackers-map",
@@ -792,6 +823,7 @@ export function parseControllerCommand(value) {
 // "uncertain"; apply and retention remain writes. This one list also drives the operator-socket channel
 // waiver and read-only plugin invocation; splitting those authority uses from outcome mapping is backlog.
 export const READ_METHODS = Object.freeze([
+  "team-history",
   "worktree-lifecycle-preview",
   "controller-status",
   "health",

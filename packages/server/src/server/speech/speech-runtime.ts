@@ -17,7 +17,7 @@ import {
 } from "./providers/openai/runtime.js";
 import type { SpeechToTextProvider, TextToSpeechProvider } from "./speech-provider.js";
 import type { RequestedSpeechProviders } from "./speech-types.js";
-import type { TurnDetectionProvider } from "./turn-detection-provider.js";
+import { type TurnDetectionProvider, VOICE_TURN_PAUSE_MS } from "./turn-detection-provider.js";
 
 const SPEECH_RUNTIME_MONITOR_INTERVAL_MS = 3000;
 
@@ -334,6 +334,8 @@ export interface SpeechService {
   resolveSttLanguage: () => string;
   resolveTts: () => TextToSpeechProvider | null;
   resolveTurnDetection: () => TurnDetectionProvider | null;
+  /** FULCRA(core-fixes): silence that ends a voice-mode turn, in ms. */
+  resolveVoiceTurnPauseMs: () => number;
   resolveDictationStt: () => SpeechToTextProvider | null;
   resolveDictationSttLanguage: () => string;
   getReadiness: () => SpeechReadinessSnapshot;
@@ -708,6 +710,7 @@ export function createSpeechService(params: {
 
   return {
     resolveTurnDetection: () => turnDetectionService,
+    resolveVoiceTurnPauseMs: () => speechConfig?.voiceTurnPauseMs ?? VOICE_TURN_PAUSE_MS,
     resolveStt: () => sttService,
     resolveSttLanguage: () => speechConfig?.sttLanguages?.voice ?? "en",
     resolveTts: () => ttsService,
