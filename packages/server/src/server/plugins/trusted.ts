@@ -64,8 +64,10 @@ interface Agent {
   persistence?: { sessionId: string } | null;
 }
 
+type OwnsSession = (agentId: string) => boolean;
 interface Hooks {
   input?: Parameters<TrustedPluginServer["admission"]["onInput"]>[0];
+  owns?: OwnsSession;
   mcp?: Parameters<TrustedPluginServer["admission"]["mcpRefresh"]>[0];
   codex?: Parameters<TrustedPluginServer["admission"]["codexTurn"]>[0];
   permission?: Parameters<TrustedPluginServer["guard"]>[1];
@@ -74,6 +76,7 @@ interface Hooks {
 interface V11Hooks {
   queuedReceipt?: Parameters<TrustedPluginServerV11["admission"]["nativeQueuedReceipt"]>[0];
   input?: Parameters<TrustedPluginServerV11["admission"]["onInput"]>[0];
+  owns?: OwnsSession;
   mcp?: Parameters<TrustedPluginServerV11["admission"]["mcpRefresh"]>[0];
   codex?: Parameters<TrustedPluginServerV11["admission"]["codexTurn"]>[0];
   permission?: Parameters<TrustedPluginServerV11["guard"]>[1];
@@ -383,6 +386,7 @@ export class TrustedPlugins {
         admission: {
           nativeQueuedReceipt: (h) => set("queuedReceipt", h),
           onInput: (h) => set("input", h),
+          ownsSession: (h) => set("owns", h),
           mcpRefresh: (h) => set("mcp", h),
           codexTurn: (h) => set("codex", h),
         },
@@ -482,6 +486,24 @@ export class TrustedPlugins {
     } finally {
       registering = false;
     }
+  }
+
+  /**
+   * FULCRA: whether the host may resume this session on its own. Every plugin with an input hook must answer that
+   * it does not own the session; no answer, any other answer, a throw or a failed authority refuses (fail closed).
+   */
+  mayResumeUnscoped(agentId: string): boolean {
+    if (this.failed) return false;
+    for (const hooks of [...this.plugins.values(), ...this.v11.values()]) {
+      if (!hooks.input) continue;
+      if (!hooks.owns) return false;
+      try {
+        if (hooks.owns(agentId) !== false) return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
   }
 
   catalog(): Array<{ id: string; contract?: "1.1"; hooks: string[] }> {
