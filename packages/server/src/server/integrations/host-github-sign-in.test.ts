@@ -205,7 +205,9 @@ describe("host integrations wiring", () => {
       });
       const listed = await withSignIn.services.credentials!.list();
       withSignIn.dispose();
-      expect(listed.accounts.map((a) => [a.displayName, a.method])).toEqual([["example-user", "cli"]]);
+      expect(listed.accounts.map((a) => [a.displayName, a.method])).toEqual([
+        ["example-user", "cli"],
+      ]);
       const without = make(null);
       const none = await without.services.credentials!.list();
       without.dispose();

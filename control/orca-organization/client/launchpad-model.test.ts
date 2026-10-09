@@ -247,7 +247,12 @@ test("M6: matched per connector on the GitHub login; a Jira display name never c
         account("github", "example-user"),
         account("jira", "example-user", "acme.atlassian.net"),
       ]),
-      views: { [P]: view([item(1, "pr", "open", "example-user", NOW - 2 * H), jiraItem(7, "example-user")]) },
+      views: {
+        [P]: view([
+          item(1, "pr", "open", "example-user", NOW - 2 * H),
+          jiraItem(7, "example-user"),
+        ]),
+      },
     }),
   );
   assert.deepEqual(
@@ -277,7 +282,9 @@ test("M6: no GitHub account and no sign-in on this Mac means nothing is yours, a
 
 test("M6: a GitHub Enterprise account's login does not match github.com items", () => {
   const pad = buildLaunchpad(
-    base({ integrations: withAccounts([account("github", "example-user", "github.corp.example")]) }),
+    base({
+      integrations: withAccounts([account("github", "example-user", "github.corp.example")]),
+    }),
   );
   assert.equal(pad.you.length, 0);
   assert.match(pad.gaps.join(" "), /Can't tell which GitHub items are yours/);
@@ -365,7 +372,9 @@ test('W4: an account\'s "(GitHub)" suffix is not part of the login, so a connect
 });
 
 test("W4: an Enterprise sign-in names you only on its own site", () => {
-  const views = { [P]: view([item(1, "pr", "open", "example-user", NOW - 2 * H), gheItem(8, "example-user")]) };
+  const views = {
+    [P]: view([item(1, "pr", "open", "example-user", NOW - 2 * H), gheItem(8, "example-user")]),
+  };
   const pad = buildLaunchpad(
     base({ integrations: withAccounts([hostSignIn("example-user", "ghe.corp.example")]), views }),
   );

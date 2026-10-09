@@ -745,7 +745,9 @@ describe("this Mac's GitHub sign-in (U7 W4)", () => {
   }
 
   it("lists the detected login as a connected GitHub account from this Mac's sign-in", async () => {
-    const { credentials, accounts } = withSignIn(signedIn({ site: null, login: "example-user", id: 42 }));
+    const { credentials, accounts } = withSignIn(
+      signedIn({ site: null, login: "example-user", id: 42 }),
+    );
     const listed = (await credentials.list()).accounts;
     expect(listed).toEqual([
       {
@@ -799,7 +801,9 @@ describe("this Mac's GitHub sign-in (U7 W4)", () => {
   });
 
   it("is only a name: no request, disconnect, reconnect or forge token uses it", async () => {
-    const { credentials, accounts } = withSignIn(signedIn({ site: null, login: "example-user", id: 42 }));
+    const { credentials, accounts } = withSignIn(
+      signedIn({ site: null, login: "example-user", id: 42 }),
+    );
     const [detected] = (await credentials.list()).accounts;
     await expect(
       credentials.request({

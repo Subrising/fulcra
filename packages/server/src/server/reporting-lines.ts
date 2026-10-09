@@ -178,7 +178,10 @@ function refusal(input: LineInput, rawLine: string, line: string | null): LineDe
       reason: "A main assistant sends to its own leads. Ask the owner to add a direct link.",
     };
   if (rawLine === MAIN_ASSISTANT_REF && !line)
-    return { allowed: false, reason: "No chat is the main assistant now. Ask the owner to set one." };
+    return {
+      allowed: false,
+      reason: "No chat is the main assistant now. Ask the owner to set one.",
+    };
   if (rawLine === MAIN_ASSISTANT_REF)
     return {
       allowed: false,

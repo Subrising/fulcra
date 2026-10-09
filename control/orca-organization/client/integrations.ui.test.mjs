@@ -300,7 +300,11 @@ test("W4: this Mac's GitHub sign-in is shown as such, with nothing to reconnect 
       "From this Mac's GitHub sign-in. To change it, run gh auth login, or connect another GitHub account here.",
     ),
   );
-  assert.equal(!!screen.queryByRole("button", { name: "Reconnect example-user" }), false, "no Reconnect");
+  assert.equal(
+    !!screen.queryByRole("button", { name: "Reconnect example-user" }),
+    false,
+    "no Reconnect",
+  );
   assert.equal(
     !!screen.queryByRole("button", { name: "Disconnect example-user" }),
     false,
