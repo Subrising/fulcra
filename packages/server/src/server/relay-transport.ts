@@ -11,6 +11,7 @@ import {
 import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
 import type { ExternalSocketMetadata } from "./websocket-server.js";
 import { createEncryptedRelaySocket } from "./websocket/encrypted-relay-socket.js";
+import { createRelayDnsLookup } from "./relay-dns-lookup.js";
 
 export interface RelayTransportOptions {
   logger: pino.Logger;
@@ -21,6 +22,7 @@ export interface RelayTransportOptions {
   daemonKeyPair?: KeyPair;
   deviceGate?: RelayDeviceGate;
   createWebSocket?: RelayWebSocketFactory;
+  random?: () => number;
 }
 
 export interface RelayTransportController {
@@ -58,12 +60,20 @@ type ControlMessage =
 const CONTROL_PING_INTERVAL_MS = 10_000;
 const CONTROL_STALE_TIMEOUT_MS = 30_000;
 const CONTROL_READY_TIMEOUT_MS = 8_000;
+const CONTROL_HANDSHAKE_TIMEOUT_ALERT_THRESHOLD = 3;
+const HANDSHAKE_TIMEOUT_MESSAGE = "Opening handshake has timed out";
 const RELAY_WEBSOCKET_OPTIONS = { handshakeTimeout: 10_000, perMessageDeflate: false } as const;
+const relayDnsLookup = createRelayDnsLookup();
 
 function createDefaultRelayWebSocket(url: string): RelayWebSocketLike {
   return new WebSocket(url, {
     ...RELAY_WEBSOCKET_OPTIONS,
+    lookup: relayDnsLookup,
   });
+}
+
+function isHandshakeTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message === HANDSHAKE_TIMEOUT_MESSAGE;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -119,6 +129,7 @@ export function startRelayTransport({
   daemonKeyPair,
   deviceGate,
   createWebSocket = createDefaultRelayWebSocket,
+  random = Math.random,
 }: RelayTransportOptions): RelayTransportController {
   const relayLogger = logger.child({ module: "relay-transport" });
 
@@ -131,6 +142,7 @@ export function startRelayTransport({
   let controlReadyTimeout: ReturnType<typeof setTimeout> | null = null;
   let controlLastSeenAt = 0;
   let controlConnectionSeq = 0;
+  let controlHandshakeTimeouts = 0;
 
   const stop = async (): Promise<void> => {
     stopped = true;
@@ -183,6 +195,13 @@ export function startRelayTransport({
       if (controlConnected) return;
       controlConnected = true;
       reconnectAttempt = 0;
+      if (controlHandshakeTimeouts >= CONTROL_HANDSHAKE_TIMEOUT_ALERT_THRESHOLD) {
+        relayLogger.info(
+          { connectionId, handshakeTimeouts: controlHandshakeTimeouts },
+          `Relay control: recovered after ${controlHandshakeTimeouts} handshake timeouts`,
+        );
+      }
+      controlHandshakeTimeouts = 0;
       if (controlReadyTimeout) {
         clearTimeout(controlReadyTimeout);
         controlReadyTimeout = null;
@@ -285,6 +304,15 @@ export function startRelayTransport({
     socket.on("error", (err) => {
       if (controlWs !== socket) return;
       relayLogger.warn({ err, connectionId }, "relay_error");
+      if (!isHandshakeTimeout(err)) return;
+      controlHandshakeTimeouts += 1;
+      // Once per run of failures, so a log watch can alert without a flood.
+      if (controlHandshakeTimeouts === CONTROL_HANDSHAKE_TIMEOUT_ALERT_THRESHOLD) {
+        relayLogger.warn(
+          { connectionId, handshakeTimeouts: controlHandshakeTimeouts, url },
+          `Relay control: ${controlHandshakeTimeouts} handshake timeouts in a row`,
+        );
+      }
       // close event will schedule reconnect
     });
 
@@ -340,7 +368,8 @@ export function startRelayTransport({
     if (reconnectTimeout) return;
 
     reconnectAttempt += 1;
-    const delayMs = Math.min(30000, 1000 * reconnectAttempt);
+    // Jitter keeps reconnects from many daemons, or one daemon's retries, off a fixed beat.
+    const delayMs = Math.round(Math.min(30000, 1000 * reconnectAttempt) * (0.5 + 0.5 * random()));
     reconnectTimeout = setTimeout(() => {
       reconnectTimeout = null;
       connectControl();
