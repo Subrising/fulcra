@@ -68,7 +68,7 @@ final class OnDeviceSpeech {
             firstStart: segments.first?.timestamp ?? 0,
             lastEnd: segments.last.map { $0.timestamp + $0.duration } ?? 0
         )
-        onPartial?(transcript.update(part, isFinal: result.isFinal))
+        onPartial?(transcript.update(part, isFinal: result.isFinal, stopping: finishing))
         guard result.isFinal else { return }
         if finishing { complete() } else { replaceTask() }
     }

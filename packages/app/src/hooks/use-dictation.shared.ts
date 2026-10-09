@@ -31,6 +31,11 @@ export interface UseDictationResult {
 }
 
 export const DURATION_TICK_MS = 1000;
+/**
+ * FULCRA: the microphone keeps recording this long after the person taps stop. People tap as they say the last word,
+ * and the native capture drops the audio it has not yet delivered when it stops, so without it the end is cut off.
+ */
+export const DICTATION_STOP_TAIL_MS = 300;
 export const PCM_DICTATION_FORMAT = "audio/pcm;rate=16000;bits=16";
 
 export const toError = (error: unknown): Error => {

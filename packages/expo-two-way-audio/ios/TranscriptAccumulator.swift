@@ -19,12 +19,23 @@ struct TranscriptAccumulator {
     /// Everything heard so far: the finished parts, then the part in progress.
     var text: String { join(committed, current?.text ?? "") }
 
-    /// Takes the newest result and returns the whole transcript.
-    mutating func update(_ result: Result, isFinal: Bool) -> String {
-        if let previous = current, restarted(from: previous, to: result) { commit(previous.text) }
+    /// Takes the newest result and returns the whole transcript. `stopping`: the person tapped stop and this is the
+    /// answer to the end of the audio.
+    mutating func update(_ result: Result, isFinal: Bool, stopping: Bool = false) -> String {
+        var shown = current
+        if let previous = current, restarted(from: previous, to: result) {
+            commit(previous.text)
+            shown = nil
+        }
         current = result
         if isFinal {
-            commit(result.text)
+            // At the stop the final result can lose the last words the person saw in the partial: the audio ended in
+            // the middle of them. When the final is the partial with its end cut off, keep the partial.
+            if stopping, let shown = shown, endCut(final: result.text, partial: shown.text) {
+                commit(shown.text)
+            } else {
+                commit(result.text)
+            }
             current = nil
         }
         return text
@@ -52,6 +63,12 @@ struct TranscriptAccumulator {
         }
         // Untimed partials: a revision keeps the opening words. A restart begins with other words and is shorter.
         return before.count >= 3 && before[0] != after[0] && after.count < before.count
+    }
+
+    /// True when the final has fewer words than the partial and they are the partial's first words.
+    private func endCut(final: String, partial: String) -> Bool {
+        let kept = words(final), seen = words(partial)
+        return !kept.isEmpty && kept.count < seen.count && Array(seen.prefix(kept.count)) == kept
     }
 
     private func words(_ text: String) -> [String] {

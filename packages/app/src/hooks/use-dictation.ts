@@ -7,6 +7,7 @@ import { useDictationAudioSource } from "@/hooks/use-dictation-audio-source";
 import { generateMessageId } from "@/types/stream";
 import { AttemptGuard } from "@/utils/attempt-guard";
 import {
+  DICTATION_STOP_TAIL_MS,
   DURATION_TICK_MS,
   PCM_DICTATION_FORMAT,
   toError,
@@ -390,6 +391,8 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
     const attemptId = attemptGuardRef.current.next();
 
     try {
+      await new Promise((resolve) => setTimeout(resolve, DICTATION_STOP_TAIL_MS));
+      attemptGuardRef.current.assertCurrent(attemptId);
       await audio.stop();
       attemptGuardRef.current.assertCurrent(attemptId);
 

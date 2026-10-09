@@ -100,5 +100,35 @@ do {
           "\(DictationOutcome.text("one two"))")
 }
 
+// 8. 0.2.9: at the stop the final result can drop the last words the partial showed (the audio ended inside them).
+//    The words said before stop are kept. A real revision, a final with other words, still wins.
+do {
+    var t = TranscriptAccumulator()
+    _ = t.update(R(text: "please send the report today", firstStart: 0, lastEnd: 0), isFinal: false)
+    let last = t.update(R(text: "please send the report", firstStart: 0, lastEnd: 0), isFinal: true, stopping: true)
+    check("the last words before stop are kept", last, "please send the report today")
+
+    var mid = TranscriptAccumulator()
+    _ = mid.update(R(text: "one two three four", firstStart: 0, lastEnd: 0), isFinal: false)
+    let midLast = mid.update(R(text: "one two three", firstStart: 0, lastEnd: 0), isFinal: true)
+    check("a final before stop still replaces the partial", midLast, "one two three")
+
+    var revised = TranscriptAccumulator()
+    _ = revised.update(R(text: "combinations and lie down", firstStart: 0, lastEnd: 0), isFinal: false)
+    let revisedLast = revised.update(R(text: "combinations and like", firstStart: 0, lastEnd: 0), isFinal: true, stopping: true)
+    check("a revised final at stop wins", revisedLast, "combinations and like")
+
+    var earlier = TranscriptAccumulator()
+    _ = earlier.update(R(text: "first part here", firstStart: 0, lastEnd: 0), isFinal: true)
+    _ = earlier.update(R(text: "and the end words", firstStart: 0, lastEnd: 0), isFinal: false)
+    let earlierLast = earlier.update(R(text: "and the end", firstStart: 0, lastEnd: 0), isFinal: true, stopping: true)
+    check("after a restart the end is kept too", earlierLast, "first part here and the end words")
+
+    var timed = TranscriptAccumulator()
+    _ = timed.update(R(text: "one two", firstStart: 0.2, lastEnd: 1.0), isFinal: false)
+    let timedLast = timed.update(R(text: "one", firstStart: 1.5, lastEnd: 2.0), isFinal: true, stopping: true)
+    check("a new utterance at stop is added, not merged", timedLast, "one two one")
+}
+
 if failures > 0 { print("\(failures) failed"); exit(1) }
 print("all passed")
