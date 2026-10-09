@@ -373,6 +373,19 @@ test("a holder labelled earlier that still has a parent is detached at the next 
   assert.deepEqual(w.detaches, [main]);
 });
 
+test("a holder the labelled list leaves out is not written again when its own record has the label", async (t) => {
+  const main = randomUUID();
+  const w = world(t, { snapshots: { [main]: chat() } });
+  await seatMain(w, main);
+  await w.control.team.syncSeat("start");
+  assert.equal(w.labelWrites.length, 1);
+  w.control.native.labelled = async () => []; // the daemon directory dropped the chat (no project record)
+  await w.control.team.syncSeat("timer");
+  await w.control.team.syncSeat("timer");
+  assert.equal(w.labelWrites.length, 1);
+  assert.equal(w.control.team.history().filter((c) => c.kind === "seat-set").length, 1);
+});
+
 test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {
   const main = randomUUID(),
     stale = randomUUID(),

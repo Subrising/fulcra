@@ -139,8 +139,16 @@ export class Team {
         `${reason}: not the main assistant seat holder`,
       );
     }
+    // The holder's own record decides whether it is labelled. The labelled list can leave a chat out (the daemon's
+    // directory drops a chat whose project or workspace record is missing), and then each pass would write again.
+    const snapshot =
+      holder && typeof native.snapshot === "function"
+        ? await native.snapshot(holder).catch(() => null)
+        : null;
+    const holderLabelled =
+      marked.includes(holder) || snapshot?.labels?.[SEAT_LABEL] === MAIN_ASSISTANT;
     let set = false;
-    if (holder && !marked.includes(holder)) {
+    if (holder && !holderLabelled) {
       await native.setLabels(holder, {
         [SEAT_LABEL]: MAIN_ASSISTANT,
         "fulcra.reports-to": "owner",
@@ -152,8 +160,7 @@ export class Team {
     // drives archive cascades. Checked on every pass, so a holder labelled earlier, or a failed detach, is repaired.
     // The daemon changes a parent only through detach (never a label update). Detach only when a parent is there,
     // so the timer writes nothing on a normal pass.
-    if (holder && typeof native.detach === "function" && typeof native.snapshot === "function") {
-      const snapshot = await native.snapshot(holder).catch(() => null);
+    if (holder && typeof native.detach === "function") {
       const parent = snapshot?.labels?.["paseo.parent-agent-id"];
       if (typeof parent === "string" && parent.trim()) {
         try {
