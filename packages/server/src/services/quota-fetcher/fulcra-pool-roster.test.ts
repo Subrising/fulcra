@@ -1,8 +1,18 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createFulcraPoolRoster } from "./fulcra-pool-roster.js";
+import { readUsage } from "../../../../../control/orca-organization/server/accounts.mjs";
+import type { AccountUsageRow } from "./account-usage-types.js";
+import { createFulcraPoolRoster, writeUsageSnapshot } from "./fulcra-pool-roster.js";
 
 const WORK = "11111111-1111-4111-8111-111111111111";
 const OFF = "22222222-2222-4222-8222-222222222222";
@@ -84,5 +94,46 @@ describe("Fulcra pool roster", () => {
     expect(
       await createFulcraPoolRoster({ root: empty, readToken: async () => TOKEN }).list(),
     ).toEqual([]);
+  });
+});
+
+describe("Fulcra pool usage snapshot", () => {
+  const row = (accountId: string | null, weekly: AccountUsageRow["weekly"]): AccountUsageRow => ({
+    accountId,
+    name: "Work",
+    provider: "claude",
+    status: "ok",
+    observedAt: "2026-10-09T00:00:00.000Z",
+    source: null,
+    fiveHour: { usedPct: 12, resetsAt: null },
+    weekly,
+    inUse: false,
+  });
+  const resetsAt = new Date(Date.now() + 86_400_000).toISOString();
+
+  it("writes each account's weekly use, which the pool reads back, and nothing else", () => {
+    const root = home([acct(WORK, "claude", "Work")]);
+    const rows = [
+      row(WORK, { usedPct: 91.5, resetsAt }),
+      row(OFF, null),
+      row(null, { usedPct: 50, resetsAt }),
+      row("../not-an-id", { usedPct: 50, resetsAt }),
+    ];
+    expect(writeUsageSnapshot(root, rows)).toBe(true);
+    const file = path.join(root, "accounts", "usage.json");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      v: 1,
+      accounts: { [WORK]: { provider: "claude", weeklyUsedPct: 91.5, weeklyResetsAt: resetsAt } },
+    });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readUsage(root)).toEqual({ [WORK]: 91.5 });
+    expect(writeUsageSnapshot(root, rows)).toBe(false); // unchanged figures: no write
+  });
+
+  it("writes nothing when this computer has no account pool", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "u7c-roster-"));
+    dirs.push(root);
+    expect(writeUsageSnapshot(root, [row(WORK, { usedPct: 10, resetsAt })])).toBe(false);
+    expect(existsSync(path.join(root, "accounts"))).toBe(false);
   });
 });

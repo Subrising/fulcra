@@ -138,14 +138,40 @@ export function accountStatus(a, now = Date.now()) {
 export function activeCount(s, accountId) {
   return Object.values(s.assignments).filter((x) => x.accountId === accountId && !x.ended).length;
 }
+// Weekly use at or above this keeps a NEW session off an account while another account is below it (the owner's rule,
+// 9 Oct 2026: do not start new work on an account above about 90% of its weekly limit).
+export const WEEKLY_LAUNCH_CAP_PCT = 90;
+// Each account's weekly use in percent, from <root>/accounts/usage.json (the daemon writes it from its usage readings).
+// A figure past its reset is dropped: that window has started over. Unreadable or absent: {} (no account is held back).
+export function readUsage(root, now = Date.now()) {
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(accountsDir(root), "usage.json"), "utf8"));
+  } catch {
+    return {};
+  }
+  const out = {};
+  for (const [id, x] of Object.entries(raw?.accounts ?? {})) {
+    if (typeof x?.weeklyUsedPct !== "number" || !Number.isFinite(x.weeklyUsedPct)) continue;
+    const reset = typeof x.weeklyResetsAt === "string" ? Date.parse(x.weeklyResetsAt) : NaN;
+    if (Number.isFinite(reset) && reset <= now) continue;
+    out[id] = x.weeklyUsedPct;
+  }
+  return out;
+}
 // The account a NEW launch should use: available ones only -- the provider's default account while it is ready, else by
-// the pool's policy. `except` excludes accounts (the one that just hit its limit). Returns null when none is available.
-export function choose(s, provider, now = Date.now(), except = []) {
-  const ok = s.accounts.filter(
+// the pool's policy. `except` excludes accounts (the one that just hit its limit). `usage` (weekly percent by account)
+// holds back accounts at or above WEEKLY_LAUNCH_CAP_PCT while another is below it; when all are, the one with the most
+// left is used. Returns null when none is available.
+export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
+  const ready = s.accounts.filter(
     (a) =>
       a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
   );
-  if (!ok.length) return null;
+  if (!ready.length) return null;
+  const used = (a) => usage[a.id] ?? 0;
+  const room = ready.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
+  const ok = room.length ? room : [...ready].sort((x, y) => used(x) - used(y)).slice(0, 1);
   const preferred = ok.find((a) => a.id === s.defaults?.[provider]);
   if (preferred) return preferred;
   const key = (a) =>
@@ -311,9 +337,11 @@ export async function setPolicy(root, policy) {
 // machine's own login, as before the pool). When every account is limited -> the account with the earliest reset
 // (the launch will stop at the limit again, and the controller waits for that reset), flagged allLimited.
 export async function assign(root, sessionId, provider, now = Date.now()) {
-  return update(root, (s) => assignInStore(s, sessionId, provider, now));
+  const usage = readUsage(root, now);
+  return update(root, (s) => assignInStore(s, sessionId, provider, now, [], usage));
 }
-function assignInStore(s, sessionId, provider, now, except = []) {
+// `usage` applies only when the session needs an account: a session keeps its own account (no automatic switch).
+function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   const cur = s.assignments[sessionId],
     held = cur && s.accounts.find((a) => a.id === cur.accountId && a.provider === provider);
   if (cur?.takeover) {
@@ -330,7 +358,7 @@ function assignInStore(s, sessionId, provider, now, except = []) {
     s.assignments[sessionId] = { accountId: held.id, provider, at: iso(now), ended: false };
     return { account: { ...held }, allLimited: true, earliestReset: held.limitedUntil };
   }
-  let a = heldState === "ok" ? held : choose(s, provider, now, except);
+  let a = heldState === "ok" ? held : choose(s, provider, now, except, usage);
   let allLimited = false;
   if (!a) {
     a =
@@ -794,6 +822,7 @@ export function sessionOpenHook({
         seen = [],
         sessionId = request.agentId,
         provider = request.provider;
+      const usage = readUsage(storeRoot, now());
       let expected,
         started = false;
       // Absence is history unknown: the bounded store prunes old assignments. Only an ordinary
@@ -807,7 +836,7 @@ export function sessionOpenHook({
             if (!started && !cur) return null;
             throw refused();
           }
-          const result = assignInStore(s, sessionId, provider, now(), seen);
+          const result = assignInStore(s, sessionId, provider, now(), seen, usage);
           if (!result?.account || seen.includes(result.account.id)) throw refused();
           return { result, assignment: JSON.stringify(s.assignments[sessionId]) };
         });

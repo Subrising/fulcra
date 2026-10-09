@@ -25,11 +25,14 @@ export function readAccounts(root: string): AccountState;
 export function update<T>(root: string, fn: (s: AccountState) => T | Promise<T>): Promise<T>;
 export function withStoreLock<T>(root: string, fn: () => T | Promise<T>): Promise<T>;
 export function accountStatus(a: Account, now?: number): { state: string; until?: string };
+export const WEEKLY_LAUNCH_CAP_PCT: number;
+export function readUsage(root: string, now?: number): Record<string, number>;
 export function choose(
   s: AccountState,
   provider: string,
   now?: number,
   except?: string[],
+  usage?: Record<string, number>,
 ): Account | null;
 export function earliestReset(s: AccountState, provider: string, now?: number): string | null;
 export function addAccount(
