@@ -74,10 +74,7 @@ const SCENARIOS: Scenario[] = [
     offline: [],
     directories: { book: withLeads([]), mini: { available: true, primes: [prime("prime-1")] } },
     remembered: {},
-    expectText: [
-      "Main assistant · Mac-mini.local",
-      "Use the main assistant on Mac-mini.local",
-    ],
+    expectText: ["Main assistant · Mac-mini.local", "Use the main assistant on Mac-mini.local"],
     absentText: ["No main assistant yet"],
   },
   {

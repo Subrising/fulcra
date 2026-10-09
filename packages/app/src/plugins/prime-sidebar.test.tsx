@@ -463,10 +463,7 @@ it("shows both main assistants when two computers have one, each with its comput
   await screen.findByText("Main assistant · Mac-mini.local");
   expect(await screen.findByText("Main assistant · MacBook Pro")).toBeTruthy();
   const titles = screen.getAllByText(/^Main assistant · /).map((node) => node.textContent);
-  expect(titles).toEqual([
-    "Main assistant · Mac-mini.local",
-    "Main assistant · MacBook Pro",
-  ]);
+  expect(titles).toEqual(["Main assistant · Mac-mini.local", "Main assistant · MacBook Pro"]);
 });
 
 it("forgets a computer's main assistant when that computer says it has none", async () => {
