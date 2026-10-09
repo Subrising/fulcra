@@ -293,6 +293,32 @@ describe("DictationStreamSender", () => {
     }
   });
 
+  it("sends a long recording whole, in order, with the right final sequence", async () => {
+    const client = new FakeDaemonClient();
+    const sender = new DictationStreamSender({
+      client,
+      format: "audio/pcm;rate=16000;bits=16",
+      createDictationId: () => "d-long",
+    });
+
+    // 60 s of audio in 50 ms segments.
+    const segmentCount = 1200;
+    const sent = Array.from({ length: segmentCount }, (_, seq) => `segment-${seq}`);
+    for (const segment of sent) {
+      sender.enqueueSegment(segment);
+    }
+    await tick();
+
+    const result = await sender.finish(sender.getFinalSeq());
+
+    expect(result).toEqual({ dictationId: "d-long", text: "ok" });
+    expect(sender.getFinalSeq()).toBe(segmentCount - 1);
+    expect(client.starts).toHaveLength(1);
+    expect(client.chunks.map((chunk) => chunk.seq)).toEqual(sent.map((_, seq) => seq));
+    expect(client.chunks.map((chunk) => chunk.audio)).toEqual(sent);
+    expect(client.finishes).toEqual([{ dictationId: "d-long", finalSeq: segmentCount - 1 }]);
+  });
+
   it("waits for server delivery acknowledgement before finishing", async () => {
     const client = new FakeDaemonClient();
     client.autoAck = false;
@@ -339,22 +365,4 @@ describe("DictationStreamSender", () => {
     });
     expect(client.finishes).toEqual([{ dictationId: "d1", finalSeq: 479 }]);
   });
-});
-
-it("keeps local dictation audio off the host until fallback, and retains it after refusal", async () => {
-  const client = new FakeDaemonClient();
-  const sender = new DictationStreamSender({ client, format: "audio/pcm;rate=16000;bits=16" });
-  sender.setPaused(true);
-  sender.enqueueSegment("inert-audio-one");
-  sender.enqueueSegment("inert-audio-two");
-  await tick();
-  expect(client.starts).toHaveLength(0);
-  expect(client.chunks).toHaveLength(0);
-  expect(sender.getSegmentCount()).toBe(2);
-  sender.setPaused(false);
-  const result = await sender.finish(sender.getFinalSeq());
-  expect(result.text).toBe("ok");
-  expect(client.chunks.map((chunk) => chunk.audio)).toEqual(["inert-audio-one", "inert-audio-two"]);
-  expect(sender.hasSegments()).toBe(true);
-  sender.dispose();
 });

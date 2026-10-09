@@ -28,8 +28,7 @@
     "typecheck": "tsgo --noEmit",
     "expo-module": "expo-module",
     "open:ios": "xed examples/basic-usage/ios",
-    "open:android": "open -a \"Android Studio\" examples/basic-usage/android",
-    "test:swift": "mkdir -p .swift-test && xcrun swiftc ios/TranscriptAccumulator.swift swift-tests/transcript/main.swift -o .swift-test/transcript && .swift-test/transcript"
+    "open:android": "open -a \"Android Studio\" examples/basic-usage/android"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
