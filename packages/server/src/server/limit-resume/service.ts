@@ -196,6 +196,7 @@ function refusalOf(agent: LimitResumeAgent | null, binding: string): string | nu
   if (!agent) return "session not found";
   if (agent.archived) return "archived";
   if (agent.busy) return "busy";
+  if (!agent.unscopedResumeAllowed) return "owned by a trusted plugin";
   if (agent.binding === null) return "no binding after load";
   if (agent.binding !== binding) return "binding changed";
   if (agent.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
@@ -448,6 +449,12 @@ export class LimitResumeService {
     const epoch = this.epochOf(agentId);
     const agent = await this.admissionAgent(agentId, limitId, epoch);
     if (!agent) return;
+    const refusal = refusalOf(agent, binding);
+    if (refusal) {
+      this.deps.onSkip?.(agentId, refusal);
+      await this.clearStaleMarker(agentId, agent);
+      return;
+    }
     const now = this.now();
     const recent = this.queue.recent[agentId];
     const attempt =

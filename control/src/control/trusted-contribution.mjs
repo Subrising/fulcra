@@ -359,6 +359,19 @@ export function createTrustedContribution({
       read(bootstrapCandidate(agent), (db) => send(db, agent, operation, input.admissionPhase));
       return "allow";
     });
+    // FULCRA 0.2.9: the host asks before it resumes a session on its own (usage limit or restart). Every session in
+    // the controller's journal is claimed: a delegated one is resumed through the controller's own channel (the input
+    // hook above would end its delegation), and one a person took over keeps its stops with that person. Any read
+    // failure claims the session too (fail closed). Only sessions the controller has never known are left to the host.
+    server.admission.ownsSession?.((agentId) => {
+      try {
+        return read(false, (db) =>
+          Boolean(db.prepare("SELECT 1 FROM sessions WHERE id=?").get(agentId)),
+        );
+      } catch {
+        return true;
+      }
+    });
     server.guard("agent.permission_respond", (agent, requestId, response, input) => {
       if (!requestId.startsWith("orca-permission:")) {
         if (own(input.operation)) fail("Missing permission intent");

@@ -135,6 +135,12 @@ export interface TrustedPluginServerV11 {
       ) => void,
     ): void;
     onInput(handler: (agent: TrustedAgentV11, input: TrustedInputV11) => AdmissionDecision): void;
+    /**
+     * FULCRA: answers whether this plugin governs a session, before the host resumes it on its own (after a usage
+     * limit or a restart). Return false to let the host resume it; true keeps it with the plugin. A plugin with an
+     * input hook and no answer blocks every automatic resume, and a throw counts as true. Synchronous.
+     */
+    ownsSession?(handler: (agentId: string) => boolean): void;
     mcpRefresh(
       handler: (agent: TrustedAgentV11) => {
         allowed: boolean;
