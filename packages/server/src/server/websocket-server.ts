@@ -101,7 +101,10 @@ import { ProviderUsageService } from "../services/quota-fetcher/service.js";
 import { AccountUsageRegistry } from "../services/quota-fetcher/account-usage-registry.js";
 import { ClaudeAccountUsageReader } from "../services/quota-fetcher/providers/claude-account-usage.js";
 import { CodexAccountUsageReader } from "../services/quota-fetcher/providers/codex-account-usage.js";
-import { createFulcraPoolRoster } from "../services/quota-fetcher/fulcra-pool-roster.js";
+import {
+  createFulcraPoolRoster,
+  writeUsageSnapshot,
+} from "../services/quota-fetcher/fulcra-pool-roster.js";
 import { getProcessMemoryDiagnostics, getProcessUptimeSeconds } from "./process-diagnostics.js";
 import {
   CLIENT_SHUTDOWN_RPC_REASON,
@@ -837,6 +840,13 @@ export class VoiceAssistantWebSocketServer {
       ],
       roster: createFulcraPoolRoster({ root: join(paseoHome, "command-centre") }),
       sessions: () => this.agentManager.listPooledUsageSessions(),
+      onPass: (rows) => {
+        try {
+          writeUsageSnapshot(join(paseoHome, "command-centre"), rows);
+        } catch {
+          this.logger.warn("Account usage snapshot could not be written");
+        }
+      },
     });
     this.accountUsage.start();
 

@@ -39,6 +39,8 @@ export interface AccountUsageRegistryOptions {
   /** Running sessions on pooled accounts and the last reading each one's own traffic produced. */
   sessions?: () => LiveAccountSession[];
   now?: () => number;
+  /** FULCRA: after each periodic pass, the cached rows (no probe). The account pool reads weekly use from them. */
+  onPass?: (rows: AccountUsageRow[]) => void;
 }
 
 interface Entry {
@@ -143,6 +145,7 @@ export class AccountUsageRegistry {
   private readonly roster: AccountRoster | undefined;
   private readonly sessions: (() => LiveAccountSession[]) | undefined;
   private readonly now: () => number;
+  private readonly onPass: ((rows: AccountUsageRow[]) => void) | undefined;
   private readonly entries = new Map<string, Entry>();
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -152,6 +155,7 @@ export class AccountUsageRegistry {
     this.roster = options.roster;
     this.sessions = options.sessions;
     this.now = options.now ?? Date.now;
+    this.onPass = options.onPass;
   }
 
   start(): void {
@@ -217,6 +221,7 @@ export class AccountUsageRegistry {
     await Promise.all(
       entries.map(({ entry, account }) => this.refreshEntry(entry, account, "periodic")),
     );
+    this.onPass?.(this.observe());
   }
 
   private async sync(): Promise<{ entry: Entry; account: PooledAccount }[]> {

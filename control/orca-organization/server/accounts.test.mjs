@@ -26,6 +26,7 @@ import {
   setDefaultAccount,
   switchSession,
   sessionAccounts,
+  readUsage,
 } from "./accounts.mjs";
 
 const T0 = Date.parse("2026-10-01T00:00:00Z");
@@ -60,6 +61,49 @@ test("spread policy balances live sessions across accounts", async () => {
       .map(([id]) => id);
   for (const id of onA) await sessionEnded(root, id);
   assert.equal(choose(readAccounts(root), "codex", T0).name, "A");
+});
+const writeUsage = (root, accounts) =>
+  fs.writeFileSync(path.join(root, "accounts", "usage.json"), JSON.stringify({ v: 1, accounts }));
+const week = (pct, resetsAtMs = T0 + 3 * 86400000) => ({
+  provider: "claude",
+  weeklyUsedPct: pct,
+  weeklyResetsAt: new Date(resetsAtMs).toISOString(),
+});
+test("a new session stays off an account at 90% of its weekly limit while another is below; a session keeps its own account", async () => {
+  const root = scratch();
+  const work = await addAccount(root, { provider: "claude", name: "Work" }, T0),
+    personal = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await setPolicy(root, "spread");
+  assert.equal((await assign(root, S(1), "claude", T0)).account.id, work.id); // no usage file: the policy decides
+  writeUsage(root, { [work.id]: week(40), [personal.id]: week(91) });
+  // Spread would pick Personal (no sessions), but it is past 90%: Work, though it is busier.
+  assert.equal((await assign(root, S(2), "claude", T0)).account.id, work.id);
+  assert.equal((await assign(root, S(3), "claude", T0)).account.id, work.id);
+  // A session already on Personal keeps it: no automatic switch.
+  writeUsage(root, { [work.id]: week(40), [personal.id]: week(20) });
+  assert.equal((await assign(root, S(4), "claude", T0)).account.id, personal.id);
+  writeUsage(root, { [work.id]: week(40), [personal.id]: week(95) });
+  assert.equal((await assign(root, S(4), "claude", T0 + 5)).account.id, personal.id);
+  // The default account is held back too while another is below the cap.
+  await setDefaultAccount(root, "claude", personal.id);
+  assert.equal((await assign(root, S(5), "claude", T0)).account.id, work.id);
+  // Both past 90%: the one with the most left. This is not a switch; S(6) is new.
+  writeUsage(root, { [work.id]: week(97), [personal.id]: week(92) });
+  assert.equal((await assign(root, S(6), "claude", T0)).account.id, personal.id);
+  // A figure past its weekly reset no longer counts: that week started over.
+  writeUsage(root, { [work.id]: week(40), [personal.id]: week(99, T0 - 1) });
+  assert.deepEqual(readUsage(root, T0), { [work.id]: 40 });
+  assert.equal((await assign(root, S(7), "claude", T0)).account.id, personal.id); // default, back under the cap
+});
+test("the launch hook applies the weekly cap to a new pooled launch", async () => {
+  const root = scratch();
+  const work = await addAccount(root, { provider: "claude", name: "Work" }, T0),
+    personal = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  writeUsage(root, { [work.id]: week(93), [personal.id]: week(10) });
+  const keychain = { get: async () => "sk-ant-oat01-" + "x".repeat(40) };
+  const hook = sessionOpenHook({ root: () => root, keychain, now: () => T0 });
+  const out = await hook({ request: { agentId: S(1), provider: "claude", env: {} } });
+  assert.equal(out.env.FULCRA_ACCOUNT_ID, personal.id); // priority would pick Work
 });
 test("a usage limit marks the account limited until its reset, moves the session, and new sessions avoid it; all limited -> the earliest reset", async () => {
   const root = scratch();
