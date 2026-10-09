@@ -122,7 +122,7 @@ class FakeRelayWebSocket {
     );
   }
 
-  private emit(event: string, ...args: unknown[]) {
+  emit(event: string, ...args: unknown[]) {
     const handlers = this.listeners.get(event) ?? [];
     for (const handler of handlers.slice()) {
       handler(...args);
@@ -224,6 +224,94 @@ describe("relay-transport control lifecycle", () => {
     vi.advanceTimersByTime(40_000);
     expect(hasLogMessage(logger, "warn", "relay_control_stale_terminating")).toBe(true);
     expect(control.terminateCalls).toBe(1);
+  });
+
+  test("logs one alert per run of control handshake timeouts and a line on recovery", () => {
+    vi.useFakeTimers();
+    const logger = createMockLogger();
+    const controller = startRelayTransport({
+      logger: logger as unknown as pino.Logger,
+      attachSocket: async () => {},
+      relayEndpoint: "relay.example.test:443",
+      relayUseTls: true,
+      serverId: "srv_test",
+      createWebSocket: relay.createWebSocket,
+      random: () => 1,
+    });
+    controllers.push(controller);
+    const alertCount = (count: number) =>
+      logger.messages.filter((entry) =>
+        entry.args.includes(`Relay control: ${count} handshake timeouts in a row`),
+      ).length;
+    const failLatestHandshake = () => {
+      const socket = relay.sockets[relay.sockets.length - 1];
+      socket.emit("error", new Error("Opening handshake has timed out"));
+      socket.terminate();
+      vi.advanceTimersByTime(30_000);
+    };
+
+    for (let attempt = 0; attempt < 5; attempt += 1) failLatestHandshake();
+    expect(alertCount(3)).toBe(1);
+    expect(relay.sockets).toHaveLength(6);
+
+    const recovered = relay.sockets[5];
+    recovered.open();
+    recovered.message(JSON.stringify({ type: "sync", connectionIds: [] }));
+    expect(
+      hasLogMessage(logger, "info", "Relay control: recovered after 5 handshake timeouts"),
+    ).toBe(true);
+
+    recovered.terminate();
+    vi.advanceTimersByTime(30_000);
+    for (let attempt = 0; attempt < 3; attempt += 1) failLatestHandshake();
+    expect(alertCount(3)).toBe(2);
+  });
+
+  test("does not count other control errors as handshake timeouts", () => {
+    vi.useFakeTimers();
+    const logger = createMockLogger();
+    const controller = startRelayTransport({
+      logger: logger as unknown as pino.Logger,
+      attachSocket: async () => {},
+      relayEndpoint: "relay.example.test:443",
+      relayUseTls: true,
+      serverId: "srv_test",
+      createWebSocket: relay.createWebSocket,
+    });
+    controllers.push(controller);
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const socket = relay.sockets[relay.sockets.length - 1];
+      socket.emit("error", new Error("getaddrinfo ENOTFOUND relay.example.test"));
+      socket.terminate();
+      vi.advanceTimersByTime(30_000);
+    }
+
+    const relayControlLines = logger.messages
+      .flatMap((entry) => entry.args)
+      .filter((arg) => typeof arg === "string" && arg.startsWith("Relay control:"));
+    expect(relayControlLines).toEqual([]);
+  });
+
+  test("jitters the control reconnect delay below the linear backoff", () => {
+    vi.useFakeTimers();
+    const logger = createMockLogger();
+    const controller = startRelayTransport({
+      logger: logger as unknown as pino.Logger,
+      attachSocket: async () => {},
+      relayEndpoint: "relay.example.test:443",
+      relayUseTls: true,
+      serverId: "srv_test",
+      createWebSocket: relay.createWebSocket,
+      random: () => 0,
+    });
+    controllers.push(controller);
+
+    relay.sockets[0].terminate();
+    vi.advanceTimersByTime(499);
+    expect(relay.sockets).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(relay.sockets).toHaveLength(2);
   });
 
   test("refuses data sockets without encrypted device admission", async () => {

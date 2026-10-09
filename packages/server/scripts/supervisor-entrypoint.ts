@@ -17,6 +17,8 @@ import { resolveSupervisorLogFile } from "./supervisor-log-config.js";
 
 process.title = "Fulcra Supervisor";
 
+const DAEMON_WORKER_THREADPOOL_SIZE = "16";
+
 interface DaemonRunnerConfig {
   devMode: boolean;
   workerArgs: string[];
@@ -101,7 +103,13 @@ async function main(): Promise<void> {
   const config = parseConfig(process.argv.slice(2));
   const workerEntry = config.devMode ? resolveDevWorkerEntry() : resolveWorkerEntry();
   const workerExecArgv = resolveWorkerExecArgv(workerEntry, config.devMode);
-  const workerEnv: NodeJS.ProcessEnv = { ...process.env };
+  // The default libuv pool has 4 threads. A burst of slow file work (for example archiving
+  // a large worktree) can fill it, and then every request that reads a file waits minutes.
+  // Agents and terminals inherit this value; libuv reads it only at start.
+  const workerEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE ?? DAEMON_WORKER_THREADPOOL_SIZE,
+  };
   const packagedNodeEntrypointRunner =
     process.env.ELECTRON_RUN_AS_NODE === "1"
       ? resolvePackagedNodeEntrypointRunnerPath(fileURLToPath(import.meta.url))
