@@ -438,6 +438,33 @@ test("an old holder loses reports-to=owner with the seat; another reporting line
   assert.equal(v.labels[first]["fulcra.reports-to"], third);
 });
 
+test("a refused tracker change shows the board's own error text", async (t) => {
+  const w = world(t);
+  const team = w.control.team;
+  team.config = {
+    ...team.config,
+    authority: { ...team.config.authority, issueApi: "http://board.test" },
+  };
+  const answer = (status, body) => async () => ({
+    ok: status < 300,
+    status,
+    text: async () => body,
+  });
+  team.fetcher = answer(409, JSON.stringify({ error: "A project called Mac operations exists" }));
+  await assert.rejects(
+    team.tracker("/api/companies/x/projects", "POST", {}),
+    /HTTP 409: A project called Mac operations exists/,
+  );
+  team.fetcher = answer(500, "database is locked\n");
+  await assert.rejects(team.tracker("/api/x", "GET"), /HTTP 500: database is locked\)/);
+  team.fetcher = answer(502, "");
+  await assert.rejects(team.tracker("/api/x", "GET"), /\(HTTP 502\)/);
+  team.fetcher = async () => {
+    throw Object.assign(TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  };
+  await assert.rejects(team.tracker("/api/x", "GET"), /does not answer: ECONNREFUSED/);
+});
+
 test("the history prune keeps seat-set rows", async (t) => {
   const w = world(t);
   const team = w.control.team;
