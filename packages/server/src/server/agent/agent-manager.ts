@@ -4536,13 +4536,13 @@ export class AgentManager {
     }
   }
 
-  /** No ownership classifier exists for trusted input authorities: unknown ownership refuses fallback. */
+  /** Trusted input authorities must each disown the session; unknown ownership refuses fallback. */
   canRunUnscopedLimitResume(agentId: string): boolean {
     const agent = this.agents.get(agentId);
     if (!agent || agent.internal || agent.owner || !["codex", "claude"].includes(agent.provider))
       return false;
     try {
-      return !this.trustedPlugins.catalog().some((plugin) => plugin.hooks.includes("input"));
+      return this.trustedPlugins.mayResumeUnscoped(agentId);
     } catch {
       return false;
     }

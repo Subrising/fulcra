@@ -14,6 +14,7 @@ import { DaemonConfigStore } from "../daemon-config-store.js";
 import { TrustedPlugins } from "../plugins/trusted.js";
 import { startLimitResume } from "./start.js";
 import {
+  INTERRUPTED_RESUME_PROMPT,
   LIMIT_RESUME_AT_LABEL,
   LIMIT_RESUME_OPT_OUT_LABEL,
   limitResumeFilePath,
@@ -575,3 +576,58 @@ test("native-owned ineligible stop has no advertised automatic schedule", async 
     await f.cleanup();
   }
 });
+
+test.each(["standalone", "delegated", "no-answer"] as const)(
+  "a restart mid-turn resumes only sessions no trusted input authority claims: %s",
+  async (kind) => {
+    const f = await fixture();
+    const store = new ControlStore(path.join(f.home, "journal.sqlite"));
+    if (kind === "no-answer")
+      f.host.registerV11("fixture-input-authority", true, (server) =>
+        server.admission.onInput(() => "allow"),
+      );
+    else
+      f.host.registerV11(OWN_ID, true, (server) =>
+        createTrustedContribution({ home: f.home })(server),
+      );
+    const readQueue = async () => JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8"));
+    let service = f.start();
+    try {
+      const run = f.manager.runAgent(f.agent.id, "long task").catch(() => undefined);
+      await f.server.waitForTurnStart();
+      await vi.waitFor(async () => expect((await readQueue()).running[f.agent.id]).toBeTruthy());
+      // The daemon stops in the middle of the turn; the next boot finds the turn cut off.
+      service.stop();
+      if (kind === "delegated") {
+        store.created(f.agent.id, randomUUID(), f.home);
+        store.db
+          .prepare("UPDATE sessions SET mode='delegated',boot=?,grantedAt=1 WHERE id=?")
+          .run(f.host.boot, f.agent.id);
+      }
+      f.server.completeTurn({ threadId: "limit-thread", status: "interrupted" });
+      await run;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      service = f.start();
+      await service.enqueueInterrupted(randomUUID());
+      const queued = (await readQueue()).entries;
+      if (kind !== "standalone") {
+        expect(queued).toEqual([]);
+        expect(f.manager.getAgent(f.agent.id)?.labels[LIMIT_RESUME_AT_LABEL]).toBeFalsy();
+        expect(f.turnStarts()).toHaveLength(1);
+        return;
+      }
+      expect(queued).toHaveLength(1);
+      expect(queued[0].source).toBe("interrupted");
+      await makeDue(f.home);
+      service.stop();
+      service = f.start();
+      await vi.waitFor(() => expect(f.turnStarts()).toHaveLength(2), { timeout: 5_000 });
+      expect(JSON.stringify(f.turnStarts()[1])).toContain(INTERRUPTED_RESUME_PROMPT.slice(0, 40));
+    } finally {
+      service.stop();
+      await f.cleanup();
+      store.close();
+    }
+  },
+  15_000,
+);
