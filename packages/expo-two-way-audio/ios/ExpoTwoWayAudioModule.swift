@@ -8,7 +8,6 @@ let ON_AUDIO_INTERRUPTION_EVENT_NAME = "onAudioInterruption"
 
 public class ExpoTwoWayAudioModule: Module {
     private var audioEngine: AudioEngine?
-    private let onDeviceSpeech = OnDeviceSpeech()
     public func definition() -> ModuleDefinition {
         Name("ExpoTwoWayAudio")
 
@@ -105,7 +104,6 @@ public class ExpoTwoWayAudioModule: Module {
         }
 
         Function("tearDown") {
-            self.onDeviceSpeech.cancel()
             self.audioEngine?.tearDown()
             self.audioEngine = nil
         }
@@ -162,19 +160,8 @@ public class ExpoTwoWayAudioModule: Module {
             )
         }
 
-        AsyncFunction("startOnDeviceDictation") { (locale: String, promise: Promise) in
-            self.onDeviceSpeech.onPartial = { [weak self] text in
-                self?.sendEvent("onDictationPartial", ["text": text])
-            }
-            self.onDeviceSpeech.start(locale: locale, promise: promise)
-        }
-        Function("appendOnDeviceDictation") { (base64: String) in self.onDeviceSpeech.append(base64: base64) }
-        AsyncFunction("finishOnDeviceDictation") { (promise: Promise) in self.onDeviceSpeech.finish(promise: promise) }
-        Function("cancelOnDeviceDictation") { self.onDeviceSpeech.cancel() }
-
         // Define the events that can be emitted
         Events([
-            "onDictationPartial",
             ON_MIC_DATA_EVENT_NAME,
             ON_INPUT_VOLUME_LEVEL_EVENT_NAME,
             ON_OUTPUT_VOLUME_LEVEL_EVENT_NAME,

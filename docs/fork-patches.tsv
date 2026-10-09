@@ -555,8 +555,6 @@ core-fixes	A	14	0	packages/client/src/controller-transport.test.ts
 core-fixes	A	109	0	packages/client/src/controller-transport.ts
 core-fixes	A	103	0	packages/client/src/daemon-client-revocation.test.ts
 core-fixes	M	1	0	packages/expo-two-way-audio/ios/ExpoTwoWayAudio.podspec
-core-fixes	A	102	0	packages/expo-two-way-audio/ios/TranscriptAccumulator.swift
-core-fixes	A	104	0	packages/expo-two-way-audio/swift-tests/transcript/main.swift
 core-fixes	A	22	0	packages/protocol/src/agent-background-work.ts
 core-fixes	M	9	0	packages/protocol/src/agent-deep-link.test.ts
 core-fixes	M	1	1	packages/protocol/src/agent-deep-link.ts
@@ -1232,8 +1230,6 @@ pairing	A	169	0	packages/app/src/device/device-key-adapters.ts
 pairing	A	10	0	packages/app/src/device/plugin-device.electron.ts
 pairing	A	12	0	packages/app/src/device/plugin-device.ts
 pairing	A	6	0	packages/app/src/device/plugin-device.web.ts
-pairing	A	42	0	packages/app/src/dictation/on-device-dictation.native.ts
-pairing	A	9	0	packages/app/src/dictation/on-device-dictation.ts
 pairing	M	2	2	packages/app/src/hosts/appearance.test.ts
 pairing	M	2	1	packages/app/src/hosts/appearance.ts
 pairing	M	4	3	packages/app/src/hosts/host-chooser.tsx
@@ -1282,7 +1278,6 @@ pairing	A	23	0	packages/desktop/src/features/relay-identity-electron.ts
 pairing	A	107	0	packages/desktop/src/features/relay-identity.test.ts
 pairing	A	106	0	packages/desktop/src/features/relay-identity.ts
 pairing	M	13	0	packages/expo-two-way-audio/ios/ExpoTwoWayAudioModule.swift
-pairing	A	162	0	packages/expo-two-way-audio/ios/OnDeviceSpeech.swift
 pairing	M	39	68	packages/protocol/src/connection-offer.test.ts
 pairing	M	49	18	packages/protocol/src/connection-offer.ts
 pairing	M	47	2	packages/protocol/src/daemon-endpoints.test.ts
