@@ -120,8 +120,10 @@ export class ImportSessionFlow {
     await expect(this.page.getByTestId("user-message").filter({ visible: true })).toContainText(
       userText,
     );
+    // The imported answer comes first. In CI the provider CLI then fails to resume the fixture id and adds its
+    // error as more assistant rows, so a check across every row races that error.
     await expect(
-      this.page.getByTestId("assistant-message").filter({ visible: true }),
+      this.page.getByTestId("assistant-message").filter({ visible: true }).first(),
     ).toContainText(assistantText);
   }
   async showAll() {
