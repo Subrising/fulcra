@@ -43,9 +43,9 @@ Organisation, report-up, hierarchy, accounts presentation and switching already 
 | `automations` | Fulcra prime (product) | 1 | +11/−0 | 10 | +2717 | Automations ("when X, do Y") on top of Paseo schedules: service, protocol messages, client calls, screen and sidebar entry. Kept in core: moving it into the plugin needs two SDK seams and a ~900-line UI rewrite to save ~150 shared-file lines. |
 | `features` | Fulcra prime (product) | 148 | +3598/−1019 | 172 | +27341 | Fulcra product UI and helpers in the app: architecture map and plain-English PR review (the checkout.pull-request-review.explain RPC behind the pullRequestReviewExplain feature, cached in PASEO_HOME/review-explanations, capped daily by the optional daemon config field explainDailyLimit), insights, work map, attention, schedules, navigation, sidebar and other views. Kept in core because each would cost more to move into the plugin than the shared-file lines it saves. |
 | `branding` | Fulcra prime (release) | 73 | +6167/−1880 | 102 | +4606 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
-| `build-ci` | Fulcra prime (release) | 63 | +1565/−2625 | 71 | +5755 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
+| `build-ci` | Fulcra prime (release) | 64 | +1568/−2625 | 71 | +5755 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
 | `core-fixes` | Fulcra prime (platform) | 55 | +1038/−261 | 65 | +6935 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
-| **total** | | 723 | +58396/−13829 | 827 | +118304 | |
+| **total** | | 724 | +58399/−13829 | 827 | +118304 | |
 
 Shared seams (upstream files where several patches meet; resolve these hunk by hunk on merge):
 

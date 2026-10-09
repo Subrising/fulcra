@@ -409,6 +409,7 @@ build-ci	M	18	0	.gitignore
 build-ci	M	8	1	.oxfmtrc.json
 build-ci	M	54	1	.oxlintrc.json
 build-ci	M	1	0	docker/base/Dockerfile
+build-ci	M	3	0	lefthook.yml
 build-ci	A	3	0	local/activation-releases.json.example
 build-ci	A	1	0	local/components.json.example
 build-ci	A	1	0	local/dependency-sides.json.example
