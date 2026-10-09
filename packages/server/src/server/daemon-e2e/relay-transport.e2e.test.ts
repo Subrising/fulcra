@@ -21,6 +21,91 @@ const isRelayDataConnected = (line: string) => line.includes("relay_data_connect
 const nodeMajor = Number((process.versions.node ?? "0").split(".")[0] ?? "0");
 const shouldRunRelayE2e = process.env.FORCE_RELAY_E2E === "1" || nodeMajor < 25;
 
+// Fulcra 0.2.9: the permissions a paired device's relay socket gets in server_info (what the app's Command Centre
+// gate reads). The client says it understands command-centre.manage, as the app does.
+async function relayServerInfoPermissions(args: {
+  relayPort: number;
+  serverId: string;
+  daemonPublicKeyB64: string;
+  deviceKeyPair: ReturnType<typeof generateKeyPair>;
+}): Promise<string[]> {
+  const ws = new WebSocket(
+    buildRelayWebSocketUrl({
+      endpoint: `127.0.0.1:${args.relayPort}`,
+      useTls: false,
+      serverId: args.serverId,
+      role: "client",
+    }),
+  );
+  try {
+    return await new Promise<string[]>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("timed out waiting for server_info")),
+        20000,
+      );
+      const transport: Transport = {
+        send: (data) => ws.send(data),
+        close: (code?: number, reason?: string) => ws.close(code, reason),
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+      };
+      ws.on("message", (data, isBinary) => {
+        transport.onmessage?.({
+          data: isBinary
+            ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+            : data.toString(),
+          isBinary,
+        });
+      });
+      ws.on("close", (code, reason) => transport.onclose?.(code, reason.toString()));
+      ws.on("error", (err) => transport.onerror?.(err));
+      ws.on("open", async () => {
+        try {
+          const channel = await createClientChannel(
+            transport,
+            args.daemonPublicKeyB64,
+            {
+              onmessage: (data) => {
+                const payload = typeof data === "string" ? JSON.parse(data) : data;
+                const wsMsg = WSOutboundMessageSchema.safeParse(payload);
+                if (
+                  wsMsg.success &&
+                  wsMsg.data.type === "session" &&
+                  wsMsg.data.message.type === "status" &&
+                  wsMsg.data.message.payload?.status === "server_info"
+                ) {
+                  clearTimeout(timeout);
+                  resolve([...((wsMsg.data.message.payload.permissions as string[]) ?? [])]);
+                }
+              },
+              onerror: (err) => {
+                clearTimeout(timeout);
+                reject(err);
+              },
+            },
+            { deviceKeyPair: args.deviceKeyPair, serverId: args.serverId },
+          );
+          await channel.send(
+            JSON.stringify({
+              type: "hello",
+              clientId: `cid_test_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
+              clientType: "mobile",
+              protocolVersion: 1,
+              capabilities: { command_centre_permission: true },
+            }),
+          );
+        } catch (err) {
+          clearTimeout(timeout);
+          reject(err);
+        }
+      });
+    });
+  } finally {
+    ws.close();
+  }
+}
+
 function createCapturingLogger() {
   const lines: string[] = [];
   const stream = new Writable({
@@ -387,6 +472,57 @@ async function waitForCapturedLog(
       await stopRelay();
     }
   }, 90000);
+
+  // Fulcra 0.2.9: a scratch daemon and a paired scratch device over a local relay. Command Centre (the
+  // command-centre.manage permission the app's gate reads) rides on the relay only while the owner's grant stands.
+  test("a paired device gets Command Centre over the relay only while the owner allows it", async () => {
+    process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";
+    const { logger, lines } = createCapturingLogger();
+    await startRelay();
+    const daemon = await createTestPaseoDaemon({
+      listen: "127.0.0.1",
+      logger,
+      relayEnabled: true,
+      relayUseTls: false,
+      relayEndpoint: `127.0.0.1:${relayPort}`,
+    });
+    try {
+      const offerUrl = await getPairingOfferUrl({
+        paseoHome: daemon.paseoHome,
+        relayEnabled: daemon.config.relayEnabled,
+        relayEndpoint: daemon.config.relayEndpoint,
+        relayPublicEndpoint: daemon.config.relayPublicEndpoint,
+        appBaseUrl: daemon.config.appBaseUrl,
+      });
+      const { serverId, daemonPublicKeyB64 } = decodeOfferFromFragmentUrl(offerUrl);
+      const deviceKeyPair = generateKeyPair();
+      const registry = new DeviceRegistry(daemon.paseoHome);
+      const device = await registry.add(exportPublicKey(deviceKeyPair.publicKey), "Scratch phone");
+      const read = () =>
+        relayServerInfoPermissions({ relayPort, serverId, daemonPublicKeyB64, deviceKeyPair });
+
+      // Paired, not allowed: sessions and chat, no Command Centre.
+      const before = await read();
+      expect(before).toContain("daemon.read");
+      expect(before).not.toContain("command-centre.manage");
+
+      await registry.setCommandCentre(device.deviceId, true, () => undefined);
+      const allowed = await read();
+      expect(allowed).toContain("command-centre.manage");
+      expect(allowed).toContain("daemon.manage");
+      expect(allowed).not.toContain("access.manage");
+
+      await registry.setCommandCentre(device.deviceId, false, () => undefined);
+      expect(await read()).not.toContain("command-centre.manage");
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("daemon logs (tail):\n", lines.slice(-50).join(""));
+      throw err;
+    } finally {
+      await daemon.close();
+      await stopRelay();
+    }
+  }, 120000);
 
   test("daemon closes a relay client that sends an unsupported handshake key", async () => {
     process.env.PASEO_PRIMARY_LAN_IP = "192.168.1.12";

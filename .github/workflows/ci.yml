@@ -618,3 +618,40 @@ jobs:
       PASEO_CLI_TEST_SHARD: "3"
       PASEO_CLI_TEST_SHARD_TOTAL: "3"
     steps: *cli_test_steps
+
+  # FULCRA: the one check that branch protection on main requires. A job skipped by the path filter counts as passed;
+  # a failed or cancelled job fails this one. Add every new job to `needs`. `!cancelled()` (not always()) so a
+  # superseded run still cancels; a cancelled run leaves this check cancelled, which does not pass protection.
+  ci-passed:
+    name: ci-passed
+    if: ${{ !cancelled() }}
+    needs:
+      - changes
+      - format
+      - lint
+      - machine-data
+      - typecheck
+      - server-tests-ubuntu
+      - server-tests-macos
+      - desktop-tests-ubuntu
+      - app-tests
+      - sdk-tests
+      - playwright-1
+      - playwright-2
+      - playwright-3
+      - playwright-4
+      - relay-tests
+      - cli-tests-1
+      - cli-tests-2
+      - cli-tests-3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then
+            echo "A CI job failed or was cancelled."
+            exit 1
+          fi

@@ -123,7 +123,7 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
     </button>
   ),
 }));
-import { PinnedMainAssistant, PrimeSidebarRows } from "./prime-sidebar";
+import { leadsFailureLabel, PinnedMainAssistant, PrimeSidebarRows } from "./prime-sidebar";
 import { useMainAssistantMemory } from "@/stores/main-assistant-memory-store";
 const clients: QueryClient[] = [];
 const fastRetry = () => 1;
@@ -238,7 +238,7 @@ it("shows nothing pinned when no connected computer has a main assistant", async
 it("distinguishes unavailable role records from an empty directory and allows retry", async () => {
   f.read.mockResolvedValue({ available: false, primes: [] });
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Couldn't load leads · Retry" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Couldn't load leads/ }));
   expect(screen.queryByText("No main assistant yet · Set up")).toBeNull();
   expect(f.open).not.toHaveBeenCalled();
 });
@@ -368,7 +368,7 @@ it("retries the first load by itself after a restart", async () => {
   expect(
     await screen.findByRole("button", { name: "Open Lead · weather-cli conversation" }),
   ).toBeTruthy();
-  expect(screen.queryByText("Couldn't load leads · Retry")).toBeNull();
+  expect(screen.queryByText(/^Couldn't load leads/)).toBeNull();
   expect(f.read).toHaveBeenCalledTimes(3);
   expect(f.fleet).toHaveBeenCalledTimes(2);
 });
@@ -377,7 +377,7 @@ it("Retry reads the lead status again, not only the main assistant list", async 
   f.read.mockResolvedValue({ available: false, primes: [] });
   f.fleet.mockReset().mockRejectedValue(new Error("plugin not ready"));
   mount();
-  const retry = await screen.findByRole("button", { name: "Couldn't load leads · Retry" });
+  const retry = await screen.findByRole("button", { name: /^Couldn't load leads/ });
   const fleetCalls = f.fleet.mock.calls.length;
   f.read.mockResolvedValue({
     available: true,
@@ -492,4 +492,41 @@ it("says it is still finding the main assistant while another computer's read is
   expect(
     await screen.findByRole("button", { name: "Use the main assistant on Mac-mini.local" }),
   ).toBeTruthy();
+});
+
+// Fulcra 0.2.9: with the Mac mini's controller stopped, the row said "Loading leads…" for about 35 s, then only
+// "Couldn't load leads", with no reason.
+it("gives the reason and the computer at the first failed reply, while it keeps retrying", async () => {
+  f.hosts = [{ serverId: "mini", label: "Mac mini" }];
+  let answer: (value: unknown) => void = () => undefined;
+  f.read
+    .mockResolvedValueOnce({ available: false, unavailable: "Management refused", primes: [] })
+    .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+  mount();
+  expect(
+    await screen.findByRole("button", {
+      name: "Couldn't load leads: Command Centre is not answering on Mac mini · Retry",
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByText("Loading leads…")).toBeNull();
+  // The automatic retries go on behind the reason; the first good reply replaces it.
+  await vi.waitFor(() => expect(f.read).toHaveBeenCalledTimes(2));
+  answer({ available: true, primes: [prime()], projectSeats: [] });
+  await vi.waitFor(() => expect(screen.queryByText(/^Couldn't load leads/)).toBeNull());
+});
+
+it("names a specific reason as it is, and a generic one as Command Centre not answering", () => {
+  const relay = "Command Centre needs a direct connection to this Mac";
+  expect(leadsFailureLabel(new Error(relay), "Mac mini")).toBe(
+    `Couldn't load leads: ${relay} · Retry`,
+  );
+  for (const generic of [
+    "Management refused",
+    "Role records unavailable",
+    "Controller stopped",
+    "",
+  ])
+    expect(leadsFailureLabel(new Error(generic), "Mac mini")).toBe(
+      "Couldn't load leads: Command Centre is not answering on Mac mini · Retry",
+    );
 });

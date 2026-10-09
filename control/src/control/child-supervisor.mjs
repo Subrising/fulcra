@@ -5,6 +5,9 @@ export function createChildSupervisor({
   spawn,
   createChannel,
   recover,
+  // Fulcra 0.2.9: clears controller files that provably belong to no running controller (a lock from before the last
+  // restart). Returns true when it cleared them. Used only by an explicit Retry after a refused recovery.
+  recoverStale = () => false,
   onReady = () => {},
   schedule = (fn, ms) => {
     const timer = setTimeout(fn, ms);
@@ -30,6 +33,7 @@ export function createChildSupervisor({
     throw Error("Invalid restart bound");
   let current = null,
     stopped = false,
+    recoveryRefused = false,
     started = false,
     restarts = 0,
     stopping = null,
@@ -185,8 +189,10 @@ export function createChildSupervisor({
       // Only an observed exit can authorise recovery. Unknown ownership fails shut.
       try {
         recover(child);
-      } catch {
+      } catch (error) {
+        log(`recovery refused: ${String(error?.message ?? error).slice(0, 200)}`);
         stopped = true;
+        recoveryRefused = true;
         return;
       }
       if (!stopped && restarts < maxRestarts) {
@@ -224,6 +230,12 @@ export function createChildSupervisor({
       };
     },
     retry() {
+      // A refused recovery stops the controller. A Retry may start it again only when the stale files are cleared now;
+      // an explicit stop() is never undone here.
+      if (stopped && recoveryRefused && !stopping && !current && recoverStale()) {
+        stopped = false;
+        recoveryRefused = false;
+      }
       if (stopped) throw Error("Controller stopped; restart Command Centre in Settings");
       if (!current) {
         cancelRestart();

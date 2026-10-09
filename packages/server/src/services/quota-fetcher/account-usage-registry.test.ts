@@ -14,6 +14,7 @@ import {
 import type {
   AccountUsageReader,
   AccountUsageReading,
+  AccountUsageRow,
   LiveAccountSession,
   PooledAccount,
 } from "./account-usage-types.js";
@@ -64,6 +65,7 @@ function setup(options?: {
   roster?: PooledAccount[];
   sessions?: () => LiveAccountSession[];
   probe?: (account: PooledAccount) => Promise<AccountUsageReading | null>;
+  onPass?: (rows: AccountUsageRow[]) => void;
 }) {
   let nowMs = T0;
   const logLines: string[] = [];
@@ -81,6 +83,7 @@ function setup(options?: {
     readers: [reader, { provider: "codex", probe: codexProbe }],
     roster: { list: async () => options?.roster ?? [work, personal] },
     sessions: options?.sessions,
+    onPass: options?.onPass,
   });
   return {
     registry,
@@ -92,6 +95,22 @@ function setup(options?: {
     },
   };
 }
+
+describe("AccountUsageRegistry weekly use for the pool", () => {
+  it("each periodic pass hands the cached rows on, also when no probe is due", async () => {
+    const passes: AccountUsageRow[][] = [];
+    const { registry, probe, advance } = setup({ onPass: (rows) => passes.push(rows) });
+    await registry.periodicPass();
+    advance(60_000);
+    await registry.periodicPass();
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(passes).toHaveLength(2);
+    expect(passes[1]?.map((row) => [row.name, row.weekly?.usedPct])).toEqual([
+      ["Work", 60],
+      ["Personal", 97],
+    ]);
+  });
+});
 
 describe("AccountUsageRegistry cost control", () => {
   it("a periodic pass probes each account at most once per 10 minutes", async () => {

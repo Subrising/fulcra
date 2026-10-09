@@ -77,18 +77,19 @@ export function AutoResumeOnLimitCard({ serverId }: { serverId: string }) {
       <View style={settingsStyles.row}>
         <View style={settingsStyles.rowContent}>
           <Text style={settingsStyles.rowTitle}>
-            Auto-resume eligible sessions after usage limits reset
+            Auto-resume eligible sessions after usage limits reset or a restart
           </Text>
           <Text style={settingsStyles.rowHint}>
-            Eligible standalone sessions may resume after a usage limit resets if their setup is
-            unchanged. Sessions managed by a prime or another owner use that owner’s controls.
-            Turning this on does not grant permission to continue.
+            Eligible standalone sessions may resume after a usage limit resets, or after this host
+            restarts during their turn, if their setup is unchanged. Sessions managed by a prime or
+            another owner use that owner’s controls. Turning this on does not grant permission to
+            continue.
           </Text>
         </View>
         <Switch
           value={config.autoResumeOnLimit !== false}
           onValueChange={handleValueChange}
-          accessibilityLabel="Auto-resume eligible sessions after usage limits reset"
+          accessibilityLabel="Auto-resume eligible sessions after usage limits reset or a restart"
           testID="host-page-auto-resume-on-limit-switch"
         />
       </View>

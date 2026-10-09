@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { writePrivateFileAtomicSync } from "../../server/private-files.js";
 import { safeAccountName } from "./account-usage-sanitize.js";
-import type { AccountRoster, PooledAccount } from "./account-usage-types.js";
+import type { AccountRoster, AccountUsageRow, PooledAccount } from "./account-usage-types.js";
 
 // update-7c: the roster of Fulcra's account pool, read from Fulcra's own store (<home>/accounts/accounts.json, written by
 // the Command Centre plugin; the same file, never a shared config key). Claude tokens come from the Keychain item the
@@ -125,4 +126,36 @@ export function createFulcraPoolRoster(options: FulcraPoolRosterOptions): Accoun
       return list;
     },
   };
+}
+
+/**
+ * FULCRA: writes each pooled account's weekly use to <home>/accounts/usage.json, so the pool does not start a new session
+ * on an account near its weekly limit. Only account IDs, the provider, the percentage and the reset time; nothing else.
+ * Written only when a pool exists and only when the figures change.
+ */
+export function writeUsageSnapshot(root: string, rows: AccountUsageRow[]): boolean {
+  const accountsDir = path.join(root, "accounts");
+  if (!existsSync(path.join(accountsDir, "accounts.json"))) return false;
+  const accounts: Record<
+    string,
+    { provider: string; weeklyUsedPct: number; weeklyResetsAt: string | null }
+  > = {};
+  for (const row of rows) {
+    if (!row.accountId || !UUID.test(row.accountId) || !row.weekly) continue;
+    if (!Number.isFinite(row.weekly.usedPct)) continue;
+    accounts[row.accountId] = {
+      provider: row.provider,
+      weeklyUsedPct: Math.min(100, Math.max(0, row.weekly.usedPct)),
+      weeklyResetsAt: row.weekly.resetsAt,
+    };
+  }
+  const file = path.join(accountsDir, "usage.json");
+  const body = `${JSON.stringify({ v: 1, accounts })}\n`;
+  try {
+    if (readFileSync(file, "utf8") === body) return false;
+  } catch {
+    /* First write. */
+  }
+  writePrivateFileAtomicSync(file, body);
+  return true;
 }

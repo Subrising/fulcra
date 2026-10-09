@@ -403,6 +403,82 @@ test("an old holder the labelled list leaves out is still cleared after a change
   assert.equal(w.labelWrites.length, writes);
 });
 
+test("an old holder loses reports-to=owner with the seat; another reporting line is kept", async (t) => {
+  const first = randomUUID(),
+    second = randomUUID();
+  const w = world(t, { snapshots: { [first]: chat(), [second]: chat() } });
+  await seatMain(w, first);
+  await w.control.team.syncSeat("start");
+  assert.equal(w.labels[first]["fulcra.reports-to"], "owner");
+  await seatMain(w, second);
+  await w.control.team.syncSeat("setup");
+  assert.equal(w.labels[first]["fulcra.seat"], "");
+  assert.equal(w.labels[first]["fulcra.reports-to"], "");
+  assert.equal(w.labels[second]["fulcra.reports-to"], "owner");
+  // The clear is one write, not two.
+  assert.equal(
+    w.labelWrites.filter((x) => x.id === first && x.labels["fulcra.seat"] === "").length,
+    1,
+  );
+  assert.ok(
+    w.labelWrites.some(
+      (x) =>
+        x.id === first && x.labels["fulcra.reports-to"] === "" && x.labels["fulcra.seat"] === "",
+    ),
+  );
+  // A holder that was made a lead keeps the lead's line.
+  const third = randomUUID();
+  const v = world(t, { snapshots: { [first]: chat(), [third]: chat() } });
+  await seatMain(v, first);
+  await v.control.team.syncSeat("start");
+  v.labels[first]["fulcra.reports-to"] = third;
+  await seatMain(v, third);
+  await v.control.team.syncSeat("setup");
+  assert.equal(v.labels[first]["fulcra.seat"], "");
+  assert.equal(v.labels[first]["fulcra.reports-to"], third);
+});
+
+test("a refused tracker change shows the board's own error text", async (t) => {
+  const w = world(t);
+  const team = w.control.team;
+  team.config = {
+    ...team.config,
+    authority: { ...team.config.authority, issueApi: "http://board.test" },
+  };
+  const answer = (status, body) => async () => ({
+    ok: status < 300,
+    status,
+    text: async () => body,
+  });
+  team.fetcher = answer(409, JSON.stringify({ error: "A project called Mac operations exists" }));
+  await assert.rejects(
+    team.tracker("/api/companies/x/projects", "POST", {}),
+    /HTTP 409: A project called Mac operations exists/,
+  );
+  team.fetcher = answer(500, "database is locked\n");
+  await assert.rejects(team.tracker("/api/x", "GET"), /HTTP 500: database is locked\)/);
+  team.fetcher = answer(502, "");
+  await assert.rejects(team.tracker("/api/x", "GET"), /\(HTTP 502\)/);
+  team.fetcher = async () => {
+    throw Object.assign(TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+  };
+  await assert.rejects(team.tracker("/api/x", "GET"), /does not answer: ECONNREFUSED/);
+});
+
+test("the history prune keeps seat-set rows", async (t) => {
+  const w = world(t);
+  const team = w.control.team;
+  const holder = randomUUID();
+  team.record("seat-set", holder, null, "{}", "holds the main seat");
+  for (let i = 0; i < 5000; i++) team.record("note", randomUUID(), null, "{}", "x");
+  team.record("note", randomUUID(), null, "{}", "after the prune");
+  const seats = w.store.db
+    .prepare("SELECT count(*) n FROM team_changes WHERE kind='seat-set'")
+    .get().n;
+  assert.equal(seats, 1);
+  assert.ok(w.store.db.prepare("SELECT count(*) n FROM team_changes").get().n < 5000);
+});
+
 test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {
   const main = randomUUID(),
     stale = randomUUID(),

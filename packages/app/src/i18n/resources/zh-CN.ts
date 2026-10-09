@@ -4,13 +4,8 @@ import { pluginSettings } from "./plugin-settings";
 
 export const zhCN: TranslationResources = {
   plugins: {
-    commandCentreRelay: {
-      title: "Command Centre 需要直接连接到这台 Mac",
-      why: "此设备通过加密中继连接到 Mac。中继无法打开 Command Centre,因此在你直接连接之前,这些页面会保持空白。",
-      todo: "要直接连接,请打开此主机,选择“添加连接”→“直接连接”,然后输入这台 Mac 的 Tailscale 或局域网地址和主机密码。能连上时,应用会自动切换过去。",
-      meanwhile: "会话和聊天仍可通过中继正常使用。",
-      error: "Command Centre 需要直接连接到这台 Mac。请为此主机添加直接连接(Tailscale 或局域网)。",
-    },
+    // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
+    commandCentreRelay: en.plugins.commandCentreRelay,
   },
   sessionOwnership: {
     noLeaderYet: "尚无负责人",

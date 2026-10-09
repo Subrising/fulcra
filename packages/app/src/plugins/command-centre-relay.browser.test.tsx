@@ -119,8 +119,10 @@ describe("L46: Command Centre screens and the relay", () => {
     state.connection = { type: "relay" };
     await mount();
     expect(container.querySelector('[data-testid="command-centre-relay-notice"]')).not.toBeNull();
-    expect(container.textContent).toContain("Command Centre needs a direct connection to this Mac");
-    expect(container.textContent).toContain("Add connection → Direct connection");
+    // Fulcra 0.2.9: the notice names the real reason and the owner's switch, not the host password.
+    expect(container.textContent).toContain("Command Centre is off for this device");
+    expect(container.textContent).toContain("Turn on Allow Command Centre for this device");
+    expect(container.textContent).not.toContain("password");
     expect(container.textContent).not.toContain("Management unavailable");
     expect(container.textContent).not.toContain("Command Centre content");
     expect(state.surfaceMounts).toBe(0);

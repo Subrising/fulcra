@@ -4,14 +4,8 @@ import { pluginSettings } from "./plugin-settings";
 
 export const ko: TranslationResources = {
   plugins: {
-    commandCentreRelay: {
-      title: "Command Centre를 사용하려면 이 Mac에 직접 연결해야 합니다",
-      why: "이 기기는 암호화된 릴레이를 통해 Mac에 연결되어 있습니다. 릴레이로는 Command Centre를 열 수 없으므로 직접 연결할 때까지 이 화면은 비어 있습니다.",
-      todo: "직접 연결하려면 이 호스트를 열고 연결 추가 → 직접 연결을 선택한 다음 Mac의 Tailscale 또는 로컬 네트워크 주소와 호스트 비밀번호를 입력하세요. 연결할 수 있게 되면 앱이 자동으로 전환합니다.",
-      meanwhile: "세션과 채팅은 릴레이를 통해 계속 작동합니다.",
-      error:
-        "Command Centre를 사용하려면 이 Mac에 직접 연결해야 합니다. 이 호스트에 직접 연결(Tailscale 또는 로컬 네트워크)을 추가하세요.",
-    },
+    // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
+    commandCentreRelay: en.plugins.commandCentreRelay,
   },
   sessionOwnership: {
     noLeaderYet: "아직 리더 없음",

@@ -48,6 +48,8 @@ export async function runStatusCommand(options: CommandOptions, _command: Comman
   };
 }
 
+const STATUS_CONNECT_TIMEOUT_MS = 5_000;
+
 async function probeDaemonStatus(
   target: DaemonTarget,
   instance: Awaited<ReturnType<typeof readDaemonInstance>>,
@@ -58,7 +60,13 @@ async function probeDaemonStatus(
   let live: Record<string, unknown> = {};
   let client: Awaited<ReturnType<typeof connectToDaemon>> | undefined;
   try {
-    client = await connectToDaemon({ target, instance: instance ?? undefined, timeout: 1_500 });
+    // FULCRA: the daemon checks a supplied password with bcrypt (cost 12) before it answers. On a slow or busy host
+    // that can pass 1.5 s, and a wrong password then read as "unreachable". A refused connection still fails at once.
+    client = await connectToDaemon({
+      target,
+      instance: instance ?? undefined,
+      timeout: STATUS_CONNECT_TIMEOUT_MS,
+    });
   } catch (error) {
     const failure = buildDaemonConnectionCommandError({ target, error });
     if (target.kind === "endpoint") throw failure;

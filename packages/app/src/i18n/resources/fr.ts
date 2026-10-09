@@ -4,14 +4,8 @@ import { pluginSettings } from "./plugin-settings";
 
 export const fr: TranslationResources = {
   plugins: {
-    commandCentreRelay: {
-      title: "Command Centre a besoin d'une connexion directe à ce Mac",
-      why: "Cet appareil joint le Mac via le relais chiffré. Le relais ne peut pas ouvrir Command Centre : ces écrans restent vides tant que vous n'êtes pas connecté directement.",
-      todo: "Pour vous connecter directement, ouvrez cet hôte, choisissez Ajouter une connexion → Connexion directe, puis saisissez l'adresse Tailscale ou réseau local du Mac avec son mot de passe. L'app bascule d'elle-même dès qu'elle peut la joindre.",
-      meanwhile: "Les sessions et le chat continuent de fonctionner via le relais.",
-      error:
-        "Command Centre a besoin d'une connexion directe à ce Mac. Ajoutez une connexion directe (Tailscale ou réseau local) pour cet hôte.",
-    },
+    // Fulcra 0.2.9: English until translated; the old text gave the host-password route.
+    commandCentreRelay: en.plugins.commandCentreRelay,
   },
   sessionOwnership: {
     noLeaderYet: "Pas encore de responsable",

@@ -55,6 +55,9 @@ const l42 = vi.hoisted(() => ({
   accountsManage: false,
   accountsGrants: [] as Array<{ deviceId: string; allow: boolean }>,
   audit: [] as Array<Record<string, unknown>>,
+  // Fulcra 0.2.9: devices that pair while the screen is open, and the list's refresh interval.
+  extraDevices: [] as Array<{ deviceId: string; name: string; connected: boolean }>,
+  devicesInterval: undefined as unknown,
 }));
 vi.mock("@/runtime/host-runtime", () => ({
   // The pair-all section's reads (no other hosts here).
@@ -102,11 +105,14 @@ vi.mock("@/data/query", () => ({
     queryKey,
     queryFn,
     enabled,
+    refetchInterval,
   }: {
     queryKey: string[];
     queryFn: () => Promise<unknown>;
     enabled?: boolean;
+    refetchInterval?: unknown;
   }) => {
+    if (queryKey[0] === "paired-devices") l42.devicesInterval = refetchInterval;
     let data: unknown = { relayEnabled: true, url: fixture.url };
     if (queryKey[0] === "daemon-pairing-offer") {
       l42.enabled.push(enabled !== false);
@@ -147,6 +153,7 @@ vi.mock("@/data/query", () => ({
             readOnly: l42.readOnly || undefined,
             accountsManage: l42.accountsManage || undefined,
           },
+          ...l42.extraDevices,
         ],
       };
     } else if (queryKey[0] === "accounts-audit") {
@@ -225,6 +232,8 @@ afterEach(() => {
     accountsGrants: [],
     audit: [],
     getOffer: null,
+    extraDevices: [],
+    devicesInterval: undefined,
   });
   vi.unstubAllGlobals();
 });
@@ -391,9 +400,7 @@ describe("L42: the pairing offer never loads forever", () => {
   it("Allow Command Centre is off by default, turns on per device, and warns about lost phones", async () => {
     await mount(darkTheme, 390, 844);
     await expect
-      .element(
-        page.getByText("Off: Command Centre works on this device only over a direct connection."),
-      )
+      .element(page.getByText("Off: this device cannot open Command Centre through the relay."))
       .toBeVisible();
     await page.getByTestId("paired-device-command-centre-switch-dev_fixture").click();
     await vi.waitFor(() => expect(l42.grants).toEqual([{ deviceId: "dev_fixture", allow: true }]));
@@ -404,6 +411,41 @@ describe("L42: the pairing offer never loads forever", () => {
     await expect
       .element(page.getByText(/If it's lost or stolen, remove it here straight away/))
       .toBeVisible();
+  });
+  // Fulcra 0.2.9: the grant is offered at pairing. A device that pairs while the code is shown appears with the choice.
+  it("a device that pairs while the code is shown appears as just paired, with Command Centre off", async () => {
+    await mount(darkTheme, 390, 844);
+    expect(l42.devicesInterval).toBe(5000);
+    expect(container.querySelector('[data-testid^="paired-device-just-paired-"]')).toBeNull();
+    l42.extraDevices = [{ deviceId: "dev_new", name: "New phone", connected: true }];
+    await act(async () => {
+      root!.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <PairDeviceSection serverId="fixture-host" onClose={noop} />
+        </QueryClientProvider>,
+      );
+    });
+    await expect.element(page.getByTestId("paired-device-just-paired-dev_new")).toBeVisible();
+    expect(container.textContent).toContain("Just paired. Command Centre is off for this device.");
+    expect(container.scrollWidth).toBeLessThanOrEqual(390);
+    await page.screenshot({
+      path: "../../.vitest-screenshots/pairing/just-paired-390x844.png",
+      fullPage: false,
+    });
+    expect(
+      container.querySelector('[data-testid="paired-device-just-paired-dev_fixture"]'),
+    ).toBeNull();
+    expect(
+      page
+        .getByTestId("paired-device-command-centre-switch-dev_new")
+        .element()
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+  it("the device list refreshes only while a pairing code is shown", async () => {
+    l42.offer = "idle";
+    await mount(darkTheme, 390, 844);
+    expect(l42.devicesInterval).toBe(false);
   });
   // U7: the owner's separate, explicit account-management grant, and what devices did with it.
   it("accounts-manage: not offered without a full Command Centre grant", async () => {
