@@ -3,9 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { isTrustedCatalogV11 } from "@getpaseo/protocol/trusted-input";
 import { TrustedPlugins } from "./trusted.js";
 import { ControlStore } from "../../../../../control/src/control/store.mjs";
-import { createTrustedContribution } from "../../../../../control/src/control/trusted-contribution.mjs";
+import {
+  createTrustedContribution,
+  OWN_ID,
+} from "../../../../../control/src/control/trusted-contribution.mjs";
 
 const A = "11111111-1111-4111-8111-111111111111";
 
@@ -86,6 +90,27 @@ test("the Command Centre controller claims the sessions in its journal and leave
     await rm(path.join(home, "journal.sqlite"), { force: true });
     await writeFile(path.join(home, "journal.sqlite"), "not a database");
     expect(plugins.mayResumeUnscoped(standalone)).toBe(false);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+// 0.2.9 shipped with this broken: the "owns" answer was a sixth hook that the controller's own activation check did not
+// allow, so the controller refused to activate and every Command Centre call failed.
+test("the real controller, with its ownership answer, still passes the controller's own activation check", async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "resume-ownership-"));
+  try {
+    const plugins = new TrustedPlugins();
+    plugins.initializeKnownAgents([]);
+    plugins.registerV11(OWN_ID, true, (server) => createTrustedContribution({ home })(server));
+    const catalog = {
+      plugins: [],
+      trustedHost: { contract: "1.1", boot: plugins.boot },
+      trustedPlugins: plugins.catalog(),
+    };
+    expect(catalog.trustedPlugins.find((p) => p.id === OWN_ID)?.hooks).toContain("owns");
+    expect(isTrustedCatalogV11(catalog, OWN_ID, plugins.boot)).toBe(true);
+    plugins.close();
   } finally {
     await rm(home, { recursive: true, force: true });
   }

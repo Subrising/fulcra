@@ -569,9 +569,11 @@ export function isTrustedCatalogV11(
     return false;
   const own = trustedPlugins.find((report) => report.id === ownId);
   const required: TrustedHookNameV11[] = ["input", "permission", "deny", "mcp", "codex"];
-  // Known V1.1 extensions: the queued-receipt observer and the automatic
-  // permission-policy callback. Neither replaces any required admission hook.
-  const allowed = new Set<string>([...required, "queuedReceipt", "automatic"]);
+  // Known V1.1 extensions: the queued-receipt observer, the automatic
+  // permission-policy callback and the session-ownership answer (FULCRA: "owns",
+  // asked before the host resumes a session on its own). None replaces any required
+  // admission hook.
+  const allowed = new Set<string>([...required, "queuedReceipt", "automatic", "owns"]);
   return (
     own?.contract === "1.1" &&
     new Set(own.hooks).size === own.hooks.length &&
