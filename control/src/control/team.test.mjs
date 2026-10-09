@@ -438,6 +438,20 @@ test("an old holder loses reports-to=owner with the seat; another reporting line
   assert.equal(v.labels[first]["fulcra.reports-to"], third);
 });
 
+test("the history prune keeps seat-set rows", async (t) => {
+  const w = world(t);
+  const team = w.control.team;
+  const holder = randomUUID();
+  team.record("seat-set", holder, null, "{}", "holds the main seat");
+  for (let i = 0; i < 5000; i++) team.record("note", randomUUID(), null, "{}", "x");
+  team.record("note", randomUUID(), null, "{}", "after the prune");
+  const seats = w.store.db
+    .prepare("SELECT count(*) n FROM team_changes WHERE kind='seat-set'")
+    .get().n;
+  assert.equal(seats, 1);
+  assert.ok(w.store.db.prepare("SELECT count(*) n FROM team_changes").get().n < 5000);
+});
+
 test("a stale holder is cleared before the holder is set; a failed clear never leaves two", async (t) => {
   const main = randomUUID(),
     stale = randomUUID(),

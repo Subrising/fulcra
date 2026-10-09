@@ -55,7 +55,7 @@ export class Team {
     if (this.db.prepare("SELECT count(*) n FROM team_changes").get().n >= 5000)
       this.db
         .prepare(
-          "DELETE FROM team_changes WHERE id IN (SELECT id FROM team_changes ORDER BY at LIMIT 500)",
+          "DELETE FROM team_changes WHERE id IN (SELECT id FROM team_changes WHERE kind != 'seat-set' ORDER BY at LIMIT 500)",
         )
         .run();
     const at = this.now().toISOString();
