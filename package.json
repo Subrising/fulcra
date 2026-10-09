@@ -73,7 +73,7 @@
     "format": "oxfmt .",
     "format:files": "oxfmt",
     "format:check": "oxfmt --check .",
-    "format:check:files": "oxfmt --check",
+    "format:check:files": "oxfmt --check --no-error-on-unmatched-pattern",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "knip": "knip",
