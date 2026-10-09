@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 // Private test configuration first: some plugin modules read it when they load.
 import "./portable.fixture";
-import { localProjectDirectory, readProjectList, readProjects } from "./projects";
+import {
+  localProjectDirectory,
+  readArchivedProjects,
+  readProjectList,
+  readProjects,
+} from "./projects";
 import { COMPANY } from "./tasks";
 const id = (n: number) => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`;
 const p = (n = 1) => ({
@@ -250,4 +255,39 @@ test("an archived project is hidden with its tasks; nothing about it reads as pa
     { taskId: id(2), projectId: id(1) },
     { taskId: id(3), projectId: null },
   ]);
+});
+
+test("archived projects and their tasks follow the projects list rule; an unreadable source hides nothing", async () => {
+  const projects = [
+    p(1),
+    { ...p(3), archivedAt: "2026-10-08T00:00:00.000Z" },
+    { ...p(4), status: "archived" },
+  ];
+  const issues = [i(2, id(1)), i(5, id(3)), i(6, id(4)), i(7, null)];
+  const remote = await readArchivedProjects(
+    async (r) => (r === "projects" ? projects : issues),
+    null,
+    null,
+  );
+  assert.deepEqual([...remote.projects], [id(3), id(4)]);
+  assert.deepEqual([...remote.tasks], [id(5), id(6)]);
+  // The listed projects are exactly the ones not archived.
+  assert.deepEqual(
+    (await read(projects, issues)).projects.map((x) => x.id),
+    [id(1)],
+  );
+  const local = await readArchivedProjects(
+    undefined,
+    () => issues,
+    () => projects,
+  );
+  assert.deepEqual([...local.tasks], [id(5), id(6)]);
+  const down = await readArchivedProjects(
+    async () => {
+      throw Error("offline");
+    },
+    null,
+    null,
+  );
+  assert.deepEqual([down.projects.size, down.tasks.size], [0, 0]);
 });

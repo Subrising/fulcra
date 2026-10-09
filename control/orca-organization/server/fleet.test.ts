@@ -1045,3 +1045,119 @@ test("lead sessions stay in the capped fleet when nothing is working or recently
   );
   assert.equal(leadSessions({ status: "rejected", reason: new Error("down") }).size, 0);
 });
+
+// Fulcra 0.2.9: archived chats and archived projects stayed on the Team map (an archived lead with archived workers,
+// and loose "No reporting line" rows).
+test("attachOwnership drops an archived chat and a chat of an archived project, with their edges", async () => {
+  const { attachOwnership } = await import("./fleet");
+  const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const node = (n: number, task = U(90)) =>
+    ({ id: U(n), task, host: "This Mac", status: "idle", mode: "delegated" }) as any;
+  const nodes: any[] = [node(1), node(2), node(3), node(4, U(91)), node(5)];
+  const edges: any[] = [
+    { from: U(1), to: U(2), state: "owned" },
+    { from: U(2), to: U(5), state: "owned" },
+    { from: U(1), to: U(3), state: "owned" },
+  ];
+  const entries = [
+    { agent: { id: U(1), labels: {} } },
+    { agent: { id: U(2), labels: {}, archivedAt: "2026-10-08T00:00:00Z" } }, // archived lead
+    { agent: { id: U(3), labels: { "fulcra.project": U(80) } } }, // active, archived project
+    { agent: { id: U(4), labels: {} } }, // task of an archived project
+    { agent: { id: U(5), labels: {} } },
+    { agent: { id: U(6), labels: { "paseo.parent-agent-id": U(1), "fulcra.project": U(80) } } },
+    { agent: { id: U(7), labels: { "paseo.parent-agent-id": U(1) } } },
+  ];
+  attachOwnership(nodes, edges, entries, "This Mac", () => null, 64, {
+    projects: new Set([U(80)]),
+    tasks: new Set([U(91)]),
+  });
+  assert.deepEqual(
+    nodes.map((n) => n.id.slice(-1)),
+    ["1", "5", "7"],
+  );
+  assert.deepEqual(
+    edges.map((e) => [e.from.slice(-1), e.to.slice(-1)]),
+    [["1", "7"]],
+  );
+});
+
+test("an active chat in an archived project leaves Team but stays openable from History", async () => {
+  const f = fixture();
+  const project = id(80);
+  const listed = await f.paseo.agents.list({ filter: { includeArchived: true } });
+  listed.entries[0].agent.labels = { "fulcra.project": project };
+  f.paseo.agents.list = async () => listed;
+  const archive = async () => ({ projects: new Set([project]), tasks: new Set<string>() });
+  const directory: any = async () => ({ projects: [], membership: [] });
+  const fleet = await readFleet(
+    f.paseo,
+    f.call,
+    f.catalog,
+    undefined,
+    undefined,
+    {},
+    directory,
+    archive,
+  );
+  assert.equal(
+    fleet.nodes.some((n) => n.id === id(1)),
+    false,
+  );
+  assert.equal(fleet.matching, 1);
+  assert.equal(
+    fleet.edges.some((e) => e.from === id(1) || e.to === id(1)),
+    false,
+  );
+  // Team reads only: the chat is not archived or changed, so History lists and opens it.
+  assert(
+    f.methods.every((m) =>
+      ["list", "observe", "manager-summary", "quota-status", "bindings-status"].includes(m),
+    ),
+  );
+  const history = await f.paseo.agents.list({ filter: { includeArchived: true } });
+  const chat = history.entries.find((e: any) => e.agent.id === id(1))?.agent;
+  assert.equal(chat?.archivedAt, undefined);
+  assert.equal((await f.paseo.agents.ref(id(1)).refresh()).agent.id, id(1));
+  const { readHistory } = await import("./history");
+  const page = await readHistory({ sessionId: id(1), taskId: task, cursor: null }, f.paseo, f.call);
+  assert.equal(page.sessionId, id(1));
+  // Without the archived project the same chat is on the map.
+  const shown = await readFleet(
+    f.paseo,
+    f.call,
+    f.catalog,
+    undefined,
+    undefined,
+    {},
+    directory,
+    async () => ({
+      projects: new Set<string>(),
+      tasks: new Set<string>(),
+    }),
+  );
+  assert(shown.nodes.some((n) => n.id === id(1)));
+});
+
+test("an archived chat on this host is not on the fleet page", async () => {
+  const f = fixture();
+  const listed = await f.paseo.agents.list({ filter: { includeArchived: true } });
+  listed.entries[0].agent.archivedAt = "2026-10-08T00:00:00Z";
+  f.paseo.agents.list = async () => listed;
+  const none = async () => ({ projects: new Set<string>(), tasks: new Set<string>() });
+  const fleet = await readFleet(
+    f.paseo,
+    f.call,
+    f.catalog,
+    undefined,
+    undefined,
+    {},
+    undefined,
+    none,
+  );
+  assert.deepEqual(
+    fleet.nodes.map((n) => n.id),
+    [id(2)],
+  );
+  assert.equal(fleet.edges.length, 0);
+});

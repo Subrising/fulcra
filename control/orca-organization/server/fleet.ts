@@ -13,7 +13,7 @@ import {
   type FleetHosts,
 } from "../shared/fleet";
 import { CONTROLLER_METHOD } from "../shared/roles";
-import { readProjects } from "./projects";
+import { readArchivedProjects, readProjects, type ArchivedProjects } from "./projects";
 import { localCall } from "./management";
 import { readBoard } from "./organization";
 import { readTaskCatalog } from "./tasks";
@@ -123,6 +123,8 @@ export function labelParent(labels: Record<string, string> | undefined | null): 
 // Pure: given the page's nodes and this host's agents, attach ownership (parent/project/role/account) to local nodes and
 // add the sessions a node here started that the controller did not create ("spawned"), with an edge from their parent,
 // up to the node limit. Spawned children of spawned children are followed (a lead's worker's worker).
+// Fulcra 0.2.9: an archived chat, and a chat of an archived project, leave the page with their edges. The chat itself
+// is not changed: History still opens it.
 export function attachOwnership(
   nodes: any[],
   edges: any[],
@@ -130,6 +132,7 @@ export function attachOwnership(
   localHost: string,
   accountOf: (id: string) => { name: string; provider: string } | null,
   limit = 64,
+  archived: ArchivedProjects | null = null,
 ) {
   const accountLabel = (id: string) => {
     const account = accountOf(id);
@@ -154,6 +157,23 @@ export function attachOwnership(
       n.account = accountLabel(n.id);
       Object.assign(n, labelLine(a.labels));
     }
+  }
+  const hidden = new Set(
+    nodes
+      .filter(
+        (n) =>
+          (n.host === localHost && agents.get(n.id)?.archivedAt) ||
+          archived?.tasks.has(n.task) ||
+          (n.project && archived?.projects.has(n.project)),
+      )
+      .map((n) => n.id),
+  );
+  if (hidden.size) {
+    keep(nodes, (n) => !hidden.has(n.id));
+    keep(edges, (e) => !hidden.has(e.from) && !hidden.has(e.to));
+    for (const id of hidden) byId.delete(id);
+  }
+  for (const n of nodes) {
     if (
       n.parent &&
       byId.has(n.parent) &&
@@ -174,6 +194,10 @@ export function attachOwnership(
       const parent = labelParent(a.labels);
       if (!parent || byId.has(a.id) || !byId.has(parent) || a.archivedAt) continue;
       const p = byId.get(parent);
+      const project = UUID.test(a.labels?.["fulcra.project"] ?? "")
+        ? a.labels["fulcra.project"]
+        : (p.project ?? null);
+      if (project && archived?.projects.has(project)) continue;
       const n = {
         id: a.id,
         task: p.task,
@@ -194,9 +218,7 @@ export function attachOwnership(
         updatedAt: a.updatedAt ?? null,
         error: null,
         parent,
-        project: UUID.test(a.labels?.["fulcra.project"] ?? "")
-          ? a.labels["fulcra.project"]
-          : (p.project ?? null),
+        project,
         role:
           typeof a.labels?.["fulcra.role"] === "string"
             ? a.labels["fulcra.role"].slice(0, 40)
@@ -217,6 +239,11 @@ export function attachOwnership(
         });
     }
   }
+}
+/** Keeps the matching items, in place: the caller holds the array. */
+function keep<T>(items: T[], ok: (item: T) => boolean) {
+  const kept = items.filter(ok);
+  items.splice(0, items.length, ...kept);
 }
 export async function listAgents(paseo: PaseoApi, ms: number, pages = 5) {
   const deadline = Date.now() + ms,
@@ -301,19 +328,22 @@ export async function readFleet(
   budgetMs = FLEET_BUDGET_MS,
   input: { search?: string; offset?: number; host?: string; projectId?: string } = {},
   directory = readProjects,
+  archive = readArchivedProjects,
 ): Promise<Fleet> {
   const deadline = Date.now() + budgetMs,
     left = () => Math.max(0, Math.min(12000, deadline - Date.now()));
   const bindings = readNativeHostBindings();
   const all = await enrollment(call, left());
   const stage = left();
-  const [native, roles, board, quotaRead, seats] = await Promise.allSettled([
+  const [native, roles, board, quotaRead, seats, archivedRead] = await Promise.allSettled([
     listAgents(paseo, stage),
     bounded(call("manager-summary"), stage),
     bounded(catalog(), stage),
     bounded(call("quota-status"), stage),
     bounded(call(CONTROLLER_METHOD.directory), stage),
+    bounded(archive(), stage),
   ]);
+  const archived = archivedRead.status === "fulfilled" ? archivedRead.value : null;
   let quota: ReturnType<typeof quotaStatusSchema.parse> | null = null;
   try {
     if (quotaRead.status === "fulfilled") {
@@ -341,6 +371,10 @@ export async function readFleet(
   const query = input.search?.trim().toLowerCase() ?? "";
   const eligible = all.filter((row) => {
     const agent = entries.find((e) => e.agent.id === row.id)?.agent;
+    // Fulcra 0.2.9: Team shows no archived chat and no chat of an archived project (the projects list rule).
+    if (row.host === portable.localHost.name && agent?.archivedAt) return false;
+    if (archived?.tasks.has(row.task) || archived?.projects.has(agent?.labels?.["fulcra.project"]))
+      return false;
     const projectId = projects?.membership.find((m) => m.taskId === row.task)?.projectId;
     const task =
       board.status === "fulfilled" ? board.value.tasks.find((t) => t.id === row.task) : null;
@@ -519,6 +553,7 @@ export async function readFleet(
     portable.localHost.name,
     (id) => (pool ? poolAccountOf(pool, id) : null),
     FLEET_NODE_LIMIT,
+    archived,
   );
   const taskIds = [
     ...new Set([
