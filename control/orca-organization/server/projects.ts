@@ -224,3 +224,35 @@ export async function readProjects(
     });
   }
 }
+
+export interface ArchivedProjects {
+  projects: Set<string>;
+  tasks: Set<string>;
+}
+
+/**
+ * Fulcra 0.2.9: the archived projects and their tasks, by the same rule as the projects list. Team hides their chats;
+ * the chats themselves are not changed, so History still opens them. An unreadable source hides nothing.
+ */
+export async function readArchivedProjects(
+  read = readProjectList,
+  local = portable.authority.issueApi === null ? localIssues : null,
+  localProjectRows = portable.authority.issueApi === null ? localProjects : null,
+): Promise<ArchivedProjects> {
+  try {
+    const [projectRows, taskRows] = local
+      ? [localProjectRows?.() ?? [], local()]
+      : await Promise.all([read("projects"), read("issues")]);
+    if (!Array.isArray(projectRows) || !Array.isArray(taskRows))
+      throw new Error("Project source unavailable");
+    const projects = archivedIds(projectRows);
+    const tasks = new Set<string>();
+    for (const raw of taskRows) {
+      const row = raw as { id?: unknown; projectId?: unknown } | null;
+      if (typeof row?.id === "string" && projects.has(row.projectId as string)) tasks.add(row.id);
+    }
+    return { projects, tasks };
+  } catch {
+    return { projects: new Set(), tasks: new Set() };
+  }
+}
