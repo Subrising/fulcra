@@ -2,12 +2,14 @@ import { usagePanelCopy } from "../usage-panel-copy";
 export const en = {
   plugins: {
     commandCentreRelay: {
-      title: "Command Centre needs a direct connection to this Mac",
-      why: "This device reaches the Mac through the encrypted relay. The relay can't open Command Centre, so these screens stay empty until you connect directly.",
-      todo: "To connect directly, open this host, choose Add connection → Direct connection, and enter the Mac's Tailscale or local-network address with its host password. The app switches to it by itself whenever it can reach it.",
+      // Fulcra 0.2.9: the relay carries Command Centre for a device the owner allowed; the old text sent people to
+      // share the host password instead.
+      title: "Command Centre is off for this device",
+      why: "This device reaches the Mac through the encrypted relay. The Mac's owner allows Command Centre one paired device at a time, and it is off for this one.",
+      todo: "On the Mac, open Settings, choose this Mac, then Pair a device. Turn on Allow Command Centre for this device. This device then reconnects by itself.",
       meanwhile: "Sessions and chat keep working over the relay.",
       error:
-        "Command Centre needs a direct connection to this Mac. Add a direct connection (Tailscale or local network) for this host.",
+        "Command Centre is off for this device. On the Mac, turn on Allow Command Centre for it (Settings, this Mac, Pair a device).",
     },
   },
   sessionOwnership: {
@@ -2059,7 +2061,9 @@ export const en = {
       loadingOffer: "Loading pairing offer...",
       allowCommandCentre: "Allow Command Centre",
       commandCentreOff:
-        "Off: Command Centre works on this device only over a direct connection. Changing this briefly reconnects the device.",
+        "Off: this device cannot open Command Centre through the relay. Changing this briefly reconnects the device.",
+      justPaired:
+        "Just paired. Command Centre is off for this device. Turn it on below only if you trust this device.",
       commandCentreWarning:
         "On: this device can manage sessions from anywhere through the relay. If it's lost or stolen, remove it here straight away. Changing this briefly reconnects the device.",
       allowAccountsManage: "Allow account management",
