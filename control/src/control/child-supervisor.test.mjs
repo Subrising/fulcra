@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createChildSupervisor } from "./child-supervisor.mjs";
 
-function fixture() {
+function fixture(options = {}) {
   const children = [],
     channels = [],
     timers = [],
@@ -59,6 +59,7 @@ function fixture() {
         if (i >= 0) timers.splice(i, 1);
       };
     },
+    ...options,
   });
   const ready = (child) =>
     child.emit("message", {
@@ -264,4 +265,32 @@ test("IR-5 exhausted retries are visible and an explicit Retry starts one new at
   f.ready(f.children.at(-1));
   assert.equal(f.supervisor.status.state, "ready");
   await stop(f);
+});
+
+// Fulcra 0.2.9: a refused recovery (a lock left by a controller killed in a restart) stopped the controller for good;
+// Retry answered "Controller stopped" until the daemon restarted.
+test("after a refused recovery, Retry starts again only when the stale lock is cleared, and the reason is logged", async () => {
+  const logs = [];
+  let stale = false;
+  const f = fixture({
+    recover: () => {
+      throw Error("Lock belongs to another child");
+    },
+    recoverStale: () => stale,
+    log: (reason) => logs.push(reason),
+  });
+  f.supervisor.start();
+  f.children.at(-1).emit("exit", 1);
+  assert.equal(f.supervisor.status.state, "stopped");
+  assert.deepEqual(logs, ["recovery refused: Lock belongs to another child"]);
+  assert.throws(() => f.supervisor.retry(), /Controller stopped/);
+  assert.equal(f.children.length, 1);
+  stale = true;
+  f.supervisor.retry();
+  assert.equal(f.children.length, 2);
+  f.ready(f.children.at(-1));
+  assert.equal(f.supervisor.status.state, "ready");
+  await stop(f);
+  // An explicit stop is never undone by Retry.
+  assert.throws(() => f.supervisor.retry(), /Controller stopped/);
 });

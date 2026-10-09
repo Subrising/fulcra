@@ -1,5 +1,5 @@
 import { PluginCatalogPaging, type CatalogReadState } from "./catalog-paging.js";
-import { managementFailure } from "./management-error.js";
+import { managementFailure, managementMethod, managementReason } from "./management-error.js";
 import { readPackagedBundles } from "./packaged-bundles.js";
 import type { TrustedPlugins } from "./trusted.js";
 import type { ManagementInvocation, ManagementTarget } from "./management.js";
@@ -1014,13 +1014,25 @@ export class PluginRuntime {
               callId: message.callId,
               output,
             }),
-          (error: unknown) =>
-            loaded.child &&
-            send(loaded.child, {
-              type: "host.error",
-              callId: message.callId,
-              ...managementFailure(error),
-            }),
+          (error: unknown) => {
+            // FULCRA(plugin-host): the plugin gets the plain code; the log keeps the real reason.
+            this.logger.warn(
+              {
+                pluginId: loaded.id,
+                method: managementMethod(message.command),
+                reason: managementReason(error),
+              },
+              "Management call failed",
+            );
+            return (
+              loaded.child &&
+              send(loaded.child, {
+                type: "host.error",
+                callId: message.callId,
+                ...managementFailure(error),
+              })
+            );
+          },
         )
         .catch(() => undefined);
       return;

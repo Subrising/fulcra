@@ -8,7 +8,7 @@ import { readFrames, writeFrames } from "./bounded-pipe.mjs";
 import { socketLocation } from "./socket-location.mjs";
 import { createTrustedContribution } from "./trusted-contribution.mjs";
 import { createChildSupervisor } from "./child-supervisor.mjs";
-import { captureOwnedFiles, recoverOwnedFiles } from "./owned-child-files.mjs";
+import { captureOwnedFiles, recoverOwnedFiles, recoverPreBootLock } from "./owned-child-files.mjs";
 import { parseControllerCommand, READ_METHODS } from "./command-parser.mjs";
 import { initializeRoleDefaults } from "../../orca-organization/server/role-defaults-store.mjs";
 import { firstRun } from "../config.mjs";
@@ -16,6 +16,20 @@ import { recordBootStart, sealBoot } from "./boot-chain.mjs";
 export const hostContract = "1.1";
 export default function setup() {
   throw Error("Distribution startup context required");
+}
+/** Clears a controller lock from before the last restart; says so, or says why not, in the daemon log. */
+export function recoverStaleLock(home, recover = recoverPreBootLock) {
+  try {
+    const recovered = recover(home);
+    if (recovered)
+      console.error(
+        "Controller lifecycle: recovered a controller lock from before the last restart",
+      );
+    return recovered;
+  } catch (error) {
+    console.error("Controller lifecycle: lock from before the last restart kept:", error.message);
+    return false;
+  }
 }
 export function createDistribution({ home, bundleDirectory }) {
   const config = firstRun({ ORCA_HOME: home });
@@ -147,7 +161,10 @@ export function createDistribution({ home, bundleDirectory }) {
           else if (fs.existsSync(socketLocation(home).socket))
             throw Error("Unowned controller socket");
         },
+        recoverStale: () => recoverStaleLock(home),
       });
+      // Fulcra 0.2.9: a restart of this computer leaves the killed controller's lock; it is cleared before the first start.
+      recoverStaleLock(home);
       supervisor.start();
     },
     async stop() {
