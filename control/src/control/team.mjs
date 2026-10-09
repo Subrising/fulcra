@@ -16,6 +16,12 @@ import { managementRefusal } from "./management-refusal.mjs";
 // bindings-assign, which these methods only make possible.
 
 const TRACKER_TIMEOUT = 4000;
+// The board's own words, one line, no control characters, short enough for a message.
+const shown = (text) =>
+  String(text)
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .trim()
+    .slice(0, 300);
 const NAME_MAX = 160;
 const ACTIVE = new Set(["todo", "in_progress"]);
 
@@ -55,7 +61,7 @@ export class Team {
     if (this.db.prepare("SELECT count(*) n FROM team_changes").get().n >= 5000)
       this.db
         .prepare(
-          "DELETE FROM team_changes WHERE id IN (SELECT id FROM team_changes ORDER BY at LIMIT 500)",
+          "DELETE FROM team_changes WHERE id IN (SELECT id FROM team_changes WHERE kind != 'seat-set' ORDER BY at LIMIT 500)",
         )
         .run();
     const at = this.now().toISOString();
@@ -143,7 +149,14 @@ export class Team {
       }
     const cleared = [];
     for (const id of stale) {
-      await native.setLabels(id, { [SEAT_LABEL]: "" });
+      // The seat sync wrote "reports to the owner" with the seat, so it is cleared with the seat. A chat that
+      // reports to anyone else keeps its line.
+      const record =
+        typeof native.snapshot === "function" ? await native.snapshot(id).catch(() => null) : null;
+      await native.setLabels(id, {
+        [SEAT_LABEL]: "",
+        ...(record?.labels?.["fulcra.reports-to"] === "owner" ? { "fulcra.reports-to": "" } : {}),
+      });
       cleared.push(id);
       this.record(
         "seat-cleared",
@@ -349,13 +362,26 @@ export class Team {
         redirect: "error",
         signal: AbortSignal.timeout(TRACKER_TIMEOUT),
       });
-    } catch {
-      refuse("The project board on this computer does not answer. Nothing was changed.");
-    }
-    if (!response.ok)
+    } catch (error) {
+      const cause = error?.cause?.code ?? error?.cause?.message ?? error?.message;
       refuse(
-        `The project board refused the change (HTTP ${response.status}). Nothing was changed.`,
+        `The project board on this computer does not answer${cause ? `: ${shown(cause)}` : ""}. Nothing was changed.`,
       );
+    }
+    if (!response.ok) {
+      // The board says why it refused (a duplicate name, a missing field). Show that text, not only the number.
+      const body = await response.text().catch(() => "");
+      let reason = body;
+      try {
+        const parsed = JSON.parse(body);
+        reason = parsed?.error?.message ?? parsed?.error ?? parsed?.message ?? body;
+      } catch {
+        // Not JSON: the plain text is the reason.
+      }
+      refuse(
+        `The project board refused the change (HTTP ${response.status}${reason && typeof reason === "string" && reason.trim() ? `: ${shown(reason)}` : ""}). Nothing was changed.`,
+      );
+    }
     const text = await response.text();
     if (text.length > 1048576) refuse("The project board answer is too large.");
     return text ? JSON.parse(text) : null;

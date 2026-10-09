@@ -11,6 +11,7 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import { getShortcutOs } from "@/utils/shortcut-platform";
 import { useHasWindowChromeObstruction, useOwnsWindowChromeCorner } from "@/utils/desktop-window";
 import { iconButtonChromeGlyphSize } from "@/components/ui/icon-button-chrome";
+import { HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 
 interface MenuHeaderProps {
   title?: string;
@@ -25,6 +26,7 @@ interface SidebarMenuToggleProps {
   nativeID?: string;
 }
 
+const MENU_TOUCH_TARGET = 48;
 const MOBILE_MENU_LINE_WIDTH = 16;
 const MOBILE_MENU_LINE_SHORT_WIDTH = 8;
 const MOBILE_MENU_LINE_HEIGHT = 1.5;
@@ -159,6 +161,15 @@ export function MenuHeader({ title, rightContent, borderless }: MenuHeaderProps)
 
 const styles = StyleSheet.create((theme) => ({
   leadingToggle: {
+    // A finger needs at least 48 points. The shared icon frame is 32 on a phone, so the menu control sets its own.
+    width: {
+      xs: MENU_TOUCH_TARGET,
+      md: HEADER_CONTROL_HEIGHT,
+    },
+    height: {
+      xs: MENU_TOUCH_TARGET,
+      md: HEADER_CONTROL_HEIGHT,
+    },
     marginLeft: {
       xs: 0,
       md: -theme.spacing[2],
