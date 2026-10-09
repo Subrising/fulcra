@@ -2,7 +2,7 @@
   {
     "file": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
     "sha256": "965d9ff595733e27add2ae5ce279307aa632d6a707313fc61171c3035bd1aecf",
-    "patterns": ["/Users/", "/Volumes/", "name-term", "The owner", "name-term"],
+    "patterns": ["/Users/", "/Volumes/", "name-term"],
     "justification": "Electron upstream macOS system-volume rules, generic home-path text, compression dictionary words and VDAVideoDecoder identifier; no user-specific configuration."
   },
   {

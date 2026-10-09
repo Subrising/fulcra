@@ -2,7 +2,7 @@
 
 Implementation in progress · README last revised 19 September 2026 · Australia/Brisbane
 
-**Goal:** give the owner an outcome-driven organization of persistent, independently resumable AI sessions across providers and machines. the owner can lead through Discord/OpenClaw, direct Claude or Codex, or a shared visual application, wearing an EM, CTO, CPO, strategy, marketing or other hat. The system explains consequential alternatives and impacts before work, follows a proportionate ADW process, and connects reviewed decisions to delivered and verified results.
+**Goal:** give the owner an outcome-driven organization of persistent, independently resumable AI sessions across providers and machines. The owner can lead through Discord/OpenClaw, direct Claude or Codex, or a shared visual application, wearing an EM, CTO, CPO, strategy, marketing or other hat. The system explains consequential alternatives and impacts before work, follows a proportionate ADW process, and connects reviewed decisions to delivered and verified results.
 
 **Product direction:** Fulcra is a standalone native product built on a maintained Paseo fork. The existing Fulcra sidebar extension is an implementation boundary, not the intended product identity. Preserve upstream package names and history where useful; keep Fulcra-specific app identity, entry points and coordination changes explicit so upstream merges remain reviewable.
 

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { auditPackagedBundle } from "./no-machine-ties.mjs";
+import { auditPackagedBundle, reviewKey } from "./no-machine-ties.mjs";
 const marker = ["", "Users", "runner", "build"].join("/");
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 function fixture(fn) {
@@ -123,3 +123,12 @@ test("malformed and escaping archive entries fail closed", () =>
     put(root, archive, asar({ "main.js": "portable" }).subarray(0, 17));
     assert.throws(() => auditPackagedBundle(root, []), /Invalid ASAR bounds/);
   }));
+
+test("a local personal match is reviewed as name-term in any letter case; other patterns stay as they are", () => {
+  const term = /^(?:zork)$/i;
+  assert.equal(reviewKey("ZOrk", term), "name-term");
+  assert.equal(reviewKey("zork", term), "name-term");
+  assert.equal(reviewKey("/Users/", term), "/Users/");
+  assert.equal(reviewKey("zorkish", term), "zorkish");
+  assert.equal(reviewKey("ZOrk", null), "ZOrk");
+});

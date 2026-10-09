@@ -1,6 +1,6 @@
 # Natural OpenClaw conversation — AIN-84
 
-the owner wants ordinary conversation to operate persistent Fulcra work without typing slash commands or UUIDs. The existing main OpenClaw agent already has trusted local execution. The installed slash plugin registers commands only; the older isolated ingress plugin restricts its agent's tools and cannot replace main's normal tool surface.
+The owner wants ordinary conversation to operate persistent Fulcra work without typing slash commands or UUIDs. The existing main OpenClaw agent already has trusted local execution. The installed slash plugin registers commands only; the older isolated ingress plugin restricts its agent's tools and cannot replace main's normal tool surface.
 
 Decision: a main-workspace skill plus a small local client. Reuse the existing controller, command-origin binding, receipt ledger and native sessions. No Gateway code/config/restart is required. The alternative of adding a new model tool plugin would need a new host-hook authority path and rollout; installing the old ingress unchanged would remove main's tools. Neither is necessary for this trusted same-user use case.
 

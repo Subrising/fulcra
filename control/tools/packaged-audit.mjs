@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { packagedFiles, scanFiles, forbidden } from "./no-machine-ties.mjs";
+import { packagedFiles, scanFiles, forbidden, reviewKey } from "./no-machine-ties.mjs";
 import { credentialSource, personalBlocker, safeFinding } from "./packaged-review-policy.mjs";
 import { approvedPublicLiteral, matchesPublicLiteral } from "./public-literal-policy.mjs";
 const approvedPemMarkers = JSON.parse(
@@ -154,13 +154,13 @@ export function auditPackagedBundle(base, exemptions = []) {
       errors.push({ file, error: "Exempted file hash changed" });
     const patterns = new Set();
     for (const hit of hits) {
-      patterns.add(hit.pattern);
+      patterns.add(reviewKey(hit.pattern));
       const blocker = personalBlocker(hit, thirdParty(file));
       const ex = entries.find(
         (ex) =>
           ex.sha256 === digest &&
           (ex.kind === undefined
-            ? ex.patterns.includes(hit.pattern)
+            ? ex.patterns.includes(reviewKey(hit.pattern))
             : ex.line === hit.line &&
               ex.offset === hit.offset &&
               ex.pattern === hit.pattern &&

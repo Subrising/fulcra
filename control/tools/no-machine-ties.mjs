@@ -8,6 +8,7 @@ import { inScope, fixture } from "./portable-scope.mjs";
 import { auditPackagedBundle } from "./packaged-audit.mjs";
 export { auditPackagedBundle } from "./packaged-audit.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
+const personal = localJson("personal-patterns.json", []);
 // Encoded fragments avoid making the detector itself a machine tie.
 const patterns = [
   String.raw`\x2fVolumes\x2f`,
@@ -17,9 +18,13 @@ const patterns = [
   String.raw`100\.90\.`,
   String.raw`\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b`,
   String.raw`\bsrv_[a-z0-9]+\b`,
-  ...localJson("personal-patterns.json", []),
+  ...personal,
 ];
 export const forbidden = new RegExp(patterns.join("|"), "i");
+// A match of a local personal pattern is reviewed as "name-term", so a public review file never spells the name.
+export const personalTerm = personal.length ? new RegExp(`^(?:${personal.join("|")})$`, "i") : null;
+export const reviewKey = (pattern, term = personalTerm) =>
+  term?.test(pattern) ? "name-term" : pattern;
 export function scanFiles(
   base,
   files,

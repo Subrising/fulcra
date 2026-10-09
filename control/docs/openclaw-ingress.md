@@ -2,7 +2,7 @@
 
 ## Outcome and scope
 
-the owner can assign and inspect one explicitly delegated saved Fulcra session from a bound OpenClaw conversation. Preserve native identity, delivery IDs, takeover, canonical memory and the existing task journal. This command increment precedes durable completion wakes; neither is the full Fulcra release.
+The owner can assign and inspect one explicitly delegated saved Fulcra session from a bound OpenClaw conversation. Preserve native identity, delivery IDs, takeover, canonical memory and the existing task journal. This command increment precedes durable completion wakes; neither is the full Fulcra release.
 
 ## Choice and existing responsibilities
 
