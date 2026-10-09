@@ -1564,10 +1564,17 @@ export async function createPaseoDaemon(
   );
   // Orca R3a. Nothing runs a stored `running` turn after a restart, so it is normalised to idle with a durable
   // interruption marker before any client reads it. No agent is loaded, resumed or prompted here.
+  const interruptionBootId = randomUUID();
   const interrupted = await agentStorage.normalizeInterruptedTurns(
-    { detectedAt: new Date().toISOString(), bootId: randomUUID() },
+    { detectedAt: new Date().toISOString(), bootId: interruptionBootId },
     (agentId) => agentManager.getAgent(agentId) !== null,
   );
+  // FULCRA: sessions whose turn was cut off by the previous daemon's stop (restart or crash) are queued once for a
+  // later, staggered resume. Only those with a recorded binding that still matches when loaded are resumed
+  // (limit-resume/service.ts).
+  void limitResume
+    .enqueueInterrupted(interruptionBootId)
+    .catch((err) => logger.warn({ err }, "Could not queue interrupted sessions for auto-resume"));
   if (interrupted.length > 0) {
     logger.info(
       { agentIds: interrupted },

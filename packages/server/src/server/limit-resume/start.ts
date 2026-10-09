@@ -80,6 +80,7 @@ export function startLimitResume(input: {
       await waitForFinalInputHandoff(finalCheck);
     },
     onError: (error) => logger.warn({ err: error }, "Auto-resume step failed"),
+    onSkip: (agentId, reason) => logger.info({ agentId, reason }, "Auto-resume skipped"),
   });
   service.start();
   service.onStop(

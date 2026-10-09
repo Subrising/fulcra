@@ -5,6 +5,7 @@ import {
   LIMIT_RESUME_AT_LABEL,
   LIMIT_RESUME_OPT_OUT_LABEL,
   LIMIT_RESUME_PROMPT,
+  INTERRUPTED_RESUME_PROMPT,
   NETWORK_RESUME_PROMPT,
   LIMIT_RESUME_REASON_LABEL,
   pendingLimitResumeAt,
@@ -15,14 +16,19 @@ import { useSessionStore } from "@/stores/session-store";
 import type { Theme } from "@/styles/theme";
 import { toErrorMessage } from "@/utils/error-messages";
 
+const RESUME_PROMPTS: Partial<Record<string, string>> = {
+  network: NETWORK_RESUME_PROMPT,
+  interrupted: INTERRUPTED_RESUME_PROMPT,
+};
+
 // Matches the chat column width the banner sits above.
 const MAX_CONTENT_WIDTH = 820;
 
 export function formatLimitResumeStatus(resumeAtMs: number, reason = "usage"): string {
   const time = new Date(resumeAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return reason === "network"
-    ? `Paused: network, retrying at ${time}`
-    : `Paused: usage limit, resumes at ${time}`;
+  if (reason === "network") return `Paused: network, retrying at ${time}`;
+  if (reason === "interrupted") return `Paused: interrupted by a restart, resumes at ${time}`;
+  return `Paused: usage limit, resumes at ${time}`;
 }
 
 /** Shown above the composer while the host has a resume queued for this session. */
@@ -52,10 +58,7 @@ export function LimitResumeBanner({ serverId, agentId }: { serverId: string; age
     if (!client) return;
     setError(null);
     try {
-      await client.sendAgentMessage(
-        agentId,
-        reason === "network" ? NETWORK_RESUME_PROMPT : LIMIT_RESUME_PROMPT,
-      );
+      await client.sendAgentMessage(agentId, RESUME_PROMPTS[reason] ?? LIMIT_RESUME_PROMPT);
     } catch (e) {
       setError(toErrorMessage(e));
     }
