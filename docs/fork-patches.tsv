@@ -164,7 +164,7 @@ admission	M	1591	85	packages/client/src/daemon-client.ts
 admission	A	179	0	packages/plugin/src/server/trusted.ts
 admission	A	110	0	packages/plugin/TRUSTED-HOST.md
 admission	A	91	0	packages/protocol/src/trusted-input.test.ts
-admission	A	581	0	packages/protocol/src/trusted-input.ts
+admission	A	583	0	packages/protocol/src/trusted-input.ts
 admission	A	132	0	packages/server/src/server/admission-regression.test.ts
 admission	M	108	1	packages/server/src/server/agent/agent-sdk-types.ts
 admission	A	140	0	packages/server/src/server/agent/background-work/authority-fence.test.ts
@@ -378,6 +378,7 @@ branding	M	3	1	README.ja.md
 branding	M	3	1	README.ko.md
 branding	M	221	134	README.md
 branding	M	3	1	README.zh-CN.md
+branding	A	54	0	RELEASE-NOTES-0.2.10.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -1420,7 +1421,7 @@ plugin-host	M	122	2	packages/server/src/server/plugins/plugin-process-protocol.t
 plugin-host	M	168	22	packages/server/src/server/plugins/plugin-process.ts
 plugin-host	A	226	0	packages/server/src/server/plugins/r-v11a-cascade-archive.test.ts
 plugin-host	M	9	5	packages/server/src/server/plugins/requirements.posix.test.ts
-plugin-host	A	92	0	packages/server/src/server/plugins/resume-ownership.test.ts
+plugin-host	A	117	0	packages/server/src/server/plugins/resume-ownership.test.ts
 plugin-host	M	304	1	packages/server/src/server/plugins/runtime.posix.test.ts
 plugin-host	M	248	15	packages/server/src/server/plugins/runtime.ts
 plugin-host	A	248	0	plugin-examples/integrations-dev/client/integrations-screen.tsx
