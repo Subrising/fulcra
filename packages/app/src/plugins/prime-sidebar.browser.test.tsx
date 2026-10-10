@@ -101,8 +101,9 @@ const SCENARIOS: Scenario[] = [
       mini: { available: true, primes: [prime("prime-1")] },
     },
     remembered: {},
-    expectText: ["Main assistant · MacBook Pro", "Main assistant · Mac-mini.local"],
-    absentText: ["No main assistant yet"],
+    // Fulcra 0.2.11: the home computer's main assistant is listed first in Leads, so it has no automatic pin.
+    expectText: ["Main assistant · Idle · MacBook Pro", "Main assistant · Mac-mini.local"],
+    absentText: ["No main assistant yet", "Main assistant · MacBook Pro"],
   },
   // Fulcra 0.2.11: the main assistant first in Leads, chat names, and a lead on another computer (read-only).
   {

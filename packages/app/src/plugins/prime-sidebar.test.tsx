@@ -625,3 +625,56 @@ it("lists the leads of another connected computer read-only, with that computer'
   expect(screen.queryByTestId("sidebar-remote-lead-book-g1-new-work")).toBeNull();
   expect(screen.queryByTestId("sidebar-remote-lead-book-old")).toBeNull();
 });
+
+// Fulcra 0.2.11 (decision by the Fulcra lead, 10 Oct): Leads lists the home computer's main assistant first, so its
+// automatic pinned row goes. Another computer's main assistant stays pinned, and the pin returns when Leads cannot
+// list it.
+function mountBoth() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  render(
+    <QueryClientProvider client={client}>
+      <PinnedMainAssistant />
+      <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
+    </QueryClientProvider>,
+  );
+}
+
+it("drops the automatic pin of the main assistant that Leads lists; another computer's pin stays", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "Mac-mini.local" },
+    { serverId: "book", label: "MacBook Pro" },
+  ];
+  const directory = { available: true, primes: [prime()], projectSeats: [] };
+  f.read.mockResolvedValue(directory);
+  f.remote.mini = { directory, fleet: { nodes: [] } };
+  f.remote.book = {
+    directory: { available: true, primes: [prime({ sessionId: "remote" })] },
+    fleet: { nodes: [] },
+  };
+  mountBoth();
+  expect(await screen.findByTestId("sidebar-lead-main-assistant")).toBeTruthy();
+  expect(
+    await screen.findByRole("button", { name: /^Open Main assistant · MacBook Pro/ }),
+  ).toBeTruthy();
+  // The only pin left is the other computer's.
+  await vi.waitFor(() =>
+    expect(screen.getByTestId("sidebar-pinned-main-assistant").textContent).toContain(
+      "MacBook Pro",
+    ),
+  );
+  expect(screen.queryByText(/Main assistant · Mac-mini\.local/)).toBeNull();
+});
+
+it("keeps the pin when Leads cannot list the main assistant", async () => {
+  f.read.mockResolvedValue({ available: false, primes: [] });
+  f.remote.mini = {
+    directory: { available: true, primes: [prime()] },
+    fleet: { nodes: [] },
+  };
+  mountBoth();
+  expect(await screen.findByRole("button", { name: /^Couldn't load leads/ })).toBeTruthy();
+  const pin = await screen.findByTestId("sidebar-pinned-main-assistant");
+  expect(pin.textContent).toContain("Main assistant · Mac-mini.local");
+  expect(screen.queryByTestId("sidebar-lead-main-assistant")).toBeNull();
+});

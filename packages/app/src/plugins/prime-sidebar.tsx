@@ -27,6 +27,7 @@ import { roleDirectoryRpc, type Seat } from "../../../../control/orca-organizati
 import { fleetRpc, type Fleet } from "../../../../control/orca-organization/shared/fleet";
 import { projectsRpc } from "../../../../control/orca-organization/shared/projects";
 import { STATE_LABEL, stateOf } from "../../../../control/orca-organization/client/team-tree";
+import { create } from "zustand";
 
 import type { Theme } from "@/styles/theme";
 
@@ -204,6 +205,24 @@ export function PrimeSidebarRows({
 }
 
 /**
+ * Fulcra 0.2.11: the computers whose Leads section lists their main assistant now. Their automatic pinned row is
+ * not shown (it would show the same chat twice). When Leads cannot list it (offline, not read yet) the pin stays.
+ */
+export const useLeadsListedMainAssistant = create<{
+  hosts: ReadonlySet<string>;
+  set(serverId: string, listed: boolean): void;
+}>()((set, get) => ({
+  hosts: new Set(),
+  set(serverId, listed) {
+    if (get().hosts.has(serverId) === listed) return;
+    const hosts = new Set(get().hosts);
+    if (listed) hosts.add(serverId);
+    else hosts.delete(serverId);
+    set({ hosts });
+  },
+}));
+
+/**
  * Fulcra 0.2.11: the main assistant first, then this computer's project leads, then the leads another connected
  * computer records (read-only). Every row names its chat.
  */
@@ -231,6 +250,12 @@ function LeadRows({
   const main = directory ? mainAssistant(directory.primes) : null;
   const mainNode = main?.sessionId ? nodes.get(main.sessionId) : undefined;
   const remote = useOtherHostLeads(serverId);
+  const listMain = useLeadsListedMainAssistant((state) => state.set);
+  const listed = main !== null;
+  useEffect(() => {
+    listMain(serverId, listed);
+    return () => listMain(serverId, false);
+  }, [listMain, serverId, listed]);
   return (
     <>
       {main ? (
@@ -421,7 +446,9 @@ function useAllMainAssistants() {
  * stays, marked offline; its chat says the computer is offline. Two computers with one each both show.
  */
 export function PinnedMainAssistant({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
-  const { shown, label } = useAllMainAssistants();
+  const { shown: all, label } = useAllMainAssistants();
+  const inLeads = useLeadsListedMainAssistant((state) => state.hosts);
+  const shown = all.filter((entry) => !inLeads.has(entry.serverId));
   return (
     <>
       {shown.map((entry, index) => {
