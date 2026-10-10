@@ -104,10 +104,10 @@ accounts	A	27	0	packages/server/src/server/limit-resume/feature.e2e.test.ts
 accounts	A	458	0	packages/server/src/server/limit-resume/owner-route.posix.test.ts
 accounts	A	86	0	packages/server/src/server/limit-resume/parse-reset.test.ts
 accounts	A	162	0	packages/server/src/server/limit-resume/parse-reset.ts
-accounts	A	563	0	packages/server/src/server/limit-resume/service.test.ts
-accounts	A	605	0	packages/server/src/server/limit-resume/service.ts
-accounts	A	633	0	packages/server/src/server/limit-resume/start.fences.posix.test.ts
-accounts	A	96	0	packages/server/src/server/limit-resume/start.ts
+accounts	A	605	0	packages/server/src/server/limit-resume/service.test.ts
+accounts	A	609	0	packages/server/src/server/limit-resume/service.ts
+accounts	A	729	0	packages/server/src/server/limit-resume/start.fences.posix.test.ts
+accounts	A	97	0	packages/server/src/server/limit-resume/start.ts
 accounts	A	87	0	packages/server/src/server/plugins/account-actions.ts
 accounts	A	202	0	packages/server/src/server/plugins/plugin-secrets.test.ts
 accounts	A	220	0	packages/server/src/server/plugins/plugin-secrets.ts
@@ -379,6 +379,7 @@ branding	M	3	1	README.ko.md
 branding	M	221	134	README.md
 branding	M	3	1	README.zh-CN.md
 branding	A	54	0	RELEASE-NOTES-0.2.10.md
+branding	A	39	0	RELEASE-NOTES-0.2.11.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -395,7 +396,7 @@ build-ci	M	7	7	.github/ISSUE_TEMPLATE/config.yml
 build-ci	M	2	2	.github/PULL_REQUEST_TEMPLATE.md
 build-ci	A	22	0	.github/upstream-watch.json
 build-ci	M	9	1	.github/workflows/android-apk-release.yml
-build-ci	M	144	20	.github/workflows/ci.yml
+build-ci	M	178	20	.github/workflows/ci.yml
 build-ci	M	58	1	.github/workflows/deploy-app.yml
 build-ci	A	47	0	.github/workflows/deploy-fulcra-website.yml
 build-ci	M	45	1	.github/workflows/deploy-website.yml
@@ -455,7 +456,7 @@ build-ci	M	50	1	packages/app/vitest.config.ts
 build-ci	M	1	0	packages/cli/package.json
 build-ci	M	10	0	packages/client/package.json
 build-ci	M	1	1	packages/expo-two-way-audio/package.json
-build-ci	M	4	5	packages/server/package.json
+build-ci	M	5	5	packages/server/package.json
 build-ci	M	12	0	packages/server/src/test-utils/vitest-setup.ts
 build-ci	M	11	1	packages/server/vitest.config.ts
 build-ci	A	14	0	patches/app-builder-lib+26.8.1.patch
@@ -549,6 +550,8 @@ core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
+core-fixes	M	22	0	packages/cli/src/commands/daemon/restart.ts
+core-fixes	M	16	1	packages/cli/src/commands/daemon/stop.ts
 core-fixes	M	1	1	packages/cli/src/commands/heartbeat/index.ts
 core-fixes	M	8	10	packages/cli/src/commands/open.ts
 core-fixes	M	2	2	packages/cli/src/commands/script/shared.ts
@@ -601,6 +604,8 @@ core-fixes	M	2	0	packages/server/src/server/checkout/status-projection.ts
 core-fixes	M	8	0	packages/server/src/server/client-message-id.test.ts
 core-fixes	A	97	0	packages/server/src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
 core-fixes	A	189	0	packages/server/src/server/daemon-e2e/stored-timeline-read.e2e.test.ts
+core-fixes	M	65	0	packages/server/src/server/daemon-instance.test.ts
+core-fixes	M	13	0	packages/server/src/server/daemon-instance.ts
 core-fixes	A	75	0	packages/server/src/server/directory-access.test.ts
 core-fixes	A	121	0	packages/server/src/server/directory-access.ts
 core-fixes	A	41	0	packages/server/src/server/native-artifact-origin.ts
@@ -609,6 +614,8 @@ core-fixes	A	79	0	packages/server/src/server/native-evidence-origin.test.ts
 core-fixes	A	119	0	packages/server/src/server/native-evidence-origin.ts
 core-fixes	A	239	0	packages/server/src/server/notification-settings.test.ts
 core-fixes	A	48	0	packages/server/src/server/notification-settings.ts
+core-fixes	A	51	0	packages/server/src/server/own-session-guard.test.ts
+core-fixes	A	79	0	packages/server/src/server/own-session-guard.ts
 core-fixes	A	350	0	packages/server/src/server/owner-report-read.ts
 core-fixes	M	40	28	packages/server/src/server/push/push-service.ts
 core-fixes	A	81	0	packages/server/src/server/r-v11b-controller-id-squat.test.ts
@@ -645,6 +652,8 @@ core-fixes	M	1	1	packages/server/src/utils/worktree-metadata.ts
 desktop-runtime	M	9	4	packages/app/e2e/support/helpers/directory-bootstrap-scenario.ts
 desktop-runtime	M	10	1	packages/app/src/components/host-route-bootstrap-boundary.tsx
 desktop-runtime	M	26	0	packages/app/src/dictation/dictation-stream-sender.test.ts
+desktop-runtime	A	51	0	packages/app/src/hooks/use-dictation.lock.test.ts
+desktop-runtime	M	11	2	packages/app/src/hooks/use-dictation.ts
 desktop-runtime	M	0	0	packages/desktop/assets/128x128.png
 desktop-runtime	M	0	0	packages/desktop/assets/128x128@2x.png
 desktop-runtime	M	0	0	packages/desktop/assets/32x32.png
@@ -708,7 +717,7 @@ desktop-runtime	M	45	7	packages/desktop/src/settings/desktop-settings.test.ts
 desktop-runtime	M	45	7	packages/desktop/src/settings/desktop-settings.ts
 desktop-runtime	A	126	0	packages/server/src/server/bootstrap-interrupted-turn.test.ts
 desktop-runtime	M	75	5	packages/server/src/server/bootstrap.smoke.test.ts
-desktop-runtime	M	347	20	packages/server/src/server/bootstrap.ts
+desktop-runtime	M	350	20	packages/server/src/server/bootstrap.ts
 desktop-runtime	M	3	1	packages/server/src/server/config.test.ts
 desktop-runtime	M	42	20	packages/server/src/server/config.ts
 desktop-runtime	M	19	1	packages/server/src/server/daemon-worker.ts
@@ -1351,9 +1360,9 @@ plugin-host	M	5	5	packages/app/src/plugins/hosts/index.test.ts
 plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
-plugin-host	A	297	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
-plugin-host	A	532	0	packages/app/src/plugins/prime-sidebar.test.tsx
-plugin-host	A	681	0	packages/app/src/plugins/prime-sidebar.tsx
+plugin-host	A	344	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
+plugin-host	A	680	0	packages/app/src/plugins/prime-sidebar.test.tsx
+plugin-host	A	882	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
 plugin-host	A	138	0	packages/app/src/plugins/radius-scratch-owner.ts
 plugin-host	A	290	0	packages/app/src/plugins/react-native/pan-surface.test.tsx
