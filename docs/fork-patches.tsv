@@ -431,7 +431,7 @@ build-ci	A	1	0	local/personal-patterns.json.example
 build-ci	A	27	0	local/release.env.example
 build-ci	M	30	9	nix/desktop-package.nix
 build-ci	M	6	2	nix/package.nix
-build-ci	M	447	2032	package-lock.json
+build-ci	M	450	2032	package-lock.json
 build-ci	M	39	6	package.json
 build-ci	M	2	1	packages/app/.gitignore
 build-ci	M	28	2	packages/app/e2e/support/global-setup.ts
@@ -463,7 +463,7 @@ build-ci	M	50	1	packages/app/vitest.config.ts
 build-ci	M	1	0	packages/cli/package.json
 build-ci	M	10	0	packages/client/package.json
 build-ci	M	1	1	packages/expo-two-way-audio/package.json
-build-ci	M	5	5	packages/server/package.json
+build-ci	M	8	5	packages/server/package.json
 build-ci	M	12	0	packages/server/src/test-utils/vitest-setup.ts
 build-ci	M	11	1	packages/server/vitest.config.ts
 build-ci	A	14	0	patches/app-builder-lib+26.8.1.patch
@@ -1369,6 +1369,7 @@ plugin-host	A	67	0	packages/app/src/plugins/command-centre-connection.ts
 plugin-host	A	53	0	packages/app/src/plugins/command-centre-relay-notice.tsx
 plugin-host	A	139	0	packages/app/src/plugins/command-centre-relay.browser.test.tsx
 plugin-host	M	4	0	packages/app/src/plugins/contribution-host.ts
+plugin-host	A	191	0	packages/app/src/plugins/controller-native-runtime.test.tsx
 plugin-host	M	31	0	packages/app/src/plugins/evaluate.test.ts
 plugin-host	M	19	0	packages/app/src/plugins/evaluate.ts
 plugin-host	A	159	0	packages/app/src/plugins/home-computer.test.ts
@@ -1432,7 +1433,8 @@ plugin-host	A	32	0	packages/protocol/src/bundled-controller.ts
 plugin-host	M	2	2	packages/protocol/src/plugin-requirements.test.ts
 plugin-host	M	3	3	packages/protocol/src/plugin-requirements.ts
 plugin-host	M	2	1	packages/server/src/server/plugins/builtin/index.test.ts
-plugin-host	M	27	9	packages/server/src/server/plugins/compiler.ts
+plugin-host	M	109	0	packages/server/src/server/plugins/compiler.test.ts
+plugin-host	M	51	11	packages/server/src/server/plugins/compiler.ts
 plugin-host	A	176	0	packages/server/src/server/plugins/daemon-boot.test.ts
 plugin-host	A	68	0	packages/server/src/server/plugins/daemon-boot.ts
 plugin-host	M	34	2	packages/server/src/server/plugins/index.posix.test.ts
