@@ -527,7 +527,9 @@ export function inheritLoginShellEnv(input: LoginShellEnvDependencies = {}): voi
         ? error.details
         : { reason: "throw", shell: deps.env.SHELL ?? undefined };
     const cause = error instanceof Error ? error.cause : undefined;
-    deps.logger.warn("[login-shell-env] failed; keeping inherited env", {
+    // Windows has no login shell. Keeping the inherited env is the normal path there.
+    const log = details.reason === "win32" ? deps.logger.info : deps.logger.warn;
+    log.call(deps.logger, "[login-shell-env] failed; keeping inherited env", {
       ...details,
       durationMs: deps.now() - startedAt,
       timeoutMs,

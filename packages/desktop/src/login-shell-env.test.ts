@@ -629,4 +629,20 @@ describeIfZsh("login shell env", () => {
     });
     expectNoRawStdout(logger.warnings[2]?.fields ?? {});
   });
+
+  it("keeps the inherited env on Windows and logs it as info, not a warning", () => {
+    const env = createEnv("C:\\Users\\test");
+    const logger = new RecordingLoginShellLogger();
+    const spawnSync: LoginShellSpawnSync = () => {
+      throw new Error("no shell is started on Windows");
+    };
+
+    inheritLoginShellEnv({ env, logger, now: () => 1_000, platform: "win32", spawnSync });
+
+    expect(env.PATH).toBe(basePath);
+    expect(logger.warnings).toEqual([]);
+    expect(logger.infos).toHaveLength(1);
+    expect(logger.infos[0]?.message).toBe("[login-shell-env] failed; keeping inherited env");
+    expect(logger.infos[0]?.fields).toMatchObject({ reason: "win32", pathChanged: false });
+  });
 });
