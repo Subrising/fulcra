@@ -52,8 +52,10 @@ accounts	M	226	0	packages/client/src/index.test.ts
 accounts	M	71	0	packages/client/src/index.ts
 accounts	A	29	0	packages/client/src/pairing-secrets.test.ts
 accounts	A	117	0	packages/desktop/e2e/smoke-secret-scan.js
+accounts	A	40	0	packages/desktop/src/daemon/command-centre-keychain-windows.test.ts
+accounts	A	75	0	packages/desktop/src/daemon/command-centre-keychain-windows.ts
 accounts	A	99	0	packages/desktop/src/daemon/command-centre-keychain.test.ts
-accounts	A	97	0	packages/desktop/src/daemon/command-centre-keychain.ts
+accounts	A	119	0	packages/desktop/src/daemon/command-centre-keychain.ts
 accounts	A	203	0	packages/desktop/src/daemon/local-service-credential.test.ts
 accounts	A	136	0	packages/desktop/src/daemon/local-service-credential.ts
 accounts	M	1	1	packages/desktop/src/integrations/cli-install/install.ts
@@ -186,11 +188,12 @@ admission	A	20	0	packages/server/src/server/plugins/trusted-bootstrap.ts
 admission	A	123	0	packages/server/src/server/plugins/trusted-daemon-startup.test.ts
 admission	A	114	0	packages/server/src/server/plugins/trusted-facts.test.ts
 admission	A	153	0	packages/server/src/server/plugins/trusted-facts.ts
+admission	A	69	0	packages/server/src/server/plugins/trusted-ownership.test.ts
+admission	A	80	0	packages/server/src/server/plugins/trusted-ownership.ts
 admission	A	227	0	packages/server/src/server/plugins/trusted-pipeline.test.ts
-admission	A	8	0	packages/server/src/server/plugins/trusted-platform.ts
 admission	A	739	0	packages/server/src/server/plugins/trusted-v11.test.ts
 admission	A	403	0	packages/server/src/server/plugins/trusted.test.ts
-admission	A	1215	0	packages/server/src/server/plugins/trusted.ts
+admission	A	1210	0	packages/server/src/server/plugins/trusted.ts
 admission	M	16	6	packages/server/src/server/session-admission-auth.ts
 admission	M	9	4	packages/server/src/server/test-utils/session-stubs.ts
 admission	A	41	0	packages/server/src/server/test-utils/trusted-surface.ts
@@ -270,7 +273,7 @@ branding	A	0	0	docs/presentation/social-preview.png
 branding	M	16	0	docs/product.md
 branding	M	34	0	docs/providers.md
 branding	A	10	0	docs/release-checklist.md
-branding	A	59	0	docs/windows.md
+branding	A	76	0	docs/windows.md
 branding	A	10	0	fastlane/metadata/android/en-US/changelogs/100011.txt
 branding	A	10	0	fastlane/metadata/android/en-US/changelogs/100012.txt
 branding	A	10	0	fastlane/metadata/android/en-US/changelogs/100013.txt
@@ -376,7 +379,7 @@ branding	M	9	9	public-docs/sdk/quickstart.md
 branding	M	18	9	public-docs/skills.md
 branding	M	3	1	README.ja.md
 branding	M	3	1	README.ko.md
-branding	M	221	134	README.md
+branding	M	223	134	README.md
 branding	M	3	1	README.zh-CN.md
 branding	A	54	0	RELEASE-NOTES-0.2.10.md
 branding	A	39	0	RELEASE-NOTES-0.2.11.md
@@ -501,7 +504,7 @@ build-ci	A	188	0	scripts/http-dependencies.test.mjs
 build-ci	A	31	0	scripts/install-git-hooks.mjs
 build-ci	A	82	0	scripts/install-git-hooks.test.mjs
 build-ci	A	294	0	scripts/native-build-dependency-overrides.test.mjs
-build-ci	A	218	0	scripts/orca-preview-build.mjs
+build-ci	A	222	0	scripts/orca-preview-build.mjs
 build-ci	A	353	0	scripts/orca-preview-release.mjs
 build-ci	A	105	0	scripts/orca/build-brand-rasters.mjs
 build-ci	A	91	0	scripts/orca/install-icons.mjs
@@ -678,7 +681,7 @@ desktop-runtime	M	2	0	packages/desktop/e2e/daemon-lifecycle-renderer.electron.mj
 desktop-runtime	M	20	2	packages/desktop/e2e/daemon-lifecycle.e2e.mjs
 desktop-runtime	M	37	5	packages/desktop/e2e/linux-artifact-smoke.js
 desktop-runtime	A	1401	0	packages/desktop/e2e/native-acceptance-walkthrough.js
-desktop-runtime	M	164	18	packages/desktop/e2e/packaged-app-smoke.js
+desktop-runtime	M	165	19	packages/desktop/e2e/packaged-app-smoke.js
 desktop-runtime	M	55	1	packages/desktop/e2e/plugin-links.electron.mjs
 desktop-runtime	M	46	29	packages/desktop/e2e/settings-memory.electron.mjs
 desktop-runtime	M	3	15	packages/desktop/e2e/settings-sidebar-scroll.spec.ts
@@ -1427,9 +1430,9 @@ plugin-host	M	17	0	packages/server/src/server/plugins/lifecycle/handlers.test.ts
 plugin-host	M	19	1	packages/server/src/server/plugins/lifecycle/index.ts
 plugin-host	A	163	0	packages/server/src/server/plugins/native-radius-scratch.test.ts
 plugin-host	A	46	0	packages/server/src/server/plugins/native-radius-scratch.ts
-plugin-host	A	92	0	packages/server/src/server/plugins/packaged-bundles.test.ts
-plugin-host	A	40	0	packages/server/src/server/plugins/packaged-bundles.ts
-plugin-host	A	28	0	packages/server/src/server/plugins/packaged-directory.ts
+plugin-host	A	78	0	packages/server/src/server/plugins/packaged-bundles.test.ts
+plugin-host	A	39	0	packages/server/src/server/plugins/packaged-bundles.ts
+plugin-host	A	36	0	packages/server/src/server/plugins/packaged-directory.ts
 plugin-host	A	80	0	packages/server/src/server/plugins/plugin-host-calls.ts
 plugin-host	A	278	0	packages/server/src/server/plugins/plugin-notifications.test.ts
 plugin-host	A	381	0	packages/server/src/server/plugins/plugin-notifications.ts
