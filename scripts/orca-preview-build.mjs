@@ -186,6 +186,10 @@ if (target === "android" || target === "android-prebuild") {
   }
   env.PASEO_DESKTOP_SMOKE = "1";
   env.PASEO_WEB_PLATFORM = "electron";
+  // The bundled Command Centre controller plugin is staged into packages/desktop/bundled-plugins
+  // and packed as resources/bundled-plugins; without this step the app has no Command Centre.
+  run(npm, ["run", "build:server:clean"]);
+  run(process.execPath, [path.join(root, "scripts/build-command-centre.mjs"), path.join(root, "control")]);
   run(npm, [
     "run",
     "build:desktop",

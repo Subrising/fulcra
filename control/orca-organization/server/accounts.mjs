@@ -664,10 +664,93 @@ const testSecurity = (env) =>
   env.FULCRA_ACCOUNTS_KEYCHAIN && path.isAbsolute(env.FULCRA_ACCOUNTS_SECURITY ?? "")
     ? env.FULCRA_ACCOUNTS_SECURITY
     : null;
+// Windows has no Keychain. The token is wrapped with DPAPI (CurrentUser scope, so only this Windows user can read it)
+// in a PowerShell child: it goes in on stdin, never argv, and one ciphertext file per account sits in `dir`. `runner`
+// is a test seam with the same shape as `run`. macOS keeps the Keychain (createKeychain below).
+const DPAPI_PROTECT =
+  "Add-Type -AssemblyName System.Security;$i=[Console]::In.ReadToEnd();" +
+  "[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($i),$null,'CurrentUser'))";
+const DPAPI_UNPROTECT =
+  "Add-Type -AssemblyName System.Security;$i=[Console]::In.ReadToEnd().Trim();" +
+  "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($i),$null,'CurrentUser'))";
+const powershellArgs = (script) => ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script];
+export function windowsKeychainDir(env = process.env) {
+  const home = env.ORCA_HOME ?? (env.PASEO_HOME ? path.join(env.PASEO_HOME, "command-centre") : null);
+  if (!home) throw Error("Account Keychain: no Command Centre home");
+  return path.join(home, "accounts", "secrets");
+}
+export function createWindowsKeychain({
+  dir = windowsKeychainDir(),
+  powershell = "powershell.exe",
+  runner = run,
+} = {}) {
+  const fileOf = (id) => path.join(dir, `${id}.dpapi`);
+  const unavailable = () =>
+    Object.assign(Error("Account Keychain: operation-failed"), { code: "ACCOUNT_KEYCHAIN_UNAVAILABLE" });
+  async function read(id) {
+    let cipher;
+    try {
+      cipher = fs.readFileSync(fileOf(id), "utf8");
+    } catch (e) {
+      throw e?.code === "ENOENT"
+        ? Object.assign(Error("Account Keychain: operation-failed"), { code: "ACCOUNT_ITEM_MISSING" })
+        : unavailable();
+    }
+    try {
+      return (await runner(powershell, powershellArgs(DPAPI_UNPROTECT), cipher)).replace(/\r?\n$/, "");
+    } catch {
+      throw unavailable();
+    }
+  }
+  return {
+    async put(id, secret) {
+      if (!uuid(id)) throw Error("Bad account id");
+      if (!TOKEN.test(secret ?? ""))
+        throw Error("That does not look like a token from `claude setup-token`");
+      let cipher;
+      try {
+        cipher = (await runner(powershell, powershellArgs(DPAPI_PROTECT), secret)).trim();
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const temp = `${fileOf(id)}.${process.pid}.tmp`;
+        fs.writeFileSync(temp, `${cipher}\n`, { mode: 0o600 });
+        fs.renameSync(temp, fileOf(id));
+      } catch {
+        throw Error("Account Keychain: operation-failed");
+      }
+      let stored;
+      try {
+        stored = await read(id);
+      } catch {
+        throw Error("Account Keychain: readback-failed");
+      }
+      if (stored !== secret) throw Error("Account Keychain: readback-mismatch");
+    },
+    async get(id) {
+      if (!uuid(id)) throw Error("Bad account id");
+      try {
+        const v = await read(id);
+        return TOKEN.test(v) ? v : null;
+      } catch (error) {
+        if (error?.code === "ACCOUNT_ITEM_MISSING") return null;
+        throw Object.assign(Error("Account Keychain temporarily unavailable; retry"), {
+          code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+        });
+      }
+    },
+    async remove(id) {
+      if (!uuid(id)) return;
+      try {
+        fs.rmSync(fileOf(id), { force: true });
+      } catch {}
+    },
+  };
+}
 export function createKeychain({
   keychain = process.env.FULCRA_ACCOUNTS_KEYCHAIN || null,
   security = testSecurity(process.env) ?? "/usr/bin/security",
+  platform = process.platform,
 } = {}) {
+  if (platform === "win32" && !keychain) return createWindowsKeychain();
   const kc = keychain ? [keychain] : [];
   const q = (v) => `"${String(v).replace(/[\\"]/g, "")}"`;
   const read = async (id) =>
