@@ -42,10 +42,10 @@ Organisation, report-up, hierarchy, accounts presentation and switching already 
 | `desktop-runtime` | Fulcra prime (release) | 68 | +3137/−513 | 30 | +3947 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
 | `automations` | Fulcra prime (product) | 1 | +11/−0 | 10 | +2717 | Automations ("when X, do Y") on top of Paseo schedules: service, protocol messages, client calls, screen and sidebar entry. Kept in core: moving it into the plugin needs two SDK seams and a ~900-line UI rewrite to save ~150 shared-file lines. |
 | `features` | Fulcra prime (product) | 148 | +3598/−1019 | 172 | +27403 | Fulcra product UI and helpers in the app: architecture map and plain-English PR review (the checkout.pull-request-review.explain RPC behind the pullRequestReviewExplain feature, cached in PASEO_HOME/review-explanations, capped daily by the optional daemon config field explainDailyLimit), insights, work map, attention, schedules, navigation, sidebar and other views. Kept in core because each would cost more to move into the plugin than the shared-file lines it saves. |
-| `branding` | Fulcra prime (release) | 73 | +6169/−1880 | 109 | +4940 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
+| `branding` | Fulcra prime (release) | 73 | +6169/−1880 | 109 | +4941 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
 | `build-ci` | Fulcra prime (release) | 64 | +1611/−2627 | 74 | +6114 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
 | `core-fixes` | Fulcra prime (platform) | 59 | +1106/−270 | 73 | +7987 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
-| **total** | | 735 | +56881/−11508 | 855 | +121579 | |
+| **total** | | 735 | +56881/−11508 | 855 | +121580 | |
 
 Shared seams (upstream files where several patches meet; resolve these hunk by hunk on merge):
 

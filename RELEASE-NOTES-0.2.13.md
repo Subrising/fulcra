@@ -34,6 +34,7 @@ Fulcra 0.2.13 is based on Paseo v0.11.0-beta.5.
 
 ### iPhone
 
+- Command Centre pages open on the iPhone. Before, every page failed ("Element type is invalid"), because the phone's JavaScript engine (Hermes) turned class expressions in plugin pages into undefined. The computer now compiles plugin pages for the phone without class syntax. The phone app itself does not change.
 - Plugin commands such as `/account` work on the iPhone. The plugin list read failed on iOS on every try, so plugins from your computers never loaded there. A failed plugin list read is now logged.
 
 ### Command line
