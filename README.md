@@ -150,13 +150,13 @@ Fulcra has no public app download. You build and package your own copy from sour
 | **macOS** (Apple silicon) | Build and package your own app (below)                                                                              | [Build, launch &amp; pair](docs/getting-started.md) |
 | **iPhone**                | Tested method: Xcode with your own free Apple Account (Personal Team); onboarding taps and re-signing not exercised | [iPhone guide](docs/ios-personal-device.md)         |
 | **Android**               | **Untested** source-derived APK build                                                                               | [Android guide](docs/android.md)                    |
-| **Windows** (x64)         | Build, CLI and Command Centre tested on one Windows 11 PC                                                          | [Windows guide](docs/windows.md)                    |
+| **Windows** (x64)         | Build, CLI and Command Centre tested on one Windows 11 PC                                                           | [Windows guide](docs/windows.md)                    |
 
 [Platform evidence](docs/platform-installation-status.md) records what was run for each guide.
 
 ### Build and package your own Fulcra (macOS)
 
-On Windows, do not use these steps. Use the [Windows guide](docs/windows.md). It needs Node.js 24 and npm 11 too.
+On Windows, do not use these steps. Use the [Windows guide](docs/windows.md). It needs Node.js 24 and npm 11 too. On Windows the built-in daemon is opt-in, so the app can open with no daemon running. To start the daemon and use Fulcra's leads and workers, enable **Command Centre** in **Settings → Advanced → Background service**.
 
 **Prerequisites**
 
@@ -219,8 +219,8 @@ The app is not notarised. Do not turn off the macOS security protections.
 **5. First start**
 
 1. Copy `Fulcra.app` to `/Applications`.
-2. Open Fulcra. The built-in daemon is opt-in, so the app can open with no daemon running.
-3. To start the daemon and use Fulcra's leads and workers, enable **Command Centre** in **Settings → Advanced → Background service**.
+2. Open Fulcra. The app starts its own daemon.
+3. To use Fulcra's leads and workers, enable **Command Centre** in **Settings**.
 4. Continue with [Quick start](#quick-start).
 
 An app that you build on the same Mac has no quarantine flag, so macOS opens it without a warning. If you copy the app to a different Mac, macOS can block it. In that case, open **System Settings → Privacy & Security** and select **Open Anyway**. (We did not test this case.)
