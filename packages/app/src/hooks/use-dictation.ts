@@ -14,6 +14,9 @@ import {
   type UseDictationResult,
 } from "./use-dictation.shared";
 
+// Dictation method changes need the owner's approval (decision log, 10 Oct).
+// Phone composer dictation records PCM and sends it to the host for transcription.
+// use-dictation.lock.test.ts fails if that changes.
 export function useDictation(options: UseDictationOptions): UseDictationResult {
   const { t } = useTranslation();
   const {
@@ -70,7 +73,11 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
 
   const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const attemptGuardRef = useRef(new AttemptGuard());
-  const actionGateRef = useRef<{ starting: boolean; confirming: boolean; cancelling: boolean }>({
+  const actionGateRef = useRef<{
+    starting: boolean;
+    confirming: boolean;
+    cancelling: boolean;
+  }>({
     starting: false,
     confirming: false,
     cancelling: false,
@@ -181,7 +188,9 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
       const next = message.payload.text ?? "";
       latestPartialTranscriptRef.current = next;
       setPartialTranscript(next);
-      onPartialTranscriptRef.current?.(next, { requestId: generateMessageId() });
+      onPartialTranscriptRef.current?.(next, {
+        requestId: generateMessageId(),
+      });
     });
   }, [client]);
 
