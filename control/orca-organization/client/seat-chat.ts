@@ -32,7 +32,28 @@ export function chatStatusLine(chat: SeatChat): string {
     case "error":
       return "Needs attention";
     default:
-      return chat.status === "closed" ? "Saved" : "Status unavailable";
+      return lastKnownStatus(chat.status);
+  }
+}
+
+/**
+ * The app has no live turn state for a chat it has not opened (activity "unknown"). The host's own status for the
+ * chat is still in the list, so it is shown, marked as the last known value rather than a live one.
+ */
+function lastKnownStatus(status: string): string {
+  switch (status) {
+    case "running":
+      return "Working now · last known";
+    case "idle":
+      return "Idle · last known";
+    case "initializing":
+      return "Starting · last known";
+    case "error":
+      return "Needs attention · last known";
+    case "closed":
+      return "Saved";
+    default:
+      return "Status unavailable";
   }
 }
 
