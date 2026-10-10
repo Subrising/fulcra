@@ -1168,8 +1168,8 @@ orchestration	A	176	0	packages/protocol/src/native-intercom.ts
 orchestration	M	69	2	packages/protocol/src/provider-manifest.ts
 orchestration	A	81	0	packages/protocol/src/session-ownership.ts
 orchestration	M	2	0	packages/server/src/server/agent/agent-loading.ts
-orchestration	M	6032	2570	packages/server/src/server/agent/agent-manager.test.ts
-orchestration	M	3878	573	packages/server/src/server/agent/agent-manager.ts
+orchestration	M	3658	159	packages/server/src/server/agent/agent-manager.test.ts
+orchestration	M	3922	583	packages/server/src/server/agent/agent-manager.ts
 orchestration	M	30	0	packages/server/src/server/agent/import-sessions.test.ts
 orchestration	M	24	5	packages/server/src/server/agent/import-sessions.ts
 orchestration	M	217	0	packages/server/src/server/agent/lifecycle-command.test.ts
@@ -1543,8 +1543,8 @@ session-launch	A	123	0	packages/server/src/server/agent/providers/claude/backgro
 session-launch	M	3	1	packages/server/src/server/agent/providers/claude/feature-definitions.ts
 session-launch	A	306	0	packages/server/src/server/agent/providers/claude/model-discovery.test.ts
 session-launch	A	302	0	packages/server/src/server/agent/providers/claude/model-discovery.ts
-session-launch	M	28	10	packages/server/src/server/agent/providers/claude/model-manifest.ts
-session-launch	M	15	3	packages/server/src/server/agent/providers/claude/models.test.ts
+session-launch	M	36	10	packages/server/src/server/agent/providers/claude/model-manifest.ts
+session-launch	M	27	3	packages/server/src/server/agent/providers/claude/models.test.ts
 session-launch	M	22	5	packages/server/src/server/agent/providers/claude/models.ts
 session-launch	M	22	1	packages/server/src/server/agent/providers/claude/query.ts
 session-launch	M	712	201	packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
