@@ -64,6 +64,9 @@ export function privateDenyRules(home) {
   // Private entries only: managed worktrees live under home/tasks.
   const entries = [
     "control.sock",
+    // Windows: the file that names the random controller pipe. An agent must not read or rewrite it.
+    "control.pipe",
+    "control.pipe.*",
     "operator.secret",
     "controller.secret",
     "journal.sqlite*",

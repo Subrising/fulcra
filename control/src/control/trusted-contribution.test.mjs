@@ -643,6 +643,8 @@ test("real host collects portable private Claude deny paths", async (t) => {
     "pairing/**",
     "devices/**",
     "control.sock",
+    "control.pipe",
+    "control.pipe.*",
     "config.json",
   ])
     for (const tool of ["Read", "Edit", "Write"])

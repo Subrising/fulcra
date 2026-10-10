@@ -61,21 +61,18 @@ test("a controller pipe is gated until locked to this user, then serves", win, a
   }
 });
 
-test("owner must be exactly this user for private files; code may also be owned by Administrators", win, (t) => {
+test("owner must be exactly this user for private files; code may also be owned by the OS", win, () => {
   const root = privateFolder();
+  // Program Files is owned by TrustedInstaller or Administrators, and its ACL names principals that cannot be translated
+  // to a name (ALL APPLICATION PACKAGES): the SID-based script must still answer, not throw.
+  const system = process.env.ProgramFiles ?? "C:\\Program Files";
   try {
     assert.equal(privateOwned(fs.lstatSync(root), root), true);
     assert.equal(ownedByMe(fs.lstatSync(root), root), true);
-    try {
-      icacls(root, "/setowner", "Administrators");
-    } catch {
-      t.skip("cannot set the owner to Administrators in this session");
-      return;
-    }
-    // Same ACL, other owner: no longer "mine", still acceptable as trusted code.
-    assert.equal(windowsAclProbe(root, PRIVATE_MASK, "me"), false);
-    assert.equal(windowsAclProbe(root, 0, "me"), false);
-    assert.equal(windowsAclProbe(root, WRITE_MASK, "trusted"), true);
+    assert.equal(windowsAclProbe(system, 0, "me"), false, "owned by the OS, not by me");
+    assert.equal(windowsAclProbe(system, PRIVATE_MASK, "me"), false);
+    assert.equal(windowsAclProbe(system, WRITE_MASK, "trusted"), true, "OS owner, others only read");
+    assert.equal(trustedCode(fs.lstatSync(system), system), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
