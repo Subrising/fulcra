@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureOwnedFiles, recoverOwnedFiles, recoverPreBootLock } from "./owned-child-files.mjs";
+import {
+  captureOwnedFiles,
+  recoverOwnedFiles,
+  recoverPreBootLock,
+  pidStartMs,
+} from "./owned-child-files.mjs";
 
 test("only the exited child with the exact lock identity may recover its files", () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "owned-child-")));
@@ -122,12 +127,57 @@ test("a lock from before the restart is kept when its pid is alive", () => {
       mode: 0o600,
     });
     fs.utimesSync(lock, before, before);
-    assert.throws(() => recoverPreBootLock(home, { bootMs }), /still running/);
-    assert.throws(() => recoverPreBootLock(home, { bootMs, isAlive: () => true }), /still running/);
+    assert.throws(
+      () => recoverPreBootLock(home, { bootMs, startMs: () => before.getTime() - 1000 }),
+      /still running/,
+    );
+    assert.throws(
+      () => recoverPreBootLock(home, { bootMs, isAlive: () => true, startMs: () => null }),
+      /still running/,
+    );
     assert.equal(fs.existsSync(lock), true);
     assert.equal(recoverPreBootLock(home, { bootMs, isAlive: () => false }), true);
     assert.equal(fs.existsSync(lock), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+// Fulcra 0.2.12: after a restart the system can give the old controller's pid to another process.
+test("a pid reused after the restart does not keep the old lock", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "owned-child-")));
+  try {
+    const lock = path.join(home, "process.lock");
+    const bootMs = Date.now() - 60_000;
+    const before = new Date(bootMs - 5 * 60_000);
+    const write = () => {
+      fs.writeFileSync(lock, JSON.stringify({ pid: 4242, epoch: "reused-epoch" }), { mode: 0o600 });
+      fs.utimesSync(lock, before, before);
+    };
+    const alive = { bootMs, isAlive: () => true };
+    write();
+    // The pid started after the lock was written: another process.
+    assert.equal(recoverPreBootLock(home, { ...alive, startMs: () => bootMs + 1000 }), true);
+    assert.equal(fs.existsSync(lock), false);
+    // The pid started before the lock was written: the same controller still runs.
+    write();
+    assert.throws(
+      () => recoverPreBootLock(home, { ...alive, startMs: () => before.getTime() - 1000 }),
+      /still running/,
+    );
+    // Start time unknown: refuse.
+    assert.throws(
+      () => recoverPreBootLock(home, { ...alive, startMs: () => null }),
+      /still running/,
+    );
+    assert.equal(fs.existsSync(lock), true);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("pidStartMs reads this process start time", () => {
+  const started = pidStartMs(process.pid);
+  assert.ok(started !== null && started <= Date.now() && started > Date.now() - 86_400_000 * 365);
+  assert.equal(pidStartMs(2 ** 22 + 12345), null);
 });
