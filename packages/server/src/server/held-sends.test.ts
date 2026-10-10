@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { AgentManagerEvent } from "./agent/agent-manager.js";
-import { deliveryWithReceipt, HeldSends } from "./held-sends.js";
+import { deliveryWithReceipt, HeldSends, MAX_HELD_PER_TARGET } from "./held-sends.js";
 
 const TARGET = "33333333-3333-4333-8333-333333333333";
 
@@ -145,5 +145,15 @@ describe("held sends", () => {
     expect(f.delivered).toEqual(["a"]);
     f.endTurn();
     await expect(failed).rejects.toThrow("caller archived");
+  });
+
+  test("a target holds at most MAX_HELD_PER_TARGET messages; one more is refused with a clear error", () => {
+    const f = fixture();
+    f.busy.add(TARGET);
+    for (let n = 0; n < MAX_HELD_PER_TARGET; n++) f.held.hold(TARGET, f.deliver(`m${n}`));
+    expect(() => f.held.hold(TARGET, f.deliver("one more"))).toThrow(
+      /already has 50 messages waiting/,
+    );
+    expect(f.held.pending(TARGET)).toBe(MAX_HELD_PER_TARGET);
   });
 });

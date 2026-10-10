@@ -66,9 +66,11 @@ import {
 import {
   sendPromptToAgent,
   setupFinishNotification,
+  SteerUnavailableError,
   waitForAgentRunStartWithTimeout,
 } from "../agent-prompt.js";
-import { heldSendsFor } from "../../held-sends.js";
+import { deliveryWithReceipt, heldSendsFor } from "../../held-sends.js";
+import { tellSenderUndelivered } from "../../undelivered-notice.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -102,7 +104,7 @@ import type {
 } from "./types.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
-import { checkPromptLine, lineStoreOf } from "../../reporting-lines.js";
+import { checkPromptLine, decideSend, lineStoreOf } from "../../reporting-lines.js";
 
 export interface PaseoToolHostDependencies {
   nativeReportOrigin?: NativeReportOrigin;
@@ -2017,12 +2019,46 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           sessionMode,
           logger: childLogger,
         });
-      const holdForTurnEnd = () => {
-        heldSendsFor(agentManager, childLogger).hold(agentId, async () => {
-          // Armed while the child is idle, so it sees the delivered turn run and end.
-          armFinishNotification();
-          await dispatch();
-        });
+      const holdForTurnEnd = (caller: string) => {
+        const store = lineStoreOf({ agentManager, agentStorage });
+        heldSendsFor(agentManager, childLogger).hold(
+          agentId,
+          deliveryWithReceipt({
+            // The line can change while the prompt waits: check it again, and tell the caller why if refused.
+            recheck: async () => {
+              const decision = await decideSend(store, { agentId: caller }, agentId, null);
+              return decision && !decision.allowed ? decision.reason : null;
+            },
+            // In the caller's own trust context (agent input), never in the turn-end event's context.
+            deliver: () =>
+              agentManager.trustedPlugins.agentInput(async () => {
+                if (agentManager.hasInFlightRun(agentId)) throw new SteerUnavailableError(agentId);
+                // Armed while the child is idle, so it sees the delivered turn run and end.
+                armFinishNotification();
+                // Steer-only: a turn that starts after the check keeps the prompt waiting, never replaced.
+                await sendPromptToAgent({
+                  agentManager,
+                  agentStorage,
+                  agentId,
+                  prompt,
+                  sessionMode,
+                  activeTurnBehavior: "steer",
+                  steerOnly: true,
+                  logger: childLogger,
+                });
+              }),
+            tellSender: (reason) =>
+              tellSenderUndelivered({
+                agentManager,
+                agentStorage,
+                logger: childLogger,
+                localServerId: null,
+                sender: { agentId: caller },
+                targetId: agentId,
+                reason,
+              }),
+          }),
+        );
         return {
           content: [],
           structuredContent: ensureValidJson({
@@ -2034,7 +2070,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           }),
         };
       };
-      if (callerAgentId && agentManager.hasInFlightRun(agentId)) return holdForTurnEnd();
+      if (callerAgentId && agentManager.hasInFlightRun(agentId))
+        return holdForTurnEnd(callerAgentId);
       const { disposition } = await dispatch();
 
       // If not running in background, wait for completion
