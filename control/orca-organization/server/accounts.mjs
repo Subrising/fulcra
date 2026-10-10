@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
+import { powershellExe } from "./owned.mjs";
 
 export const PROVIDERS = Object.freeze(["claude", "codex"]);
 export const POLICIES = Object.freeze(["priority", "spread"]);
@@ -681,7 +682,7 @@ export function windowsKeychainDir(env = process.env) {
 }
 export function createWindowsKeychain({
   dir = windowsKeychainDir(),
-  powershell = "powershell.exe",
+  powershell = powershellExe(),
   runner = run,
 } = {}) {
   const fileOf = (id) => path.join(dir, `${id}.dpapi`);

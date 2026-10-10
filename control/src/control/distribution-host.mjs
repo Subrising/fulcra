@@ -158,7 +158,7 @@ export function createDistribution({ home, bundleDirectory }) {
           if (!owner && fs.existsSync(path.join(home, "process.lock")))
             owner = captureOwnedFiles(home, { pid: child.pid, epoch: epochs.get(child) });
           if (owner) recoverOwnedFiles(owner, { exited: true });
-          else if (fs.existsSync(socketLocation(home).socket))
+          else if (!socketLocation(home).pipe && fs.existsSync(socketLocation(home).socket))
             throw Error("Unowned controller socket");
         },
         recoverStale: () => recoverStaleLock(home),

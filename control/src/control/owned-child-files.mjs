@@ -54,6 +54,7 @@ export function captureOwnedFiles(home, { pid, epoch }) {
     socketDirectory,
     directory: location.external ? location.directory : null,
     pipe: location.pipe === true,
+    pipeFile: location.pipe === true ? location.pipeFile : null,
   });
   owners.add(owner);
   return owner;
@@ -73,6 +74,8 @@ export function recoverOwnedFiles(owner, { exited }) {
   if (socket && (!owner.socketStat || !same(socket, owner.socketStat)))
     throw Error("Socket ownership changed");
   if (socket) fs.unlinkSync(owner.socket);
+  // The pipe name file of a controller that exited: the pipe died with it.
+  if (owner.pipeFile) fs.rmSync(owner.pipeFile, { force: true });
   if (lock) fs.unlinkSync(owner.lock);
   if (directory) {
     try {
