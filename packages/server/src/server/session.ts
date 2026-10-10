@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { GitAiDraftResponseSchema } from "@getpaseo/protocol/git-ai-draft";
 import { createGitAiDraftHelp } from "./session/checkout/git-ai-draft-help.js";
@@ -124,7 +125,10 @@ import {
 } from "./persistence-hooks.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
 import {
+  FINISH_NOTIFICATION_MESSAGE_PREFIX,
+  formatSystemNotificationPrompt,
   sendPromptToAgent,
+  SteerUnavailableError,
   waitForAgentRunStartWithTimeout,
   unarchiveAgentState,
 } from "./agent/agent-prompt.js";
@@ -148,6 +152,7 @@ import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-uti
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import { decideSend, lineStoreOf, resolveRoleTarget, type LineStore } from "./reporting-lines.js";
+import { deliveryWithReceipt, heldSendsFor } from "./held-sends.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
@@ -9677,6 +9682,103 @@ export class Session {
     return role.ok ? role : { ok: false, notFound: true, error: role.error };
   }
 
+  /** FULCRA(orchestration): a held message from a chat was not delivered; that chat gets one notice with why. */
+  private tellSenderUndelivered(
+    sender: { agentId: string; serverId?: string },
+    targetId: string,
+    reason: string,
+  ): void {
+    const local = !sender.serverId || sender.serverId === this.localServerId;
+    this.sessionLogger.warn(
+      { sender: sender.agentId, senderServer: sender.serverId ?? null, target: targetId, reason },
+      "Held message not delivered",
+    );
+    if (!local || !this.agentManager.getAgent(sender.agentId)) return;
+    const title =
+      this.agentManager.getAgent(targetId)?.config.title?.trim() || targetId.slice(0, 8);
+    const prompt = formatSystemNotificationPrompt(
+      `Your message to ${title} (${targetId}) was not delivered: ${reason}`,
+    );
+    heldSendsFor(this.agentManager, this.sessionLogger).hold(sender.agentId, () =>
+      this.agentManager.trustedPlugins.daemon(async () => {
+        await sendPromptToAgent({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          agentId: sender.agentId,
+          prompt,
+          messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}undelivered:${randomUUID()}`,
+          activeTurnBehavior: "steer",
+          steerOnly: true,
+          unarchive: false,
+          logger: this.sessionLogger,
+        });
+      }),
+    );
+  }
+
+  /**
+   * FULCRA(orchestration): the delivery step of send_agent_message (the owner, 10 Oct: "human messages should steer").
+   */
+  private agentMessageSender(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+    prompt: ReturnType<typeof buildAgentPrompt>,
+  ): () => Promise<void> {
+    // FULCRA(orchestration): The owner, 10 Oct: "human messages should steer". Nothing changes for an idle target.
+    // - A send from another chat (stamped) never enters or cancels a running turn: it is held until the target's
+    //   turn ends, then sent as before (held-sends.ts).
+    // - A send from the owner to a busy target steers into the running turn, and is held, not replaced, when the
+    //   turn cannot take it. An explicit "interrupt" (an operator's choice, the controller's sends) still interrupts.
+    const requested = msg.activeTurnBehavior ?? "interrupt";
+    const dispatch = async (behavior: "interrupt" | "steer", signal?: AbortSignal) => {
+      const result = await sendPromptToAgent({
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        agentId,
+        prompt,
+        messageId: msg.messageId,
+        activeTurnBehavior: behavior,
+        steerOnly: behavior === "steer",
+        clearPendingPermissions: true,
+        logger: this.sessionLogger,
+      });
+      if (result.disposition === "turn_started") {
+        await waitForAgentRunStartWithTimeout(this.agentManager, agentId, signal);
+      }
+    };
+    const held = heldSendsFor(this.agentManager, this.sessionLogger);
+    const whenIdle = async () => {
+      // A turn that started after the queue's check keeps this message waiting.
+      if (this.agentManager.hasInFlightRun(agentId)) throw new SteerUnavailableError(agentId);
+      await dispatch(requested);
+    };
+    const sender = msg.sender;
+    return async () => {
+      if (sender) {
+        held.hold(
+          agentId,
+          deliveryWithReceipt({
+            recheck: () => this.reportingLineRefusal(sender, agentId),
+            deliver: whenIdle,
+            tellSender: (reason) => this.tellSenderUndelivered(sender, agentId, reason),
+          }),
+        );
+        return;
+      }
+      const busy = this.agentManager.hasInFlightRun(agentId);
+      if (!busy || msg.activeTurnBehavior === "interrupt") {
+        await dispatch(requested, this.delivery.requestSignal);
+        return;
+      }
+      try {
+        await dispatch("steer", this.delivery.requestSignal);
+      } catch (error) {
+        if (!(error instanceof SteerUnavailableError)) throw error;
+        held.hold(agentId, whenIdle);
+      }
+    };
+  }
+
   private async handleSendAgentMessageRequest(
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
   ): Promise<void> {
@@ -9756,25 +9858,7 @@ export class Session {
         },
         "agent.session.send_agent_message",
       );
-      const send = async () => {
-        const result = await sendPromptToAgent({
-          agentManager: this.agentManager,
-          agentStorage: this.agentStorage,
-          agentId,
-          prompt,
-          messageId: msg.messageId,
-          activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
-          clearPendingPermissions: true,
-          logger: this.sessionLogger,
-        });
-        if (result.disposition === "turn_started") {
-          await waitForAgentRunStartWithTimeout(
-            this.agentManager,
-            agentId,
-            this.delivery.requestSignal,
-          );
-        }
-      };
+      const send = this.agentMessageSender(msg, agentId, prompt);
       if (msg.messageId) {
         await this.messageReceipts.send({
           agentId,

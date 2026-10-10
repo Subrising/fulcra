@@ -68,6 +68,7 @@ import {
   setupFinishNotification,
   waitForAgentRunStartWithTimeout,
 } from "../agent-prompt.js";
+import { heldSendsFor } from "../../held-sends.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -1959,6 +1960,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   const PROMPTED_AGENT_NOTIFICATION_GUIDANCE =
     "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.";
 
+  const HELD_PROMPT_GUIDANCE =
+    "The agent is busy. Your prompt waits until its current turn ends and is then delivered; you will be notified when it finishes. Do not poll.";
+
   registerTool(
     "send_agent_prompt",
     {
@@ -2002,14 +2006,36 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         return !agentManager.nativeReportOwnsFinish(agentId, callerAgentId);
       }
 
-      const { disposition } = await sendPromptToAgent({
-        agentManager,
-        agentStorage,
-        agentId,
-        prompt,
-        sessionMode,
-        logger: childLogger,
-      });
+      // FULCRA(orchestration): a prompt from another chat never enters or cancels a running turn. A busy target
+      // gets it when its turn ends (held-sends.ts); the finish notification is armed only when it is delivered.
+      const dispatch = () =>
+        sendPromptToAgent({
+          agentManager,
+          agentStorage,
+          agentId,
+          prompt,
+          sessionMode,
+          logger: childLogger,
+        });
+      const holdForTurnEnd = () => {
+        heldSendsFor(agentManager, childLogger).hold(agentId, async () => {
+          // Armed while the child is idle, so it sees the delivered turn run and end.
+          armFinishNotification();
+          await dispatch();
+        });
+        return {
+          content: [],
+          structuredContent: ensureValidJson({
+            success: true,
+            status: agentManager.getAgent(agentId)?.lifecycle ?? "running",
+            lastMessage: null,
+            permission: null,
+            guidance: HELD_PROMPT_GUIDANCE,
+          }),
+        };
+      };
+      if (callerAgentId && agentManager.hasInFlightRun(agentId)) return holdForTurnEnd();
+      const { disposition } = await dispatch();
 
       // If not running in background, wait for completion
       if (!background) {

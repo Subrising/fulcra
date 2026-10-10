@@ -502,12 +502,12 @@ export interface AgentManagerOptions {
 }
 
 export type ActiveTurnSteerDispatchResult =
-  | { status: "inactive" | "steered" }
+  | { status: "inactive" | "steered" | "unavailable" }
   | { status: "replaced"; iterator: AsyncGenerator<AgentStreamEvent> };
 
 function stripSteerOptions(options?: AgentSteerOptions): AgentRunOptions | undefined {
   if (!options) return undefined;
-  const { clearPendingPermissions: _, ...runOptions } = options;
+  const { clearPendingPermissions: _, steerOnly: __, ...runOptions } = options;
   return runOptions;
 }
 
@@ -5268,6 +5268,7 @@ export class AgentManager {
         if (agent.activeForegroundTurnId === null && agent.activeTurnId === expectedTurnId) {
           return { status: "inactive" };
         }
+        if (options?.steerOnly) return { status: "unavailable" };
 
         await this.beforeSteerUnavailableFallback?.({ agentId, expectedTurnId });
         assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);

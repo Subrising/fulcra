@@ -3,6 +3,8 @@ import { checkNativeReportOriginPublication } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
+import { startReportUp } from "./report-up.js";
+import { heldSendsFor } from "./held-sends.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
@@ -440,6 +442,7 @@ export interface PaseoDaemonConfig {
   explainDailyLimit?: number;
   notificationMode?: "all" | "primes" | "off";
   enableTerminalAgentHooks?: boolean;
+  reportUpOnTurnEnd?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
@@ -660,6 +663,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     explainDailyLimit: config.explainDailyLimit,
     notificationMode: initialNotificationMode(config),
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
+    reportUpOnTurnEnd: config.reportUpOnTurnEnd !== false,
     autoResumeOnLimit: config.autoResumeOnLimit ?? true,
     appendSystemPrompt: config.appendSystemPrompt ?? "",
     pluginsEnabled: config.pluginsEnabled ?? false,
@@ -1547,6 +1551,16 @@ export async function createPaseoDaemon(
     daemonConfigStore,
     logger,
   });
+  // FULCRA(orchestration): one held-send queue per target for this daemon (held-sends.ts).
+  const heldSends = heldSendsFor(agentManager, logger);
+  // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
+  const stopReportUp = startReportUp({
+    agentManager,
+    agentStorage,
+    daemonConfigStore,
+    localServerId: serverId,
+    logger,
+  });
   // Automations ("when X, do Y") drive the Schedule service above; see automations/automation-service.ts.
   const automationService = await startHostAutomations({
     paseoHome: config.paseoHome,
@@ -2101,6 +2115,8 @@ export async function createPaseoDaemon(
 
   const stop = async () => {
     limitResume.stop();
+    stopReportUp();
+    heldSends.close();
     await distribution?.stop();
     hostIntegrations.dispose();
     localCredential = null;

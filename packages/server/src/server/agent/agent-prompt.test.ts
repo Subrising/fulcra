@@ -54,6 +54,8 @@ function createCapturedLogger(): CapturedLogger {
 }
 
 interface FinishNotificationScenarioOptions {
+  /** The caller has a turn in flight; a held notice waits for it to end. */
+  parentBusy?: () => boolean;
   childLastAssistantMessage?: string | null;
   childParentAgentId?: string | null;
   requireParentOwnership?: boolean;
@@ -67,6 +69,8 @@ interface FinishNotificationScenarioOptions {
 
 interface FinishNotificationScenario {
   startWatchingChild(): void;
+  /** The caller's running turn ends. */
+  endCallerTurn(): void;
   requestChildPermission(requestId?: string): void;
   resolveChildPermission(requestId?: string): void;
   resolveChildPermissionFromState(requestId?: string): void;
@@ -84,7 +88,11 @@ interface FinishNotificationScenario {
 function createFinishNotificationScenario(
   options?: FinishNotificationScenarioOptions,
 ): FinishNotificationScenario {
-  let subscriber: ((event: AgentManagerEvent) => void) | null = null;
+  // Every listener gets each event, as in the real manager (the notice and the held-send queue both listen).
+  const subscribers = new Set<(event: AgentManagerEvent) => void>();
+  const subscriber = (event: AgentManagerEvent) => {
+    for (const callback of Array.from(subscribers)) callback(event);
+  };
   let resolveParentPrompt: ((prompt: string) => void) | null = null;
   let parentPrompted = false;
   let steerAttemptCount = 0;
@@ -122,9 +130,9 @@ function createFinishNotificationScenario(
     return null;
   });
   Reflect.set(agentManager, "subscribe", (callback: (event: AgentManagerEvent) => void) => {
-    subscriber = callback;
+    subscribers.add(callback);
     return () => {
-      subscriber = null;
+      subscribers.delete(callback);
     };
   });
   Reflect.set(agentManager, "captureFinishNotificationCheck", () => () => {
@@ -140,7 +148,13 @@ function createFinishNotificationScenario(
     return options?.childLastAssistantMessage ?? null;
   });
   Reflect.set(agentManager, "tryRunOutOfBand", () => false);
-  Reflect.set(agentManager, "hasInFlightRun", () => Boolean(options?.parentPromptError));
+  Reflect.set(
+    agentManager,
+    "hasInFlightRun",
+    (agentId: string) =>
+      agentId === "caller-agent" &&
+      (options?.parentBusy?.() ?? Boolean(options?.parentPromptError)),
+  );
   Reflect.set(agentManager, "steerOrReplaceActiveTurn", async () => {
     steerAttemptCount += 1;
     return { status: "inactive" };
@@ -297,6 +311,13 @@ function createFinishNotificationScenario(
     },
     wasParentPrompted() {
       return parentPrompted;
+    },
+    endCallerTurn() {
+      subscriber({
+        type: "agent_stream",
+        agentId: "caller-agent",
+        event: { type: "turn_completed", provider: "claude" },
+      });
     },
   };
 }
@@ -482,26 +503,26 @@ test("follow-up finish notifications do not require a parent relationship", asyn
   expect(parentPrompt).toContain("Agent child-agent (Child Agent) finished.");
 });
 
-test("finish notifications log a rejected parent prompt without an unhandled rejection", async () => {
+test("a finish notice to a busy caller is held until its turn ends, never steered into it", async () => {
+  // FULCRA(orchestration): only the owner steers. The notice comes from the daemon, so it waits (held-sends.ts).
   const captured = createCapturedLogger();
+  let callerBusy = true;
   const scenario = createFinishNotificationScenario({
-    parentPromptError: new Error("parent provider rejected replacement"),
+    parentBusy: () => callerBusy,
     logger: captured.logger,
   });
 
   scenario.startWatchingChild();
-  await scenario.finishChildAndReadParentPrompt();
-  await captured.nextRecord;
+  scenario.finishChild();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(scenario.steerAttemptCount()).toBe(0);
+  expect(scenario.parentPrompts()).toEqual([]);
 
-  expect(captured.records).toEqual([
-    expect.objectContaining({
-      msg: "Failed to notify caller agent",
-      childAgentId: "child-agent",
-      callerAgentId: "caller-agent",
-      reason: "finished",
-      err: expect.objectContaining({ message: "parent provider rejected replacement" }),
-    }),
-  ]);
+  callerBusy = false;
+  scenario.endCallerTurn();
+  await vi.waitFor(() => expect(scenario.parentPrompts()).toHaveLength(1));
+  expect(scenario.parentPrompts()[0]).toContain("finished.");
+  expect(captured.records).toEqual([]);
 });
 
 it("does not notify archived callers", async () => {

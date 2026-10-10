@@ -13,6 +13,7 @@ import type {
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
 import type { AgentStorage } from "./agent-storage.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
+import { heldSendsFor } from "../held-sends.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
@@ -42,6 +43,17 @@ export interface StartAgentRunOptions {
   runOptions?: AgentRunOptions;
   /** Ask the provider to deny permissions blocking this steer. */
   clearPendingPermissions?: boolean;
+  /** FULCRA(orchestration): steer into a running turn or throw SteerUnavailableError; never replace it. */
+  steerOnly?: boolean;
+}
+
+/** FULCRA(orchestration): a steer-only prompt found a running turn it could not steer into. Hold it and retry. */
+export class SteerUnavailableError extends Error {
+  readonly code = "STEER_UNAVAILABLE";
+  constructor(readonly agentId: string) {
+    super(`Agent ${agentId} is busy and cannot take this message into its running turn`);
+    this.name = "SteerUnavailableError";
+  }
 }
 
 export type PromptDispatchDisposition = "out_of_band" | "steered" | "turn_started";
@@ -62,9 +74,11 @@ async function steerOrReplaceActiveRun(
   if (options?.activeTurnBehavior !== "steer") {
     return null;
   }
-  const steerOptions = options.clearPendingPermissions
-    ? { ...options.runOptions, clearPendingPermissions: true }
-    : options.runOptions;
+  const steerOptions = {
+    ...options.runOptions,
+    ...(options.clearPendingPermissions ? { clearPendingPermissions: true } : {}),
+    ...(options.steerOnly ? { steerOnly: true } : {}),
+  };
   const result = await agentManager.steerOrReplaceActiveTurn(agentId, prompt, steerOptions);
   if (result.status === "steered") {
     return { disposition: "steered" };
@@ -72,6 +86,12 @@ async function steerOrReplaceActiveRun(
   if (result.status === "replaced") {
     return { disposition: "turn_started", iterator: result.iterator };
   }
+  // A turn still in flight without a steerable foreground turn would be replaced below.
+  if (
+    options.steerOnly &&
+    (result.status === "unavailable" || agentManager.hasInFlightRun(agentId))
+  )
+    throw new SteerUnavailableError(agentId);
   return null;
 }
 
@@ -285,6 +305,8 @@ export interface SendPromptToAgentParams {
   prompt: AgentPromptInput;
   messageId?: string;
   activeTurnBehavior?: ActiveTurnBehavior;
+  /** With "steer": never replace a running turn; throws SteerUnavailableError instead. */
+  steerOnly?: boolean;
   runOptions?: AgentRunOptions;
   /** Optional mode to set on the agent before the run starts. */
   sessionMode?: string;
@@ -427,6 +449,7 @@ export async function sendPromptToAgent(
         replaceRunning: true,
         activeTurnBehavior: params.activeTurnBehavior,
         clearPendingPermissions: params.clearPendingPermissions,
+        steerOnly: params.steerOnly,
         runOptions,
       };
       if (finishCheck) finishDispatchChecks.set(startOptions, finishCheck);
@@ -548,6 +571,19 @@ export const FINISH_NOTIFICATION_MESSAGE_PREFIX = "paseo-notify:";
 // next finish reaches the caller once.
 const armedFinishNotifications = new WeakMap<AgentManager, Map<string, () => void>>();
 
+/** FULCRA(orchestration): a caller already waits on this child's finish, so report-up stays quiet for it. */
+export function hasArmedFinishNotification(
+  agentManager: AgentManager,
+  childAgentId: string,
+  callerAgentId: string,
+): boolean {
+  return (
+    armedFinishNotifications
+      .get(agentManager)
+      ?.has(JSON.stringify([childAgentId, callerAgentId])) ?? false
+  );
+}
+
 export function setupFinishNotification(params: SetupFinishNotificationParams): void {
   const {
     agentManager,
@@ -618,22 +654,32 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
       permissionRequest,
     });
 
-    const finalCheck = createFinalInputCheck(checkCurrent);
-    const dispatch: SendPromptToAgentParams = {
-      agentManager,
-      agentStorage,
-      agentId: callerAgentId,
-      prompt: formatSystemNotificationPrompt(body),
-      messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${randomUUID()}`,
-      runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
-      activeTurnBehavior: "steer",
-      unarchive: false,
-      logger,
-    };
-    finishDispatchChecks.set(dispatch, checkCurrent);
-    checkCurrent();
-    await sendPromptToAgent(dispatch);
-    await waitForFinalInputHandoff(finalCheck);
+    const prompt = formatSystemNotificationPrompt(body);
+    const messageId = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${randomUUID()}`;
+    // FULCRA(orchestration): only the owner steers. The notice comes from the daemon, so like a chat's message it
+    // waits until the caller's turn ends (held-sends.ts) and is then sent with the daemon source.
+    const deliver = () =>
+      agentManager.trustedPlugins.daemon(async () => {
+        checkCurrent();
+        const finalCheck = createFinalInputCheck(checkCurrent);
+        const dispatch: SendPromptToAgentParams = {
+          agentManager,
+          agentStorage,
+          agentId: callerAgentId,
+          prompt,
+          messageId,
+          runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
+          activeTurnBehavior: "steer",
+          steerOnly: true,
+          unarchive: false,
+          logger,
+        };
+        finishDispatchChecks.set(dispatch, checkCurrent);
+        checkCurrent();
+        await sendPromptToAgent(dispatch);
+        await waitForFinalInputHandoff(finalCheck);
+      });
+    heldSendsFor(agentManager, logger).hold(callerAgentId, deliver);
   }
 
   function notifySafely(reason: FinishNotificationReason, options: NotifySafelyOptions = {}): void {

@@ -266,6 +266,7 @@ export const PersistedConfigSchema = z
         explainDailyLimit: z.number().int().min(0).max(1000).optional(),
         notificationMode: z.enum(["all", "primes", "off"]).optional(),
         enableTerminalAgentHooks: z.boolean().optional(),
+        reportUpOnTurnEnd: z.boolean().optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),

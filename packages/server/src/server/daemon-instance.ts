@@ -12,6 +12,7 @@ import {
 import { daemonLaunchEnvironment } from "./config-environment.js";
 import { readPersistedConfig } from "./persisted-config.js";
 import { assertNotInsideOwnDaemonSession } from "./own-session-guard.js";
+import { readServerId } from "./server-id.js";
 import treeKill from "tree-kill";
 const killTree = (pid: number, signal: string): Promise<void> =>
   new Promise((resolve, reject) =>
@@ -181,8 +182,10 @@ export async function stopDaemonInstance(
   }
   if (instance.pid <= 1 || instance.pid === process.pid)
     throw new Error("Refusing to stop invalid supervisor PID");
+  // The marker check also covers a caller that left the daemon's process tree (nohup, at, launchctl submit).
   assertNotInsideOwnDaemonSession({
     action: "stop",
+    serverId: readServerId(home),
     daemonPids: [instance.pid],
     override: options.overrideSessionGuard,
   });
