@@ -5,7 +5,7 @@ import path from "node:path";
 // Windows files carry no POSIX uid or mode, so ownership is proved from the ACL instead: the owner must be this user,
 // SYSTEM, Administrators or TrustedInstaller (root or this user on POSIX), and no other principal may hold a write,
 // delete, change-permissions or take-ownership right, including GENERIC_ALL and GENERIC_WRITE. SIDs only, no name
-// translation (language independent; an unresolvable principal cannot throw); InheritOnly entries are skipped.
+// translation (language independent; an unresolvable principal cannot throw); InheritOnly entries (flag 2, tested as an integer) are skipped.
 export const WINDOWS_WRITE_MASK = 852310 + 0x10000000 + 0x40000000;
 const WINDOWS_ACL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
@@ -18,7 +18,7 @@ $ok = @($me, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-18310380
 if ($ok -notcontains $acl.GetOwner($sid).Value) { 'UNSAFE'; exit 0 }
 foreach ($r in $acl.GetAccessRules($true, $true, $sid)) {
   if ($r.AccessControlType -ne 'Allow') { continue }
-  if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+  if (([int]$r.PropagationFlags -band 2) -ne 0) { continue }
   if ($ok -contains $r.IdentityReference.Value) { continue }
   $rights = [long][BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$r.FileSystemRights), 0)
   if (($rights -band $mask) -ne 0) { 'UNSAFE'; exit 0 }

@@ -20,8 +20,8 @@ export function powershellExe(env = process.env) {
 }
 
 // SIDs only (GetOwner and GetAccessRules with SecurityIdentifier): no name translation, so it is language independent
-// and an unresolvable principal (for example ALL APPLICATION PACKAGES) cannot throw. InheritOnly entries do not apply
-// to the object itself and are skipped.
+// and an unresolvable principal (for example ALL APPLICATION PACKAGES) cannot throw. InheritOnly entries (flag 2) do not apply
+// to the object itself and are skipped; the flag is tested as an integer, never as an enum.
 const SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $p = $env:FULCRA_ACL_PATH
@@ -34,7 +34,7 @@ $owners = if ($env:FULCRA_ACL_OWNER -eq 'me') { @($me) } else { $trusted }
 if ($owners -notcontains $acl.GetOwner($sid).Value) { 'UNSAFE'; exit 0 }
 foreach ($r in $acl.GetAccessRules($true, $true, $sid)) {
   if ($r.AccessControlType -ne 'Allow') { continue }
-  if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+  if (([int]$r.PropagationFlags -band 2) -ne 0) { continue }
   if ($trusted -contains $r.IdentityReference.Value) { continue }
   $rights = [long][BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$r.FileSystemRights), 0)
   if (($rights -band $mask) -ne 0) { 'UNSAFE'; exit 0 }
