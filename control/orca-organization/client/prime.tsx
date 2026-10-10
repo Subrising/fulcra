@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
+import * as pluginClient from "@getpaseo/plugin/client";
 import { type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { fleetRpc, type Fleet } from "../shared/fleet";
@@ -28,6 +29,14 @@ import { WorkBrief } from "./work-brief";
 import { Activity } from "./fleet";
 import { lastGood } from "./last-good";
 import { TeamSetupCard } from "./team-setup";
+import { EMPTY_NATIVE } from "./live-map-model";
+import {
+  CHAT_LIST_NOTE,
+  chatFromList,
+  chatStatusLine,
+  partialSentence,
+  type SeatChat,
+} from "./seat-chat";
 
 /**
  * The top of Orca: recorded prime orchestrators, then a project, then sessions as a drill-down.
@@ -35,6 +44,9 @@ import { TeamSetupCard } from "./team-setup";
  * Nothing here delegates, assigns or transfers. Actions open an existing conversation or the
  * existing management route for a workstream.
  */
+// COMPAT(observedOverview): optional on older apps; the seat then keeps the old wording.
+const nativeApi = pluginClient as Partial<Pick<typeof pluginClient, "useObservedAgents">>;
+const useObservedChats = nativeApi.useObservedAgents ?? (() => EMPTY_NATIVE);
 const STALE_MS = 45000;
 /** A prime seat name, as the controller accepts it (bindings.mjs). The operator chooses it; none is built in. */
 const PRIME_SEAT = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -219,6 +231,25 @@ function NewPrimeSeat({
   );
 }
 
+/** A seat or leader that is not a fleet node, read from the app's chat list (host name and status as the host reports them). */
+function ChatFromList({
+  chat,
+  text,
+  muted,
+}: {
+  chat: SeatChat;
+  text: { color: string };
+  muted: { color: string };
+}) {
+  return (
+    <>
+      <Text style={muted}>{chat.hostName}</Text>
+      <Text style={text}>{chatStatusLine(chat)}</Text>
+      <Text style={muted}>{CHAT_LIST_NOTE}</Text>
+    </>
+  );
+}
+
 function LeaderCard({
   leader,
   fleet,
@@ -241,7 +272,11 @@ function LeaderCard({
     muted = { color: c.foregroundMuted };
   const node = fleet?.nodes.find((n) => n.id === leader.sessionId),
     task = fleet?.tasks.find((t) => t.id === leader.taskId);
-  const name = node ? sessionName(node, fleet) : "Leader conversation not in this observation";
+  const observed = useObservedChats();
+  const chat = node ? null : chatFromList(observed.entries, leader.sessionId);
+  const name = node
+    ? sessionName(node, fleet)
+    : (chat?.title ?? "Leader conversation not in this observation");
   return (
     <View
       style={{
@@ -274,6 +309,8 @@ function LeaderCard({
             </Text>
           )}
         </>
+      ) : chat ? (
+        <ChatFromList chat={chat} text={text} muted={muted} />
       ) : (
         <Text style={text}>
           This leader is recorded, but its conversation is not in the current observation. Its
@@ -623,6 +660,7 @@ export function PrimeSurface(props: Props) {
     return () => clearInterval(timer);
   }, []);
   const hostId = props.host?.id;
+  const observed = useObservedChats();
   const fleet = useObservation(["orca-fleet", hostId], () => readFleet({}), now, 15000);
   const directory = useObservation(["orca-projects", hostId], () => readProjects({}), now, 30000);
   const briefing = useObservation(
@@ -712,9 +750,7 @@ export function PrimeSurface(props: Props) {
         </Text>
       )}
       {fleet.data?.partial && (
-        <Text style={muted}>
-          Some work or team members could not be observed. This view is incomplete.
-        </Text>
+        <Text style={muted}>{partialSentence(fleet.data)}</Text>
       )}
       <Text accessibilityRole="header" style={{ ...text, fontSize: 20, fontWeight: "600" }}>
         Main assistants
@@ -747,7 +783,11 @@ export function PrimeSurface(props: Props) {
       ) : (
         h.primeSeats.map((seat) => {
           const node = fleet.data?.nodes.find((n) => n.id === seat.sessionId);
-          const name = node ? sessionName(node, fleet.data) : "Its chat is not in this view";
+          const chat =
+            node || !seat.sessionId ? null : chatFromList(observed.entries, seat.sessionId);
+          const name = node
+            ? sessionName(node, fleet.data)
+            : (chat?.title ?? "Its chat is not in this view");
           return (
             <View
               key={`${seat.role}:${seat.seat}`}
@@ -768,6 +808,8 @@ export function PrimeSurface(props: Props) {
               </Text>
               {node ? (
                 <Text style={text}>{sessionStatus(node, fleet.stale)}</Text>
+              ) : chat ? (
+                <ChatFromList chat={chat} text={text} muted={muted} />
               ) : (
                 <Text style={text}>
                   This main assistant's chat is not in the current view. Its history has not been
