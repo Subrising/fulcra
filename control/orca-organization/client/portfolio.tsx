@@ -1,3 +1,4 @@
+import { partialSentence } from "./seat-chat";
 import { quotaLabel, quotaIsStale } from "./quota-wait";
 import { workName as name, sessionName, sessionStatus } from "./work-labels";
 import { useEffect, useState } from "react";
@@ -168,9 +169,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
             </Text>
           )}
           {d?.partial && (
-            <Text style={muted}>
-              Some work or team members could not be observed. This view is incomplete.
-            </Text>
+            <Text style={muted}>{partialSentence(d)}</Text>
           )}
           {d && !roleKnown && (
             <Text style={text}>

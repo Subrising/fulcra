@@ -7,6 +7,13 @@ import {
   type OrchestratorAssignment,
 } from "./hierarchy";
 import type { Fleet } from "../shared/fleet";
+import {
+  CHAT_LIST_NOTE,
+  chatFromList,
+  chatStatusLine,
+  partialSentence,
+  type SeatChat,
+} from "./seat-chat";
 import type { ProjectDirectory } from "../shared/projects";
 import type { Briefing } from "../shared/briefing";
 import type { RoleDirectory, Seat } from "../shared/roles";
@@ -699,4 +706,60 @@ test("U5-D04: flagged supervisor records are counted for the view; the readable 
   assert.equal(h.supervisionUnreadable, 1);
   assert.equal(h.supervisionTruncated, 2);
   assert.ok(h.primes.length + h.soloLeaders.length > 0 || h.supervisionAvailable);
+});
+
+const listed = (extra: Partial<SeatChat> = {}): SeatChat => ({
+  agentId: PRIME,
+  title: "Main assistant",
+  hostName: "Host one",
+  activity: "idle",
+  status: "idle",
+  connection: "online",
+  ...extra,
+});
+
+test("FU-47: a seat that is not a fleet node is read from the chat list by exact id", () => {
+  assert.equal(chatFromList([listed()], PRIME)?.title, "Main assistant");
+  assert.equal(chatFromList([listed({ agentId: LEAD })], PRIME), null);
+  assert.equal(chatFromList(undefined, PRIME), null);
+  // The same id on two hosts is ambiguous: nothing is chosen.
+  assert.equal(chatFromList([listed(), listed({ hostName: "Host two" })], PRIME), null);
+});
+
+test("FU-47: the chat-list status is plain and says when the host is not connected", () => {
+  assert.equal(chatStatusLine(listed({ activity: "working" })), "Working now");
+  assert.equal(chatStatusLine(listed({ activity: "idle" })), "Idle");
+  assert.equal(chatStatusLine(listed({ activity: "permission" })), "Needs you · permission pending");
+  assert.equal(chatStatusLine(listed({ activity: "error" })), "Needs attention");
+  assert.equal(chatStatusLine(listed({ activity: "unknown", status: "closed" })), "Saved");
+  assert.equal(chatStatusLine(listed({ activity: "unknown" })), "Status unavailable");
+  assert.match(chatStatusLine(listed({ connection: "offline" })), /host not connected/);
+  assert.match(CHAT_LIST_NOTE, /does not track this chat/);
+});
+
+test("FU-47: a partial fleet names what could not be read", () => {
+  const node = (host: string, status: string) => ({ host, status }) as never;
+  assert.equal(
+    partialSentence(
+      fleet({ nodes: [node("host-b", "unavailable"), node("host-b", "unavailable"), node("host-a", "idle")] }),
+    ),
+    "2 chats on host-b could not be read. This view is incomplete.",
+  );
+  assert.equal(
+    partialSentence(fleet({ nodes: [node("host-a", "unavailable"), node("host-b", "unavailable")] })),
+    "1 chat on host-a could not be read; 1 chat on host-b could not be read. This view is incomplete.",
+  );
+  assert.match(
+    partialSentence(fleet({ supervisionAvailable: false })),
+    /^Who leads whom could not be read\. This view is incomplete\.$/,
+  );
+  assert.match(
+    partialSentence(fleet({ supervisionIssues: { unreadable: 1, ids: [], truncated: 0 } })),
+    /1 chat's leadership record could not be read/,
+  );
+  // No nameable reason: the general sentence, never an invented reason.
+  assert.equal(
+    partialSentence(fleet({ partial: true })),
+    "Some work or team members could not be observed. This view is incomplete.",
+  );
 });

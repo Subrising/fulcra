@@ -199,7 +199,12 @@ files.push(
   "server/projects.test.ts",
   "client/projects.tsx",
 );
-files.push("client/hierarchy.ts", "client/hierarchy.test.ts", "client/prime.tsx");
+files.push(
+  "client/hierarchy.ts",
+  "client/hierarchy.test.ts",
+  "client/prime.tsx",
+  "client/seat-chat.ts",
+);
 files.push("shared/roles.ts", "server/roles.ts", "server/roles.test.ts", "client/role-seat.tsx");
 files.push(
   "shared/session-defaults.ts",
