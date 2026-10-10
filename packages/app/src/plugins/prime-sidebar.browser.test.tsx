@@ -243,6 +243,7 @@ vi.mock("@/stores/main-assistant-memory-store", async () => {
   return { useMainAssistantMemory };
 });
 vi.mock("./registry", () => ({
+  useUntrustedPlugins: () => [],
   useControllerPlugin: () => null,
   pluginRegistry: { controllerPluginId: () => "orca-organization-next" },
 }));
