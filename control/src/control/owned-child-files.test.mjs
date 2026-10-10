@@ -9,12 +9,16 @@ test("only the exited child with the exact lock identity may recover its files",
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "owned-child-")));
   try {
     const lock = path.join(home, "process.lock");
-    fs.writeFileSync(lock, JSON.stringify({ pid: 101, epoch: "owned-epoch" }), { mode: 0o600 });
+    fs.writeFileSync(lock, JSON.stringify({ pid: 101, epoch: "owned-epoch" }), {
+      mode: 0o600,
+    });
     const owner = captureOwnedFiles(home, { pid: 101, epoch: "owned-epoch" });
     assert.throws(() => recoverOwnedFiles(owner, { exited: false }));
     assert.equal(fs.existsSync(lock), true);
     fs.renameSync(lock, lock + ".saved");
-    fs.writeFileSync(lock, JSON.stringify({ pid: 102, epoch: "other-epoch" }), { mode: 0o600 });
+    fs.writeFileSync(lock, JSON.stringify({ pid: 102, epoch: "other-epoch" }), {
+      mode: 0o600,
+    });
     assert.throws(() => recoverOwnedFiles(owner, { exited: true }));
     assert.equal(fs.existsSync(lock), true);
     assert.throws(() => captureOwnedFiles(home, { pid: 101, epoch: "owned-epoch" }));
@@ -50,7 +54,9 @@ test("a foreign socket is never deleted alongside an owned lock", () => {
   try {
     const lock = path.join(home, "process.lock"),
       socket = path.join(home, "control.sock");
-    fs.writeFileSync(lock, JSON.stringify({ pid: 101, epoch: "owned-epoch" }), { mode: 0o600 });
+    fs.writeFileSync(lock, JSON.stringify({ pid: 101, epoch: "owned-epoch" }), {
+      mode: 0o600,
+    });
     const owner = captureOwnedFiles(home, { pid: 101, epoch: "owned-epoch" });
     fs.writeFileSync(socket, "foreign");
     assert.throws(() => recoverOwnedFiles(owner, { exited: true }));
@@ -71,14 +77,18 @@ test("a lock from before the last restart is recovered; a lock from since then i
       mode: 0o600,
     });
     // Written since the restart: it may belong to a running controller.
-    assert.equal(recoverPreBootLock(home, { bootMs }), false);
+    assert.equal(recoverPreBootLock(home, { bootMs, isAlive: () => false }), false);
     assert.equal(fs.existsSync(lock), true);
     // Written before the restart: no controller of that boot runs now.
     const before = new Date(bootMs - 5 * 60_000);
     fs.utimesSync(lock, before, before);
-    assert.equal(recoverPreBootLock(home, { bootMs }), true);
+    assert.equal(recoverPreBootLock(home, { bootMs, isAlive: () => false }), true);
     assert.equal(fs.existsSync(lock), false);
-    assert.equal(recoverPreBootLock(home, { bootMs }), false, "no lock: nothing to do");
+    assert.equal(
+      recoverPreBootLock(home, { bootMs, isAlive: () => false }),
+      false,
+      "no lock: nothing to do",
+    );
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -93,9 +103,30 @@ test("a lock from before the restart without a full owner identity is kept", () 
     for (const content of [JSON.stringify({ pid: 44726 }), "not json"]) {
       fs.writeFileSync(lock, content, { mode: 0o600 });
       fs.utimesSync(lock, before, before);
-      assert.throws(() => recoverPreBootLock(home, { bootMs }));
+      assert.throws(() => recoverPreBootLock(home, { bootMs, isAlive: () => false }));
       assert.equal(fs.existsSync(lock), true);
     }
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Fulcra 0.2.11: the wall clock can be wrong, so a live pid in an old lock blocks recovery.
+test("a lock from before the restart is kept when its pid is alive", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "owned-child-")));
+  try {
+    const lock = path.join(home, "process.lock");
+    const bootMs = Date.now() - 60_000;
+    const before = new Date(bootMs - 5 * 60_000);
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, epoch: "live-epoch" }), {
+      mode: 0o600,
+    });
+    fs.utimesSync(lock, before, before);
+    assert.throws(() => recoverPreBootLock(home, { bootMs }), /still running/);
+    assert.throws(() => recoverPreBootLock(home, { bootMs, isAlive: () => true }), /still running/);
+    assert.equal(fs.existsSync(lock), true);
+    assert.equal(recoverPreBootLock(home, { bootMs, isAlive: () => false }), true);
+    assert.equal(fs.existsSync(lock), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

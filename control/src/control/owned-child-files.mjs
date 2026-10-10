@@ -91,13 +91,25 @@ export function recoverOwnedFiles(owner, { exited }) {
 
 /** When this computer last started, in ms. */
 export const systemBootMs = () => Date.now() - os.uptime() * 1000;
+/** True when a process with this pid exists. EPERM means it exists but belongs to another user. */
+export function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+}
 /**
  * Fulcra 0.2.9: a controller lock written before this computer last started cannot belong to a running controller, so
  * the host may recover it. After a restart, the lock of the killed controller stayed and every new controller refused
  * to start. A lock written since the start is never touched here. The margin covers the rounding of the boot time.
  * Returns true when it removed the lock (and the lock's socket).
  */
-export function recoverPreBootLock(home, { bootMs = systemBootMs(), marginMs = 5000 } = {}) {
+export function recoverPreBootLock(
+  home,
+  { bootMs = systemBootMs(), marginMs = 5000, isAlive = pidIsAlive } = {},
+) {
   const lock = path.join(home, "process.lock");
   const found = stat(lock);
   if (!found) return false;
@@ -113,8 +125,14 @@ export function recoverPreBootLock(home, { bootMs = systemBootMs(), marginMs = 5
   } catch {
     throw Error("Unreadable controller lock from before the restart");
   }
+  // The wall clock can be wrong. A live pid in the lock means the controller may still run: refuse.
+  if (Number.isSafeInteger(value?.pid) && value.pid > 0 && isAlive(value.pid))
+    throw Error("Controller lock pid is still running");
   // The same identity and file checks as a recovery after an observed exit.
-  const owner = captureOwnedFiles(home, { pid: value?.pid, epoch: value?.epoch });
+  const owner = captureOwnedFiles(home, {
+    pid: value?.pid,
+    epoch: value?.epoch,
+  });
   recoverOwnedFiles(owner, { exited: true });
   return true;
 }

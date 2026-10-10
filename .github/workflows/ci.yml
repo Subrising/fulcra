@@ -554,6 +554,33 @@ jobs:
       - name: Run relay tests
         run: npm run test --workspace=@getpaseo/relay
 
+  # FULCRA 0.2.11: the Command Centre grant e2e (relay-transport.e2e) is in neither test:unit nor test:integration.
+  relay-grant-e2e:
+    name: relay-grant-e2e
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.relay != 'false') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # npm 10 mis-resolves the root markdown-it override in this lockfile.
+      - name: Use the lockfile-compatible npm version
+        run: npm install --global npm@11.12.1
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Build server dependencies
+        run: npm run build:server-deps
+
+      - name: Run the relay transport and Command Centre grant e2e
+        run: npm run test:integration:relay --workspace=@getpaseo/server
+
   cli-tests-1:
     name: cli-tests (shard 1/3)
     needs: changes
@@ -641,6 +668,7 @@ jobs:
       - playwright-3
       - playwright-4
       - relay-tests
+      - relay-grant-e2e
       - cli-tests-1
       - cli-tests-2
       - cli-tests-3
@@ -649,8 +677,14 @@ jobs:
       - name: Every job passed or was skipped
         env:
           RESULTS: ${{ toJSON(needs.*.result) }}
+          CHANGES: ${{ needs.changes.result }}
         run: |
           echo "$RESULTS"
+          # The path filter must have run. If it did not succeed, a skipped job may not mean "no changes".
+          if [ "$CHANGES" != "success" ]; then
+            echo "The changes job did not succeed ($CHANGES)."
+            exit 1
+          fi
           if echo "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then
             echo "A CI job failed or was cancelled."
             exit 1
