@@ -57,11 +57,11 @@ function PointJunction([string]$target) {
 }
 function GuiProcesses {
   Get-CimInstance Win32_Process -Filter "Name='Fulcra.exe'" |
-    Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch '\.js' }
+    Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch '\.[mc]?js' }
 }
 function DaemonProcesses {
   Get-CimInstance Win32_Process -Filter "Name='Fulcra.exe'" |
-    Where-Object { $_.CommandLine -match '\.js|--type=' }
+    Where-Object { $_.CommandLine -match '\.[mc]?js|--type=' }
 }
 
 # --- Song Studio check. Refuse when a chat on this daemon could stop. ---
