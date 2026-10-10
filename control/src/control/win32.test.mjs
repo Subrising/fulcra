@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { socketLocation, pipeName, createPipeEndpoint, readPipeName, PIPE_FILE } from "./socket-location.mjs";
+import {
+  socketLocation,
+  pipeName,
+  createPipeEndpoint,
+  readPipeName,
+  PIPE_FILE,
+} from "./socket-location.mjs";
 import { pipeDaclIsPrivate, restrictPipeToUser, gateConnections } from "./pipe-acl.mjs";
 import { captureGroupOwner, runScript } from "./environment-runner.mjs";
 import { EnvironmentRefused } from "../../orca-organization/shared/cc/environment-rules.mjs";
@@ -25,13 +31,17 @@ test("win32 location names no socket: the name comes only from the private pipe 
   assert.equal(location.socket, null);
   assert.match(location.pipeFile, /control\.pipe$/);
 });
-test("posix location is unchanged: a socket file in the home", { skip: process.platform === "win32" }, () => {
-  assert.deepEqual(socketLocation("/tmp/h", "darwin"), {
-    socket: "/tmp/h/control.sock",
-    directory: "/tmp/h",
-    external: false,
-  });
-});
+test(
+  "posix location is unchanged: a socket file in the home",
+  { skip: process.platform === "win32" },
+  () => {
+    assert.deepEqual(socketLocation("/tmp/h", "darwin"), {
+      socket: "/tmp/h/control.sock",
+      directory: "/tmp/h",
+      external: false,
+    });
+  },
+);
 test("pipe DACL: only SYSTEM, Administrators and this user, protected", () => {
   assert.equal(pipeDaclIsPrivate(`D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;${ME})`, ME), true);
   assert.equal(pipeDaclIsPrivate("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)", ME), false);
@@ -78,7 +88,8 @@ test("no connection is served before the pipe is locked: it is destroyed, not ha
 test("environment scripts and process-group identity are refused on win32, with the reason", () => {
   assert.equal(captureGroupOwner(1234, "win32"), null);
   assert.throws(
-    () => runScript({ checkout: "C:\\c", script: "run.sh", args: [], timeoutS: 1, platform: "win32" }),
+    () =>
+      runScript({ checkout: "C:\\c", script: "run.sh", args: [], timeoutS: 1, platform: "win32" }),
     (e) => e instanceof EnvironmentRefused && /not available on Windows/.test(e.message),
   );
 });

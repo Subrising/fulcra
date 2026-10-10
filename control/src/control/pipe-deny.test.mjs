@@ -12,13 +12,17 @@ try {
   if (error?.code !== "ERR_MODULE_NOT_FOUND") throw error;
 }
 
-test("an agent cannot read or rewrite the pipe name file: it is in the protected controller state", {
-  skip: privateDenyRules ? false : "workspace packages are not installed",
-}, () => {
-  const home = path.join(os.tmpdir(), "cc-home");
-  const rules = privateDenyRules(home);
-  for (const name of ["control.sock", "control.pipe", "control.pipe.*"])
-    for (const tool of ["Read", "Edit", "Write"])
-      assert.ok(rules.includes(`${tool}(/${path.join(home, name)})`), `${tool} ${name}`);
-  assert.ok(rules.includes(`Bash(*${path.join(home, "control.pipe")}*)`));
-});
+test(
+  "an agent cannot read or rewrite the pipe name file: it is in the protected controller state",
+  {
+    skip: privateDenyRules ? false : "workspace packages are not installed",
+  },
+  () => {
+    const home = path.join(os.tmpdir(), "cc-home");
+    const rules = privateDenyRules(home);
+    for (const name of ["control.sock", "control.pipe", "control.pipe.*"])
+      for (const tool of ["Read", "Edit", "Write"])
+        assert.ok(rules.includes(`${tool}(/${path.join(home, name)})`), `${tool} ${name}`);
+    assert.ok(rules.includes(`Bash(*${path.join(home, "control.pipe")}*)`));
+  },
+);

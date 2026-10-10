@@ -189,7 +189,10 @@ if (target === "android" || target === "android-prebuild") {
   // The bundled Command Centre controller plugin is staged into packages/desktop/bundled-plugins
   // and packed as resources/bundled-plugins; without this step the app has no Command Centre.
   run(npm, ["run", "build:server:clean"]);
-  run(process.execPath, [path.join(root, "scripts/build-command-centre.mjs"), path.join(root, "control")]);
+  run(process.execPath, [
+    path.join(root, "scripts/build-command-centre.mjs"),
+    path.join(root, "control"),
+  ]);
   run(npm, [
     "run",
     "build:desktop",

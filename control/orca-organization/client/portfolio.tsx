@@ -168,9 +168,7 @@ export function PortfolioSurface(props: PluginSurfaceProps & { onTask: (id: stri
                   : "Fulcra is not answering yet; retrying."}
             </Text>
           )}
-          {d?.partial && (
-            <Text style={muted}>{partialSentence(d)}</Text>
-          )}
+          {d?.partial && <Text style={muted}>{partialSentence(d)}</Text>}
           {d && !roleKnown && (
             <Text style={text}>
               Leadership records are unavailable. Session names and graph connections are not enough

@@ -21,10 +21,7 @@ const NO_RELOAD_REASONS = new Set(["clean-exit", "launch-failed", "integrity-fai
 const MAX_RELOADS = 3;
 const RELOAD_WINDOW_MS = 60_000;
 
-export function shouldReloadRenderer(input: {
-  reason: string;
-  recentReloads: number;
-}): boolean {
+export function shouldReloadRenderer(input: { reason: string; recentReloads: number }): boolean {
   return !NO_RELOAD_REASONS.has(input.reason) && input.recentReloads < MAX_RELOADS;
 }
 

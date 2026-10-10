@@ -44,10 +44,9 @@ export const CHAT_LIST_NOTE =
  * Names why a fleet read is partial when the fleet data says so. Falls back to the general sentence when it
  * cannot name a reason. Never claims a reason the data does not show.
  */
-export function partialSentence(fleet: Pick<
-  Fleet,
-  "nodes" | "supervisionAvailable" | "supervisionIssues"
->): string {
+export function partialSentence(
+  fleet: Pick<Fleet, "nodes" | "supervisionAvailable" | "supervisionIssues">,
+): string {
   const reasons: string[] = [];
   const byHost = new Map<string, number>();
   for (const node of fleet.nodes)

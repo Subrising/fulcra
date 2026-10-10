@@ -674,9 +674,17 @@ const DPAPI_PROTECT =
 const DPAPI_UNPROTECT =
   "Add-Type -AssemblyName System.Security;$i=[Console]::In.ReadToEnd().Trim();" +
   "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($i),$null,'CurrentUser'))";
-const powershellArgs = (script) => ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script];
+const powershellArgs = (script) => [
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-Command",
+  script,
+];
 export function windowsKeychainDir(env = process.env) {
-  const home = env.ORCA_HOME ?? (env.PASEO_HOME ? path.join(env.PASEO_HOME, "command-centre") : null);
+  const home =
+    env.ORCA_HOME ?? (env.PASEO_HOME ? path.join(env.PASEO_HOME, "command-centre") : null);
   if (!home) throw Error("Account Keychain: no Command Centre home");
   return path.join(home, "accounts", "secrets");
 }
@@ -687,18 +695,25 @@ export function createWindowsKeychain({
 } = {}) {
   const fileOf = (id) => path.join(dir, `${id}.dpapi`);
   const unavailable = () =>
-    Object.assign(Error("Account Keychain: operation-failed"), { code: "ACCOUNT_KEYCHAIN_UNAVAILABLE" });
+    Object.assign(Error("Account Keychain: operation-failed"), {
+      code: "ACCOUNT_KEYCHAIN_UNAVAILABLE",
+    });
   async function read(id) {
     let cipher;
     try {
       cipher = fs.readFileSync(fileOf(id), "utf8");
     } catch (e) {
       throw e?.code === "ENOENT"
-        ? Object.assign(Error("Account Keychain: operation-failed"), { code: "ACCOUNT_ITEM_MISSING" })
+        ? Object.assign(Error("Account Keychain: operation-failed"), {
+            code: "ACCOUNT_ITEM_MISSING",
+          })
         : unavailable();
     }
     try {
-      return (await runner(powershell, powershellArgs(DPAPI_UNPROTECT), cipher)).replace(/\r?\n$/, "");
+      return (await runner(powershell, powershellArgs(DPAPI_UNPROTECT), cipher)).replace(
+        /\r?\n$/,
+        "",
+      );
     } catch {
       throw unavailable();
     }

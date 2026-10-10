@@ -15,7 +15,9 @@ test("POSIX rule: group/other write or a foreign owner is refused", () => {
   expect(unsafeOwnership("f", stat(0o100644, 0), options)).toBe(false);
   expect(unsafeOwnership("f", stat(0o100666, 0), options)).toBe(true);
   expect(unsafeOwnership("f", stat(0o100644, 424242), options)).toBe(true);
-  expect(unsafeOwnership("f", stat(0o100644, 424242), { ...options, checkOwner: false })).toBe(false);
+  expect(unsafeOwnership("f", stat(0o100644, 424242), { ...options, checkOwner: false })).toBe(
+    false,
+  );
 });
 
 test("Windows rule follows the ACL probe and ignores mode bits", () => {
@@ -28,10 +30,17 @@ test.runIf(process.platform === "win32")(
   "Windows: only this user and the OS may change a trusted folder; anything else fails closed",
   async () => {
     const root = await mkdtemp(path.join(tmpdir(), "acl-"));
-    const icacls = (...args: string[]) => execFileSync("icacls.exe", [root, ...args], { stdio: "pipe" });
+    const icacls = (...args: string[]) =>
+      execFileSync("icacls.exe", [root, ...args], { stdio: "pipe" });
     try {
       // Reset to explicit entries so the result does not depend on what the temp folder inherits.
-      icacls("/inheritance:r", "/grant:r", `${process.env.USERNAME}:(OI)(CI)F`, "/grant:r", "SYSTEM:(OI)(CI)F");
+      icacls(
+        "/inheritance:r",
+        "/grant:r",
+        `${process.env.USERNAME}:(OI)(CI)F`,
+        "/grant:r",
+        "SYSTEM:(OI)(CI)F",
+      );
       expect(windowsAclIsSafe(root)).toBe(true);
       icacls("/grant", "Everyone:(OI)(CI)W");
       expect(windowsAclIsSafe(root)).toBe(false);
@@ -49,7 +58,14 @@ test.runIf(process.platform === "win32")(
     try {
       execFileSync(
         "icacls.exe",
-        [root, "/inheritance:r", "/grant:r", `${process.env.USERNAME}:(OI)(CI)F`, "/grant:r", "SYSTEM:(OI)(CI)F"],
+        [
+          root,
+          "/inheritance:r",
+          "/grant:r",
+          `${process.env.USERNAME}:(OI)(CI)F`,
+          "/grant:r",
+          "SYSTEM:(OI)(CI)F",
+        ],
         { stdio: "pipe" },
       );
       const resources = path.join(root, "resources");

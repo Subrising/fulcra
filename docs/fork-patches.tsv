@@ -52,8 +52,8 @@ accounts	M	226	0	packages/client/src/index.test.ts
 accounts	M	71	0	packages/client/src/index.ts
 accounts	A	29	0	packages/client/src/pairing-secrets.test.ts
 accounts	A	117	0	packages/desktop/e2e/smoke-secret-scan.js
-accounts	A	40	0	packages/desktop/src/daemon/command-centre-keychain-windows.test.ts
-accounts	A	75	0	packages/desktop/src/daemon/command-centre-keychain-windows.ts
+accounts	A	43	0	packages/desktop/src/daemon/command-centre-keychain-windows.test.ts
+accounts	A	76	0	packages/desktop/src/daemon/command-centre-keychain-windows.ts
 accounts	A	99	0	packages/desktop/src/daemon/command-centre-keychain.test.ts
 accounts	A	119	0	packages/desktop/src/daemon/command-centre-keychain.ts
 accounts	A	203	0	packages/desktop/src/daemon/local-service-credential.test.ts
@@ -188,8 +188,8 @@ admission	A	20	0	packages/server/src/server/plugins/trusted-bootstrap.ts
 admission	A	123	0	packages/server/src/server/plugins/trusted-daemon-startup.test.ts
 admission	A	114	0	packages/server/src/server/plugins/trusted-facts.test.ts
 admission	A	153	0	packages/server/src/server/plugins/trusted-facts.ts
-admission	A	69	0	packages/server/src/server/plugins/trusted-ownership.test.ts
-admission	A	80	0	packages/server/src/server/plugins/trusted-ownership.ts
+admission	A	85	0	packages/server/src/server/plugins/trusted-ownership.test.ts
+admission	A	91	0	packages/server/src/server/plugins/trusted-ownership.ts
 admission	A	227	0	packages/server/src/server/plugins/trusted-pipeline.test.ts
 admission	A	739	0	packages/server/src/server/plugins/trusted-v11.test.ts
 admission	A	403	0	packages/server/src/server/plugins/trusted.test.ts
@@ -392,7 +392,7 @@ branding	A	47	0	RELEASE-NOTES-0.2.9.md
 branding	A	17	0	RELEASE-NOTES-v0.2.0.md
 branding	A	13	0	release/README.md
 branding	A	46	0	scripts/c2c-ui-fixture/README.md
-branding	A	38	0	scripts/windows-update/README.md
+branding	A	43	0	scripts/windows-update/README.md
 branding	M	26	34	SECURITY.md
 branding	A	178	0	skills/fulcra/SKILL.md
 build-ci	A	15	0	.gitattributes
@@ -507,7 +507,7 @@ build-ci	A	188	0	scripts/http-dependencies.test.mjs
 build-ci	A	31	0	scripts/install-git-hooks.mjs
 build-ci	A	82	0	scripts/install-git-hooks.test.mjs
 build-ci	A	294	0	scripts/native-build-dependency-overrides.test.mjs
-build-ci	A	222	0	scripts/orca-preview-build.mjs
+build-ci	A	225	0	scripts/orca-preview-build.mjs
 build-ci	A	353	0	scripts/orca-preview-release.mjs
 build-ci	A	105	0	scripts/orca/build-brand-rasters.mjs
 build-ci	A	91	0	scripts/orca/install-icons.mjs
@@ -727,14 +727,14 @@ desktop-runtime	A	76	0	packages/desktop/src/features/notification-digest.ts
 desktop-runtime	M	43	26	packages/desktop/src/features/notifications.ts
 desktop-runtime	M	16	0	packages/desktop/src/login-shell-env.test.ts
 desktop-runtime	M	3	1	packages/desktop/src/login-shell-env.ts
-desktop-runtime	M	45	9	packages/desktop/src/main.ts
+desktop-runtime	M	48	9	packages/desktop/src/main.ts
 desktop-runtime	A	63	0	packages/desktop/src/settings/command-centre-settings.test.ts
 desktop-runtime	M	1	1	packages/desktop/src/settings/desktop-settings-commands.test.ts
 desktop-runtime	M	27	1	packages/desktop/src/settings/desktop-settings-commands.ts
 desktop-runtime	M	45	7	packages/desktop/src/settings/desktop-settings.test.ts
 desktop-runtime	M	45	7	packages/desktop/src/settings/desktop-settings.ts
 desktop-runtime	A	64	0	packages/desktop/src/window/renderer-crash-recovery.test.ts
-desktop-runtime	A	71	0	packages/desktop/src/window/renderer-crash-recovery.ts
+desktop-runtime	A	68	0	packages/desktop/src/window/renderer-crash-recovery.ts
 desktop-runtime	A	126	0	packages/server/src/server/bootstrap-interrupted-turn.test.ts
 desktop-runtime	M	75	5	packages/server/src/server/bootstrap.smoke.test.ts
 desktop-runtime	M	366	20	packages/server/src/server/bootstrap.ts

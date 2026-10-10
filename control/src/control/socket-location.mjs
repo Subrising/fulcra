@@ -11,7 +11,10 @@ const limit = 104;
 // when it is a private file owned by this user. The pipe is also locked to this user by pipe-acl.mjs.
 export const PIPE_FILE = "control.pipe";
 const PIPE_NAME = /^\\\\\.\\pipe\\fulcra-[A-Za-z0-9_-]{1,32}-[a-f0-9]{32}$/;
-export function pipeName(username = os.userInfo().username, suffix = randomBytes(16).toString("hex")) {
+export function pipeName(
+  username = os.userInfo().username,
+  suffix = randomBytes(16).toString("hex"),
+) {
   const user = username.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 32);
   return `\\\\.\\pipe\\fulcra-${user}-${suffix}`;
 }
@@ -47,7 +50,13 @@ export function readPipeName(home) {
 export function socketLocation(home, platform = process.platform) {
   // The name is secret and per start: see createPipeEndpoint and readPipeName. Nothing here is derivable.
   if (platform === "win32")
-    return { socket: null, directory: home, external: false, pipe: true, pipeFile: path.join(home, PIPE_FILE) };
+    return {
+      socket: null,
+      directory: home,
+      external: false,
+      pipe: true,
+      pipeFile: path.join(home, PIPE_FILE),
+    };
   const direct = path.join(home, "control.sock");
   if (Buffer.byteLength(direct) < limit)
     return { socket: direct, directory: home, external: false };
@@ -101,10 +110,6 @@ function validateSocket(socket) {
     if (error.code === "ENOENT") return;
     throw error;
   }
-  if (
-    !stat.isSocket() ||
-    stat.isSymbolicLink() ||
-    !privateOwned(stat, socket)
-  )
+  if (!stat.isSocket() || stat.isSymbolicLink() || !privateOwned(stat, socket))
     throw Error("Private owned socket required");
 }

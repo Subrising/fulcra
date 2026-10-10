@@ -26,11 +26,7 @@ export function secret(file) {
   try {
     const s = fs.fstatSync(fd),
       value = fs.readFileSync(fd, "utf8");
-    if (
-      !s.isFile() ||
-      !privateOwned(s, file) ||
-      !/^[A-Za-z0-9_-]{43}$/.test(value)
-    )
+    if (!s.isFile() || !privateOwned(s, file) || !/^[A-Za-z0-9_-]{43}$/.test(value))
       throw Error("Private receiver secret required");
     return value;
   } finally {

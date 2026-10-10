@@ -31,6 +31,7 @@ export function createWindowsCommandCentreKeychain(options: {
       text = await readFile(filePath, "utf8");
     } catch (error) {
       if ((error as { code?: string }).code === "ENOENT") return {};
+      // eslint-disable-next-line preserve-caught-error
       throw Error("Command Centre Keychain: operation-failed");
     }
     try {

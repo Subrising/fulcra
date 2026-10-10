@@ -20,7 +20,8 @@ import {
 // Run in the desktop session: a file made in an elevated SSH session is owned by Administrators, not by this user.
 const win = { skip: process.platform !== "win32" };
 const user = () => process.env.USERNAME;
-const icacls = (target, ...args) => execFileSync("icacls.exe", [target, ...args], { stdio: "pipe" });
+const icacls = (target, ...args) =>
+  execFileSync("icacls.exe", [target, ...args], { stdio: "pipe" });
 
 // A private folder: owner is this user, access only for this user and SYSTEM.
 function privateFolder() {
@@ -37,7 +38,9 @@ test("a controller pipe is gated until locked to this user, then serves", win, a
     c.once("data", (d) => c.end(`echo:${d.toString().trim()}\n`));
   });
   const server = net.createServer(gate.handler);
-  await new Promise((resolve, reject) => (server.once("error", reject), server.listen(name, resolve)));
+  await new Promise(
+    (resolve, reject) => (server.once("error", reject), server.listen(name, resolve)),
+  );
   const ask = (text) =>
     new Promise((resolve) => {
       const client = net.createConnection(name);
@@ -61,49 +64,73 @@ test("a controller pipe is gated until locked to this user, then serves", win, a
   }
 });
 
-test("owner must be exactly this user for private files; code may also be owned by the OS", win, () => {
-  const root = privateFolder();
-  // Program Files is owned by TrustedInstaller or Administrators, and its ACL names principals that cannot be translated
-  // to a name (ALL APPLICATION PACKAGES): the SID-based script must still answer, not throw.
-  const system = process.env.ProgramFiles ?? "C:\\Program Files";
-  try {
-    assert.equal(privateOwned(fs.lstatSync(root), root), true);
-    assert.equal(ownedByMe(fs.lstatSync(root), root), true);
-    assert.equal(windowsAclProbe(system, 0, "me"), false, "owned by the OS, not by me");
-    assert.equal(windowsAclProbe(system, PRIVATE_MASK, "me"), false);
-    assert.equal(windowsAclProbe(system, WRITE_MASK, "trusted"), true, "OS owner, others only read");
-    assert.equal(trustedCode(fs.lstatSync(system), system), true);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+test(
+  "owner must be exactly this user for private files; code may also be owned by the OS",
+  win,
+  () => {
+    const root = privateFolder();
+    // Program Files is owned by TrustedInstaller or Administrators, and its ACL names principals that cannot be translated
+    // to a name (ALL APPLICATION PACKAGES): the SID-based script must still answer, not throw.
+    const system = process.env.ProgramFiles ?? "C:\\Program Files";
+    try {
+      assert.equal(privateOwned(fs.lstatSync(root), root), true);
+      assert.equal(ownedByMe(fs.lstatSync(root), root), true);
+      assert.equal(windowsAclProbe(system, 0, "me"), false, "owned by the OS, not by me");
+      assert.equal(windowsAclProbe(system, PRIVATE_MASK, "me"), false);
+      assert.equal(
+        windowsAclProbe(system, WRITE_MASK, "trusted"),
+        true,
+        "OS owner, others only read",
+      );
+      assert.equal(trustedCode(fs.lstatSync(system), system), true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
-test("another principal with access fails; an inherit-only entry does not count; a missing path fails closed", win, () => {
-  const root = privateFolder();
-  try {
-    icacls(root, "/grant", "Everyone:(OI)(CI)(IO)F");
-    assert.equal(windowsAclProbe(root, PRIVATE_MASK, "me"), true, "inherit-only applies to children, not here");
-    icacls(root, "/grant", "Everyone:(OI)(CI)R");
-    assert.equal(windowsAclProbe(root, PRIVATE_MASK, "me"), false);
-    assert.equal(windowsAclProbe(root, WRITE_MASK, "trusted"), true, "read-only is not a write right");
-    assert.equal(windowsAclProbe(path.join(root, "missing"), 0, "me"), false);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+test(
+  "another principal with access fails; an inherit-only entry does not count; a missing path fails closed",
+  win,
+  () => {
+    const root = privateFolder();
+    try {
+      icacls(root, "/grant", "Everyone:(OI)(CI)(IO)F");
+      assert.equal(
+        windowsAclProbe(root, PRIVATE_MASK, "me"),
+        true,
+        "inherit-only applies to children, not here",
+      );
+      icacls(root, "/grant", "Everyone:(OI)(CI)R");
+      assert.equal(windowsAclProbe(root, PRIVATE_MASK, "me"), false);
+      assert.equal(
+        windowsAclProbe(root, WRITE_MASK, "trusted"),
+        true,
+        "read-only is not a write right",
+      );
+      assert.equal(windowsAclProbe(path.join(root, "missing"), 0, "me"), false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
-test("the pipe name file is private to this user: written by the controller, refused when widened", win, () => {
-  const home = privateFolder();
-  try {
-    const name = createPipeEndpoint(home);
-    assert.equal(readPipeName(home), name);
-    const file = path.join(home, PIPE_FILE);
-    icacls(file, "/grant", "Everyone:R");
-    assert.throws(() => readPipeName(home), /Private owned/);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
+test(
+  "the pipe name file is private to this user: written by the controller, refused when widened",
+  win,
+  () => {
+    const home = privateFolder();
+    try {
+      const name = createPipeEndpoint(home);
+      assert.equal(readPipeName(home), name);
+      const file = path.join(home, PIPE_FILE);
+      icacls(file, "/grant", "Everyone:R");
+      assert.throws(() => readPipeName(home), /Private owned/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  },
+);
 
 test("trustedCode follows the write rule on a real folder", win, () => {
   const root = privateFolder();

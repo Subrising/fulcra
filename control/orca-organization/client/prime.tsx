@@ -749,9 +749,7 @@ export function PrimeSurface(props: Props) {
               : "Fulcra is not answering yet; retrying."}
         </Text>
       )}
-      {fleet.data?.partial && (
-        <Text style={muted}>{partialSentence(fleet.data)}</Text>
-      )}
+      {fleet.data?.partial && <Text style={muted}>{partialSentence(fleet.data)}</Text>}
       <Text accessibilityRole="header" style={{ ...text, fontSize: 20, fontWeight: "600" }}>
         Main assistants
       </Text>

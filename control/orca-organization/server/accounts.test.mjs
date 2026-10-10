@@ -903,7 +903,8 @@ test("windows keychain: token goes on stdin, the file holds only ciphertext, rou
   await k.put(id, token);
   assert.equal(await k.get(id), token);
   assert.ok(!fs.readFileSync(path.join(dir, `${id}.dpapi`), "utf8").includes(token));
-  for (const c of calls) assert.ok(!JSON.stringify(c.args).includes(token), "token must not be in argv");
+  for (const c of calls)
+    assert.ok(!JSON.stringify(c.args).includes(token), "token must not be in argv");
   assert.equal(calls[0].input, token);
   await k.remove(id);
   assert.equal(await k.get(id), null);
