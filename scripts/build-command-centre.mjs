@@ -121,7 +121,7 @@ for (const [entry, filename] of sources) {
     const absolute = path.resolve(control, input);
     if (
       absolute.startsWith(control + path.sep) &&
-      !inScope(path.relative(control, absolute)) &&
+      !inScope(path.relative(control, absolute).split(path.sep).join("/")) &&
       !(await assertLockedControllerRegistryInput(control, absolute))
     )
       throw Error(`Excluded controller build input: ${input}`);

@@ -56,7 +56,7 @@ async function assertBuiltinPluginsStarted(listen) {
     await client.connect();
     const catalog = await client.getPluginCatalog();
     assert.deepEqual(
-      catalog.map(({ id }) => id).sort(),
+      (Array.isArray(catalog) ? catalog : catalog.plugins).map(({ id }) => id).sort(),
       [...builtinPlugins].sort(),
       "Every built-in plugin must start in the packaged desktop daemon",
     );
