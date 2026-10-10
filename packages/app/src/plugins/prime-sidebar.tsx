@@ -18,7 +18,8 @@ import { useOrganizationIntakePreferences } from "@/stores/organization-intake-p
 import { mergeMainAssistants, useMainAssistantReads } from "./home-computer";
 import { mainAssistant } from "../../../../control/orca-organization/shared/team";
 import { useSessionStore } from "@/stores/session-store";
-import { pluginRegistry, useControllerPlugin } from "./registry";
+import { useLeadsMemory, type RememberedLead } from "@/stores/leads-memory-store";
+import { pluginRegistry, useControllerPlugin, useUntrustedPlugins } from "./registry";
 import { PluginInstallationProvider } from "./installation-provider";
 import { usePluginHostNavigation } from "./host-navigation";
 import { buildPluginSurfaceRoute } from "./routes";
@@ -264,13 +265,15 @@ function LeadRows({
   );
   const main = directory ? mainAssistant(directory.primes) : null;
   const mainNode = main?.sessionId ? nodes.get(main.sessionId) : undefined;
-  const remote = useOtherHostLeads(serverId);
+  const { live: remote, remembered: rememberedLeads } = useOtherHostLeads(serverId);
   const sessions = useSessionStore((state) => state.sessions);
-  const seatedIds = new Set(
-    [main, ...leads, ...remote.map((lead) => lead.seat)].flatMap((seat) =>
+  const seatedIds = new Set([
+    ...[main, ...leads, ...remote.map((lead) => lead.seat)].flatMap((seat) =>
       seat?.sessionId ? [seat.sessionId] : [],
     ),
-  );
+    // A remembered lead stays one row even while its chat is still in this app's chat list.
+    ...rememberedLeads.map((lead) => lead.sessionId),
+  ]);
   const chatLeadRows = useMemo(
     () => chatLeads(sessions, seatedIds),
     // seatedIds is rebuilt each render from the values below.
@@ -326,6 +329,13 @@ function LeadRows({
           onBeforeNavigate={onBeforeNavigate}
         />
       ))}
+      {rememberedLeads.map((lead) => (
+        <RememberedLeadRow
+          key={`remembered:${lead.serverId}:${lead.seat}`}
+          lead={lead}
+          onBeforeNavigate={onBeforeNavigate}
+        />
+      ))}
       {remote.map((lead) => (
         <LeadRow
           key={`remote:${lead.serverId}:${lead.seat.seat}`}
@@ -366,52 +376,143 @@ export interface OtherHostLead {
  * computer's name. The same reads the pinned main assistant makes (role directory, projects, fleet), from each online
  * computer except the home computer. A computer that does not answer shows no rows; the home computer's leads stay.
  */
-function useOtherHostLeads(homeServerId: string): OtherHostLead[] {
+function useOtherHostLeads(homeServerId: string): {
+  live: OtherHostLead[];
+  remembered: ShownRememberedLead[];
+} {
   const hosts = useHosts();
   const ids = useMemo(
     () => hosts.map((host) => host.serverId).filter((id) => id !== homeServerId),
     [hosts, homeServerId],
   );
   const statuses = useHostRuntimeConnectionStatuses(ids);
+  const untrusted = useUntrustedPlugins();
+  const needsUpdate = (id: string) =>
+    untrusted.some(
+      (plugin) => plugin.serverId === id && plugin.id === pluginRegistry.controllerPluginId(id),
+    );
+  // An online computer whose Fulcra is not trusted here cannot be read; it is shown from memory.
   const key = ids
-    .filter((id) => statuses.get(id) === "online")
+    .filter((id) => statuses.get(id) === "online" && !needsUpdate(id))
     .sort()
     .join(",");
   const query = useFetchQuery({
     queryKey: ["fulcra-other-host-leads", key],
-    queryFn: async () => (await Promise.all(key.split(",").map(readHostLeads))).flat(),
+    queryFn: async () =>
+      Promise.all(
+        key
+          .split(",")
+          .map(async (serverId) => ({ serverId, leads: await readHostLeads(serverId) })),
+      ),
     enabled: key.length > 0,
     staleTimeMs: 30_000,
     refetchInterval: SIDEBAR_REFRESH_MS,
     dataShape: "list",
     retry: 1,
   });
-  return useMemo(
-    () =>
-      (key ? (query.data ?? []) : []).map(
-        (lead): OtherHostLead => ({
-          serverId: lead.serverId,
-          seat: lead.seat,
-          project: lead.project,
-          node: lead.node,
-          hostLabel:
-            hosts.find((host) => host.serverId === lead.serverId)?.label ?? "another computer",
-        }),
-      ),
-    [key, query.data, hosts],
+  const memory = useLeadsMemory((state) => state.byHost);
+  const remember = useLeadsMemory((state) => state.remember);
+  const labelOf = useCallback(
+    (id: string) => hosts.find((host) => host.serverId === id)?.label ?? "another computer",
+    [hosts],
   );
+  const results = useMemo(
+    () => new Map((key ? (query.data ?? []) : []).map((read) => [read.serverId, read.leads])),
+    [key, query.data],
+  );
+  // What each computer answered is kept, so it can be shown when the computer is away.
+  useEffect(() => {
+    for (const [id, leads] of results) {
+      if (leads === null) continue;
+      remember(
+        id,
+        leads.map((lead) => ({
+          seat: lead.seat.seat,
+          sessionId: lead.seat.sessionId ?? "",
+          project: lead.project,
+          title: chatName(lead.node, `Lead · ${lead.project}`),
+        })),
+      );
+    }
+  }, [results, remember]);
+  const live = useMemo(
+    () =>
+      [...results.entries()].flatMap(([id, leads]) =>
+        (leads ?? []).map(
+          (lead): OtherHostLead => ({
+            serverId: lead.serverId,
+            seat: lead.seat,
+            project: lead.project,
+            node: lead.node,
+            hostLabel: labelOf(id),
+          }),
+        ),
+      ),
+    [results, labelOf],
+  );
+  const shownRemembered = useMemo(
+    () =>
+      ids.flatMap((id): ShownRememberedLead[] => {
+        const note = rememberedNote(
+          labelOf(id),
+          needsUpdate(id),
+          statuses.get(id) === "online",
+          results.get(id),
+        );
+        // Read fine just now: the live rows show. Not read yet: remembered rows, not greyed, so nothing flickers.
+        if (note === LIVE) return [];
+        return (memory[id] ?? []).map(
+          (lead): ShownRememberedLead => ({
+            seat: lead.seat,
+            sessionId: lead.sessionId,
+            project: lead.project,
+            title: lead.title,
+            serverId: id,
+            note,
+          }),
+        );
+      }),
+    // needsUpdate reads `untrusted` and `ids`; both are listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ids, memory, results, statuses, untrusted, labelOf],
+  );
+  return { live, remembered: shownRemembered };
 }
 
-async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hostLabel">[]> {
+export interface ShownRememberedLead extends RememberedLead {
+  serverId: string;
+  /** Why the lead is greyed: "<computer> offline", "update Fulcra on <computer>", or null while it is being read. */
+  note: string | null;
+}
+
+const LIVE = Symbol("read now");
+
+/** LIVE when the computer was read now; else the reason its remembered leads are greyed (null: not read yet). */
+export function rememberedNote(
+  label: string,
+  needsUpdate: boolean,
+  online: boolean,
+  read: unknown[] | null | undefined,
+): string | null | typeof LIVE {
+  if (needsUpdate) return `update Fulcra on ${label}`;
+  if (!online) return `${label} offline`;
+  if (read === null) return `Command Centre not answering on ${label}`;
+  if (read === undefined) return null;
+  return LIVE;
+}
+
+async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hostLabel">[] | null> {
   const client = getHostRuntimeStore().getSnapshot(serverId)?.client;
-  if (!client) return [];
+  if (!client) return null;
   const plugin = pluginRegistry.controllerPluginId(serverId);
   try {
     const directory = (await client.invokePluginRpc(plugin, "organization.role-directory", {})) as {
       available?: boolean;
       projectSeats?: Seat[];
     } | null;
-    const seats = (directory?.available ? (directory.projectSeats ?? []) : []).filter(
+    // A reply that says it is unavailable is a failed read, not "no leads": the remembered leads stay.
+    if (!directory?.available) return null;
+    const seats = (directory.projectSeats ?? []).filter(
       (seat) => seat.state === "assigned" && seat.projectId,
     );
     if (!seats.length) return [];
@@ -421,8 +522,8 @@ async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hos
     ])) as [{ projects?: { id: string; name: string }[] } | null, Fleet | null];
     const names = new Map((projects?.projects ?? []).map((p) => [p.id, p.name]));
     const nodes = new Map((fleet?.nodes ?? []).map((node) => [node.id, node]));
-    // Leads of archived projects are hidden with their project, as on the home computer.
-    // A failed projects read hides nothing (the lead is then named "project").
+    // Leads of archived projects are hidden with their project, as on the home computer. A failed projects read
+    // hides nothing (the lead is then named "project").
     return seats
       .filter((seat) => !projects || names.has(seat.projectId!))
       .map((seat) => ({
@@ -432,7 +533,7 @@ async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hos
         node: seat.sessionId ? nodes.get(seat.sessionId) : undefined,
       }));
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -761,6 +862,51 @@ function ChatLeadRow({
   );
 }
 
+/**
+ * A lead another computer reported earlier, shown greyed because that computer is offline, needs an update, or did not
+ * answer. A press opens its chat, which says plainly when the computer is offline.
+ */
+function RememberedLeadRow({
+  lead,
+  onBeforeNavigate,
+}: {
+  lead: ShownRememberedLead;
+  onBeforeNavigate?: () => void;
+}) {
+  const navigation = usePluginHostNavigation(lead.serverId);
+  const open = useCallback(() => {
+    if (
+      navigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.sessionId }) ===
+      "requested"
+    )
+      onBeforeNavigate?.();
+  }, [lead.serverId, lead.sessionId, navigation, onBeforeNavigate]);
+  const status = ["Lead", lead.project, lead.note ?? "last known"].join(" · ");
+  return (
+    <View style={[styles.row, lead.note ? styles.greyed : null]}>
+      <View style={styles.line}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${lead.title} conversation. ${lead.note ?? ""}`.trim()}
+          onPress={open}
+          testID={`sidebar-remembered-lead-${lead.serverId}-${lead.seat}`}
+          style={styles.main}
+        >
+          <ThemedUsers size={14} uniProps={mutedColor} />
+          <View style={styles.text}>
+            <Text style={styles.title} numberOfLines={2}>
+              {lead.title}
+            </Text>
+            <Text style={styles.status} numberOfLines={2}>
+              {status}
+            </Text>
+          </View>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function LeadRow({
   seat,
   title,
@@ -939,6 +1085,7 @@ function NewWorkBox({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  greyed: { opacity: 0.5 },
   row: { paddingHorizontal: theme.spacing[2] },
   line: { flexDirection: "row", alignItems: "center" },
   main: {
