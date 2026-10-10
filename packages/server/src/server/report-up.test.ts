@@ -124,4 +124,34 @@ describe("report-up", () => {
     expect(f.delivered[0]!.prompt).toContain(`${"x".repeat(REPORT_UP_SNIPPET_CHARS)}…`);
     expect(f.delivered[0]!.prompt).not.toContain("x".repeat(REPORT_UP_SNIPPET_CHARS + 1));
   });
+
+  test("a canceled turn resets the state: the owner's next turn after a canceled notice turn is reported", async () => {
+    // Review 0.2.12 case A: a notice started the turn, the owner interrupted it, the owner's turn then ends.
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, { type: "turn_started", provider: "claude" });
+    f.stream(WORKER, {
+      type: "timeline",
+      provider: "claude",
+      item: { type: "user_message", text: "notice", clientMessageId: "paseo-notify:x" },
+    });
+    f.stream(WORKER, { type: "turn_canceled", provider: "claude" });
+    f.turn(WORKER, { text: "owner work" });
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("a canceled owner turn does not let the next notice-started turn report", async () => {
+    // Review 0.2.12 case B: the owner's turn is canceled, the next turn starts from a notice.
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, { type: "turn_started", provider: "claude" });
+    f.stream(WORKER, {
+      type: "timeline",
+      provider: "claude",
+      item: { type: "user_message", text: "owner work" },
+    });
+    f.stream(WORKER, { type: "turn_canceled", provider: "claude" });
+    f.turn(WORKER, { text: "notice", clientMessageId: "paseo-notify:y" });
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
 });

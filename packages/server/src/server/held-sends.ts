@@ -8,6 +8,19 @@ import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 
 export type HeldDelivery = () => Promise<void>;
 
+/** Messages one target can have waiting. A chat in a loop gets a clear refusal instead of filling memory. */
+export const MAX_HELD_PER_TARGET = 50;
+
+export class HeldQueueFullError extends Error {
+  readonly code = "HELD_QUEUE_FULL";
+  constructor(readonly agentId: string) {
+    super(
+      `Agent ${agentId} is busy and already has ${MAX_HELD_PER_TARGET} messages waiting. Send again after its turn ends.`,
+    );
+    this.name = "HeldQueueFullError";
+  }
+}
+
 const isRequeue = (error: unknown) =>
   (error as { code?: unknown } | null)?.code === "STEER_UNAVAILABLE";
 
@@ -66,6 +79,7 @@ export class HeldSends {
   /** Queues a delivery for the target; it runs now when the target is idle and nothing waits before it. */
   hold(targetId: string, deliver: HeldDelivery): number {
     const queue = this.queues.get(targetId) ?? [];
+    if (queue.length >= MAX_HELD_PER_TARGET) throw new HeldQueueFullError(targetId);
     queue.push(deliver);
     this.queues.set(targetId, queue);
     const position = queue.length;
