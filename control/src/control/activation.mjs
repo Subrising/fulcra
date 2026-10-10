@@ -1,6 +1,7 @@
 import { localMachine } from "../local-machine.mjs";
 import { portable } from "../portable-config.mjs";
 import fs from "node:fs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -22,7 +23,7 @@ export function verifyActivationAt(home, port) {
   )
     throw Error("Canonical controller home and valid native port required");
   const owner = fs.lstatSync(home);
-  if (!owner.isDirectory() || owner.uid !== process.getuid() || owner.mode & 0o077)
+  if (!owner.isDirectory() || !privateOwned(owner, home))
     throw Error("Private owned controller home required");
   const active = JSON.parse(fs.readFileSync(`${home}/admission/active.json`, "utf8"));
   const guard = bindGuardHome(

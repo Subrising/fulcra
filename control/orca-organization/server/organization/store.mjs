@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { ownedByMe } from "../owned.mjs";
 import path from "node:path";
 import {
   projectReferenceKey,
@@ -35,7 +36,7 @@ export class OrganizationStore {
       requireValue(
         fs.lstatSync(file).isFile() &&
           !fs.lstatSync(file).isSymbolicLink() &&
-          fs.lstatSync(file).uid === process.getuid(),
+          ownedByMe(fs.lstatSync(file), file),
         "Organization state must be an owned file",
       );
     const fd = fs.openSync(

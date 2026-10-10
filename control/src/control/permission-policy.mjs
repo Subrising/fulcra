@@ -1,6 +1,7 @@
 import { automaticMode, automaticPermissionProof } from "./automatic-permission.mjs";
 import { portable } from "../portable-config.mjs";
 import fs from "node:fs";
+import { ownedByMe, privateOwned } from "../../orca-organization/server/owned.mjs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 export const TASK_ROOT = portable.controller + "/tasks";
@@ -15,7 +16,7 @@ export function taskRoots(home = portable.controller) {
   try {
     if (fs.realpathSync(file) !== file) throw Error("path changed");
     const s = fs.lstatSync(file);
-    if (!s.isFile() || s.uid !== process.getuid() || s.mode & 0o077 || s.size > 4096)
+    if (!s.isFile() || !privateOwned(s, file) || s.size > 4096)
       throw Error("private bounded file required");
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
     if (
@@ -37,7 +38,7 @@ export function taskRoots(home = portable.controller) {
       )
         throw Error("canonical absolute root required");
       const d = fs.statSync(root);
-      if (!d.isDirectory() || d.uid !== process.getuid()) throw Error("owned directory required");
+      if (!d.isDirectory() || !ownedByMe(d, root)) throw Error("owned directory required");
       if (!roots.includes(root)) roots.push(root);
     }
     return Object.freeze(roots);

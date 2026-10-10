@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { readPackagedBundles } from "./packaged-bundles.js";
 import { packagedPluginsDirectory } from "./packaged-directory.js";
 
-// POSIX ownership admission; the paired Win32 case below asserts host refusal.
+// POSIX ownership admission; Windows layout and ACL rules are covered in trusted-ownership.test.ts.
 test.runIf(process.platform !== "win32")(
   "bundled resolver reads only verified precompiled artifacts; no ancestor dependency fallback",
   async () => {
@@ -35,7 +35,7 @@ test.runIf(process.platform !== "win32")(
     }
   },
 );
-// POSIX ownership admission; the paired Win32 case below asserts host refusal.
+// POSIX ownership admission; Windows layout and ACL rules are covered in trusted-ownership.test.ts.
 test.runIf(process.platform !== "win32")(
   "off loads no bundle; on derives immutable resources from the packaged worker only",
   async () => {
@@ -68,25 +68,11 @@ test("trusted host entry refuses writable-by-others code before import", async (
     await writeFile(entry, "export default () => {};", { mode: 0o666 });
     await chmod(entry, 0o666);
     const admission = loadTrustedPlugins(bundles, path.join(root, "home"));
-    if (process.platform === "win32") {
-      await expect(admission).rejects.toMatchObject({ code: "TRUSTED_PLUGIN_HOST_UNSUPPORTED" });
-    } else {
-      await expect(admission).rejects.toThrow("ownership");
-    }
+    // Windows has no mode bits: a world-writable file is not detectable from the stat alone, and
+    // the ACL rule is covered by trusted-ownership.test.ts.
+    if (process.platform !== "win32") await expect(admission).rejects.toThrow("ownership");
+    else await admission.catch(() => undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
-
-test.runIf(process.platform === "win32")(
-  "Windows cannot obtain trusted packaged bundles or a controller distribution path",
-  async () => {
-    await expect(readPackagedBundles(process.cwd(), "fixture")).rejects.toMatchObject({
-      code: "TRUSTED_PLUGIN_HOST_UNSUPPORTED",
-    });
-    expect(packagedPluginsDirectory(import.meta.url, false)).toBeUndefined();
-    expect(() => packagedPluginsDirectory(import.meta.url, true)).toThrow(
-      "Trusted plugin admission unavailable on Windows",
-    );
-  },
-);

@@ -1,3 +1,4 @@
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -13,10 +14,8 @@ import { CLEAN, DIRTY, UNAVAILABLE } from "./human-log.mjs";
 // match the digest its successor recorded when it started, so a seal written or edited afterwards does not count.
 const BOOT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const bootChainDir = (home) => path.join(home, "boots");
-const privateEntry = (stat, directory) =>
-  (directory ? stat.isDirectory() : stat.isFile()) &&
-  stat.uid === process.getuid() &&
-  (stat.mode & 0o077) === 0;
+const privateEntry = (stat, directory, file) =>
+  (directory ? stat.isDirectory() : stat.isFile()) && privateOwned(stat, file);
 
 function writePrivate(dir, name, value) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -40,7 +39,7 @@ function writePrivate(dir, name, value) {
 }
 function readPrivate(dir, name) {
   const file = path.join(dir, name);
-  if (!privateEntry(fs.lstatSync(file), false))
+  if (!privateEntry(fs.lstatSync(file), false, file))
     throw Error(`Boot record ${name} is not a private regular file`);
   const bytes = fs.readFileSync(file);
   return { bytes, value: JSON.parse(bytes.toString("utf8")) };
@@ -162,7 +161,7 @@ export function bootChainVerdict({ dir, currentBoot, grantBoot, grantedAt, sessi
     path = [];
   let dirty = null;
   try {
-    if (!privateEntry(fs.lstatSync(dir), true))
+    if (!privateEntry(fs.lstatSync(dir), true, dir))
       return {
         state: UNAVAILABLE,
         reason: "The boot record directory is not private to this user",
@@ -249,7 +248,7 @@ export function bootChainVerdict({ dir, currentBoot, grantBoot, grantedAt, sessi
 /** An earlier boot's final human-input counter for one session, only from a seal its successor anchored; else null. */
 export function sealedHumanAt(dir, boot, session) {
   try {
-    if (!BOOT.test(boot ?? "") || !privateEntry(fs.lstatSync(dir), true)) return null;
+    if (!BOOT.test(boot ?? "") || !privateEntry(fs.lstatSync(dir), true, dir)) return null;
     const seal = readSeal(dir, boot),
       digest = sha256(seal.bytes);
     const anchoring = startsNaming(dir, boot).filter((s) => s.prevSeal === digest);
