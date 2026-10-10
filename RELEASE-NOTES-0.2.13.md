@@ -11,13 +11,17 @@ Fulcra 0.2.13 is based on Paseo v0.11.0-beta.5.
 - Command Centre runs on Windows (x64). It was tested on one Windows 11 PC. Turn it on in Settings → Advanced → Background service.
 - The Command Centre secret and the account tokens are encrypted with Windows data protection (DPAPI, this Windows user only). There is no plain-text fallback. DPAPI protects them from other users, not from other programs that run as you.
 - The controller uses a named pipe with a random name, locked to this Windows user. File ownership checks use Windows access rules and fail closed.
-- When the app window crashes, the crash is logged and the window reloads, at most 3 times a minute. Child process crashes are logged too.
 - `scripts/windows-update` builds a release into a new folder, swaps it in, checks its health and rolls back on failure.
 - docs/windows.md says what was tested on Windows and what is not available.
+
+### App window (all platforms)
+
+- When the app window crashes, the crash is logged and the window reloads, at most 3 times a minute. This applies on macOS too. Child process crashes are logged too.
 
 ### Messages between chats
 
 - A held message is delivered in its sender's own trust context: a message from a chat counts as agent input, and a message from you counts as yours. Before, a held message from a chat could count as your input.
+- Every message from one chat to another now runs as agent input, also when the target chat is idle. In 0.2.12, a send to an idle chat ran as owner input. A trusted plugin that required owner input for these sends now sees agent input.
 - A held prompt from the MCP `send_agent_prompt` tool now re-checks the reporting line at delivery and tells the sending chat when it is refused or fails, as CLI sends already did.
 - When a held message from you fails, you see an error.
 - A chat can hold at most 50 waiting messages. One more is refused with a clear message.
@@ -25,7 +29,7 @@ Fulcra 0.2.13 is based on Paseo v0.11.0-beta.5.
 
 ### Models
 
-- A worker that a chat starts without a model gets Sonnet 5.5. Chats that you start keep Opus 5.5. A model that is given explicitly always wins.
+- A worker that a chat starts without a model gets Sonnet 5.5. Sessions that Command Centre starts without a model or a role model also get Sonnet 5.5. Chats that you start in the app keep Opus 5.5. A model that is given explicitly always wins.
 
 ### Command Centre
 
