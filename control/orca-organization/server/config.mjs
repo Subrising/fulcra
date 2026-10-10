@@ -259,6 +259,23 @@ export function validateConfig(c) {
   }
   return c;
 }
+/**
+ * Fulcra 0.2.11: the programme task that every local task hangs from. The controller checks a task by walking its
+ * parents up to this row; a local catalog without it refused every Team setup step ("Local task unavailable").
+ */
+export function localProgrammeRow({ companyId, programmeId }) {
+  return {
+    id: programmeId,
+    companyId,
+    parentId: null,
+    identifier: "ORCA-P",
+    title: "My projects",
+    status: "in_progress",
+    assigneeUserId: "local-board",
+    assigneeAgentId: null,
+    projectId: null,
+  };
+}
 export function firstRun(env = process.env) {
   const home = stateRoot(env);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -290,7 +307,7 @@ export function firstRun(env = process.env) {
     }
   };
   create("config.json", c);
-  create("tasks.json", { version: 1, issues: [], projects: [] });
+  create("tasks.json", { version: 1, issues: [localProgrammeRow(c.authority)], projects: [] });
   return loadConfig(env);
 }
 export function loadConfig(env = process.env) {
