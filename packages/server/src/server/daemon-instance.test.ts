@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir, uptime } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { readDaemonInstance, stopDaemonInstance } from "./daemon-instance.js";
@@ -94,3 +95,67 @@ describe("daemon instance identity across a reboot", () => {
     await expect(readFile(join(paseoHome, "paseo.pid"), "utf-8")).rejects.toThrow(/ENOENT/);
   });
 });
+
+describe.skipIf(process.platform === "win32")(
+  "stopping from inside the daemon's own process tree",
+  () => {
+    let paseoHome: string;
+    let supervisor: ChildProcess | undefined;
+
+    beforeEach(async () => {
+      paseoHome = await mkdtemp(join(tmpdir(), "paseo-own-session-"));
+    });
+
+    afterEach(async () => {
+      supervisor?.kill("SIGKILL");
+      supervisor = undefined;
+      await rm(paseoHome, { recursive: true, force: true });
+    });
+
+    const moduleUrl = new URL("./daemon-instance.ts", import.meta.url).href;
+    const tsx = fileURLToPath(
+      new URL("../../../../node_modules/tsx/dist/esm/index.mjs", import.meta.url),
+    );
+    /** Runs stopDaemonInstance in a new process and prints "stopped" or the error code. */
+    const stopScript = (home: string) =>
+      `import(${JSON.stringify(moduleUrl)}).then((m) => m.stopDaemonInstance(${JSON.stringify(home)}, { timeoutMs: 5_000 }))` +
+      `.then(() => console.log("stopped"), (e) => console.log(e.code ?? String(e)));`;
+    const output = (child: ChildProcess) =>
+      new Promise<string>((resolve) => {
+        let text = "";
+        child.stdout?.on("data", (chunk) => (text += String(chunk)));
+        child.once("exit", () => resolve(text.trim()));
+      });
+
+    /** A stand-in supervisor that records SIGTERM; with `nested`, it runs the stop as its own child (a session). */
+    const startSupervisor = (marker: string, nested: boolean) =>
+      spawn(
+        process.execPath,
+        [
+          "-e",
+          `process.on("SIGTERM", () => { require("node:fs").writeFileSync(${JSON.stringify(marker)}, "SIGTERM"); process.exit(0); });` +
+            (nested
+              ? `const c = require("node:child_process").spawn(process.execPath, ["--import", ${JSON.stringify(tsx)}, "-e", ${JSON.stringify(stopScript(paseoHome))}], { stdio: ["ignore", "inherit", "inherit"] });` +
+                `c.on("exit", () => setTimeout(() => process.exit(0), 200));`
+              : `setTimeout(() => {}, 120_000);`),
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+
+    test("a session of the daemon cannot stop it; a process outside can", async () => {
+      const marker = join(paseoHome, "supervisor-signalled");
+      supervisor = startSupervisor(marker, true);
+      await writeLock(paseoHome, lockFor(supervisor.pid!, new Date()));
+      expect(await output(supervisor)).toBe("OWN_DAEMON_SESSION");
+      expect(existsSync(marker)).toBe(false);
+
+      supervisor = startSupervisor(marker, false);
+      await writeLock(paseoHome, lockFor(supervisor.pid!, new Date()));
+      const outside = spawn(process.execPath, ["--import", tsx, "-e", stopScript(paseoHome)], {
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      expect(await output(outside)).toBe("stopped");
+      expect(existsSync(marker)).toBe(true);
+    }, 30_000);
+  },
+);

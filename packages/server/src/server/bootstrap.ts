@@ -197,6 +197,7 @@ import { loadOrCreateDaemonKeyPair } from "./daemon-keypair.js";
 import { createRelayRuntime, type RelayRuntime } from "./relay-runtime.js";
 import type { PushNotificationSender } from "./push/index.js";
 import { getOrCreateServerId } from "./server-id.js";
+import { DAEMON_SERVER_ID_ENV } from "./own-session-guard.js";
 import { resolveDaemonVersion } from "./daemon-version.js";
 import type { AgentClient, AgentProvider } from "./agent/agent-sdk-types.js";
 import type {
@@ -720,6 +721,8 @@ export async function createPaseoDaemon(
   const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({});
   const serverId = getOrCreateServerId(config.paseoHome, { logger });
+  // Agents and terminals inherit this, so `daemon stop` and `daemon restart` can refuse to end their own daemon.
+  process.env[DAEMON_SERVER_ID_ENV] = serverId;
   let wsServer: VoiceAssistantWebSocketServer | null = null;
   const hostIntegrations = createHostIntegrations({
     paseoHome: config.paseoHome,

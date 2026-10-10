@@ -1,8 +1,10 @@
 import { Command } from "commander";
 import {
+  assertNotInsideOwnDaemonSession,
   readDaemonInstance,
   isSameDaemonInstance,
   DaemonInstanceError,
+  type DaemonInstance,
 } from "@getpaseo/server/daemon-control";
 import { setTimeout as delay } from "node:timers/promises";
 import { connectToDaemon } from "../../utils/client.js";
@@ -20,6 +22,10 @@ export function daemonRestartCommand(): Command {
     ),
   )
     .option("--timeout <seconds>", "Replacement readiness deadline (default: 600)")
+    .option(
+      "--override-session-guard",
+      "Restart even when this shell may run inside a session of that daemon (operators outside sessions only)",
+    )
     .action(withOutput(runRestartCommand));
 }
 
@@ -52,6 +58,7 @@ export async function runRestartCommand(options: CommandOptions, _command: Comma
   let acknowledged = false;
   try {
     workerPid = (await client.getDaemonStatus({ timeout: remaining() })).pid;
+    guardOwnSession(options, serverId, instance, workerPid);
     await checkSupervisor();
     try {
       await client.restartServer("cli_restart", undefined, { timeout: remaining() });
@@ -110,6 +117,21 @@ export async function runRestartCommand(options: CommandOptions, _command: Comma
     code: "RESTART_NOT_CONFIRMED",
     message: `Replacement was not confirmed for ${describeDaemonTarget(target)}. Restart acknowledged: ${acknowledged}. Last observation: ${String(lastError)}`,
   };
+}
+
+function guardOwnSession(
+  options: CommandOptions,
+  serverId: string | undefined,
+  instance: DaemonInstance | null,
+  workerPid: number,
+): void {
+  assertNotInsideOwnDaemonSession({
+    action: "restart",
+    serverId,
+    // Process ids only mean something for a daemon on this computer.
+    daemonPids: options.daemonTarget.kind === "instance" ? [instance?.pid, workerPid] : [],
+    override: options.overrideSessionGuard === true,
+  });
 }
 
 function isReconnectFailure(error: unknown): boolean {
