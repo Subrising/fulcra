@@ -677,8 +677,14 @@ jobs:
       - name: Every job passed or was skipped
         env:
           RESULTS: ${{ toJSON(needs.*.result) }}
+          CHANGES: ${{ needs.changes.result }}
         run: |
           echo "$RESULTS"
+          # The path filter must have run. If it did not succeed, a skipped job may not mean "no changes".
+          if [ "$CHANGES" != "success" ]; then
+            echo "The changes job did not succeed ($CHANGES)."
+            exit 1
+          fi
           if echo "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then
             echo "A CI job failed or was cancelled."
             exit 1
