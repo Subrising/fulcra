@@ -7,6 +7,12 @@ import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { pluginRegistry } from "./registry";
 
+// FULCRA(plugin-host): one failed catalog read (a slow or dropped network on the phone, a host that is still starting)
+// used to leave the host with no plugins until the app restarted: no /account, no home computer. The read is
+// tried again by itself, 2 s, 4 s, 8 s ... up to 30 s apart, 6 times in all.
+export const CATALOG_READ_RETRIES = 6;
+export const catalogRetryDelay = (attempt: number) => Math.min(2000 * 2 ** attempt, 30_000);
+
 export function PluginCatalogSync({
   serverId,
   client,
@@ -25,6 +31,8 @@ export function PluginCatalogSync({
     let generation = 0;
     let connectionAvailable = connected;
     let reading: AbortController | undefined;
+    let failures = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     if (!connected) {
       pluginRegistry.suspendHost(serverId);
       return;
@@ -50,6 +58,7 @@ export function PluginCatalogSync({
       }
     });
     const refresh = (replacePluginId?: string) => {
+      clearTimeout(retryTimer);
       const epoch = ++generation;
       pluginRegistry.clearHostInputPolicy(serverId, client);
       reading?.abort();
@@ -82,12 +91,20 @@ export function PluginCatalogSync({
               trustedPlugins: catalog.trustedPlugins,
               audio: audio ?? undefined,
             });
+            failures = 0;
           }
         } catch {
           if (!cancelled && epoch === generation) {
             // A paging refusal never retries through the legacy catalog or preserves old action surfaces.
             pluginRegistry.suspendHost(serverId);
             pluginRegistry.markCatalogSettled(serverId);
+            if (failures < CATALOG_READ_RETRIES) {
+              retryTimer = setTimeout(
+                () => void refresh(replacePluginId),
+                catalogRetryDelay(failures),
+              );
+              failures++;
+            }
           }
         }
         return undefined;
@@ -121,6 +138,7 @@ export function PluginCatalogSync({
     });
     return () => {
       cancelled = true;
+      clearTimeout(retryTimer);
       generation++;
       pluginRegistry.clearHostInputPolicy(serverId, client);
       releaseConnection();

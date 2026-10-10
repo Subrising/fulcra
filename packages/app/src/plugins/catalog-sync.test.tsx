@@ -3,7 +3,7 @@ import React from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { PluginCatalogSync } from "./catalog-sync";
+import { PluginCatalogSync, CATALOG_READ_RETRIES, catalogRetryDelay } from "./catalog-sync";
 const state = vi.hoisted(() => ({
   prepare: vi.fn(async (entries: unknown[]) => entries),
   connected: false,
@@ -308,3 +308,79 @@ it.each([false, true])(
     }
   },
 );
+
+// Phone and desktop, 10 Oct: one failed catalog read left the host with no plugins until the app restarted.
+it("reads the catalog again after a failed read, and stops after the retry limit", async () => {
+  vi.useFakeTimers();
+  try {
+    state.connected = true;
+    state.supported = true;
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network dropped"))
+      .mockResolvedValue({ plugins: [{ id: "fresh", clientBundle: "b" }] });
+    const client = {
+      subscribeConnectionStatus: () => () => {},
+      getPluginCatalog: read,
+      observeEvents: () => ({
+        subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+        release: async () => {},
+      }),
+    } as unknown as DaemonClient;
+    await act(async () => {
+      render(React.createElement(PluginCatalogSync, { serverId: "host", client }));
+    });
+    expect(state.registry.installCatalog).not.toHaveBeenCalled();
+    expect(state.registry.markCatalogSettled).toHaveBeenCalledWith("host");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(catalogRetryDelay(0));
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(state.registry.installCatalog).toHaveBeenCalledOnce();
+    // A read that always fails is tried the set number of times, then left alone.
+    cleanup();
+    const failing = vi.fn().mockRejectedValue(new Error("refused"));
+    const hopeless = {
+      subscribeConnectionStatus: () => () => {},
+      getPluginCatalog: failing,
+      observeEvents: client.observeEvents,
+    } as unknown as DaemonClient;
+    await act(async () => {
+      render(React.createElement(PluginCatalogSync, { serverId: "host", client: hopeless }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(failing).toHaveBeenCalledTimes(1 + CATALOG_READ_RETRIES);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("does not read again after the view is gone", async () => {
+  vi.useFakeTimers();
+  try {
+    state.connected = true;
+    state.supported = true;
+    const read = vi.fn().mockRejectedValue(new Error("down"));
+    const client = {
+      subscribeConnectionStatus: () => () => {},
+      getPluginCatalog: read,
+      observeEvents: () => ({
+        subscribe: (handlers: { snapshot: () => void }) => handlers.snapshot(),
+        release: async () => {},
+      }),
+    } as unknown as DaemonClient;
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(React.createElement(PluginCatalogSync, { serverId: "host", client }));
+    });
+    view.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});

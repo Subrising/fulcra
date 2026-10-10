@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { useSessionStore } from "@/stores/session-store";
+import { selectWorkspace } from "@/stores/session-store-hooks/selectors";
 import { createPluginAgentActionContext, createPluginWorkspaceActionContext } from "../actions";
 import { createPluginClientStateSource } from "../client-state/source";
 import { createPluginNavigation } from "../navigation";
@@ -18,6 +20,15 @@ export function usePluginClientSlashCommands(input: {
   agentId: string;
 }): PluginClientSlashCommand[] {
   const installed = useInstalledPlugins();
+  // The commands are built from the chat and workspace records. Those arrive after the first render, so the lists
+  // must follow the store: a list built before they arrived used to stay empty ("/account is unavailable").
+  const hasWorkspace = useSessionStore((store) =>
+    Boolean(selectWorkspace(store, input.serverId, input.workspaceId ?? null)),
+  );
+  const hasAgent = useSessionStore((store) => {
+    const session = store.sessions[input.serverId];
+    return Boolean(session?.agents.get(input.agentId) ?? session?.agentDetails.get(input.agentId));
+  });
   return useMemo(() => {
     if (!input.workspaceId) return [];
     const workspaceId = input.workspaceId;
@@ -30,8 +41,9 @@ export function usePluginClientSlashCommands(input: {
       .filter((plugin) => plugin.serverId === input.serverId)
       .flatMap((plugin) =>
         plugin.clientSlashCommands.flatMap((contribution) => {
-          if (contribution.context === "agent" && !state.getAgent(input.agentId)) return [];
-          if (!state.getWorkspace(workspaceId)) return [];
+          if (contribution.context === "agent" && (!hasAgent || !state.getAgent(input.agentId)))
+            return [];
+          if (!hasWorkspace || !state.getWorkspace(workspaceId)) return [];
           return [
             {
               pluginId: plugin.id,
@@ -64,5 +76,5 @@ export function usePluginClientSlashCommands(input: {
         }),
       );
     return commands;
-  }, [input.agentId, input.serverId, input.workspaceId, installed]);
+  }, [input.agentId, input.serverId, input.workspaceId, installed, hasWorkspace, hasAgent]);
 }
