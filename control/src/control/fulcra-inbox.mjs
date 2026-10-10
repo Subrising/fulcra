@@ -13,6 +13,7 @@
 // human input, which the controller checks against the session's human-log and timeline. The grant is this channel's own private file (grants/channel/<channelId>.json): it
 // holds no operator secret and reaches only the channel methods, scoped by what the app allowed at pairing.
 import fs from "node:fs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { randomUUID } from "node:crypto";
@@ -24,7 +25,7 @@ function readGrant(file) {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
     const s = fs.fstatSync(fd);
-    if (!s.isFile() || s.uid !== process.getuid() || s.mode & 0o077 || s.size > 1024)
+    if (!s.isFile() || !privateOwned(s, file) || s.size > 1024)
       throw Error("The channel grant file must be private to you");
     const g = JSON.parse(fs.readFileSync(fd, "utf8"));
     if (g?.version !== 1 || !uuid(g.channelId) || !/^[A-Za-z0-9_-]{43}$/.test(g.capability))

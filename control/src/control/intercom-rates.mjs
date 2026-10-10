@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import { createHash } from "node:crypto";
 
 // Private journal accounting. Window rollover changes throughput, never a grant, generation or expiry.
@@ -156,8 +157,7 @@ export function readNativeRateSettings(file) {
     const stat = fs.fstatSync(fd);
     if (
       !stat.isFile() ||
-      stat.mode & 0o077 ||
-      stat.uid !== process.getuid() ||
+      !privateOwned(stat, file) ||
       stat.size > 8 * 1024 * 1024
     )
       throw Error("Unsafe native owner rate Settings store");

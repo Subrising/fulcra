@@ -150,7 +150,7 @@ Fulcra has no public app download. You build and package your own copy from sour
 | **macOS** (Apple silicon) | Build and package your own app (below)                                                                              | [Build, launch &amp; pair](docs/getting-started.md) |
 | **iPhone**                | Tested method: Xcode with your own free Apple Account (Personal Team); onboarding taps and re-signing not exercised | [iPhone guide](docs/ios-personal-device.md)         |
 | **Android**               | **Untested** source-derived APK build                                                                               | [Android guide](docs/android.md)                    |
-| **Windows** (x64)         | Build and CLI tested on one Windows 11 PC; Command Centre does not run on Windows yet                               | [Windows guide](docs/windows.md)                    |
+| **Windows** (x64)         | Build, CLI and Command Centre tested on one Windows 11 PC                                                          | [Windows guide](docs/windows.md)                    |
 
 [Platform evidence](docs/platform-installation-status.md) records what was run for each guide.
 

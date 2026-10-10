@@ -25,7 +25,11 @@ export function macHeldNotifier(
     new Promise((resolve, reject) =>
       execFile(file, args, { timeout: 10000 }, (e) => (e ? reject(e) : resolve())),
     ),
+  platform = process.platform,
 ) {
+  // The notice is a macOS user notification. Windows has no equivalent here: nothing is shown, and the message
+  // stays in Fulcra › Inbox.
+  if (platform === "win32") return async () => {};
   return async (n) => {
     const t = heldNoticeText(n),
       q = (v) => JSON.stringify(v); // the fixed template above (plain ASCII plus the › separator): JSON quoting is valid AppleScript quoting
@@ -54,7 +58,9 @@ export function macLimitNotifier(
     new Promise((resolve, reject) =>
       execFile(file, args, { timeout: 10000 }, (e) => (e ? reject(e) : resolve())),
     ),
+  platform = process.platform,
 ) {
+  if (platform === "win32") return async () => {};
   return async (n) => {
     const t = limitNoticeText(n),
       q = (v) => JSON.stringify(v);

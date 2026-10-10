@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 export const canonical = (x) =>
   JSON.stringify(x, (_k, v) =>
@@ -27,8 +28,7 @@ export function secret(file) {
       value = fs.readFileSync(fd, "utf8");
     if (
       !s.isFile() ||
-      s.uid !== process.getuid() ||
-      s.mode & 0o077 ||
+      !privateOwned(s, file) ||
       !/^[A-Za-z0-9_-]{43}$/.test(value)
     )
       throw Error("Private receiver secret required");
