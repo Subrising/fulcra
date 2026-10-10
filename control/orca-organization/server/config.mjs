@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { privateOwned } from "./owned.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 const object = (v, keys, name, required = []) => {
@@ -71,7 +72,7 @@ export function privateJson(file, limit = 1048576) {
   );
   try {
     const s = fs.fstatSync(fd);
-    if (!s.isFile() || s.uid !== process.getuid() || s.mode & 0o077 || s.size > limit)
+    if (!s.isFile() || !privateOwned(s, file) || s.size > limit)
       throw Error("Private owned bounded file required");
     return JSON.parse(fs.readFileSync(fd, "utf8"));
   } finally {
@@ -92,8 +93,7 @@ function privateRoot(home) {
   if (
     fs.realpathSync(home) !== home ||
     !s.isDirectory() ||
-    s.uid !== process.getuid() ||
-    s.mode & 0o077
+    !privateOwned(s, home)
   )
     throw Error("ORCA_HOME must be a canonical private owned directory (mode 700)");
 }

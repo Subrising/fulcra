@@ -111,10 +111,12 @@ test("memory entry paths work when the installed package directory contains spac
       fs.copyFileSync(new URL(name, import.meta.url), path.join(source, name));
     const server = path.join(home, "orca-organization/server");
     fs.mkdirSync(server, { recursive: true });
-    fs.copyFileSync(
-      new URL("../orca-organization/server/config.mjs", import.meta.url),
-      path.join(server, "config.mjs"),
-    );
+    // config.mjs checks private files through the shared ownership helper.
+    for (const name of ["config.mjs", "owned.mjs"])
+      fs.copyFileSync(
+        new URL(`../orca-organization/server/${name}`, import.meta.url),
+        path.join(server, name),
+      );
     const { canonicalMemoryConfig } = await import(
       pathToFileURL(path.join(source, "canonical-memory-route.mjs")).href
     );

@@ -68,7 +68,21 @@ export function accountOf(
   s: AccountState,
   sessionId: string,
 ): { id: string; name: string; provider: string } | null;
-export function createKeychain(o?: { keychain?: string | null; security?: string }): {
+export function createWindowsKeychain(o?: {
+  dir?: string;
+  powershell?: string;
+  runner?: (bin: string, args: string[], input?: string) => Promise<string>;
+}): {
+  put(id: string, secret: string): Promise<void>;
+  get(id: string): Promise<string | null>;
+  remove(id: string): Promise<void>;
+};
+export function windowsKeychainDir(env?: NodeJS.ProcessEnv): string;
+export function createKeychain(o?: {
+  keychain?: string | null;
+  security?: string;
+  platform?: string;
+}): {
   put(id: string, secret: string): Promise<void>;
   get(id: string): Promise<string | null>;
   remove(id: string): Promise<void>;

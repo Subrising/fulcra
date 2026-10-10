@@ -1,3 +1,4 @@
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 // Controller-side reader for the pinned guard's durable human-input log (STAGE2-DESIGN.md s2.8). Read-only.
@@ -18,10 +19,8 @@ export const CLEAN = "clean",
   UNAVAILABLE = "unavailable";
 const BOOT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HEADER = "v,boot,pid,prev,prevBytes,prevSha256,receipts";
-const privateEntry = (stat, directory) =>
-  (directory ? stat.isDirectory() : stat.isFile()) &&
-  stat.uid === process.getuid() &&
-  (stat.mode & 0o077) === 0;
+const privateEntry = (stat, directory, file) =>
+  (directory ? stat.isDirectory() : stat.isFile()) && privateOwned(stat, file);
 
 // Parses one log. Returns every well-formed record it could read even when the file is faulty, together
 // with the first fault, so the caller can still find evidence of a human in a damaged file.
@@ -35,7 +34,7 @@ export function readHumanLog(dir, boot) {
   const file = `${dir}/${boot}.log`;
   let bytes;
   try {
-    if (!privateEntry(fs.lstatSync(file), false))
+    if (!privateEntry(fs.lstatSync(file), false, file))
       return fault(`Human-input log ${boot} is not a private regular file`);
     bytes = fs.readFileSync(file);
   } catch {
@@ -138,7 +137,7 @@ export function humanLogVerdict({ dir, currentBoot, grantBoot, grantedAt, sessio
     path = [];
   let dirty = null;
   try {
-    if (!privateEntry(fs.lstatSync(dir), true))
+    if (!privateEntry(fs.lstatSync(dir), true, dir))
       return {
         state: UNAVAILABLE,
         reason: "The human-input log directory is not private to this user",

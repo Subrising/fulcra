@@ -1,8 +1,25 @@
-# Windows source build — ALL WINDOWS STEPS UNTESTED
+# Windows source build
 
-No Windows machine or actual Windows build/device run was available for this documentation batch. The following commands come from the committed scripts and electron-builder targets; **none is claimed working or verified on Windows**. v0.2.0 has no Windows binary asset. The existing [OPEN `cc/win-channel-fix` branch](https://github.com/Subrising/fulcra/tree/cc/win-channel-fix) is not merged and is not a promise that the channel/lifecycle problem is fixed.
+Tested once, on 10 Oct 2026: Windows 11 Pro x64, Node.js 24.21.0, npm 11.19.0, no Visual Studio and no Python. The source at v0.2.11 built, the packaged smoke passed, and the CLI started the daemon and ran a Claude chat (the chat needs a signed-in Claude CLI). Do not package on macOS and infer Windows results. Windows ARM64 is not tested.
 
-Use a real Windows x64 machine with Node.js 24, npm 11.12.1 and the native build tools required by Electron dependencies. Do not package on macOS and infer Windows native/runtime acceptance. Windows ARM64 requires its own actual checks despite declared targets.
+**Command Centre works on Windows** (tested on that PC): turn it on in Settings → Advanced → Background service. The sidebar then shows Fulcra, Team map and Leads, and Settings → Accounts & models lists your Claude accounts. Windows needs its own pieces for what macOS gets from the Keychain, POSIX file modes and Unix sockets:
+
+- The Command Centre secret and each account token are encrypted with Windows data protection (DPAPI, this Windows user only). There is no plain-text fallback.
+- Trusted plugin files and private folders are checked by their Windows permissions (ACL): only you, SYSTEM, Administrators or TrustedInstaller may own or change them. A folder with a wider permission is refused.
+- The controller listens on a named pipe, `\\.\pipe\fulcra-<user>-<id>`, locked to your user.
+
+**Stop the daemon before you kill the app.** Quit the app, or run `paseo.cmd daemon stop`: both remove the controller lock. If the app or controller is killed hard (for example `taskkill`), `command-centre\process.lock` stays. The controller then refuses to start and the daemon log says "Lock belongs to another child". Make sure that no `controller.mjs` process runs, then delete that file. This is the same rule as on macOS.
+
+**Known limits on Windows** (reviewed, accepted for now):
+
+- Between the moment the controller creates its pipe and the moment the pipe is locked to your user, a connection can be made. The controller destroys every connection it accepts before the lock, and the pipe name is random and known only to a private file, so this window serves nothing.
+- The permission checks read a file's permissions and use them later. On a network drive, or if a file changes between the check and the use, the check can be out of date. The cache of an answer is keyed by the file state (`ctime`), which a network drive may not update. Install Fulcra on a local drive.
+- The permission checks start PowerShell and wait for it. They block the controller for a short time at start and when a new file is first checked.
+- Windows data protection (DPAPI) protects a secret from other users, not from other programs that run as you. Any process you start can decrypt the Command Centre secret and the account tokens.
+
+**Not available on Windows:** environment scripts and Radius scratch runs (they need POSIX process groups and file modes), the macOS desktop notification for held messages, and the bounded worker-artifact reader (it needs Python 3). Each of these refuses or shows nothing, with a clear reason.
+
+Use a real Windows x64 machine with Node.js 24 and npm 11. Put Node.js 24 first in `PATH`; Node.js 22 fails the engine check. A built desktop app starts no daemon by itself: start one with `paseo.cmd daemon start` in your desktop session, or enable it in Settings. A daemon started from an SSH session stops when that session closes.
 
 ## Source/dependency setup
 
@@ -11,7 +28,7 @@ PowerShell, from your own checkout:
 ```powershell
 git clone https://github.com/Subrising/fulcra.git
 cd fulcra
-git checkout v0.2.0
+git checkout v0.2.11
 npm ci
 npm --prefix control ci
 ```
@@ -26,7 +43,7 @@ The committed preview script requires native Windows x64, builds the desktop sta
 node scripts/orca-preview-build.mjs windows
 ```
 
-**UNTESTED.** The declared output is an unsigned per-user NSIS installer and portable ZIP under `artifacts/orca-preview/windows`. The preview configuration extends the normal builder configuration; NSIS is not a verified public download. The script runs its packaged smoke if a build is reached, but no such Windows result is supplied here. Do not bypass failures, substitute another platform's native packages or force the unresolved channel branch into this docs change.
+The output is an unsigned per-user NSIS installer and portable ZIP under `artifacts/orca-preview/windows`. The preview configuration extends the normal builder configuration; NSIS is not a verified public download. The script runs its packaged smoke if a build is reached, but no such Windows result is supplied here. Do not bypass failures, substitute another platform's native packages or force the unresolved channel branch into this docs change.
 
 For a source-derived explicit target after building/staging the required server, Command Centre, app and desktop main:
 
@@ -39,7 +56,7 @@ cd packages/desktop
 npm exec -- electron-builder --config electron-builder.preview.yml --win nsis zip --x64 --publish never
 ```
 
-This alternate sequence is also **UNTESTED**, not a repair or a claim that the wrapper works on Windows. No signing identity or auto-update feed is provided. Keep source/dependency declarations intact and retain actual errors for a Windows owner to reproduce.
+This alternate sequence was not run; the wrapper above was. No signing identity or auto-update feed is provided. Keep source/dependency declarations intact and retain actual errors for a Windows owner to reproduce.
 
 ## Actual compatibility CLI syntax
 

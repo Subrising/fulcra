@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 export function readCredential(file) {
   const fd = fs.openSync(
     file,
@@ -6,7 +7,7 @@ export function readCredential(file) {
   );
   try {
     const s = fs.fstatSync(fd);
-    if (!s.isFile() || s.uid !== process.getuid() || s.mode & 0o077 || s.size !== 43)
+    if (!s.isFile() || !privateOwned(s, file) || s.size !== 43)
       throw Error("Private owned controller credential required");
     const value = fs.readFileSync(fd, "utf8");
     if (

@@ -1,6 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import path from "node:path";
 import type { CommandCentreKeychain } from "./command-centre-auth.js";
+import { createWindowsCommandCentreKeychain } from "./command-centre-keychain-windows.js";
 const execute = promisify(execFile);
 
 export interface KeychainCommandResult {
@@ -93,5 +95,25 @@ const command: KeychainCommand = async (args, input) => {
     child.stdin.end(input);
   });
 };
+/** Windows has no macOS Keychain: the secret is wrapped with safeStorage (DPAPI) instead. */
+function createWindowsStore(): CommandCentreKeychain {
+  let inner: CommandCentreKeychain | null = null;
+  async function open() {
+    if (!inner) {
+      const { app, safeStorage } = await import("electron");
+      inner = createWindowsCommandCentreKeychain({
+        safeStorage,
+        filePath: path.join(app.getPath("userData"), "command-centre-secrets.json"),
+      });
+    }
+    return inner;
+  }
+  return {
+    get: async (service) => (await open()).get(service),
+    set: async (service, password) => (await open()).set(service, password),
+  };
+}
+
 /** Tests inject a command adapter and never access an OS Keychain. */
-export const commandCentreKeychain = createCommandCentreKeychain(command);
+export const commandCentreKeychain: CommandCentreKeychain =
+  process.platform === "win32" ? createWindowsStore() : createCommandCentreKeychain(command);

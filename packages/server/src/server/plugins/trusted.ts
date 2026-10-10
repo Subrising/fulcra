@@ -1,5 +1,5 @@
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
-import { requireTrustedBundleHost } from "./trusted-platform.js";
+import { unsafeOwnership } from "./trusted-ownership.js";
 import { NativeQueuedMessageReceiptSchema } from "@getpaseo/protocol/native-intercom";
 import type { ControllerDistribution } from "./controller-distribution.js";
 import { admissionRequest, admissionCheck, admissionDiagnostic } from "./admission-outcome.js";
@@ -1116,7 +1116,6 @@ export async function loadTrustedPlugins(
   knownAgentIds: readonly string[] = [],
   management?: ManagementStartup,
 ): Promise<TrustedPlugins> {
-  if (directory) requireTrustedBundleHost();
   // U7: remote account actions are audited in this home, for the owner.
   const authority = new TrustedPlugins(management, {
     accountActions: new AccountActionsAudit(paseoHome),
@@ -1168,11 +1167,7 @@ export async function loadTrustedPlugins(
 async function verifyTrustedEntryOwnership(bundleDirectory: string, entry: string) {
   for (const file of [bundleDirectory, entry]) {
     const stat = await lstat(file);
-    if (
-      stat.isSymbolicLink() ||
-      stat.mode & 0o022 ||
-      (stat.uid !== 0 && stat.uid !== process.getuid?.())
-    )
+    if (stat.isSymbolicLink() || unsafeOwnership(file, stat))
       throw Error("Unsafe trusted bundle ownership");
   }
 }

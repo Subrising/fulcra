@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   update,
   addAccount,
@@ -882,4 +883,43 @@ test("Keychain lookup distinguishes missing item from transient refusal without 
           ),
       );
   }
+});
+
+// ---- Windows DPAPI backend (a fake runner stands in for PowerShell; no real DPAPI call)
+import { createWindowsKeychain } from "./accounts.mjs";
+const winRunner = (calls) => async (bin, args, input) => {
+  calls.push({ bin, args, input });
+  const script = args[args.length - 1];
+  return script.includes("::Protect")
+    ? Buffer.from(`enc:${input}`).toString("base64")
+    : Buffer.from(input.trim(), "base64").toString().replace(/^enc:/, "");
+};
+test("windows keychain: token goes on stdin, the file holds only ciphertext, round-trip works", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "win-kc-"));
+  const calls = [];
+  const k = createWindowsKeychain({ dir, powershell: "powershell.exe", runner: winRunner(calls) });
+  const id = randomUUID();
+  const token = "sk-ant-oat01-" + "A".repeat(40);
+  await k.put(id, token);
+  assert.equal(await k.get(id), token);
+  assert.ok(!fs.readFileSync(path.join(dir, `${id}.dpapi`), "utf8").includes(token));
+  for (const c of calls) assert.ok(!JSON.stringify(c.args).includes(token), "token must not be in argv");
+  assert.equal(calls[0].input, token);
+  await k.remove(id);
+  assert.equal(await k.get(id), null);
+});
+test("windows keychain: refuses bad ids and tokens; a failing runner is unavailable, not a missing token", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "win-kc-"));
+  const id = randomUUID();
+  const ok = createWindowsKeychain({ dir, runner: winRunner([]) });
+  await assert.rejects(ok.put("nope", "x".repeat(30)), /Bad account id/);
+  await assert.rejects(ok.put(id, "short"), /does not look like a token/);
+  await ok.put(id, "sk-ant-oat01-" + "B".repeat(40));
+  const broken = createWindowsKeychain({
+    dir,
+    runner: async () => {
+      throw Error("boom");
+    },
+  });
+  await assert.rejects(broken.get(id), (e) => e.code === "ACCOUNT_KEYCHAIN_UNAVAILABLE");
 });
