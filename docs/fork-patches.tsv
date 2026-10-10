@@ -553,6 +553,8 @@ core-fixes	M	2	0	packages/app/e2e/browser/settings-toggle-tab-regression.spec.ts
 core-fixes	M	9	14	packages/app/e2e/browser/viewed-agent-timelines.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
 core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
+core-fixes	A	40	0	packages/cli/src/commands/agent/archive.test.ts
+core-fixes	M	21	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
