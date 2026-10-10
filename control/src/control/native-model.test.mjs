@@ -146,3 +146,45 @@ test("a session the controller creates comes up Medium and Auto, not High and Al
   assert.equal(chosen.ask, null, "no ask pin, which is what re-imposes prompting on top of auto");
   assert.equal(chosen.options, undefined);
 });
+
+// Fulcra 0.2.13: a worker the controller creates gets the host's worker default, when the host names one.
+test("a session the controller creates uses the host's worker default, else the host's default", async () => {
+  const withWorker = {
+    provider: "claude",
+    models: [
+      { provider: "claude", id: "claude-opus-5-5", label: "Opus 5.5", isDefault: true },
+      {
+        provider: "claude",
+        id: "claude-sonnet-5-5",
+        label: "Sonnet 5.5",
+        metadata: { workerDefault: true },
+      },
+    ],
+  };
+  assert.equal(
+    await resolveProviderModel(hostClient(withWorker), "claude", "/owned"),
+    "claude/claude-sonnet-5-5",
+  );
+  // An old Claude Code does not offer it: the host's default is used.
+  assert.equal(
+    await resolveProviderModel(
+      hostClient({ ...withWorker, models: withWorker.models.slice(0, 1) }),
+      "claude",
+      "/owned",
+    ),
+    "claude/claude-opus-5-5",
+  );
+  // An unselectable worker default is ignored; an explicit provider/model is returned as given.
+  const hidden = {
+    ...withWorker,
+    models: [withWorker.models[0], { ...withWorker.models[1], isSelectable: false }],
+  };
+  assert.equal(
+    await resolveProviderModel(hostClient(hidden), "claude", "/owned"),
+    "claude/claude-opus-5-5",
+  );
+  assert.equal(
+    await resolveProviderModel(hostClient(withWorker), "claude/claude-opus-5-5", "/owned"),
+    "claude/claude-opus-5-5",
+  );
+});

@@ -2449,20 +2449,46 @@ test("X4: creating a session without a thinking option stores the model's defaul
     workspaceId: undefined,
   });
 
-  // FULCRA(default-model): no model named means Sonnet 5.5, which also defaults to medium thinking.
-  expect(snapshot.config.model).toBe("claude-sonnet-5-5");
+  // FULCRA(default-model): a chat the owner makes keeps Opus 5.5.
+  expect(snapshot.config.model).toBe("claude-opus-5-5");
   expect(snapshot.config.thinkingOptionId).toBe("medium");
   expect(f.client.createdConfigs[0]?.thinkingOptionId).toBe("medium"); // the session was launched with it
   await f.manager.closeAgent(snapshot.id);
   expect((await f.storage.get(snapshot.id))?.config?.thinkingOptionId).toBe("medium"); // and persisted
 });
 
-test("an explicit model always wins over the default", async () => {
-  const f = defaultModeFixture("x4-explicit-model-");
+// FULCRA(default-model): a worker that a chat starts without a model gets Sonnet 5.5.
+test.each([
+  ["a CLI run by a chat", { "fulcra.reports-to": "lead-1" }],
+  ["an MCP create by a chat", { "paseo.parent-agent-id": "lead-1" }],
+  ["a Command Centre spawn", { "fulcra.parent-session": "lead-1" }],
+])("a worker started by a chat (%s) without a model gets Sonnet 5.5", async (_name, labels) => {
+  const f = defaultModeFixture("worker-default-");
+  const snapshot = await f.manager.createAgent({ provider: "claude", cwd: f.workdir }, undefined, {
+    workspaceId: undefined,
+    labels,
+  });
+  expect(snapshot.config.model).toBe("claude-sonnet-5-5");
+});
+
+test("a chat the owner makes, or a line to the owner, keeps the Opus default", async () => {
+  for (const labels of [undefined, {}, { "fulcra.reports-to": "owner" }]) {
+    const f = defaultModeFixture("owner-default-");
+    const snapshot = await f.manager.createAgent(
+      { provider: "claude", cwd: f.workdir },
+      undefined,
+      { workspaceId: undefined, ...(labels ? { labels } : {}) },
+    );
+    expect(snapshot.config.model).toBe("claude-opus-5-5");
+  }
+});
+
+test("an explicit model always wins, for a worker too", async () => {
+  const f = defaultModeFixture("explicit-model-");
   const snapshot = await f.manager.createAgent(
     { provider: "claude", cwd: f.workdir, model: "claude-opus-5-5" },
     undefined,
-    { workspaceId: undefined },
+    { workspaceId: undefined, labels: { "fulcra.reports-to": "lead-1" } },
   );
   expect(snapshot.config.model).toBe("claude-opus-5-5");
 });

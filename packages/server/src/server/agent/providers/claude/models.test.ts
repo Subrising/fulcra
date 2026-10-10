@@ -79,14 +79,19 @@ describe("getClaudeModels", () => {
     const models = getClaudeModels();
     const defaults = models.filter((m) => m.isDefault);
     expect(defaults).toHaveLength(1);
-    // FULCRA(default-model): a session started without a model gets Sonnet 5.5. Opus is chosen on purpose.
-    expect(defaults[0].id).toBe("claude-sonnet-5-5");
-    expect(models.some((m) => m.id === "claude-opus-5-5")).toBe(true);
+    // FULCRA(default-model): a new chat the owner makes keeps Opus 5.5 as the default.
+    expect(defaults[0].id).toBe("claude-opus-5-5");
   });
 
-  it("falls back to Opus 5.5 as default when this Claude Code is too old for Sonnet 5.5", () => {
-    const defaults = getClaudeModels("2.1.283").filter((m) => m.isDefault);
-    expect(defaults.map((m) => m.id)).toEqual(["claude-opus-5-5"]);
+  it("marks Sonnet 5.5 as the worker default, only when this Claude Code offers it", () => {
+    const workerDefaults = (version?: string) =>
+      getClaudeModels(version)
+        .filter((m) => m.metadata?.workerDefault === true)
+        .map((m) => m.id);
+    expect(workerDefaults()).toEqual(["claude-sonnet-5-5"]);
+    expect(workerDefaults("2.1.284")).toEqual(["claude-sonnet-5-5"]);
+    // Too old for Sonnet 5.5: no worker default, so a worker falls back to the normal default.
+    expect(workerDefaults("2.1.283")).toEqual([]);
   });
 
   it("defines context window sizes in the catalog", () => {
