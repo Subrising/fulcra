@@ -222,7 +222,7 @@ jobs:
           ORCA_HOME: ${{ runner.temp }}/fulcra-controller-contracts
         run: |
           node --input-type=module -e 'import { firstRun } from "./control/src/config.mjs"; firstRun({ ORCA_HOME: process.env.ORCA_HOME });'
-          node --test control/src/control/tool-surface.test.mjs control/src/control/provider-recovery.test.mjs control/src/control/role-channels.test.mjs control/src/control/recovery.test.mjs control/src/control/compaction-loops.test.mjs control/src/control/worktree-lifecycle-runtime.test.mjs control/src/control/worktree-lifecycle.test.mjs control/src/control/command-parser.test.mjs control/src/control/rpc-methods.test.mjs control/src/control/team.test.mjs
+          node --test control/src/control/tool-surface.test.mjs control/src/control/provider-recovery.test.mjs control/src/control/role-channels.test.mjs control/src/control/recovery.test.mjs control/src/control/compaction-loops.test.mjs control/src/control/worktree-lifecycle-runtime.test.mjs control/src/control/worktree-lifecycle.test.mjs control/src/control/command-parser.test.mjs control/src/control/rpc-methods.test.mjs control/src/control/team.test.mjs control/src/control/owned-child-files.test.mjs control/src/config.test.mjs
           npx tsx --test control/orca-organization/server/team-setup.test.ts
 
       - name: Run Hub CLI/daemon contract
