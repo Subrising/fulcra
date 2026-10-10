@@ -8,6 +8,8 @@ interface ClaudeModelManifestEntry {
   label: string;
   description: string;
   defaultPriority?: number;
+  /** The model a worker that a chat starts gets when it names none. */
+  workerDefault?: boolean;
   minimumClaudeCodeVersion?: string;
   contextWindowMaxTokens?: number;
   effortLevels?: readonly ClaudeEffortLevel[];
@@ -105,6 +107,9 @@ export const CLAUDE_MODEL_MANIFEST = [
     id: "claude-sonnet-5-5",
     label: "Sonnet 5.5",
     description: "Sonnet 5.5 · Best for everyday tasks",
+    // FULCRA(default-model): a worker that a chat starts without naming a model gets this one. A new chat made by
+    // the owner keeps the default (Opus 5.5). An explicit model always wins. Read from the model's metadata.
+    workerDefault: true,
     minimumClaudeCodeVersion: "2.1.284",
     defaultThinkingOptionId: "medium",
     contextWindowMaxTokens: 1_000_000,
@@ -253,6 +258,9 @@ export function getClaudeManifestModels(claudeCodeVersion?: string): AgentModelD
     }
     if (model === defaultModel) {
       definition.isDefault = true;
+    }
+    if (model.workerDefault === true) {
+      definition.metadata = { ...definition.metadata, workerDefault: true };
     }
     if (model.contextWindowMaxTokens !== undefined) {
       definition.contextWindowMaxTokens = model.contextWindowMaxTokens;
