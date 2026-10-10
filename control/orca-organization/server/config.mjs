@@ -90,11 +90,7 @@ function privateRoot(home) {
       );
     throw e;
   }
-  if (
-    fs.realpathSync(home) !== home ||
-    !s.isDirectory() ||
-    !privateOwned(s, home)
-  )
+  if (fs.realpathSync(home) !== home || !s.isDirectory() || !privateOwned(s, home))
     throw Error("ORCA_HOME must be a canonical private owned directory (mode 700)");
 }
 // DESIGN-NEXT-BUILD A2: role-aware session defaults. The closed set of creation roles; per role an optional preferred

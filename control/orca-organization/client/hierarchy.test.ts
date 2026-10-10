@@ -729,7 +729,10 @@ test("FU-47: a seat that is not a fleet node is read from the chat list by exact
 test("FU-47: the chat-list status is plain and says when the host is not connected", () => {
   assert.equal(chatStatusLine(listed({ activity: "working" })), "Working now");
   assert.equal(chatStatusLine(listed({ activity: "idle" })), "Idle");
-  assert.equal(chatStatusLine(listed({ activity: "permission" })), "Needs you · permission pending");
+  assert.equal(
+    chatStatusLine(listed({ activity: "permission" })),
+    "Needs you · permission pending",
+  );
   assert.equal(chatStatusLine(listed({ activity: "error" })), "Needs attention");
   assert.equal(chatStatusLine(listed({ activity: "unknown", status: "closed" })), "Saved");
   assert.equal(chatStatusLine(listed({ activity: "unknown" })), "Status unavailable");
@@ -741,12 +744,20 @@ test("FU-47: a partial fleet names what could not be read", () => {
   const node = (host: string, status: string) => ({ host, status }) as never;
   assert.equal(
     partialSentence(
-      fleet({ nodes: [node("host-b", "unavailable"), node("host-b", "unavailable"), node("host-a", "idle")] }),
+      fleet({
+        nodes: [
+          node("host-b", "unavailable"),
+          node("host-b", "unavailable"),
+          node("host-a", "idle"),
+        ],
+      }),
     ),
     "2 chats on host-b could not be read. This view is incomplete.",
   );
   assert.equal(
-    partialSentence(fleet({ nodes: [node("host-a", "unavailable"), node("host-b", "unavailable")] })),
+    partialSentence(
+      fleet({ nodes: [node("host-a", "unavailable"), node("host-b", "unavailable")] }),
+    ),
     "1 chat on host-a could not be read; 1 chat on host-b could not be read. This view is incomplete.",
   );
   assert.match(

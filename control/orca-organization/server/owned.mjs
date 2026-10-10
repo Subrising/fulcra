@@ -16,7 +16,13 @@ export const PRIVATE_MASK = WRITE_MASK + (1 + 8 + 32) + 0x80000000 + 0x20000000;
 
 /** The absolute Windows PowerShell path. A bare "powershell.exe" would run one planted in the current folder. */
 export function powershellExe(env = process.env) {
-  return path.win32.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  return path.win32.join(
+    env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
 }
 
 // SIDs only (GetOwner and GetAccessRules with SecurityIdentifier): no name translation, so it is language independent
@@ -81,19 +87,31 @@ function windowsSafe(file, stat, mask, owner, probe) {
 const uid = () => process.getuid?.();
 
 /** True when this user owns the file. POSIX: uid. Windows: this user is exactly the ACL owner; others are not limited. */
-export function ownedByMe(stat, file, { platform = process.platform, probe = windowsAclProbe } = {}) {
+export function ownedByMe(
+  stat,
+  file,
+  { platform = process.platform, probe = windowsAclProbe } = {},
+) {
   if (platform === "win32") return windowsSafe(file, stat, 0, "me", probe);
   return stat.uid === uid();
 }
 
 /** True when this user owns the file and nobody else has any access. POSIX: uid and no group/other mode bits. */
-export function privateOwned(stat, file, { platform = process.platform, probe = windowsAclProbe } = {}) {
+export function privateOwned(
+  stat,
+  file,
+  { platform = process.platform, probe = windowsAclProbe } = {},
+) {
   if (platform === "win32") return windowsSafe(file, stat, PRIVATE_MASK, "me", probe);
   return stat.uid === uid() && (stat.mode & 0o077) === 0;
 }
 
 /** True when this user (or root) owns the file and nobody else can change it. For code that will be run or trusted. */
-export function trustedCode(stat, file, { platform = process.platform, probe = windowsAclProbe } = {}) {
+export function trustedCode(
+  stat,
+  file,
+  { platform = process.platform, probe = windowsAclProbe } = {},
+) {
   if (platform === "win32") return windowsSafe(file, stat, WRITE_MASK, "trusted", probe);
   return (stat.mode & 0o022) === 0 && [0, uid()].includes(stat.uid);
 }

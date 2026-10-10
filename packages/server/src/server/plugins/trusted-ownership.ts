@@ -44,9 +44,20 @@ export const windowsAclIsSafe: WindowsAclProbe = (file) => {
   try {
     const out = execFileSync(
       windowsPowershell(),
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_ACL_SCRIPT],
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        WINDOWS_ACL_SCRIPT,
+      ],
       {
-        env: { ...process.env, FULCRA_TRUST_PATH: file, FULCRA_TRUST_MASK: String(WINDOWS_WRITE_MASK) },
+        env: {
+          ...process.env,
+          FULCRA_TRUST_PATH: file,
+          FULCRA_TRUST_MASK: String(WINDOWS_WRITE_MASK),
+        },
         encoding: "utf8",
         timeout: 20000,
         windowsHide: true,

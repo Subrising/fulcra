@@ -42,7 +42,10 @@ import {
   buildStandardContextMenuItems,
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
-import { logChildProcessGone, setupRendererCrashRecovery } from "./window/renderer-crash-recovery.js";
+import {
+  logChildProcessGone,
+  setupRendererCrashRecovery,
+} from "./window/renderer-crash-recovery.js";
 import { resolveDesktopWindowChromeMode, windowChromeModeArgument } from "./window/chrome.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
 import {

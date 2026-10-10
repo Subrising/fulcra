@@ -9,14 +9,17 @@ const password = "b".repeat(64);
 // A stand-in for Electron safeStorage: reversible, and visibly not plain text.
 const fake = (available = true) => ({
   isEncryptionAvailable: () => available,
-  encryptString: (text: string) => Buffer.from([...text].reverse().join("") + "!enc"),
-  decryptString: (data: Buffer) => [...data.toString().slice(0, -4)].reverse().join(""),
+  encryptString: (text: string) => Buffer.from([...text].toReversed().join("") + "!enc"),
+  decryptString: (data: Buffer) => Array.from(data.toString().slice(0, -4)).toReversed().join(""),
 });
 
 async function setup(available = true) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "cc-keychain-"));
   const filePath = path.join(dir, "command-centre-secrets.json");
-  return { filePath, keychain: createWindowsCommandCentreKeychain({ safeStorage: fake(available), filePath }) };
+  return {
+    filePath,
+    keychain: createWindowsCommandCentreKeychain({ safeStorage: fake(available), filePath }),
+  };
 }
 
 test("stores the secret encrypted and reads it back", async () => {

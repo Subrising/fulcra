@@ -66,7 +66,12 @@ function defaultRun(name) {
     execFile(
       powershellExe(),
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT],
-      { env: { ...process.env, FULCRA_PIPE_NAME: name }, encoding: "utf8", timeout: 30000, windowsHide: true },
+      {
+        env: { ...process.env, FULCRA_PIPE_NAME: name },
+        encoding: "utf8",
+        timeout: 30000,
+        windowsHide: true,
+      },
       (error, stdout) => (error ? reject(error) : resolve(stdout)),
     ),
   );

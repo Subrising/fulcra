@@ -155,11 +155,7 @@ export function readNativeRateSettings(file) {
   );
   try {
     const stat = fs.fstatSync(fd);
-    if (
-      !stat.isFile() ||
-      !privateOwned(stat, file) ||
-      stat.size > 8 * 1024 * 1024
-    )
+    if (!stat.isFile() || !privateOwned(stat, file) || stat.size > 8 * 1024 * 1024)
       throw Error("Unsafe native owner rate Settings store");
     const data = JSON.parse(fs.readFileSync(fd, "utf8"));
     if (

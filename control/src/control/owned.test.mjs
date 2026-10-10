@@ -24,14 +24,18 @@ test("POSIX: ownedByMe looks at the uid only", { skip: !process.getuid }, () => 
   assert.equal(ownedByMe(st(0o100666), "f", o), true);
   assert.equal(ownedByMe(st(0o100600, me + 1), "f", o), false);
 });
-test("POSIX: trustedCode allows root or me, refuses group/other write", { skip: !process.getuid }, () => {
-  const o = { platform: "linux" };
-  assert.equal(trustedCode(st(0o100755), "f", o), true);
-  assert.equal(trustedCode(st(0o100755, 0), "f", o), true);
-  assert.equal(trustedCode(st(0o100775), "f", o), false);
-  assert.equal(trustedCode(st(0o100757), "f", o), false);
-  assert.equal(trustedCode(st(0o100755, me + 1), "f", o), false);
-});
+test(
+  "POSIX: trustedCode allows root or me, refuses group/other write",
+  { skip: !process.getuid },
+  () => {
+    const o = { platform: "linux" };
+    assert.equal(trustedCode(st(0o100755), "f", o), true);
+    assert.equal(trustedCode(st(0o100755, 0), "f", o), true);
+    assert.equal(trustedCode(st(0o100775), "f", o), false);
+    assert.equal(trustedCode(st(0o100757), "f", o), false);
+    assert.equal(trustedCode(st(0o100755, me + 1), "f", o), false);
+  },
+);
 test("Windows: the ACL probe decides, mode and uid are ignored; the owner rule is exact for me and wide for code", () => {
   const calls = [];
   const probe = (file, mask, owner) => (calls.push([file, mask, owner]), file === "good");
@@ -59,10 +63,7 @@ test("PowerShell is the absolute system path, never a bare name", () => {
     powershellExe({ SystemRoot: "D:\\WIN" }),
     "D:\\WIN\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
   );
-  assert.equal(
-    powershellExe({}),
-    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-  );
+  assert.equal(powershellExe({}), "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
 });
 test("Windows: an answer is cached per file state and refreshed when ctime moves", () => {
   let n = 0;

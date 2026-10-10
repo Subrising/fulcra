@@ -23,11 +23,7 @@ export function sweepMode(home) {
   } catch {
     return { mode: "off", reason: "No mode file; the sweep is off by default" };
   }
-  if (
-    !stat.isFile() ||
-    !privateOwned(stat, file) ||
-    stat.size > 64
-  )
+  if (!stat.isFile() || !privateOwned(stat, file) || stat.size > 64)
     return {
       mode: "off",
       reason: "The mode file is not a small private regular file; the sweep stays off",
