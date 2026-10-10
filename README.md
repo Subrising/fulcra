@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Subrising/fulcra/releases/tag/v0.2.11"><img src="https://img.shields.io/badge/release-v0.2.11%20source-5E1623?style=flat-square" alt="Release v0.2.11 (source)"></a>
+  <a href="https://github.com/Subrising/fulcra/releases/tag/v0.2.12"><img src="https://img.shields.io/badge/release-v0.2.12%20source-5E1623?style=flat-square" alt="Release v0.2.12 (source)"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-5E1623?style=flat-square" alt="Licence Apache-2.0"></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20silicon-FF8A5B?style=flat-square" alt="macOS Apple silicon">
   <img src="https://img.shields.io/badge/iPhone-build%20from%20source-FF8A5B?style=flat-square" alt="iPhone: build from source">
@@ -169,7 +169,7 @@ Fulcra has no public app download. You build and package your own copy from sour
 ```bash
 git clone https://github.com/Subrising/fulcra.git
 cd fulcra
-git checkout v0.2.11
+git checkout v0.2.12
 ```
 
 **2. Install the dependencies**
@@ -232,7 +232,7 @@ A self-built app shows the base version 0.11.0-beta.5 in **About**. This is corr
 
    ```bash
    git fetch --tags
-   git checkout v0.2.11
+   git checkout v0.2.12
    ```
 
    Use the tag of the version that you want.
