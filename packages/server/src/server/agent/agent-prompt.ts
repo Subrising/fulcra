@@ -399,6 +399,7 @@ export async function sendPromptToAgent(
         };
       const unarchive = params.unarchive ?? true;
 
+<<<<<<< HEAD
       const record = await params.agentStorage.get(params.agentId);
       finishCheck?.();
       if (record?.archivedAt) {
@@ -435,6 +436,33 @@ export async function sendPromptToAgent(
         agentStorage: params.agentStorage,
         logger: params.logger,
       });
+=======
+  const record = await params.agentStorage.get(params.agentId);
+  let archivedAtToRestore: string | null = null;
+  if (record?.archivedAt) {
+    if (!unarchive) {
+      return { disposition: "turn_started" };
+    }
+    if (await unarchiveAgentState(params.agentStorage, params.agentManager, params.agentId)) {
+      archivedAtToRestore = record.archivedAt;
+    }
+  }
+
+  try {
+    await ensureAgentLoaded(params.agentId, {
+      agentManager: params.agentManager,
+      agentStorage: params.agentStorage,
+      logger: params.logger,
+    });
+  } catch (error) {
+    // A send that could not load the agent leaves it where it was: still archived.
+    // Concurrent sends share this load, so none of them holds a live session.
+    if (archivedAtToRestore) {
+      await params.agentManager.archiveSnapshot(params.agentId, archivedAtToRestore);
+    }
+    throw error;
+  }
+>>>>>>> refs/tags/v0.11.2
 
       finishCheck?.();
       if (params.sessionMode) {
