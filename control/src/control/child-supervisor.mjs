@@ -15,6 +15,11 @@ export function createChildSupervisor({
     return () => clearTimeout(timer);
   },
   maxRestarts = 3,
+  // Fulcra 0.2.13: after the quick restarts are used up, try again by itself: 30 s, 1, 2, 5 min, then every 5 min.
+  // Before this a controller that failed three times (service handshake deadline exceeded, 10 Oct) stayed down
+  // until the daemon restarted. A stable run or an explicit Retry starts the list again.
+  slowRetryMs = [30000, 60000, 120000, 300000],
+  now = () => Date.now(),
   stableMs = 60000,
   handshakeMs = 15000,
   startupMs = 180000,
@@ -36,6 +41,8 @@ export function createChildSupervisor({
     recoveryRefused = false,
     started = false,
     restarts = 0,
+    slowRetries = 0,
+    nextRetryAt = null,
     stopping = null,
     cancelRestart = () => {};
   const uncertain = () =>
@@ -65,6 +72,7 @@ export function createChildSupervisor({
   }
   function launch() {
     if (stopped || current) return;
+    nextRetryAt = null;
     const child = spawn();
     const owner = {
       child,
@@ -152,7 +160,10 @@ export function createChildSupervisor({
         owner.ready = true;
         owner.cancelHandshake();
         owner.cancelStable = schedule(() => {
-          if (current === owner && owner.ready && !owner.revoked) restarts = 0;
+          if (current === owner && owner.ready && !owner.revoked) {
+            restarts = 0;
+            slowRetries = 0;
+          }
         }, stableMs);
         return;
       }
@@ -198,6 +209,18 @@ export function createChildSupervisor({
       if (!stopped && restarts < maxRestarts) {
         const delay = 250 * 2 ** restarts++;
         cancelRestart = schedule(launch, delay);
+      } else if (!stopped && slowRetryMs.length > 0) {
+        const delay = slowRetryMs[Math.min(slowRetries, slowRetryMs.length - 1)];
+        const attempt = ++slowRetries;
+        nextRetryAt = now() + delay;
+        log(
+          `restart budget used; trying again in ${Math.round(delay / 1000)} s (retry ${attempt})`,
+        );
+        cancelRestart = schedule(() => {
+          nextRetryAt = null;
+          log(`retry ${attempt}: starting the controller`);
+          launch();
+        }, delay);
       }
     });
     owner.cancelHandshake = schedule(() => {
@@ -227,6 +250,8 @@ export function createChildSupervisor({
                 ? "failed"
                 : "stopped",
         restarts,
+        // Set while the supervisor waits to try again by itself.
+        ...(nextRetryAt === null ? {} : { retryAttempt: slowRetries, nextRetryAt }),
       };
     },
     retry() {
@@ -240,6 +265,8 @@ export function createChildSupervisor({
       if (!current) {
         cancelRestart();
         restarts = 0;
+        slowRetries = 0;
+        nextRetryAt = null;
         started = true;
         launch();
       }
@@ -258,6 +285,7 @@ export function createChildSupervisor({
       if (stopping) return stopping;
       if (stopped && !current) return;
       stopped = true;
+      nextRetryAt = null;
       cancelRestart();
       const owner = current;
       if (!owner) return;

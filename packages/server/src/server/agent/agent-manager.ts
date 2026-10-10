@@ -122,6 +122,8 @@ import {
   isDelegatedAgent,
   isOpenAgentTabLabel,
   PARENT_AGENT_ID_LABEL,
+  REPORTS_TO_LABEL,
+  REPORTS_TO_OWNER,
   SEAT_LABEL,
 } from "@getpaseo/protocol/agent-labels";
 import type { Logger } from "pino";
@@ -303,7 +305,23 @@ function isUnsetThinkingOptionId(thinkingOptionId: string | null | undefined): b
   );
 }
 
+/**
+ * FULCRA(default-model): true when a chat started this session (a CLI run, an MCP create or a Command Centre spawn
+ * from a chat): its labels name a parent or a chat it reports to. A session the owner starts has neither.
+ */
+function isCreatedByChat(labels: Record<string, string> | undefined): boolean {
+  if (!labels) return false;
+  const reportsTo = labels[REPORTS_TO_LABEL]?.trim();
+  return Boolean(
+    labels[PARENT_AGENT_ID_LABEL]?.trim() ||
+    labels["fulcra.parent-session"]?.trim() ||
+    (reportsTo && reportsTo !== REPORTS_TO_OWNER),
+  );
+}
+
 interface NormalizeConfigOptions {
+  /** Prefer the provider's worker default when no model is named (a chat started this session). */
+  workerDefault?: boolean;
   resolveDefaultModel?: boolean;
   /**
    * Fill a missing mode from the provider default. OFF unless asked, unlike resolveDefaultModel: only the
@@ -2541,6 +2559,7 @@ export class AgentManager {
         env: options?.env,
         resolveDefaultMode: !options.fromStoredRecord,
         resolveDefaultThinking: !options.fromStoredRecord,
+        workerDefault: isCreatedByChat(options.labels),
       },
     );
     this.requireEnabledProvider(storedConfig.provider);
@@ -8271,7 +8290,10 @@ export class AgentManager {
 
     const shouldResolveDefaultModel = options.resolveDefaultModel ?? true;
     if (shouldResolveDefaultModel && !normalized.model) {
-      const defaultModelId = await this.resolveDefaultModelId(normalized);
+      const defaultModelId = await this.resolveDefaultModelId(
+        normalized,
+        options.workerDefault === true,
+      );
       if (defaultModelId) {
         normalized.model = defaultModelId;
       }
@@ -8388,7 +8410,10 @@ export class AgentManager {
     }
   }
 
-  private async resolveDefaultModelId(config: AgentSessionConfig): Promise<string | undefined> {
+  private async resolveDefaultModelId(
+    config: AgentSessionConfig,
+    preferWorkerDefault = false,
+  ): Promise<string | undefined> {
     const client = this.clients.get(config.provider);
     if (!client) {
       return undefined;
@@ -8399,7 +8424,14 @@ export class AgentManager {
         cwd: config.cwd,
         force: false,
       });
-      return (catalog.models.find((model) => model.isDefault) ?? catalog.models[0])?.id;
+      // FULCRA(default-model): a worker a chat starts without a model gets the provider's worker default (Sonnet 5.5
+      // for Claude, when this Claude Code offers it); otherwise the provider's default.
+      const worker = preferWorkerDefault
+        ? catalog.models.find(
+            (model) => model.isSelectable !== false && model.metadata?.workerDefault === true,
+          )
+        : undefined;
+      return (worker ?? catalog.models.find((model) => model.isDefault) ?? catalog.models[0])?.id;
     } catch {
       // Provider may not support model listing — leave model undefined.
       return undefined;
@@ -8414,11 +8446,13 @@ export class AgentManager {
       purpose?: AgentResumePurpose;
       resolveDefaultMode?: boolean;
       resolveDefaultThinking?: boolean;
+      workerDefault?: boolean;
     } = {},
   ): Promise<PreparedSessionConfig> {
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
       env: options.env,
       purpose: options.purpose,
+      workerDefault: options.workerDefault,
       resolveDefaultMode: options.resolveDefaultMode,
       resolveDefaultThinking: options.resolveDefaultThinking,
     });

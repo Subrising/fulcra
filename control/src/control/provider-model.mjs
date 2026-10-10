@@ -8,6 +8,18 @@ export async function resolveProviderModel(client, selection, cwd) {
     throw Error(
       `Cannot resolve ${selection} default model: ${inventory.error || "provider inventory unavailable"}`,
     );
+  // Fulcra 0.2.13: a session the controller creates is a worker a chat started. When the host marks one model as its
+  // worker default (metadata.workerDefault, Sonnet 5.5 for Claude), that model is used; else the host's default.
+  // The release is named by the host, never here.
+  const offered = (model) =>
+    model.provider === selection &&
+    model.isSelectable !== false &&
+    typeof model.id === "string" &&
+    model.id.trim();
+  const workers = inventory.models.filter(
+    (model) => model.metadata?.workerDefault === true && offered(model),
+  );
+  if (workers.length === 1) return `${selection}/${workers[0].id}`;
   const defaults = inventory.models.filter(
     (model) =>
       model.isDefault === true &&

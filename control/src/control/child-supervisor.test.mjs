@@ -150,10 +150,66 @@ test("restarts are bounded, stop cancels backoff, and recovery requires observed
     if (i < 3) f.timers.shift()();
   }
   assert.equal(f.children.length, 4);
-  assert.equal(f.timers.length, 0);
+  // The quick restarts are used up: one slow retry waits (Fulcra 0.2.13), and nothing more is spawned yet.
+  assert.equal(f.timers.length, 1);
   await stop(f);
+  assert.equal(f.timers.length, 0, "stop cancels the slow retry");
   f.supervisor.start();
   assert.equal(f.children.length, 4);
+});
+
+// Fulcra 0.2.13: after the quick restarts the controller is tried again by itself, with a growing wait.
+test("after the quick restarts, the controller is retried 30 s, 1, 2, 5 min, then every 5 min, and each try is logged", async () => {
+  const delays = [],
+    logs = [];
+  let clock = 1_000_000;
+  const f = fixture({
+    log: (reason) => logs.push(reason),
+    now: () => clock,
+  });
+  f.supervisor.start();
+  const exitLatest = () => f.children.at(-1).emit("exit", 1, null);
+  for (let i = 0; i < 3; i++) {
+    exitLatest();
+    f.timers.shift()();
+  }
+  assert.equal(f.children.length, 4);
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    exitLatest();
+    assert.equal(f.timers.length, 1, "one slow retry is waiting");
+    assert.equal(f.supervisor.status.state, "failed");
+    assert.equal(f.supervisor.status.retryAttempt, attempt);
+    delays.push(f.supervisor.status.nextRetryAt - clock);
+    f.timers.shift()();
+    assert.equal(f.children.length, 4 + attempt, "the retry starts a new controller");
+    assert.equal(f.supervisor.status.nextRetryAt, undefined);
+  }
+  assert.deepEqual(delays, [30000, 60000, 120000, 300000, 300000, 300000]);
+  assert.ok(logs.some((l) => /trying again in 30 s \(retry 1\)/.test(l)));
+  assert.ok(logs.some((l) => /retry 6: starting the controller/.test(l)));
+  await stop(f);
+});
+
+test("a stable run, or an explicit Retry, starts the retry list again", async () => {
+  const f = fixture();
+  f.supervisor.start();
+  const exitLatest = () => f.children.at(-1).emit("exit", 1, null);
+  for (let i = 0; i < 3; i++) {
+    exitLatest();
+    f.timers.shift()();
+  }
+  exitLatest();
+  assert.equal(f.supervisor.status.retryAttempt, 1);
+  f.timers.shift()();
+  exitLatest();
+  assert.equal(f.supervisor.status.retryAttempt, 2);
+  // Retry: the list starts again, and the controller is launched at once.
+  f.supervisor.retry();
+  const launched = f.children.length;
+  exitLatest();
+  f.timers.shift()();
+  assert.equal(f.children.length, launched + 1, "quick restart budget is back");
+  await stop(f);
 });
 
 test("a reply with wrong epoch cannot settle a pending command", async () => {
