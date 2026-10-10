@@ -166,7 +166,7 @@ admission	A	110	0	packages/plugin/TRUSTED-HOST.md
 admission	A	91	0	packages/protocol/src/trusted-input.test.ts
 admission	A	583	0	packages/protocol/src/trusted-input.ts
 admission	A	132	0	packages/server/src/server/admission-regression.test.ts
-admission	M	110	1	packages/server/src/server/agent/agent-sdk-types.ts
+admission	M	108	1	packages/server/src/server/agent/agent-sdk-types.ts
 admission	A	140	0	packages/server/src/server/agent/background-work/authority-fence.test.ts
 admission	M	4	3	packages/server/src/server/agent/permission-response.test.ts
 admission	A	961	0	packages/server/src/server/agent/providers/codex/turn-admission.test.ts
@@ -609,8 +609,8 @@ core-fixes	A	97	0	packages/server/src/server/daemon-e2e/reporting-lines-role.e2e
 core-fixes	A	189	0	packages/server/src/server/daemon-e2e/stored-timeline-read.e2e.test.ts
 core-fixes	A	75	0	packages/server/src/server/directory-access.test.ts
 core-fixes	A	121	0	packages/server/src/server/directory-access.ts
-core-fixes	A	132	0	packages/server/src/server/held-sends.test.ts
-core-fixes	A	131	0	packages/server/src/server/held-sends.ts
+core-fixes	A	149	0	packages/server/src/server/held-sends.test.ts
+core-fixes	A	146	0	packages/server/src/server/held-sends.ts
 core-fixes	A	41	0	packages/server/src/server/native-artifact-origin.ts
 core-fixes	A	262	0	packages/server/src/server/native-artifact-store.ts
 core-fixes	A	79	0	packages/server/src/server/native-evidence-origin.test.ts
@@ -1158,7 +1158,7 @@ orchestration	M	69	2	packages/protocol/src/provider-manifest.ts
 orchestration	A	81	0	packages/protocol/src/session-ownership.ts
 orchestration	M	2	0	packages/server/src/server/agent/agent-loading.ts
 orchestration	M	6032	2570	packages/server/src/server/agent/agent-manager.test.ts
-orchestration	M	3877	574	packages/server/src/server/agent/agent-manager.ts
+orchestration	M	3878	573	packages/server/src/server/agent/agent-manager.ts
 orchestration	M	30	0	packages/server/src/server/agent/import-sessions.test.ts
 orchestration	M	24	5	packages/server/src/server/agent/import-sessions.ts
 orchestration	M	217	0	packages/server/src/server/agent/lifecycle-command.test.ts
@@ -1499,7 +1499,7 @@ session-launch	M	18	12	packages/server/src/server/agent/agent-mcp.e2e.test.ts
 session-launch	M	181	0	packages/server/src/server/agent/agent-projections.test.ts
 session-launch	M	53	12	packages/server/src/server/agent/agent-projections.ts
 session-launch	M	251	24	packages/server/src/server/agent/agent-prompt.test.ts
-session-launch	M	270	76	packages/server/src/server/agent/agent-prompt.ts
+session-launch	M	270	74	packages/server/src/server/agent/agent-prompt.ts
 session-launch	A	375	0	packages/server/src/server/agent/catalog-timeout.test.ts
 session-launch	M	1	1	packages/server/src/server/agent/create-agent-lifecycle-dispatch.ts
 session-launch	M	216	2	packages/server/src/server/agent/create-agent-mode.test.ts
