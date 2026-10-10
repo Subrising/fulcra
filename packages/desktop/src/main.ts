@@ -42,6 +42,7 @@ import {
   buildStandardContextMenuItems,
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
+import { logChildProcessGone, setupRendererCrashRecovery } from "./window/renderer-crash-recovery.js";
 import { resolveDesktopWindowChromeMode, windowChromeModeArgument } from "./window/chrome.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
 import {
@@ -739,6 +740,7 @@ async function createWindow(
   }
 
   setupDarwinCompositorWatchdog(mainWindow);
+  setupRendererCrashRecovery(mainWindow, { logger: log });
   setupWindowResizeEvents(mainWindow);
   if (windowStateStore) {
     setupWindowStatePersistence(mainWindow, windowStateStore);
@@ -1090,6 +1092,10 @@ electronAutoUpdater.on("before-quit-for-update", () => {
 });
 app.on("before-quit", quitLifecycle.handleBeforeQuit);
 registerExternalQuitSignals({ signals: process, quit: () => app.quit() });
+
+app.on("child-process-gone", (_event, details) => {
+  logChildProcessGone(log, details);
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
