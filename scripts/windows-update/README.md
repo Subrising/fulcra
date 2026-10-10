@@ -30,3 +30,9 @@ Exit codes: 0 done, 2 unhealthy and rolled back, 3 refused (chats would stop), o
 - The app starts in your desktop session. Run the full update from a session where a window can open. From ssh the app starts, but the window appears only if a user is signed in at the console.
 - Health does not test the Command Centre screens. It tests the daemon and the controller pipe.
 - The build needs Git, Node 24 at `C:\Users\dzgra\tools\node24` and about 15 GB free.
+
+## Known behaviour
+- `fulcra-current` is a junction. Windows refuses to follow a junction made in a desktop session from an ssh session ("untrusted mount point"). From ssh, call `paseo.cmd` by its real path (see `state.json`). The update itself runs in the desktop session (scheduled task with `/IT`), where the junction works.
+- Run the update from a scheduled task or a desktop PowerShell. The task runs as the signed-in user.
+- First live run (10 Oct 2026): the build was fine. Two script faults showed first: the variable `$state` hid the path variable `$State`, and native `paseo` error text stopped the script. Both are fixed in this copy.
+- The first health check ran with the daemon already stopped, so its baseline (server ID, chat count) was empty. Normal runs record both before the stop.

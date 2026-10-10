@@ -22,7 +22,7 @@ $Home_ = 'C:\Users\dzgra'
 $Root = Join-Path $Home_ 'fulcra-update'
 $Builds = Join-Path $Home_ 'fulcra-builds'
 $Current = Join-Path $Home_ 'fulcra-current'
-$State = Join-Path $Root 'state.json'
+$StateFile = Join-Path $Root 'state.json'
 $Lock = Join-Path $Root 'lock'
 $Log = Join-Path $Root 'update.log'
 $Node = Join-Path $Home_ 'tools\node24'
@@ -37,15 +37,17 @@ function Say([string]$m) {
 }
 function Fail([string]$m) { Say "FAIL: $m"; throw $m }
 function ReadState {
-  if (Test-Path $State) { return Get-Content $State -Raw | ConvertFrom-Json }
+  if (Test-Path $StateFile) { return Get-Content $StateFile -Raw | ConvertFrom-Json }
   return [pscustomobject]@{ current = $Legacy; previous = $Legacy }
 }
-function WriteState($s) { $s | ConvertTo-Json | Set-Content -Path $State -Encoding ASCII }
+function WriteState($s) { $s | ConvertTo-Json | Set-Content -Path $StateFile -Encoding ASCII }
 function PaseoCmd([string]$build) { Join-Path $build 'resources\bin\paseo.cmd' }
 function Paseo([string]$build, [string[]]$a) {
   $env:PASEO_HOME = $PaseoHome
   $env:Path = "$Node;" + $env:Path
-  $out = & (PaseoCmd $build) @a 2>&1 | Out-String
+  # cmd /c keeps native stderr from becoming a terminating error under $ErrorActionPreference = 'Stop'.
+  $line = '"' + (PaseoCmd $build) + '" ' + ($a -join ' ') + ' 2>&1'
+  $out = cmd /c $line | Out-String
   return [pscustomobject]@{ code = $LASTEXITCODE; text = $out }
 }
 function PointJunction([string]$target) {
@@ -55,11 +57,11 @@ function PointJunction([string]$target) {
 }
 function GuiProcesses {
   Get-CimInstance Win32_Process -Filter "Name='Fulcra.exe'" |
-    Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch 'node-script|node-entrypoint-runner' }
+    Where-Object { $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch '\.js' }
 }
 function DaemonProcesses {
   Get-CimInstance Win32_Process -Filter "Name='Fulcra.exe'" |
-    Where-Object { $_.CommandLine -match 'node-script|node-entrypoint-runner|--type=' }
+    Where-Object { $_.CommandLine -match '\.js|--type=' }
 }
 
 # --- Song Studio check. Refuse when a chat on this daemon could stop. ---
@@ -140,7 +142,6 @@ function Build([string]$ref) {
   if ($LASTEXITCODE -ne 0) { Fail 'git clone failed' }
   $sha = (git -C $dir rev-parse HEAD).Trim()
   Say "commit $sha"
-  Set-Content -Path (Join-Path $dir 'BUILD-COMMIT.txt') -Value $sha -Encoding ASCII
   Push-Location $dir
   try {
     Say 'npm ci'
@@ -152,6 +153,8 @@ function Build([string]$ref) {
   } finally { Pop-Location }
   $unpacked = Join-Path $dir 'packages\desktop\release-preview\win-unpacked'
   if (-not (Test-Path (Join-Path $unpacked 'Fulcra.exe'))) { Fail 'build did not produce Fulcra.exe' }
+  # Written after the build: the build refuses a source tree with extra files.
+  Set-Content -Path (Join-Path $dir 'BUILD-COMMIT.txt') -Value $sha -Encoding ASCII
   Say "built $unpacked"
   return $unpacked
 }
@@ -166,7 +169,7 @@ while ($anc -and $guard++ -lt 12) {
   $anc = $pr.ParentProcessId
 }
 if (-not $Ref -and -not $Switch -and -not $Rollback) { Fail 'give -Ref, -Switch or -Rollback' }
-if (-not (Test-Path $State)) { WriteState (ReadState) }
+if (-not (Test-Path $StateFile)) { WriteState (ReadState) }
 $state = ReadState
 if (-not (Test-Path $Current)) { PointJunction $state.current }
 
@@ -228,6 +231,9 @@ try {
     if (HealthCheck $Current $serverId $minAgents $HealthSeconds) { Say "ROLLED BACK: running $old" } else { Say 'ROLLBACK ALSO UNHEALTHY: read the daemon log' }
     exit 2
   }
+} catch {
+  Say ("ERROR: " + $_.Exception.Message + " at line " + $_.InvocationInfo.ScriptLineNumber)
+  throw
 } finally {
   if ($ownLock -and (Test-Path $Lock)) { Remove-Item $Lock -Recurse -Force -ErrorAction SilentlyContinue }
 }
