@@ -29,7 +29,8 @@ import { fleetRpc, type Fleet } from "../../../../control/orca-organization/shar
 import { projectsRpc } from "../../../../control/orca-organization/shared/projects";
 import { STATE_LABEL, stateOf } from "../../../../control/orca-organization/client/team-tree";
 import { create } from "zustand";
-import { chatLeads, chatStatusLabel } from "./sidebar-chat-leads";
+import { chatLeads } from "./sidebar-chat-leads";
+import { lastKnownStatusLine } from "@getpaseo/protocol/chat-status";
 
 import type { Theme } from "@/styles/theme";
 
@@ -803,8 +804,7 @@ export function leadStatusLine(
   // The seat's chat is not a fleet node (the human-facing main assistant is not delegated to the controller): say
   // what the chat list knows, marked as last known.
   if (!node) {
-    const known = chatStatusLabel(chatStatus);
-    return known ? `${known} · last known` : "Status unknown";
+    return lastKnownStatusLine(chatStatus);
   }
   return `${STATE_LABEL[stateOf(node)]} · ${hostLabel ?? node.host}`;
 }
@@ -826,12 +826,9 @@ function ChatLeadRow({
   leadership: () => void;
   onBeforeNavigate?: () => void;
 }) {
-  const known = chatStatusLabel(lead.status);
-  const status = [
-    "Lead",
-    known ? `${known} · last known` : "Status unknown",
-    hostLabel ?? "another computer",
-  ].join(" · ");
+  const status = ["Lead", lastKnownStatusLine(lead.status), hostLabel ?? "another computer"].join(
+    " · ",
+  );
   const open = useCallback(() => {
     const result = navigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId });
     if (result !== "requested") return leadership();

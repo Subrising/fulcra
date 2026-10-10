@@ -51,7 +51,7 @@ describe("chatStatusLabel", () => {
   it("uses the Team map words and nothing for an unknown status", () => {
     expect(chatStatusLabel("running")).toBe("Working");
     expect(chatStatusLabel("idle")).toBe("Idle");
-    expect(chatStatusLabel("error")).toBe("Error");
+    expect(chatStatusLabel("error")).toBe("Needs attention");
     expect(chatStatusLabel(undefined)).toBeNull();
     expect(chatStatusLabel("weird")).toBeNull();
   });

@@ -1,5 +1,6 @@
 import type { PluginObservedAgent } from "@getpaseo/plugin/client";
 import type { Fleet } from "../shared/fleet";
+import { lastKnownStatusLine } from "@getpaseo/protocol/chat-status";
 
 /**
  * FU-47. A main assistant or leader seat can name a session that is not an enrolled fleet node (the human-facing
@@ -32,28 +33,9 @@ export function chatStatusLine(chat: SeatChat): string {
     case "error":
       return "Needs attention";
     default:
-      return lastKnownStatus(chat.status);
-  }
-}
-
-/**
- * The app has no live turn state for a chat it has not opened (activity "unknown"). The host's own status for the
- * chat is still in the list, so it is shown, marked as the last known value rather than a live one.
- */
-function lastKnownStatus(status: string): string {
-  switch (status) {
-    case "running":
-      return "Working now · last known";
-    case "idle":
-      return "Idle · last known";
-    case "initializing":
-      return "Starting · last known";
-    case "error":
-      return "Needs attention · last known";
-    case "closed":
-      return "Saved";
-    default:
-      return "Status unavailable";
+      // No live turn state for a chat the app has not opened: the host's own status from the chat list, in the
+      // words that the sidebar uses too.
+      return lastKnownStatusLine(chat.status);
   }
 }
 

@@ -584,6 +584,8 @@ core-fixes	M	9	0	packages/protocol/src/agent-deep-link.test.ts
 core-fixes	M	1	1	packages/protocol/src/agent-deep-link.ts
 core-fixes	M	13	0	packages/protocol/src/agent-types.ts
 core-fixes	A	84	0	packages/protocol/src/automatic-approval-mode.test.ts
+core-fixes	A	18	0	packages/protocol/src/chat-status.test.ts
+core-fixes	A	21	0	packages/protocol/src/chat-status.ts
 core-fixes	M	2	0	packages/protocol/src/client-capabilities.ts
 core-fixes	A	59	0	packages/protocol/src/git-ai-draft.test.ts
 core-fixes	A	51	0	packages/protocol/src/git-ai-draft.ts
@@ -1042,6 +1044,7 @@ features	M	20	2	packages/app/src/sidebar-nav/model.test.ts
 features	M	5	1	packages/app/src/sidebar-nav/model.ts
 features	M	14	3	packages/app/src/sidebar-nav/use-sidebar-nav-items.ts
 features	M	2	2	packages/app/src/stores/explorer-tab-memory.ts
+features	A	60	0	packages/app/src/stores/leads-memory-store.ts
 features	A	45	0	packages/app/src/stores/main-assistant-memory-store.ts
 features	M	1	1	packages/app/src/stores/panel-store/state.ts
 features	M	13	0	packages/app/src/stores/session-store.ts
@@ -1383,9 +1386,9 @@ plugin-host	M	5	5	packages/app/src/plugins/hosts/index.test.ts
 plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
-plugin-host	A	344	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
-plugin-host	A	680	0	packages/app/src/plugins/prime-sidebar.test.tsx
-plugin-host	A	882	0	packages/app/src/plugins/prime-sidebar.tsx
+plugin-host	A	345	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
+plugin-host	A	998	0	packages/app/src/plugins/prime-sidebar.test.tsx
+plugin-host	A	1130	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
 plugin-host	A	138	0	packages/app/src/plugins/radius-scratch-owner.ts
 plugin-host	A	290	0	packages/app/src/plugins/react-native/pan-surface.test.tsx
@@ -1402,6 +1405,8 @@ plugin-host	M	115	0	packages/app/src/plugins/registry.test.ts
 plugin-host	M	256	6	packages/app/src/plugins/registry.ts
 plugin-host	M	8	0	packages/app/src/plugins/routes.test.ts
 plugin-host	M	9	1	packages/app/src/plugins/settings/index.tsx
+plugin-host	A	58	0	packages/app/src/plugins/sidebar-chat-leads.test.ts
+plugin-host	A	56	0	packages/app/src/plugins/sidebar-chat-leads.ts
 plugin-host	M	75	0	packages/app/src/plugins/sidebar-groups.test.ts
 plugin-host	M	39	1	packages/app/src/plugins/sidebar-groups.ts
 plugin-host	A	173	0	packages/app/src/plugins/sidebar-items.test.tsx

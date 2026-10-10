@@ -738,10 +738,13 @@ test("FU-47: the chat-list status is plain and says when the host is not connect
   // No live turn state: the host's own status is shown, marked as the last known value.
   assert.equal(
     chatStatusLine(listed({ activity: "unknown", status: "running" })),
-    "Working now · last known",
+    "Working · last known",
   );
-  assert.equal(chatStatusLine(listed({ activity: "unknown", status: "idle" })), "Idle · last known");
-  assert.equal(chatStatusLine(listed({ activity: "unknown", status: "weird" })), "Status unavailable");
+  assert.equal(
+    chatStatusLine(listed({ activity: "unknown", status: "idle" })),
+    "Idle · last known",
+  );
+  assert.equal(chatStatusLine(listed({ activity: "unknown", status: "weird" })), "Status unknown");
   assert.match(chatStatusLine(listed({ connection: "offline" })), /host not connected/);
   assert.match(CHAT_LIST_NOTE, /does not track this chat/);
 });
