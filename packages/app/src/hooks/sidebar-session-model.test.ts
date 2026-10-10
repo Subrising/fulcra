@@ -43,6 +43,17 @@ describe("reportingLeadLine", () => {
     );
     expect(reportingLeadLine({}, "mini", sessions)).toBeNull();
     expect(reportingLeadLine({ "fulcra.reports-to": "  " }, "mini", sessions)).toBeNull();
+    // A lead (it holds a seat) with no line and no parent is flagged, not hidden.
+    expect(reportingLeadLine({ "fulcra.seat": "project-lead" }, "mini", sessions)).toBe(
+      "No reporting line recorded",
+    );
+    expect(
+      reportingLeadLine(
+        { "fulcra.seat": "project-lead", "paseo.parent-agent-id": "lead-1" },
+        "mini",
+        sessions,
+      ),
+    ).toBe("Reports to Fulcra lead");
   });
 
   it("falls back to the parent label, as the daemon does", () => {

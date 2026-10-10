@@ -177,10 +177,12 @@ function refusal(input: LineInput, rawLine: string, line: string | null): LineDe
       allowed: false,
       reason: "A main assistant sends to its own leads. Ask the owner to add a direct link.",
     };
+  // The sender's line is the main assistant, and no chat on this computer holds that role. The send is not refused
+  // for the missing role: it is refused because the target does not report to the sender.
   if (rawLine === MAIN_ASSISTANT_REF && !line)
     return {
       allowed: false,
-      reason: "No chat is the main assistant now. Ask the owner to set one.",
+      reason: `${name(input.target, input.target.id)} does not report to you, so you cannot send to it. Your line is the main assistant, and no chat on this computer holds that role now. Ask the owner to add a direct link.`,
     };
   if (rawLine === MAIN_ASSISTANT_REF)
     return {

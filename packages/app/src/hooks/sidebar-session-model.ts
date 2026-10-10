@@ -3,6 +3,7 @@ import {
   PARENT_AGENT_ID_LABEL,
   REPORTS_TO_LABEL,
   REPORTS_TO_OWNER,
+  SEAT_LABEL,
 } from "@getpaseo/protocol/agent-labels";
 import type { Agent } from "@/stores/session-store";
 import {
@@ -20,13 +21,18 @@ export interface SidebarSessionRow {
   status: Agent["status"];
   pendingPermissionCount: number;
   account: SessionAccount | null;
-  /** Fulcra 0.2.8: the chat's lead in plain words ("Reports to …"), or null when it has no reporting line. */
+  /** Fulcra 0.2.8: the chat's lead in plain words ("Reports to …"), or null when it has no reporting line. A seated chat without one says so. */
   lead: string | null;
 }
 
 const CONTROLLER_PARENT_LABEL = "fulcra.parent-session";
 
 type Sessions = Record<string, { agents: ReadonlyMap<string, Agent> } | undefined>;
+
+/** A chat with a seat (a lead) and no line says so, instead of showing nothing. */
+function noLineNote(labels: Record<string, string> | undefined): string | null {
+  return labels?.[SEAT_LABEL]?.trim() ? "No reporting line recorded" : null;
+}
 
 /**
  * The line under a chat's name: who it reports to, from its fulcra.reports-to label. A chat ID names that chat
@@ -43,7 +49,7 @@ export function reportingLeadLine(
     labels?.[REPORTS_TO_LABEL]?.trim() ||
     labels?.[CONTROLLER_PARENT_LABEL]?.trim() ||
     labels?.[PARENT_AGENT_ID_LABEL]?.trim();
-  if (!line) return null;
+  if (!line) return noLineNote(labels);
   if (line === REPORTS_TO_OWNER) return "Reports to you";
   if (line === MAIN_ASSISTANT_REF) return "Reports to Main assistant";
   const at = line.lastIndexOf("@");
