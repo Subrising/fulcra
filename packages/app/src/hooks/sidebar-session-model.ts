@@ -2,7 +2,9 @@ import {
   MAIN_ASSISTANT_REF,
   PARENT_AGENT_ID_LABEL,
   REPORTS_TO_LABEL,
+  MAIN_ASSISTANT_ROLE,
   REPORTS_TO_OWNER,
+  SEAT_LABEL,
 } from "@getpaseo/protocol/agent-labels";
 import type { Agent } from "@/stores/session-store";
 import {
@@ -20,13 +22,44 @@ export interface SidebarSessionRow {
   status: Agent["status"];
   pendingPermissionCount: number;
   account: SessionAccount | null;
-  /** Fulcra 0.2.8: the chat's lead in plain words ("Reports to …"), or null when it has no reporting line. */
+  /** Fulcra 0.2.8: the chat's lead in plain words ("Reports to …"), or null when it has no reporting line. A chat with no line but with chats under it says so. */
   lead: string | null;
 }
 
 const CONTROLLER_PARENT_LABEL = "fulcra.parent-session";
 
 type Sessions = Record<string, { agents: ReadonlyMap<string, Agent> } | undefined>;
+
+const lineOf = (labels: Record<string, string> | undefined) =>
+  labels?.[REPORTS_TO_LABEL]?.trim() ||
+  labels?.[CONTROLLER_PARENT_LABEL]?.trim() ||
+  labels?.[PARENT_AGENT_ID_LABEL]?.trim();
+
+/** True when another chat's line names this chat (on this computer, or "<id>@<serverId>"). */
+function hasChildren(agentId: string, serverId: string, sessions: Sessions): boolean {
+  for (const [host, session] of Object.entries(sessions)) {
+    for (const other of session?.agents.values() ?? []) {
+      if (other.id === agentId && host === serverId) continue;
+      const line = lineOf(other.labels);
+      if (line === `${agentId}@${serverId}` || (host === serverId && line === agentId)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A chat with no line and no parent, but with chats that report to it, says so instead of showing nothing. The
+ * chat that holds the main assistant role is left out: it reports to the owner.
+ */
+function noLineNote(
+  labels: Record<string, string> | undefined,
+  serverId: string,
+  sessions: Sessions,
+  agentId: string | undefined,
+): string | null {
+  if (!agentId || labels?.[SEAT_LABEL]?.trim() === MAIN_ASSISTANT_ROLE) return null;
+  return hasChildren(agentId, serverId, sessions) ? "No reporting line recorded" : null;
+}
 
 /**
  * The line under a chat's name: who it reports to, from its fulcra.reports-to label. A chat ID names that chat
@@ -36,20 +69,18 @@ export function reportingLeadLine(
   labels: Record<string, string> | undefined,
   serverId: string,
   sessions: Sessions,
+  agentId?: string,
 ): string | null {
   // The same order as the daemon's reportsTo (packages/server/src/server/reporting-lines.ts): the recorded line,
   // then the parent the controller or the creating chat recorded.
-  const line =
-    labels?.[REPORTS_TO_LABEL]?.trim() ||
-    labels?.[CONTROLLER_PARENT_LABEL]?.trim() ||
-    labels?.[PARENT_AGENT_ID_LABEL]?.trim();
-  if (!line) return null;
+  const line = lineOf(labels);
+  if (!line) return noLineNote(labels, serverId, sessions, agentId);
   if (line === REPORTS_TO_OWNER) return "Reports to you";
   if (line === MAIN_ASSISTANT_REF) return "Reports to Main assistant";
   const at = line.lastIndexOf("@");
-  const agentId = at > 0 ? line.slice(0, at) : line;
+  const leadId = at > 0 ? line.slice(0, at) : line;
   const host = at > 0 ? line.slice(at + 1) : serverId;
-  const title = sessions[host]?.agents.get(agentId)?.title?.trim();
+  const title = sessions[host]?.agents.get(leadId)?.title?.trim();
   return title ? `Reports to ${title}` : "Reports to a chat that is not loaded";
 }
 
@@ -75,7 +106,7 @@ export function selectSidebarSessionRows(
           provider: agent.provider,
           labels: { [SESSION_ACCOUNT_LABEL]: agent.labels?.[SESSION_ACCOUNT_LABEL] ?? "" },
         }),
-        lead: reportingLeadLine(agent.labels, serverId, sessions),
+        lead: reportingLeadLine(agent.labels, serverId, sessions, agent.id),
       });
     }
   }

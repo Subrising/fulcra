@@ -180,7 +180,7 @@ describe("reporting lines", () => {
       }),
     ).toEqual({
       allowed: false,
-      reason: "No chat is the main assistant now. Ask the owner to set one.",
+      reason: `${worker.title} (${worker.id.slice(0, 8)}) does not report to you, so you cannot send to it. Your line is the main assistant, and no chat on this computer holds that role now. Ask the owner to add a direct link.`,
     });
   });
 
