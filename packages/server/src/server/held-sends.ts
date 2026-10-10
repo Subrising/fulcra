@@ -73,6 +73,21 @@ export class HeldSends {
     return position;
   }
 
+  /** Like hold, and settles when this delivery has run: resolved when it was sent, rejected when it failed. */
+  holdAndWait(targetId: string, deliver: HeldDelivery): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.hold(targetId, async () => {
+        try {
+          await deliver();
+          resolve();
+        } catch (error) {
+          if (isRequeue(error)) throw error;
+          reject(error);
+        }
+      });
+    });
+  }
+
   pending(targetId: string): number {
     return this.queues.get(targetId)?.length ?? 0;
   }
