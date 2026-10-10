@@ -93,7 +93,12 @@ export function PluginCatalogSync({
             });
             failures = 0;
           }
-        } catch {
+        } catch (error) {
+          // FULCRA(plugin-host): the failure was silent. Without this line no log shows why a host has no plugins.
+          console.warn(
+            `[Plugins] Catalog read failed for ${serverId} (attempt ${failures + 1}, ${paging === true ? "paged" : "legacy"})`,
+            error,
+          );
           if (!cancelled && epoch === generation) {
             // A paging refusal never retries through the legacy catalog or preserves old action surfaces.
             pluginRegistry.suspendHost(serverId);
