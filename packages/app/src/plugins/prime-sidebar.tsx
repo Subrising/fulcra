@@ -7,6 +7,7 @@ import { Crown, Network, Plus, RefreshCw, Users } from "lucide-react-native";
 import { router } from "expo-router";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import {
+  getHostRuntimeStore,
   useHostRegistryLoaded,
   useHostRuntimeClient,
   useHostRuntimeConnectionStatuses,
@@ -156,12 +157,6 @@ export function PrimeSidebarRows({
   const available = !query.isError && query.data?.available === true;
   const nodes = new Map((fleet.data?.nodes ?? []).map((node) => [node.id, node]));
   const projectName = new Map((projects.data?.projects ?? []).map((p) => [p.id, p.name]));
-  // Leads of archived projects are hidden with their project.
-  const leads = available
-    ? (query.data!.projectSeats ?? []).filter(
-        (seat) => seat.state === "assigned" && seat.projectId && projectName.has(seat.projectId),
-      )
-    : [];
   return (
     <>
       <SidebarHeaderRow
@@ -195,20 +190,185 @@ export function PrimeSidebarRows({
       {available && !mainAssistant(query.data!.primes) ? (
         <MainAssistantChoice serverId={serverId} leadership={leadership} />
       ) : null}
-      {leads.map((seat) => (
+      <LeadRows
+        serverId={serverId}
+        directory={available ? query.data! : null}
+        nodes={nodes}
+        projectName={projectName}
+        navigation={navigation}
+        leadership={leadership}
+        onBeforeNavigate={onBeforeNavigate}
+      />
+    </>
+  );
+}
+
+/**
+ * Fulcra 0.2.11: the main assistant first, then this computer's project leads, then the leads another connected
+ * computer records (read-only). Every row names its chat.
+ */
+function LeadRows({
+  serverId,
+  directory,
+  nodes,
+  projectName,
+  navigation,
+  leadership,
+  onBeforeNavigate,
+}: {
+  serverId: string;
+  directory: { primes?: Seat[]; projectSeats?: Seat[] } | null;
+  nodes: ReadonlyMap<string, FleetNode>;
+  projectName: ReadonlyMap<string, string>;
+  navigation: ReturnType<typeof usePluginHostNavigation>;
+  leadership: () => void;
+  onBeforeNavigate?: () => void;
+}) {
+  // Leads of archived projects are hidden with their project.
+  const leads = (directory?.projectSeats ?? []).filter(
+    (seat) => seat.state === "assigned" && seat.projectId && projectName.has(seat.projectId),
+  );
+  const main = directory ? mainAssistant(directory.primes) : null;
+  const mainNode = main?.sessionId ? nodes.get(main.sessionId) : undefined;
+  const remote = useOtherHostLeads(serverId);
+  return (
+    <>
+      {main ? (
         <LeadRow
-          key={`project:${seat.seat}`}
-          seat={seat}
-          title={`Lead · ${projectName.get(seat.projectId!) ?? "project"}`}
-          node={seat.sessionId ? nodes.get(seat.sessionId) : undefined}
+          key="main-assistant"
+          seat={main}
+          role="Main assistant"
+          title={chatName(mainNode, "Main assistant")}
+          node={mainNode}
           navigation={navigation}
           leadership={leadership}
           onBeforeNavigate={onBeforeNavigate}
-          testID={`sidebar-lead-${seat.seat}`}
+          testID="sidebar-lead-main-assistant"
+        />
+      ) : null}
+      {leads.map((seat) => {
+        const node = seat.sessionId ? nodes.get(seat.sessionId) : undefined;
+        const role = `Lead · ${projectName.get(seat.projectId!) ?? "project"}`;
+        return (
+          <LeadRow
+            key={`project:${seat.seat}`}
+            seat={seat}
+            role={role}
+            title={chatName(node, role)}
+            node={node}
+            navigation={navigation}
+            leadership={leadership}
+            onBeforeNavigate={onBeforeNavigate}
+            testID={`sidebar-lead-${seat.seat}`}
+          />
+        );
+      })}
+      {remote.map((lead) => (
+        <LeadRow
+          key={`remote:${lead.serverId}:${lead.seat.seat}`}
+          seat={lead.seat}
+          role={`Lead · ${lead.project}`}
+          title={chatName(lead.node, `Lead · ${lead.project}`)}
+          node={lead.node}
+          hostLabel={lead.hostLabel}
+          readOnly
+          navigation={navigation}
+          leadership={leadership}
+          onBeforeNavigate={onBeforeNavigate}
+          testID={`sidebar-remote-lead-${lead.serverId}-${lead.seat.seat}`}
         />
       ))}
     </>
   );
+}
+
+/** The chat's own name from the fleet, else the role. */
+export function chatName(node: FleetNode | undefined, fallback: string): string {
+  const title = node?.title?.trim();
+  return title && title !== "Saved conversation" && title !== "Remote conversation"
+    ? title
+    : fallback;
+}
+
+export interface OtherHostLead {
+  serverId: string;
+  hostLabel: string;
+  seat: Seat;
+  project: string;
+  node: FleetNode | undefined;
+}
+
+/**
+ * Fulcra 0.2.11: the project leads that the controller on another connected computer records, read-only, with that
+ * computer's name. The same reads the pinned main assistant makes (role directory, projects, fleet), from each online
+ * computer except the home computer. A computer that does not answer shows no rows; the home computer's leads stay.
+ */
+function useOtherHostLeads(homeServerId: string): OtherHostLead[] {
+  const hosts = useHosts();
+  const ids = useMemo(
+    () => hosts.map((host) => host.serverId).filter((id) => id !== homeServerId),
+    [hosts, homeServerId],
+  );
+  const statuses = useHostRuntimeConnectionStatuses(ids);
+  const key = ids
+    .filter((id) => statuses.get(id) === "online")
+    .sort()
+    .join(",");
+  const query = useFetchQuery({
+    queryKey: ["fulcra-other-host-leads", key],
+    queryFn: async () => (await Promise.all(key.split(",").map(readHostLeads))).flat(),
+    enabled: key.length > 0,
+    staleTimeMs: 30_000,
+    dataShape: "list",
+    retry: 1,
+  });
+  return useMemo(
+    () =>
+      (key ? (query.data ?? []) : []).map(
+        (lead): OtherHostLead => ({
+          serverId: lead.serverId,
+          seat: lead.seat,
+          project: lead.project,
+          node: lead.node,
+          hostLabel:
+            hosts.find((host) => host.serverId === lead.serverId)?.label ?? "another computer",
+        }),
+      ),
+    [key, query.data, hosts],
+  );
+}
+
+async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hostLabel">[]> {
+  const client = getHostRuntimeStore().getSnapshot(serverId)?.client;
+  if (!client) return [];
+  const plugin = pluginRegistry.controllerPluginId(serverId);
+  try {
+    const directory = (await client.invokePluginRpc(plugin, "organization.role-directory", {})) as {
+      available?: boolean;
+      projectSeats?: Seat[];
+    } | null;
+    const seats = (directory?.available ? (directory.projectSeats ?? []) : []).filter(
+      (seat) => seat.state === "assigned" && seat.projectId,
+    );
+    if (!seats.length) return [];
+    const [projects, fleet] = (await Promise.all([
+      client.invokePluginRpc(plugin, "organization.projects", {}).catch(() => null),
+      client.invokePluginRpc(plugin, "organization.fleet", {}).catch(() => null),
+    ])) as [{ projects?: { id: string; name: string }[] } | null, Fleet | null];
+    const names = new Map((projects?.projects ?? []).map((p) => [p.id, p.name]));
+    const nodes = new Map((fleet?.nodes ?? []).map((node) => [node.id, node]));
+    // Leads of archived projects are hidden with their project, as on the home computer.
+    return seats
+      .filter((seat) => names.has(seat.projectId!))
+      .map((seat) => ({
+        serverId,
+        seat,
+        project: names.get(seat.projectId!)!,
+        node: seat.sessionId ? nodes.get(seat.sessionId) : undefined,
+      }));
+  } catch {
+    return [];
+  }
 }
 
 function useAllMainAssistants() {
@@ -467,11 +627,12 @@ export function leadStatusLine(
   node: FleetNode | undefined,
   canOpen: boolean,
   unavailableText = "Unavailable",
+  hostLabel?: string,
 ): string {
   if (seat.state === "vacant") return "Empty slot";
   if (!canOpen) return unavailableText;
   if (!node) return "Status unknown";
-  return `${STATE_LABEL[stateOf(node)]} · ${node.host}`;
+  return `${STATE_LABEL[stateOf(node)]} · ${hostLabel ?? node.host}`;
 }
 
 function LeadRow({
@@ -483,9 +644,18 @@ function LeadRow({
   onBeforeNavigate,
   testID,
   unavailableText,
+  role,
+  hostLabel,
+  readOnly = false,
 }: {
   seat: Seat;
   title: string;
+  /** "Main assistant" or "Lead · <project>", shown before the status. */
+  role?: string;
+  /** The computer this app knows the lead's host as; it replaces the fleet's own host name. */
+  hostLabel?: string;
+  /** A lead on another computer: open its chat, but no "+" new work from here. */
+  readOnly?: boolean;
   node: FleetNode | undefined;
   navigation: ReturnType<typeof usePluginHostNavigation>;
   leadership: () => void;
@@ -505,7 +675,11 @@ function LeadRow({
   const canOpen = Boolean(
     seat.state === "assigned" && seat.sessionPresent && seat.sessionId && agentServerId,
   );
-  const status = leadStatusLine(seat, node, canOpen, unavailableText);
+  const state = leadStatusLine(seat, node, canOpen, unavailableText, hostLabel);
+  // Another computer's lead always names that computer, even when its status is not known here.
+  const located =
+    hostLabel && !state.endsWith(` · ${hostLabel}`) ? `${state} · ${hostLabel}` : state;
+  const status = role ? `${role} · ${located}` : located;
   const label = canOpen ? title : `${title} · ${status}`;
   const [composing, setComposing] = useState(false);
   const open = useCallback(() => {
@@ -538,12 +712,12 @@ function LeadRow({
             <Text style={styles.title} numberOfLines={2}>
               {title}
             </Text>
-            <Text style={styles.status} numberOfLines={1}>
+            <Text style={styles.status} numberOfLines={2}>
               {status}
             </Text>
           </View>
         </Pressable>
-        {canOpen ? (
+        {canOpen && !readOnly ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`New work for ${title}`}
@@ -555,7 +729,7 @@ function LeadRow({
           </Pressable>
         ) : null}
       </View>
-      {composing && canOpen ? (
+      {composing && canOpen && !readOnly ? (
         <NewWorkBox
           title={title}
           serverId={agentServerId!}
