@@ -4185,6 +4185,66 @@ describe("send_agent_prompt MCP tool", () => {
     }
   });
 
+  it("a held prompt that the reporting line refuses at delivery is not sent and the caller is told why", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "mcp-held-refused-"));
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const parentClient = new HeldTurnAgentClient("claude", false);
+    const childClient = new HeldTurnAgentClient("codex", true);
+    const agentManager = new AgentManager({
+      clients: { claude: parentClient, codex: childClient },
+      registry: storage,
+      logger,
+    });
+
+    try {
+      const parent = await agentManager.createAgent(
+        { provider: "claude", cwd: existingCwd },
+        undefined,
+        { workspaceId: "wks_parent" },
+      );
+      const server = await createAgentMcpServer({
+        agentManager,
+        agentStorage: storage,
+        callerAgentId: parent.id,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger,
+      });
+      const created = await invokeToolWithParsedInput(registeredTool(server, "create_agent"), {
+        relationship: { kind: "subagent" },
+        workspace: { kind: "current" },
+        title: "Busy Child",
+        provider: "codex/gpt-5.4",
+        initialPrompt: "Run a long command",
+      });
+      const childId = z.object({ agentId: z.string() }).parse(created.structuredContent).agentId;
+      await vi.waitFor(() => expect(agentManager.getAgent(childId)?.lifecycle).toBe("running"));
+      await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+        agentId: childId,
+        prompt: "Held prompt",
+      });
+
+      // While the prompt waits, the line changes: the child no longer reports to the caller, and the caller now
+      // reports to another chat. A send from the caller to the child is then outside its line.
+      const relabel = async (id: string, labels: Record<string, string>) => {
+        const live = Reflect.get(agentManager, "agents").get(id);
+        if (live) live.labels = labels;
+        const record = await storage.get(id);
+        if (record) await storage.upsert({ ...record, labels });
+      };
+      await relabel(childId, {});
+      await relabel(parent.id, { "fulcra.reports-to": "99999999-9999-4999-8999-999999999999" });
+
+      const childSession = childClient.sessions[0]!;
+      childSession.finishTurn();
+      const toldWhy = () =>
+        (parentClient.sessions[0]?.prompts ?? []).join("\n").includes("was not delivered");
+      await vi.waitFor(() => expect(toldWhy()).toBe(true));
+      expect(childSession.prompts).toEqual(["Run a long command"]);
+    } finally {
+      await removeAgentStateDir(agentManager, storage, workdir);
+    }
+  });
+
   it("reports a background prompt's accepted turn as running", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-background-send-status-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);

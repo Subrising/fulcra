@@ -89,6 +89,11 @@ export class ReportUpService {
   }
 
   onEvent(event: AgentManagerEvent): void {
+    // A closed chat keeps no state here, so the map does not grow with old chats.
+    if (event.type === "agent_state" && event.agent.lifecycle === "closed") {
+      this.turns.delete(event.agent.id);
+      return;
+    }
     if (event.type !== "agent_stream") return;
     const { agentId } = event;
     const kind = event.event.type;
@@ -96,6 +101,12 @@ export class ReportUpService {
     this.turns.set(agentId, turn);
     if (kind === "turn_started") {
       turn.open = true;
+      return;
+    }
+    // A canceled turn (interrupt, stop, archive) sends nothing, and its first message must not decide for the next.
+    if (kind === "turn_canceled") {
+      turn.open = false;
+      turn.fromNotice = null;
       return;
     }
     if (kind === "timeline") {
