@@ -11,6 +11,7 @@ import {
 } from "./pid-lock.js";
 import { daemonLaunchEnvironment } from "./config-environment.js";
 import { readPersistedConfig } from "./persisted-config.js";
+import { assertNotInsideOwnDaemonSession } from "./own-session-guard.js";
 import treeKill from "tree-kill";
 const killTree = (pid: number, signal: string): Promise<void> =>
   new Promise((resolve, reject) =>
@@ -29,6 +30,11 @@ export { resolvePaseoHome } from "./paseo-home.js";
 export { ensurePrivateDirectory } from "./private-files.js";
 export { daemonLaunchEnvironment } from "./config-environment.js";
 export { readLocalCredentialForTarget } from "./local-credential.js";
+export {
+  assertNotInsideOwnDaemonSession,
+  DAEMON_SERVER_ID_ENV,
+  OwnDaemonSessionError,
+} from "./own-session-guard.js";
 export {
   isSamePidLock as isSameDaemonInstance,
   type PidLockInfo as DaemonInstance,
@@ -145,6 +151,8 @@ export async function stopDaemonInstance(
     timeoutMs?: number;
     killTimeoutMs?: number;
     requestShutdown?: (instance: PidLockInfo & { listen: string }) => Promise<void>;
+    /** Only for an operator outside every session of this daemon. */
+    overrideSessionGuard?: boolean;
   } = {},
 ): Promise<{
   action: "stopped" | "not_running";
@@ -173,6 +181,11 @@ export async function stopDaemonInstance(
   }
   if (instance.pid <= 1 || instance.pid === process.pid)
     throw new Error("Refusing to stop invalid supervisor PID");
+  assertNotInsideOwnDaemonSession({
+    action: "stop",
+    daemonPids: [instance.pid],
+    override: options.overrideSessionGuard,
+  });
   let { forced, usedLifecycleRpc } = await requestInstanceStop(home, instance, options);
   const waitForExit = async (waitMs: number) => {
     const exitDeadline = Date.now() + waitMs;
