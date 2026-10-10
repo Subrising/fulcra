@@ -44,6 +44,7 @@ export function startLimitResume(input: {
         busy: false,
         unscopedResumeAllowed: false,
         binding: null,
+        stored: true,
       };
     },
     getLastAssistantMessage: (agentId) => agentManager.getLastAssistantMessage(agentId),

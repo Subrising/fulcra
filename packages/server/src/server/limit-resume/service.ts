@@ -102,6 +102,8 @@ export interface LimitResumeAgent {
   busy: boolean;
   unscopedResumeAllowed: boolean;
   binding: string | null;
+  /** Read from storage only: the session is not loaded, so ownership and binding are not known yet. */
+  stored?: true;
 }
 
 export interface LimitResumeDeps {
@@ -449,7 +451,9 @@ export class LimitResumeService {
     const epoch = this.epochOf(agentId);
     const agent = await this.admissionAgent(agentId, limitId, epoch);
     if (!agent) return;
-    const refusal = refusalOf(agent, binding);
+    // At boot no session is loaded yet. A stored record cannot say who owns the session or what its binding is,
+    // so those checks wait for the due time, when fire() loads the session and refuses (fail closed).
+    const refusal = agent.stored ? null : refusalOf(agent, binding);
     if (refusal) {
       this.deps.onSkip?.(agentId, refusal);
       await this.clearStaleMarker(agentId, agent);

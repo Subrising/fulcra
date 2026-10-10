@@ -141,6 +141,7 @@ async function fixture() {
         .flatMap((item) => item.requests())
         .filter((request) => request.method === "turn/start"),
     manager,
+    client,
     agent,
     get session() {
       return session;
@@ -630,4 +631,99 @@ test.each(["standalone", "delegated", "no-answer"] as const)(
     }
   },
   15_000,
+);
+
+test.each(["standalone", "delegated", "no-answer", "setting off"] as const)(
+  "a cold boot after a restart mid-turn queues the session and checks the owner when it loads: %s",
+  async (kind) => {
+    const f = await fixture();
+    const store = new ControlStore(path.join(f.home, "journal.sqlite"));
+    const registerPlugin = (host: TrustedPlugins) => {
+      if (kind === "no-answer")
+        host.registerV11("fixture-input-authority", true, (server) =>
+          server.admission.onInput(() => "allow"),
+        );
+      else
+        host.registerV11(OWN_ID, true, (server) =>
+          createTrustedContribution({ home: f.home })(server),
+        );
+    };
+    registerPlugin(f.host);
+    const readQueue = async () => JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8"));
+    let service = f.start();
+    // The next daemon process: a new plugin host and a new AgentManager on the same storage, with no session loaded.
+    const bootHost = new TrustedPlugins();
+    bootHost.initializeKnownAgents([f.agent.id]);
+    registerPlugin(bootHost);
+    const booted = new AgentManager({
+      registry: f.storage,
+      logger: f.logger,
+      trustedPlugins: bootHost,
+      clients: { codex: f.client },
+    });
+    const startBooted = () =>
+      startLimitResume({
+        paseoHome: f.home,
+        agentManager: booted,
+        agentStorage: f.storage,
+        daemonConfigStore: f.config,
+        logger: f.logger,
+      });
+    const skipped = vi.spyOn(f.logger, "info");
+    try {
+      const run = f.manager.runAgent(f.agent.id, "long task").catch(() => undefined);
+      await f.server.waitForTurnStart();
+      await vi.waitFor(async () => expect((await readQueue()).running[f.agent.id]).toBeTruthy());
+      service.stop();
+      if (kind === "delegated") {
+        store.created(f.agent.id, randomUUID(), f.home);
+        store.db
+          .prepare("UPDATE sessions SET mode='delegated',boot=?,grantedAt=1 WHERE id=?")
+          .run(bootHost.boot, f.agent.id);
+      }
+      if (kind === "setting off") f.config.patch({ autoResumeOnLimit: false });
+      f.server.completeTurn({ threadId: "limit-thread", status: "interrupted" });
+      await run;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      service = startBooted();
+      expect(booted.getAgent(f.agent.id)).toBeNull();
+      await service.enqueueInterrupted(randomUUID());
+      const queued = (await readQueue()).entries;
+      if (kind === "setting off") {
+        expect(queued).toEqual([]);
+        expect(f.turnStarts()).toHaveLength(1);
+        return;
+      }
+      // Ownership is not known before the session loads, so every interrupted session is queued once.
+      expect(queued).toHaveLength(1);
+      expect(queued[0].source).toBe("interrupted");
+      expect(skipped.mock.calls.some((call) => call[1] === "Auto-resume skipped")).toBe(false);
+      await makeDue(f.home);
+      service.stop();
+      service = startBooted();
+      // Due time: the session loads and is checked; a refusal sends nothing and removes the entry. A cold Codex
+      // session knows its account only after its thread loads in a turn, so its binding cannot match yet and it
+      // fails closed. The Claude binding has no such part; the scratch-daemon restart test covers that resume.
+      const reason = kind === "standalone" ? "binding changed" : "owned by a trusted plugin";
+      await vi.waitFor(async () => expect((await readQueue()).entries).toEqual([]), {
+        timeout: 5_000,
+      });
+      expect(
+        skipped.mock.calls.some(
+          (call) =>
+            call[1] === "Auto-resume skipped" && (call[0] as { reason?: string }).reason === reason,
+        ),
+      ).toBe(true);
+      expect(booted.getAgent(f.agent.id)?.labels[LIMIT_RESUME_AT_LABEL]).toBeFalsy();
+      expect(f.turnStarts()).toHaveLength(1);
+    } finally {
+      service.stop();
+      await bootHost.shutdownClosure(() => booted.closeAgent(f.agent.id)).catch(() => undefined);
+      await booted.flush();
+      bootHost.close();
+      await f.cleanup();
+      store.close();
+    }
+  },
+  20_000,
 );
