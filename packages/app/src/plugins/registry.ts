@@ -140,6 +140,8 @@ export class PluginRegistry {
     for (const entry of catalog) {
       if (!entry.clientBundle || isPluginBundleTrusted(entry)) continue;
       const key = `${serverId}/${entry.id}`;
+      // FULCRA(plugin-host): a refused bundle is never evaluated; say so, or the plugin just seems missing.
+      console.warn(`[Plugins] Bundle not trusted, not evaluated: ${key}`);
       const prior = previous.find((plugin) => plugin.id === entry.id) ?? previousUntrusted.get(key);
       // Keep only safe presentation fields from previously verified contributions. Never inspect/eval refused code.
       const priorItems =
