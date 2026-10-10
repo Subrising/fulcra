@@ -28,6 +28,7 @@ import { fleetRpc, type Fleet } from "../../../../control/orca-organization/shar
 import { projectsRpc } from "../../../../control/orca-organization/shared/projects";
 import { STATE_LABEL, stateOf } from "../../../../control/orca-organization/client/team-tree";
 import { create } from "zustand";
+import { chatLeads, chatStatusLabel } from "./sidebar-chat-leads";
 
 import type { Theme } from "@/styles/theme";
 
@@ -66,6 +67,9 @@ type FleetNode = Fleet["nodes"][number];
 // report the role records unavailable. The sidebar tries again by itself (about 35 s in total) before it shows
 // "Couldn't load", instead of waiting for someone to press Retry.
 export const SIDEBAR_READ_RETRIES = 6;
+// FULCRA(sidebar-leads): the lead reads had no timer, so a lead seated after the app opened stayed out of the sidebar
+// until the app was reopened (Music and video lead, 11 Oct). The Leads page already read every 30 s.
+export const SIDEBAR_REFRESH_MS = 30_000;
 export const sidebarRetryDelay = (attempt: number) => Math.min(1000 * 2 ** attempt, 10_000);
 async function availableDirectory<T extends { available?: boolean; unavailable?: string | null }>(
   read: Promise<T>,
@@ -109,6 +113,7 @@ export function PrimeSidebarRows({
     queryKey: ["orca-role-directory", serverId],
     queryFn: () => availableDirectory(read({})),
     staleTimeMs: 30_000,
+    refetchInterval: SIDEBAR_REFRESH_MS,
     dataShape: "value",
     retry: SIDEBAR_READ_RETRIES,
     retryDelay,
@@ -117,6 +122,7 @@ export function PrimeSidebarRows({
     queryKey: ["orca-fleet", serverId],
     queryFn: () => readFleet({}),
     staleTimeMs: 30_000,
+    refetchInterval: SIDEBAR_REFRESH_MS,
     dataShape: "value",
     retry: SIDEBAR_READ_RETRIES,
     retryDelay,
@@ -125,6 +131,7 @@ export function PrimeSidebarRows({
     queryKey: ["orca-projects", serverId],
     queryFn: () => readProjects({}),
     staleTimeMs: 60_000,
+    refetchInterval: SIDEBAR_REFRESH_MS,
     dataShape: "value",
     retry: SIDEBAR_READ_RETRIES,
     retryDelay,
@@ -196,6 +203,7 @@ export function PrimeSidebarRows({
         directory={available ? query.data! : null}
         nodes={nodes}
         projectName={projectName}
+        projectsKnown={projects.data !== undefined}
         navigation={navigation}
         leadership={leadership}
         onBeforeNavigate={onBeforeNavigate}
@@ -231,6 +239,7 @@ function LeadRows({
   directory,
   nodes,
   projectName,
+  projectsKnown,
   navigation,
   leadership,
   onBeforeNavigate,
@@ -239,17 +248,36 @@ function LeadRows({
   directory: { primes?: Seat[]; projectSeats?: Seat[] } | null;
   nodes: ReadonlyMap<string, FleetNode>;
   projectName: ReadonlyMap<string, string>;
+  /** False while the projects read has failed or not answered: a seated lead is then still shown. */
+  projectsKnown: boolean;
   navigation: ReturnType<typeof usePluginHostNavigation>;
   leadership: () => void;
   onBeforeNavigate?: () => void;
 }) {
-  // Leads of archived projects are hidden with their project.
+  // Leads of archived projects are hidden with their project, but only when the project list was read: a failed
+  // projects read must not hide every seated lead.
   const leads = (directory?.projectSeats ?? []).filter(
-    (seat) => seat.state === "assigned" && seat.projectId && projectName.has(seat.projectId),
+    (seat) =>
+      seat.state === "assigned" &&
+      seat.projectId &&
+      (!projectsKnown || projectName.has(seat.projectId)),
   );
   const main = directory ? mainAssistant(directory.primes) : null;
   const mainNode = main?.sessionId ? nodes.get(main.sessionId) : undefined;
   const remote = useOtherHostLeads(serverId);
+  const sessions = useSessionStore((state) => state.sessions);
+  const seatedIds = new Set(
+    [main, ...leads, ...remote.map((lead) => lead.seat)].flatMap((seat) =>
+      seat?.sessionId ? [seat.sessionId] : [],
+    ),
+  );
+  const chatLeadRows = useMemo(
+    () => chatLeads(sessions, seatedIds),
+    // seatedIds is rebuilt each render from the values below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, [...seatedIds].sort().join(",")],
+  );
+  const hosts = useHosts();
   const listMain = useLeadsListedMainAssistant((state) => state.set);
   const listed = main !== null;
   useEffect(() => {
@@ -288,6 +316,16 @@ function LeadRows({
           />
         );
       })}
+      {chatLeadRows.map((lead) => (
+        <ChatLeadRow
+          key={`chat:${lead.serverId}:${lead.agentId}`}
+          lead={lead}
+          hostLabel={hosts.find((host) => host.serverId === lead.serverId)?.label}
+          navigation={navigation}
+          leadership={leadership}
+          onBeforeNavigate={onBeforeNavigate}
+        />
+      ))}
       {remote.map((lead) => (
         <LeadRow
           key={`remote:${lead.serverId}:${lead.seat.seat}`}
@@ -344,6 +382,7 @@ function useOtherHostLeads(homeServerId: string): OtherHostLead[] {
     queryFn: async () => (await Promise.all(key.split(",").map(readHostLeads))).flat(),
     enabled: key.length > 0,
     staleTimeMs: 30_000,
+    refetchInterval: SIDEBAR_REFRESH_MS,
     dataShape: "list",
     retry: 1,
   });
@@ -383,12 +422,13 @@ async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hos
     const names = new Map((projects?.projects ?? []).map((p) => [p.id, p.name]));
     const nodes = new Map((fleet?.nodes ?? []).map((node) => [node.id, node]));
     // Leads of archived projects are hidden with their project, as on the home computer.
+    // A failed projects read hides nothing (the lead is then named "project").
     return seats
-      .filter((seat) => names.has(seat.projectId!))
+      .filter((seat) => !projects || names.has(seat.projectId!))
       .map((seat) => ({
         serverId,
         seat,
-        project: names.get(seat.projectId!)!,
+        project: names.get(seat.projectId!) ?? "project",
         node: seat.sessionId ? nodes.get(seat.sessionId) : undefined,
       }));
   } catch {
@@ -655,11 +695,70 @@ export function leadStatusLine(
   canOpen: boolean,
   unavailableText = "Unavailable",
   hostLabel?: string,
+  chatStatus?: string,
 ): string {
   if (seat.state === "vacant") return "Empty slot";
   if (!canOpen) return unavailableText;
-  if (!node) return "Status unknown";
+  // The seat's chat is not a fleet node (the human-facing main assistant is not delegated to the controller): say
+  // what the chat list knows, marked as last known.
+  if (!node) {
+    const known = chatStatusLabel(chatStatus);
+    return known ? `${known} · last known` : "Status unknown";
+  }
   return `${STATE_LABEL[stateOf(node)]} · ${hostLabel ?? node.host}`;
+}
+
+/**
+ * A lead found in the chat list: a chat that reports to the main assistant and holds no seat. It opens its chat; there
+ * is no "+" new work here, and its computer is named.
+ */
+function ChatLeadRow({
+  lead,
+  hostLabel,
+  navigation,
+  leadership,
+  onBeforeNavigate,
+}: {
+  lead: { serverId: string; agentId: string; title: string; status: string | undefined };
+  hostLabel: string | undefined;
+  navigation: ReturnType<typeof usePluginHostNavigation>;
+  leadership: () => void;
+  onBeforeNavigate?: () => void;
+}) {
+  const known = chatStatusLabel(lead.status);
+  const status = [
+    "Lead",
+    known ? `${known} · last known` : "Status unknown",
+    hostLabel ?? "another computer",
+  ].join(" · ");
+  const open = useCallback(() => {
+    const result = navigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId });
+    if (result !== "requested") return leadership();
+    onBeforeNavigate?.();
+  }, [lead.agentId, lead.serverId, leadership, navigation, onBeforeNavigate]);
+  return (
+    <View style={styles.row}>
+      <View style={styles.line}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${lead.title} conversation`}
+          onPress={open}
+          testID={`sidebar-chat-lead-${lead.serverId}-${lead.agentId}`}
+          style={styles.main}
+        >
+          <ThemedUsers size={14} uniProps={mutedColor} />
+          <View style={styles.text}>
+            <Text style={styles.title} numberOfLines={2}>
+              {lead.title}
+            </Text>
+            <Text style={styles.status} numberOfLines={2}>
+              {status}
+            </Text>
+          </View>
+        </Pressable>
+      </View>
+    </View>
+  );
 }
 
 function LeadRow({
@@ -702,7 +801,12 @@ function LeadRow({
   const canOpen = Boolean(
     seat.state === "assigned" && seat.sessionPresent && seat.sessionId && agentServerId,
   );
-  const state = leadStatusLine(seat, node, canOpen, unavailableText, hostLabel);
+  const chatStatus = useSessionStore((state) =>
+    agentServerId && seat.sessionId
+      ? state.sessions[agentServerId]?.agents.get(seat.sessionId)?.status
+      : undefined,
+  );
+  const state = leadStatusLine(seat, node, canOpen, unavailableText, hostLabel, chatStatus);
   // Another computer's lead always names that computer, even when its status is not known here.
   const located =
     hostLabel && !state.endsWith(` · ${hostLabel}`) ? `${state} · ${hostLabel}` : state;
