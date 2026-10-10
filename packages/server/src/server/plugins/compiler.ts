@@ -299,16 +299,37 @@ function createRuntimeBoundaryPlugin(target: PluginBuildTarget, pluginDirectory:
 }
 
 function wrapCommonJsBundle(code: string): string {
-  return `(function(require) {\nconst module = { exports: {} };\nconst exports = module.exports;\n${code}\nreturn module.exports;\n})`;
+  return `(function(require) {\nvar module = { exports: {} };\nvar exports = module.exports;\n${code}\nreturn module.exports;\n})`;
 }
 
 function makeHermesInteropEager(code: string): string {
   // Hermes evaluates esbuild's lazy CommonJS interop getters from a string with
   // the final loop binding, so every named import can resolve to the last export.
   // Plugin bundles execute once and do not need live bindings from host modules.
-  return code
-    .replaceAll("get: () => from[key]", "value: from[key]")
-    .replaceAll("get:()=>from[key]", "value:from[key]");
+  // esbuild renames `key` (key10) when the plugin has its own top-level `key`.
+  return code.replace(/get: ?\(\) ?=> ?from\[(key\d*)\]/g, "value: from[$1]");
+}
+
+// FULCRA(plugin-host): the app's Hermes compiles a plugin bundle from source, not through Metro.
+// For a large source it compiles lazily, and then every class expression evaluates to undefined
+// (an error boundary becomes "Element type is invalid ... got: undefined"). It also gives let/const
+// one binding per function, so a closure made in a loop sees the last value. Lower exactly these
+// two features, as Metro's preset does for app code; the rest of es2020 runs on Hermes as is.
+function lowerForHermes(code: string, minifyWhitespace: boolean): string {
+  const babel = nodeRequire("@babel/core") as typeof import("@babel/core");
+  const result = babel.transformSync(code, {
+    babelrc: false,
+    configFile: false,
+    sourceType: "script",
+    compact: minifyWhitespace,
+    comments: !minifyWhitespace,
+    plugins: [
+      nodeRequire.resolve("@babel/plugin-transform-classes"),
+      nodeRequire.resolve("@babel/plugin-transform-block-scoping"),
+    ],
+  });
+  if (!result?.code) throw new Error("Plugin client compilation produced no output");
+  return result.code;
 }
 
 function runtimeSpecifierError(
@@ -427,7 +448,8 @@ async function compileTarget(
   checkSharedDependencies(result.metafile.inputs, pluginDirectory);
   const output = result.outputFiles[0]?.text;
   if (!output) throw new Error(`Plugin ${target} compilation produced no output`);
-  return wrapCommonJsBundle(makeHermesInteropEager(output));
+  const eager = makeHermesInteropEager(output);
+  return wrapCommonJsBundle(target === "client" ? lowerForHermes(eager, minifyWhitespace) : eager);
 }
 
 // minifyWhitespace is for the precompiled bundled plugin build only: it keeps the client catalog

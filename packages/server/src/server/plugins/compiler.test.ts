@@ -1,7 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compilePlugin,
@@ -910,4 +913,110 @@ export default function contribute() { void value; void secret; return () => und
     expect(clientBundle).toContain("Client contribution");
     expect(serverBundle).toBeNull();
   });
+});
+
+// FULCRA(plugin-host): the app's Hermes runs client bundles from source. It rejects or drops class syntax and gives
+// let/const one binding per function, so the compiler lowers both before the bundle leaves the daemon.
+const testRequire = createRequire(import.meta.url);
+const HERMESC = path.join(
+  path.dirname(testRequire.resolve("react-native/package.json")),
+  "sdks",
+  "hermesc",
+  { darwin: "osx-bin", linux: "linux64-bin", win32: "win64-bin" }[process.platform as string] ?? "",
+  process.platform === "win32" ? "hermesc.exe" : "hermesc",
+);
+
+async function compilesWithHermes(bundle: string): Promise<void> {
+  const directory = await mkdtemp(path.join(tmpdir(), "paseo-plugin-hermes-"));
+  temporaryDirectories.push(directory);
+  const source = path.join(directory, "bundle.js");
+  await writeFile(source, bundle);
+  execFileSync(HERMESC, ["-emit-binary", "-out", path.join(directory, "bundle.hbc"), source], {
+    stdio: "pipe",
+  });
+}
+
+function hermesUnsafeSyntax(bundle: string): string[] {
+  const babel = testRequire("@babel/core") as typeof import("@babel/core");
+  const found: string[] = [];
+  babel.traverse(
+    babel.parseSync(bundle, { babelrc: false, configFile: false, sourceType: "script" })!,
+    {
+      Class(classPath) {
+        found.push(`class at line ${classPath.node.loc?.start.line}`);
+      },
+      VariableDeclaration(declaration) {
+        if (declaration.node.kind !== "var")
+          found.push(`${declaration.node.kind} at line ${declaration.node.loc?.start.line}`);
+      },
+    },
+  );
+  return found;
+}
+
+describe("client bundles for the app's Hermes", () => {
+  it("lowers classes and block scoping, and keeps loop closures and namespace imports correct", async () => {
+    const entries = await createSplitPlugin();
+    await writeFile(
+      entries.client,
+      `import { Component } from "react";
+import * as kit from "@getpaseo/plugin/client/ui";
+// A top-level "key" makes esbuild rename its interop loop variable.
+const key = "plugin key";
+class Boundary extends Component { static getDerivedStateFromError() { return {}; } }
+class Refused extends Error {}
+export default function contribute(client) {
+  const handlers = [];
+  for (const name of ["a", "b", "c"]) handlers.push(() => name);
+  const shadow = "outer";
+  { const shadow = "inner"; void shadow; }
+  client.report({
+    key,
+    boundary: typeof Boundary,
+    refused: new Refused("no").message,
+    loop: handlers.map((handler) => handler()).join(),
+    shadow,
+    first: kit.First,
+  });
+  return () => undefined;
+}`,
+    );
+    const { clientBundle } = await compilePlugin({ client: entries.client, server: null });
+
+    expect(hermesUnsafeSyntax(clientBundle!)).toEqual([]);
+    expect(clientBundle).not.toMatch(/get: ?\(\) ?=> ?from\[/);
+    await compilesWithHermes(clientBundle!);
+    const host: Record<string, unknown> = {
+      react: { Component: function HostComponent() {} },
+      "@getpaseo/plugin/client/ui": { __esModule: true, First: "first", Last: "last" },
+    };
+    const factory = (0, eval)(clientBundle!) as (require: (name: string) => unknown) => {
+      default: (client: { report(value: unknown): void }) => unknown;
+    };
+    let report: unknown;
+    factory((name) => host[name]).default({ report: (value) => (report = value) });
+    expect(report).toEqual({
+      key: "plugin key",
+      boundary: "function",
+      refused: "no",
+      loop: "a,b,c",
+      shadow: "outer",
+      first: "first",
+    });
+  });
+
+  it("compiles the controller plugin's client for Hermes, inside the catalog size limit", async () => {
+    const controller = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../../control/orca-organization/index.client.tsx",
+    );
+    const { clientBundle } = await compilePlugin(
+      { client: controller, server: null },
+      { minifyWhitespace: true },
+    );
+
+    expect(hermesUnsafeSyntax(clientBundle!)).toEqual([]);
+    await compilesWithHermes(clientBundle!);
+    expect(Buffer.byteLength(JSON.stringify(clientBundle))).toBeLessThan(1024 * 1024);
+  }, 120_000);
 });
