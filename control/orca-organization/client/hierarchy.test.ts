@@ -128,7 +128,7 @@ const held = (extra: Partial<Seat> = {}): Seat =>
     note: "Accountable for the retained format",
     sessionPresent: true,
     sessionTaskMatches: true,
-    dispatch: { host: "host-a", supported: true, reason: null },
+    dispatch: { host: "mini", supported: true, reason: null },
     ...extra,
   });
 const roles = (extra: Partial<RoleDirectory> = {}): RoleDirectory => ({
@@ -601,7 +601,7 @@ test("role drift is named without erasing the accountability record", () => {
       projectSeats: [
         held({
           dispatch: {
-            host: "host-b",
+            host: "macbook",
             supported: false,
             reason: "The role session runs on the Book host.",
           },
