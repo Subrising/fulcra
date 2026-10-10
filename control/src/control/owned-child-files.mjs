@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -100,6 +101,20 @@ export function pidIsAlive(pid) {
     return e.code === "EPERM";
   }
 }
+/** When the process with this pid started, in ms; null when it cannot be read. Resolution is one second. */
+export function pidStartMs(pid) {
+  try {
+    const text = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C" },
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const ms = Date.parse(text);
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
 /**
  * Fulcra 0.2.9: a controller lock written before this computer last started cannot belong to a running controller, so
  * the host may recover it. After a restart, the lock of the killed controller stayed and every new controller refused
@@ -108,7 +123,7 @@ export function pidIsAlive(pid) {
  */
 export function recoverPreBootLock(
   home,
-  { bootMs = systemBootMs(), marginMs = 5000, isAlive = pidIsAlive } = {},
+  { bootMs = systemBootMs(), marginMs = 5000, isAlive = pidIsAlive, startMs = pidStartMs } = {},
 ) {
   const lock = path.join(home, "process.lock");
   const found = stat(lock);
@@ -126,8 +141,13 @@ export function recoverPreBootLock(
     throw Error("Unreadable controller lock from before the restart");
   }
   // The wall clock can be wrong. A live pid in the lock means the controller may still run: refuse.
-  if (Number.isSafeInteger(value?.pid) && value.pid > 0 && isAlive(value.pid))
-    throw Error("Controller lock pid is still running");
+  // After a restart the system can give the same pid to another process. That process started after the
+  // lock was written, so it is not the controller. If its start time is unknown, refuse (fail closed).
+  if (Number.isSafeInteger(value?.pid) && value.pid > 0 && isAlive(value.pid)) {
+    const started = startMs(value.pid);
+    if (started === null || started <= found.mtimeMs + marginMs)
+      throw Error("Controller lock pid is still running");
+  }
   // The same identity and file checks as a recovery after an observed exit.
   const owner = captureOwnedFiles(home, {
     pid: value?.pid,
