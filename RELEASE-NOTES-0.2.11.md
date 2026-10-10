@@ -6,11 +6,11 @@ Fulcra 0.2.11 is based on Paseo v0.11.0-beta.5.
 
 ## New in 0.2.11
 
-### Auto-resume after a restart works
+### Auto-resume after a restart works for Claude sessions on a pool account
 
-- A session that a daemon restart or crash cut off is now queued and resumed once, after the restart. In 0.2.9 and 0.2.10 no session was queued.
+- A Claude session on a pool account that a daemon restart or crash cut off is now queued and resumed once, after the restart. In 0.2.9 and 0.2.10 no session was queued.
 - Command Centre keeps its rule: a session that it manages (delegated, or taken over by you) is not resumed. This check runs when the resume is due.
-- Known limit: a Codex session on a pool account is not resumed after a restart. It fails closed and sends nothing.
+- Known limits: other sessions are not resumed after a restart. A Claude session that is not on a pool account is not queued. A Codex session is refused when the resume is due. Both fail closed and send nothing.
 
 ### Leads sidebar
 
