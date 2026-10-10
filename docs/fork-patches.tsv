@@ -380,7 +380,7 @@ branding	M	221	134	README.md
 branding	M	3	1	README.zh-CN.md
 branding	A	54	0	RELEASE-NOTES-0.2.10.md
 branding	A	39	0	RELEASE-NOTES-0.2.11.md
-branding	A	31	0	RELEASE-NOTES-0.2.12.md
+branding	A	36	0	RELEASE-NOTES-0.2.12.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -1345,6 +1345,8 @@ plugin-host	A	2	0	packages/app/src/plugins/bundle-trust-policy.ts
 plugin-host	A	196	0	packages/app/src/plugins/bundle-trust.test.ts
 plugin-host	A	37	0	packages/app/src/plugins/bundle-trust.ts
 plugin-host	M	4	0	packages/app/src/plugins/client-runtime.ts
+plugin-host	A	113	0	packages/app/src/plugins/client-slash-commands/index.test.tsx
+plugin-host	M	15	3	packages/app/src/plugins/client-slash-commands/index.ts
 plugin-host	M	35	0	packages/app/src/plugins/client-slash-commands/model.test.ts
 plugin-host	M	17	0	packages/app/src/plugins/client-slash-commands/model.ts
 plugin-host	M	72	0	packages/app/src/plugins/client-state/snapshots.test.ts
@@ -1473,8 +1475,8 @@ session-launch	M	48	2	packages/app/src/composer/index.tsx
 session-launch	M	118	2	packages/app/src/create-agent-preferences/preferences.test.ts
 session-launch	M	108	2	packages/app/src/create-agent-preferences/preferences.ts
 session-launch	M	70	23	packages/app/src/hooks/use-agent-form-state.ts
-session-launch	A	310	0	packages/app/src/plugins/catalog-sync.test.tsx
-session-launch	M	73	26	packages/app/src/plugins/catalog-sync.tsx
+session-launch	A	386	0	packages/app/src/plugins/catalog-sync.test.tsx
+session-launch	M	90	25	packages/app/src/plugins/catalog-sync.tsx
 session-launch	M	148	5	packages/app/src/provider-selection/provider-selection.test.ts
 session-launch	M	36	2	packages/app/src/provider-selection/provider-selection.ts
 session-launch	M	510	29	packages/app/src/provider-selection/resolve-agent-form.test.ts

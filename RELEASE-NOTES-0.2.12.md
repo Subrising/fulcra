@@ -19,6 +19,11 @@ Fulcra 0.2.12 is based on Paseo v0.11.0-beta.5.
 - When a send is refused because the target does not report to the sender and no chat holds the main assistant role, the refusal names the target and says how to fix it.
 - A lead without a reporting line, and a chat with no line but with chats under it, now show "No reporting line recorded" instead of nothing.
 
+### Commands and connections
+
+- Plugin slash commands such as `/account` now appear when the chat and workspace records arrive after the screen first shows. Before, the command list could stay empty ("/account is unavailable") on the phone and in the app.
+- When a read of a computer's plugin list fails, the app tries again by itself: up to 6 times, 2 s, 4 s, 8 s, 16 s, then 30 s apart. Before, one failed read left that computer with no plugins (for example "isn't connected" in the sidebar) until the app restarted.
+
 ### Safety
 
 - On macOS and Linux, `paseo daemon stop` for a local daemon now also checks the session marker before it stops the daemon. Before, a process that left the daemon's process tree (for example with `nohup`) but kept the marker could stop its own daemon.
