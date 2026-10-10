@@ -656,8 +656,8 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
 
     const prompt = formatSystemNotificationPrompt(body);
     const messageId = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${randomUUID()}`;
-    // FULCRA(orchestration): the notice steers into the caller's running turn but never replaces it: when the turn
-    // cannot take a steer, it waits for the turn to end (held-sends.ts) and is then sent with the daemon source.
+    // FULCRA(orchestration): only the owner steers. The notice comes from the daemon, so like a chat's message it
+    // waits until the caller's turn ends (held-sends.ts) and is then sent with the daemon source.
     const deliver = () =>
       agentManager.trustedPlugins.daemon(async () => {
         checkCurrent();
@@ -679,12 +679,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         await sendPromptToAgent(dispatch);
         await waitForFinalInputHandoff(finalCheck);
       });
-    try {
-      await deliver();
-    } catch (error) {
-      if (!(error instanceof SteerUnavailableError)) throw error;
-      heldSendsFor(agentManager, logger).hold(callerAgentId, deliver);
-    }
+    heldSendsFor(agentManager, logger).hold(callerAgentId, deliver);
   }
 
   function notifySafely(reason: FinishNotificationReason, options: NotifySafelyOptions = {}): void {
