@@ -5,8 +5,8 @@ import { worktreeLifecycleSettings } from "../config.mjs";
 import fs from "node:fs";
 import { readCredential } from "./credential.mjs";
 import net from "node:net";
-import { socketLocation, prepareSocketLocation } from "./socket-location.mjs";
-import { restrictPipeToUser } from "./pipe-acl.mjs";
+import { socketLocation, prepareSocketLocation, createPipeEndpoint } from "./socket-location.mjs";
+import { restrictPipeToUser, gateConnections } from "./pipe-acl.mjs";
 import { acquireProcessLock } from "./process-lock.mjs";
 import { randomBytes } from "node:crypto";
 import { rpc, RPC_METHODS, managementDispatcher } from "./rpc.mjs";
@@ -75,8 +75,10 @@ export async function startController({
   // writes goes through it, so after a rotation nothing is left writing into the renamed file.
   const log = new MetricsLog(),
     counter = { rpcs: 0 };
-  const socket = socketLocation(HOME).socket;
-  if (fs.existsSync(socket))
+  // Windows: a fresh random pipe name per start (the old file, if any, names a pipe that died with its controller).
+  const socket =
+    process.platform === "win32" ? createPipeEndpoint(HOME) : socketLocation(HOME).socket;
+  if (process.platform !== "win32" && fs.existsSync(socket))
     throw new Error("Socket already exists; verify the prior owner before recovering it");
   const local = await connectNative({ daemon, issueProvenance, getHandshakeBoot }),
     store = instrumentDb(new ControlStore(`${HOME}/journal.sqlite`)),
@@ -239,20 +241,25 @@ export async function startController({
   const unregisterManagement = registerManagement(managementDispatcher(control));
   // Merge (cc/v02-cutover-control): the live lineage's one-request-per-connection protocol and request timeout
   // (operator-connection.mjs, Track 1 2fbca3ee) replaces V4's inline handler; V4's read-only operator lane is kept.
-  const server = net.createServer(
+  // Windows: no connection is served until the pipe DACL is locked to this user (see gateConnections).
+  const connections = gateConnections(
     operatorConnection({
       dispatch,
       operations,
       errorFields: (e) => (e instanceof InstructionAllowanceExhausted ? { code: e.code } : {}),
     }),
+    { startOpen: process.platform !== "win32" },
   );
+  const server = net.createServer(connections.handler);
   prepareSocketLocation(HOME);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(socket, () => resolve(undefined));
   });
-  if (process.platform === "win32") restrictPipeToUser(socket);
-  else fs.chmodSync(socket, 0o600);
+  if (process.platform === "win32") {
+    await restrictPipeToUser(socket);
+    connections.open();
+  } else fs.chmodSync(socket, 0o600);
   eventsReady = true;
   log.line({ ready: true, socket, pid: process.pid, log: log.rotating ? "rotating" : "stdout" });
   const stopLoopSampler = startLoopSampler(log, counter);

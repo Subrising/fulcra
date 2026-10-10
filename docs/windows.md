@@ -10,6 +10,13 @@ Tested once, on 10 Oct 2026: Windows 11 Pro x64, Node.js 24.21.0, npm 11.19.0, n
 
 **Stop the daemon before you kill the app.** Quit the app, or run `paseo.cmd daemon stop`: both remove the controller lock. If the app or controller is killed hard (for example `taskkill`), `command-centre\process.lock` stays. The controller then refuses to start and the daemon log says "Lock belongs to another child". Make sure that no `controller.mjs` process runs, then delete that file. This is the same rule as on macOS.
 
+**Known limits on Windows** (reviewed, accepted for now):
+
+- Between the moment the controller creates its pipe and the moment the pipe is locked to your user, a connection can be made. The controller destroys every connection it accepts before the lock, and the pipe name is random and known only to a private file, so this window serves nothing.
+- The permission checks read a file's permissions and use them later. On a network drive, or if a file changes between the check and the use, the check can be out of date. The cache of an answer is keyed by the file state (`ctime`), which a network drive may not update. Install Fulcra on a local drive.
+- The permission checks start PowerShell and wait for it. They block the controller for a short time at start and when a new file is first checked.
+- Windows data protection (DPAPI) protects a secret from other users, not from other programs that run as you. Any process you start can decrypt the Command Centre secret and the account tokens.
+
 **Not available on Windows:** environment scripts and Radius scratch runs (they need POSIX process groups and file modes), the macOS desktop notification for held messages, and the bounded worker-artifact reader (it needs Python 3). Each of these refuses or shows nothing, with a clear reason.
 
 Use a real Windows x64 machine with Node.js 24 and npm 11. Put Node.js 24 first in `PATH`; Node.js 22 fails the engine check. A built desktop app starts no daemon by itself: start one with `paseo.cmd daemon start` in your desktop session, or enable it in Settings. A daemon started from an SSH session stops when that session closes.

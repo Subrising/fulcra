@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { powershellExe } from "../../orca-organization/server/owned.mjs";
 
 // Windows named pipes: Node creates the pipe with the default security descriptor, which also lets Everyone open it
 // for reading. This replaces the DACL with exactly SYSTEM, Administrators and this user (protected, no inheritance),
@@ -47,11 +48,11 @@ export function pipeDaclIsPrivate(sddl, me) {
   return aces.length > 0 && aces.every((a) => a.length >= 6 && a[0] === "A" && allowed.has(a[5]));
 }
 
-/** Locks a listening pipe to this user. Throws unless the read-back DACL is private. */
-export function restrictPipeToUser(name, { run = defaultRun } = {}) {
+/** Locks a listening pipe to this user. Rejects unless the read-back DACL is private. */
+export async function restrictPipeToUser(name, { run = defaultRun } = {}) {
   let out;
   try {
-    out = run(name);
+    out = await run(name);
   } catch {
     throw Error("Controller pipe could not be secured");
   }
@@ -61,9 +62,32 @@ export function restrictPipeToUser(name, { run = defaultRun } = {}) {
 }
 
 function defaultRun(name) {
-  return execFileSync(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT],
-    { env: { ...process.env, FULCRA_PIPE_NAME: name }, encoding: "utf8", timeout: 30000, windowsHide: true },
+  return new Promise((resolve, reject) =>
+    execFile(
+      powershellExe(),
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT],
+      { env: { ...process.env, FULCRA_PIPE_NAME: name }, encoding: "utf8", timeout: 30000, windowsHide: true },
+      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+    ),
   );
+}
+
+/**
+ * Wraps a connection handler so nothing is served until open() is called. A connection accepted while closed is
+ * destroyed: it may have been made before the pipe DACL was locked, so it is not trusted to be this user's.
+ */
+export function gateConnections(handler, { startOpen = false } = {}) {
+  let isOpen = startOpen;
+  return {
+    handler(connection) {
+      if (!isOpen) {
+        connection.destroy();
+        return;
+      }
+      handler(connection);
+    },
+    open() {
+      isOpen = true;
+    },
+  };
 }
