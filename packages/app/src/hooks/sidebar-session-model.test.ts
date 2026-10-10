@@ -43,17 +43,36 @@ describe("reportingLeadLine", () => {
     );
     expect(reportingLeadLine({}, "mini", sessions)).toBeNull();
     expect(reportingLeadLine({ "fulcra.reports-to": "  " }, "mini", sessions)).toBeNull();
-    // A lead (it holds a seat) with no line and no parent is flagged, not hidden.
-    expect(reportingLeadLine({ "fulcra.seat": "project-lead" }, "mini", sessions)).toBe(
-      "No reporting line recorded",
-    );
-    expect(
-      reportingLeadLine(
-        { "fulcra.seat": "project-lead", "paseo.parent-agent-id": "lead-1" },
-        "mini",
-        sessions,
-      ),
-    ).toBe("Reports to Fulcra lead");
+  });
+
+  it("flags a chat with no line and no parent that has chats under it, except the main assistant", () => {
+    const all = {
+      mini: {
+        agents: new Map([
+          ["ship-lead", agent("ship-lead", "Ship It lead", { project: "ship-it", role: "lead" })],
+          ["ship-worker", agent("ship-worker", "Worker", { "paseo.parent-agent-id": "ship-lead" })],
+          ["main-1", agent("main-1", "Main", { "fulcra.seat": "main-assistant" })],
+          ["main-kid", agent("main-kid", "Kid", { "fulcra.reports-to": "main-1" })],
+          ["alone", agent("alone", "Alone")],
+        ]),
+      },
+      book: {
+        agents: new Map([
+          ["book-kid", agent("book-kid", "Book kid", { "fulcra.reports-to": "alone@mini" })],
+        ]),
+      },
+    };
+    const note = (id: string) =>
+      reportingLeadLine(all.mini.agents.get(id)!.labels, "mini", all, id);
+    expect(note("ship-lead")).toBe("No reporting line recorded");
+    // A child on another computer counts too.
+    expect(note("alone")).toBe("No reporting line recorded");
+    // The main assistant holds the role and reports to the owner.
+    expect(note("main-1")).toBeNull();
+    // A chat with a parent shows its lead, and a chat with no children shows nothing.
+    expect(note("ship-worker")).toBe("Reports to Ship It lead");
+    expect(note("main-kid")).toBe("Reports to Main");
+    expect(reportingLeadLine({}, "mini", all, "nobody")).toBeNull();
   });
 
   it("falls back to the parent label, as the daemon does", () => {
@@ -77,6 +96,7 @@ describe("selectSidebarSessionRows", () => {
   it("carries each chat's lead line", () => {
     const rows = selectSidebarSessionRows(sessions, ["mini"]);
     expect(rows.find((row) => row.agentId === "worker-1")?.lead).toBe("Reports to Fulcra lead");
-    expect(rows.find((row) => row.agentId === "lead-1")?.lead).toBeNull();
+    // lead-1 has no line and no parent, and worker-1 reports to it: flagged.
+    expect(rows.find((row) => row.agentId === "lead-1")?.lead).toBe("No reporting line recorded");
   });
 });
