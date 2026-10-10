@@ -74,12 +74,13 @@ async function steerOrReplaceActiveRun(
   if (options?.activeTurnBehavior !== "steer") {
     return null;
   }
-  const steerOptions = {
-    ...options.runOptions,
-    ...(options.clearPendingPermissions ? { clearPendingPermissions: true } : {}),
-    ...(options.steerOnly ? { steerOnly: true } : {}),
-  };
-  const result = await agentManager.steerOrReplaceActiveTurn(agentId, prompt, steerOptions);
+  const steerOptions = options.clearPendingPermissions
+    ? { ...options.runOptions, clearPendingPermissions: true }
+    : options.runOptions;
+  // Steer-only is a dispatch rule, not a run option: trusted admission accepts only known run options.
+  const result = options.steerOnly
+    ? await agentManager.steerOrReplaceActiveTurn(agentId, prompt, steerOptions, true)
+    : await agentManager.steerOrReplaceActiveTurn(agentId, prompt, steerOptions);
   if (result.status === "steered") {
     return { disposition: "steered" };
   }
@@ -679,7 +680,8 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         await sendPromptToAgent(dispatch);
         await waitForFinalInputHandoff(finalCheck);
       });
-    heldSendsFor(agentManager, logger).hold(callerAgentId, deliver);
+    // Wait for the delivery: the notice stays armed until it is sent, so a newer arm still supersedes it.
+    await heldSendsFor(agentManager, logger).holdAndWait(callerAgentId, deliver);
   }
 
   function notifySafely(reason: FinishNotificationReason, options: NotifySafelyOptions = {}): void {

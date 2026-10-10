@@ -129,4 +129,21 @@ describe("held sends", () => {
     expect(told).toEqual(["Agent is archived"]);
     expect(f.warnings).toEqual([]);
   });
+
+  test("holdAndWait settles when its own delivery has run", async () => {
+    const f = fixture();
+    f.busy.add(TARGET);
+    let settled = false;
+    const sent = f.held.holdAndWait(TARGET, f.deliver("a")).then(() => (settled = true));
+    const failed = f.held.holdAndWait(TARGET, async () => {
+      throw new Error("caller archived");
+    });
+    await f.settle();
+    expect(settled).toBe(false);
+    f.endTurn();
+    await sent;
+    expect(f.delivered).toEqual(["a"]);
+    f.endTurn();
+    await expect(failed).rejects.toThrow("caller archived");
+  });
 });

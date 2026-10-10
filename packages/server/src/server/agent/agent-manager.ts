@@ -507,7 +507,7 @@ export type ActiveTurnSteerDispatchResult =
 
 function stripSteerOptions(options?: AgentSteerOptions): AgentRunOptions | undefined {
   if (!options) return undefined;
-  const { clearPendingPermissions: _, steerOnly: __, ...runOptions } = options;
+  const { clearPendingPermissions: _, ...runOptions } = options;
   return runOptions;
 }
 
@@ -5215,6 +5215,8 @@ export class AgentManager {
     agentId: string,
     prompt: AgentPromptInput,
     options?: AgentSteerOptions,
+    /** FULCRA(orchestration): never replace the running turn; an unaccepted steer reports "unavailable". */
+    steerOnly?: boolean,
   ): Promise<ActiveTurnSteerDispatchResult> {
     assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
     return this.withInput(
@@ -5268,7 +5270,7 @@ export class AgentManager {
         if (agent.activeForegroundTurnId === null && agent.activeTurnId === expectedTurnId) {
           return { status: "inactive" };
         }
-        if (options?.steerOnly) return { status: "unavailable" };
+        if (steerOnly) return { status: "unavailable" };
 
         await this.beforeSteerUnavailableFallback?.({ agentId, expectedTurnId });
         assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);

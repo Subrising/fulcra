@@ -234,8 +234,6 @@ export interface AgentRunOptions {
 export interface AgentSteerOptions extends AgentRunOptions {
   /** Deny permissions that block this steer. An accepted steer must honor this contract. */
   clearPendingPermissions?: boolean;
-  /** FULCRA(orchestration): never replace the running turn; an unaccepted steer reports "unavailable". */
-  steerOnly?: boolean;
 }
 
 export type SteerResult = { status: "accepted" } | { status: "unavailable" };
