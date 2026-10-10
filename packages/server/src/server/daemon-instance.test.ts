@@ -157,5 +157,26 @@ describe.skipIf(process.platform === "win32")(
       expect(await output(outside)).toBe("stopped");
       expect(existsSync(marker)).toBe(true);
     }, 30_000);
+
+    test("a caller outside the process tree that carries the daemon's marker cannot stop it", async () => {
+      // Models `nohup sh -c 'sleep 30; paseo daemon stop' &` from a session: launchd adopts it, the marker stays.
+      const marker = join(paseoHome, "supervisor-signalled");
+      supervisor = startSupervisor(marker, false);
+      await writeLock(paseoHome, lockFor(supervisor.pid!, new Date()));
+      await writeFile(join(paseoHome, "server-id"), "srv_fixture_daemon\n");
+      const detached = spawn(process.execPath, ["--import", tsx, "-e", stopScript(paseoHome)], {
+        stdio: ["ignore", "pipe", "inherit"],
+        env: { ...process.env, PASEO_DAEMON_SERVER_ID: "srv_fixture_daemon" },
+      });
+      expect(await output(detached)).toBe("OWN_DAEMON_SESSION");
+      expect(existsSync(marker)).toBe(false);
+
+      const otherDaemon = spawn(process.execPath, ["--import", tsx, "-e", stopScript(paseoHome)], {
+        stdio: ["ignore", "pipe", "inherit"],
+        env: { ...process.env, PASEO_DAEMON_SERVER_ID: "srv_fixture_other" },
+      });
+      expect(await output(otherDaemon)).toBe("stopped");
+      expect(existsSync(marker)).toBe(true);
+    }, 30_000);
   },
 );

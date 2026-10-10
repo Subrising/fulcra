@@ -26,6 +26,15 @@ function generateServerId(): string {
   return `srv_${rand}`;
 }
 
+/** The server id stored in a home, read only; null when there is none or it cannot be read. */
+export function readServerId(paseoHome: string): string | null {
+  try {
+    return readFileSync(getServerIdPath(paseoHome), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Stable daemon identifier scoped to a given $PASEO_HOME.
  *
