@@ -6,6 +6,7 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { pluginRegistry } from "./registry";
+import { sha256Hex } from "./catalog-hash";
 
 // FULCRA(plugin-host): one failed catalog read (a slow or dropped network on the phone, a host that is still starting)
 // used to leave the host with no plugins until the app restarted: no /account, no home computer. The read is
@@ -73,12 +74,7 @@ export function PluginCatalogSync({
                   signal: abort.signal,
                   sha256: async (bytes) => {
                     const { digest, CryptoDigestAlgorithm } = await import("expo-crypto");
-                    const copy = new Uint8Array(bytes.byteLength);
-                    copy.set(bytes);
-                    const hash = new Uint8Array(
-                      await digest(CryptoDigestAlgorithm.SHA256, copy.buffer),
-                    );
-                    return Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
+                    return sha256Hex(bytes, digest, CryptoDigestAlgorithm.SHA256);
                   },
                 })
               : await client.getPluginCatalog();
