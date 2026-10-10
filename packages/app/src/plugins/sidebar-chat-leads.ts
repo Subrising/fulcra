@@ -4,6 +4,7 @@ import {
   REPORTS_TO_LABEL,
   SEAT_LABEL,
 } from "@getpaseo/protocol/agent-labels";
+import { chatStatusWord } from "@getpaseo/protocol/chat-status";
 
 // Fulcra 0.2.14: leads the sidebar finds in the chat list. The role directory lists only chats with a seat, so a
 // chat that reports to the main assistant without a seat (the AI gag games lead on the MacBook, 11 Oct) never showed.
@@ -49,14 +50,7 @@ export function chatLeads(sessions: Sessions, shownIds: ReadonlySet<string>): Ch
   );
 }
 
-const CHAT_STATUS_LABEL: Record<string, string> = {
-  running: "Working",
-  idle: "Idle",
-  initializing: "Starting",
-  error: "Error",
-};
-
-/** A chat's own status from the chat list, in the words of the Team map; null when it has none. */
+/** A chat's own status from the chat list, in the words shared with the Leads page; null when it has none. */
 export function chatStatusLabel(status: string | undefined): string | null {
-  return (status && CHAT_STATUS_LABEL[status]) || null;
+  return chatStatusWord(status);
 }
