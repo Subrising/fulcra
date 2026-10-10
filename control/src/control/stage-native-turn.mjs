@@ -1,5 +1,6 @@
 import { localJson } from "../local-machine.mjs";
 import fs from "node:fs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -22,12 +23,10 @@ export function validateStagePaths(outputRoot, controllerHome, journalFile) {
       journal = fs.lstatSync(journalFile);
     if (
       !home.isDirectory() ||
-      home.uid !== process.getuid() ||
-      home.mode & 0o077 ||
+      !privateOwned(home, controllerHome) ||
       fs.realpathSync(controllerHome) !== controllerHome ||
       !journal.isFile() ||
-      journal.uid !== process.getuid() ||
-      journal.mode & 0o077 ||
+      !privateOwned(journal, journalFile) ||
       journal.nlink !== 1
     )
       throw Error("Existing controller state must be private, owned and unaliased");

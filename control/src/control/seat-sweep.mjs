@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 // Stage 2 (STAGE2-DESIGN.md s3): after a verified daemon restart, re-pin every seat whose evidence is
 // complete, without a human trigger. The authority is never the restart -- anyone who can restart the
 // daemon can mint a verified boot -- it is the shared seat gate (Controller.sweepSeat), including R9: the pinned
@@ -24,8 +25,7 @@ export function sweepMode(home) {
   }
   if (
     !stat.isFile() ||
-    stat.uid !== process.getuid() ||
-    (stat.mode & 0o077) !== 0 ||
+    !privateOwned(stat, file) ||
     stat.size > 64
   )
     return {

@@ -2,9 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 // macOS sun_path includes its trailing NUL in the 104-byte bound.
 const limit = 104;
-export function socketLocation(home) {
+// Windows has no Unix sockets in Node: the controller listens on a named pipe, \\.\pipe\fulcra-<user>-<digest>.
+// The pipe is locked to this user by pipe-acl.mjs when the server starts.
+export function pipeName(home, username = os.userInfo().username) {
+  const user = username.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 32);
+  const digest = createHash("sha256").update(home).digest("hex").slice(0, 24);
+  return `\\\\.\\pipe\\fulcra-${user}-${digest}`;
+}
+export function socketLocation(home, platform = process.platform) {
+  if (platform === "win32")
+    return { socket: pipeName(home), directory: home, external: false, pipe: true };
   const direct = path.join(home, "control.sock");
   if (Buffer.byteLength(direct) < limit)
     return { socket: direct, directory: home, external: false };
@@ -22,8 +32,7 @@ export function validateSocketDirectory(directory) {
   if (
     !stat.isDirectory() ||
     stat.isSymbolicLink() ||
-    stat.uid !== process.getuid() ||
-    stat.mode & 0o077 ||
+    !privateOwned(stat, directory) ||
     fs.realpathSync(directory) !== directory
   )
     throw Error("Canonical private owned socket directory required");
@@ -40,13 +49,13 @@ export function prepareSocketLocation(home) {
     }
     validateSocketDirectory(location.directory);
   }
-  validateSocket(location.socket);
+  if (!location.pipe) validateSocket(location.socket);
   return location.socket;
 }
 export function resolveSocketPath(home) {
   const location = socketLocation(home);
   validateSocketDirectory(location.directory);
-  validateSocket(location.socket);
+  if (!location.pipe) validateSocket(location.socket);
   return location.socket;
 }
 
@@ -61,8 +70,7 @@ function validateSocket(socket) {
   if (
     !stat.isSocket() ||
     stat.isSymbolicLink() ||
-    stat.uid !== process.getuid() ||
-    stat.mode & 0o077
+    !privateOwned(stat, socket)
   )
     throw Error("Private owned socket required");
 }

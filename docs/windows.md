@@ -2,7 +2,15 @@
 
 Tested once, on 10 Oct 2026: Windows 11 Pro x64, Node.js 24.21.0, npm 11.19.0, no Visual Studio and no Python. The source at v0.2.11 built, the packaged smoke passed, and the CLI started the daemon and ran a Claude chat (the chat needs a signed-in Claude CLI). Do not package on macOS and infer Windows results. Windows ARM64 is not tested.
 
-**Not working yet:** Command Centre (the leads, the Team map and Accounts & models). It needs the Keychain and POSIX file checks that Windows does not have. This branch adds a DPAPI store for the secrets and the trusted-plugin checks for Windows, but the controller itself still stops at POSIX-only code. See the open items in the pull request.
+**Command Centre works on Windows** (tested on that PC): turn it on in Settings → Advanced → Background service. The sidebar then shows Fulcra, Team map and Leads, and Settings → Accounts & models lists your Claude accounts. Windows needs its own pieces for what macOS gets from the Keychain, POSIX file modes and Unix sockets:
+
+- The Command Centre secret and each account token are encrypted with Windows data protection (DPAPI, this Windows user only). There is no plain-text fallback.
+- Trusted plugin files and private folders are checked by their Windows permissions (ACL): only you, SYSTEM, Administrators or TrustedInstaller may own or change them. A folder with a wider permission is refused.
+- The controller listens on a named pipe, `\\.\pipe\fulcra-<user>-<id>`, locked to your user.
+
+**Stop the daemon before you kill the app.** Quit the app, or run `paseo.cmd daemon stop`: both remove the controller lock. If the app or controller is killed hard (for example `taskkill`), `command-centre\process.lock` stays. The controller then refuses to start and the daemon log says "Lock belongs to another child". Make sure that no `controller.mjs` process runs, then delete that file. This is the same rule as on macOS.
+
+**Not available on Windows:** environment scripts and Radius scratch runs (they need POSIX process groups and file modes), the macOS desktop notification for held messages, and the bounded worker-artifact reader (it needs Python 3). Each of these refuses or shows nothing, with a clear reason.
 
 Use a real Windows x64 machine with Node.js 24 and npm 11. Put Node.js 24 first in `PATH`; Node.js 22 fails the engine check. A built desktop app starts no daemon by itself: start one with `paseo.cmd daemon start` in your desktop session, or enable it in Settings. A daemon started from an SSH session stops when that session closes.
 

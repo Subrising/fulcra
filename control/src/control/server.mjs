@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { readCredential } from "./credential.mjs";
 import net from "node:net";
 import { socketLocation, prepareSocketLocation } from "./socket-location.mjs";
+import { restrictPipeToUser } from "./pipe-acl.mjs";
 import { acquireProcessLock } from "./process-lock.mjs";
 import { randomBytes } from "node:crypto";
 import { rpc, RPC_METHODS, managementDispatcher } from "./rpc.mjs";
@@ -250,7 +251,8 @@ export async function startController({
     server.once("error", reject);
     server.listen(socket, () => resolve(undefined));
   });
-  fs.chmodSync(socket, 0o600);
+  if (process.platform === "win32") restrictPipeToUser(socket);
+  else fs.chmodSync(socket, 0o600);
   eventsReady = true;
   log.line({ ready: true, socket, pid: process.pid, log: log.rotating ? "rotating" : "stdout" });
   const stopLoopSampler = startLoopSampler(log, counter);

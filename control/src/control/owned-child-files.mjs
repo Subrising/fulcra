@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { socketLocation, validateSocketDirectory } from "./socket-location.mjs";
+import { privateOwned } from "../../orca-organization/server/owned.mjs";
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino;
 const owners = new WeakSet();
 function stat(file) {
@@ -16,12 +17,7 @@ export function captureOwnedFiles(home, { pid, epoch }) {
   if (!Number.isSafeInteger(pid) || pid < 1 || typeof epoch !== "string" || !epoch)
     throw Error("Invalid child ownership");
   const root = fs.lstatSync(home);
-  if (
-    !root.isDirectory() ||
-    root.uid !== process.getuid() ||
-    root.mode & 0o077 ||
-    fs.realpathSync(home) !== home
-  )
+  if (!root.isDirectory() || !privateOwned(root, home) || fs.realpathSync(home) !== home)
     throw Error("Canonical private child home required");
   const lock = path.join(home, "process.lock"),
     location = socketLocation(home),
@@ -37,18 +33,16 @@ export function captureOwnedFiles(home, { pid, epoch }) {
   let held;
   try {
     held = fs.fstatSync(fd);
-    if (!held.isFile() || held.size > 1024 || held.uid !== process.getuid() || held.mode & 0o077)
+    if (!held.isFile() || held.size > 1024 || !privateOwned(held, lock))
       throw Error("Private owned lock required");
     const value = JSON.parse(fs.readFileSync(fd, "utf8"));
     if (value.pid !== pid || value.epoch !== epoch) throw Error("Lock belongs to another child");
   } finally {
     fs.closeSync(fd);
   }
-  const socketStat = stat(socket);
-  if (
-    socketStat &&
-    (!socketStat.isSocket() || socketStat.uid !== process.getuid() || socketStat.mode & 0o077)
-  )
+  // A Windows named pipe is not a file: there is nothing to stat, own or remove.
+  const socketStat = location.pipe ? null : stat(socket);
+  if (socketStat && (!socketStat.isSocket() || !privateOwned(socketStat, socket)))
     throw Error("Private owned socket required");
   const owner = Object.freeze({
     home,
@@ -59,6 +53,7 @@ export function captureOwnedFiles(home, { pid, epoch }) {
     socketStat,
     socketDirectory,
     directory: location.external ? location.directory : null,
+    pipe: location.pipe === true,
   });
   owners.add(owner);
   return owner;
@@ -68,7 +63,7 @@ export function recoverOwnedFiles(owner, { exited }) {
   if (!same(fs.lstatSync(owner.home), owner.root) || fs.realpathSync(owner.home) !== owner.home)
     throw Error("Child home ownership changed");
   const lock = stat(owner.lock),
-    socket = stat(owner.socket);
+    socket = owner.pipe ? null : stat(owner.socket);
   const directory = owner.directory ? stat(owner.directory) : null;
   if (directory && (!owner.socketDirectory || !same(directory, owner.socketDirectory)))
     throw Error("Socket directory ownership changed");

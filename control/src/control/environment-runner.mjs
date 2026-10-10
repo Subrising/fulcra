@@ -153,7 +153,9 @@ export function groupAlive(pgid) {
   }
 }
 /** Snapshot an owned group leader; unavailable identity never authorizes later recovery. */
-export function captureGroupOwner(pid) {
+export function captureGroupOwner(pid, platform = process.platform) {
+  // Windows has no process groups or ps: an unverifiable identity never authorizes recovery.
+  if (platform === "win32") return null;
   if (!Number.isSafeInteger(pid) || pid <= 1) return null;
   try {
     const output = execFileSync("/bin/ps", ["-p", String(pid), "-o", "pid=,pgid=,uid=,lstart="], {
@@ -216,7 +218,12 @@ export function runScript({
   context,
   signal = null,
   onGroup = () => {},
+  platform = process.platform,
 }) {
+  if (platform === "win32")
+    throw new EnvironmentRefused(
+      "Environment scripts need POSIX process groups and are not available on Windows",
+    );
   const file = resolveScript(checkout, script);
   fs.mkdirSync(path.join(checkout, ".fulcra-tmp"), { recursive: true });
   return new Promise((resolve) => {
