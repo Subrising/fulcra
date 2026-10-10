@@ -38,6 +38,24 @@ export interface AgentArchiveOptions extends CommandOptions {
 
 export type AgentArchiveCommandResult = SingleResult<AgentArchiveResult>;
 
+type ArchiveClient = Pick<
+  Awaited<ReturnType<typeof connectToDaemon>>,
+  "fetchAgent" | "fetchAgents"
+>;
+
+/**
+ * The chat to archive. The daemon looks the ID up itself first, so a stored chat that is not loaded is found. A
+ * list read gives only one page, and old chats fall outside it. The list is the fallback, for names.
+ */
+export async function findAgentToArchive(client: ArchiveClient, idOrName: string) {
+  const direct = await client.fetchAgent({ agentId: idOrName.trim() }).catch(() => null);
+  if (direct?.agent) return direct.agent;
+  const payload = await client.fetchAgents({ filter: { includeArchived: true } });
+  const agents = payload.entries.map((entry) => entry.agent);
+  const agentId = resolveAgentId(idOrName, agents);
+  return agentId ? (agents.find((entry) => entry.id === agentId) ?? null) : null;
+}
+
 export async function runArchiveCommand(
   agentIdArg: string,
   options: AgentArchiveOptions,
@@ -56,10 +74,8 @@ export async function runArchiveCommand(
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
-    const agentsPayload = await client.fetchAgents({ filter: { includeArchived: true } });
-    const agents = agentsPayload.entries.map((entry) => entry.agent);
-    const agentId = resolveAgentId(agentIdArg, agents);
-    if (!agentId) {
+    const agent = await findAgentToArchive(client, agentIdArg);
+    if (!agent) {
       const error: CommandError = {
         code: "AGENT_NOT_FOUND",
         message: `Agent not found: ${agentIdArg}`,
@@ -67,10 +83,7 @@ export async function runArchiveCommand(
       };
       throw error;
     }
-    const agent = agents.find((entry) => entry.id === agentId);
-    if (!agent) {
-      throw new Error(`Resolved agent missing from fetched agents: ${agentId}`);
-    }
+    const agentId = agent.id;
 
     // Check if agent is already archived
     if (agent.archivedAt) {
