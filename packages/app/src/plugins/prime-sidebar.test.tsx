@@ -15,7 +15,7 @@ const f = vi.hoisted(() => ({
   registeredHost: true,
   // Fulcra 0.2.8: each connected computer's role directory and fleet, for the pinned main assistant.
   hosts: [] as { serverId: string; label: string }[],
-  remote: {} as Record<string, { directory: unknown; fleet?: unknown }>,
+  remote: {} as Record<string, { directory: unknown; fleet?: unknown; projects?: unknown }>,
   companyHost: null as string | null,
   chooseCompany: vi.fn(),
   offline: new Set<string>(),
@@ -66,9 +66,10 @@ vi.mock("@/runtime/host-runtime", () => ({
         ? {
             client: {
               invokePluginRpc: async (_plugin: string, method: string) =>
-                method === "organization.fleet"
-                  ? f.remote[serverId]!.fleet
-                  : f.remote[serverId]!.directory,
+                ({
+                  "organization.fleet": f.remote[serverId]!.fleet,
+                  "organization.projects": f.remote[serverId]!.projects,
+                })[method] ?? f.remote[serverId]!.directory,
             },
           }
         : undefined,
@@ -315,16 +316,17 @@ it("pins project leads with a plain status and computer, and + sends new work th
   f.projects.mockResolvedValue({ projects: [{ id: "proj-1", name: "weather-cli" }] });
   f.send.mockResolvedValue(undefined);
   mount();
-  const lead = await screen.findByRole("button", {
-    name: "Open Lead · weather-cli conversation",
-  });
-  expect(await screen.findByText("Waiting for you · MacBook Pro")).toBeTruthy();
+  // Fulcra 0.2.11: each row names its chat; the role, project, status and computer follow.
+  const lead = await screen.findByRole("button", { name: "Open Forecast conversation" });
+  expect(
+    await screen.findByText("Lead · weather-cli · Waiting for you · MacBook Pro"),
+  ).toBeTruthy();
   expect(screen.queryByText(/proj-2/)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "New work for Lead · weather-cli" }));
+  fireEvent.click(screen.getByRole("button", { name: "New work for Forecast" }));
   fireEvent.change(screen.getByTestId("sidebar-new-work-input"), {
     target: { value: "Add a --days flag" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Send to Lead · weather-cli" }));
+  fireEvent.click(screen.getByRole("button", { name: "Send to Forecast" }));
   await vi.waitFor(() => expect(f.send).toHaveBeenCalledWith("remote", "Add a --days flag"));
   await vi.waitFor(() =>
     expect(f.open).toHaveBeenCalledWith({ serverId: "mini", agentId: "remote" }),
@@ -365,9 +367,7 @@ it("retries the first load by itself after a restart", async () => {
       ],
     });
   mount();
-  expect(
-    await screen.findByRole("button", { name: "Open Lead · weather-cli conversation" }),
-  ).toBeTruthy();
+  expect(await screen.findByTestId("sidebar-lead-p1")).toBeTruthy();
   expect(screen.queryByText(/^Couldn't load leads/)).toBeNull();
   expect(f.read).toHaveBeenCalledTimes(3);
   expect(f.fleet).toHaveBeenCalledTimes(2);
@@ -529,4 +529,152 @@ it("names a specific reason as it is, and a generic one as Command Centre not an
     expect(leadsFailureLabel(new Error(generic), "Mac mini")).toBe(
       "Couldn't load leads: Command Centre is not answering on Mac mini · Retry",
     );
+});
+
+// Fulcra 0.2.11 (the owner, 10 Oct): the main assistant was only pinned, not in Leads; rows said only "Lead · <project>".
+it("lists the main assistant first in Leads, by its chat name, then the project leads", async () => {
+  f.read.mockResolvedValue({
+    available: true,
+    primes: [prime()],
+    projectSeats: [
+      {
+        seat: "p1",
+        role: "project-orchestrator",
+        projectId: "proj-1",
+        state: "assigned",
+        sessionPresent: true,
+        sessionId: "remote",
+      },
+    ],
+  });
+  f.fleet.mockResolvedValue({
+    nodes: [
+      {
+        id: "original-prime",
+        host: "Mac mini",
+        status: "running",
+        pending: 0,
+        title: "Fulcra main assistant",
+      },
+      { id: "remote", host: "Mac mini", status: "idle", pending: 0, title: "Fulcra lead" },
+    ],
+  });
+  f.projects.mockResolvedValue({ projects: [{ id: "proj-1", name: "Fulcra" }] });
+  mount();
+  const main = await screen.findByTestId("sidebar-lead-main-assistant");
+  const lead = await screen.findByTestId("sidebar-lead-p1");
+  expect(main.textContent).toContain("Fulcra main assistant");
+  expect(main.textContent).toContain("Main assistant · Working · Mac mini");
+  expect(lead.textContent).toContain("Fulcra lead");
+  expect(lead.textContent).toContain("Lead · Fulcra · Idle · Mac mini");
+  // The main assistant comes first.
+  expect(main.compareDocumentPosition(lead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it("a row without a known chat name keeps the role as its name", async () => {
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.fleet.mockResolvedValue({ nodes: [] });
+  mount();
+  const main = await screen.findByTestId("sidebar-lead-main-assistant");
+  expect(main.textContent).toContain("Main assistant");
+  expect(main.textContent).toContain("Main assistant · Status unknown");
+});
+
+it("lists the leads of another connected computer read-only, with that computer's name", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "Mac mini" },
+    { serverId: "book", label: "MacBook Pro" },
+  ];
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.remote.book = {
+    directory: {
+      available: true,
+      primes: [],
+      projectSeats: [
+        {
+          seat: "g1",
+          role: "project-orchestrator",
+          projectId: "proj-g",
+          state: "assigned",
+          sessionPresent: true,
+          sessionId: "remote",
+        },
+        {
+          seat: "old",
+          role: "project-orchestrator",
+          projectId: "proj-archived",
+          state: "assigned",
+          sessionPresent: true,
+          sessionId: "remote",
+        },
+      ],
+    },
+    projects: { projects: [{ id: "proj-g", name: "AI gag games" }] },
+    fleet: {
+      nodes: [
+        { id: "remote", host: "macbook", status: "idle", pending: 0, title: "Gag games lead" },
+      ],
+    },
+  };
+  mount();
+  const row = await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(row.textContent).toContain("Gag games lead");
+  expect(row.textContent).toContain("Lead · AI gag games · Idle · MacBook Pro");
+  expect(row.textContent).not.toContain("macbook ·");
+  // Read-only: no new work from here; a lead of an archived project is hidden.
+  expect(screen.queryByTestId("sidebar-remote-lead-book-g1-new-work")).toBeNull();
+  expect(screen.queryByTestId("sidebar-remote-lead-book-old")).toBeNull();
+});
+
+// Fulcra 0.2.11 (decision by the Fulcra lead, 10 Oct): Leads lists the home computer's main assistant first, so its
+// automatic pinned row goes. Another computer's main assistant stays pinned, and the pin returns when Leads cannot
+// list it.
+function mountBoth() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  render(
+    <QueryClientProvider client={client}>
+      <PinnedMainAssistant />
+      <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
+    </QueryClientProvider>,
+  );
+}
+
+it("drops the automatic pin of the main assistant that Leads lists; another computer's pin stays", async () => {
+  f.hosts = [
+    { serverId: "mini", label: "Mac-mini.local" },
+    { serverId: "book", label: "MacBook Pro" },
+  ];
+  const directory = { available: true, primes: [prime()], projectSeats: [] };
+  f.read.mockResolvedValue(directory);
+  f.remote.mini = { directory, fleet: { nodes: [] } };
+  f.remote.book = {
+    directory: { available: true, primes: [prime({ sessionId: "remote" })] },
+    fleet: { nodes: [] },
+  };
+  mountBoth();
+  expect(await screen.findByTestId("sidebar-lead-main-assistant")).toBeTruthy();
+  expect(
+    await screen.findByRole("button", { name: /^Open Main assistant · MacBook Pro/ }),
+  ).toBeTruthy();
+  // The only pin left is the other computer's.
+  await vi.waitFor(() =>
+    expect(screen.getByTestId("sidebar-pinned-main-assistant").textContent).toContain(
+      "MacBook Pro",
+    ),
+  );
+  expect(screen.queryByText(/Main assistant · Mac-mini\.local/)).toBeNull();
+});
+
+it("keeps the pin when Leads cannot list the main assistant", async () => {
+  f.read.mockResolvedValue({ available: false, primes: [] });
+  f.remote.mini = {
+    directory: { available: true, primes: [prime()] },
+    fleet: { nodes: [] },
+  };
+  mountBoth();
+  expect(await screen.findByRole("button", { name: /^Couldn't load leads/ })).toBeTruthy();
+  const pin = await screen.findByTestId("sidebar-pinned-main-assistant");
+  expect(pin.textContent).toContain("Main assistant · Mac-mini.local");
+  expect(screen.queryByTestId("sidebar-lead-main-assistant")).toBeNull();
 });

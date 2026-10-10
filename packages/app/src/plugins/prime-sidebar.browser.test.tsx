@@ -101,8 +101,40 @@ const SCENARIOS: Scenario[] = [
       mini: { available: true, primes: [prime("prime-1")] },
     },
     remembered: {},
-    expectText: ["Main assistant · MacBook Pro", "Main assistant · Mac-mini.local"],
-    absentText: ["No main assistant yet"],
+    // Fulcra 0.2.11: the home computer's main assistant is listed first in Leads, so it has no automatic pin.
+    expectText: ["Main assistant · Idle · MacBook Pro", "Main assistant · Mac-mini.local"],
+    absentText: ["No main assistant yet", "Main assistant · MacBook Pro"],
+  },
+  // Fulcra 0.2.11: the main assistant first in Leads, chat names, and a lead on another computer (read-only).
+  {
+    name: "leads-both-hosts",
+    offline: [],
+    directories: {
+      book: withLeads([prime("prime-2")]),
+      mini: {
+        available: true,
+        primes: [],
+        projectSeats: [
+          {
+            seat: "g1",
+            role: "project-orchestrator",
+            projectId: "proj-g",
+            state: "assigned",
+            sessionPresent: true,
+            sessionId: "gag-1",
+          },
+        ],
+      },
+    },
+    remembered: {},
+    expectText: [
+      "Main assistant · Idle · MacBook Pro",
+      "Forecast",
+      "Lead · weather-cli · Waiting for you · MacBook Pro",
+      "AI gag games lead: Ship It and Demo Day planning",
+      "Lead · AI gag games · Idle · Mac-mini.local",
+    ],
+    absentText: ["Lead · weather-cli conversation"],
   },
 ];
 // Below 768 px the sidebar is the full-width phone drawer; from 768 px it is the 320 px desktop sidebar.
@@ -135,7 +167,12 @@ vi.mock("@/stores/session-store", () => ({
             ["lead-1", {}],
           ]),
         },
-        mini: { agents: new Map([["prime-1", {}]]) },
+        mini: {
+          agents: new Map([
+            ["prime-1", {}],
+            ["gag-1", {}],
+          ]),
+        },
       },
     }),
 }));
@@ -148,6 +185,13 @@ const FLEET = {
     { id: "prime-1", host: "Mac-mini.local", status: "running", pending: 0, title: "Main" },
     { id: "prime-2", host: "MacBook Pro", status: "idle", pending: 0, title: "Main" },
     { id: "lead-1", host: "MacBook Pro", status: "idle", pending: 1, title: "Forecast" },
+    {
+      id: "gag-1",
+      host: "mini",
+      status: "idle",
+      pending: 0,
+      title: "AI gag games lead: Ship It and Demo Day planning",
+    },
   ],
 };
 vi.mock("@/runtime/host-runtime", () => ({
@@ -163,7 +207,10 @@ vi.mock("@/runtime/host-runtime", () => ({
         : {
             client: {
               invokePluginRpc: async (_plugin: string, method: string) =>
-                method === "organization.fleet" ? FLEET : f.scenario?.directories[serverId],
+                ({
+                  "organization.fleet": FLEET,
+                  "organization.projects": { projects: [{ id: "proj-g", name: "AI gag games" }] },
+                })[method] ?? f.scenario?.directories[serverId],
             },
           },
   }),
@@ -227,7 +274,7 @@ afterEach(() => {
 });
 
 const NEW_CONTROLS =
-  /^(sidebar-pinned-main-assistant|sidebar-use-remote-main-assistant|sidebar-set-up-main-assistant)/;
+  /^(sidebar-pinned-main-assistant|sidebar-use-remote-main-assistant|sidebar-set-up-main-assistant|sidebar-lead-|sidebar-remote-lead-)/;
 
 function measure(box: HTMLElement): string[] {
   const problems: string[] = [];
