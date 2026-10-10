@@ -48,6 +48,8 @@ describe("LimitResumeService", () => {
   let markers: Map<string, string | null>;
   let onMarker: ((id: string, at: string | null) => Promise<void> | void) | null;
   let getAgentDelay: Promise<void> | null;
+  /** Sessions not loaded yet: like a fresh daemon, getAgent reads only the stored record until a resume loads them. */
+  let unloaded: Set<string>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -60,6 +62,7 @@ describe("LimitResumeService", () => {
     markers = new Map();
     onMarker = null;
     getAgentDelay = null;
+    unloaded = new Set();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -71,9 +74,21 @@ describe("LimitResumeService", () => {
       paseoHome: home,
       isEnabled: () => enabled,
       captureBinding: (id) => agents.get(id)?.binding ?? null,
-      getAgent: async (id) => {
+      getAgent: async (id, forResume) => {
         if (getAgentDelay) await getAgentDelay;
-        return agents.get(id) ?? null;
+        const agent = agents.get(id);
+        if (!agent) return null;
+        if (forResume) unloaded.delete(id);
+        if (!unloaded.has(id)) return agent;
+        const stored: LimitResumeAgent = {
+          labels: agent.labels,
+          archived: agent.archived,
+          busy: false,
+          unscopedResumeAllowed: false,
+          binding: null,
+          stored: true,
+        };
+        return stored;
       },
       getLastAssistantMessage: async (id) => lastMessage.get(id) ?? null,
       setMarker: async (id, at) => {
@@ -494,6 +509,33 @@ describe("LimitResumeService", () => {
       await svc.enqueueInterrupted("boot-2");
       await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS * 4);
       expect(sent).toHaveLength(1);
+    });
+
+    it("queues a session that is not loaded at boot and resumes it once when it loads", async () => {
+      agents.set("a", idle());
+      const svc = await interruptedRestart();
+      unloaded.add("a");
+      await svc.enqueueInterrupted("boot-2");
+      expect(queued()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS + 1_000);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.prompt).toBe(INTERRUPTED_RESUME_PROMPT);
+      await svc.enqueueInterrupted("boot-2");
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS * 4);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("refuses a session that is not loaded at boot when its owner is a trusted plugin", async () => {
+      agents.set("a", idle());
+      const svc = await interruptedRestart();
+      agents.set("a", { ...idle(), unscopedResumeAllowed: false });
+      unloaded.add("a");
+      await svc.enqueueInterrupted("boot-2");
+      expect(queued()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(INTERRUPTED_SETTLE_MS + 1_000);
+      expect(sent).toEqual([]);
+      expect(queued()).toEqual([]);
+      expect(markers.get("a")).toBeNull();
     });
 
     it("never resumes a session whose binding changed while the daemon was down", async () => {
