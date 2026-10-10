@@ -105,6 +105,9 @@ export const CLAUDE_MODEL_MANIFEST = [
     id: "claude-sonnet-5-5",
     label: "Sonnet 5.5",
     description: "Sonnet 5.5 · Best for everyday tasks",
+    // FULCRA(default-model): a chat that starts a session without naming a model gets Sonnet 5.5. Opus is chosen on
+    // purpose (an explicit model always wins). Highest priority among the models this Claude Code version offers.
+    defaultPriority: 4,
     minimumClaudeCodeVersion: "2.1.284",
     defaultThinkingOptionId: "medium",
     contextWindowMaxTokens: 1_000_000,

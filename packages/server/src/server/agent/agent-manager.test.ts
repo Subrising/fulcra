@@ -2449,11 +2449,22 @@ test("X4: creating a session without a thinking option stores the model's defaul
     workspaceId: undefined,
   });
 
-  expect(snapshot.config.model).toBe("claude-opus-5-5");
+  // FULCRA(default-model): no model named means Sonnet 5.5, which also defaults to medium thinking.
+  expect(snapshot.config.model).toBe("claude-sonnet-5-5");
   expect(snapshot.config.thinkingOptionId).toBe("medium");
   expect(f.client.createdConfigs[0]?.thinkingOptionId).toBe("medium"); // the session was launched with it
   await f.manager.closeAgent(snapshot.id);
   expect((await f.storage.get(snapshot.id))?.config?.thinkingOptionId).toBe("medium"); // and persisted
+});
+
+test("an explicit model always wins over the default", async () => {
+  const f = defaultModeFixture("x4-explicit-model-");
+  const snapshot = await f.manager.createAgent(
+    { provider: "claude", cwd: f.workdir, model: "claude-opus-5-5" },
+    undefined,
+    { workspaceId: undefined },
+  );
+  expect(snapshot.config.model).toBe("claude-opus-5-5");
 });
 
 test("X4: the stored default follows the chosen model", async () => {
