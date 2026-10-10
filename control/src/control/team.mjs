@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { portable, privateJson } from "../portable-config.mjs";
+import { localProgrammeRow } from "../config.mjs";
 import { COMPANY, PROGRAMME, uuid } from "./authority.mjs";
 import { managementRefusal } from "./management-refusal.mjs";
 
@@ -259,6 +260,7 @@ export class Team {
     if (typeof snapshot.cwd !== "string" || !path.isAbsolute(snapshot.cwd))
       refuse("This chat has no working folder, so it cannot join a team.");
     try {
+      this.ensureLocalProgramme();
       await this.control.authority(taskId);
     } catch (error) {
       refuse(`This task cannot take team members: ${error.message}`);
@@ -418,6 +420,13 @@ export class Team {
 
   // --- the local catalog (tasks.json): the same rows `bootstrap.mjs project add` writes ---
 
+  /** Fulcra 0.2.11: a local catalog gets its programme row before a chat joins a task (the task check needs it). */
+  ensureLocalProgramme() {
+    if (this.config.authority.issueApi !== null) return;
+    if (this.catalog().issues.some((row) => row?.id === PROGRAMME)) return;
+    this.writeCatalog(() => undefined);
+  }
+
   catalog() {
     const data = privateJson(this.config.tasks);
     if (data.version !== 1 || !Array.isArray(data.issues))
@@ -429,6 +438,9 @@ export class Team {
     // Re-read inside the write: the controller is the only writer it can order, and a `bootstrap.mjs` edit between
     // the read and the rename would otherwise be lost. Replaced atomically, private, as task-catalog.py does.
     const data = this.catalog();
+    // Fulcra 0.2.11: a catalog written before this release has no programme row; every write adds it back.
+    if (!data.issues.some((row) => row?.id === PROGRAMME))
+      data.issues.unshift(localProgrammeRow({ companyId: COMPANY, programmeId: PROGRAMME }));
     const result = update(data);
     const text = JSON.stringify(data, null, 2) + "\n";
     if (Buffer.byteLength(text) > 1048576)

@@ -8,7 +8,7 @@ import { ControlStore } from "./store.mjs";
 import { Controller } from "./controller.mjs";
 import { Bindings } from "./bindings.mjs";
 import { localProjectDirectory } from "./projects.mjs";
-import { COMPANY, PROGRAMME } from "./authority.mjs";
+import { COMPANY, PROGRAMME, authorizeTask } from "./authority.mjs";
 import { managementDispatcher, rpc } from "./rpc.mjs";
 import { managementReplyFailure } from "./management-refusal.mjs";
 import { Team } from "./team.mjs";
@@ -25,7 +25,17 @@ const owner = {
 };
 const NOTE = "The owner asked for this team change";
 
-function world(t, { snapshots = {}, labels = {}, failClear = null, failDetach = null } = {}) {
+function world(
+  t,
+  {
+    snapshots = {},
+    labels = {},
+    failClear = null,
+    failDetach = null,
+    issues,
+    realAuthority = false,
+  } = {},
+) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-team-")));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const tasks = path.join(dir, "tasks.json");
@@ -39,7 +49,9 @@ function world(t, { snapshots = {}, labels = {}, failClear = null, failDetach = 
     assigneeAgentId: null,
     projectId: null,
   };
-  fs.writeFileSync(tasks, JSON.stringify({ version: 1, issues: [root] }), { mode: 0o600 });
+  fs.writeFileSync(tasks, JSON.stringify({ version: 1, issues: issues ?? [root] }), {
+    mode: 0o600,
+  });
   const read = () => JSON.parse(fs.readFileSync(tasks, "utf8"));
   const store = new ControlStore(path.join(dir, "journal.sqlite"));
   t.after(() => store.db.close());
@@ -71,7 +83,17 @@ function world(t, { snapshots = {}, labels = {}, failClear = null, failDetach = 
       return { ...snapshots[id], labels: { ...labels[id] } };
     },
   };
-  const control = new Controller({ store, native, authority: async (id) => ({ id }) });
+  // The real task check walks the parents up to the programme row, reading this catalog as a local install does.
+  const localRead = async (id) => {
+    const row = read().issues.find((r) => r.id === id);
+    if (!row || row.companyId !== COMPANY) throw Error("Local task unavailable");
+    return row;
+  };
+  const control = new Controller({
+    store,
+    native,
+    authority: realAuthority ? (id) => authorizeTask(id, localRead) : async (id) => ({ id }),
+  });
   control.bindings = new Bindings(
     control,
     async () =>
@@ -588,4 +610,68 @@ test("the real host adapter passes label writes and label reads to this computer
   const bare = new HostNative({ store, local: {} });
   assert.throws(() => bare.setLabels(id, {}), /cannot write labels/);
   assert.throws(() => bare.detach(id), /cannot detach a chat/);
+});
+
+// Fulcra 0.2.11: on a computer with a local task catalog (the MacBook), every Team setup step was refused with
+// "This task cannot take team members: Local task unavailable": the catalog had no programme row for the task check.
+test("on a local catalog without a programme row, a lead, a worker and the main assistant all join", async (t) => {
+  const [lead, worker, main] = [randomUUID(), randomUUID(), randomUUID()];
+  const w = world(t, {
+    snapshots: { [lead]: chat(), [worker]: chat(), [main]: chat() },
+    issues: [],
+    realAuthority: true,
+  });
+  const project = await w.dispatch("team-project-create", { name: "AI gag games", note: NOTE });
+  const programme = w.read().issues.filter((r) => r.id === PROGRAMME);
+  assert.equal(programme.length, 1);
+  assert.equal(programme[0].assigneeUserId, "local-board");
+  const seat = async (role, name, sessionId) =>
+    w.dispatch("bindings-assign", {
+      role,
+      seat: name,
+      sessionId,
+      expectedRevision: 0,
+      expectedSessionGeneration: 1,
+      note: NOTE,
+    });
+  await w.dispatch("team-enrol", { sessionId: lead, taskId: project.taskId, note: NOTE });
+  assert.equal((await seat("project-orchestrator", project.projectId, lead)).sessionId, lead);
+  assert.equal(
+    (await w.dispatch("team-enrol", { sessionId: worker, taskId: project.taskId, note: NOTE }))
+      .action,
+    "enrolled",
+  );
+  await w.dispatch("team-enrol", { sessionId: main, taskId: PROGRAMME, note: NOTE });
+  assert.equal((await seat("prime", "main", main)).sessionId, main);
+});
+
+test("a catalog that already has a project but no programme row gets the row before a chat joins", async (t) => {
+  // The MacBook on 10 Oct: the project and its anchor task were written, the programme row never was.
+  const lead = randomUUID();
+  const projectId = randomUUID(),
+    taskId = randomUUID();
+  const w = world(t, {
+    snapshots: { [lead]: chat() },
+    realAuthority: true,
+    issues: [
+      {
+        id: taskId,
+        companyId: COMPANY,
+        parentId: PROGRAMME,
+        title: "AI gag games",
+        status: "in_progress",
+        assigneeUserId: "local-board",
+        assigneeAgentId: null,
+        projectId,
+      },
+    ],
+  });
+  const enrolled = await w.dispatch("team-enrol", { sessionId: lead, taskId, note: NOTE });
+  assert.equal(enrolled.action, "enrolled");
+  const rows = w.read().issues;
+  assert.equal(rows.filter((r) => r.id === PROGRAMME).length, 1);
+  assert.ok(
+    rows.some((r) => r.id === taskId),
+    "the existing task is kept",
+  );
 });

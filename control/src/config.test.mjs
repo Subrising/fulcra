@@ -31,9 +31,22 @@ test("first run is private, portable, stable and does not overwrite configuratio
     assert.deepEqual(firstRun(env), loadConfig(env));
     assert.equal(c.daemon.url, null);
     assert.deepEqual(c.hosts, []);
+    // Fulcra 0.2.11: the programme row every local task hangs from; without it no Team setup step could run.
     assert.deepEqual(JSON.parse(fs.readFileSync(c.tasks)), {
       version: 1,
-      issues: [],
+      issues: [
+        {
+          id: c.authority.programmeId,
+          companyId: c.authority.companyId,
+          parentId: null,
+          identifier: "ORCA-P",
+          title: "My projects",
+          status: "in_progress",
+          assigneeUserId: "local-board",
+          assigneeAgentId: null,
+          projectId: null,
+        },
+      ],
       projects: [],
     });
   }));
