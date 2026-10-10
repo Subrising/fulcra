@@ -20,6 +20,7 @@ const f = vi.hoisted(() => ({
   chooseCompany: vi.fn(),
   offline: new Set<string>(),
   // Fulcra 0.2.14: chats from the app's chat list, by computer, and the records of the two default chats.
+  untrusted: [] as { serverId: string; id: string }[],
   chats: {} as Record<string, Record<string, object>>,
   records: {} as Record<string, object>,
   cached: null as null | { key: string; value: unknown },
@@ -61,7 +62,31 @@ vi.mock("@/stores/session-store", () => ({
     select: (state: { sessions: Record<string, { agents: Map<string, object> }> }) => unknown,
   ) => select(f.state()),
 }));
+vi.mock("@/stores/leads-memory-store", async () => {
+  const { create } = await import("zustand");
+  interface Lead {
+    seat: string;
+    sessionId: string;
+    project: string;
+    title: string;
+  }
+  const useLeadsMemory = create<{
+    byHost: Record<string, Lead[]>;
+    remember: (id: string, leads: Lead[]) => void;
+    forget: (id: string) => void;
+  }>()((set, get) => ({
+    byHost: {},
+    remember: (id, leads) => {
+      if (JSON.stringify(get().byHost[id] ?? []) === JSON.stringify(leads)) return;
+      const { [id]: _old, ...rest } = get().byHost;
+      set({ byHost: leads.length ? { ...rest, [id]: leads } : rest });
+    },
+    forget: () => {},
+  }));
+  return { useLeadsMemory };
+});
 vi.mock("./registry", () => ({
+  useUntrustedPlugins: () => f.untrusted,
   useControllerPlugin: () => null,
   pluginRegistry: { controllerPluginId: () => "orca-organization-next" },
 }));
@@ -141,9 +166,11 @@ import {
   leadsFailureLabel,
   PinnedMainAssistant,
   PrimeSidebarRows,
+  rememberedNote,
   SIDEBAR_REFRESH_MS,
 } from "./prime-sidebar";
 import { useMainAssistantMemory } from "@/stores/main-assistant-memory-store";
+import { useLeadsMemory } from "@/stores/leads-memory-store";
 const clients: QueryClient[] = [];
 const fastRetry = () => 1;
 function mount() {
@@ -184,6 +211,8 @@ beforeEach(() => {
   f.push.mockClear();
   f.chats = {};
   f.records = {};
+  f.untrusted = [];
+  useLeadsMemory.setState({ byHost: {} });
   f.read.mockReset();
   f.send.mockReset();
   f.fleet.mockReset().mockResolvedValue({ nodes: [] });
@@ -836,4 +865,134 @@ it("shows the main assistant's status from the chat list when its chat is not a 
 
 it("reads the lead lists again every 30 s", () => {
   expect(SIDEBAR_REFRESH_MS).toBe(30_000);
+});
+
+// Fulcra 0.2.14 (FU-50): another computer's leads stay, greyed, while it is away.
+const HOSTS = [
+  { serverId: "mini", label: "Mac mini" },
+  { serverId: "book", label: "MacBook Pro" },
+];
+const GAG = {
+  seat: "g1",
+  sessionId: "11111111-1111-4111-8111-111111111111",
+  project: "AI gag games",
+  title: "Gag games lead",
+};
+const bookReads = (available = true) => ({
+  directory: {
+    available,
+    primes: [],
+    projectSeats: [
+      {
+        seat: "g1",
+        role: "project-orchestrator",
+        projectId: "proj-g",
+        state: "assigned",
+        sessionPresent: true,
+        sessionId: GAG.sessionId,
+      },
+    ],
+  },
+  projects: { projects: [{ id: "proj-g", name: "AI gag games" }] },
+  fleet: {
+    nodes: [{ id: GAG.sessionId, host: "macbook", status: "idle", pending: 0, title: GAG.title }],
+  },
+});
+
+it("shows an offline computer's last known leads, greyed, with '<computer> offline'", async () => {
+  f.hosts = HOSTS;
+  f.offline = new Set(["book"]);
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  useLeadsMemory.setState({ byHost: { book: [GAG] } });
+  mount();
+  const row = await screen.findByTestId("sidebar-remembered-lead-book-g1");
+  expect(row.textContent).toContain("Gag games lead");
+  expect(row.textContent).toContain("Lead · AI gag games · MacBook Pro offline");
+  expect(screen.queryByTestId("sidebar-remote-lead-book-g1")).toBeNull();
+});
+
+it("says 'update Fulcra on <computer>' when that computer's Fulcra is not trusted here", async () => {
+  f.hosts = HOSTS;
+  f.untrusted = [{ serverId: "book", id: "orca-organization-next" }];
+  f.remote.book = bookReads();
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  useLeadsMemory.setState({ byHost: { book: [GAG] } });
+  mount();
+  const row = await screen.findByTestId("sidebar-remembered-lead-book-g1");
+  expect(row.textContent).toContain("update Fulcra on MacBook Pro");
+  expect(screen.queryByTestId("sidebar-remote-lead-book-g1")).toBeNull();
+});
+
+it("keeps the remembered leads when an online computer does not answer", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = bookReads(false);
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  useLeadsMemory.setState({ byHost: { book: [GAG] } });
+  mount();
+  const row = await screen.findByTestId("sidebar-remembered-lead-book-g1");
+  // Until the read answers the row is plain "last known"; then it says why it is greyed.
+  expect(row.textContent).toContain("Lead · AI gag games · last known");
+  await vi.waitFor(() =>
+    expect(screen.getByTestId("sidebar-remembered-lead-book-g1").textContent).toContain(
+      "Command Centre not answering on MacBook Pro",
+    ),
+  );
+});
+
+it("shows a read computer's leads live, remembers them, and lists no remembered row beside them", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = bookReads();
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  mount();
+  await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(screen.queryByTestId("sidebar-remembered-lead-book-g1")).toBeNull();
+  await vi.waitFor(() => expect(useLeadsMemory.getState().byHost.book?.[0]?.seat).toBe("g1"));
+  expect(useLeadsMemory.getState().byHost.book?.[0]?.title).toBe("Gag games lead");
+});
+
+it("lists a seated lead on another computer once, even when its chat reports to the main assistant", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = bookReads();
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.chats = {
+    book: {
+      [GAG.sessionId]: {
+        id: GAG.sessionId,
+        title: GAG.title,
+        status: "idle",
+        labels: { "fulcra.reports-to": "role:main-assistant" },
+      },
+    },
+  };
+  mount();
+  await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(screen.queryByTestId(`sidebar-chat-lead-book-${GAG.sessionId}`)).toBeNull();
+});
+
+it("does not list a remembered lead a second time from the chat list while its computer is away", async () => {
+  f.hosts = HOSTS;
+  f.offline = new Set(["book"]);
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  useLeadsMemory.setState({ byHost: { book: [GAG] } });
+  f.chats = {
+    book: {
+      [GAG.sessionId]: {
+        id: GAG.sessionId,
+        title: GAG.title,
+        status: "idle",
+        labels: { "fulcra.reports-to": "role:main-assistant" },
+      },
+    },
+  };
+  mount();
+  await screen.findByTestId("sidebar-remembered-lead-book-g1");
+  expect(screen.queryByTestId(`sidebar-chat-lead-book-${GAG.sessionId}`)).toBeNull();
+});
+
+it("explains why remembered leads are greyed, and says nothing while a computer is still being read", () => {
+  expect(rememberedNote("Book", true, true, [])).toBe("update Fulcra on Book");
+  expect(rememberedNote("Book", false, false, undefined)).toBe("Book offline");
+  expect(rememberedNote("Book", false, true, null)).toBe("Command Centre not answering on Book");
+  expect(rememberedNote("Book", false, true, undefined)).toBeNull();
+  expect(typeof rememberedNote("Book", false, true, [])).toBe("symbol");
 });
