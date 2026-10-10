@@ -1389,7 +1389,7 @@ plugin-host	M	28	0	packages/app/src/plugins/registry-hooks.test.tsx
 plugin-host	M	55	86	packages/app/src/plugins/registry-lifecycle.test.ts
 plugin-host	M	3	3	packages/app/src/plugins/registry-requirements.test.ts
 plugin-host	M	115	0	packages/app/src/plugins/registry.test.ts
-plugin-host	M	254	6	packages/app/src/plugins/registry.ts
+plugin-host	M	256	6	packages/app/src/plugins/registry.ts
 plugin-host	M	8	0	packages/app/src/plugins/routes.test.ts
 plugin-host	M	9	1	packages/app/src/plugins/settings/index.tsx
 plugin-host	M	75	0	packages/app/src/plugins/sidebar-groups.test.ts
@@ -1480,8 +1480,10 @@ session-launch	M	48	2	packages/app/src/composer/index.tsx
 session-launch	M	118	2	packages/app/src/create-agent-preferences/preferences.test.ts
 session-launch	M	108	2	packages/app/src/create-agent-preferences/preferences.ts
 session-launch	M	70	23	packages/app/src/hooks/use-agent-form-state.ts
+session-launch	A	26	0	packages/app/src/plugins/catalog-hash.test.ts
+session-launch	A	16	0	packages/app/src/plugins/catalog-hash.ts
 session-launch	A	386	0	packages/app/src/plugins/catalog-sync.test.tsx
-session-launch	M	90	25	packages/app/src/plugins/catalog-sync.tsx
+session-launch	M	91	25	packages/app/src/plugins/catalog-sync.tsx
 session-launch	M	148	5	packages/app/src/provider-selection/provider-selection.test.ts
 session-launch	M	36	2	packages/app/src/provider-selection/provider-selection.ts
 session-launch	M	510	29	packages/app/src/provider-selection/resolve-agent-form.test.ts
