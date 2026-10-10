@@ -482,7 +482,9 @@ test("follow-up finish notifications do not require a parent relationship", asyn
   expect(parentPrompt).toContain("Agent child-agent (Child Agent) finished.");
 });
 
-test("finish notifications log a rejected parent prompt without an unhandled rejection", async () => {
+test("a finish notice never replaces a busy caller's turn; it waits for the turn to end", async () => {
+  // FULCRA(orchestration): the owner's rule, 10 Oct. The caller is busy and cannot take a steer; replacing its turn would
+  // cancel its running tool call. The notice is held instead (held-sends.ts), so nothing fails and nothing is sent.
   const captured = createCapturedLogger();
   const scenario = createFinishNotificationScenario({
     parentPromptError: new Error("parent provider rejected replacement"),
@@ -490,18 +492,12 @@ test("finish notifications log a rejected parent prompt without an unhandled rej
   });
 
   scenario.startWatchingChild();
-  await scenario.finishChildAndReadParentPrompt();
-  await captured.nextRecord;
+  scenario.finishChild();
+  await vi.waitFor(() => expect(scenario.steerAttemptCount()).toBe(1));
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
-  expect(captured.records).toEqual([
-    expect.objectContaining({
-      msg: "Failed to notify caller agent",
-      childAgentId: "child-agent",
-      callerAgentId: "caller-agent",
-      reason: "finished",
-      err: expect.objectContaining({ message: "parent provider rejected replacement" }),
-    }),
-  ]);
+  expect(scenario.parentPrompts()).toEqual([]);
+  expect(captured.records).toEqual([]);
 });
 
 it("does not notify archived callers", async () => {

@@ -30,6 +30,7 @@ interface SupportedMutableConfigPatch {
   explainDailyLimit?: number;
   notificationMode?: MutableDaemonConfig["notificationMode"];
   enableTerminalAgentHooks?: boolean;
+  reportUpOnTurnEnd?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: MutableDaemonConfig["terminalProfiles"];
@@ -188,6 +189,7 @@ const RELOADABLE_PATHS = [
   "daemon.explainDailyLimit",
   "daemon.notificationMode",
   "daemon.enableTerminalAgentHooks",
+  "daemon.reportUpOnTurnEnd",
   "daemon.autoResumeOnLimit",
   "daemon.appendSystemPrompt",
   "daemon.terminalProfiles",
@@ -214,6 +216,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.explainDailyLimit", "explainDailyLimit"],
   ["daemon.notificationMode", "notificationMode"],
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
+  ["daemon.reportUpOnTurnEnd", "reportUpOnTurnEnd"],
   ["daemon.autoResumeOnLimit", "autoResumeOnLimit"],
   ["daemon.appendSystemPrompt", "appendSystemPrompt"],
   ["daemon.terminalProfiles", "terminalProfiles"],
@@ -262,6 +265,12 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 }
 
 // Kept apart so the patch picker stays under the complexity limit; present only when the patch sets it.
+function reportUpField(patch: MutableDaemonConfigPatch): { reportUpOnTurnEnd?: boolean } {
+  return patch.reportUpOnTurnEnd !== undefined
+    ? { reportUpOnTurnEnd: patch.reportUpOnTurnEnd }
+    : {};
+}
+
 function explainBudgetField(patch: MutableDaemonConfigPatch): { explainDailyLimit?: number } {
   return patch.explainDailyLimit !== undefined
     ? { explainDailyLimit: patch.explainDailyLimit }
@@ -286,6 +295,7 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
       ? { autoArchiveAfterMerge: patch.autoArchiveAfterMerge }
       : {}),
     ...explainBudgetField(patch),
+    ...reportUpField(patch),
     ...(patch.autoResumeOnLimit !== undefined
       ? { autoResumeOnLimit: patch.autoResumeOnLimit }
       : {}),
@@ -781,6 +791,9 @@ function mergeMutableDaemonPatch(
   }
   if (patch.enableTerminalAgentHooks !== undefined) {
     next.enableTerminalAgentHooks = patch.enableTerminalAgentHooks;
+  }
+  if (patch.reportUpOnTurnEnd !== undefined) {
+    next.reportUpOnTurnEnd = patch.reportUpOnTurnEnd;
   }
   if (patch.appendSystemPrompt !== undefined) next.appendSystemPrompt = patch.appendSystemPrompt;
   if (patch.terminalProfiles !== undefined) next.terminalProfiles = patch.terminalProfiles;

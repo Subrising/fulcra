@@ -281,6 +281,8 @@ export const MutableDaemonConfigSchema = z
     explainDailyLimit: z.number().int().min(0).max(1000).optional(),
     notificationMode: z.enum(["all", "primes", "off"]).default("primes"),
     enableTerminalAgentHooks: z.boolean().default(false),
+    // FULCRA(orchestration): a worker's finished turn is sent to its lead as one short notice. Unset means on.
+    reportUpOnTurnEnd: z.boolean().optional(),
     autoResumeOnLimit: z.boolean().default(true),
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
@@ -305,6 +307,7 @@ export const MutableDaemonConfigPatchSchema = z
     explainDailyLimit: z.number().int().min(0).max(1000).optional(),
     notificationMode: z.enum(["all", "primes", "off"]).optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
+    reportUpOnTurnEnd: z.boolean().optional(),
     autoResumeOnLimit: z.boolean().optional(),
     appendSystemPrompt: z.string().optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),

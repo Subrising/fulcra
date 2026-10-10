@@ -4119,7 +4119,7 @@ describe("send_agent_prompt MCP tool", () => {
       await removeAgentStateDir(agentManager, storage, workdir);
     }
   });
-  it("notifies the caller once when it prompts a created child that is still running", async () => {
+  it("holds a prompt to a running child until its turn ends, then notifies the caller once", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "mcp-send-running-child-"));
     const storage = new AgentStorage(join(workdir, "agents"), logger);
     const parentClient = new HeldTurnAgentClient("claude", false);
@@ -4163,16 +4163,21 @@ describe("send_agent_prompt MCP tool", () => {
         status: "running",
       });
       const childSession = childClient.sessions[0]!;
-      await vi.waitFor(() => expect(childSession.prompts).toHaveLength(2));
-
-      childSession.finishTurn();
+      // FULCRA(orchestration): a prompt from another chat never enters or cancels the running turn.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(childSession.prompts).toEqual(["Run a long command"]);
 
       function finishNotifications() {
         return (parentClient.sessions[0]?.prompts ?? []).filter((prompt) =>
           prompt.includes(`Agent ${childId} (Busy Child) finished.`),
         );
       }
-      await vi.waitFor(() => expect(finishNotifications()).not.toHaveLength(0));
+      childSession.finishTurn();
+      await vi.waitFor(() => expect(childSession.prompts).toHaveLength(2));
+      expect(childSession.prompts[1]).toContain("Stop and reply instead");
+      childSession.finishTurn();
+      // Arming for the delivered prompt replaces the first turn's notice: one notice, for the answering turn.
+      await vi.waitFor(() => expect(finishNotifications()).toHaveLength(1));
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(finishNotifications()).toHaveLength(1);
     } finally {

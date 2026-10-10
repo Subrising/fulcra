@@ -622,6 +622,7 @@ export function resolveConfigFromPersisted(
     explainDailyLimit,
     notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
+    reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
     terminalProfiles,
@@ -677,6 +678,7 @@ export function resolveConfigFromPersisted(
 function resolvePersistedPassThroughSettings(paseoHome: string, persisted: PersistedConfig) {
   return {
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    reportUpOnTurnEnd: persisted.daemon?.reportUpOnTurnEnd ?? true,
     autoResumeOnLimit:
       readLimitResumeSetting(paseoHome) ?? persisted.daemon?.autoResumeOnLimit ?? true,
     notificationMode: persisted.daemon?.notificationMode ?? ("primes" as const),
