@@ -111,11 +111,12 @@ import {
 import { AgentNavigationInbox, parseAgentDeepLinkFromArgv } from "./agent-navigation.js";
 import { findOAuthCallbackInArgv, isOAuthCallbackLink } from "./oauth-callback.js";
 import { APP_DISPLAY_NAME } from "./app-display-name.js";
+import { resolveSingleInstanceOverride } from "./single-instance-override.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
 const APP_SCHEME = "paseo";
 const PASEO_DEBUG = process.env.PASEO_DEBUG === "1";
-const DISABLE_SINGLE_INSTANCE_LOCK = process.env.PASEO_DISABLE_SINGLE_INSTANCE_LOCK === "1";
+const SINGLE_INSTANCE_OVERRIDE = resolveSingleInstanceOverride(process.env);
 const APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim() || "Orca";
 const DESKTOP_WINDOW_CHROME_MODE = resolveDesktopWindowChromeMode({
   platform: process.platform,
@@ -891,9 +892,14 @@ app.on("open-url", (event, url) => {
 });
 
 function setupSingleInstanceLock(): boolean {
-  if (DISABLE_SINGLE_INSTANCE_LOCK) {
+  if (SINGLE_INSTANCE_OVERRIDE === "disabled") {
     log.info("[single-instance] disabled by PASEO_DISABLE_SINGLE_INSTANCE_LOCK");
     return true;
+  }
+  if (SINGLE_INSTANCE_OVERRIDE === "ignored") {
+    log.warn(
+      "[single-instance] PASEO_DISABLE_SINGLE_INSTANCE_LOCK ignored: it needs PASEO_ELECTRON_USER_DATA_DIR",
+    );
   }
 
   const gotLock = app.requestSingleInstanceLock();
@@ -922,11 +928,12 @@ function setupSingleInstanceLock(): boolean {
       isDefaultApp: false,
     });
     log.info("[open-project] second-instance openProjectPath:", openProjectPath);
-    // Relaunching the app (CLI `paseo [path]`, double-click, etc.) opens a new
-    // window rather than focusing the existing one. Wait for bootstrap (not just
-    // app.whenReady) so the protocol + IPC handlers exist before the window loads.
+    // One Fulcra app per system: a relaunch (double-click, Dock, Spotlight) brings the running
+    // app to the front. Only an explicit project path (CLI `paseo <path>`) opens a new window.
+    // Wait for bootstrap (not just app.whenReady) so the protocol + IPC handlers exist before
+    // a window loads.
     void bootstrapComplete
-      .then(() => desktopWindowOwner.openAdditional({ pendingProjectPath: openProjectPath }))
+      .then(() => desktopWindowOwner.openFromRelaunch({ pendingProjectPath: openProjectPath }))
       .catch((error) => {
         log.error("[window] failed to create window from second-instance", error);
       });

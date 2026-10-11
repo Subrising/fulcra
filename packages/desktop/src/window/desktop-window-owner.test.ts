@@ -9,6 +9,7 @@ function harness() {
   const windows: OwnedDesktopWindow<Target>[] = [];
   const launches: Array<{ initialRoute: string | null; restoreWindowState: boolean }> = [];
   const sent: Target[] = [];
+  const focusCalls: number[] = [];
   let nextId = 1;
   let focused: OwnedDesktopWindow<Target> | null = null;
   let closeWindow = (_id: number) => {};
@@ -27,7 +28,7 @@ function harness() {
         isMinimized: () => false,
         restore: () => {},
         show: () => {},
-        focus: () => {},
+        focus: () => focusCalls.push(id),
         sendAgent: (target) => sent.push(target),
       };
       windows.push(window);
@@ -43,6 +44,7 @@ function harness() {
     owner,
     launches,
     sent,
+    focusCalls,
     windows,
     setFocused: (window: OwnedDesktopWindow<Target>) => {
       focused = window;
@@ -78,5 +80,29 @@ describe("desktop window owner", () => {
     await h.owner.openAdditional({ pendingProjectPath: "/project/a" });
     h.close(1);
     expect(h.owner.takePendingProject(1)).toBeNull();
+  });
+
+  it("a second launch brings the running window to the front and opens no window", async () => {
+    const h = harness();
+    await h.owner.openPrimary();
+    await h.owner.openFromRelaunch({ pendingProjectPath: null });
+    await h.owner.openFromRelaunch({ pendingProjectPath: null });
+    expect(h.launches).toHaveLength(1);
+    expect(h.focusCalls).toEqual([1, 1]);
+  });
+
+  it("a second launch with no window open opens the primary window", async () => {
+    const h = harness();
+    await h.owner.openFromRelaunch({ pendingProjectPath: null });
+    expect(h.launches).toEqual([{ initialRoute: null, restoreWindowState: true }]);
+  });
+
+  it("a second launch with a project path opens that project in a new window", async () => {
+    const h = harness();
+    await h.owner.openPrimary();
+    await h.owner.openFromRelaunch({ pendingProjectPath: "/project/b" });
+    expect(h.launches).toHaveLength(2);
+    expect(h.owner.takePendingProject(2)).toBe("/project/b");
+    expect(h.focusCalls).toEqual([]);
   });
 });

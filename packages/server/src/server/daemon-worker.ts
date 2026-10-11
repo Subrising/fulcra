@@ -4,6 +4,7 @@ import path from "node:path";
 import { createPaseoDaemon, formatListenTarget } from "./bootstrap.js";
 import { loadConfig } from "./config.js";
 import { resolvePaseoHome } from "./paseo-home.js";
+import { findOtherHomeOwner, formatOtherHomeOwner } from "./home-owner-guard.js";
 import { createRootLogger } from "./logger.js";
 import type { DaemonLifecycleIntent } from "./bootstrap.js";
 import { getProcessDiagnostics } from "./process-diagnostics.js";
@@ -151,7 +152,18 @@ function applyCliFlagOverrides(config: ReturnType<typeof loadConfig>): void {
   }
 }
 
+async function exitIfHomeHasOtherOwner(): Promise<void> {
+  const home = resolvePaseoHome();
+  const owner = await findOtherHomeOwner({ paseoHome: home, parentPid: process.ppid });
+  if (!owner) return;
+  const message = formatOtherHomeOwner(home, owner);
+  process.stderr.write(`${message}\n`);
+  writeWorkerLifecycleLog(home, message, { ownerPid: owner.pid, parentPid: process.ppid });
+  process.exit(1);
+}
+
 async function main() {
+  await exitIfHomeHasOtherOwner();
   const { paseoHome, logger, config } = bootstrapFromEnvironment();
   let daemon: Awaited<ReturnType<typeof createPaseoDaemon>> | null = null;
   let shutdownPromise: Promise<number> | null = null;

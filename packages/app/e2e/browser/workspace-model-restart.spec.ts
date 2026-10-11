@@ -14,6 +14,7 @@ import {
   createNodeWebSocketFactory,
   type NodeWebSocketFactory,
 } from "../support/helpers/node-ws-factory";
+import { assertTestHome } from "../../../../scripts/test-support/test-home.cjs";
 import { withDisabledE2ESpeechEnv } from "../support/helpers/speech-env";
 import {
   expectNewWorkspaceProjectSelected,
@@ -237,6 +238,7 @@ async function startRestartDaemon(input: {
     return startRestartDaemon(input);
   }
 
+  assertTestHome(input.paseoHome, "the restart e2e daemon");
   const serverDir = path.resolve(__dirname, "../../../server");
   const child = spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], {
     cwd: serverDir,

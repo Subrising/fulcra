@@ -8,6 +8,7 @@ import net from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { _electron as electron, expect } from "playwright/test";
 import { savePersistedConfig } from "@getpaseo/server/configuration";
+import { assertTestHome } from "../../../scripts/test-support/test-home.cjs";
 import {
   startDaemonInstance,
   stopDaemonInstance,
@@ -25,6 +26,7 @@ const env = Object.fromEntries(
 env.HOME = root;
 env.USERPROFILE = root;
 env.PASEO_HOME = home;
+assertTestHome(home, "the desktop lifecycle e2e");
 const server = net.createServer();
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const port = server.address().port;

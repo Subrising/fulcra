@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { assertTestHome } from "../../../../../scripts/test-support/test-home.cjs";
 import { getAvailableHostDaemonPort } from "./isolated-host-daemon";
 import { killProcessTree, spawnTsx } from "./spawn-node";
 
@@ -80,6 +81,7 @@ interface VersionedHostDaemonOptions {
 async function startVersionedHostDaemon(
   options: VersionedHostDaemonOptions,
 ): Promise<VersionedHostDaemon> {
+  assertTestHome(options.paseoHomeRoot, `the versioned e2e daemon ${options.version}`);
   const child = spawnTsx(
     VERSIONED_DAEMON_ENTRYPOINT,
     [options.version, String(options.port), options.paseoHomeRoot],
