@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { main } from "./node-entrypoint-runner";
+import { main, resolveBackgroundExecPath } from "./node-entrypoint-runner";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -62,5 +62,45 @@ globalThis.__PASEO_NODE_ENTRYPOINT_RUNNER_FIXTURE__ = {
       globalThis.__PASEO_NODE_ENTRYPOINT_RUNNER_FIXTURE__ = originalFixture;
       rmSync(fixtureDir, { recursive: true, force: true });
     }
+  });
+
+  describe("background exec path (no Dock icon on macOS)", () => {
+    const mainExecutable = "/Applications/Fulcra.app/Contents/MacOS/Fulcra";
+    const helper =
+      "/Applications/Fulcra.app/Contents/Frameworks/Fulcra Helper.app/Contents/MacOS/Fulcra Helper";
+
+    it("runs the bundle's main executable through its Helper", () => {
+      expect(
+        resolveBackgroundExecPath({
+          execPath: mainExecutable,
+          platform: "darwin",
+          exists: (p) => p === helper,
+        }),
+      ).toBe(helper);
+    });
+
+    it("keeps the Helper, plain Node, other platforms and bundles without a Helper", () => {
+      const exists = () => true;
+      expect(
+        resolveBackgroundExecPath({ execPath: helper, platform: "darwin", exists }),
+      ).toBeNull();
+      expect(
+        resolveBackgroundExecPath({
+          execPath: "/opt/homebrew/bin/node",
+          platform: "darwin",
+          exists,
+        }),
+      ).toBeNull();
+      expect(
+        resolveBackgroundExecPath({ execPath: mainExecutable, platform: "linux", exists }),
+      ).toBeNull();
+      expect(
+        resolveBackgroundExecPath({
+          execPath: mainExecutable,
+          platform: "darwin",
+          exists: () => false,
+        }),
+      ).toBeNull();
+    });
   });
 });
