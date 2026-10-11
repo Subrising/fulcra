@@ -238,12 +238,19 @@ test("server entry obeys host cleanup contract and registers explicit management
     },
     {
       get(target, name) {
-        if (name === "secrets" || name === "notify" || name === "device" || name === "credentials")
-          return undefined;
-        /* the sanctioned structural reads: ctx.secrets (J3 trackers), ctx.notify (J3b push), ctx.device (J5b pairing) and ctx.credentials (J4, host-mediated requests, CONTRACTS v1.7); absent here, so push, pairing and host credentials stay off */ if (
-          name !== "handle"
+        // The sanctioned structural reads: ctx.secrets (J3 trackers), ctx.notify (J3b push), ctx.device (J5b pairing),
+        // ctx.credentials (J4, host-mediated requests, CONTRACTS v1.7) and ctx.before (the agent.create and
+        // agent.session_open hooks, tested for with typeof). All are absent here, so push, pairing, host
+        // credentials and the launch hooks stay off.
+        if (
+          name === "secrets" ||
+          name === "notify" ||
+          name === "device" ||
+          name === "credentials" ||
+          name === "before"
         )
-          throw new Error("Unexpected hook or action");
+          return undefined;
+        if (name !== "handle") throw new Error(`Unexpected hook or action: ${String(name)}`);
         return target.handle;
       },
     },
@@ -253,6 +260,21 @@ test("server entry obeys host cleanup contract and registers explicit management
   // WL (d6cd5164) registers its worktree Clean-up methods first.
   assert.equal(typeof cleanup, "function");
   assert.deepEqual(names, [
+    "organization.intercom.artifacts.content.set",
+    "organization.intercom.artifacts.content.list",
+    "organization.radius.scratch.simulate",
+    "organization.radius.scratch.prune-simulate",
+    "organization.intercom.artifacts.tool.set",
+    "organization.intercom.receipts.status",
+    "organization.intercom.prime.register",
+    "organization.intercom.prime.promote",
+    "organization.intercom.prime.demote",
+    "organization.intercom.project.transfer",
+    "organization.intercom.rates.get",
+    "organization.intercom.status",
+    "organization.intercom.rates.set",
+    "organization.intercom.parent.adopt",
+    "organization.intercom.registration.revoke",
     "organization.cleanup-preview",
     "organization.cleanup-apply",
     "organization.cleanup-settings",
@@ -268,6 +290,8 @@ test("server entry obeys host cleanup contract and registers explicit management
     "organization.session-file-history",
     "organization.project-briefing",
     "organization.role-directory",
+    "organization.team-setup",
+    "organization.team-chats",
     "organization.role-project",
     "organization.role-assign",
     "organization.project-session-requests",
@@ -279,11 +303,21 @@ test("server entry obeys host cleanup contract and registers explicit management
     "organization.work-map-project",
     "organization.session-ownership",
     "organization.session-defaults",
+    "organization.accounts",
+    "organization.accounts.add",
+    "organization.accounts.update",
+    "organization.accounts.settings",
+    "organization.accounts.session",
+    "organization.accounts.switch",
+    "organization.ask.start",
+    "organization.ask.result",
+    "organization.accounts.takeover",
     "organization.outcome",
     "organization.outcome-artifact",
     "organization.manage",
     "organization.recovery",
     "organization.recovery-act",
+    "organization.operator-invoke",
     "organization.task-manage",
     "organization.tasks",
     "organization.usage",
@@ -314,6 +348,17 @@ test("server entry obeys host cleanup contract and registers explicit management
     "organization.held-release",
     "organization.digest",
     "organization.environments",
+    "organization.deploy-overview",
+    "organization.deploy-sources",
+    "organization.deploy-plan-view",
+    "organization.deploy-job",
+    "organization.deploy-connect-local",
+    "organization.deploy-connect-cluster",
+    "organization.deploy-disconnect",
+    "organization.deploy-plan",
+    "organization.deploy-rollback-plan",
+    "organization.deploy-discard",
+    "organization.deploy-confirm",
     "organization.environment-propose",
     "organization.promotion-create",
     "organization.promotion-cancel",
@@ -333,6 +378,9 @@ test("server entry obeys host cleanup contract and registers explicit management
     "organization.project-domain-set",
     "organization.project-brief",
     "organization.snapshot",
+    "organization.workspace.get_directory.request",
+    "organization.workspace.receiver.request",
+    "organization.workspace.update.request",
   ]);
   cleanup();
 });
