@@ -62,11 +62,8 @@ import {
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
-import {
-  SIDEBAR_TOUCH_ROW_HEIGHT,
-  sidebarFooterButtonSize,
-  useSidebarTouchRows,
-} from "@/components/sidebar/sidebar-touch";
+import { SIDEBAR_TOUCH_ROW_HEIGHT, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
+import { sidebarFooterButtonSize } from "@/components/sidebar/sidebar-footer-size";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
 
