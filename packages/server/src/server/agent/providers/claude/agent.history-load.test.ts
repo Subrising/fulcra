@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import pino from "pino";
@@ -40,6 +40,8 @@ describe("ClaudeAgentSession persisted history load", () => {
       { provider: "claude", sessionId: SESSION_ID },
       { cwd },
     );
+    // FU-77: the transcript is read without blocking the main thread, so history is complete once it is streamed.
+    for await (const event of session.streamHistory()) void event;
     await session.close();
   }
 
@@ -89,5 +91,34 @@ describe("ClaudeAgentSession persisted history load", () => {
         err: expect.objectContaining({ message: expect.stringContaining("EISDIR") }),
       }),
     );
+  });
+
+  test("a resumed transcript is replayed after an async read, and resume returns before it is read", async () => {
+    mkdirSync(path.dirname(transcriptPath()), { recursive: true });
+    const line = JSON.stringify({
+      type: "user",
+      uuid: "u1",
+      sessionId: SESSION_ID,
+      message: { role: "user", content: "hello from the transcript" },
+      timestamp: "2026-10-12T00:00:00.000Z",
+    });
+    writeFileSync(transcriptPath(), `${line}\n`);
+    const client = new ClaudeAgentClient({
+      logger: pino({ level: "silent" }),
+      queryFactory: vi.fn(() => {
+        throw new Error("history load must not start a query");
+      }),
+      resolveVersion: async () => "2.1.220",
+    });
+    const session = await client.resumeSession(
+      { provider: "claude", sessionId: SESSION_ID },
+      { cwd },
+    );
+    const items: unknown[] = [];
+    for await (const event of session.streamHistory()) {
+      if (event.type === "timeline") items.push(event.item);
+    }
+    await session.close();
+    expect(JSON.stringify(items)).toContain("hello from the transcript");
   });
 });

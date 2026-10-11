@@ -2236,6 +2236,8 @@ class ClaudeAgentSession implements AgentSession {
     { type: "provider_subagent" }
   >[] = [];
   private historyPending = false;
+  // FU-77: the transcript is read without blocking the main thread; readers of persistedHistory await this first.
+  private historyLoad: Promise<void> = Promise.resolve();
   private turnState: TurnState = "idle";
   private nextTurnOrdinal = 1;
   private cancelCurrentTurn: (() => void) | null = null;
@@ -2285,7 +2287,7 @@ class ClaudeAgentSession implements AgentSession {
       }
       this.claudeSessionId = handle.sessionId;
       this.persistence = handle;
-      this.loadPersistedHistory(handle.sessionId);
+      this.historyLoad = this.loadPersistedHistory(handle.sessionId);
     } else {
       // A rotation names the fresh conversation up front; the first query starts it with sessionId.
       this.claudeSessionId = options.freshSessionId ?? null;
@@ -2672,6 +2674,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+    await this.historyLoad;
     if (
       !this.historyPending ||
       (this.persistedHistory.length === 0 && this.persistedProviderSubagentEvents.length === 0)
@@ -3178,6 +3181,7 @@ class ClaudeAgentSession implements AgentSession {
       };
     }
 
+    await this.historyLoad;
     const candidates = this.getRewindCandidateUserMessageIds();
     if (candidates.length === 0) {
       return {
@@ -3267,7 +3271,7 @@ class ClaudeAgentSession implements AgentSession {
     this.emittedUserMessageIds.clear();
     this.rewindTurnAnchors.length = 0;
     this.taskState.reset();
-    this.loadPersistedHistory(sessionId);
+    this.historyLoad = this.loadPersistedHistory(sessionId);
     if (oldSessionId && oldSessionId !== sessionId) {
       this.dispatchEvents([
         {
@@ -5304,22 +5308,22 @@ class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  private loadPersistedHistory(sessionId: string): void {
+  private async loadPersistedHistory(sessionId: string): Promise<void> {
     let historyPath: string | null = null;
     try {
       this.taskState.reset();
       historyPath = this.resolveHistoryPath(sessionId);
-      if (!historyPath || !fs.existsSync(historyPath)) {
+      if (!historyPath || !(await pathExists(historyPath))) {
         this.logger.info(
           { sessionId, cwd: this.config.cwd, historyPath },
           "No Claude transcript to load history from",
         );
         return;
       }
-      const content = fs.readFileSync(historyPath, "utf8");
+      const content = await promises.readFile(historyPath, "utf8");
       const replay = this.ingestPersistedSidechains(
         content,
-        readClaudeSidechainHistory(historyPath),
+        await readClaudeSidechainHistory(historyPath),
       );
       this.ingestPersistedHistory(content, replay);
     } catch (error) {
@@ -6290,7 +6294,8 @@ interface ClaudeSidechainHistory {
 
 const CLAUDE_SUBAGENT_META_FILE = /^agent-(.+)\.meta\.json$/;
 
-function readClaudeSidechainHistory(historyPath: string): ClaudeSidechainHistory {
+// Async (FU-77): a session with many sidechain files is read at daemon start, often from a slow disk.
+async function readClaudeSidechainHistory(historyPath: string): Promise<ClaudeSidechainHistory> {
   const sessionDirectory = path.join(
     path.dirname(historyPath),
     path.basename(historyPath, ".jsonl"),
@@ -6303,25 +6308,25 @@ function readClaudeSidechainHistory(historyPath: string): ClaudeSidechainHistory
     metaByAgentId: new Map(),
   };
   const workflowDirectory = path.join(sessionDirectory, "workflows");
-  if (fs.existsSync(workflowDirectory)) {
-    for (const entry of fs.readdirSync(workflowDirectory, { withFileTypes: true })) {
+  if (await pathExists(workflowDirectory)) {
+    for (const entry of await promises.readdir(workflowDirectory, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
         history.workflowContents.push(
-          fs.readFileSync(path.join(workflowDirectory, entry.name), "utf8"),
+          await promises.readFile(path.join(workflowDirectory, entry.name), "utf8"),
         );
       } catch {
         // A partial or unreadable run summary must not fail the rest of history ingestion.
       }
     }
   }
-  if (!fs.existsSync(sidechainDirectory)) return history;
+  if (!(await pathExists(sidechainDirectory))) return history;
 
   const directories = [sidechainDirectory];
   while (directories.length > 0) {
     const directory = directories.pop();
     if (!directory) continue;
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of await promises.readdir(directory, { withFileTypes: true })) {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         directories.push(entryPath);
@@ -6329,7 +6334,7 @@ function readClaudeSidechainHistory(historyPath: string): ClaudeSidechainHistory
       }
       if (!entry.isFile()) continue;
       if (entry.name.endsWith(".jsonl")) {
-        recordClaudeSidechainContents(history, sidechainDirectory, entryPath);
+        await recordClaudeSidechainContents(history, sidechainDirectory, entryPath);
         continue;
       }
       // The sidecar carries the Task tool_use id, which is the same id the live stream keys on.
@@ -6337,7 +6342,7 @@ function readClaudeSidechainHistory(historyPath: string): ClaudeSidechainHistory
       const metaMatch = CLAUDE_SUBAGENT_META_FILE.exec(entry.name);
       if (!metaMatch?.[1]) continue;
       try {
-        const meta = parseClaudeSubagentMeta(fs.readFileSync(entryPath, "utf8"));
+        const meta = parseClaudeSubagentMeta(await promises.readFile(entryPath, "utf8"));
         if (meta) history.metaByAgentId.set(metaMatch[1], meta);
       } catch {
         // Undocumented internals: a missing or unreadable sidecar must never fail ingestion.
@@ -6347,12 +6352,12 @@ function readClaudeSidechainHistory(historyPath: string): ClaudeSidechainHistory
   return history;
 }
 
-function recordClaudeSidechainContents(
+async function recordClaudeSidechainContents(
   history: ClaudeSidechainHistory,
   sidechainDirectory: string,
   entryPath: string,
-): void {
-  const contents = fs.readFileSync(entryPath, "utf8");
+): Promise<void> {
+  const contents = await promises.readFile(entryPath, "utf8");
   const relativeParts = path.relative(sidechainDirectory, entryPath).split(path.sep);
   const workflowRunId =
     relativeParts[0] === "workflows" && relativeParts.length >= 3 ? relativeParts[1] : undefined;
