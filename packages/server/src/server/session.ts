@@ -149,6 +149,7 @@ import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-uti
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import { decideSend, lineStoreOf, resolveRoleTarget, type LineStore } from "./reporting-lines.js";
+import { noteAgentMessage } from "./agent-message-log.js";
 import { deliveryWithReceipt, heldSendsFor, ProvenanceRefusedError } from "./held-sends.js";
 import { tellSenderUndelivered } from "./undelivered-notice.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
@@ -9722,6 +9723,7 @@ export class Session {
       });
     const sender = msg.sender;
     return async () => {
+      if (sender) noteAgentMessage(sender.agentId, agentId);
       if (sender) {
         held.hold(
           agentId,

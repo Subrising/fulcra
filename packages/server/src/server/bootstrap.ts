@@ -665,7 +665,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     explainDailyLimit: config.explainDailyLimit,
     notificationMode: initialNotificationMode(config),
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
-    reportUpOnTurnEnd: config.reportUpOnTurnEnd !== false,
+    reportUpOnTurnEnd: config.reportUpOnTurnEnd,
     reviveOnRestart: config.reviveOnRestart !== false,
     autoResumeOnLimit: config.autoResumeOnLimit ?? true,
     appendSystemPrompt: config.appendSystemPrompt ?? "",

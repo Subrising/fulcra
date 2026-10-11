@@ -676,11 +676,13 @@ export function resolveConfigFromPersisted(
 }
 
 /** Settings read straight from the persisted file, with their defaults. */
-// FULCRA(orchestration): kept apart so the pass-through settings stay under the complexity limit. Unset means on.
+// FULCRA(orchestration): kept apart so the pass-through settings stay under the complexity limit. Unset means on,
+// except reportUpOnTurnEnd: unset leaves it unset, which means OFF for "finished a turn" notices (native notifyOnFinish
+// is the standard) and on for the other report-up notices; only an explicit true turns the fallback on.
 function orchestrationSettings(persisted: PersistedConfig) {
   const daemon = persisted.daemon;
   return {
-    reportUpOnTurnEnd: daemon?.reportUpOnTurnEnd ?? true,
+    reportUpOnTurnEnd: daemon?.reportUpOnTurnEnd,
     reviveOnRestart: daemon?.reviveOnRestart ?? true,
   };
 }
