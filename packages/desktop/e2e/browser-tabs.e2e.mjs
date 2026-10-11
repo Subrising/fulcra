@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { chromium } from "playwright";
+import { assertTestHome } from "../../../scripts/test-support/test-home.cjs";
 import { runAppearanceFontSizeRegression } from "./appearance-font-size.electron.mjs";
 import { runSettingsMemoryRegression } from "./settings-memory.electron.mjs";
 
@@ -1095,6 +1096,8 @@ async function main() {
   const target = await startTargetPage();
   const pluginDirectory = seedPluginLinks(paseoHome, workspaceIds[0], target.url, workspaceIds[1]);
   const remoteHome = path.join(runtimeDir, "remote-home");
+  assertTestHome(paseoHome, "the browser tabs e2e app");
+  assertTestHome(remoteHome, "the browser tabs e2e remote daemon");
   seedPaseoHome(remoteHome, `127.0.0.1:${remotePort}`, path.join(runtimeDir, "remote-workspaces"));
   const children = [];
   let browser = null;
