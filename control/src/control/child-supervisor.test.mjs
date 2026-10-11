@@ -350,3 +350,55 @@ test("after a refused recovery, Retry starts again only when the stale lock is c
   // An explicit stop is never undone by Retry.
   assert.throws(() => f.supervisor.retry(), /Controller stopped/);
 });
+
+// FU-74: a refused recovery used to wait for a person to press Retry. It now tries again by itself on the slow
+// retry list and starts the controller once the stale files are cleared.
+test("after a refused recovery, the supervisor retries by itself and starts once the stale files are cleared", async () => {
+  const logs = [];
+  let stale = false;
+  const f = fixture({
+    recover: () => {
+      throw Error("Lock belongs to another child");
+    },
+    recoverStale: () => stale,
+    log: (reason) => logs.push(reason),
+  });
+  f.supervisor.start();
+  f.children.at(-1).emit("exit", 1);
+  assert.equal(f.supervisor.status.state, "stopped");
+  assert.equal(f.timers.length, 1);
+  assert.equal(f.supervisor.status.retryAttempt, 1);
+
+  // Still held: no new child, and another try is planned.
+  f.timers.shift()();
+  assert.equal(f.children.length, 1);
+  assert.equal(f.timers.length, 1);
+  assert.match(logs.at(-1), /still held/);
+
+  stale = true;
+  f.timers.shift()();
+  assert.equal(f.children.length, 2);
+  assert.match(logs.at(-1), /stale controller files cleared/);
+  f.ready(f.children.at(-1));
+  assert.equal(f.supervisor.status.state, "ready");
+  await stop(f);
+});
+
+test("an explicit stop ends the automatic retries after a refused recovery", async () => {
+  let stale = false;
+  const f = fixture({
+    recover: () => {
+      throw Error("Lock belongs to another child");
+    },
+    recoverStale: () => stale,
+    log: () => {},
+  });
+  f.supervisor.start();
+  f.children.at(-1).emit("exit", 1);
+  assert.equal(f.timers.length, 1);
+  await f.supervisor.stop();
+  assert.equal(f.timers.length, 0);
+  stale = true;
+  assert.throws(() => f.supervisor.retry(), /Controller stopped/);
+  assert.equal(f.children.length, 1);
+});
