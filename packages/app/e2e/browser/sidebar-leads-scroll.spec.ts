@@ -1,10 +1,11 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Page } from "@playwright/test";
+import type { Page, WebSocketRoute } from "@playwright/test";
 import { expect, test } from "../support/fixtures";
 import { buildPluginSurfaceRoute } from "../../src/plugins/routes";
 import { buildHostWorkspaceRoute } from "../../src/utils/host-routes";
+import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { connectNewWorkspaceDaemonClient } from "../support/helpers/new-workspace";
 import { pluginRequirements } from "../support/helpers/plugin-fixture";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
@@ -51,6 +52,7 @@ function expectSidebarPasses(label: string, size: Size, result: Measured) {
   expect.soft(result.sessions, `${label}: sessions`).toBe("reachable");
   expect.soft(result.overflow, `${label}: overflow`).toEqual([]);
   expect.soft(result.clipped, `${label}: clipped text`).toEqual([]);
+  expect.soft(result.overlaps, `${label}: overlapping rows`).toEqual([]);
   const leads = result.controls.filter(
     (control) =>
       control.testId === "sidebar-top-primes" ||
@@ -70,6 +72,9 @@ function expectSidebarPasses(label: string, size: Size, result: Measured) {
     expect.soft(newChat?.height, `${label}: compact rows kept with a mouse`).toBeLessThan(48);
   }
 }
+
+// What the app shows while the daemon connection is down.
+const RECONNECTING = /Reconnecting to host|isn't connected|^Connecting$|is offline|Cannot reach/i;
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -223,7 +228,47 @@ async function measure(page: Page) {
           height: Math.round(r.height),
         };
       });
+    // No two rows draw in the same place (FU-62: on 0.2.13 the Leads setup rows did while a host reconnected).
+    const nested = (a: Element, b: Element) => a.contains(b) || b.contains(a);
+    const hits = (a: DOMRect, b: DOMRect) =>
+      a.height > 0.5 &&
+      b.height > 0.5 &&
+      a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+    // A row inside the scroll is drawn only where the scroll shows it; rows scrolled under the footer are hidden.
+    const seen = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      if (!scroller!.contains(el)) return r;
+      const top = Math.max(r.top, box.top);
+      const bottom = Math.min(r.bottom, box.bottom);
+      return new DOMRect(r.left, top, r.width, Math.max(0, bottom - top));
+    };
+    const named = (el: Element) => el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? el.tagName;
+    const overlaps: string[] = [];
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-testid^="sidebar-"]')].filter((el) => {
+      const r = el.getBoundingClientRect();
+      const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
+      return role && r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
+    });
+    const lines = [...top.querySelectorAll<HTMLElement>("*")].filter((el) => {
+      const r = el.getBoundingClientRect();
+      const ownText = [...el.childNodes].some(
+        (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+      );
+      return ownText && r.width > 0 && r.height > 0;
+    });
+    for (const group of [rows, lines])
+      for (let i = 0; i < group.length; i++)
+        for (let j = i + 1; j < group.length; j++) {
+          const a = group[i]!;
+          const b = group[j]!;
+          if (nested(a, b)) continue;
+          // Inline parts of one text line ("title", " · ", "status") share a line box by design.
+          if (a.closest("[dir]") && a.closest("[dir]") === b.closest("[dir]")) continue;
+          if (hits(seen(a), seen(b)))
+            overlaps.push(`${named(a)} overlaps ${named(b)}`);
+        }
     return {
+      overlaps,
       sideways:
         scroller.scrollWidth > scroller.clientWidth + 1 ||
         document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -255,11 +300,23 @@ async function openSidebar(page: Page, workspaceId: string) {
 test("the sidebar scrolls as one area with many leads, at phone, tablet and desktop sizes", async ({
   page,
 }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(480_000);
   await mkdir(SHOTS, { recursive: true });
   const directory = await mkdtemp(path.join(tmpdir(), "paseo-fu62-plugin-"));
   const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
   const seeded: SeededWorkspace[] = [];
+  // Every daemon connection goes through this route, so the test can cut it and refuse new ones, as a daemon
+  // restart does.
+  const sockets = new Set<WebSocketRoute>();
+  let refuse = false;
+  await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
+    if (refuse) {
+      void socket.close({ code: 1012, reason: "Synthetic daemon restart" });
+      return;
+    }
+    socket.connectToServer();
+    sockets.add(socket);
+  });
   try {
     const sources = pluginSources();
     await writeFile(
@@ -326,6 +383,33 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
       expectSidebarPasses(`home ${size.name}`, size, result);
     }
     await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
+
+    // FU-62 (user report, 11 Oct): while the daemon restarts and after it is back, the Leads rows must not overlap.
+    for (const size of SIZES) {
+      await setSize(page, size);
+      await openSidebar(page, seeded[0]!.workspaceId);
+      refuse = true;
+      for (const socket of sockets) await socket.close({ code: 1012, reason: "Synthetic daemon restart" });
+      sockets.clear();
+      await expect(page.getByText(RECONNECTING).first()).toBeVisible({ timeout: 30_000 });
+      const down = await measure(page);
+      results[`reconnecting-${size.name}`] = down;
+      await page.screenshot({ path: path.join(SHOTS, `reconnecting-${size.name}.png`) });
+      expect.soft(down.overlaps, `reconnecting ${size.name}: overlapping rows`).toEqual([]);
+      expect.soft(down.sideways, `reconnecting ${size.name}: sideways scroll`).toBe(false);
+      expect.soft(down.overflow, `reconnecting ${size.name}: overflow`).toEqual([]);
+      expect.soft(down.clipped, `reconnecting ${size.name}: clipped text`).toEqual([]);
+      refuse = false;
+      await expect(page.getByText(/Synthetic project 1 /).first()).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByText(RECONNECTING)).toHaveCount(0, {
+        timeout: 60_000,
+      });
+      const back = await measure(page);
+      results[`reconnected-${size.name}`] = back;
+      await page.screenshot({ path: path.join(SHOTS, `reconnected-${size.name}.png`) });
+      expect.soft(back.overlaps, `reconnected ${size.name}: overlapping rows`).toEqual([]);
+      await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
+    }
 
     // The arrow folds Leads and the choice survives a reload.
     await setSize(page, SIZES[0]!);

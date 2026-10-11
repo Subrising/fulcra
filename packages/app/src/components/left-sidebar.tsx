@@ -903,13 +903,10 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minHeight: 0,
   },
+  // FU-62: the close row takes its own space above the sidebar's rows. Floating over them, its 48 px target
+  // covered the right end of "New chat", so a tap there closed the sidebar.
   mobileCloseButtonRow: {
-    position: "absolute",
-    // The close target grew from 32 to 48 px (FU-62); half the growth comes off each offset so the X stays put.
-    top: theme.spacing[3] - 8,
-    left: 0,
-    right: 0,
-    zIndex: 2,
+    paddingTop: theme.spacing[1],
     alignItems: "flex-end",
   },
   mobileCloseButton: {

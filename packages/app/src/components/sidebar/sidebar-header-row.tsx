@@ -96,7 +96,7 @@ export function SidebarHeaderRow({
           accessibilityLabel={accessibilityLabel ?? label}
           accessibilityState={isActive ? SELECTED_STATE : undefined}
           aria-selected={isActive}
-          style={tallRow ? tallButtonStyle : styles.button}
+          style={tallRow ? [styles.button, sidebarTouchStyles.row] : styles.button}
         >
           {ThemedIcon ? (
             <ThemedIcon
@@ -183,8 +183,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingRight: theme.spacing[2],
   },
 }));
-
-const tallButtonStyle = [styles.button, sidebarTouchStyles.row];
 
 function getContainerStyle(variant: SidebarHeaderRowVariant) {
   switch (variant) {
