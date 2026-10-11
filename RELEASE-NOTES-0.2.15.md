@@ -6,6 +6,13 @@ Fulcra 0.2.15 is based on Paseo v0.11.0-beta.5.
 
 ## New in 0.2.15
 
+### Restart
+
+- After a daemon restart (a clean stop or a crash), the sessions that were open read idle again, so the app and the leads see them as open. They load when they get their next message or held send. Before, a clean stop closed every open session.
+- A turn that the restart cut off is loaded and continued with the limit-resume "continue" prompt, 2 sessions at a time with a gap, after the daemon settles. Sessions on a pool account stay with limit-resume.
+- A cut-off turn is not continued if its folder or provider is missing, it does not load, or its account is at a limit. Its lead gets one held notice: "Daemon restarted at <time>; N sessions closed: <names>".
+- A clean stop records the open sessions in revive-at-boot.json first. The setting daemon.reviveOnRestart = false turns this off.
+
 ### Command Centre
 
 - A session that another computer books on this computer is a worker. It now uses the worker default model that this computer marks (Sonnet 5.5 for Claude). This closes the known gap in the 0.2.14 notes, where a booked session got Opus 5.5. If this computer marks no worker default, or its model list cannot be read, the booked session keeps its enrolled model. A model that the booking names still wins.
