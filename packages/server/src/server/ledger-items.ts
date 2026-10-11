@@ -1,0 +1,75 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
+// Fulcra 0.2.17 (FU-101): the open items of the project ledgers (`ledger` command), read-only. A ledger is
+// <dir>/<project>/OPEN-ITEMS.md, a table with the columns id | item | kind | owner | status | evidence | source.
+// Only the id, owner and status are read; the item text is never sent anywhere from here.
+
+export interface LedgerRow {
+  project: string;
+  id: string;
+  owner: string;
+  status: string;
+}
+
+/** Where the ledgers are: FULCRA_LEDGER_DIR, else ~/shared-vault/projects. */
+export function defaultLedgerDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.FULCRA_LEDGER_DIR?.trim() || path.join(homedir(), "shared-vault", "projects");
+}
+
+const MAX_FILE_BYTES = 512 * 1024;
+
+/** The rows of one ledger file that are not DONE or MOVED. */
+export function parseOpenRows(project: string, text: string): LedgerRow[] {
+  const rows: LedgerRow[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("|")) continue;
+    const cells = line
+      .slice(1)
+      .split("|")
+      .map((cell) => cell.trim());
+    if (cells.length < 7) continue;
+    const [id, , , owner, status] = cells;
+    if (!id || !/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(id)) continue;
+    if (/^(DONE|MOVED)\b/.test(status ?? "")) continue;
+    rows.push({ project, id, owner: owner ?? "", status: status ?? "" });
+  }
+  return rows;
+}
+
+/** Every open row of every project ledger in `dir`. A missing or unreadable ledger gives no rows. */
+export function readOpenLedgerRows(dir: string): LedgerRow[] {
+  const rows: LedgerRow[] = [];
+  let projects: string[] = [];
+  try {
+    projects = readdirSync(dir);
+  } catch {
+    return rows;
+  }
+  for (const project of projects) {
+    try {
+      const text = readFileSync(path.join(dir, project, "OPEN-ITEMS.md"), "utf8");
+      if (text.length <= MAX_FILE_BYTES) rows.push(...parseOpenRows(project, text));
+    } catch {
+      /* no ledger here */
+    }
+  }
+  return rows;
+}
+
+/**
+ * The open rows a chat owns: the owner names the chat's title, or the first 8 characters of its ID in brackets, as
+ * `ledger set --owner "<title> (<short id>)"` writes it.
+ */
+export function rowsOwnedBy(
+  rows: readonly LedgerRow[],
+  chat: { id: string; title: string },
+): LedgerRow[] {
+  const short = `(${chat.id.slice(0, 8)})`.toLowerCase();
+  const title = chat.title.trim().toLowerCase();
+  return rows.filter((row) => {
+    const owner = row.owner.toLowerCase();
+    return owner.includes(short) || (title.length >= 4 && owner === title);
+  });
+}

@@ -271,7 +271,7 @@ test(
 
 // Fulcra 0.2.17 (FU-92): a Windows shell shim is never run, because a shell changes the arguments.
 const scratchFolders = () =>
-  fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("fulcra-ask-")).length;
+  fs.readdirSync(os.tmpdir()).filter((name) => /^fulcra-ask-[A-Za-z0-9]{6}$/.test(name)).length;
 
 test("a .cmd or .bat Claude binary is refused with a plain error, and nothing is started or left behind", async () => {
   for (const name of ["claude.cmd", "C:\\tools\\claude.BAT", "/x/claude.Cmd"]) {
@@ -302,4 +302,128 @@ test("the CLI is never started through a shell, even for a schema with shell cha
   const src = fs.readFileSync(new URL("./ask.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(src, /shell:\s*(?:true|process|[a-z]+\()/);
   assert.match(src, /shell:\s*false/);
+});
+
+// Fulcra 0.2.17 (FU-93, FU-94): spawnClaudeOnce against a fake Claude CLI, and the timeout that stops the whole tree.
+import { killProcessTree } from "./ask.mjs";
+const posix = process.platform === "win32" ? { skip: "needs a POSIX shell" } : {};
+function fakeClaude(body) {
+  const dir = scratch();
+  const file = path.join(dir, "fake-claude.mjs");
+  fs.writeFileSync(file, `#!${process.execPath}\n${body}`, { mode: 0o755 });
+  return { dir, file };
+}
+const run = (file, over = {}) =>
+  spawnClaudeOnce({
+    token: "sk-ant-oat01-testtoken",
+    model: "claude-haiku-5-5",
+    prompt: "x",
+    timeoutMs: 15000,
+    bin: file,
+    env: { PATH: process.env.PATH, HOME: os.homedir(), UNRELATED_SECRET: "must-not-pass" },
+    ...over,
+  });
+
+test(
+  "spawnClaudeOnce: flags, scratch folder, environment and stdin are exactly as designed",
+  posix,
+  async () => {
+    const { file } = fakeClaude(`
+    let input = ""; process.stdin.on("data", (d) => (input += d));
+    process.stdin.on("end", () => process.stdout.write(JSON.stringify({
+      is_error: false, result: "ok", argv: process.argv.slice(2), cwd: process.cwd(), input,
+      env: { token: process.env.CLAUDE_CODE_OAUTH_TOKEN, config: process.env.CLAUDE_CONFIG_DIR,
+        apiKey: process.env.ANTHROPIC_API_KEY, authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+        secret: process.env.UNRELATED_SECRET ?? null } })));
+  `);
+    const prompt = 'Say "hi" & | < > ^ % now';
+    const schema = { type: "object", properties: { "a&b": { type: "string" } } };
+    const before = scratchFolders();
+    const r = await run(file, { prompt, schema });
+    assert.equal(r.input, prompt, "the prompt goes on stdin, unchanged");
+    const flag = (name) => r.argv[r.argv.indexOf(name) + 1];
+    assert.equal(r.argv.includes("-p"), true);
+    assert.equal(flag("--output-format"), "json");
+    assert.equal(flag("--model"), "claude-haiku-5-5");
+    assert.equal(flag("--tools"), "", "tools are off: an empty value stays an empty argument");
+    assert.equal(flag("--setting-sources"), "");
+    assert.ok(r.argv.includes("--no-session-persistence"));
+    assert.ok(r.argv.includes("--disable-slash-commands"));
+    assert.deepEqual(JSON.parse(flag("--json-schema")), schema);
+    assert.equal(r.env.token, "sk-ant-oat01-testtoken");
+    assert.equal(r.env.apiKey, "");
+    assert.equal(r.env.authToken, "");
+    assert.equal(r.env.secret, null, "the parent's other variables do not reach the CLI");
+    assert.ok(path.basename(r.cwd).startsWith("fulcra-ask-"));
+    assert.equal(path.basename(path.dirname(r.env.config)), path.basename(r.cwd));
+    assert.ok(!r.argv.some((a) => a.includes("testtoken")), "the token is never in argv");
+    assert.equal(fs.existsSync(r.cwd), false, "the scratch folder is removed");
+    assert.equal(scratchFolders(), before);
+  },
+);
+
+test(
+  "spawnClaudeOnce: a bad result and a missing binary both clean up the scratch folder",
+  posix,
+  async () => {
+    const before = scratchFolders();
+    const bad = fakeClaude(`process.stdout.write("not json");`);
+    await assert.rejects(run(bad.file), (e) => e.code === "BAD_RESULT");
+    await assert.rejects(run("/nonexistent/claude"), (e) => e.code === "CLI_UNAVAILABLE");
+    assert.equal(scratchFolders(), before);
+  },
+);
+
+test(
+  "spawnClaudeOnce: a CLI that exits before reading a large prompt does not crash the process",
+  posix,
+  async () => {
+    await assert.rejects(run("/usr/bin/false", { prompt: "x".repeat(5_000_000) }), (e) =>
+      ["BAD_RESULT", "CLI_UNAVAILABLE"].includes(e.code),
+    );
+  },
+);
+
+test(
+  "spawnClaudeOnce: a timeout ends the call at once and stops a process the CLI started",
+  posix,
+  async () => {
+    const marker = path.join(scratch(), "grandchild.pid");
+    const { file } = fakeClaude(`
+    import { spawn } from "node:child_process"; import fs from "node:fs";
+    const g = spawn("sleep", ["30"], { stdio: ["ignore", "inherit", "inherit"] });
+    fs.writeFileSync(${JSON.stringify(marker)}, String(g.pid));
+    setInterval(() => {}, 1000);
+  `);
+    const started = Date.now();
+    await assert.rejects(run(file, { timeoutMs: 1500 }), (e) => e.code === "TIMEOUT");
+    assert.ok(Date.now() - started < 6000, "the job did not wait for the grandchild");
+    const pid = Number(fs.readFileSync(marker, "utf8"));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.throws(() => process.kill(pid, 0), /ESRCH/, "the grandchild is gone");
+  },
+);
+
+test("killProcessTree uses taskkill /T /F on Windows and the process group elsewhere", () => {
+  const calls = [];
+  const run = (...args) => (calls.push(args), { on: () => ({ unref() {} }) });
+  const killed = [];
+  killProcessTree({ pid: 4242, kill: (s) => killed.push(s) }, { platform: "win32", run });
+  assert.deepEqual(calls[0].slice(0, 2), ["taskkill", ["/pid", "4242", "/T", "/F"]]);
+  assert.deepEqual(killed, ["SIGKILL"]);
+  assert.doesNotThrow(() => killProcessTree({ pid: undefined, kill() {} }, { platform: "linux" }));
+});
+
+test("an ask with --account takes a name or an ID, in any case", async () => {
+  const { root, b } = await pool();
+  for (const wanted of ["personal", b.id.toUpperCase()]) {
+    const r = await askOnce({
+      root,
+      keychain,
+      input: input({ account: wanted }),
+      now: () => T0,
+      spawnClaude: async () => ok(),
+    });
+    assert.equal(r.account, "Personal");
+  }
 });

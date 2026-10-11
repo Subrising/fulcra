@@ -12,7 +12,14 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 - Options: `--model` (default `claude-sonnet-5-5`), `--output-schema`, `--timeout`, `--account`, `--host` and `--home`.
 - If the account is at its usage limit, the call marks it limited and moves once to the next usable account. If that also fails, the call stops with a clear error.
 - On Windows, `fulcra ask` never uses a shell. It refuses a `.cmd` or `.bat` Claude file with a clear error; use the native `claude.exe`. Send the prompt on standard input (`-`) and give `--output-schema` as a file path, because `cmd.exe` changes `&`, `|`, `<`, `>`, `^`, `%` and `"` in a command line. See docs/windows.md.
+- When `fulcra ask` times out, it ends at once and stops the Claude process and everything it started.
 - `fulcra run --account <name>` checks that the account exists and is usable, then pins the new session to it.
+
+### Run and leads
+
+- `fulcra run` uses the workspace that already owns the run directory, instead of creating a new workspace for each run. `--new-workspace` still creates one.
+- `fulcra run --output-schema` prints the agent id on standard error. With an explicit `--json`, the answer is `{"agentId": ..., "output": ...}`. Without `--json`, the output is the same as before.
+- A lead that turns idle while it owns open ledger items and has idle workers gets one short message that lists them. The daemon reads the project ledgers in `~/shared-vault/projects` (or `FULCRA_LEDGER_DIR`) and sends the message when the lead's turn ends. It sends it at most once per idle period, and never after a turn that a nudge started.
 
 ### Usage limits
 
