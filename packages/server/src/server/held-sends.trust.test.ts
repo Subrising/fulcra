@@ -36,6 +36,12 @@ async function fixture() {
       return deny ? "deny" : "allow";
     });
   });
+  let issue:
+    | ((binding: { agentId: string; kind: string; messageId: string | null }) => string)
+    | null = null;
+  host.register("legacy-fixture", true, (server) => {
+    issue = server.issueProvenance as never;
+  });
   const manager = new AgentManager({
     registry: storage,
     logger,
@@ -94,6 +100,17 @@ async function fixture() {
     ambient(() => heldSendsFor(manager, logger).hold(target.id, async () => undefined));
     await vi.waitFor(() => expect(heldSendsFor(manager, logger).pending(target.id)).toBe(0));
   };
+  // A plugin's provenance token for a steer of this message (a legacy plugin: no payload digest to compute).
+  const sendWithProvenance = async (text: string) => {
+    await session.handleMessage({
+      type: "send_agent_message_request",
+      requestId: randomUUID(),
+      agentId: target.id,
+      text,
+      inputProvenance: issue!({ agentId: target.id, kind: "prompt", messageId: null }),
+    });
+  };
+  const pending = () => heldSendsFor(manager, logger).pending(target.id);
   const sourcesFor = () =>
     admitted.filter((entry) => entry.agentId === target.id).map((entry) => entry.source);
   return {
@@ -102,6 +119,8 @@ async function fixture() {
     target,
     busy,
     send,
+    sendWithProvenance,
+    pending,
     endTurnIn,
     sourcesFor,
     messages,
@@ -153,4 +172,29 @@ test("an owner's held message that fails at delivery is reported to the owner, n
       ),
     ).toBe(true),
   );
+});
+
+// 0.2.13 review, finding 3: a held owner message lost its plugin provenance and was admitted as plain owner input.
+test("a message that carries plugin provenance is refused while the chat is busy, never held as owner input", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  await f.sendWithProvenance("from a plugin");
+  expect(
+    f.messages.some(
+      (m) => m.type === "send_agent_message_response" && m.payload.accepted === false,
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(f.messages)).toContain("a queued message loses the plugin as its source");
+  expect(f.pending()).toBe(0);
+  // Nothing is delivered later: the turn's end admits no further input.
+  const afterRefusal = f.sourcesFor().length;
+  await f.endTurnIn((run) => f.host.daemon(run));
+  expect(f.sourcesFor().length).toBe(afterRefusal);
+});
+
+test("an owner's message without provenance is still held while the chat is busy", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  await f.send("from the owner");
+  expect(f.pending()).toBe(1);
 });

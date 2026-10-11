@@ -45,10 +45,14 @@ type ArchiveClient = Pick<
 
 /**
  * The chat to archive. The daemon looks the ID up itself first, so a stored chat that is not loaded is found. A
- * list read gives only one page, and old chats fall outside it. The list is the fallback, for names.
+ * list read gives only one page, and old chats fall outside it. The list is the fallback, for names the daemon does
+ * not know.
  */
 export async function findAgentToArchive(client: ArchiveClient, idOrName: string) {
-  const direct = await client.fetchAgent({ agentId: idOrName.trim() }).catch(() => null);
+  // An error from the daemon (the ID or title is ambiguous, the connection dropped) is shown as it is. Only "not
+  // found" (null) falls back to the list: the list could pick one of several chats the daemon just said it cannot tell
+  // apart.
+  const direct = await client.fetchAgent({ agentId: idOrName.trim() });
   if (direct?.agent) return direct.agent;
   const payload = await client.fetchAgents({ filter: { includeArchived: true } });
   const agents = payload.entries.map((entry) => entry.agent);
