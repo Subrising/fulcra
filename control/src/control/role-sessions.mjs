@@ -460,10 +460,10 @@ export class RoleSessions {
     await this.control.bindings.verifyMembership(projectId, body.taskId, undefined);
     // Update-7 W3 (gap a): an omitted provider is resolved (and checked) before the ownership row exists.
     if (body.provider === undefined && !this.store.delivery(body.messageId))
-      body = await this.control.resolveProvider(body);
+      body = await this.control.resolveProvider(body, projectId);
     // Update-7 W3: an unlisted explicit model is refused before the ownership row exists.
     if (body.defaults && !this.store.delivery(body.messageId))
-      await this.control.checkOverride(this.control.withRoleProvider(body));
+      await this.control.checkOverride(this.control.withRoleProvider(body, projectId));
     this.store.atomic(() => {
       const prior = this.db
         .prepare("SELECT * FROM session_ownership WHERE request=?")
@@ -573,7 +573,9 @@ export class RoleSessions {
     const { role: _role, model, effort, ...fields } = a;
     // Update-7 W3 (gap a): the role default's provider when none is chosen, checked before the allowance is reserved.
     if (fields.provider === undefined)
-      fields.provider = (await this.control.resolveProvider({ role })).provider;
+      fields.provider = (
+        await this.control.resolveProvider({ role }, uuid(a.seat) ? a.seat : null)
+      ).provider;
     a = fields;
     // Update-7 W3: an explicit model / effort wins; the role default fills whatever is left out.
     const defaults =

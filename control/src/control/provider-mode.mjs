@@ -10,10 +10,12 @@ import {
 } from "../../orca-organization/server/role-defaults-store.mjs";
 // Update-7: the persisted role defaults (Settings -> Accounts & models; their own file, L44) over the shared config's
 // defaults.roles. A role entry for one provider: { model?, thinkingOptionId? } with only the values set.
-function storedRoleEntry(config, role, provider, configuredRoles) {
+function storedRoleEntry(config, role, provider, configuredRoles, project = null) {
   try {
     if (!config?.home) return undefined;
-    const e = readRoleDefaults(config.home, configuredRoles ?? null).roles?.[role]?.[provider];
+    const e = readRoleDefaults(config.home, configuredRoles ?? null, null, project).roles?.[role]?.[
+      provider
+    ];
     if (!e) return undefined;
     const out = {};
     if (e.model) out.model = e.model;
@@ -329,12 +331,17 @@ export function roleDefaultProvider(role) {
   return role && DEFAULT_ROLES.includes(role) ? (SEED[role]?.provider ?? null) : null;
 }
 // DESIGN-NEXT-BUILD A3 (prime Q1): the provider a role prefers, used only when the caller names none.
-export function roleProvider(role, config = installationConfig()) {
+export function roleProvider(role, config = installationConfig(), project = null) {
   if (role === undefined || role === null) return null;
   if (!DEFAULT_ROLES.includes(role)) throw Error(`Unknown session role ${role}`);
   try {
     if (config?.home) {
-      const p = configuredRoleProvider(config.home, configuredDefaults(config).roles ?? null, role);
+      const p = configuredRoleProvider(
+        config.home,
+        configuredDefaults(config).roles ?? null,
+        role,
+        project,
+      );
       if (p) return p;
     }
   } catch {}
@@ -348,6 +355,7 @@ export function sessionDefaults(
   override = {},
   config = installationConfig(),
   role = null,
+  project = null,
 ) {
   // Own key, not a raw index. CAPABILITIES['__proto__'] is Object.prototype and CAPABILITIES['constructor']
   // is the Object constructor -- both truthy, so a prototype-named provider passed this check and then died
@@ -379,7 +387,7 @@ export function sessionDefaults(
   if (role !== null && role !== undefined && !DEFAULT_ROLES.includes(role))
     throw Error(`Unknown session role ${role}`);
   const roleEntry = role
-    ? (storedRoleEntry(config, role, provider, configured.roles) ??
+    ? (storedRoleEntry(config, role, provider, configured.roles, project) ??
       own(own(configured.roles, role), provider))
     : undefined;
   const roleModel = own(roleEntry, "model") ?? null,

@@ -20,7 +20,12 @@ import {
   PROVIDERS,
   type TakeOver,
 } from "./accounts.mjs";
-import { readRoleDefaults, writeRoleDefaults, MODE_CHOICES } from "./role-defaults-store.mjs";
+import {
+  readRoleDefaults,
+  writeRoleDefaults,
+  projectRoleOverrides,
+  MODE_CHOICES,
+} from "./role-defaults-store.mjs";
 import { accountAuthority, askOwner, recordAccountAction } from "./account-authority.mjs";
 import type { AccountsView, SessionAccountsView } from "../shared/accounts";
 
@@ -163,6 +168,7 @@ export function createAccountHandlers(d: Deps) {
         ...v,
         defaults: {
           roles: t.roles,
+          projects: projectRoleOverrides(d.root()),
           orchestrationGuard: t.orchestrationGuard,
           modes: t.modes,
           modeChoices,
@@ -284,6 +290,7 @@ export function createAccountHandlers(d: Deps) {
       input: {
         policy?: "priority" | "spread";
         role?: string;
+        project?: string;
         defaults?: any;
         orchestrationGuard?: boolean;
         rotateOnLimit?: boolean;
@@ -337,6 +344,7 @@ export function createAccountHandlers(d: Deps) {
             d.root(),
             {
               role: input.role,
+              ...(input.project ? { project: input.project } : {}),
               defaults: input.defaults,
               orchestrationGuard: input.orchestrationGuard,
             },
