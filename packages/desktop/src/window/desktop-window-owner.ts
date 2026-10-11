@@ -31,6 +31,8 @@ export interface DesktopWindowOwner<TAgentTarget> {
   }): Promise<void>;
   openAdditional(input?: { pendingProjectPath?: string | null }): Promise<void>;
   openOrFocusAgent(target: TAgentTarget): Promise<void>;
+  /** A second launch of the app: a project path opens a window for it, otherwise the app comes to the front. */
+  openFromRelaunch(input: { pendingProjectPath: string | null }): Promise<void>;
   restoreWhenActivated(): Promise<void>;
   takePendingProject(webContentsId: number): string | null;
 }
@@ -54,6 +56,17 @@ export function createDesktopWindowOwner<TAgentTarget>(
     });
   };
 
+  const frontWindow = (): OwnedDesktopWindow<TAgentTarget> | undefined => {
+    const windows = port.windows().filter((candidate) => !candidate.isDestroyed());
+    return port.focusedWindow() ?? windows.find((candidate) => candidate.isVisible()) ?? windows[0];
+  };
+
+  const bringToFront = (window: OwnedDesktopWindow<TAgentTarget>): void => {
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  };
+
   const owner: DesktopWindowOwner<TAgentTarget> = {
     openPrimary: (input = {}) =>
       open({
@@ -68,9 +81,7 @@ export function createDesktopWindowOwner<TAgentTarget>(
         restoreWindowState: false,
       }),
     async openOrFocusAgent(target) {
-      const windows = port.windows();
-      const window =
-        port.focusedWindow() ?? windows.find((candidate) => candidate.isVisible()) ?? windows[0];
+      const window = frontWindow();
       if (!window || window.isDestroyed()) {
         if (!agentWindowCreation) {
           agentWindowCreation = owner
@@ -85,11 +96,21 @@ export function createDesktopWindowOwner<TAgentTarget>(
         await owner.openOrFocusAgent(target);
         return;
       }
-      if (window.isMinimized()) window.restore();
-      window.show();
-      window.focus();
+      bringToFront(window);
       const deliverable = port.deliverAgent(window.webContentsId, target);
       if (deliverable) window.sendAgent(deliverable);
+    },
+    async openFromRelaunch({ pendingProjectPath }) {
+      if (pendingProjectPath) {
+        await owner.openAdditional({ pendingProjectPath });
+        return;
+      }
+      const window = frontWindow();
+      if (window && !window.isDestroyed()) {
+        bringToFront(window);
+        return;
+      }
+      await owner.openPrimary();
     },
     async restoreWhenActivated() {
       if (port.windows().length === 0) await owner.openPrimary();

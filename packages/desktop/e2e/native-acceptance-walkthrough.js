@@ -63,6 +63,7 @@ const { localMachine } = require("../../../control/src/local-machine.mjs");
 const { spawn } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
 const secretScan = require("./smoke-secret-scan");
+const { assertTestHome, markTestRoot } = require("../../../scripts/test-support/test-home.cjs");
 const personalScan = require("./smoke-personal-scan");
 
 const APP_PATH = process.env.FULCRA_APP_PATH ?? "/Applications/Fulcra.app";
@@ -238,8 +239,10 @@ async function launchApp() {
   if (!fs.existsSync(executable)) throw new Error(`No packaged executable at ${executable}`);
   fs.mkdirSync(SCRATCH_DIR, { recursive: true, mode: 0o700 });
   const scratch = fs.mkdtempSync(path.join(SCRATCH_DIR, "run-"));
+  markTestRoot(scratch);
   const userData = path.join(scratch, "user-data");
   const paseoHome = path.join(scratch, "paseo-home");
+  assertTestHome(paseoHome, "the installed-app walkthrough");
   fs.mkdirSync(userData);
   fs.mkdirSync(paseoHome);
   const cdpPort = await reserveLocalTcpPort();

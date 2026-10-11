@@ -61,6 +61,23 @@ def guard_human_chain(profile, role):
     return None if stage2_release_on_disk(home) else disarm_human_chain(home)
 
 
+def background_executable(executable):
+    """macOS lists a process that runs an app bundle's main executable as a foreground app (Dock icon,
+    Force Quit), even under ELECTRON_RUN_AS_NODE. The bundle's Helper app is LSUIElement, so the service runs
+    the same Electron build through it, as the desktop app and the CLI shim already do. Other paths stay."""
+    path = Path(executable)
+    if len(path.parents) < 3 or path.parent.name != 'MacOS' or path.parents[1].name != 'Contents' \
+            or path.parents[2].suffix != '.app':
+        return executable
+    helper = path.parents[1] / 'Frameworks' / (path.name + ' Helper.app') / 'Contents' / 'MacOS' / (path.name + ' Helper')
+    if not helper.exists():
+        return executable
+    regular(str(helper))
+    if not os.access(helper, os.X_OK):
+        raise ValueError('Helper executable unavailable: ' + str(helper))
+    return str(helper)
+
+
 def validate(profile_path, expected, role):
     raw = regular(profile_path).read_bytes()
     if len(raw) > 65536 or hashlib.sha256(raw).hexdigest() != expected:
@@ -127,7 +144,8 @@ def main():
         env = {k: v for k, v in os.environ.items() if k not in ('NODE_OPTIONS', 'PYTHONPATH', 'PYTHONHOME')}
         env.update(profile['env'])
         # Native process.py / Paseo supervisor own the lock and recovery semantics.
-        os.execve(profile['argv'][0], profile['argv'], env)
+        argv = [background_executable(profile['argv'][0])] + profile['argv'][1:]
+        os.execve(argv[0], argv, env)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(json.dumps({'service': args.role, 'status': 'startup-refused', 'error': str(error)}), file=sys.stderr)
         sys.exit(78)

@@ -2,6 +2,7 @@
 // Passes only when the main process loads the renderer and reaches the daemon start
 // path, so a build that loads but stalls (as 0.2.3 did on the Book) cannot pass.
 import assert from "node:assert/strict";
+import { assertTestHome } from "./test-support/test-home.cjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ const timeoutMs = Number(process.env.FULCRA_DESKTOP_LAUNCH_TIMEOUT_MS ?? 60000);
 const scratch = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "fulcra-desktop-launch-"));
 const userData = path.join(scratch, "userData");
 const home = path.join(scratch, "home");
+assertTestHome(home, "the packaged desktop launch gate");
 fs.mkdirSync(userData);
 fs.mkdirSync(home);
 fs.writeFileSync(
