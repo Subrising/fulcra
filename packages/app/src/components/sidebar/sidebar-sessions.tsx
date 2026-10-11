@@ -3,6 +3,7 @@ import { Pressable, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useSessionStore } from "@/stores/session-store";
+import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
 import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import {
   selectSidebarSessionRows,
@@ -37,7 +38,11 @@ export function SidebarSessions({
     [selectedHosts],
   );
   const rows = useStoreWithEqualityFn(useSessionStore, selector, equalSidebarSessionRows);
-  const [expanded, setExpanded] = useState(true);
+  // Saved, so a close and reopen of the app keeps the group as the user left it.
+  const expanded = !useSidebarCollapsedSectionsStore((state) => state.collapsedAllSessions);
+  const toggleExpanded = useSidebarCollapsedSectionsStore(
+    (state) => state.toggleAllSessionsCollapsed,
+  );
   const [showAll, setShowAll] = useState(false);
   const touchRows = useSidebarTouchRows();
   const headingStyle = useMemo(
@@ -45,7 +50,6 @@ export function SidebarSessions({
     [touchRows],
   );
   const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
-  const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
   const toggleAll = useCallback(() => setShowAll((value) => !value), []);
   const displayed = showAll ? rows : rows.slice(0, PREVIEW_LIMIT);
   if (!rows.length) return null;
@@ -165,4 +169,3 @@ const styles = StyleSheet.create((theme) => ({
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
   metadata: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
 }));
-

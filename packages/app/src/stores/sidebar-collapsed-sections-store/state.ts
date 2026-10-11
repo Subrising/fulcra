@@ -6,6 +6,8 @@ export interface CollapsedProjectsState {
   collapsedPinned: boolean;
   /** FU-62: the sidebar's Leads block is folded to its header. */
   collapsedLeads: boolean;
+  /** FU-86: the sidebar's "All sessions" group is folded to its header. */
+  collapsedAllSessions: boolean;
 }
 
 export interface PersistedCollapsedProjects {
@@ -14,6 +16,7 @@ export interface PersistedCollapsedProjects {
   collapsedStatusGroupKeys?: string[];
   collapsedPinned?: boolean;
   collapsedLeads?: boolean;
+  collapsedAllSessions?: boolean;
 }
 
 export const PersistedCollapsedProjectsSchema: z.ZodType<PersistedCollapsedProjects> =
@@ -24,6 +27,7 @@ export const PersistedCollapsedProjectsSchema: z.ZodType<PersistedCollapsedProje
     collapsedStatusGroupKeys: z.array(z.string()).optional(),
     collapsedPinned: z.boolean().optional(),
     collapsedLeads: z.boolean().optional(),
+    collapsedAllSessions: z.boolean().optional(),
   });
 
 export function togglePinnedCollapsed(state: CollapsedProjectsState): CollapsedProjectsState {
@@ -32,6 +36,10 @@ export function togglePinnedCollapsed(state: CollapsedProjectsState): CollapsedP
 
 export function toggleLeadsCollapsed(state: CollapsedProjectsState): CollapsedProjectsState {
   return { ...state, collapsedLeads: !state.collapsedLeads };
+}
+
+export function toggleAllSessionsCollapsed(state: CollapsedProjectsState): CollapsedProjectsState {
+  return { ...state, collapsedAllSessions: !state.collapsedAllSessions };
 }
 
 export function toggleProjectCollapsed(
@@ -79,12 +87,14 @@ export function serializeCollapsedProjects(state: CollapsedProjectsState): {
   collapsedWorkspaceGroupKeys: string[];
   collapsedPinned: boolean;
   collapsedLeads: boolean;
+  collapsedAllSessions: boolean;
 } {
   return {
     collapsedProjectKeys: Array.from(state.collapsedProjectKeys),
     collapsedWorkspaceGroupKeys: Array.from(state.collapsedWorkspaceGroupKeys),
     collapsedPinned: state.collapsedPinned,
     collapsedLeads: state.collapsedLeads,
+    collapsedAllSessions: state.collapsedAllSessions,
   };
 }
 
@@ -107,11 +117,13 @@ export function mergePersistedCollapsedProjects<S extends CollapsedProjectsState
   );
   const restoredPinned = persisted.collapsedPinned ?? current.collapsedPinned;
   const restoredLeads = persisted.collapsedLeads ?? current.collapsedLeads;
+  const restoredAllSessions = persisted.collapsedAllSessions ?? current.collapsedAllSessions;
   if (
     areSetsEqual(current.collapsedProjectKeys, restoredProjects) &&
     areSetsEqual(current.collapsedWorkspaceGroupKeys, restoredWorkspaceGroups) &&
     current.collapsedPinned === restoredPinned &&
-    current.collapsedLeads === restoredLeads
+    current.collapsedLeads === restoredLeads &&
+    current.collapsedAllSessions === restoredAllSessions
   ) {
     return current;
   }
@@ -121,6 +133,7 @@ export function mergePersistedCollapsedProjects<S extends CollapsedProjectsState
     collapsedWorkspaceGroupKeys: restoredWorkspaceGroups,
     collapsedPinned: restoredPinned,
     collapsedLeads: restoredLeads,
+    collapsedAllSessions: restoredAllSessions,
   };
 }
 

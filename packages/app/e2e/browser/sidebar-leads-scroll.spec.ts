@@ -459,22 +459,35 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
       await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
     }
 
-    // The arrow folds Leads and the choice survives a reload.
+    // The arrow folds Leads and the choice survives a reload. After a reload a phone can hold a hidden copy of
+    // the sidebar, so every control here is the visible one.
+    const leadsArrow = page.locator('[data-testid="sidebar-leads-collapse"]:visible').first();
     await setSize(page, SIZES[0]!);
     await openSidebar(page, seeded[0]!.workspaceId);
-    await page.getByTestId("sidebar-leads-collapse").first().click();
+    await leadsArrow.click();
     await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
     await page.screenshot({ path: path.join(SHOTS, "phone-375-leads-folded.png") });
     await page.reload();
     const menu = page.getByRole("button", { name: "Open menu" });
     if (await menu.isVisible().catch(() => false)) await menu.click();
-    await expect(page.getByTestId("sidebar-leads-collapse").first()).toHaveAttribute(
-      "aria-expanded",
-      "false",
-      { timeout: 30_000 },
-    );
+    await expect(leadsArrow).toHaveAttribute("aria-expanded", "false", { timeout: 30_000 });
     await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
-    await page.getByTestId("sidebar-leads-collapse").first().click();
+
+    // FU-86: All sessions also keeps its fold after a reload (it opened again on every app start).
+    const allSessions = page.locator('[data-testid="sidebar-all-sessions-toggle"]:visible').first();
+    const sessionRows = page.locator('[data-testid^="sidebar-session-open-"]:visible');
+    await expect(sessionRows.first()).toBeVisible();
+    await allSessions.click();
+    await expect(sessionRows).toHaveCount(0);
+    await page.reload();
+    if (await menu.isVisible().catch(() => false)) await menu.click();
+    // The rows stay hidden after the reload (the group header shows before the saved fold is read).
+    await expect(allSessions).toBeVisible({ timeout: 30_000 });
+    await expect(sessionRows).toHaveCount(0);
+    await page.screenshot({ path: path.join(SHOTS, "phone-375-all-sessions-folded.png") });
+    await allSessions.click();
+    await expect(sessionRows.first()).toBeVisible();
+    await leadsArrow.click();
   } finally {
     await client.removePlugin(PLUGIN_ID).catch(() => {});
     await client.close?.();

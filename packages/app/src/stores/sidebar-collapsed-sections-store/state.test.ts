@@ -4,6 +4,7 @@ import {
   mergePersistedCollapsedProjects,
   serializeCollapsedProjects,
   setProjectCollapsed,
+  toggleAllSessionsCollapsed,
   toggleLeadsCollapsed,
   togglePinnedCollapsed,
   toggleProjectCollapsed,
@@ -16,6 +17,7 @@ function emptyState(): CollapsedProjectsState {
     collapsedWorkspaceGroupKeys: new Set(),
     collapsedPinned: false,
     collapsedLeads: false,
+    collapsedAllSessions: false,
   };
 }
 
@@ -38,6 +40,7 @@ describe("sidebar collapsed projects transitions", () => {
       collapsedWorkspaceGroupKeys: new Set(["running"]),
       collapsedPinned: true,
       collapsedLeads: false,
+      collapsedAllSessions: true,
     };
 
     expect(serializeCollapsedProjects(state)).toEqual({
@@ -45,6 +48,7 @@ describe("sidebar collapsed projects transitions", () => {
       collapsedWorkspaceGroupKeys: ["running"],
       collapsedPinned: true,
       collapsedLeads: false,
+      collapsedAllSessions: true,
     });
   });
 
@@ -69,6 +73,21 @@ describe("sidebar collapsed projects transitions", () => {
     // Preferences saved before the Leads arrow existed keep Leads open.
     expect(
       mergePersistedCollapsedProjects({ collapsedPinned: true }, emptyState()).collapsedLeads,
+    ).toBe(false);
+  });
+
+  it("toggles All sessions and restores its collapse after a restart", () => {
+    const toggled = toggleAllSessionsCollapsed(emptyState());
+    expect(toggled.collapsedAllSessions).toBe(true);
+
+    const restored = mergePersistedCollapsedProjects(
+      serializeCollapsedProjects(toggled),
+      emptyState(),
+    );
+    expect(restored.collapsedAllSessions).toBe(true);
+    // Preferences saved before FU-86 keep All sessions open.
+    expect(
+      mergePersistedCollapsedProjects({ collapsedLeads: true }, emptyState()).collapsedAllSessions,
     ).toBe(false);
   });
 

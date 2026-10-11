@@ -63,7 +63,10 @@ export function PrimeSidebar({
 }) {
   const plugin = useControllerPlugin(serverId);
   const client = useHostRuntimeClient(serverId);
-  if (!plugin || !client) return null;
+  if (!plugin) return null;
+  // FU-86: on a phone the connection to the home computer (often through the relay) takes a few seconds after
+  // the app opens. The Leads block showed nothing until then; it now shows its header and a loading row.
+  if (!client) return <LeadsConnecting serverId={serverId} onBeforeNavigate={onBeforeNavigate} />;
   return (
     <PluginInstallationProvider plugin={plugin}>
       <PrimeSidebarRows
@@ -72,6 +75,56 @@ export function PrimeSidebar({
         hasTeamMap={plugin.surfaces.some((surface) => surface.id === "team")}
       />
     </PluginInstallationProvider>
+  );
+}
+
+const ignorePress = () => {};
+
+function LeadsConnecting({
+  serverId,
+  onBeforeNavigate,
+}: {
+  serverId: string;
+  onBeforeNavigate?: () => void;
+}) {
+  const leadership = useCallback(() => {
+    onBeforeNavigate?.();
+    router.push(
+      buildPluginSurfaceRoute(serverId, pluginRegistry.controllerPluginId(serverId), {
+        kind: "surface",
+        id: "leadership",
+      }),
+    );
+  }, [onBeforeNavigate, serverId]);
+  const hostLabel = useHosts().find((host) => host.serverId === serverId)?.label ?? "this computer";
+  const leadsCollapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedLeads);
+  const toggleLeads = useSidebarCollapsedSectionsStore((state) => state.toggleLeadsCollapsed);
+  const leadsToggle = useMemo(
+    () => <LeadsCollapseToggle collapsed={leadsCollapsed} onToggle={toggleLeads} />,
+    [leadsCollapsed, toggleLeads],
+  );
+  return (
+    <>
+      <SidebarHeaderRow
+        icon={Crown}
+        label="Leads"
+        accessibilityLabel="Leads: your main assistant and project leads"
+        onPress={leadership}
+        variant="compact"
+        testID="sidebar-top-primes"
+        trailing={leadsToggle}
+        tall
+      />
+      {leadsCollapsed ? null : (
+        <SidebarHeaderRow
+          icon={RefreshCw}
+          label={`Connecting to ${hostLabel}…`}
+          onPress={ignorePress}
+          variant="compact"
+          testID="sidebar-leads-connecting"
+        />
+      )}
+    </>
   );
 }
 
