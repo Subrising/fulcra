@@ -39,7 +39,11 @@ export function SidebarSessions({
   const rows = useStoreWithEqualityFn(useSessionStore, selector, equalSidebarSessionRows);
   const [expanded, setExpanded] = useState(true);
   const [showAll, setShowAll] = useState(false);
-  const headingStyle = useSidebarTouchRows() ? touchStyles.heading : styles.heading;
+  const touchRows = useSidebarTouchRows();
+  const headingStyle = useMemo(
+    () => (touchRows ? [styles.heading, sidebarTouchStyles.stack] : styles.heading),
+    [touchRows],
+  );
   const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
   const toggleAll = useCallback(() => setShowAll((value) => !value), []);
@@ -103,7 +107,11 @@ function SessionItem({
     onSelect?.();
     navigateToAgent({ serverId: row.serverId, agentId: row.agentId, workspaceId: row.workspaceId });
   }, [onSelect, row.serverId, row.agentId, row.workspaceId]);
-  const openStyle = useSidebarTouchRows() ? touchStyles.open : styles.open;
+  const touchRows = useSidebarTouchRows();
+  const openStyle = useMemo(
+    () => (touchRows ? [styles.open, sidebarTouchStyles.stack] : styles.open),
+    [touchRows],
+  );
   return (
     <View style={styles.row} testID={`sidebar-session-${row.serverId}-${row.agentId}`}>
       <Pressable
@@ -157,9 +165,4 @@ const styles = StyleSheet.create((theme) => ({
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
   metadata: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
 }));
-
-const touchStyles = {
-  heading: [styles.heading, sidebarTouchStyles.stack],
-  open: [styles.open, sidebarTouchStyles.stack],
-};
 

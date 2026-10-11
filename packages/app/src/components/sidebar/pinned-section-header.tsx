@@ -39,7 +39,7 @@ export function PinnedSectionHeader({
       accessibilityRole="button"
       accessibilityState={accessibilityState}
       onPress={onToggle}
-      style={touchRows ? touchHeaderStyle : styles.header}
+      style={touchRows ? [styles.header, sidebarTouchStyles.row] : styles.header}
       testID="sidebar-pinned-section-header"
     >
       {({ hovered }) => (
@@ -71,8 +71,6 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.normal,
   },
 }));
-
-const touchHeaderStyle = [styles.header, sidebarTouchStyles.row];
 
 /** Retained pin rows do not prove that this host's current sessions are connected. */
 export function PinnedHostConnectionNotice({

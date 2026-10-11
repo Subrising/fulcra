@@ -41,6 +41,8 @@ vi.mock("react-native-unistyles", async () => {
 interface Scenario {
   name: string;
   offline: string[];
+  /** Hosts that are reconnecting (a daemon restart): neither online nor offline. */
+  connecting?: string[];
   directories: Record<string, unknown>;
   remembered: Record<string, { seat: string; sessionId: string }>;
   expectText: string[];
@@ -136,6 +138,18 @@ const SCENARIOS: Scenario[] = [
     ],
     absentText: ["Lead · weather-cli conversation"],
   },
+  // FU-62 (user report, 11 Oct): the phone app while the other computer's daemon restarted. This computer has leads
+  // but no main assistant; the other computer's main assistant is remembered and it is reconnecting. The setup rows
+  // and the lead rows must not draw on top of each other.
+  {
+    name: "home-reconnecting",
+    offline: [],
+    connecting: ["mini"],
+    directories: { book: withLeads([]) },
+    remembered: { mini: { seat: "main", sessionId: "prime-1" } },
+    expectText: ["Use the main assistant on Mac-mini.local", "Make a chat the main assistant"],
+    absentText: ["No main assistant yet"],
+  },
 ];
 // Below 768 px the sidebar is the full-width phone drawer; from 768 px it is the 320 px desktop sidebar.
 const SIZES = [
@@ -150,6 +164,7 @@ const f = vi.hoisted(() => ({
   push: vi.fn(),
   scenario: null as null | {
     offline: string[];
+    connecting?: string[];
     directories: Record<string, unknown>;
   },
 }));
@@ -194,15 +209,20 @@ const FLEET = {
     },
   ],
 };
+function hostStatus(id: string): string {
+  if (f.scenario?.offline.includes(id)) return "offline";
+  if (f.scenario?.connecting?.includes(id)) return "connecting";
+  return "online";
+}
 vi.mock("@/runtime/host-runtime", () => ({
   useHostRuntimeClient: () => ({ sendAgentMessage: async () => undefined }),
   useHosts: () => HOSTS,
   useHostRegistryLoaded: () => true,
   useHostRuntimeConnectionStatuses: (ids: readonly string[]) =>
-    new Map(ids.map((id) => [id, f.scenario?.offline.includes(id) ? "offline" : "online"])),
+    new Map(ids.map((id) => [id, hostStatus(id)])),
   getHostRuntimeStore: () => ({
     getSnapshot: (serverId: string) =>
-      f.scenario?.offline.includes(serverId)
+      hostStatus(serverId) !== "online"
         ? null
         : {
             client: {

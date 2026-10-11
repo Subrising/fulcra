@@ -824,7 +824,11 @@ function setUpLabel(elsewhere: boolean, finding: boolean): string {
   return "No main assistant yet · Set up";
 }
 
-/** A one-line sidebar choice with a 48 px target, the same height as the main assistant rows. */
+/**
+ * A one-line sidebar choice with a 48 px target, the same height as the main assistant rows. FU-62: the button sits
+ * in a row line like every other Leads row. Directly in the column, its `flex: 1` made its height basis 0, so a
+ * squeezed native sidebar (0.2.13, while a host reconnected) drew the setup rows on top of each other.
+ */
 function ChoiceRow({
   label,
   onPress,
@@ -836,18 +840,20 @@ function ChoiceRow({
 }) {
   return (
     <View style={styles.row}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={onPress}
-        testID={testID}
-        style={styles.main}
-      >
-        <ThemedCrown size={14} uniProps={mutedColor} />
-        <Text style={[styles.title, styles.text]} numberOfLines={2}>
-          {label}
-        </Text>
-      </Pressable>
+      <View style={styles.line}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          onPress={onPress}
+          testID={testID}
+          style={styles.main}
+        >
+          <ThemedCrown size={14} uniProps={mutedColor} />
+          <Text style={[styles.title, styles.text]} numberOfLines={2}>
+            {label}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
