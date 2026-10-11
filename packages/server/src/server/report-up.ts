@@ -57,7 +57,9 @@ import {
 //   not told in the last 5 minutes; others wait and go out as ONE message listing each worker with a short snippet,
 //   after the window and after the lead's running turn ends. A worker that already messaged its lead during its turn
 //   sends none. A failed turn is still sent at once. Waiting notices are in memory: a daemon restart drops them.
-// - daemon.reportUpOnTurnEnd = false turns it off.
+// - OFF BY DEFAULT (0.2.17): native notifyOnFinish is the standard way a lead hears a worker finish. daemon.reportUpOnTurnEnd
+//   = true turns these "finished a turn" notices on, as a fallback. The permission, limit and idle-lead notices are not
+//   "finished a turn" notices: they stay on unless daemon.reportUpOnTurnEnd = false turns every report-up notice off.
 // - A lead that turns idle while it owns open ledger items and has idle workers gets ONE short message that lists them
 //   (FU-101). It is driven by the end of the lead's turn, not by a timer. It is sent at most once per idle period, and
 //   never after a turn that a nudge started, so a lead that does nothing is not nudged again and again.
@@ -105,7 +107,10 @@ export const NUDGE_LIST_LIMIT = 8;
 export interface ReportUpDeps {
   agentManager: AgentManager;
   agentStorage: AgentStorage;
+  /** "Finished a turn" notices: off unless the owner turned the fallback on. */
   isEnabled: () => boolean;
+  /** The permission, limit and idle-lead notices: on unless every report-up notice is turned off. Default: on. */
+  isOtherEnabled?: () => boolean;
   localServerId: string | null;
   logger: Logger;
   /** The delivery step; tests replace it. */
@@ -447,6 +452,14 @@ export class ReportUpService {
   }
 
   /** Why a finished-turn notice is not needed, or null. A failed turn is always sent. */
+  private anyEnabled(): boolean {
+    return this.deps.isEnabled() || this.otherEnabled();
+  }
+
+  private otherEnabled(): boolean {
+    return this.deps.isOtherEnabled ? this.deps.isOtherEnabled() : true;
+  }
+
   private async quietReason(input: {
     workerId: string;
     leadId: string;
@@ -493,7 +506,7 @@ export class ReportUpService {
    * when the lead is at a usage limit, or when the nudge was already sent in this idle period.
    */
   private async nudgeIdleLead(leadId: string): Promise<void> {
-    if (!this.deps.isEnabled() || this.nudged.has(leadId)) return;
+    if (!this.otherEnabled() || this.nudged.has(leadId)) return;
     await new Promise((resolve) => setImmediate(resolve));
     if (this.turns.get(leadId)?.open || this.nudged.has(leadId) || this.limitOf(leadId)) return;
     const lead = await this.store.get(leadId);
@@ -537,7 +550,7 @@ export class ReportUpService {
 
   /** Tells the lead once that a chat is waiting for permission. Nothing is allowed or denied here. */
   private async notifyPermission(workerId: string, request: PermissionRequest): Promise<void> {
-    if (!this.deps.isEnabled()) return;
+    if (!this.otherEnabled()) return;
     const live = this.deps.agentManager.getAgent(workerId);
     const worker = await this.store.get(workerId);
     if (!worker || worker.archivedAt || live?.internal) return;
@@ -677,7 +690,7 @@ export class ReportUpService {
     const skip = (reason: string) => {
       this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
     };
-    if (!this.deps.isEnabled()) return skip("turned off");
+    if (!this.anyEnabled()) return skip("turned off");
     // Idle: a follow-up turn that starts at once reports when it ends.
     await new Promise((resolve) => setImmediate(resolve));
     if (this.turns.get(workerId)?.open) return skip("a new turn started");
@@ -686,6 +699,8 @@ export class ReportUpService {
     if (!worker || worker.archivedAt || live?.internal) return skip("not a visible chat");
     // A usage limit is limit state, never "finished a turn" (FU-63).
     if (await this.noteLimit(workerId, failed, failure)) return skip("ended on a usage limit");
+    // OFF BY DEFAULT: the limit notice above stays on; "finished a turn" and "ended with an error" notices need the fallback.
+    if (!this.deps.isEnabled()) return skip("turned off");
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return skip(lead.skip);
     const leadAgent = await this.store.get(lead.id);
@@ -809,7 +824,8 @@ export class ReportUpService {
   private send(leadId: string, prompt: string, kind: "report-up" | "idle-nudge"): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
-      if (!this.deps.isEnabled()) throw new Error("Report-up was turned off");
+      if (!this.deps.isEnabled() && !this.otherEnabled())
+        throw new Error("Report-up was turned off");
     };
     return agentManager.trustedPlugins.daemon(async () => {
       const finalCheck = createFinalInputCheck(checkCurrent);
@@ -833,6 +849,17 @@ export class ReportUpService {
   }
 }
 
+/**
+ * What daemon.reportUpOnTurnEnd turns on. Unset: only the notices that are not "finished a turn" (permission, limit,
+ * idle lead). true: the "finished a turn" fallback too. false: every report-up notice is off.
+ */
+export function reportUpSwitches(setting: boolean | undefined): {
+  finishedTurns: boolean;
+  otherNotices: boolean;
+} {
+  return { finishedTurns: setting === true, otherNotices: setting !== false };
+}
+
 export function startReportUp(input: {
   paseoHome?: string;
   agentManager: AgentManager;
@@ -844,7 +871,10 @@ export function startReportUp(input: {
   const service = new ReportUpService({
     agentManager: input.agentManager,
     agentStorage: input.agentStorage,
-    isEnabled: () => input.daemonConfigStore.get().reportUpOnTurnEnd !== false,
+    isEnabled: () =>
+      reportUpSwitches(input.daemonConfigStore.get().reportUpOnTurnEnd).finishedTurns,
+    isOtherEnabled: () =>
+      reportUpSwitches(input.daemonConfigStore.get().reportUpOnTurnEnd).otherNotices,
     localServerId: input.localServerId,
     logger: input.logger,
     ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),
