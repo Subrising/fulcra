@@ -6,6 +6,7 @@ import { createPermitCommand } from "./commands/permit/index.js";
 import { createProviderCommand } from "./commands/provider/index.js";
 import { createPluginCommand } from "./commands/plugin/index.js";
 import { createAccountCommand } from "./commands/account.js";
+import { createAskCommand } from "./commands/ask.js";
 import { createProjectCommand } from "./commands/project/index.js";
 import { createScheduleCommand } from "./commands/schedule/index.js";
 import { createSpeechCommand } from "./commands/speech/index.js";
@@ -151,6 +152,7 @@ export function createCli(): Command {
   program.addCommand(createProviderCommand());
   program.addCommand(createPluginCommand());
   program.addCommand(createAccountCommand());
+  program.addCommand(createAskCommand());
 
   // Speech model commands
   program.addCommand(createSpeechCommand());

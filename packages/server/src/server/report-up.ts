@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { writePrivateFileAtomicSync } from "./private-files.js";
 import type { Logger } from "pino";
 import { REPORTS_TO_OWNER, ROLE_REF_PREFIX } from "@getpaseo/protocol/agent-labels";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
@@ -14,6 +17,7 @@ import {
 import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
+import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
   decideSend,
   lineStoreOf,
@@ -36,8 +40,16 @@ import {
 // - The notice uses the daemon source, like the finish notification, and waits in the lead's held-send queue: it
 //   never enters or cancels the lead's running turn (held-sends.ts).
 // - daemon.reportUpOnTurnEnd = false turns it off.
+// - A new pending permission prompt in a chat sends its lead ONE notice (chat, tool, the start of the command, folder)
+//   (FU-68), so the lead can allow or deny it. It is driven by the daemon's own permission event, not by polling, and
+//   it changes no guard or ask rule.
+// - A turn that ends on a usage limit ("You've hit your session limit ...") is not "a turn finished" (FU-63). The chat
+//   is marked limited (kind and reset time), its lead hears ONCE ("<chat> is at its <kind> limit until <time>"), and
+//   a chat that is limited is not woken by worker reports: they are held and sent as one notice after the reset.
 
 export const REPORT_UP_SNIPPET_CHARS = 600;
+/** How much of a command a permission notice carries. */
+export const PERMISSION_COMMAND_CHARS = 200;
 
 interface TurnState {
   /** A turn began (turn_started, or its first user message) and has not ended yet; one notice per turn. */
@@ -54,6 +66,85 @@ export interface ReportUpDeps {
   logger: Logger;
   /** The delivery step; tests replace it. */
   deliver?: (leadId: string, prompt: string) => Promise<void>;
+  /** The clock and the timer; tests replace them. */
+  now?: () => number;
+  setTimer?: (run: () => void, ms: number) => void;
+  /** Where the limited chats and the held reports are kept, so a daemon restart does not lose them. */
+  statePath?: string;
+}
+
+interface PersistedState {
+  v: 1;
+  limited: Record<string, LimitedChat>;
+  held: Record<string, string[]>;
+}
+
+/** A chat whose last turn ended on a usage limit. */
+export interface LimitedChat {
+  kind: string;
+  /** Epoch ms of the reset; our own estimate when the text named none. */
+  until: number;
+  /** Its lead was told. */
+  notified: boolean;
+}
+
+/** Wait when the limit text names no reset. */
+export const UNKNOWN_RESET_MS = 15 * 60 * 1000;
+/** Reports held for one limited chat; the oldest are dropped past this. */
+export const MAX_HELD_REPORTS = 20;
+
+export function formatLimitNotice(title: string, limit: LimitedChat): string {
+  const when = new Date(limit.until).toLocaleString("en-AU", {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${title} is at its ${limit.kind} limit until ${when}.`;
+}
+
+export interface PermissionRequest {
+  id: string;
+  name?: string;
+  title?: string;
+  input?: Record<string, unknown>;
+  detail?: { type?: string; command?: unknown; filePath?: unknown } | null;
+}
+
+/** The start of what the chat wants to run, for a lead that has to allow or deny it. */
+export function permissionCommandOf(request: PermissionRequest): string {
+  const raw =
+    (typeof request.input?.command === "string" && request.input.command) ||
+    (typeof request.detail?.command === "string" && request.detail.command) ||
+    (typeof request.detail?.filePath === "string" && request.detail.filePath) ||
+    request.title ||
+    "";
+  const text = raw.replace(/\s+/g, " ").trim();
+  return text.length > PERMISSION_COMMAND_CHARS
+    ? `${text.slice(0, PERMISSION_COMMAND_CHARS)}…`
+    : text;
+}
+
+export function formatPermissionNotice(input: {
+  worker: LineAgent;
+  request: PermissionRequest;
+  cwd: string | null;
+}): string {
+  const command = permissionCommandOf(input.request);
+  return [
+    `Worker ${titleOf(input.worker)} (${input.worker.id}) is waiting for permission.`,
+    `Tool: ${input.request.name ?? "unknown"}`,
+    `Command: ${command || "(none)"}`,
+    `Folder: ${input.cwd ?? "unknown"}`,
+    `Request: ${input.request.id}`,
+  ].join("\n");
+}
+
+function failureText(event: object): string {
+  const failed = event as { error?: unknown; code?: unknown; diagnostic?: unknown };
+  return [failed.error, failed.code, failed.diagnostic]
+    .filter((part) => part !== undefined && part !== null)
+    .map(String)
+    .join(" ");
 }
 
 function isNoticeMessage(item: { text?: unknown; clientMessageId?: unknown }): boolean {
@@ -103,15 +194,70 @@ export async function leadChatOf(
 export class ReportUpService {
   private readonly turns = new Map<string, TurnState>();
   private readonly store: LineStore;
+  private readonly limited = new Map<string, LimitedChat>();
+  private readonly held = new Map<string, string[]>();
+  /** Permission prompts already sent to a lead, as "<chat>:<request>"; a request is told once. */
+  private readonly askedPermission = new Set<string>();
 
   constructor(private readonly deps: ReportUpDeps) {
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
+    this.load();
+  }
+
+  /** Reads the kept state: limits that have not passed, and reports still held. Held reports are released after the reset. */
+  private load(): void {
+    const file = this.deps.statePath;
+    if (!file) return;
+    let state: Partial<PersistedState> = {};
+    try {
+      state = JSON.parse(readFileSync(file, "utf8")) as Partial<PersistedState>;
+    } catch {
+      return;
+    }
+    const now = this.now();
+    for (const [id, limit] of Object.entries(state.limited ?? {})) {
+      if (typeof limit?.kind === "string" && Number.isFinite(limit.until) && limit.until > now)
+        this.limited.set(id, {
+          kind: limit.kind,
+          until: limit.until,
+          notified: limit.notified === true,
+        });
+    }
+    for (const [lead, held] of Object.entries(state.held ?? {})) {
+      const reports = Array.isArray(held)
+        ? held.filter((r): r is string => typeof r === "string").slice(-MAX_HELD_REPORTS)
+        : [];
+      if (!reports.length) continue;
+      this.held.set(lead, reports);
+      const wait = Math.max(0, (this.limited.get(lead)?.until ?? now) - now) + 5000;
+      (this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms).unref()))(
+        () => this.releaseHeld(lead),
+        wait,
+      );
+    }
+  }
+
+  private save(): void {
+    const file = this.deps.statePath;
+    if (!file) return;
+    const state: PersistedState = {
+      v: 1,
+      limited: Object.fromEntries(this.limited),
+      held: Object.fromEntries(this.held),
+    };
+    try {
+      writePrivateFileAtomicSync(file, JSON.stringify(state));
+    } catch (err) {
+      this.deps.logger.warn({ err }, "Report-up state not saved");
+    }
   }
 
   onEvent(event: AgentManagerEvent): void {
     // A closed chat keeps no state here, so the map does not grow with old chats.
     if (event.type === "agent_state" && event.agent.lifecycle === "closed") {
       this.turns.delete(event.agent.id);
+      for (const key of this.askedPermission)
+        if (key.startsWith(`${event.agent.id}:`)) this.askedPermission.delete(key);
       return;
     }
     if (event.type !== "agent_stream") return;
@@ -119,6 +265,10 @@ export class ReportUpService {
     const kind = event.event.type;
     const turn = this.turns.get(agentId) ?? { open: false, fromNotice: null };
     this.turns.set(agentId, turn);
+    if (kind === "permission_requested" || kind === "permission_resolved") {
+      this.onPermissionEvent(agentId, kind, event.event);
+      return;
+    }
     if (kind === "turn_started") {
       turn.open = true;
       return;
@@ -137,6 +287,15 @@ export class ReportUpService {
       return;
     }
     if (kind !== "turn_completed" && kind !== "turn_failed") return;
+    this.onTurnEnd(agentId, turn, kind, event.event);
+  }
+
+  private onTurnEnd(
+    agentId: string,
+    turn: TurnState,
+    kind: "turn_completed" | "turn_failed",
+    streamEvent: object,
+  ): void {
     // A second end event for the same turn sends nothing.
     if (!turn.open) return;
     turn.open = false;
@@ -149,14 +308,18 @@ export class ReportUpService {
         this.deps.agentManager.nativeReportOwnsFinish(agentId, leadHint)
       : false;
     if (fromNotice || armed) {
+      // A limit is recorded even when this turn sends no report, so the chat is not woken again while it is limited.
+      void this.noteLimit(agentId, kind === "turn_failed", failureText(streamEvent)).catch(
+        (err: unknown) => this.deps.logger.warn({ err, agentId }, "Limit note failed"),
+      );
       this.deps.logger.info(
         { agentId, reason: fromNotice ? "turn started by a notice" : "caller already notified" },
         "Report-up skipped",
       );
       return;
     }
-    void this.report(agentId, kind === "turn_failed").catch((err: unknown) =>
-      this.deps.logger.warn({ err, agentId }, "Report-up failed"),
+    void this.report(agentId, kind === "turn_failed", failureText(streamEvent)).catch(
+      (err: unknown) => this.deps.logger.warn({ err, agentId }, "Report-up failed"),
     );
   }
 
@@ -165,7 +328,150 @@ export class ReportUpService {
     return leadChatOf(this.store, worker, this.deps.localServerId);
   }
 
-  private async report(workerId: string, failed: boolean): Promise<void> {
+  /** A new prompt is told to the lead once; a resolved prompt may be asked again under a new request. */
+  private onPermissionEvent(agentId: string, kind: string, event: object): void {
+    if (kind === "permission_resolved") {
+      const requestId = (event as { requestId?: string }).requestId;
+      if (requestId) this.askedPermission.delete(`${agentId}:${requestId}`);
+      return;
+    }
+    const request = (event as { request?: PermissionRequest }).request;
+    if (!request?.id || this.askedPermission.has(`${agentId}:${request.id}`)) return;
+    this.askedPermission.add(`${agentId}:${request.id}`);
+    void this.notifyPermission(agentId, request).catch((err: unknown) =>
+      this.deps.logger.warn({ err, agentId }, "Permission notice failed"),
+    );
+  }
+
+  /** Tells the lead once that a chat is waiting for permission. Nothing is allowed or denied here. */
+  private async notifyPermission(workerId: string, request: PermissionRequest): Promise<void> {
+    if (!this.deps.isEnabled()) return;
+    const live = this.deps.agentManager.getAgent(workerId);
+    const worker = await this.store.get(workerId);
+    if (!worker || worker.archivedAt || live?.internal) return;
+    const lead = await this.leadOf(worker);
+    if ("skip" in lead) return;
+    const leadAgent = await this.store.get(lead.id);
+    if (!leadAgent || leadAgent.archivedAt) return;
+    const decision = await decideSend(
+      this.store,
+      { agentId: workerId },
+      lead.id,
+      this.deps.localServerId,
+    );
+    if (!decision?.allowed) return;
+    const prompt = formatSystemNotificationPrompt(
+      formatPermissionNotice({
+        worker,
+        request,
+        cwd: (live as { cwd?: string } | null)?.cwd ?? (worker as { cwd?: string }).cwd ?? null,
+      }),
+    );
+    await this.toLead(workerId, lead.id, prompt);
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  /** Whether a chat is at a usage limit now. */
+  limitOf(agentId: string): LimitedChat | null {
+    const limit = this.limited.get(agentId);
+    if (!limit) return null;
+    if (limit.until > this.now()) return limit;
+    this.limited.delete(agentId);
+    this.save();
+    return null;
+  }
+
+  /**
+   * Reads how a turn ended. A usage limit marks the chat limited and tells its lead once; any other end clears the
+   * mark. Returns true for a limit, which is never reported as a finished turn.
+   */
+  private async noteLimit(workerId: string, failed: boolean, text: string): Promise<boolean> {
+    const now = this.now();
+    const last = failed
+      ? null
+      : await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null);
+    const stop = failed ? classifyFailedTurn(text, now) : classifyEndingAssistantMessage(last, now);
+    if (!stop || stop.kind === "network") {
+      if (this.limited.delete(workerId)) {
+        this.save();
+        this.releaseHeld(workerId);
+      }
+      return false;
+    }
+    const previous = this.limited.get(workerId);
+    const limit: LimitedChat = {
+      kind: stop.limitKind ?? "usage",
+      until: stop.resetAt ?? now + UNKNOWN_RESET_MS,
+      notified: previous?.notified === true && previous.until > now,
+    };
+    this.limited.set(workerId, limit);
+    if (limit.notified) {
+      this.save();
+      return true;
+    }
+    limit.notified = true;
+    this.save();
+    const worker = await this.store.get(workerId);
+    if (!worker || worker.archivedAt) return true;
+    const lead = await this.leadOf(worker);
+    if ("skip" in lead) return true;
+    await this.toLead(
+      workerId,
+      lead.id,
+      formatSystemNotificationPrompt(formatLimitNotice(titleOf(worker), limit)),
+    );
+    return true;
+  }
+
+  /** Sends a notice to a lead, or holds it while the lead is at a limit (sent as one notice after the reset). */
+  private async toLead(workerId: string, leadId: string, prompt: string): Promise<void> {
+    const leadLimit = this.limitOf(leadId);
+    if (leadLimit) {
+      const held = this.held.get(leadId) ?? [];
+      held.push(prompt);
+      if (held.length > MAX_HELD_REPORTS) held.shift();
+      this.held.set(leadId, held);
+      this.save();
+      this.deps.logger.info(
+        { agentId: workerId, lead: leadId, until: leadLimit.until },
+        "Report-up held: the lead is at a usage limit",
+      );
+      const delay = Math.max(0, leadLimit.until - this.now()) + 1000;
+      (this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms).unref()))(
+        () => this.releaseHeld(leadId),
+        delay,
+      );
+      return;
+    }
+    if (this.deps.deliver) {
+      await this.deps.deliver(leadId, prompt);
+      return;
+    }
+    // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
+    heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
+      await this.send(leadId, prompt);
+      this.deps.logger.info({ agentId: workerId, lead: leadId }, "Report-up delivered");
+    });
+  }
+
+  /** The held reports for a lead go out as one notice, once the lead is no longer at a limit. */
+  private releaseHeld(leadId: string): void {
+    if (this.limitOf(leadId)) return;
+    const held = this.held.get(leadId);
+    if (!held?.length) return;
+    this.held.delete(leadId);
+    this.save();
+    const body = held.map((prompt) => prompt.trim()).join("\n\n");
+    const notice = `${held.length} report${held.length === 1 ? "" : "s"} held while you were at your usage limit:\n\n${body}`;
+    void this.toLead(leadId, leadId, notice).catch((err: unknown) =>
+      this.deps.logger.warn({ err, leadId }, "Held reports failed"),
+    );
+  }
+
+  private async report(workerId: string, failed: boolean, failure = ""): Promise<void> {
     const skip = (reason: string) => {
       this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
     };
@@ -176,6 +482,8 @@ export class ReportUpService {
     const live = this.deps.agentManager.getAgent(workerId);
     const worker = await this.store.get(workerId);
     if (!worker || worker.archivedAt || live?.internal) return skip("not a visible chat");
+    // A usage limit is limit state, never "finished a turn" (FU-63).
+    if (await this.noteLimit(workerId, failed, failure)) return skip("ended on a usage limit");
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return skip(lead.skip);
     const leadAgent = await this.store.get(lead.id);
@@ -203,15 +511,7 @@ export class ReportUpService {
     const prompt = formatSystemNotificationPrompt(
       formatReportUpNotice({ worker, failed, lastMessage }),
     );
-    if (this.deps.deliver) {
-      await this.deps.deliver(lead.id, prompt);
-      return;
-    }
-    // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
-    heldSendsFor(this.deps.agentManager, this.deps.logger).hold(lead.id, async () => {
-      await this.send(lead.id, prompt);
-      this.deps.logger.info({ agentId: workerId, lead: lead.id }, "Report-up delivered");
-    });
+    await this.toLead(workerId, lead.id, prompt);
   }
 
   private send(leadId: string, prompt: string): Promise<void> {
@@ -239,6 +539,7 @@ export class ReportUpService {
 }
 
 export function startReportUp(input: {
+  paseoHome?: string;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   daemonConfigStore: DaemonConfigStore;
@@ -251,6 +552,7 @@ export function startReportUp(input: {
     isEnabled: () => input.daemonConfigStore.get().reportUpOnTurnEnd !== false,
     localServerId: input.localServerId,
     logger: input.logger,
+    ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),
   });
   return input.agentManager.subscribe((event) => service.onEvent(event), { replayState: false });
 }

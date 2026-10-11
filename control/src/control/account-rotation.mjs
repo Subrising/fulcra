@@ -23,13 +23,28 @@ export function poolRoot() {
 // `delegated: false` (B4): a human-held session is not moved and nobody is woken; the account is still marked limited.
 export async function rotateOnLimit(
   control,
-  { session, provider, resetAt = null, note = null, stopId, now = Date.now(), delegated = true },
+  {
+    session,
+    provider,
+    resetAt = null,
+    note = null,
+    stopId,
+    now = Date.now(),
+    delegated = true,
+    kind = null,
+  },
   root = control?.poolRoot ?? poolRoot(),
 ) {
   if (!root) return null;
   let r;
   try {
-    r = await rotate(root, session, provider, { resetAt, note, stopId, reassign: delegated }, now);
+    r = await rotate(
+      root,
+      session,
+      provider,
+      { resetAt, note, stopId, reassign: delegated, kind },
+      now,
+    );
   } catch {
     return null;
   }
@@ -39,6 +54,15 @@ export async function rotateOnLimit(
       control.wakes?.accountRotated?.(session, r);
     } catch {}
   return r;
+}
+// Whether a session runs on a pooled account now. Cheap (one file read), so a stranger session costs no timeline read.
+export function pooledSession(control, session, root = control?.poolRoot ?? poolRoot()) {
+  try {
+    const a = root ? readAccounts(root).assignments[session] : null;
+    return Boolean(a && !a.ended);
+  } catch {
+    return false;
+  }
 }
 export function rotationOf(stopId, control = null, root = control?.poolRoot ?? poolRoot()) {
   try {

@@ -1,21 +1,30 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
-import { REPORT_UP_SNIPPET_CHARS, ReportUpService } from "./report-up.js";
+import { PERMISSION_COMMAND_CHARS, REPORT_UP_SNIPPET_CHARS, ReportUpService } from "./report-up.js";
 
 interface FakeChat {
   id: string;
   title: string;
   labels: Record<string, string>;
   lastMessage?: string;
+  cwd?: string;
 }
 
 const LEAD = "11111111-1111-4111-8111-111111111111";
 const WORKER = "22222222-2222-4222-8222-222222222222";
 
-function fixture(chats: FakeChat[], options: { enabled?: boolean } = {}) {
+function fixture(
+  chats: FakeChat[],
+  options: { enabled?: boolean; now?: number; statePath?: string } = {},
+) {
+  const clock = { now: options.now ?? Date.now() };
+  const timers: Array<{ run: () => void; ms: number }> = [];
   const byId = new Map(chats.map((chat) => [chat.id, chat]));
   const delivered: Array<{ leadId: string; prompt: string }> = [];
   const manager = {
@@ -34,6 +43,9 @@ function fixture(chats: FakeChat[], options: { enabled?: boolean } = {}) {
     isEnabled: () => enabled,
     localServerId: "srv_local",
     logger: createTestLogger(),
+    now: () => clock.now,
+    ...(options.statePath ? { statePath: options.statePath } : {}),
+    setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
       delivered.push({ leadId, prompt });
     },
@@ -49,12 +61,24 @@ function fixture(chats: FakeChat[], options: { enabled?: boolean } = {}) {
     });
     stream(agentId, { type: "turn_completed", provider: "claude" });
   };
+  const failedTurn = (agentId: string, error: string) => {
+    stream(agentId, { type: "turn_started", provider: "claude" });
+    stream(agentId, {
+      type: "timeline",
+      provider: "claude",
+      item: { type: "user_message", text: "do the task" },
+    });
+    stream(agentId, { type: "turn_failed", provider: "claude", error });
+  };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
   return {
     delivered,
     stream,
     turn,
     settle,
+    clock,
+    timers,
+    failedTurn,
     setEnabled: (value: boolean) => (enabled = value),
   };
 }
@@ -153,5 +177,206 @@ describe("report-up", () => {
     f.turn(WORKER, { text: "notice", clientMessageId: "paseo-notify:y" });
     await f.settle();
     expect(f.delivered).toEqual([]);
+  });
+});
+
+// Fulcra 0.2.17 (FU-63): a limit text is limit state, never "finished a turn".
+describe("report-up and usage limits", () => {
+  const NOW = Date.parse("2026-10-11T00:00:00Z");
+  const SESSION = "You've hit your session limit · resets 3pm (Australia/Brisbane)";
+  const WEEKLY = "You've hit your weekly limit · resets Oct 13 at 8am (Australia/Brisbane)";
+
+  test("a worker that ends on a session limit tells its lead once and is never reported as finished", async () => {
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const f = fixture([lead, chat], { now: NOW });
+    for (let i = 0; i < 3; i++) {
+      f.turn(WORKER);
+      await f.settle();
+    }
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(f.delivered[0]!.prompt).toContain("Builder is at its session limit until");
+    expect(f.delivered[0]!.prompt).not.toContain("finished a turn");
+  });
+
+  test("a failed turn with a weekly limit text is the same: one notice, kind weekly", async () => {
+    const f = fixture([lead, worker()], { now: NOW });
+    f.failedTurn(WORKER, WEEKLY);
+    await f.settle();
+    f.failedTurn(WORKER, WEEKLY);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Builder is at its weekly limit until");
+  });
+
+  test("a worker that recovers reports normally again, and a later limit is told again", async () => {
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const f = fixture([lead, chat], { now: NOW });
+    f.turn(WORKER);
+    await f.settle();
+    chat.lastMessage = "Done: tests pass.";
+    f.clock.now = NOW + 6 * 3600_000;
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[1]!.prompt).toContain("finished a turn: Done: tests pass.");
+    chat.lastMessage = SESSION;
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(3);
+    expect(f.delivered[2]!.prompt).toContain("session limit");
+  });
+
+  test("worker reports to a limited lead are held, then sent as one notice after the reset", async () => {
+    const SECOND = "33333333-3333-4333-8333-333333333333";
+    const limitedLead: FakeChat = { ...lead, lastMessage: SESSION };
+    const second: FakeChat = { ...worker(), id: SECOND, title: "Tester" };
+    const f = fixture([limitedLead, worker(), second], { now: NOW });
+    f.turn(LEAD);
+    await f.settle();
+    f.turn(WORKER);
+    f.turn(SECOND);
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
+    // The reset passes and the timer fires.
+    f.clock.now = NOW + 6 * 3600_000;
+    for (const timer of f.timers) timer.run();
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(f.delivered[0]!.prompt).toContain("2 reports held");
+    expect(f.delivered[0]!.prompt).toContain("Builder");
+    expect(f.delivered[0]!.prompt).toContain("Tester");
+  });
+
+  test("a limit that names no reset time holds for 15 minutes", async () => {
+    const chat = worker();
+    chat.lastMessage = "Claude AI usage limit reached|0000000000";
+    const f = fixture([lead, chat], { now: NOW });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("usage limit until");
+  });
+});
+
+// Fulcra 0.2.17 (FU-68): a new pending permission prompt is told to the chat's lead once.
+describe("report-up and permission prompts", () => {
+  const ask = (id: string, command: string) => ({
+    type: "permission_requested",
+    provider: "claude",
+    request: { id, name: "Bash", input: { command } },
+  });
+
+  test("a new prompt sends the lead one notice with the chat, tool, command and folder", async () => {
+    const chat: FakeChat = { ...worker(), cwd: "/work/game" };
+    const f = fixture([lead, chat]);
+    f.stream(WORKER, ask("req-1", "git checkout -- game tests"));
+    f.stream(WORKER, ask("req-1", "git checkout -- game tests"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    const prompt = f.delivered[0]!.prompt;
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(prompt).toContain(`Worker Builder (${WORKER}) is waiting for permission.`);
+    expect(prompt).toContain("Tool: Bash");
+    expect(prompt).toContain("Command: git checkout -- game tests");
+    expect(prompt).toContain("Folder: /work/game");
+  });
+
+  test("the command is cut at 200 characters, and each new prompt is told", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("req-1", `echo ${"x".repeat(400)}`));
+    await f.settle();
+    const first = f.delivered[0]!.prompt.split("\n").find((l) => l.startsWith("Command: "))!;
+    expect(first.length).toBeLessThanOrEqual("Command: ".length + PERMISSION_COMMAND_CHARS + 1);
+    f.stream(WORKER, { type: "permission_resolved", provider: "claude", requestId: "req-1" });
+    f.stream(WORKER, ask("req-2", "ls"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+  });
+
+  test("a chat with no lead, or with the owner as lead, tells nobody", async () => {
+    const f = fixture([lead, worker({ [REPORTS_TO_LABEL]: REPORTS_TO_OWNER })]);
+    f.stream(WORKER, ask("req-1", "ls"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
+  });
+
+  test("it stays quiet when report-up is turned off", async () => {
+    const f = fixture([lead, worker()], { enabled: false });
+    f.stream(WORKER, ask("req-1", "ls"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
+  });
+});
+
+// Fulcra 0.2.17 (FU-63 follow-up): the limited state and the held reports survive a daemon restart.
+describe("report-up limit state across a restart", () => {
+  const NOW = Date.parse("2026-10-11T00:00:00Z");
+  const SESSION = "You've hit your session limit · resets 3pm (Australia/Brisbane)";
+
+  const home = () => mkdtempSync(join(tmpdir(), "report-up-state-"));
+
+  test("a limited lead stays limited after a restart: reports are held, then sent once after the reset", async () => {
+    const dir = home();
+    const statePath = join(dir, "report-up-limits.json");
+    const limitedLead: FakeChat = { ...lead, lastMessage: SESSION };
+    const before = fixture([limitedLead, worker()], { now: NOW, statePath });
+    before.turn(LEAD);
+    await before.settle();
+    before.turn(WORKER);
+    await before.settle();
+    expect(before.delivered).toHaveLength(0);
+
+    // The daemon restarts: a new service reads the same file.
+    const after = fixture([lead, worker()], { now: NOW + 60_000, statePath });
+    after.turn(WORKER);
+    await after.settle();
+    expect(after.delivered).toHaveLength(0); // still held: the lead is limited until the reset
+    after.clock.now = NOW + 6 * 3600_000;
+    for (const timer of after.timers) timer.run();
+    await after.settle();
+    expect(after.delivered).toHaveLength(1);
+    expect(after.delivered[0]!.prompt).toContain("2 reports held");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a limited chat is not told to its lead a second time after a restart", async () => {
+    const dir = home();
+    const statePath = join(dir, "report-up-limits.json");
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const before = fixture([lead, chat], { now: NOW, statePath });
+    before.turn(WORKER);
+    await before.settle();
+    expect(before.delivered).toHaveLength(1);
+    const after = fixture([lead, chat], { now: NOW + 60_000, statePath });
+    after.turn(WORKER);
+    await after.settle();
+    expect(after.delivered).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a limit that has passed is dropped on load, and a damaged file is ignored", async () => {
+    const dir = home();
+    const statePath = join(dir, "report-up-limits.json");
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const before = fixture([lead, chat], { now: NOW, statePath });
+    before.turn(WORKER);
+    await before.settle();
+    const later = fixture([lead, { ...chat, lastMessage: "Done." }], {
+      now: NOW + 8 * 3600_000,
+      statePath,
+    });
+    later.turn(WORKER);
+    await later.settle();
+    expect(later.delivered).toHaveLength(1);
+    expect(later.delivered[0]!.prompt).toContain("finished a turn");
+    writeFileSync(statePath, "{not json");
+    expect(() => fixture([lead, worker()], { now: NOW, statePath })).not.toThrow();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

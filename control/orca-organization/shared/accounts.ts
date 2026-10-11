@@ -31,6 +31,7 @@ const account = z
     priority: z.number().int(),
     status,
     limitNote: z.string().max(200).nullable(),
+    limitKind: z.string().max(24).nullable().optional(),
     sessions: z.array(z.string().max(80)).max(50),
     lastUsedAt: z.string().max(40).nullable(),
   })
@@ -194,6 +195,45 @@ export const accountSwitchRpc = defineContract({
     .object({ agentId: z.string().min(1).max(80), account: z.string().min(1).max(80) })
     .strict(),
   output: ok,
+});
+
+// Fulcra 0.2.17 (FU-58): `fulcra ask`, a one-shot model call on a pooled account. No agent, workspace or session record.
+// The host answers a plugin call within 30 s, and a model call can take longer: the call is started, then its result is
+// read by id (the CLI reads it until it is done or its own timeout passes).
+export const askRpc = defineContract({
+  name: "organization.ask.start",
+  input: z
+    .object({
+      prompt: z.string().min(1).max(200_000),
+      model: z.string().min(1).max(120),
+      schema: z.record(z.string(), z.unknown()).optional(),
+      account: z.string().min(1).max(80).optional(),
+      timeoutMs: z.number().int().min(1000).max(600_000).optional(),
+    })
+    .strict(),
+  output: z.object({ id: z.string().uuid() }).strict(),
+});
+export const askResultRpc = defineContract({
+  name: "organization.ask.result",
+  input: z.object({ id: z.string().uuid() }).strict(),
+  output: z
+    .object({
+      state: z.enum(["running", "done", "failed"]),
+      result: z
+        .object({
+          output: z.unknown(),
+          account: z.string().max(60),
+          model: z.string().max(120),
+          costUsd: z.number().nullable(),
+        })
+        .strict()
+        .optional(),
+      error: z
+        .object({ code: z.string().max(40), message: z.string().max(1000) })
+        .strict()
+        .optional(),
+    })
+    .strict(),
 });
 
 // Explicit account continuation; distinct from giving a delegated session back to its human owner.

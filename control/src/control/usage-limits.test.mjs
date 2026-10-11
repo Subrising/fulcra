@@ -15,6 +15,12 @@ import { AUTOMATION_LIMIT } from "./journal-capacity.mjs";
 import { HostNative } from "./host-native.mjs";
 import { limitNoticeText } from "./held-notifier.mjs";
 import {
+  addAccount,
+  assign,
+  readAccounts,
+  accountStatus,
+} from "../../orca-organization/server/accounts.mjs";
+import {
   parseLimitLine,
   detectStop,
   UsageLimits,
@@ -530,4 +536,30 @@ test("server.mjs is wired: agent updates, a startup pass, the watchdog tick, rec
   assert.match(src, /await control\.usageLimits\.observe\(id\)/);
   assert.match(src, /void control\.usageLimits\.tick\(\);/);
   assert.match(src, /control\.limitNotifier = macLimitNotifier\(\)/);
+});
+
+// Fulcra 0.2.17 (FU-61): a session the controller did not enrol (the PC case: `fulcra run --output-schema`) still marks
+// its account limited, with the kind, so the pool skips the account. Nothing is resumed or moved.
+test("a limit on a session that is not enrolled marks its pool account limited, with the kind", async (t) => {
+  const f = fixture(t),
+    id = randomUUID();
+  const root = path.join(f.dir, "pool");
+  fs.mkdirSync(root, { recursive: true });
+  f.control.poolRoot = root;
+  const now = f.clock.now;
+  const work = await addAccount(root, { provider: "claude", name: "Work" }, now);
+  const personal = await addAccount(root, { provider: "claude", name: "Personal" }, now + 1);
+  assert.equal((await assign(root, id, "claude", now)).account.id, work.id);
+  f.tails.set(id, limitTail());
+  await f.limits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
+  const stored = readAccounts(root).accounts.find((a) => a.id === work.id);
+  assert.equal(stored.limitKind, "session");
+  assert.equal(stored.limitedUntil, "2026-09-24T14:50:00.000Z");
+  assert.equal(accountStatus(stored, now).state, "limited");
+  // The pool skips it: a new session takes the other account.
+  assert.equal((await assign(root, randomUUID(), "claude", now + 5)).account.id, personal.id);
+  // Not enrolled: no stop row, nothing sent, the session was not moved.
+  assert.equal(row(f, id), undefined);
+  assert.equal(f.sent.length, 0);
+  assert.equal(readAccounts(root).assignments[id].accountId, work.id);
 });
