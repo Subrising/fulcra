@@ -8,7 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { parseLimitLine } from "./limit-line.mjs";
-import { accountStatus, choose, markAccountLimited, readAccounts, readUsage } from "./accounts.mjs";
+import {
+  accountStatus,
+  choose,
+  markAccountLimited,
+  readAccountsAsync,
+  readUsageAsync,
+} from "./accounts.mjs";
 
 export class AskError extends Error {
   constructor(message, code = "ASK_FAILED") {
@@ -287,7 +293,7 @@ export async function askOnce({
     const at = now();
     const remainingMs = deadline - at;
     if (remainingMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
-    const state = readAccounts(root);
+    const state = await readAccountsAsync(root);
     let picked;
     if (account) {
       picked = namedAccount(state, account);
@@ -304,7 +310,7 @@ export async function askOnce({
         "claude",
         at,
         tried.map((t) => t.id),
-        readUsage(root, at),
+        await readUsageAsync(root, at),
       );
       if (!picked) {
         // Accounts may be limited from earlier calls: say so, with the reset, instead of "no account".
