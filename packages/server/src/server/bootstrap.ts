@@ -1,4 +1,5 @@
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
+import { startSyncIoMeter } from "./sync-io-meter.js";
 import { checkNativeReportOriginPublication } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
@@ -693,6 +694,9 @@ export async function createPaseoDaemon(
 ): Promise<PaseoDaemon> {
   configureGitProcessPolicy(config.git ?? resolveGitProcessPolicy({ env: process.env }));
   const logger = rootLogger.child({ module: "bootstrap" });
+  const stopSyncIoMeter = startSyncIoMeter((sites) =>
+    logger.info({ sites }, "Synchronous disk calls on the main thread in the last minute"),
+  );
   const obsoleteTimelineDirectory = path.join(config.paseoHome, "agent-timelines");
   await rm(obsoleteTimelineDirectory, { recursive: true, force: true }).catch((error) => {
     logger.warn(
@@ -2131,6 +2135,7 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
+    stopSyncIoMeter();
     limitResume.stop();
     stopReportUp();
     heldSends.close();
