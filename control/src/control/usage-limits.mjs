@@ -25,6 +25,7 @@ import { assertColumns } from "./schema.mjs";
 import { uuid, RecipientBusy } from "./authority.mjs";
 import {
   rotateOnLimit,
+  pooledSession,
   rotationOf,
   rotateDelay,
   rotationNote,
@@ -201,8 +202,14 @@ export class UsageLimits {
   // A native agent update: a Claude session of ours that went idle may have stopped at the limit. Single flight per
   // session, and only once per daemon update (updatedAt), so a burst of updates costs one timeline read.
   onAgent(a) {
-    if (a?.provider !== "claude" || a.status !== "idle" || !uuid(a.id) || !this.store.get(a.id))
-      return null;
+    if (a?.provider !== "claude" || a.status !== "idle" || !uuid(a.id)) return null;
+    // A Claude session this controller did not enrol (for example `fulcra run --output-schema`) is never resumed or
+    // moved, but its account is still marked limited, so the pool skips it (FU-61).
+    if (!this.store.get(a.id)) {
+      if (this.seen.get(a.id) === a.updatedAt) return null;
+      this.seen.set(a.id, a.updatedAt);
+      return this.observePoolOnly(a.id);
+    }
     if (this.seen.get(a.id) === a.updatedAt) return null;
     this.seen.set(a.id, a.updatedAt);
     if (this.seen.size > 1024) this.seen.delete(this.seen.keys().next().value);
@@ -218,6 +225,27 @@ export class UsageLimits {
       .finally(() => this.flights.delete(id));
     this.flights.set(id, flight);
     return flight;
+  }
+  async observePoolOnly(id) {
+    try {
+      if (typeof this.control.native?.limitTail !== "function") return null;
+      if (!pooledSession(this.control, id)) return null;
+      const stop = detectStop(await this.control.native.limitTail(id));
+      if (!stop) return null;
+      await rotateOnLimit(this.control, {
+        session: id,
+        provider: "claude",
+        resetAt: stop.resetAt,
+        note: stop.line,
+        stopId: derived(`${id}:${stop.seq}`, "usage-limit-stop"),
+        now: this.now(),
+        delegated: false,
+        kind: stop.kind,
+      });
+    } catch (e) {
+      this.lastError = { message: e.message, at: this.iso() };
+    }
+    return null;
   }
   async observeOnce(id) {
     if (typeof this.control.native?.limitTail !== "function") return null;
@@ -267,6 +295,7 @@ export class UsageLimits {
       stopId: row.id,
       now: this.now(),
       delegated: s.mode === "delegated",
+      kind: stop.kind,
     });
     if (rotation?.to && s.mode === "delegated") {
       this.db
