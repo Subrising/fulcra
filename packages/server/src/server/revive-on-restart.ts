@@ -319,6 +319,22 @@ async function continueOne(
 export function defaultSessions(deps: ReviveDeps): ReviveSessions {
   const { agentManager, agentStorage, logger } = deps;
   const now = deps.now ?? (() => new Date());
+  /**
+   * FU-103: a lead seat the trusted controller owns (a delegated session). The host may not resume it on its own: any
+   * other daemon input ends the delegation and cancels the seat's queued deliveries (the controller's external-input
+   * fence). Its continue therefore goes in as a host notice (daemon source, notice message ID), which the controller
+   * admits without ending the delegation, exactly as revive's lead notices already do.
+   */
+  const pluginOwned = (id: string): boolean => {
+    const live = agentManager.getAgent(id);
+    return Boolean(
+      live &&
+      !live.internal &&
+      !live.owner &&
+      ["codex", "claude"].includes(live.provider) &&
+      !agentManager.canRunUnscopedLimitResume(id),
+    );
+  };
   const refusal = (id: string): string | null => {
     const live = agentManager.getAgent(id);
     if (!live || live.archivedAt) return "not loaded";
@@ -326,7 +342,8 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
     // A pool-account session has a binding: limit-resume continues it.
     if (agentManager.getLimitResumeBinding(id) !== null)
       return "pool account: limit-resume continues it";
-    if (!agentManager.canRunUnscopedLimitResume(id)) return "owned by a trusted plugin";
+    if (!agentManager.canRunUnscopedLimitResume(id) && !pluginOwned(id))
+      return "not resumable by the host";
     if (live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
     return null;
   };
@@ -370,11 +387,23 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
       };
       checkCurrent();
       const finalCheck = createFinalInputCheck(checkCurrent);
-      void agentManager
-        .runAgent(id, INTERRUPTED_RESUME_PROMPT, { [FINAL_INPUT_CHECK]: finalCheck })
-        .catch((error: unknown) =>
-          logger.warn({ err: error, agentId: id }, "Continue after restart failed"),
-        );
+      const run = () =>
+        agentManager.runAgent(id, INTERRUPTED_RESUME_PROMPT, { [FINAL_INPUT_CHECK]: finalCheck });
+      const owned = pluginOwned(id);
+      if (owned)
+        logger.info({ agentId: id }, "Revive on restart: lead seat continues as a host notice");
+      void (
+        owned
+          ? agentManager.trustedPlugins.daemon(() =>
+              agentManager.runAgent(id, INTERRUPTED_RESUME_PROMPT, {
+                [FINAL_INPUT_CHECK]: finalCheck,
+                clientMessageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}restart-continue:${randomUUID()}`,
+              }),
+            )
+          : run()
+      ).catch((error: unknown) =>
+        logger.warn({ err: error, agentId: id }, "Continue after restart failed"),
+      );
       await waitForFinalInputHandoff(finalCheck);
     },
   };

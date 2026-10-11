@@ -6,6 +6,8 @@ import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager } from "./agent/agent-manager.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
+import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
+import { commitFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
 import { readFile, writeFile } from "node:fs/promises";
 import {
   defaultSessions,
@@ -463,5 +465,82 @@ describe("revive session reads", () => {
         lastUserMessageAt: "2026-10-11T09:42:00.000Z",
       }).changedSince(RUNNING, null),
     ).toBe("a new message arrived since the restart");
+  });
+});
+
+// FU-103: a lead whose turn a restart cut sat idle, because revive skipped every session a trusted plugin owns.
+describe("revive continue for a lead seat the controller owns", () => {
+  function manager(agent: Record<string, unknown>, options: { unscoped: boolean; pool?: boolean }) {
+    const runs: Array<{ messageId: string | undefined; daemon: boolean }> = [];
+    let inDaemon = false;
+    const live = {
+      id: RUNNING,
+      provider: "claude",
+      labels: {},
+      instanceId: "i1",
+      lastUserMessageAt: null,
+      ...agent,
+    };
+    const agentManager = {
+      getAgent: () => live,
+      hasInFlightRun: () => false,
+      getLimitResumeBinding: () => (options.pool ? "v1:binding" : null),
+      canRunUnscopedLimitResume: () => options.unscoped,
+      trustedPlugins: {
+        daemon: <T>(operation: () => T): T => {
+          inDaemon = true;
+          try {
+            return operation();
+          } finally {
+            inDaemon = false;
+          }
+        },
+      },
+      runAgent: async (_id: string, _prompt: string, run: Record<string | symbol, unknown>) => {
+        runs.push({ messageId: run.clientMessageId as string | undefined, daemon: inDaemon });
+        const check = run[FINAL_INPUT_CHECK] as object;
+        commitFinalInputCheck(check);
+        recordFinalInputHandoff(check);
+      },
+    } as unknown as AgentManager;
+    const sessions = defaultSessions({
+      agentManager,
+      agentStorage: {} as AgentStorage,
+      paseoHome: "",
+      localServerId: null,
+      logger: createTestLogger(),
+      isEnabled: () => true,
+    });
+    return { sessions, runs };
+  }
+
+  test("a plugin-owned lead is not refused, and its continue goes in as a host notice", async () => {
+    const { sessions, runs } = manager({}, { unscoped: false });
+    expect(sessions.refusal(RUNNING)).toBeNull();
+    await sessions.sendContinue(RUNNING, null);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.daemon).toBe(true);
+    expect(runs[0]!.messageId).toMatch(/^paseo-notify:restart-continue:/);
+  });
+
+  test("a session the host may resume on its own gets the plain continue prompt", async () => {
+    const { sessions, runs } = manager({}, { unscoped: true });
+    await sessions.sendContinue(RUNNING, null);
+    expect(runs).toEqual([{ messageId: undefined, daemon: false }]);
+  });
+
+  test("internal, child and other-provider sessions stay refused; a pool session is left to limit-resume", () => {
+    expect(manager({ internal: true }, { unscoped: false }).sessions.refusal(RUNNING)).toBe(
+      "not resumable by the host",
+    );
+    expect(
+      manager({ owner: { agentId: "parent" } }, { unscoped: false }).sessions.refusal(RUNNING),
+    ).toBe("not resumable by the host");
+    expect(manager({ provider: "opencode" }, { unscoped: false }).sessions.refusal(RUNNING)).toBe(
+      "not resumable by the host",
+    );
+    expect(manager({}, { unscoped: false, pool: true }).sessions.refusal(RUNNING)).toBe(
+      "pool account: limit-resume continues it",
+    );
   });
 });
