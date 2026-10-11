@@ -496,16 +496,23 @@ describe("ledger items", () => {
     expect(rowsOwnedBy(rows, { id: "33333333-x", title: "Le" })).toEqual([]);
   });
 
-  test("reads every project ledger in a folder, and a missing folder gives no rows", () => {
+  test("reads every project ledger in a folder, and a missing folder gives no rows", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ledger-items-"));
     mkdirSync(join(dir, "fulcra"));
     writeFileSync(join(dir, "fulcra", "OPEN-ITEMS.md"), table);
     mkdirSync(join(dir, "empty"));
-    expect(readOpenLedgerRows(dir).map((row) => `${row.project}:${row.id}`)).toEqual([
+    const pending = readOpenLedgerRows(dir);
+    // FU-77: the read is async, so the caller gets control back before any ledger file is read.
+    expect(pending).toBeInstanceOf(Promise);
+    expect((await pending).map((row) => `${row.project}:${row.id}`)).toEqual([
       "fulcra:FU-1",
       "fulcra:FU-4",
     ]);
-    expect(readOpenLedgerRows(join(dir, "nowhere"))).toEqual([]);
+    expect(await readOpenLedgerRows(join(dir, "nowhere"))).toEqual([]);
+    // A ledger above the size limit is skipped without being read.
+    mkdirSync(join(dir, "huge"));
+    writeFileSync(join(dir, "huge", "OPEN-ITEMS.md"), `${table}${"x".repeat(600 * 1024)}`);
+    expect((await readOpenLedgerRows(dir)).some((row) => row.project === "huge")).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
 });
