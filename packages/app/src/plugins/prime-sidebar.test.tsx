@@ -1134,3 +1134,44 @@ it("shows another computer's lead status from that computer's chat list when the
   // The same row takes "+" new work (FU-57).
   expect(screen.getByTestId("sidebar-remote-lead-book-g1-new-work")).toBeTruthy();
 });
+
+// Fulcra 0.2.17 (FU-68): a chat with a pending permission prompt says so in the sidebar.
+it("a chat-list lead with a pending permission prompt shows 'Waiting for permission'", async () => {
+  f.hosts = HOSTS;
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.chats = {
+    book: {
+      "chat-lead": {
+        id: "chat-lead",
+        title: "Lead of AI gag games",
+        status: "running",
+        requiresAttention: true,
+        attentionReason: "permission",
+        labels: { "fulcra.reports-to": "role:main-assistant" },
+      },
+    },
+  };
+  mount();
+  const row = await screen.findByTestId("sidebar-chat-lead-book-chat-lead");
+  expect(row.textContent).toContain("Lead · Waiting for permission · last known · MacBook Pro");
+});
+
+it("a seated lead on another computer with a pending permission prompt shows it, with no fleet node", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = { ...bookReads(), fleet: { nodes: [] } };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.chats = {
+    book: {
+      [GAG.sessionId]: {
+        id: GAG.sessionId,
+        title: GAG.title,
+        status: "idle",
+        requiresAttention: true,
+        attentionReason: "permission",
+      },
+    },
+  };
+  mount();
+  const row = await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(row.textContent).toContain("Waiting for permission · last known");
+});
