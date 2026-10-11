@@ -8,6 +8,7 @@ export interface Account {
   priority: number;
   auth: "ok" | "expired" | "signing-in";
   limitedUntil: string | null;
+  limitKind?: string | null;
   limitNote: string | null;
   createdAt: string;
   lastUsedAt: string | null;
@@ -62,6 +63,17 @@ export function rotate(
   o?: { resetAt?: string | null; note?: string | null; stopId?: string | null; reassign?: boolean },
   now?: number,
 ): Promise<any>;
+export function markAccountLimited(
+  root: string,
+  accountId: string,
+  o?: { resetAt?: string | null; kind?: string | null; note?: string | null },
+  now?: number,
+): Promise<{
+  id: string;
+  name: string;
+  limitedUntil: string | null;
+  limitKind: string | null;
+} | null>;
 export function rotationFor(root: string, stopId: string): any;
 export function publicView(s: AccountState, now?: number): any;
 export function accountOf(

@@ -73,3 +73,25 @@ describe("temporary network failures", () => {
     ).toBeNull();
   });
 });
+
+describe("limit kind", () => {
+  it("names the session, weekly and other limits in a Claude limit line", () => {
+    const kind = (line: string) => classifyEndingAssistantMessage(line, NOW)?.limitKind;
+    expect(kind("You've hit your session limit · resets 12:50am (Australia/Brisbane)")).toBe(
+      "session",
+    );
+    expect(kind("You've hit your weekly limit · resets Oct 13 at 8am (Australia/Brisbane)")).toBe(
+      "weekly",
+    );
+    expect(kind("You've hit your Opus limit · resets 3pm (Australia/Brisbane)")).toBe("opus");
+    expect(kind("Claude AI usage limit reached|1791030000")).toBe("usage");
+  });
+
+  it("names the kind in a failed turn's text, and falls back to usage", () => {
+    expect(
+      classifyFailedTurn("You've hit your weekly limit · resets 3pm (Europe/London)", NOW)
+        ?.limitKind,
+    ).toBe("weekly");
+    expect(classifyFailedTurn("429 Too Many Requests", NOW)?.limitKind).toBe("usage");
+  });
+});
