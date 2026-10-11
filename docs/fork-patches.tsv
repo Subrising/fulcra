@@ -574,7 +574,7 @@ core-fixes	A	121	0	packages/cli/src/commands/agent/adopt.ts
 core-fixes	A	54	0	packages/cli/src/commands/agent/archive.test.ts
 core-fixes	M	25	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	A	75	0	packages/cli/src/commands/agent/mcp-options.test.ts
-core-fixes	A	78	0	packages/cli/src/commands/agent/mcp-options.ts
+core-fixes	A	83	0	packages/cli/src/commands/agent/mcp-options.ts
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	A	127	0	packages/cli/src/commands/ask.test.ts
 core-fixes	A	181	0	packages/cli/src/commands/ask.ts
