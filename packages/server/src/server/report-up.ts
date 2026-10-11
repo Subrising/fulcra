@@ -62,7 +62,7 @@ function isNoticeMessage(item: { text?: unknown; clientMessageId?: unknown }): b
   return id.startsWith(FINISH_NOTIFICATION_MESSAGE_PREFIX) || isSystemInjectedEnvelope(text);
 }
 
-function titleOf(agent: LineAgent): string {
+export function titleOf(agent: LineAgent): string {
   const config = agent.config as { title?: unknown } | null | undefined;
   const live = typeof config?.title === "string" ? config.title.trim() : "";
   return agent.title?.trim() || live || agent.id.slice(0, 8);
@@ -78,6 +78,26 @@ export function formatReportUpNotice(input: {
     text.length > REPORT_UP_SNIPPET_CHARS ? `${text.slice(0, REPORT_UP_SNIPPET_CHARS)}…` : text;
   const verb = input.failed ? "ended a turn with an error" : "finished a turn";
   return `Worker ${titleOf(input.worker)} (${input.worker.id}) ${verb}: ${snippet || "(no message)"}`;
+}
+
+/** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
+export async function leadChatOf(
+  store: LineStore,
+  worker: LineAgent,
+  localServerId: string | null,
+): Promise<{ id: string } | { skip: string }> {
+  const ref = reportsTo(worker);
+  if (!ref || ref === REPORTS_TO_OWNER) return { skip: "no lead chat" };
+  let leadId = ref;
+  if (ref.startsWith(ROLE_REF_PREFIX)) {
+    const role = await resolveRoleTarget(store, ref);
+    if (!role?.ok) return { skip: "role has no chat" };
+    leadId = role.agentId;
+  }
+  const [id, server] = leadId.split("@", 2);
+  if (server !== undefined && server !== localServerId) return { skip: "lead on another computer" };
+  if (!id || id === worker.id) return { skip: "no lead chat" };
+  return { id };
 }
 
 export class ReportUpService {
@@ -141,20 +161,8 @@ export class ReportUpService {
   }
 
   /** The lead chat on this computer, or null with the reason. */
-  private async leadOf(worker: LineAgent): Promise<{ id: string } | { skip: string }> {
-    const ref = reportsTo(worker);
-    if (!ref || ref === REPORTS_TO_OWNER) return { skip: "no lead chat" };
-    let leadId = ref;
-    if (ref.startsWith(ROLE_REF_PREFIX)) {
-      const role = await resolveRoleTarget(this.store, ref);
-      if (!role?.ok) return { skip: "role has no chat" };
-      leadId = role.agentId;
-    }
-    const [id, server] = leadId.split("@", 2);
-    if (server !== undefined && server !== this.deps.localServerId)
-      return { skip: "lead on another computer" };
-    if (!id || id === worker.id) return { skip: "no lead chat" };
-    return { id };
+  private leadOf(worker: LineAgent): Promise<{ id: string } | { skip: string }> {
+    return leadChatOf(this.store, worker, this.deps.localServerId);
   }
 
   private async report(workerId: string, failed: boolean): Promise<void> {
