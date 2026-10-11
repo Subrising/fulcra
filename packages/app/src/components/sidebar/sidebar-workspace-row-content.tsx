@@ -493,6 +493,9 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: theme.spacing[2],
+    // The 48 px touch kebab hangs below this line into the meta line. Native hit testing checks
+    // later siblings first and zIndex only orders siblings, so this line must sit above them.
+    zIndex: 1,
   },
   shortcutBadgeOverlay: {
     position: "absolute",
