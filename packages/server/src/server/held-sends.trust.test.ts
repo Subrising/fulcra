@@ -101,13 +101,18 @@ async function fixture() {
     await vi.waitFor(() => expect(heldSendsFor(manager, logger).pending(target.id)).toBe(0));
   };
   // A plugin's provenance token for a steer of this message (a legacy plugin: no payload digest to compute).
-  const sendWithProvenance = async (text: string) => {
+  const sendWithProvenance = async (text: string, messageId?: string) => {
     await session.handleMessage({
       type: "send_agent_message_request",
       requestId: randomUUID(),
       agentId: target.id,
       text,
-      inputProvenance: issue!({ agentId: target.id, kind: "prompt", messageId: null }),
+      ...(messageId ? { messageId } : {}),
+      inputProvenance: issue!({
+        agentId: target.id,
+        kind: "prompt",
+        messageId: messageId ?? null,
+      }),
     });
   };
   const pending = () => heldSendsFor(manager, logger).pending(target.id);
@@ -190,6 +195,26 @@ test("a message that carries plugin provenance is refused while the chat is busy
   const afterRefusal = f.sourcesFor().length;
   await f.endTurnIn((run) => f.host.daemon(run));
   expect(f.sourcesFor().length).toBe(afterRefusal);
+});
+
+// 0.2.14 review: a refusal with a message ID left a pending receipt, so the retry was refused as "outcome unknown".
+test("a refused plugin message with a message ID can be sent again with the same ID once the chat is idle", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  await f.sendWithProvenance("from a plugin", "plugin-msg-1");
+  const refused = f.messages.filter(
+    (m) => m.type === "send_agent_message_response" && m.payload.accepted === false,
+  );
+  expect(refused).toHaveLength(1);
+  expect(JSON.stringify(refused)).not.toContain("agent_request_outcome_unknown");
+
+  f.busy.delete(f.target.id);
+  const before = f.sourcesFor().length;
+  await f.sendWithProvenance("from a plugin", "plugin-msg-1");
+  const last = f.messages.findLast((m) => m.type === "send_agent_message_response");
+  expect(last?.type === "send_agent_message_response" && last.payload.accepted).toBe(true);
+  expect(JSON.stringify(f.messages)).not.toContain("agent_request_outcome_unknown");
+  expect(f.sourcesFor().length).toBeGreaterThan(before);
 });
 
 test("an owner's message without provenance is still held while the chat is busy", async () => {
