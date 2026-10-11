@@ -687,10 +687,17 @@ export interface AgentCreateSessionOptions {
    */
   persistSession?: boolean;
   /**
+<<<<<<< HEAD
    * A context rotation needs the fresh native session's id before its first turn. Providers that
    * allocate ids lazily (Claude) start the conversation under this id; others ignore it.
    */
   freshSessionId?: string;
+=======
+   * Model ids added by provider configuration (`models` / `additionalModels`).
+   * Providers that validate against runtime-advertised models must accept these.
+   */
+  configuredModelIds?: readonly string[];
+>>>>>>> refs/tags/v0.11.2
 }
 
 /** What a resumed session is for: driving the agent, or reading what it already did. */
@@ -700,6 +707,8 @@ export type AgentResumePurpose = "interactive" | "history";
 export interface AgentResumeSessionOptions {
   /** Defaults to interactive. History loading may be read-only for archived native sessions. */
   purpose?: AgentResumePurpose;
+  /** See AgentCreateSessionOptions.configuredModelIds. */
+  configuredModelIds?: readonly string[];
 }
 
 /**
