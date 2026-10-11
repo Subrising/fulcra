@@ -1,3 +1,5 @@
+import { packagedInspectorFlags } from "@getpaseo/server/inspector-flavour";
+
 const PASEO_NODE_ENV = "PASEO_NODE_ENV";
 
 export interface NodeEntrypointSpec {
@@ -48,6 +50,7 @@ export function createNodeEntrypointInvocation(
       command: input.execPath,
       args: [
         "--disable-warning=DEP0040",
+        ...packagedInspectorFlags(),
         input.packagedRunnerPath,
         input.argvMode,
         input.entrypoint.entryPath,
