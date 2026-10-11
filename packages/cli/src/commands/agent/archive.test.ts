@@ -19,15 +19,29 @@ describe("findAgentToArchive", () => {
     expect(client.fetchAgents).not.toHaveBeenCalled();
   });
 
-  it("falls back to the list for a name, and when the lookup fails", async () => {
+  it("falls back to the list for a name the daemon does not know", async () => {
     const named = agent("abc-1", "Review chat");
     const client = {
       fetchAgent: vi.fn(async () => null),
       fetchAgents: vi.fn(async () => entries(named, agent("xyz-2", "Other"))),
     };
     await expect(findAgentToArchive(client as never, "Review chat")).resolves.toBe(named);
-    const failing = { ...client, fetchAgent: vi.fn(async () => Promise.reject(new Error("down"))) };
-    await expect(findAgentToArchive(failing as never, "abc")).resolves.toBe(named);
+  });
+
+  // 0.2.13 review: the daemon said the ID is ambiguous, and the CLI then archived the one match on the first page.
+  it("does not archive when the daemon says the ID is ambiguous, or the lookup fails", async () => {
+    const page = entries(agent("ab34-new", "Newer"));
+    for (const message of [
+      'Agent identifier "ab" is ambiguous (ab12-old, ab34-new)',
+      "Connection lost",
+    ]) {
+      const client = {
+        fetchAgent: vi.fn(async () => Promise.reject(new Error(message))),
+        fetchAgents: vi.fn(async () => page),
+      };
+      await expect(findAgentToArchive(client as never, "ab")).rejects.toThrow(message);
+      expect(client.fetchAgents).not.toHaveBeenCalled();
+    }
   });
 
   it("returns null for an unknown chat", async () => {
