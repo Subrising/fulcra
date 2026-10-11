@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listAccounts, switchAccountSession } from "./account.js";
+import { listAccounts, statusReason, switchAccountSession } from "./account.js";
 
 function port(output: unknown) {
   const calls: Array<{ method: string; input: unknown }> = [];
@@ -49,5 +49,29 @@ describe("account commands", () => {
     await expect(switchAccountSession(p.client, "resolved", "Personal")).rejects.toThrow(
       "Ask the owner",
     );
+  });
+  // FU-112: `account ls` says why an account is down.
+  it("keeps the reason of a revoked account and shows it in the REASON column", async () => {
+    const reason = "Failed to authenticate. API Error: 401 OAuth token has been revoked.";
+    const p = port({
+      accounts: [
+        { id: "a", name: "Tommi", provider: "claude", status: { state: "revoked", reason } },
+        {
+          id: "b",
+          name: "Work",
+          provider: "claude",
+          status: { state: "limited", until: "2026-10-13T00:00:00.000Z" },
+        },
+        { id: "c", name: "Personal", provider: "claude", status: { state: "ok" } },
+      ],
+    });
+    const rows = await listAccounts(p.client);
+    expect(rows[0].status).toEqual({ state: "revoked", reason });
+    expect(rows.map((row) => statusReason(row.status))).toEqual([
+      reason,
+      "limit until 2026-10-13T00:00:00.000Z",
+      "",
+    ]);
+    expect(statusReason({ state: "revoked" })).toBe("token revoked or invalid");
   });
 });

@@ -29,6 +29,7 @@ import {
   sessionAccounts,
   readUsage,
 } from "./accounts.mjs";
+import { markAccountRevoked, accountStatus } from "./accounts.mjs";
 
 const T0 = Date.parse("2026-10-01T00:00:00Z");
 const scratch = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-accounts-")));
@@ -975,4 +976,52 @@ test("a launch that names an account is pinned to it; a limited or unknown name 
   await assert.rejects(launch(S(3), { FULCRA_ACCOUNT_REQUEST: "Nobody" }));
   await rotate(root, S(2), "claude", { resetAt: new Date(T0 + 3600000).toISOString() }, T0 + 10);
   await assert.rejects(launch(S(4), { FULCRA_ACCOUNT_REQUEST: "Work" }));
+});
+
+// FU-112: a revoked or invalid token takes the account out of the pool, with a reason and no reset time.
+test("a revoked account is marked once, shows its reason, is skipped by choose, and comes back when it is signed in again", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  const b = await addAccount(root, { provider: "claude", name: "Tommi" }, T0 + 1);
+  const first = await markAccountRevoked(root, a.id, { note: "OAuth token has been revoked" }, T0);
+  const second = await markAccountRevoked(root, a.id, { note: "again" }, T0 + 5);
+  assert.deepEqual([first.fresh, second.fresh], [true, false], "only the first mark is news");
+  const state = readAccounts(root);
+  const stored = state.accounts.find((x) => x.id === a.id);
+  assert.equal(stored.revoked.reason, "OAuth token has been revoked", "the first reason is kept");
+  assert.deepEqual(accountStatus(stored, T0 + 10), {
+    state: "revoked",
+    reason: "OAuth token has been revoked",
+  });
+  assert.equal(choose(state, "claude", T0 + 10).id, b.id);
+  assert.equal(choose(state, "claude", T0 + 10, [b.id]), null);
+  // Not a limit: nothing to wait for, so the status never expires by itself.
+  assert.equal(accountStatus(stored, T0 + 30 * 86400000).state, "revoked");
+  await setAccount(root, a.id, { auth: "ok" });
+  assert.equal(
+    accountStatus(
+      readAccounts(root).accounts.find((x) => x.id === a.id),
+      T0,
+    ).state,
+    "ok",
+  );
+});
+
+test("a revoked token moves a session at once even when moving on a limit is off", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  const b = await addAccount(root, { provider: "claude", name: "Tommi" }, T0 + 1);
+  await assign(root, S(7), "claude", T0);
+  const r = await rotate(
+    root,
+    S(7),
+    "claude",
+    { kind: "revoked", note: "OAuth token has been revoked" },
+    T0 + 5,
+  );
+  assert.equal(r.to, b.id);
+  assert.equal(r.reason, "revoked");
+  assert.equal(r.newlyRevoked, true);
+  assert.equal(accountOf(readAccounts(root), S(7)).id, b.id);
+  assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).limitedUntil, null);
 });

@@ -62,9 +62,21 @@ export function rotate(
   root: string,
   sessionId: string,
   provider: string,
-  o?: { resetAt?: string | null; note?: string | null; stopId?: string | null; reassign?: boolean },
+  o?: {
+    resetAt?: string | null;
+    note?: string | null;
+    stopId?: string | null;
+    reassign?: boolean;
+    kind?: string | null;
+  },
   now?: number,
 ): Promise<any>;
+export function markAccountRevoked(
+  root: string,
+  accountId: string,
+  opts?: { note?: string | null },
+  now?: number,
+): Promise<{ id: string; name: string; fresh: boolean } | null>;
 export function markAccountLimited(
   root: string,
   accountId: string,

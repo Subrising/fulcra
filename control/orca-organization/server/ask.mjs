@@ -7,8 +7,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { parseLimitLine } from "./limit-line.mjs";
-import { accountStatus, choose, markAccountLimited, readAccounts, readUsage } from "./accounts.mjs";
+import { parseLimitLine, parseRevokedLine } from "./limit-line.mjs";
+import {
+  accountStatus,
+  choose,
+  markAccountLimited,
+  markAccountRevoked,
+  readAccounts,
+  readUsage,
+} from "./accounts.mjs";
 
 export class AskError extends Error {
   constructor(message, code = "ASK_FAILED") {
@@ -160,6 +167,23 @@ export function killProcessTree(child, { platform = process.platform, run = spaw
   }
 }
 
+const describeTried = (t) =>
+  t.kind === "revoked" ? `${t.name}: token revoked` : `${t.name}: ${t.kind} until ${t.until}`;
+// The error when no account is left to try: all revoked, or at a limit, or a mix, each said plainly (FU-112).
+function noAccountError(all, who = "Every usable Claude account") {
+  if (!all.length) return new AskError("No usable Claude account in the pool", "NO_ACCOUNT");
+  const detail = all.map(describeTried).join("; ");
+  if (all.every((t) => t.kind === "revoked"))
+    return new AskError(
+      `${who} has a revoked or invalid token (${detail}); sign the account in again`,
+      "ALL_REVOKED",
+    );
+  return new AskError(`${who} is down or at its limit (${detail})`, "ALL_LIMITED");
+}
+// FU-112: a revoked or invalid token: an HTTP 401 from the CLI, or its one-line "Failed to authenticate" text.
+const isRevoked = (result) =>
+  result?.is_error === true &&
+  (result.api_error_status === 401 || parseRevokedLine(String(result.result ?? "")) !== null);
 const isLimit = (result, now) =>
   result?.is_error === true &&
   (result.api_error_status === 429 || parseLimitLine(String(result.result ?? ""), now) !== null);
@@ -225,12 +249,7 @@ export async function askOnce({
           .filter((x) => x.provider === "claude" && accountStatus(x, at).state === "limited")
           .map((x) => ({ name: x.name, kind: x.limitKind ?? "usage", until: x.limitedUntil }));
         const all = [...tried, ...limited.filter((l) => !tried.some((t) => t.name === l.name))];
-        throw new AskError(
-          all.length
-            ? `Every usable Claude account is at its limit (${all.map((t) => `${t.name}: ${t.kind} until ${t.until}`).join("; ")})`
-            : "No usable Claude account in the pool",
-          all.length ? "ALL_LIMITED" : "NO_ACCOUNT",
-        );
+        throw noAccountError(all);
       }
     }
     let token = null;
@@ -242,6 +261,17 @@ export async function askOnce({
     if (!token)
       throw new AskError(`The credential for "${picked.name}" is not available`, "NO_CREDENTIAL");
     const result = await spawnClaude({ token, model, prompt, schema, timeoutMs });
+    if (isRevoked(result)) {
+      const line = String(result.result ?? "");
+      await markAccountRevoked(root, picked.id, { note: line }, at);
+      tried.push({ id: picked.id, name: picked.name, kind: "revoked", until: "re-sign-in" });
+      if (account)
+        throw new AskError(
+          `Account "${picked.name}" has a revoked or invalid token; sign it in again`,
+          "ACCOUNT_REVOKED",
+        );
+      continue;
+    }
     if (isLimit(result, at)) {
       const line = String(result.result ?? "");
       const parsed = parseLimitLine(line, at);
@@ -289,8 +319,5 @@ export async function askOnce({
       costUsd: typeof result.total_cost_usd === "number" ? result.total_cost_usd : null,
     };
   }
-  throw new AskError(
-    `Both accounts tried are at their limit (${tried.map((t) => `${t.name}: ${t.kind} until ${t.until}`).join("; ")})`,
-    "ALL_LIMITED",
-  );
+  throw noAccountError(tried, "Both accounts tried");
 }

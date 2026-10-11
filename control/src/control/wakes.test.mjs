@@ -464,3 +464,45 @@ test("operator surfaces: wakes-status and wakes-heartbeat-set are operator-only 
   ])
     assert.ok(src.includes(s), s);
 });
+
+// FU-112: an account whose token was revoked is reported once per holder: the session's lead and the main assistant.
+test("accountDown tells each holder once per account, and the notice names the account and the way out", () => {
+  const LEAD = T(60),
+    MAIN = T(61),
+    SESSION = T(62);
+  const queued = [];
+  const fake = {
+    has: () => true,
+    owned: () => [{ holder: LEAD, seat: "seat-a" }],
+    db: {
+      prepare: (sql) => ({
+        all: () => (/manager_workers/.test(sql) ? [] : [{ session: MAIN }, { session: LEAD }]),
+      }),
+    },
+    enqueue(r, kind, identity, payload) {
+      const key = JSON.stringify([r.holder, ...identity]);
+      if (queued.some((q) => q.key === key)) return false;
+      queued.push({ key, holder: r.holder, session: r.session, kind, payload });
+      return true;
+    },
+    pump: () => {},
+  };
+  const r = { from: "acct-1", fromName: "Tommi", toName: "Work" };
+  assert.equal(
+    Wakes.prototype.accountDown.call(fake, SESSION, r),
+    2,
+    "the lead and the main assistant",
+  );
+  assert.equal(
+    Wakes.prototype.accountDown.call(fake, T(63), r),
+    0,
+    "a second session: no new notice",
+  );
+  assert.deepEqual(queued.map((q) => q.holder).sort(), [LEAD, MAIN].sort());
+  assert.ok(queued.every((q) => q.kind === "account-down" && q.session === null));
+  const text = Wakes.prototype.render.call({}, [
+    { kind: "account-down", session: null, payload: JSON.stringify(queued[0].payload) },
+  ]);
+  assert.match(text, /\[account down\] The token of account "Tommi" was revoked or is invalid/);
+  assert.match(text, /must sign the account in again/);
+});

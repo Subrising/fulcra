@@ -75,6 +75,8 @@ export function statusText(s: AccountsView["accounts"][number]["status"]) {
       return `Limited until ${when(s.until)}`;
     case "auth-expired":
       return "Signed out: add its token again";
+    case "revoked":
+      return "Token revoked: add its token again";
     case "signing-in":
       return "Signing in…";
     default:
@@ -277,14 +279,15 @@ export function AccountsSurface({ theme, layout, host }: Props) {
                       Remove
                     </WorkButton>
                   </View>
-                  {provider === "claude" && a.status.state === "auth-expired" && (
-                    <TokenField
-                      theme={theme}
-                      label={`New token for ${a.name}`}
-                      busy={busy}
-                      onSubmit={(token) => act(() => update({ id: a.id, token }))}
-                    />
-                  )}
+                  {provider === "claude" &&
+                    (a.status.state === "auth-expired" || a.status.state === "revoked") && (
+                      <TokenField
+                        theme={theme}
+                        label={`New token for ${a.name}`}
+                        busy={busy}
+                        onSubmit={(token) => act(() => update({ id: a.id, token }))}
+                      />
+                    )}
                 </View>
               ))}
               {list.length > 0 && (
