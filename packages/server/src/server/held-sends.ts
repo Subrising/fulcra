@@ -21,6 +21,24 @@ export class HeldQueueFullError extends Error {
   }
 }
 
+/** A plugin message the busy chat cannot take as a steer. Nothing was sent, so its receipt is cleared like a full queue. */
+export class ProvenanceRefusedError extends Error {
+  readonly code = "PROVENANCE_REFUSED";
+  constructor(options?: { cause?: unknown }) {
+    super(
+      "This message came from a plugin and the chat is busy. It was not queued, because a queued message loses the plugin as its source. Send it again when the chat is idle.",
+      options,
+    );
+    this.name = "ProvenanceRefusedError";
+  }
+}
+
+/** Refusals that are known to have sent nothing. A retry with the same message ID is tried again. */
+export const SENT_NOTHING_CODES: ReadonlySet<string> = new Set([
+  "HELD_QUEUE_FULL",
+  "PROVENANCE_REFUSED",
+]);
+
 const isRequeue = (error: unknown) =>
   (error as { code?: unknown } | null)?.code === "STEER_UNAVAILABLE";
 

@@ -369,6 +369,8 @@ export interface OtherHostLead {
   hostLabel: string;
   seat: Seat;
   project: string;
+  /** False when the projects read failed: `project` is then a placeholder, never to be remembered. */
+  projectKnown: boolean;
   node: FleetNode | undefined;
 }
 
@@ -417,23 +419,40 @@ function useOtherHostLeads(homeServerId: string): {
     (id: string) => hosts.find((host) => host.serverId === id)?.label ?? "another computer",
     [hosts],
   );
-  const results = useMemo(
-    () => new Map((key ? (query.data ?? []) : []).map((read) => [read.serverId, read.leads])),
-    [key, query.data],
-  );
+  // Only reads for the computers in the current key count. After a computer goes offline, the list query keeps the
+  // previous key's data for a moment; using it would show a computer's leads twice for one read.
+  const results = useMemo(() => {
+    const current = new Set(key ? key.split(",") : []);
+    return new Map(
+      (key ? (query.data ?? []) : [])
+        .filter((read) => current.has(read.serverId))
+        .map((read) => [read.serverId, read.leads]),
+    );
+  }, [key, query.data]);
+  const memoryRef = useRef(memory);
+  memoryRef.current = memory;
   // What each computer answered is kept, so it can be shown when the computer is away.
   useEffect(() => {
     for (const [id, leads] of results) {
       if (leads === null) continue;
-      remember(
-        id,
-        leads.map((lead) => ({
+      // A failed projects read names no project. The name remembered for the same seat is kept; if there is none,
+      // nothing is saved this time, so the placeholder is never remembered. The next read tries again.
+      const earlier = new Map((memoryRef.current[id] ?? []).map((lead) => [lead.seat, lead]));
+      const entries: RememberedLead[] = [];
+      for (const lead of leads) {
+        const before = earlier.get(lead.seat.seat);
+        const project = lead.projectKnown ? lead.project : before?.project;
+        if (project === undefined) break;
+        entries.push({
           seat: lead.seat.seat,
           sessionId: lead.seat.sessionId ?? "",
-          project: lead.project,
-          title: chatName(lead.node, `Lead · ${lead.project}`),
-        })),
-      );
+          project,
+          title: lead.projectKnown
+            ? chatName(lead.node, `Lead · ${project}`)
+            : (before?.title ?? chatName(lead.node, `Lead · ${project}`)),
+        });
+      }
+      if (entries.length === leads.length) remember(id, entries);
     }
   }, [results, remember]);
   const live = useMemo(
@@ -444,6 +463,7 @@ function useOtherHostLeads(homeServerId: string): {
             serverId: lead.serverId,
             seat: lead.seat,
             project: lead.project,
+            projectKnown: lead.projectKnown,
             node: lead.node,
             hostLabel: labelOf(id),
           }),
@@ -531,6 +551,7 @@ async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hos
         serverId,
         seat,
         project: names.get(seat.projectId!) ?? "project",
+        projectKnown: names.has(seat.projectId!),
         node: seat.sessionId ? nodes.get(seat.sessionId) : undefined,
       }));
   } catch {
