@@ -4,7 +4,7 @@ import {
   REPORTS_TO_LABEL,
   SEAT_LABEL,
 } from "@getpaseo/protocol/agent-labels";
-import { chatStatusWord } from "@getpaseo/protocol/chat-status";
+import { chatStatusWord, effectiveChatStatus } from "@getpaseo/protocol/chat-status";
 
 // Fulcra 0.2.14: leads the sidebar finds in the chat list. The role directory lists only chats with a seat, so a
 // chat that reports to the main assistant without a seat (a lead on another computer) never showed.
@@ -13,6 +13,8 @@ interface ChatRecord {
   id: string;
   title?: string | null;
   status?: string;
+  requiresAttention?: boolean | null;
+  attentionReason?: string | null;
   archivedAt?: unknown;
   labels?: Record<string, string> | null;
 }
@@ -41,7 +43,7 @@ export function chatLeads(sessions: Sessions, shownIds: ReadonlySet<string>): Ch
         serverId,
         agentId: agent.id,
         title: agent.title?.trim() || "Lead",
-        status: agent.status,
+        status: effectiveChatStatus(agent),
       });
     }
   }

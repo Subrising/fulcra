@@ -3,13 +3,14 @@ import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-lab
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
-import { REPORT_UP_SNIPPET_CHARS, ReportUpService } from "./report-up.js";
+import { PERMISSION_COMMAND_CHARS, REPORT_UP_SNIPPET_CHARS, ReportUpService } from "./report-up.js";
 
 interface FakeChat {
   id: string;
   title: string;
   labels: Record<string, string>;
   lastMessage?: string;
+  cwd?: string;
 }
 
 const LEAD = "11111111-1111-4111-8111-111111111111";
@@ -251,5 +252,55 @@ describe("report-up and usage limits", () => {
     await f.settle();
     expect(f.delivered).toHaveLength(1);
     expect(f.delivered[0]!.prompt).toContain("usage limit until");
+  });
+});
+
+// Fulcra 0.2.17 (FU-68): a new pending permission prompt is told to the chat's lead once.
+describe("report-up and permission prompts", () => {
+  const ask = (id: string, command: string) => ({
+    type: "permission_requested",
+    provider: "claude",
+    request: { id, name: "Bash", input: { command } },
+  });
+
+  test("a new prompt sends the lead one notice with the chat, tool, command and folder", async () => {
+    const chat: FakeChat = { ...worker(), cwd: "/work/game" };
+    const f = fixture([lead, chat]);
+    f.stream(WORKER, ask("req-1", "git checkout -- game tests"));
+    f.stream(WORKER, ask("req-1", "git checkout -- game tests"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    const prompt = f.delivered[0]!.prompt;
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(prompt).toContain(`Worker Builder (${WORKER}) is waiting for permission.`);
+    expect(prompt).toContain("Tool: Bash");
+    expect(prompt).toContain("Command: git checkout -- game tests");
+    expect(prompt).toContain("Folder: /work/game");
+  });
+
+  test("the command is cut at 200 characters, and each new prompt is told", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("req-1", `echo ${"x".repeat(400)}`));
+    await f.settle();
+    const first = f.delivered[0]!.prompt.split("\n").find((l) => l.startsWith("Command: "))!;
+    expect(first.length).toBeLessThanOrEqual("Command: ".length + PERMISSION_COMMAND_CHARS + 1);
+    f.stream(WORKER, { type: "permission_resolved", provider: "claude", requestId: "req-1" });
+    f.stream(WORKER, ask("req-2", "ls"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+  });
+
+  test("a chat with no lead, or with the owner as lead, tells nobody", async () => {
+    const f = fixture([lead, worker({ [REPORTS_TO_LABEL]: REPORTS_TO_OWNER })]);
+    f.stream(WORKER, ask("req-1", "ls"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
+  });
+
+  test("it stays quiet when report-up is turned off", async () => {
+    const f = fixture([lead, worker()], { enabled: false });
+    f.stream(WORKER, ask("req-1", "ls"));
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
   });
 });
