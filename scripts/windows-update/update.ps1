@@ -15,14 +15,16 @@ param(
   [switch]$BuildOnly,
   [switch]$Rollback,
   [string]$Repo = 'https://github.com/Subrising/fulcra.git',
-  [int]$HealthSeconds = 150
+  [int]$HealthSeconds = 150,
+  [string]$BuildsRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 # The PC user's own folder. Set by Windows for every user, so no user name is in the script.
 $Home_ = $env:USERPROFILE
 if (-not $Home_) { throw 'USERPROFILE is not set' }
 $Root = Join-Path $Home_ 'fulcra-update'
-$Builds = Join-Path $Home_ 'fulcra-builds'
+# FU-64: builds and caches go to E:, not C:. -BuildsRoot wins, then the user setting FULCRA_BUILDS_ROOT, then E:.
+$Builds = if ($BuildsRoot) { $BuildsRoot } elseif ($env:FULCRA_BUILDS_ROOT) { $env:FULCRA_BUILDS_ROOT } else { 'E:\fulcra-builds' }
 $Current = Join-Path $Home_ 'fulcra-current'
 $StateFile = Join-Path $Root 'state.json'
 $Lock = Join-Path $Root 'lock'
@@ -138,7 +140,9 @@ function StopApp([string]$build) {
   if (@(DaemonProcesses).Count -gt 0) { Fail 'daemon processes still run after a graceful stop' }
 }
 function StartApp {
-  Start-Process -FilePath (Join-Path $Current 'Fulcra.exe') -WorkingDirectory $Current
+  # explorer.exe starts the app outside this task's job object. A direct Start-Process child is ended when the
+  # scheduled task ends, and the window closes while the daemon stays up.
+  Start-Process -FilePath explorer.exe -ArgumentList (Join-Path $Current 'Fulcra.exe')
 }
 
 # --- Build ---
@@ -148,6 +152,13 @@ function Build([string]$ref) {
   $safe = ($ref -replace '[^A-Za-z0-9._-]', '_')
   $dir = Join-Path $Builds "$stamp-$safe"
   $env:Path = "$Node;" + $env:Path
+  # Caches live beside the builds, so a build on another drive does not fill C:.
+  $cache = Join-Path (Split-Path $Builds -Parent) 'fulcra-cache'
+  foreach ($n in 'npm', 'electron', 'electron-builder', 'tmp') { New-Item -ItemType Directory -Force -Path (Join-Path $cache $n) | Out-Null }
+  $env:npm_config_cache = Join-Path $cache 'npm'
+  $env:ELECTRON_CACHE = Join-Path $cache 'electron'
+  $env:ELECTRON_BUILDER_CACHE = Join-Path $cache 'electron-builder'
+  $env:TEMP = Join-Path $cache 'tmp'; $env:TMP = $env:TEMP
   Say "clone $ref into $dir"
   git clone --quiet --depth 1 --branch $ref $Repo $dir
   if ($LASTEXITCODE -ne 0) { Fail 'git clone failed' }
