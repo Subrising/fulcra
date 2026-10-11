@@ -283,6 +283,8 @@ export const MutableDaemonConfigSchema = z
     enableTerminalAgentHooks: z.boolean().default(false),
     // FULCRA(orchestration): a worker's finished turn is sent to its lead as one short notice. Unset means on.
     reportUpOnTurnEnd: z.boolean().optional(),
+    // FULCRA(orchestration): after a restart, open sessions show as open and cut-off turns continue. Unset means on.
+    reviveOnRestart: z.boolean().optional(),
     autoResumeOnLimit: z.boolean().default(true),
     appendSystemPrompt: z.string().default(""),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
@@ -308,6 +310,7 @@ export const MutableDaemonConfigPatchSchema = z
     notificationMode: z.enum(["all", "primes", "off"]).optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
     reportUpOnTurnEnd: z.boolean().optional(),
+    reviveOnRestart: z.boolean().optional(),
     autoResumeOnLimit: z.boolean().optional(),
     appendSystemPrompt: z.string().optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),

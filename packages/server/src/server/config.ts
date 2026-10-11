@@ -623,6 +623,7 @@ export function resolveConfigFromPersisted(
     notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
     reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
+    reviveOnRestart: persistedSettings.reviveOnRestart,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
     terminalProfiles,
@@ -675,10 +676,19 @@ export function resolveConfigFromPersisted(
 }
 
 /** Settings read straight from the persisted file, with their defaults. */
+// FULCRA(orchestration): kept apart so the pass-through settings stay under the complexity limit. Unset means on.
+function orchestrationSettings(persisted: PersistedConfig) {
+  const daemon = persisted.daemon;
+  return {
+    reportUpOnTurnEnd: daemon?.reportUpOnTurnEnd ?? true,
+    reviveOnRestart: daemon?.reviveOnRestart ?? true,
+  };
+}
+
 function resolvePersistedPassThroughSettings(paseoHome: string, persisted: PersistedConfig) {
   return {
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
-    reportUpOnTurnEnd: persisted.daemon?.reportUpOnTurnEnd ?? true,
+    ...orchestrationSettings(persisted),
     autoResumeOnLimit:
       readLimitResumeSetting(paseoHome) ?? persisted.daemon?.autoResumeOnLimit ?? true,
     notificationMode: persisted.daemon?.notificationMode ?? ("primes" as const),
