@@ -169,6 +169,8 @@ const f = vi.hoisted(() => ({
   },
 }));
 vi.mock("expo-router", () => ({ router: { push: f.push }, usePathname: () => "/" }));
+// The lead rows open chats through this helper, whose import chain needs the full expo-router.
+vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: vi.fn() }));
 vi.mock("./host-navigation", () => ({
   usePluginHostNavigation: () => ({ openAgentOnHost: () => "requested" }),
 }));
