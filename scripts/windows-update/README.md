@@ -42,3 +42,12 @@ Exit codes: 0 done, 2 unhealthy and rolled back, 3 refused (chats would stop), o
 - Run the update from a scheduled task or a desktop PowerShell. The task runs as the signed-in user.
 - First live run (10 Oct 2026): the build was fine. Two script faults showed first: the variable `$state` hid the path variable `$State`, and native `paseo` error text stopped the script. Both are fixed in this copy.
 - The first health check ran with the daemon already stopped, so its baseline (server ID, chat count) was empty. Normal runs record both before the stop.
+
+## Build on another drive
+`-BuildsRoot E:\fulcra-builds` puts the clone, the build and the caches (npm, electron, electron-builder, temp) on that drive, in `E:\fulcra-cache`. The junction `fulcra-current` can point across drives. Use it when C: is low on space. Without the option the builds go to `fulcra-builds` in the user profile.
+
+## Starting the app
+The script starts the app with `explorer.exe`, so the window is not a child of the scheduled task. In the 13:37 run on 11 Oct the window process had ended by the time the health check passed, with the daemon still up (INFERRED: the task ended it). Starting it with `explorer.exe` from a task kept the window alive. The change inside the script itself was not re-run end to end.
+
+## Storage (FU-64)
+Fulcra files on the PC go to E:, not C:. The user settings `npm_config_cache`, `ELECTRON_CACHE`, `ELECTRON_BUILDER_CACHE`, `FULCRA_BUILDS_ROOT` and `FULCRA_SCRATCH` point at `E:\fulcra-cache` and `E:\fulcra-scratch`. The default build folder is `E:\fulcra-builds` (order: `-BuildsRoot`, then `FULCRA_BUILDS_ROOT`, then E:). Build folders are real folders, never junctions: the ownership check refuses mount points. The rights on `E:\fulcra-builds` must stay owner Administrators with SYSTEM, Administrators and the user at full control and no other principal.
