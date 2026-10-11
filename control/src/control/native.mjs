@@ -370,7 +370,10 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
         cwd,
         () => sessionDefaults(a.provider, a.defaults),
       );
-      const provider = await resolveProviderModel(client, creationModel(a.provider, chosen), cwd);
+      // Only a create that names a parent (a chat asked for this session) is a worker; the owner's own create is not.
+      const provider = await resolveProviderModel(client, creationModel(a.provider, chosen), cwd, {
+        worker: uuidLike(parent),
+      });
       const config = {
         provider,
         modeId: chosen.modeId,

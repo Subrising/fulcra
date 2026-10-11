@@ -1,16 +1,16 @@
 import { sessionDefaults } from "./provider-mode.mjs";
 // Bare portable families follow the installed provider's advertised default.
 // Explicit model selections are preserved so the provider can validate them.
-export async function resolveProviderModel(client, selection, cwd) {
+export async function resolveProviderModel(client, selection, cwd, { worker = false } = {}) {
   if (selection.includes("/")) return selection;
   const inventory = await client.providers.listModels(selection, { cwd });
   if (inventory.provider !== selection || inventory.error || !Array.isArray(inventory.models))
     throw Error(
       `Cannot resolve ${selection} default model: ${inventory.error || "provider inventory unavailable"}`,
     );
-  // Fulcra 0.2.13: a session the controller creates is a worker a chat started. When the host marks one model as its
-  // worker default (metadata.workerDefault, Sonnet 5.5 for Claude), that model is used; else the host's default.
-  // The release is named by the host, never here.
+  // Fulcra 0.2.13: a worker a chat started (a create that names a parent) uses the host's worker default when the host
+  // marks one (metadata.workerDefault, Sonnet 5.5 for Claude); else the host's default. A session the owner creates
+  // with no parent keeps the host's default (0.2.14). The release is named by the host, never here.
   const offered = (model) =>
     model.provider === selection &&
     model.isSelectable !== false &&
@@ -19,7 +19,7 @@ export async function resolveProviderModel(client, selection, cwd) {
   const workers = inventory.models.filter(
     (model) => model.metadata?.workerDefault === true && offered(model),
   );
-  if (workers.length === 1) return `${selection}/${workers[0].id}`;
+  if (worker && workers.length === 1) return `${selection}/${workers[0].id}`;
   const defaults = inventory.models.filter(
     (model) =>
       model.isDefault === true &&
