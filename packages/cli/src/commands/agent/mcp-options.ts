@@ -1,13 +1,17 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { CreateAgentRequestOptions } from "@getpaseo/client/internal/daemon-client";
 import type { CommandError } from "../../output/index.js";
+
+/** The daemon's MCP server map (stdio, http or sse configs). */
+type McpServers = NonNullable<CreateAgentRequestOptions["mcpServers"]>;
 
 // Fulcra 0.2.17 (FU-100b, ledger FU-107): `fulcra run --mcp-config <file> --preapprove <server.tool>`. The MCP servers and the
 // tools that run without a prompt go in the SAME create request, because the daemon accepts a preapproved MCP tool only
 // when its server is in that request. Claude settings files do not allow MCP tools for SDK-supplied servers; this does.
 
 export interface RunToolOptions {
-  mcpServers?: Record<string, Record<string, unknown>>;
+  mcpServers?: McpServers;
   toolPolicy?: { preapproved: Array<{ kind: "mcp"; server: string; tool: string }> };
 }
 
@@ -23,7 +27,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
 /** Reads `{ "mcpServers": { name: {...} } }` (the Claude format) or the bare `{ name: {...} }` map. */
-export function loadMcpConfig(file: string): Record<string, Record<string, unknown>> {
+export function loadMcpConfig(file: string): McpServers {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(resolve(file), "utf8"));
@@ -45,7 +49,8 @@ export function loadMcpConfig(file: string): Record<string, Record<string, unkno
       return fail(`MCP server "${name}" needs type stdio, http or sse`);
     servers[name] = { ...raw, type };
   }
-  return servers;
+  // Each entry has a checked type (stdio, http or sse); the daemon validates the rest of the config.
+  return servers as unknown as McpServers;
 }
 
 /** "server.tool" -> a preapproval. The server is the text before the first dot; the tool is the rest. */
