@@ -29,19 +29,47 @@ const SIZES = [
 type Size = (typeof SIZES)[number];
 type Measured = Awaited<ReturnType<typeof measure>>;
 
-/** Makes the page a touch screen or a mouse desktop, the way browser device emulation does. */
+// The pointer type is set per case, never taken from the runner: a headless CI browser reports no fine pointer, and
+// the app then (rightly) treats the desktop sizes as touch. Pointer and hover media queries answer from
+// `window.__e2ePointer`; every other query goes to the browser.
+function installPointerQueries() {
+  const answer = (query: string, mode: "fine" | "coarse"): boolean | undefined => {
+    const fine = mode === "fine";
+    const known: Record<string, boolean> = {
+      "(hover: hover) and (pointer: fine)": fine,
+      "(pointer: fine)": fine,
+      "(pointer: coarse)": !fine,
+      "(any-pointer: fine)": fine,
+      "(any-pointer: coarse)": !fine,
+      "(hover: hover)": fine,
+      "(hover: none)": !fine,
+    };
+    return known[query.toLowerCase().replace(/\s+/g, " ").trim()];
+  };
+  const real = window.matchMedia.bind(window);
+  window.matchMedia = (query: string) => {
+    const list = real(query);
+    const mode = (window as unknown as { __e2ePointer?: "fine" | "coarse" }).__e2ePointer;
+    const matches = mode ? answer(query, mode) : undefined;
+    if (matches === undefined) return list;
+    return Object.defineProperty(list, "matches", { get: () => matches });
+  };
+}
+
+/** Makes the page a touch screen or a mouse desktop for the next navigation. */
 async function setSize(page: Page, size: Size) {
   await page.setViewportSize({ width: size.width, height: size.height });
+  // Init scripts run in the order they were added, so the last case's mode wins.
+  await page.addInitScript(
+    (mode) => {
+      (window as unknown as { __e2ePointer?: string }).__e2ePointer = mode;
+    },
+    size.touch ? "coarse" : "fine",
+  );
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setTouchEmulationEnabled", {
     enabled: size.touch,
     maxTouchPoints: size.touch ? 5 : 1,
-  });
-  await cdp.send("Emulation.setEmulatedMedia", {
-    features: [
-      { name: "pointer", value: size.touch ? "coarse" : "fine" },
-      { name: "hover", value: size.touch ? "none" : "hover" },
-    ],
   });
 }
 
@@ -329,6 +357,7 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
 }) => {
   test.setTimeout(480_000);
   await mkdir(SHOTS, { recursive: true });
+  await page.addInitScript(installPointerQueries);
   const directory = await mkdtemp(path.join(tmpdir(), "paseo-fu62-plugin-"));
   const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
   const seeded: SeededWorkspace[] = [];
@@ -403,6 +432,8 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
         await menu.click();
       }
       await expect(page.getByTestId("sidebar-top-primes").first()).toBeVisible({ timeout: 30_000 });
+      // The lead rows load after the Leads header.
+      await expect(page.getByText(/Synthetic project 1 /).first()).toBeVisible({ timeout: 30_000 });
       const result = await measure(page);
       results[`home-${size.name}`] = result;
       await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));

@@ -33,6 +33,11 @@ vi.mock("react-native", () => ({
     <div data-testid={testID}>{children}</div>
   ),
   Pressable: () => null,
+  // The theme and the touch-row hook read the platform at import.
+  Platform: {
+    OS: "web",
+    select: (options: { web?: unknown; default?: unknown }) => options.web ?? options.default,
+  },
 }));
 vi.mock("@/components/ui/button", () => ({
   Button: ({ children, onPress }: { children: React.ReactNode; onPress: () => void }) => (
