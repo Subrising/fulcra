@@ -33,12 +33,17 @@ export function readRoleDefaults(
   root: string,
   configRoles?: unknown,
   configModes?: unknown,
+  project?: string | null,
 ): RoleTable;
+export const isProjectId: (v: unknown) => boolean;
+export function projectRoleOverrides(root: string): Record<string, RoleTable["roles"]>;
 export function writeRoleDefaults(
   root: string,
   patch: {
     role?: string;
-    defaults?: Partial<RoleEntry>;
+    /** FU-114: set (or, with defaults null, clear) this role for one project only. */
+    project?: string;
+    defaults?: Partial<RoleEntry> | null;
     orchestrationGuard?: boolean;
     mode?: { provider: string; modeId: string };
   },
@@ -51,6 +56,7 @@ export function configuredRoleProvider(
   root: string,
   configRoles: unknown,
   role: string,
+  project?: string | null,
 ): "claude" | "codex" | null;
 
 export function initializeRoleDefaults(

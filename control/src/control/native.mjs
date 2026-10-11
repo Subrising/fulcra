@@ -366,7 +366,7 @@ export async function connectNative({ daemon, issueProvenance, getHandshakeBoot 
       const { chosen, fallback } = await checkCapability(
         client,
         a.provider,
-        sessionDefaults(a.provider, a.defaults, undefined, a.role ?? null),
+        sessionDefaults(a.provider, a.defaults, undefined, a.role ?? null, project),
         cwd,
         () => sessionDefaults(a.provider, a.defaults),
       );

@@ -80,10 +80,19 @@ function cleanRole(r, fallback) {
     codex: r?.codex ? s("codex") : fallback.codex,
   };
 }
+// FU-114: a project may override the table for its own sessions: stored.projects[<project id>].roles[<role>], the same
+// shape as a role entry. A role the project does not name keeps the installation's answer, so one project's choice
+// (for example codex/gpt-6.1-sol high for the Fulcra project) never changes another project.
+const PROJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const isProjectId = (v) => typeof v === "string" && PROJECT_ID.test(v);
+const projectRole = (stored, project, role) =>
+  isProjectId(project) && Object.hasOwn(stored.projects ?? {}, project)
+    ? stored.projects[project]?.roles?.[role]
+    : undefined;
 // The effective table: this store over the shared config's roles (existing three) over the seed. Modes: a Settings
 // choice, then the shared config's defaults.modes (read, never written: the live value is an operator one-shot), then
-// the seed.
-export function readRoleDefaults(root, configRoles = null, configModes = null) {
+// the seed. With `project`, that project's own role entries sit on top.
+export function readRoleDefaults(root, configRoles = null, configModes = null, project = null) {
   let stored = {};
   try {
     stored = JSON.parse(fs.readFileSync(file(root), "utf8"));
@@ -102,7 +111,9 @@ export function readRoleDefaults(root, configRoles = null, configModes = null) {
           SEED[role],
         )
       : SEED[role];
-    roles[role] = stored.roles?.[role] ? cleanRole(stored.roles[role], fromConfig) : fromConfig;
+    const base = stored.roles?.[role] ? cleanRole(stored.roles[role], fromConfig) : fromConfig;
+    const over = projectRole(stored, project, role);
+    roles[role] = over ? cleanRole(over, base) : base;
   }
   const modes = Object.fromEntries(
     MODE_PROVIDERS.map((p) => [
@@ -156,14 +167,18 @@ export function chosenModes(root) {
 }
 // The provider someone actually chose for a role (Settings, then the shared config), or null. With none, a create that
 // omits its provider uses the seed's provider only where the controller finds it offered on this host (update-7 W3).
-export function configuredRoleProvider(root, configRoles, role) {
+export function configuredRoleProvider(root, configRoles, role, project = null) {
   let stored = {};
   try {
     stored = JSON.parse(fs.readFileSync(file(root), "utf8"));
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
-  for (const p of [stored.roles?.[role]?.provider, configRoles?.[role]?.provider])
+  for (const p of [
+    projectRole(stored, project, role)?.provider,
+    stored.roles?.[role]?.provider,
+    configRoles?.[role]?.provider,
+  ])
     if (["claude", "codex"].includes(p)) return p;
   return null;
 }
@@ -183,13 +198,15 @@ function writeRoleDefaultsLocked(root, patch, configRoles) {
     roles: stored.roles ?? {},
     orchestrationGuard: stored.orchestrationGuard === true,
     modes: stored.modes ?? {},
+    ...(stored.projects ? { projects: stored.projects } : {}),
   };
   if (patch.mode) {
     const p = patch.mode.provider;
     if (!MODE_PROVIDERS.includes(p) || !modeOf(p, patch.mode.modeId)) throw Error("Unknown mode");
     stored.modes[p] = patch.mode.modeId;
   }
-  if (patch.role) {
+  if (patch.project !== undefined) writeProjectRole(stored, patch, root, configRoles);
+  else if (patch.role) {
     if (!DEFAULT_ROLES.includes(patch.role)) throw Error("Unknown role");
     stored.roles[patch.role] = cleanRole(patch.defaults, cur.roles[patch.role]);
   }
@@ -201,6 +218,35 @@ function writeRoleDefaultsLocked(root, patch, configRoles) {
   fs.writeFileSync(tmp, JSON.stringify(stored, null, 1) + "\n", { mode: 0o600, flag: "wx" });
   fs.renameSync(tmp, file(root));
   return readRoleDefaults(root, configRoles);
+}
+// FU-114: set or clear one role of one project. `defaults: null` clears it. A project with no roles left is dropped.
+function writeProjectRole(stored, patch, root, configRoles) {
+  if (!isProjectId(patch.project)) throw Error("Unknown project");
+  if (!DEFAULT_ROLES.includes(patch.role)) throw Error("Unknown role");
+  const projects = { ...stored.projects };
+  const entry = { roles: { ...projects[patch.project]?.roles } };
+  if (patch.defaults === null) delete entry.roles[patch.role];
+  else {
+    const base = readRoleDefaults(root, configRoles).roles[patch.role];
+    entry.roles[patch.role] = cleanRole(patch.defaults, base);
+  }
+  if (Object.keys(entry.roles).length) projects[patch.project] = entry;
+  else delete projects[patch.project];
+  if (Object.keys(projects).length) stored.projects = projects;
+  else delete stored.projects;
+}
+// The projects that override anything, for the Settings read: { <project id>: { <role>: entry } }.
+export function projectRoleOverrides(root) {
+  let stored = {};
+  try {
+    stored = JSON.parse(fs.readFileSync(file(root), "utf8"));
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  const out = {};
+  for (const id of Object.keys(stored.projects ?? {}))
+    if (isProjectId(id)) out[id] = readRoleDefaults(root, null, null, id).roles;
+  return out;
 }
 // The shape the create hook (applyRoleDefaults) reads: roles.<role>.<provider> = { model, thinkingOptionId }.
 export function hookRoles(table) {

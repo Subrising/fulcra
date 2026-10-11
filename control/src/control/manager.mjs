@@ -343,10 +343,13 @@ export class Manager {
       a = {
         ...a,
         provider: (
-          await this.control.resolveProvider({
-            role: "implementation",
-            ...(a.host !== undefined ? { host: a.host } : {}),
-          })
+          await this.control.resolveProvider(
+            {
+              role: "implementation",
+              ...(a.host !== undefined ? { host: a.host } : {}),
+            },
+            this.control.roleSessions?.owner(a.sessionId)?.projectId ?? null,
+          )
         ).provider,
       };
     // Update-7 W3: an explicit model / effort wins over the implementation default; it joins the stored specification
