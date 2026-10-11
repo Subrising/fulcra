@@ -15,3 +15,12 @@ Fulcra 0.2.15 is based on Paseo v0.11.0-beta.5.
 
 - When a computer goes offline, its leads no longer show twice for one read. The sidebar shows only reads from the computers that are online now, plus the greyed remembered rows.
 - A failed projects read no longer saves the placeholder name "project" as a remembered lead's project. The sidebar keeps the name it remembered before. If it remembered none, it saves nothing until a read works.
+
+### Windows update script
+
+- The protected chat check reads its names from `protected-chats.txt` in the install folder, not from the code. The file must exist; it may be empty. A chat whose name or folder contains a listed name is never stopped by an update.
+- The update lists chats in every working folder (`paseo ls -g`). Before, the check before the stop and the health count after the start could miss chats in other folders.
+
+### Tests
+
+- Test data and two Command Centre placeholders use neutral project names.

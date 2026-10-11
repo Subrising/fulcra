@@ -534,7 +534,7 @@ test("native cache event reveals Book work and opens only the exact Book convers
     workspace: {
       id: uuid(98),
       projectId: uuid(97),
-      projectName: "Ship It",
+      projectName: "Alpha",
       kind: "worktree",
       changesAvailable: true,
     },

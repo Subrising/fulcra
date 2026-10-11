@@ -5103,8 +5103,8 @@ function intakeFixture(t) {
   });
   const host = "srv_example_book",
     company = "srv_example_mini",
-    ship = { serverId: host, projectId: "prj_ship", name: "Ship It" },
-    demo = { serverId: host, projectId: "prj_demo", name: "Demo Day" };
+    ship = { serverId: host, projectId: "prj_alpha", name: "Alpha" },
+    demo = { serverId: host, projectId: "prj_beta", name: "Beta" };
   const update = (command) =>
     store.mutate({ requestId: randomUUID(), expectedRevision: store.read().revision, command });
   update({ action: "create-workspace", name: "AI Game Dev", prime: null });
@@ -5187,7 +5187,7 @@ function intakeFixture(t) {
     layout: { compact: false, platform: "web" },
     organizationDraft: {
       id: intakeId,
-      text: "Improve Ship It onboarding",
+      text: "Improve Alpha onboarding",
       setText() {},
       bindSource() {},
     },
@@ -5205,13 +5205,13 @@ test("company intake visibly owns a named request and starts one chat in its exi
   const f = intakeFixture(t);
   mount(h(IntakeSurface, f.props));
   await screen.findByText(/Responsible intake: you/);
-  const start = await screen.findByRole("button", { name: "Start chat in Ship It" });
+  const start = await screen.findByRole("button", { name: "Start chat in Alpha" });
   await waitFor(() => assert.equal(start.disabled, false));
   fireEvent.click(start);
   await waitFor(() => assert.equal(f.store.read().intakes[0].conversations[0].state, "created"));
   await waitFor(() => assert.equal(screen.queryByText("Updating this retained request…"), null));
   await screen.findByRole("button", { name: "Open original conversation (same history)" });
-  assert.equal(f.created[0].workspaceId, "wks_prj_ship");
+  assert.equal(f.created[0].workspaceId, "wks_prj_alpha");
   assert.equal(f.created[0].options.labels["fulcra.intake"], f.intakeId);
   assert.equal(f.created[0].options.config.provider, "codex/gpt-6.1-sol");
   assert.equal(f.created[0].options.config.thinkingOptionId, "high");
@@ -5234,7 +5234,7 @@ test("correcting the visible project destination preserves the original conversa
     workspaceId: f.workspaceId,
     intakeId: f.intakeId,
     projectKey: projectReferenceKey(f.ship),
-    context: { serverId: f.host, projectId: f.ship.projectId, workspaceId: "wks_prj_ship" },
+    context: { serverId: f.host, projectId: f.ship.projectId, workspaceId: "wks_prj_alpha" },
   });
   f.update({
     action: "reserve-chat",
@@ -5252,9 +5252,9 @@ test("correcting the visible project destination preserves the original conversa
     taskId: null,
   });
   mount(h(IntakeSurface, f.props));
-  await screen.findByText(/Destination: Ship It/);
+  await screen.findByText(/Destination: Alpha/);
   fireEvent.click(screen.getByRole("button", { name: "Change destination project" }));
-  fireEvent.click(screen.getByRole("button", { name: "Demo Day" }));
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
   fireEvent.click(
     screen.getByRole("button", { name: "Save corrected destination for future requests" }),
   );

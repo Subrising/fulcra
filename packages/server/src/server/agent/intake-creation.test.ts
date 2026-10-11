@@ -117,7 +117,7 @@ test("intake cross-provider config reaches the actual SDK, manager and Claude co
   const workspace: PaseoWorkspace = {
     id: "existing",
     projectId: "ship",
-    projectDisplayName: "Ship It",
+    projectDisplayName: "Alpha",
     projectRootPath: cwd,
     workspaceDirectory: cwd,
     projectKind: "git",
@@ -170,7 +170,7 @@ test("intake cross-provider config reaches the actual SDK, manager and Claude co
       },
       project: {
         key: "ship",
-        name: "Ship It",
+        name: "Alpha",
         placements: [{ serverId: "srv_fixture_book", projectId: "ship" }],
         controllerProjectId: null,
         preferredContext: null,

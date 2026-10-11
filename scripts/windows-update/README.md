@@ -6,7 +6,7 @@ Install folder on the PC: `C:\Users\dzgra\fulcra-update` (copy of `scripts/windo
 ## What it does
 
 1. Builds a branch or tag into a new folder `C:\Users\dzgra\fulcra-builds\<time>-<ref>`. It uses a fresh shallow clone, `npm ci` and `node scripts/orca-preview-build.mjs windows`. The build runs the packaged smoke test.
-2. Checks Song Studio. It runs `paseo ls -a --json` on the running daemon. It refuses the update if a chat has a Song Studio name or folder, or if any chat is not idle. It lists the chats and stops. It never touches `C:\Users\dzgra\song-studio`.
+2. Checks protected chats. It reads `protected-chats.txt` in the install folder: one chat name or folder fragment per line, `#` starts a comment. The file must exist; it may be empty. It runs `paseo ls -a -g --json` on the running daemon (all working folders). It refuses the update if a chat name or folder contains a protected name (case does not matter), or if any chat is not idle. It lists the chats and stops.
 3. Closes the app window, then runs `paseo daemon stop` (graceful, so the controller lock is removed). It does not use taskkill.
 4. Points the junction `C:\Users\dzgra\fulcra-current` at the new build. The previous build folder stays.
 5. Starts `fulcra-current\Fulcra.exe`.
@@ -28,6 +28,7 @@ Exit codes: 0 done, 2 unhealthy and rolled back, 3 refused (chats would stop), o
 - `state.json`: current and previous build folders. The first run adopts `C:\Users\dzgra\fulcra\packages\desktop\release-preview\win-unpacked` as both.
 - `lock\`: a folder that stops two updates at once. A killed run can leave it. Remove it only when no update runs.
 - `update.log`: every step.
+- `protected-chats.txt`: names of chats that an update must never stop. This file is local to the PC and is not in the repository.
 
 ## Limits
 

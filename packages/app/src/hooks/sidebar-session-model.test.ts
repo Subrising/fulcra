@@ -49,8 +49,11 @@ describe("reportingLeadLine", () => {
     const all = {
       mini: {
         agents: new Map([
-          ["ship-lead", agent("ship-lead", "Ship It lead", { project: "ship-it", role: "lead" })],
-          ["ship-worker", agent("ship-worker", "Worker", { "paseo.parent-agent-id": "ship-lead" })],
+          ["alpha-lead", agent("alpha-lead", "Alpha lead", { project: "alpha", role: "lead" })],
+          [
+            "alpha-worker",
+            agent("alpha-worker", "Worker", { "paseo.parent-agent-id": "alpha-lead" }),
+          ],
           ["main-1", agent("main-1", "Main", { "fulcra.seat": "main-assistant" })],
           ["main-kid", agent("main-kid", "Kid", { "fulcra.reports-to": "main-1" })],
           ["alone", agent("alone", "Alone")],
@@ -64,13 +67,13 @@ describe("reportingLeadLine", () => {
     };
     const note = (id: string) =>
       reportingLeadLine(all.mini.agents.get(id)!.labels, "mini", all, id);
-    expect(note("ship-lead")).toBe("No reporting line recorded");
+    expect(note("alpha-lead")).toBe("No reporting line recorded");
     // A child on another computer counts too.
     expect(note("alone")).toBe("No reporting line recorded");
     // The main assistant holds the role and reports to the owner.
     expect(note("main-1")).toBeNull();
     // A chat with a parent shows its lead, and a chat with no children shows nothing.
-    expect(note("ship-worker")).toBe("Reports to Ship It lead");
+    expect(note("alpha-worker")).toBe("Reports to Alpha lead");
     expect(note("main-kid")).toBe("Reports to Main");
     expect(reportingLeadLine({}, "mini", all, "nobody")).toBeNull();
   });
