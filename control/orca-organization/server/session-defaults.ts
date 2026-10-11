@@ -6,7 +6,7 @@
 // daemon's own defaults apply, as they would have without roles. Explicit form values are never replaced.
 import { localCall } from "./management";
 import { loadConfig } from "./config.mjs";
-import { readRoleDefaults, hookRoles } from "./role-defaults-store.mjs";
+import { readRoleDefaults, hookRoles, isProjectId } from "./role-defaults-store.mjs";
 import type { ProviderModes } from "./role-defaults-store.mjs";
 import {
   SESSION_ROLE_LABEL,
@@ -210,12 +210,13 @@ export function mergedModes(): Modes {
   ).modes;
 }
 // Update-7: the persisted table (Settings -> Accounts & models, its own file) over the shared config's roles.
-export function mergedRoles(): unknown {
+// FU-114: with a project id, that project's own role entries sit on top.
+export function mergedRoles(project: string | null = null): unknown {
   const c = loadConfig() as { home: string; defaults?: { roles?: unknown } };
-  return hookRoles(readRoleDefaults(c.home, (c.defaults?.roles ?? null) as any));
+  return hookRoles(readRoleDefaults(c.home, (c.defaults?.roles ?? null) as any, null, project));
 }
 export function roleDefaultsHook(
-  readRoles: () => unknown = mergedRoles,
+  readRoles: (project: string | null) => unknown = mergedRoles,
   readModes: () => Modes = mergedModes,
   policy: ChildPolicy = childModeDefault,
 ) {
@@ -228,8 +229,9 @@ export function roleDefaultsHook(
     }
     const withMode = applyModeDefault(request, modes, policy);
     let roles: unknown;
+    const project = own(request.labels, "fulcra.project");
     try {
-      roles = readRoles();
+      roles = readRoles(isProjectId(project) ? project : null);
     } catch {
       return withMode;
     }

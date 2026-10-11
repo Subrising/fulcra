@@ -84,6 +84,10 @@ export const accountsView = z
       .object({
         roles: z.record(z.enum(DEFAULT_ROLES), roleDefaults),
         orchestrationGuard: z.boolean(),
+        // FU-114: roles a project overrides for its own sessions: { <project id>: { <role>: entry } }. Absent on older hosts.
+        projects: z
+          .record(z.string().uuid(), z.record(z.enum(DEFAULT_ROLES), roleDefaults))
+          .optional(),
         modes: z.object({ claude: z.string().max(40), codex: z.string().max(40) }).strict(),
         modeChoices: z
           .object({
@@ -151,7 +155,9 @@ export const poolSettingsRpc = defineContract({
       policy: z.enum(["priority", "spread"]).optional(),
       rotateOnLimit: z.boolean().optional(),
       role: z.enum(DEFAULT_ROLES).optional(),
-      defaults: roleDefaults.optional(),
+      // FU-114: with `project`, the role is set for that project only; `defaults: null` clears it.
+      project: z.string().uuid().optional(),
+      defaults: roleDefaults.nullable().optional(),
       orchestrationGuard: z.boolean().optional(),
       defaultAccount: z.object({ provider, id: z.string().uuid().nullable() }).strict().optional(),
       mode: z

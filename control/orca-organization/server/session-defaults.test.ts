@@ -537,3 +537,48 @@ test("light role: the create hook applies Haiku 5.5 medium from the seed", async
   );
   assert.notEqual(older.config.model, "claude-haiku-5-5", "a host without Haiku 5.5 falls back");
 });
+
+// FU-114: a create under a project reads that project's role table; any other create reads the installation's.
+test("the create hook reads the project's own role entries when the create carries a project label", async () => {
+  const PROJECT = "11111111-1111-4111-8111-111111111111";
+  const noModes = () => ({});
+  const asked: Array<string | null> = [];
+  const readRoles = (project: string | null) => {
+    asked.push(project);
+    return project
+      ? {
+          ...ROLES,
+          planning: { claude: { model: "claude/claude-sonnet-5-5", thinkingOptionId: "low" } },
+        }
+      : ROLES;
+  };
+  const context = {
+    paseo: {
+      providers: { listModels: async () => ({ provider: "claude", models: [OPUS, SONNET] }) },
+    },
+  };
+  const request = (labels: Record<string, string>) =>
+    ({
+      config: { provider: "claude", cwd: "/project" },
+      labels: { [SESSION_ROLE_LABEL]: "planning", ...labels },
+    }) as any;
+  const inProject = await roleDefaultsHook(readRoles, noModes)(
+    { request: request({ "fulcra.project": PROJECT }) },
+    context,
+  );
+  assert.deepEqual(
+    [inProject.config.model, inProject.config.thinkingOptionId],
+    ["claude-sonnet-5-5", "low"],
+  );
+  const elsewhere = await roleDefaultsHook(readRoles, noModes)({ request: request({}) }, context);
+  assert.deepEqual(
+    [elsewhere.config.model, elsewhere.config.thinkingOptionId],
+    ["claude-opus-5-5", "high"],
+  );
+  // A label that is not a project id is ignored, never passed to the reader.
+  await roleDefaultsHook(readRoles, noModes)(
+    { request: request({ "fulcra.project": "../../etc" }) },
+    context,
+  );
+  assert.deepEqual(asked, [PROJECT, null, null]);
+});

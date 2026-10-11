@@ -119,8 +119,8 @@ export class Controller {
     )
       throw new Error("Invalid create request");
     if (a.provider === undefined && !this.store.delivery(a.messageId))
-      a = await this.resolveProvider(a);
-    a = this.withRoleProvider(a);
+      a = await this.resolveProvider(a, creationOptions?.project);
+    a = this.withRoleProvider(a, creationOptions?.project);
     return this.exclusive(`create:${a.messageId}`, async () => {
       await this.authority(a.taskId);
       // Update-7 W3: an explicit model / effort the provider does not list is refused here, before the journal admits
@@ -167,9 +167,10 @@ export class Controller {
   // Update-7 W3 (gap a): an omitted provider is the role's chosen one; with none chosen, the role default's (the seed's)
   // provider -- only after checking this host offers it, so a create never reserves or journals a launch that cannot
   // happen. Every create path resolves through here before reserving anything.
-  async resolveProvider(a) {
+  // FU-114: `project` is the project the session is created under; its own role entries come first.
+  async resolveProvider(a, project = null) {
     if (a.provider !== undefined) return a;
-    const chosen = roleProvider(a.role);
+    const chosen = roleProvider(a.role, undefined, project);
     if (chosen) return { ...a, provider: chosen };
     const fallback = roleDefaultProvider(a.role);
     if (!fallback)
@@ -191,10 +192,10 @@ export class Controller {
   // what is journaled, so a recovery replay does not depend on the configuration at replay time. A creation journaled
   // before roles existed (no `role` in its body) keeps that identity when retried with one: the role is dropped rather
   // than the retry refused as a conflict.
-  withRoleProvider(a) {
+  withRoleProvider(a, project = null) {
     if (a.provider === undefined) {
       // A journaled creation retried without its provider: the same answer as when it was created (checked then).
-      const provider = roleProvider(a.role) ?? roleDefaultProvider(a.role);
+      const provider = roleProvider(a.role, undefined, project) ?? roleDefaultProvider(a.role);
       if (!provider)
         throw new Error(
           a.role
