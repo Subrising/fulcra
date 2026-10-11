@@ -149,7 +149,7 @@ import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-uti
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import { decideSend, lineStoreOf, resolveRoleTarget, type LineStore } from "./reporting-lines.js";
-import { deliveryWithReceipt, heldSendsFor } from "./held-sends.js";
+import { deliveryWithReceipt, heldSendsFor, ProvenanceRefusedError } from "./held-sends.js";
 import { tellSenderUndelivered } from "./undelivered-notice.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
@@ -9754,11 +9754,7 @@ export class Session {
         // A message that carries a plugin's provenance token cannot wait: its token is bound to this attempt, and a
         // later delivery would run as plain owner input, a different source than the plugin sent it as
         // (0.2.13 review). It is refused instead, with the reason, and the sender sends it again when the chat is idle.
-        if (msg.inputProvenance !== undefined)
-          throw new Error(
-            "This message came from a plugin and the chat is busy. It was not queued, because a queued message loses the plugin as its source. Send it again when the chat is idle.",
-            { cause: error },
-          );
+        if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError({ cause: error });
         const deliver = whenIdle((run) => trusted.rpc(undefined, run));
         held.hold(agentId, async () => {
           try {

@@ -107,11 +107,15 @@ vi.mock("@/runtime/host-runtime", () => ({
       f.remote[serverId]
         ? {
             client: {
-              invokePluginRpc: async (_plugin: string, method: string) =>
-                ({
-                  "organization.fleet": f.remote[serverId]!.fleet,
-                  "organization.projects": f.remote[serverId]!.projects,
-                })[method] ?? f.remote[serverId]!.directory,
+              invokePluginRpc: async (_plugin: string, method: string) => {
+                const answer =
+                  {
+                    "organization.fleet": f.remote[serverId]!.fleet,
+                    "organization.projects": f.remote[serverId]!.projects,
+                  }[method] ?? f.remote[serverId]!.directory;
+                if (answer instanceof Error) throw answer;
+                return answer;
+              },
             },
           }
         : undefined,
@@ -180,11 +184,13 @@ const fastRetry = () => 1;
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
-  render(
+  const tree = () => (
     <QueryClientProvider client={client}>
       <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(tree());
+  return { rerender: () => view.rerender(tree()) };
 }
 function mountPinned() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -1052,4 +1058,58 @@ it("a lead on another computer takes + new work, sent on that computer, then ope
   await vi.waitFor(() =>
     expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD }),
   );
+});
+
+// Fulcra 0.2.15 (FU-53): review findings on the other-computer lead rows.
+it("shows an offline switch's leads once: the old read is not shown beside the remembered row", async () => {
+  const SECOND = { ...GAG, seat: "s1", sessionId: "22222222-2222-4222-8222-222222222222" };
+  f.hosts = [...HOSTS, { serverId: "second", label: "Second computer" }];
+  f.remote.book = bookReads();
+  f.remote.second = {
+    ...bookReads(),
+    directory: {
+      available: true,
+      primes: [],
+      projectSeats: [
+        {
+          seat: "s1",
+          role: "project-orchestrator",
+          projectId: "proj-g",
+          state: "assigned",
+          sessionPresent: true,
+          sessionId: SECOND.sessionId,
+        },
+      ],
+    },
+  };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  const view = mount();
+  await screen.findByTestId("sidebar-remote-lead-second-s1");
+  await vi.waitFor(() => expect(useLeadsMemory.getState().byHost.second?.[0]?.seat).toBe("s1"));
+  f.offline = new Set(["second"]);
+  view.rerender();
+  await screen.findByTestId("sidebar-remembered-lead-second-s1");
+  expect(screen.queryByTestId("sidebar-remote-lead-second-s1")).toBeNull();
+  expect(screen.getByTestId("sidebar-remote-lead-book-g1")).toBeTruthy();
+});
+
+it("does not remember the placeholder project name when the projects read fails", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = { ...bookReads(), projects: new Error("unavailable") };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  mount();
+  await screen.findByTestId("sidebar-remote-lead-book-g1");
+  // Nothing remembered yet, so nothing is saved.
+  expect(useLeadsMemory.getState().byHost.book).toBeUndefined();
+});
+
+it("keeps the remembered project name when a later projects read fails", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = { ...bookReads(), projects: new Error("unavailable") };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  useLeadsMemory.setState({ byHost: { book: [GAG] } });
+  mount();
+  await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(useLeadsMemory.getState().byHost.book?.[0]?.project).toBe("Example project");
+  expect(useLeadsMemory.getState().byHost.book?.[0]?.title).toBe("Remote project lead");
 });
