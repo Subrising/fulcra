@@ -345,7 +345,7 @@ function LeadRows({
           title={chatName(lead.node, `Lead · ${lead.project}`)}
           node={lead.node}
           hostLabel={lead.hostLabel}
-          readOnly
+          hostServerId={lead.serverId}
           navigation={navigation}
           leadership={leadership}
           onBeforeNavigate={onBeforeNavigate}
@@ -915,7 +915,7 @@ function LeadRow({
   unavailableText,
   role,
   hostLabel,
-  readOnly = false,
+  hostServerId,
 }: {
   seat: Seat;
   title: string;
@@ -923,8 +923,11 @@ function LeadRow({
   role?: string;
   /** The computer this app knows the lead's host as; it replaces the fleet's own host name. */
   hostLabel?: string;
-  /** A lead on another computer: open its chat, but no "+" new work from here. */
-  readOnly?: boolean;
+  /**
+   * A lead on another computer: the app host that computer's own controller reported it on. It opens the chat and
+   * takes "+" new work there, like a lead on the home computer, even before this app has loaded that chat.
+   */
+  hostServerId?: string;
   node: FleetNode | undefined;
   navigation: ReturnType<typeof usePluginHostNavigation>;
   leadership: () => void;
@@ -941,8 +944,10 @@ function LeadRow({
     );
     return matches.length === 1 ? matches[0][0] : null;
   });
+  // The computer's own report names the host the chat lives on; a role-message address never does.
+  const ownerServerId = agentServerId ?? hostServerId ?? null;
   const canOpen = Boolean(
-    seat.state === "assigned" && seat.sessionPresent && seat.sessionId && agentServerId,
+    seat.state === "assigned" && seat.sessionPresent && seat.sessionId && ownerServerId,
   );
   const chatStatus = useSessionStore((state) =>
     agentServerId && seat.sessionId
@@ -959,12 +964,12 @@ function LeadRow({
   const open = useCallback(() => {
     if (!canOpen) return leadership();
     const result = navigation.openAgentOnHost?.({
-      serverId: agentServerId!,
+      serverId: ownerServerId!,
       agentId: seat.sessionId!,
     });
     if (result !== "requested") return leadership();
     onBeforeNavigate?.();
-  }, [agentServerId, canOpen, leadership, navigation, onBeforeNavigate, seat.sessionId]);
+  }, [ownerServerId, canOpen, leadership, navigation, onBeforeNavigate, seat.sessionId]);
   const toggleCompose = useCallback(() => setComposing((value) => !value), []);
   const sent = useCallback(() => {
     setComposing(false);
@@ -991,7 +996,7 @@ function LeadRow({
             </Text>
           </View>
         </Pressable>
-        {canOpen && !readOnly ? (
+        {canOpen ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`New work for ${title}`}
@@ -1003,10 +1008,10 @@ function LeadRow({
           </Pressable>
         ) : null}
       </View>
-      {composing && canOpen && !readOnly ? (
+      {composing && canOpen ? (
         <NewWorkBox
           title={title}
-          serverId={agentServerId!}
+          serverId={ownerServerId!}
           agentId={seat.sessionId!}
           onSent={sent}
           onCancel={toggleCompose}
