@@ -18,7 +18,9 @@ param(
   [int]$HealthSeconds = 150
 )
 $ErrorActionPreference = 'Stop'
-$Home_ = 'C:\Users\dzgra'
+# The PC user's own folder. Set by Windows for every user, so no user name is in the script.
+$Home_ = $env:USERPROFILE
+if (-not $Home_) { throw 'USERPROFILE is not set' }
 $Root = Join-Path $Home_ 'fulcra-update'
 $Builds = Join-Path $Home_ 'fulcra-builds'
 $Current = Join-Path $Home_ 'fulcra-current'
