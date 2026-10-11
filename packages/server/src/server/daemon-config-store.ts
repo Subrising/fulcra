@@ -31,6 +31,7 @@ interface SupportedMutableConfigPatch {
   notificationMode?: MutableDaemonConfig["notificationMode"];
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
+  reviveOnRestart?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: MutableDaemonConfig["terminalProfiles"];
@@ -190,6 +191,7 @@ const RELOADABLE_PATHS = [
   "daemon.notificationMode",
   "daemon.enableTerminalAgentHooks",
   "daemon.reportUpOnTurnEnd",
+  "daemon.reviveOnRestart",
   "daemon.autoResumeOnLimit",
   "daemon.appendSystemPrompt",
   "daemon.terminalProfiles",
@@ -217,6 +219,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.notificationMode", "notificationMode"],
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.reportUpOnTurnEnd", "reportUpOnTurnEnd"],
+  ["daemon.reviveOnRestart", "reviveOnRestart"],
   ["daemon.autoResumeOnLimit", "autoResumeOnLimit"],
   ["daemon.appendSystemPrompt", "appendSystemPrompt"],
   ["daemon.terminalProfiles", "terminalProfiles"],
@@ -265,10 +268,16 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 }
 
 // Kept apart so the patch picker stays under the complexity limit; present only when the patch sets it.
-function reportUpField(patch: MutableDaemonConfigPatch): { reportUpOnTurnEnd?: boolean } {
-  return patch.reportUpOnTurnEnd !== undefined
-    ? { reportUpOnTurnEnd: patch.reportUpOnTurnEnd }
-    : {};
+function reportUpField(patch: MutableDaemonConfigPatch): {
+  reportUpOnTurnEnd?: boolean;
+  reviveOnRestart?: boolean;
+} {
+  return {
+    ...(patch.reportUpOnTurnEnd !== undefined
+      ? { reportUpOnTurnEnd: patch.reportUpOnTurnEnd }
+      : {}),
+    ...(patch.reviveOnRestart !== undefined ? { reviveOnRestart: patch.reviveOnRestart } : {}),
+  };
 }
 
 function explainBudgetField(patch: MutableDaemonConfigPatch): { explainDailyLimit?: number } {
@@ -795,6 +804,7 @@ function mergeMutableDaemonPatch(
   if (patch.reportUpOnTurnEnd !== undefined) {
     next.reportUpOnTurnEnd = patch.reportUpOnTurnEnd;
   }
+  if (patch.reviveOnRestart !== undefined) next.reviveOnRestart = patch.reviveOnRestart;
   if (patch.appendSystemPrompt !== undefined) next.appendSystemPrompt = patch.appendSystemPrompt;
   if (patch.terminalProfiles !== undefined) next.terminalProfiles = patch.terminalProfiles;
   if (patch.agentProfiles !== undefined) next.agentProfiles = patch.agentProfiles;

@@ -267,6 +267,7 @@ export const PersistedConfigSchema = z
         notificationMode: z.enum(["all", "primes", "off"]).optional(),
         enableTerminalAgentHooks: z.boolean().optional(),
         reportUpOnTurnEnd: z.boolean().optional(),
+        reviveOnRestart: z.boolean().optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),

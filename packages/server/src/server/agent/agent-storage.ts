@@ -371,6 +371,28 @@ export class AgentStorage {
     return result;
   }
 
+  // FULCRA(orchestration): revive on restart. A clean stop saves every open session as `closed`. At the next boot
+  // the sessions that were open read `idle` again, still unloaded: clients show them open, and their next prompt or
+  // held send loads them. A session loaded in the meantime owns its own status.
+  async reopenAfterRestart(
+    agentIds: readonly string[],
+    isLoaded: (agentId: string) => boolean = () => false,
+  ): Promise<string[]> {
+    await this.load();
+    const changed: string[] = [];
+    await Promise.all(
+      agentIds.map((agentId) =>
+        this.queueRecordMutation(agentId, (existing) => {
+          if (!existing || existing.archivedAt || existing.internal) return null;
+          if (existing.lastStatus !== "closed" || isLoaded(agentId)) return null;
+          changed.push(agentId);
+          return { ...existing, lastStatus: "idle" };
+        }),
+      ),
+    );
+    return changed.sort();
+  }
+
   // Daemon shutdown closes every agent, and a closed record would read as a finished turn. A turn still running at
   // that moment keeps this marker (applySnapshot preserves it until a new user message), so the next boot sees it.
   async markShutdownInterruption(agentId: string, marker: StoredInterruptedTurn): Promise<void> {
