@@ -98,7 +98,11 @@ vi.mock("@/runtime/host-runtime", () => ({
     new Map(ids.map((id) => [id, f.offline.has(id) ? "offline" : "online"])),
   getHostRuntimeStore: () => ({
     getHostRegistryStatus: () => (f.registryReady ? "ready" : "loading"),
-    getHosts: () => (f.registeredHost && f.host ? [{ serverId: f.host }] : []),
+    // The home computer, then every other computer the test lists as connected.
+    getHosts: () => [
+      ...(f.registeredHost && f.host ? [{ serverId: f.host }] : []),
+      ...f.hosts.filter((host) => host.serverId !== f.host).map(({ serverId }) => ({ serverId })),
+    ],
     getSnapshot: (serverId: string) =>
       f.remote[serverId]
         ? {
@@ -670,8 +674,8 @@ it("lists the leads of another connected computer read-only, with that computer'
   expect(row.textContent).toContain("Remote project lead");
   expect(row.textContent).toContain("Lead · Example project · Idle · MacBook Pro");
   expect(row.textContent).not.toContain("macbook ·");
-  // Read-only: no new work from here; a lead of an archived project is hidden.
-  expect(screen.queryByTestId("sidebar-remote-lead-book-g1-new-work")).toBeNull();
+  // Like a home lead: "+" new work is offered (0.2.15). A lead of an archived project is hidden.
+  expect(screen.getByTestId("sidebar-remote-lead-book-g1-new-work")).toBeTruthy();
   expect(screen.queryByTestId("sidebar-remote-lead-book-old")).toBeNull();
 });
 
@@ -995,4 +999,57 @@ it("explains why remembered leads are greyed, and says nothing while a computer 
   expect(rememberedNote("Book", false, true, null)).toBe("Command Centre not answering on Book");
   expect(rememberedNote("Book", false, true, undefined)).toBeNull();
   expect(typeof rememberedNote("Book", false, true, [])).toBe("symbol");
+});
+
+// Fulcra 0.2.15 (FU-57): a seated lead on another computer behaves like a home lead.
+const BOOK_LEAD = "99999999-9999-4999-8999-999999999999";
+const remoteBook = () => {
+  f.hosts = [
+    { serverId: "mini", label: "Mac mini" },
+    { serverId: "book", label: "Second computer" },
+  ];
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.remote.book = {
+    directory: {
+      available: true,
+      primes: [],
+      projectSeats: [
+        {
+          seat: "g1",
+          role: "project-orchestrator",
+          projectId: "proj-g",
+          state: "assigned",
+          sessionPresent: true,
+          sessionId: BOOK_LEAD,
+        },
+      ],
+    },
+    projects: { projects: [{ id: "proj-g", name: "Example project" }] },
+    fleet: {
+      nodes: [{ id: BOOK_LEAD, host: "book", status: "idle", pending: 0, title: "Remote lead" }],
+    },
+  };
+};
+
+it("a lead on another computer opens its chat on that computer, even before this app has loaded the chat", async () => {
+  remoteBook();
+  mount();
+  fireEvent.click(await screen.findByTestId("sidebar-remote-lead-book-g1"));
+  expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD });
+  expect(f.push).not.toHaveBeenCalled();
+});
+
+it("a lead on another computer takes + new work, sent on that computer, then opens its chat", async () => {
+  remoteBook();
+  f.send.mockResolvedValue(undefined);
+  mount();
+  fireEvent.click(await screen.findByTestId("sidebar-remote-lead-book-g1-new-work"));
+  fireEvent.change(screen.getByTestId("sidebar-new-work-input"), {
+    target: { value: "Plan the next level" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send to Remote lead" }));
+  await vi.waitFor(() => expect(f.send).toHaveBeenCalledWith(BOOK_LEAD, "Plan the next level"));
+  await vi.waitFor(() =>
+    expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD }),
+  );
 });
