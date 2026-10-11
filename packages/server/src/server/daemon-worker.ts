@@ -7,6 +7,7 @@ import { resolvePaseoHome } from "./paseo-home.js";
 import { createRootLogger } from "./logger.js";
 import type { DaemonLifecycleIntent } from "./bootstrap.js";
 import { getProcessDiagnostics } from "./process-diagnostics.js";
+import { STOP_DEADLINE_MS, startWorkerWatchdog } from "./worker-watchdog.js";
 
 process.title = "Fulcra Daemon";
 
@@ -23,6 +24,10 @@ type SupervisorLifecycleMessage =
   | {
       type: "paseo:restart";
       reason?: string;
+    }
+  | {
+      // The answer to a supervisor heartbeat (FU-74).
+      type: "paseo:worker-heartbeat";
     };
 
 interface BootstrapResult {
@@ -154,6 +159,13 @@ async function main() {
 
   applyCliFlagOverrides(config);
 
+  // FU-74: a thread that ends the process when a stop overruns or an orphan's main thread is silent, also while the
+  // main thread is blocked. The main thread proves it runs every second.
+  const watchdog = startWorkerWatchdog({
+    supervisorPid: typeof process.send === "function" ? process.ppid : 0,
+  });
+  setInterval(() => watchdog.beat(), 1000).unref();
+
   const installExitHook = () => {
     if (exitHookInstalled || !shutdownPromise) {
       return;
@@ -172,6 +184,7 @@ async function main() {
     },
   ) => {
     const reason = options?.reason ?? `worker_received_${signal}`;
+    watchdog.stopStarted();
     if (!shutdownPromise) {
       logger.info(
         { signal, reason, ...getProcessDiagnostics() },
@@ -185,7 +198,7 @@ async function main() {
             "Forcing shutdown - HTTP server didn't close in time",
           );
           process.exit(1);
-        }, 10000);
+        }, STOP_DEADLINE_MS);
 
         try {
           if (!daemon) {
@@ -293,6 +306,8 @@ async function main() {
       const type = (message as { type?: unknown }).type;
       if (type === "paseo:supervisor-heartbeat") {
         lastSupervisorHeartbeatAt = Date.now();
+        // FU-74: the answer proves this main thread runs; the supervisor restarts a worker that stops answering.
+        sendSupervisorLifecycleMessage({ type: "paseo:worker-heartbeat" });
         return;
       }
       if (type === "paseo:graceful-shutdown") {
