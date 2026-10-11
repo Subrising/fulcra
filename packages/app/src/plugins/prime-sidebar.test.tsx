@@ -835,10 +835,39 @@ it("still hides the lead of an archived project when the projects list was read"
       },
     ],
   });
-  f.projects.mockResolvedValue({ projects: [{ id: "other", name: "Other" }] });
+  f.projects.mockResolvedValue({
+    available: true,
+    partial: false,
+    projects: [{ id: "other", name: "Other" }],
+  });
   mount();
   await screen.findByTestId("sidebar-lead-main-assistant");
   expect(screen.queryByTestId("sidebar-lead-p9")).toBeNull();
+});
+
+// FU-51: the Song Studio lead (seated by team setup) was missing. A projects read that says it is unavailable, or
+// that is partial, names no archived project, so it hides no seated lead.
+it.each([
+  ["unavailable", { available: false, partial: false, projects: [] }],
+  ["partial", { available: true, partial: true, projects: [{ id: "other", name: "Other" }] }],
+])("shows a seated lead when the projects read is %s", async (_case, read) => {
+  f.read.mockResolvedValue({
+    available: true,
+    primes: [prime()],
+    projectSeats: [
+      {
+        seat: "p9",
+        role: "project-orchestrator",
+        projectId: "new-project",
+        state: "assigned",
+        sessionPresent: true,
+        sessionId: "remote",
+      },
+    ],
+  });
+  f.projects.mockResolvedValue(read);
+  mount();
+  expect((await screen.findByTestId("sidebar-lead-p9")).textContent).toContain("Lead · project");
 });
 
 it("lists a chat that reports to the main assistant without a seat, on any connected computer", async () => {
@@ -1116,6 +1145,32 @@ it("a lead on another computer keeps that computer when only the home list has a
   fireEvent.click(row);
   expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD });
   expect(f.open).not.toHaveBeenCalledWith({ serverId: "mini", agentId: BOOK_LEAD });
+});
+
+// FU-57: the gag games lead on the MacBook had no "+" and opened Team leadership: that computer's records did not mark
+// the session present, although the chat was in its chat list here.
+it("a lead on another computer whose chat is listed here opens it and takes +, even when not marked present", async () => {
+  remoteBook();
+  const seat = (f.remote.book!.directory as { projectSeats: { sessionPresent: boolean }[] })
+    .projectSeats[0]!;
+  seat.sessionPresent = false;
+  f.chats = { book: { [BOOK_LEAD]: { id: BOOK_LEAD, title: "Remote lead", status: "idle" } } };
+  mount();
+  expect(await screen.findByTestId("sidebar-remote-lead-book-g1-new-work")).toBeTruthy();
+  fireEvent.click(screen.getByTestId("sidebar-remote-lead-book-g1"));
+  expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD });
+  expect(f.push).not.toHaveBeenCalled();
+});
+
+it("a lead on another computer that is not present and not listed here still opens Leadership, with no +", async () => {
+  remoteBook();
+  const seat = (f.remote.book!.directory as { projectSeats: { sessionPresent: boolean }[] })
+    .projectSeats[0]!;
+  seat.sessionPresent = false;
+  mount();
+  fireEvent.click(await screen.findByTestId("sidebar-remote-lead-book-g1"));
+  expect(screen.queryByTestId("sidebar-remote-lead-book-g1-new-work")).toBeNull();
+  expect(f.push).toHaveBeenCalledTimes(1);
 });
 
 it("a lead on another computer takes + new work, sent on that computer, then opens its chat", async () => {

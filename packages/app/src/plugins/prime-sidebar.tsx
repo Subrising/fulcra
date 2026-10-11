@@ -274,7 +274,7 @@ export function PrimeSidebarRows({
             directory={available ? query.data! : null}
             nodes={nodes}
             projectName={projectName}
-            projectsKnown={projects.data !== undefined}
+            projectsKnown={projectReadComplete(projects.data)}
             navigation={navigation}
             leadership={leadership}
             onBeforeNavigate={onBeforeNavigate}
@@ -644,6 +644,17 @@ export function rememberedNote(
   return LIVE;
 }
 
+/**
+ * FU-51: only a complete project read may hide a lead whose project it does not list (an archived project). A read
+ * that failed, says it is unavailable, or is partial (the controller dropped rows, or a host has more projects than
+ * one read holds) names no archived project, so every seated lead stays.
+ */
+export function projectReadComplete(
+  read: { available?: boolean; partial?: boolean } | null | undefined,
+): boolean {
+  return read?.available === true && read.partial !== true;
+}
+
 async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hostLabel">[] | null> {
   const client = getHostRuntimeStore().getSnapshot(serverId)?.client;
   if (!client) return null;
@@ -662,13 +673,17 @@ async function readHostLeads(serverId: string): Promise<Omit<OtherHostLead, "hos
     const [projects, fleet] = (await Promise.all([
       client.invokePluginRpc(plugin, "organization.projects", {}).catch(() => null),
       client.invokePluginRpc(plugin, "organization.fleet", {}).catch(() => null),
-    ])) as [{ projects?: { id: string; name: string }[] } | null, Fleet | null];
+    ])) as [
+      { available?: boolean; partial?: boolean; projects?: { id: string; name: string }[] } | null,
+      Fleet | null,
+    ];
     const names = new Map((projects?.projects ?? []).map((p) => [p.id, p.name]));
     const nodes = new Map((fleet?.nodes ?? []).map((node) => [node.id, node]));
-    // Leads of archived projects are hidden with their project, as on the home computer. A failed projects read
-    // hides nothing (the lead is then named "project").
+    // Leads of archived projects are hidden with their project, as on the home computer. A failed, unavailable or
+    // partial projects read hides nothing (the lead is then named "project").
+    const complete = projectReadComplete(projects);
     return seats
-      .filter((seat) => !projects || names.has(seat.projectId!))
+      .filter((seat) => !complete || names.has(seat.projectId!))
       .map((seat) => ({
         serverId,
         seat,
@@ -1107,9 +1122,6 @@ function LeadRow({
   // report keeps its host even when another host's list has a chat with the same ID and the reporting host's list
   // has not loaded it yet (FU-67).
   const ownerServerId = hostServerId ?? agentServerId ?? null;
-  const canOpen = Boolean(
-    seat.state === "assigned" && seat.sessionPresent && seat.sessionId && ownerServerId,
-  );
   // The status comes from the chat list of the computer the chat lives on: for another computer's lead, that is the
   // computer that reported it, as for a home lead (0.2.15, FU-57).
   const statusServerId = ownerServerId;
@@ -1120,6 +1132,19 @@ function LeadRow({
         : undefined;
     return agent ? effectiveChatStatus(agent) : undefined;
   });
+  const chatKnown = useSessionStore((state) =>
+    Boolean(
+      ownerServerId && seat.sessionId && state.sessions[ownerServerId]?.agents.has(seat.sessionId),
+    ),
+  );
+  // FU-57: a lead on another computer whose controller did not mark the session present still opens its chat and
+  // takes "+" when this app has that chat in the computer's chat list (the owner saw Team leadership instead).
+  const canOpen = Boolean(
+    seat.state === "assigned" &&
+    seat.sessionId &&
+    ownerServerId &&
+    (seat.sessionPresent || chatKnown),
+  );
   const state = leadStatusLine(seat, node, canOpen, unavailableText, hostLabel, chatStatus);
   // Another computer's lead always names that computer, even when its status is not known here.
   const located =
@@ -1133,9 +1158,13 @@ function LeadRow({
       serverId: ownerServerId!,
       agentId: seat.sessionId!,
     });
-    if (result !== "requested") return leadership();
+    if (result !== "requested") {
+      // A chat in its computer's loaded chat list opens directly, as a chat lead does; otherwise Leadership.
+      if (!chatKnown) return leadership();
+      navigateToAgent({ serverId: ownerServerId!, agentId: seat.sessionId! });
+    }
     onBeforeNavigate?.();
-  }, [ownerServerId, canOpen, leadership, navigation, onBeforeNavigate, seat.sessionId]);
+  }, [ownerServerId, canOpen, chatKnown, leadership, navigation, onBeforeNavigate, seat.sessionId]);
   const toggleCompose = useCallback(() => setComposing((value) => !value), []);
   const sent = useCallback(() => {
     setComposing(false);
