@@ -547,3 +547,48 @@ describe("report-up after a parent is adopted", () => {
     expect(f.delivered.map((d) => d.leadId)).toEqual([LEAD]);
   });
 });
+
+// Fulcra 0.2.18 (FU-113): leads report up on purpose, so a lead's finished turn is not sent to the main assistant.
+describe("report-up from a lead to the main assistant", () => {
+  const MAIN = "33333333-3333-4333-8333-333333333333";
+  const mainAssistant: FakeChat = {
+    id: MAIN,
+    title: "Main",
+    labels: { "fulcra.seat": "main-assistant" },
+  };
+  const leadIds = (f: { delivered: Array<{ leadId: string }> }) => f.delivered.map((d) => d.leadId);
+  const leadToMain: FakeChat = { ...lead, labels: { [REPORTS_TO_LABEL]: MAIN } };
+
+  test("a lead that has workers sends no 'finished a turn' notice to the main assistant", async () => {
+    const f = fixture([mainAssistant, leadToMain, worker()]);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("worker-to-lead notices stay, and a lead with no workers still reports to the main assistant", async () => {
+    const f = fixture([mainAssistant, leadToMain, worker()]);
+    f.turn(WORKER);
+    await f.settle();
+    expect(leadIds(f)).toEqual([LEAD]);
+    const alone = fixture([mainAssistant, leadToMain]);
+    alone.turn(LEAD);
+    await alone.settle();
+    expect(leadIds(alone)).toEqual([MAIN]);
+  });
+
+  test("a failed lead turn is still sent to the main assistant", async () => {
+    const f = fixture([mainAssistant, leadToMain, worker()]);
+    f.failedTurn(LEAD, "Provider crashed");
+    await f.settle();
+    expect(leadIds(f)).toEqual([MAIN]);
+  });
+
+  test("a lead's turn still reaches a lead that is not the main assistant", async () => {
+    const top: FakeChat = { id: MAIN, title: "Top lead", labels: {} };
+    const f = fixture([top, leadToMain, worker()]);
+    f.turn(LEAD);
+    await f.settle();
+    expect(leadIds(f)).toEqual([MAIN]);
+  });
+});
