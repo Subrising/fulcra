@@ -248,13 +248,20 @@ const FOOTER_GEOMETRY_TOLERANCE = 0.01;
  * Settings together at the end.
  */
 export async function expectFooterIconRow(page: Page): Promise<void> {
-  const boxes = (
-    await Promise.all(
-      FOOTER_ICON_TEST_IDS.map((testID) =>
-        page.locator(`[data-testid="${testID}"]:visible`).first().boundingBox(),
-      ),
-    )
-  ).map((box) => box!);
+  for (const testID of FOOTER_ICON_TEST_IDS) {
+    await expect(page.locator(`[data-testid="${testID}"]:visible`).first()).toBeVisible();
+  }
+  // All five boxes come from one frame. Separate boundingBox() calls read the icons at different
+  // moments while the compact sidebar still slides in, and the gaps then show the slide, not the layout.
+  const boxes = await page.evaluate((testIDs) => {
+    return testIDs.map((testID) => {
+      const element = [...document.querySelectorAll(`[data-testid="${testID}"]`)].find(
+        (candidate) => candidate.getClientRects().length > 0,
+      );
+      const rect = element!.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    });
+  }, FOOTER_ICON_TEST_IDS);
   const [first] = boxes;
   for (const box of boxes) {
     expect(Math.abs(box.y + box.height / 2 - first!.y - first!.height / 2)).toBeLessThan(2);
