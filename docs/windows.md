@@ -1,6 +1,6 @@
 # Windows source build
 
-Tested once, on 10 Oct 2026: Windows 11 Pro x64, Node.js 24.21.0, npm 11.19.0, no Visual Studio and no Python. The source at v0.2.11 built, the packaged smoke passed, and the CLI started the daemon and ran a Claude chat (the chat needs a signed-in Claude CLI). Do not package on macOS and infer Windows results. Windows ARM64 is not tested.
+Tested on one PC from 10 Oct 2026 (the first test below, then later builds up to v0.2.16): build, packaged smoke, Command Centre, three Claude accounts, update with rollback, and `fulcra ask`. Not run: code signing, auto-update and the NSIS installer. First test, on 10 Oct 2026: Windows 11 Pro x64, Node.js 24.21.0, npm 11.19.0, no Visual Studio and no Python. The source at v0.2.11 built, the packaged smoke passed, and the CLI started the daemon and ran a Claude chat (the chat needs a signed-in Claude CLI). Do not package on macOS and infer Windows results. Windows ARM64 is not tested.
 
 **Command Centre works on Windows** (tested on that PC): turn it on in Settings → Advanced → Background service. The sidebar then shows Fulcra, Team map and Leads, and Settings → Accounts & models lists your Claude accounts. Windows needs its own pieces for what macOS gets from the Keychain, POSIX file modes and Unix sockets:
 
@@ -20,6 +20,20 @@ Tested once, on 10 Oct 2026: Windows 11 Pro x64, Node.js 24.21.0, npm 11.19.0, n
 **Not available on Windows:** environment scripts and Radius scratch runs (they need POSIX process groups and file modes), the macOS desktop notification for held messages, and the bounded worker-artifact reader (it needs Python 3). Each of these refuses or shows nothing, with a clear reason.
 
 Use a real Windows x64 machine with Node.js 24 and npm 11. Put Node.js 24 first in `PATH`; Node.js 22 fails the engine check. A built desktop app starts no daemon by itself: start one with `paseo.cmd daemon start` in your desktop session, or enable it in Settings. A daemon started from an SSH session stops when that session closes.
+
+## Before you build: disk, folders and long paths
+
+- **Free disk space.** Keep at least 10 GB free. One build needs about 5 GB, plus the npm and Electron caches. A build on a full disk fails at the packaging step with only "Missing Windows installer or portable ZIP". That error can mean the disk is full.
+- **Build folder rights.** The app refuses to start from a folder that other users can write. The daemon log then says "Unsafe packaged directory ownership". A folder on a second drive often inherits "Authenticated Users: Modify" from the drive root. The folder must have these rights: the owner is you or Administrators; only SYSTEM, Administrators and you have full control; there is no entry for Users, Authenticated Users or Everyone. Do not use a junction or other mount point for the build folder. The check refuses it.
+- **Long paths.** Some paths under `packages/website/node_modules` are longer than 260 characters. The build works, but `icacls` and `robocopy` can fail on them. Turn on long paths: `git config --global core.longpaths true` and the Windows policy `LongPathsEnabled`.
+- **Caches on another drive.** To keep the system drive free, set the user variables `npm_config_cache`, `ELECTRON_CACHE` and `ELECTRON_BUILDER_CACHE` to folders on another local drive.
+
+## Start and run from automation
+
+- A window that a scheduled task or an SSH session starts closes when that task or session ends. Start the app with `explorer.exe <path to Fulcra.exe>` so that it does not depend on the task.
+- A junction that you make in the desktop session cannot be followed from an SSH session ("untrusted mount point"). Call `paseo.cmd` by its real path, or put a small `paseo.cmd` on the user `PATH` that reads the current build folder from a file.
+- A host and this PC must run the same Fulcra build. The Windows app loads the Command Centre of a host only when both run the same build. With different builds the page says "This plugin could not be loaded", and the app log says "Plugin not trusted on this Mac ... Update Fulcra on the host Mac and this Mac to the same build".
+- `scripts/windows-update` holds a local update script: it builds a tag into a new folder, checks the commit, switches, checks health and rolls back on failure. Its README lists the options, including `-BuildsRoot` and `-ExpectCommit`.
 
 ## Source/dependency setup
 
