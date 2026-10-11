@@ -20,6 +20,7 @@ import { parseDuration } from "../../utils/duration.js";
 import { collectMultiple } from "../../utils/command-options.js";
 import { resolveProviderAndModel } from "../../utils/provider-model.js";
 import { buildWorkspaceSource } from "../workspace/create.js";
+import { ACCOUNT_REQUEST_ENV, resolveRunAccount } from "../account.js";
 
 export { resolveProviderAndModel } from "../../utils/provider-model.js";
 
@@ -72,6 +73,10 @@ export function addRunOptions(cmd: Command): Command {
         "Set environment variable(s) for the agent process (can be used multiple times)",
         collectMultiple,
         [],
+      )
+      .option(
+        "--account <name>",
+        "Run on this pooled account (name or ID); fails if it cannot be used",
       )
       .option(
         "--label <key=value>",
@@ -133,6 +138,7 @@ export interface AgentRunOptions extends CommandOptions {
   image?: string[];
   cwd?: string;
   env?: string[];
+  account?: string;
   label?: string[];
   waitTimeout?: string;
   outputSchema?: string;
@@ -171,7 +177,7 @@ function toRunResult(
   };
 }
 
-function loadOutputSchema(value: string): Record<string, unknown> {
+export function loadOutputSchema(value: string): Record<string, unknown> {
   const trimmed = value.trim();
   if (!trimmed) {
     const error: CommandError = {
@@ -612,6 +618,15 @@ export async function runRunCommand(
 
     const labels = parseRunLabels(options.label);
     const env = parseRunEnv(options.env);
+    // FU-59: a named pooled account is checked here, so a wrong or limited name is a plain error, not a refused launch.
+    if (options.account !== undefined) {
+      const wanted = await resolveRunAccount(
+        client,
+        options.account,
+        resolvedProviderModel.provider,
+      );
+      env[ACCOUNT_REQUEST_ENV] = wanted;
+    }
     const requestEnv = Object.keys(env).length > 0 ? env : undefined;
 
     const callerAgentId = await resolveRunCallerAgentId(client);

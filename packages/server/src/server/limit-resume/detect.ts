@@ -13,6 +13,18 @@ export interface LimitStop {
   kind?: "network";
   /** Epoch ms of the stated reset, or null when the text did not say. */
   resetAt: number | null;
+  /** Which limit the text names: "session", "weekly", another word ("Opus"), or "usage" when none is named. */
+  limitKind?: string;
+}
+
+/** The kind of limit a provider's text names ("hit your session limit", "weekly limit"); null if it names none. */
+export function parseLimitKind(text: string): string | null {
+  const named = /hit your ([A-Za-z][A-Za-z0-9 -]{0,23}?) limit/i.exec(text)?.[1]?.trim();
+  if (named && !/^usage$/i.test(named)) return named.toLowerCase();
+  if (/\bweekly\b/i.test(text)) return "weekly";
+  if (/\bsession\b/i.test(text)) return "session";
+  if (named || /usage limit|limit reached/i.test(text)) return "usage";
+  return null;
 }
 
 const TRANSIENT_NETWORK =
@@ -39,7 +51,11 @@ function providerOf(text: string): LimitStop["provider"] {
 export function classifyFailedTurn(text: string, now: number): LimitStop | null {
   if (isTransientNetworkError(text)) return { provider: "other", resetAt: null, kind: "network" };
   if (!FAILED_TURN_LIMIT.test(text)) return null;
-  return { provider: providerOf(text), resetAt: parseLimitReset({ text, now }) };
+  return {
+    provider: providerOf(text),
+    resetAt: parseLimitReset({ text, now }),
+    limitKind: parseLimitKind(text) ?? "usage",
+  };
 }
 
 /** The assistant message that ended a turn, when its whole text is a provider's limit line. */
@@ -52,5 +68,9 @@ export function classifyEndingAssistantMessage(
   if (/^API Error: [^\n]+$/.test(line) && isTransientNetworkError(line))
     return { provider: "claude", resetAt: null, kind: "network" };
   if (!CLAUDE_LINE.test(line) && !CLAUDE_LEGACY.test(line) && !CODEX_LINE.test(line)) return null;
-  return { provider: providerOf(line), resetAt: parseLimitReset({ text: line, now }) };
+  return {
+    provider: providerOf(line),
+    resetAt: parseLimitReset({ text: line, now }),
+    limitKind: parseLimitKind(line) ?? "usage",
+  };
 }

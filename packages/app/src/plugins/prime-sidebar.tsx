@@ -40,7 +40,7 @@ import { projectsRpc } from "../../../../control/orca-organization/shared/projec
 import { STATE_LABEL, stateOf } from "../../../../control/orca-organization/client/team-tree";
 import { create } from "zustand";
 import { chatLeads } from "./sidebar-chat-leads";
-import { lastKnownStatusLine } from "@getpaseo/protocol/chat-status";
+import { effectiveChatStatus, lastKnownStatusLine } from "@getpaseo/protocol/chat-status";
 
 import type { Theme } from "@/styles/theme";
 
@@ -1113,11 +1113,13 @@ function LeadRow({
   // The status comes from the chat list of the computer the chat lives on: for another computer's lead, that is the
   // computer that reported it, as for a home lead (0.2.15, FU-57).
   const statusServerId = ownerServerId;
-  const chatStatus = useSessionStore((state) =>
-    statusServerId && seat.sessionId
-      ? state.sessions[statusServerId]?.agents.get(seat.sessionId)?.status
-      : undefined,
-  );
+  const chatStatus = useSessionStore((state) => {
+    const agent =
+      statusServerId && seat.sessionId
+        ? state.sessions[statusServerId]?.agents.get(seat.sessionId)
+        : undefined;
+    return agent ? effectiveChatStatus(agent) : undefined;
+  });
   const state = leadStatusLine(seat, node, canOpen, unavailableText, hostLabel, chatStatus);
   // Another computer's lead always names that computer, even when its status is not known here.
   const located =

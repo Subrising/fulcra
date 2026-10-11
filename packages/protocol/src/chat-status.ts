@@ -6,7 +6,26 @@ const WORDS: Record<string, string> = {
   idle: "Idle",
   initializing: "Starting",
   error: "Needs attention",
+  "waiting-permission": "Waiting for permission",
 };
+
+/**
+ * The status to show for a chat from the chat list: a chat with a pending permission prompt says so, whatever its run
+ * state (Fulcra 0.2.17). The chat list marks it with requiresAttention and attentionReason "permission".
+ */
+export function effectiveChatStatus(agent: {
+  status?: string | null;
+  requiresAttention?: boolean | null;
+  attentionReason?: string | null;
+}): string | undefined {
+  if (
+    agent.status !== "closed" &&
+    agent.requiresAttention === true &&
+    agent.attentionReason === "permission"
+  )
+    return "waiting-permission";
+  return agent.status ?? undefined;
+}
 
 /** The word for a chat's status from the chat list; null when it has none. */
 export function chatStatusWord(status: string | null | undefined): string | null {
