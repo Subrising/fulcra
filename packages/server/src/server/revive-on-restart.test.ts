@@ -34,6 +34,8 @@ async function fixture(input: {
   limited?: Record<string, Date | null>;
   failLoad?: Record<string, string>;
   refuse?: Record<string, string>;
+  /** Per session, the answers of successive re-reads before the resume (null: unchanged). */
+  changes?: Record<string, Array<string | null>>;
   enabled?: boolean;
 }) {
   const home = await mkdtemp(path.join(tmpdir(), "revive-on-restart-"));
@@ -66,6 +68,7 @@ async function fixture(input: {
   } as unknown as AgentStorage;
   const loads: string[] = [];
   const prompts: string[] = [];
+  const reads: string[] = [];
   const notices: Array<{ leadId: string; prompt: string }> = [];
   const sessions: ReviveSessions = {
     load: async (id) => {
@@ -75,6 +78,10 @@ async function fixture(input: {
       loaded.add(id);
     },
     refusal: (id) => input.refuse?.[id] ?? null,
+    changedSince: async (id, cutAt) => {
+      reads.push(`${id}@${cutAt}`);
+      return input.changes?.[id]?.shift() ?? null;
+    },
     limitedUntil: async (id) => input.limited?.[id],
     sendContinue: async (id) => {
       prompts.push(id);
@@ -100,7 +107,7 @@ async function fixture(input: {
       { records, crashInterrupted },
     );
   const status = (id: string) => byId.get(id)?.lastStatus;
-  return { home, run, loads, prompts, notices, status };
+  return { home, run, loads, prompts, notices, status, reads };
 }
 
 describe("revive on restart", () => {
@@ -196,6 +203,36 @@ describe("revive on restart", () => {
         ";",
       )[0],
     );
+  });
+
+  test("each resume reads the session again: a session that got a new message after the restart is not resumed twice", async () => {
+    const cutAt = "2026-10-11T01:20:00.000Z";
+    const f = await fixture({
+      records: [
+        { id: RUNNING, lastUserMessageAt: cutAt },
+        { id: LIMITED, lastUserMessageAt: cutAt },
+        { id: IDLE, lastUserMessageAt: cutAt },
+      ],
+      changes: {
+        // Changed before the first read (a user or limit-resume prompted it during the settle time).
+        [RUNNING]: ["a new message arrived since the restart"],
+        // Unchanged at the first read, changed at the last read just before the prompt.
+        [LIMITED]: [null, "a new message arrived since the restart"],
+      },
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [RUNNING, LIMITED, IDLE].map((id) => ({ id, lifecycle: "running" })),
+    });
+
+    const result = await f.run();
+
+    expect(f.prompts).toEqual([IDLE]);
+    expect(result.continued).toEqual([IDLE]);
+    expect(result.closed).toEqual([]);
+    // Every read compares with the last user message the restart cut off.
+    expect(f.reads.every((read) => read.endsWith(`@${cutAt}`))).toBe(true);
+    expect(f.reads.filter((read) => read.startsWith(IDLE))).toHaveLength(2);
   });
 
   test("turned off: nothing is reopened, loaded or prompted, and the stop record is removed", async () => {
