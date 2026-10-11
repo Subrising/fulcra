@@ -1,6 +1,10 @@
 export class AskError extends Error {
   code: string;
 }
+export function killProcessTree(
+  child: { pid?: number; kill(signal?: string): unknown },
+  o?: { platform?: string; run?: (...args: any[]) => any },
+): void;
 export function refuseShellShim(command: string): void;
 export const MAX_ASK_TIMEOUT_MS: number;
 export const DEFAULT_ASK_TIMEOUT_MS: number;
