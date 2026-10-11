@@ -206,3 +206,39 @@ test("the real weekly-limit result of the Claude CLI (11 Oct, exit 1, is_error, 
   const work = readAccounts(root).accounts.find((a) => a.name === "Work");
   assert.deepEqual([work.limitKind, work.limitedUntil], ["weekly", "2026-10-12T22:00:00.000Z"]);
 });
+
+// Fulcra 0.2.17 (FU-92): a Windows shell shim is never run, because a shell changes the arguments.
+import { refuseShellShim, spawnClaudeOnce } from "./ask.mjs";
+const scratchFolders = () =>
+  fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("fulcra-ask-")).length;
+
+test("a .cmd or .bat Claude binary is refused with a plain error, and nothing is started or left behind", async () => {
+  for (const name of ["claude.cmd", "C:\\tools\\claude.BAT", "/x/claude.Cmd"]) {
+    assert.throws(
+      () => refuseShellShim(name),
+      (e) => e instanceof AskError && e.code === "CLI_UNSUPPORTED" && /claude\.exe/.test(e.message),
+    );
+  }
+  assert.doesNotThrow(() => refuseShellShim("claude"));
+  assert.doesNotThrow(() => refuseShellShim("C:\\tools\\claude.exe"));
+  const before = scratchFolders();
+  for (const via of [{ bin: "claude.cmd" }, { env: { FULCRA_CLAUDE_BIN: "C:\\x\\claude.bat" } }]) {
+    await assert.rejects(
+      spawnClaudeOnce({
+        token: "t",
+        model: "claude-haiku-5-5",
+        prompt: "x",
+        timeoutMs: 1000,
+        ...via,
+      }),
+      (e) => e.code === "CLI_UNSUPPORTED",
+    );
+  }
+  assert.equal(scratchFolders(), before);
+});
+
+test("the CLI is never started through a shell, even for a schema with shell characters", () => {
+  const src = fs.readFileSync(new URL("./ask.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /shell:\s*(?:true|process|[a-z]+\()/);
+  assert.match(src, /shell:\s*false/);
+});

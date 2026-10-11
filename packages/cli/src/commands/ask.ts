@@ -112,11 +112,14 @@ interface AskOptions {
 export function createAskCommand(): Command {
   const cmd = new Command("ask")
     .description("One-shot model call on a pooled account: no tools, no agent or workspace record")
-    .argument("[prompt]", 'The prompt, or "-" (or nothing) to read it from standard input')
+    .argument(
+      "[prompt]",
+      'The prompt, or "-" (or nothing) to read it from standard input. On Windows, send the prompt on standard input: cmd.exe changes & | < > ^ % and " in an argument',
+    )
     .option("--model <model>", "Claude model", DEFAULT_ASK_MODEL)
     .option(
       "--output-schema <schema>",
-      "JSON schema file path or inline JSON object for the answer",
+      "JSON schema file path or inline JSON object for the answer. On Windows, use a file path",
     )
     .option("--timeout <duration>", "Longest time for the call (e.g. 30s, 2m)", DEFAULT_ASK_TIMEOUT)
     .option("--account <name>", "Use this pooled account only (no retry on another)");

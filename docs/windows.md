@@ -71,6 +71,14 @@ node packages/cli/bin/paseo daemon start
 
 Run the CLI from the repository root. Starting its standalone daemon is an intentional local effect with its own configured home; it does not implicitly select the desktop-managed daemon. A built desktop includes `paseo.cmd` as its compatibility shim.
 
+## Running `fulcra ask` safely on Windows
+
+`fulcra` starts through `paseo.cmd`, and `cmd.exe` changes some characters in the command line: `&`, `|`, `<`, `>`, `^`, `%` and `"`. A prompt with these characters can break or run as a command.
+
+- Send the prompt on standard input, with `-` as the prompt (or no prompt). Standard input is not changed by `cmd.exe`. Example: `type prompt.txt | fulcra ask - --model claude-haiku-5-5`.
+- Give `--output-schema` as a file path, not as inline JSON. Example: `--output-schema schema.json`.
+- Set `FULCRA_CLAUDE_BIN` only to the native `claude.exe`. Fulcra refuses a `.cmd` or `.bat` file, because a shell would change the arguments.
+
 ## Installation acceptance still needed
 
 Only after building and verifying your own artifacts: install the NSIS package or extract the portable ZIP, launch Fulcra, pair a host you own, test a real intended agent workflow, reconnect, upgrade and uninstall. Unsigned apps may show an unknown-publisher warning; investigate it rather than disable system protections globally. Provider CLIs/authentication are installed separately. No developer hostname, signing certificate, paired-device grant, store link or Windows PASS is invented by these instructions.
