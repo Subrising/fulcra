@@ -12,12 +12,18 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 - Options: `--model` (default `claude-sonnet-5-5`), `--output-schema`, `--timeout`, `--account`, `--host` and `--home`.
 - If the account is at its usage limit, the call marks it limited and moves once to the next usable account. If that also fails, the call stops with a clear error.
 - On Windows, `fulcra ask` never uses a shell. It refuses a `.cmd` or `.bat` Claude file with a clear error; use the native `claude.exe`. Send the prompt on standard input (`-`) and give `--output-schema` as a file path, because `cmd.exe` changes `&`, `|`, `<`, `>`, `^`, `%` and `"` in a command line. See docs/windows.md.
-- (FU-107) `fulcra run --mcp-config <file> --preapprove <server.tool>` (repeatable) starts an agent with MCP servers, and the named MCP tools run without a prompt. Both go in the same create request. A Claude settings file cannot allow an MCP tool for a server that the SDK supplies, so use this with the new "Allow List Only" mode.
+- `fulcra run --mcp-config <file> --preapprove <server.tool>` (repeatable) starts an agent with MCP servers, and the named MCP tools run without a prompt. Both go in the same create request. A Claude settings file cannot allow an MCP tool for a server that the SDK supplies, so use this with the new "Allow List Only" mode.
 - When `fulcra ask` times out, it ends at once and stops the Claude process and everything it started.
+- `fulcra ask --account` takes the account name or its ID, like `fulcra run --account`.
+- A Claude process that exits before it reads the prompt no longer stops the Command Centre plugin. The call fails with a clear error.
+- A scratch folder that cannot be removed (for example a file still open on Windows) no longer stops the plugin.
+- A rate limit (HTTP 429) without a usage-limit message holds the account for 10 minutes, not 5 hours.
 - `fulcra run --account <name>` checks that the account exists and is usable, then pins the new session to it.
 
 ### Run and leads
 
+- Claude agents can use the permission mode "Allow List Only" (`dontAsk`): tools that are allowed run, and every other tool is refused without a permission prompt.
+- `fulcra agent adopt <child> --parent <id>` makes an existing chat the child of another chat. Only the owner's own connection can do this. It fails with a plain message for an unknown chat, the same chat, or a chat that has no provider session yet.
 - `fulcra run` uses the workspace that already owns the run directory, instead of creating a new workspace for each run. `--new-workspace` still creates one.
 - `fulcra run --output-schema` prints the agent id on standard error. With an explicit `--json`, the answer is `{"agentId": ..., "output": ...}`. Without `--json`, the output is the same as before.
 - A lead that turns idle while it owns open ledger items and has idle workers gets one short message that lists them. The daemon reads the project ledgers in `~/shared-vault/projects` (or `FULCRA_LEDGER_DIR`) and sends the message when the lead's turn ends. It sends it at most once per idle period, and never after a turn that a nudge started.
@@ -48,13 +54,17 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 - A stop record revives only sessions that did not change after the stop. An old stop record, for example after a rollback, does not reopen sessions used since.
 - A lead closed by hand is not woken by the held notice.
 
-### Windows update script
+### Windows update script and guide
 
+- docs/windows.md now covers free disk space, build-folder rights, long paths, starting Fulcra from automation, and the rule that the host and the PC run the same build.
 - The README gives the correct builds folder (default `E:\fulcra-builds`).
 - `-Check` tests the builds drive: the drive must exist, and the free space is read on that drive.
 - The path to Fulcra.exe is quoted, for user folders that contain a space.
 
-### Tests
+### Tests and CI
 
+- CI now packages the Command Centre plugin, as the app build does. A plugin import that cannot be bundled fails CI, not the app build.
+- The Command Centre plugin check (`control/orca-organization/verify.mjs`) passes again: its type errors and its stale test expectations are fixed.
+- Some control tests that do not run in CI expected old behaviour or old formatting. They are updated to the current code.
 - A new node test checks the Windows update script text in CI. PowerShell itself is not run.
 - The footer icon test reads all five icons in one frame, so a sliding sidebar does not give false gaps.
