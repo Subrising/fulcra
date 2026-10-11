@@ -335,8 +335,8 @@ try {
       "--quiet should print the same ordered model IDs returned by --json",
     );
     assert(
-      claudeModelsFromJson.some((m) => m.id === "claude-sonnet-5-5"),
-      "captured --json output should include the current Claude everyday model id",
+      claudeModelsFromJson.some((m) => m.id === "claude-haiku-5-5"),
+      "captured --json output should include the current Claude quick-answer model id",
     );
     console.log("✓ provider models --quiet outputs model IDs only\n");
   }
