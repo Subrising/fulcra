@@ -13,6 +13,7 @@ import { ICON_SIZE } from "@/styles/theme";
 import type { Theme } from "@/styles/theme";
 import { Shortcut } from "@/components/ui/shortcut";
 import type { ShortcutKey } from "@/utils/format-shortcut";
+import { sidebarTouchStyles, useSidebarTouchRows } from "./sidebar-touch";
 
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -46,6 +47,8 @@ interface SidebarHeaderRowProps {
    */
   trailing?: ReactNode;
   rowRef?: Ref<View>;
+  /** A 48 px touch target with a mouse too (the Leads header, which opens and folds a block). */
+  tall?: boolean;
 }
 
 export function SidebarHeaderRow({
@@ -60,12 +63,16 @@ export function SidebarHeaderRow({
   shortcutKeys = null,
   trailing,
   rowRef,
+  tall = false,
 }: SidebarHeaderRowProps) {
   const [isHovered, setIsHovered] = useState(false);
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const ThemedIcon = useMemo(() => (Icon ? withUnistyles(Icon) : null), [Icon]);
   const isHighlighted = isHovered || isActive;
+  // The lone "header" strip has its own fixed height; rows inside a group grow to a touch target.
+  const touchRows = useSidebarTouchRows();
+  const tallRow = tall || (touchRows && variant !== "header");
   const iconSize = variant === "header" ? ICON_SIZE.md : ICON_SIZE.sm;
 
   let right = trailing ?? null;
@@ -76,7 +83,7 @@ export function SidebarHeaderRow({
   return (
     <View ref={rowRef} collapsable={false} style={getContainerStyle(variant)}>
       <View
-        style={[styles.row, isHighlighted && styles.rowHighlighted]}
+        style={[styles.row, tallRow && sidebarTouchStyles.row, isHighlighted && styles.rowHighlighted]}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
       >
@@ -89,7 +96,7 @@ export function SidebarHeaderRow({
           accessibilityLabel={accessibilityLabel ?? label}
           accessibilityState={isActive ? SELECTED_STATE : undefined}
           aria-selected={isActive}
-          style={styles.button}
+          style={tallRow ? [styles.button, sidebarTouchStyles.row] : styles.button}
         >
           {ThemedIcon ? (
             <ThemedIcon

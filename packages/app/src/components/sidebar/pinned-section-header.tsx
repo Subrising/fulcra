@@ -13,6 +13,7 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative } from "@/constants/platform";
 import type { Theme } from "@/styles/theme";
+import { sidebarTouchStyles, useSidebarTouchRows } from "./sidebar-touch";
 
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
@@ -31,19 +32,20 @@ export function PinnedSectionHeader({
   const isCompact = useIsCompactFormFactor();
   const accessibilityState = useMemo(() => ({ expanded: !collapsed }), [collapsed]);
   const Chevron = collapsed ? ThemedChevronRight : ThemedChevronDown;
+  const touchRows = useSidebarTouchRows();
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={accessibilityState}
       onPress={onToggle}
-      style={styles.header}
+      style={touchRows ? [styles.header, sidebarTouchStyles.row] : styles.header}
       testID="sidebar-pinned-section-header"
     >
       {({ hovered }) => (
         <>
           <Text style={styles.title}>{t("sidebar.pinned.title")}</Text>
-          {hovered || isNative || isCompact ? (
+          {hovered || isNative || isCompact || touchRows ? (
             <Chevron size={12} uniProps={foregroundMutedColorMapping} />
           ) : null}
         </>

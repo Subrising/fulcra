@@ -1,3 +1,4 @@
+import { SidebarTopContentProvider } from "@/components/sidebar/sidebar-top-content";
 import { router } from "expo-router";
 import { CircleGauge, FolderPlus, GitBranch, Server, Settings, X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -62,6 +63,7 @@ import {
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
+import { SIDEBAR_TOUCH_ROW_HEIGHT, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
 
@@ -296,14 +298,15 @@ function FooterIconButton({
   buttonRef?: RefObject<View | null>;
 }) {
   const isCompact = useIsCompactFormFactor();
-  const iconSize = isCompact ? theme.iconSize.lg : theme.iconSize.md;
+  const touchRows = useSidebarTouchRows();
+  const iconSize = isCompact || touchRows ? theme.iconSize.lg : theme.iconSize.md;
 
   return (
     <Tooltip delayDuration={300}>
       <TooltipTrigger asChild>
         <Pressable
           ref={buttonRef}
-          style={styles.footerIconButton(isCompact)}
+          style={styles.footerIconButton(isCompact, touchRows)}
           testID={testID}
           nativeID={testID}
           collapsable={false}
@@ -543,6 +546,11 @@ function MobileSidebar({
     closeSidebar();
   }, [closeSidebar]);
 
+  // FU-62: the top rows scroll with the list (sidebar-top-content.tsx).
+  const navRows = useMemo(
+    () => <SidebarNavRows style={styles.sidebarHeaderGroup} onBeforeNavigate={closeSidebar} />,
+    [closeSidebar],
+  );
   const mobileSidebarInsetStyle = useMemo(
     () => ({
       paddingTop: insetsTop,
@@ -560,7 +568,6 @@ function MobileSidebar({
     >
       <View style={styles.sidebarContent} pointerEvents="auto">
         <WindowChromeSafeArea placement="below" />
-        <SidebarNavRows style={styles.sidebarHeaderGroup} onBeforeNavigate={closeSidebar} />
         <WindowChromeSafeArea
           placement="inline"
           pointerEvents="box-none"
@@ -586,29 +593,34 @@ function MobileSidebar({
         </WindowChromeSafeArea>
 
         {isInitialLoad && !hasActiveHostFilter ? (
-          <SidebarAgentListSkeleton />
+          <>
+            {navRows}
+            <SidebarAgentListSkeleton />
+          </>
         ) : (
-          <SidebarWorkspaceList
-            collapsedProjectKeys={collapsedProjectKeys}
-            onToggleProjectCollapsed={toggleProjectCollapsed}
-            shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
-            groupMode={groupMode}
-            workspaceGroups={workspaceGroups}
-            projectIconTargets={projectIconTargets}
-            pinnedGroups={pinnedGroups}
-            projects={projects}
-            hasProjectsBeforeFilter={hasProjectsBeforeFilter}
-            hasActiveProjectFilter={hasActiveProjectFilter}
-            workspaceEntriesByKey={workspaceEntriesByKey}
-            isRefreshing={isManualRefresh && isRevalidating}
-            onRefresh={handleRefresh}
-            onWorkspacePress={handleWorkspacePress}
-            onAddProject={handleOpenProject}
-            onImportSession={handleImportSession}
-            parentGestureRef={closeGestureRef}
-            dragGestureHostActive={active}
-            listHeaderComponent={workspacesSectionHeaderElement}
-          />
+          <SidebarTopContentProvider value={navRows}>
+            <SidebarWorkspaceList
+              collapsedProjectKeys={collapsedProjectKeys}
+              onToggleProjectCollapsed={toggleProjectCollapsed}
+              shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
+              groupMode={groupMode}
+              workspaceGroups={workspaceGroups}
+              projectIconTargets={projectIconTargets}
+              pinnedGroups={pinnedGroups}
+              projects={projects}
+              hasProjectsBeforeFilter={hasProjectsBeforeFilter}
+              hasActiveProjectFilter={hasActiveProjectFilter}
+              workspaceEntriesByKey={workspaceEntriesByKey}
+              isRefreshing={isManualRefresh && isRevalidating}
+              onRefresh={handleRefresh}
+              onWorkspacePress={handleWorkspacePress}
+              onAddProject={handleOpenProject}
+              onImportSession={handleImportSession}
+              parentGestureRef={closeGestureRef}
+              dragGestureHostActive={active}
+              listHeaderComponent={workspacesSectionHeaderElement}
+            />
+          </SidebarTopContentProvider>
         )}
 
         <SidebarFooter
@@ -731,6 +743,11 @@ function DesktopSidebar({
     () => [styles.sidebarHeaderGroup, ownsTopLeft && styles.sidebarHeaderGroupBelowChrome],
     [ownsTopLeft],
   );
+  // FU-62: the top rows scroll with the list (sidebar-top-content.tsx).
+  const navRows = useMemo(
+    () => <SidebarNavRows style={sidebarHeaderGroupStyle} />,
+    [sidebarHeaderGroupStyle],
+  );
   return (
     <Animated.View
       accessibilityElementsHidden={!active}
@@ -760,30 +777,34 @@ function DesktopSidebar({
           ) : (
             <TitlebarDragRegion />
           )}
-          <SidebarNavRows style={sidebarHeaderGroupStyle} />
         </View>
 
         {isInitialLoad && !hasActiveHostFilter ? (
-          <SidebarAgentListSkeleton />
+          <>
+            {navRows}
+            <SidebarAgentListSkeleton />
+          </>
         ) : (
-          <SidebarWorkspaceList
-            collapsedProjectKeys={collapsedProjectKeys}
-            onToggleProjectCollapsed={toggleProjectCollapsed}
-            shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
-            groupMode={groupMode}
-            workspaceGroups={workspaceGroups}
-            projectIconTargets={projectIconTargets}
-            pinnedGroups={pinnedGroups}
-            projects={projects}
-            hasProjectsBeforeFilter={hasProjectsBeforeFilter}
-            hasActiveProjectFilter={hasActiveProjectFilter}
-            workspaceEntriesByKey={workspaceEntriesByKey}
-            isRefreshing={isManualRefresh && isRevalidating}
-            onRefresh={handleRefresh}
-            onAddProject={handleOpenProject}
-            onImportSession={handleImportSession}
-            listHeaderComponent={workspacesSectionHeaderElement}
-          />
+          <SidebarTopContentProvider value={navRows}>
+            <SidebarWorkspaceList
+              collapsedProjectKeys={collapsedProjectKeys}
+              onToggleProjectCollapsed={toggleProjectCollapsed}
+              shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
+              groupMode={groupMode}
+              workspaceGroups={workspaceGroups}
+              projectIconTargets={projectIconTargets}
+              pinnedGroups={pinnedGroups}
+              projects={projects}
+              hasProjectsBeforeFilter={hasProjectsBeforeFilter}
+              hasActiveProjectFilter={hasActiveProjectFilter}
+              workspaceEntriesByKey={workspaceEntriesByKey}
+              isRefreshing={isManualRefresh && isRevalidating}
+              onRefresh={handleRefresh}
+              onAddProject={handleOpenProject}
+              onImportSession={handleImportSession}
+              listHeaderComponent={workspacesSectionHeaderElement}
+            />
+          </SidebarTopContentProvider>
         )}
 
         <SidebarCalloutSlot />
@@ -882,20 +903,18 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minHeight: 0,
   },
+  // FU-62: the close row takes its own space above the sidebar's rows. Floating over them, its 48 px target
+  // covered the right end of "New chat", so a tap there closed the sidebar.
   mobileCloseButtonRow: {
-    position: "absolute",
-    top: theme.spacing[3],
-    left: 0,
-    right: 0,
-    zIndex: 2,
+    paddingTop: theme.spacing[1],
     alignItems: "flex-end",
   },
   mobileCloseButton: {
-    // The 16px X paints farther inside its 32px hit target than the 14px Settings2 glyph.
+    // The 16px X paints farther inside its hit target than the 14px Settings2 glyph.
     // This optical inset puts their painted right edges on the same sidebar rail.
-    marginRight: theme.spacing[2] + 1.5,
-    width: 32,
-    height: 32,
+    marginRight: theme.spacing[2] + 1.5 - 8,
+    width: SIDEBAR_TOUCH_ROW_HEIGHT,
+    height: SIDEBAR_TOUCH_ROW_HEIGHT,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.borderRadius.lg,
@@ -957,9 +976,10 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.spacing[1.5],
     gap: 2,
   },
-  footerIconButton: (isCompact: boolean) => ({
-    width: isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
-    height: isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
+  // FU-62: a touch screen gets a 48 px touch target; a mouse keeps the small icon buttons.
+  footerIconButton: (isCompact: boolean, touch: boolean) => ({
+    width: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
+    height: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[1],

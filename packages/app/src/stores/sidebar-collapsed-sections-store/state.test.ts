@@ -4,6 +4,7 @@ import {
   mergePersistedCollapsedProjects,
   serializeCollapsedProjects,
   setProjectCollapsed,
+  toggleLeadsCollapsed,
   togglePinnedCollapsed,
   toggleProjectCollapsed,
   toggleWorkspaceGroupCollapsed,
@@ -14,6 +15,7 @@ function emptyState(): CollapsedProjectsState {
     collapsedProjectKeys: new Set(),
     collapsedWorkspaceGroupKeys: new Set(),
     collapsedPinned: false,
+    collapsedLeads: false,
   };
 }
 
@@ -35,12 +37,14 @@ describe("sidebar collapsed projects transitions", () => {
       collapsedProjectKeys: new Set(["project-a", "project-b"]),
       collapsedWorkspaceGroupKeys: new Set(["running"]),
       collapsedPinned: true,
+      collapsedLeads: false,
     };
 
     expect(serializeCollapsedProjects(state)).toEqual({
       collapsedProjectKeys: ["project-a", "project-b"],
       collapsedWorkspaceGroupKeys: ["running"],
       collapsedPinned: true,
+      collapsedLeads: false,
     });
   });
 
@@ -50,6 +54,22 @@ describe("sidebar collapsed projects transitions", () => {
 
     const restored = mergePersistedCollapsedProjects({ collapsedPinned: true }, emptyState());
     expect(restored.collapsedPinned).toBe(true);
+  });
+
+  it("toggles the Leads block and restores its collapse after a restart", () => {
+    const toggled = toggleLeadsCollapsed(emptyState());
+    expect(toggled.collapsedLeads).toBe(true);
+    expect(serializeCollapsedProjects(toggled).collapsedLeads).toBe(true);
+
+    const restored = mergePersistedCollapsedProjects(
+      serializeCollapsedProjects(toggled),
+      emptyState(),
+    );
+    expect(restored.collapsedLeads).toBe(true);
+    // Preferences saved before the Leads arrow existed keep Leads open.
+    expect(
+      mergePersistedCollapsedProjects({ collapsedPinned: true }, emptyState()).collapsedLeads,
+    ).toBe(false);
   });
 
   it("rejects the complete value when a persisted project key is invalid", () => {
