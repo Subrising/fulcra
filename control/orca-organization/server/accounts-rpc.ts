@@ -283,6 +283,7 @@ export function createAccountHandlers(d: Deps) {
     async settings(
       input: {
         policy?: "priority" | "spread";
+        rotateOnLimit?: boolean;
         role?: string;
         defaults?: any;
         orchestrationGuard?: boolean;

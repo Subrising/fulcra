@@ -20,6 +20,8 @@ export interface AccountState {
   assignments: Record<string, { accountId: string; provider: string; at: string; ended: boolean }>;
   rotations: any[];
   defaults: Record<"claude" | "codex", string | null>;
+  /** Move a session to the next account when its account hits a limit (the owner's opt-in; false when absent). */
+  rotateOnLimit?: boolean;
 }
 export function accountsDir(root: string): string;
 export function readAccounts(root: string): AccountState;
@@ -49,6 +51,7 @@ export function setAccount(
 export function moveAccount(root: string, id: string, direction: "up" | "down"): Promise<Account>;
 export function removeAccount(root: string, id: string): Promise<Account>;
 export function setPolicy(root: string, policy: string): Promise<string>;
+export function setRotateOnLimit(root: string, value: boolean): Promise<boolean>;
 export function assign(
   root: string,
   sessionId: string,

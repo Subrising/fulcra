@@ -28,6 +28,7 @@ const ROLES = {
   },
 };
 interface Req {
+  [key: string]: unknown;
   config: {
     provider: string;
     cwd?: string;

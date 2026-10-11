@@ -639,16 +639,21 @@ for (const provider of ["claude", "codex"]) {
     const out = await f.hook({ request: f.request });
     assert.equal(out.env.FULCRA_ACCOUNT_ID, f.accounts[8].id);
     assert.equal(out.env.KEEP, "yes");
+    // A missing Codex login marks the account "signing in". A missing Claude credential does not: it stays retryable on
+    // the next launch (accounts.mjs, "Missing/unreadable Keychain material is not a provider rejection").
     assert.equal(
       Object.values(readAccounts(f.root).accounts).filter((a) => a.auth !== "ok").length,
-      8,
+      provider === "codex" ? 8 : 0,
     );
     if (provider === "claude") assert.equal(new Set(f.reads).size, 9);
   });
   test(`admission ${provider}: all 32 unavailable credentials refuse without native fallback`, async (t) => {
     const f = await admissionFixture(t, provider, 32);
     await assert.rejects(f.hook({ request: f.request }), admissionFailure);
-    assert.equal(readAccounts(f.root).accounts.filter((a) => a.auth !== "ok").length, 32);
+    assert.equal(
+      readAccounts(f.root).accounts.filter((a) => a.auth !== "ok").length,
+      provider === "codex" ? 32 : 0,
+    );
     if (provider === "claude") assert.equal(new Set(f.reads).size, 32);
   });
   test(`admission ${provider}: history-unknown empty and disabled pools preserve native opt-out`, async (t) => {
@@ -830,7 +835,8 @@ test("Book local: unavailable enabled Work refuses ambient login before provider
     providerLaunches++;
   }, admissionFailure);
   assert.equal(providerLaunches, 0);
-  assert.deepEqual(f.reads, [work.id]);
+  // Only the enabled account is read (twice: a credential that is not there is read again once).
+  assert.deepEqual([...new Set(f.reads)], [work.id]);
   assert.equal(readAccounts(f.root).accounts.find((a) => a.id === personal.id).enabled, false);
   for (const key of Object.keys(inputEnv)) assert.equal(f.request.env[key] === inputEnv[key], true);
 });

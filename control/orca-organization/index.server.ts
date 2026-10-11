@@ -172,6 +172,7 @@ import {
 } from "./shared/trackers";
 import { createTrackerService } from "./server/trackers/service.mjs";
 import { createGithubConnector } from "./server/trackers/github.mjs";
+import type { Fetcher as TrackerFetcher } from "./server/trackers/http.mjs";
 import { createGhRunner } from "./server/trackers/gh-runner.mjs";
 import { createJiraConnector } from "./server/trackers/jira.mjs";
 import { createBitbucketConnector } from "./server/trackers/bitbucket.mjs";
@@ -660,12 +661,14 @@ export default function contribute(
   // Structural read so this compiles against SDKs with and without ctx.secrets; the plugin and the host ship separately.
   const secrets =
     (server as { secrets?: { read(name: string): Promise<string | null> } }).secrets ?? noSecrets;
+  // Node's fetch returns a body that can be read with for await; the DOM types do not say so.
+  const trackerFetch = fetch as unknown as TrackerFetcher;
   const trackers = createTrackerService({
     controller: localCall,
     connectors: {
-      github: createGithubConnector({ fetcher: fetch, secrets, gh: createGhRunner() }),
-      jira: createJiraConnector({ fetcher: fetch, secrets }),
-      bitbucket: createBitbucketConnector({ fetcher: fetch, secrets }),
+      github: createGithubConnector({ fetcher: trackerFetch, secrets, gh: createGhRunner() }),
+      jira: createJiraConnector({ fetcher: trackerFetch, secrets }),
+      bitbucket: createBitbucketConnector({ fetcher: trackerFetch, secrets }),
     },
   });
   const gated = <T>(run: () => T): T => {
