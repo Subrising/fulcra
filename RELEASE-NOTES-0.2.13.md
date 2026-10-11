@@ -29,7 +29,7 @@ Fulcra 0.2.13 is based on Paseo v0.11.0-beta.5.
 
 ### Models
 
-- A worker that a chat starts without a model gets Sonnet 5.5. Sessions that Command Centre starts for a chat (they name a parent) without a model or a role model also get Sonnet 5.5. Sessions that you start yourself, in the app or in Command Centre, keep Opus 5.5. A model that is given explicitly always wins.
+- A worker that a chat starts without a model gets Sonnet 5.5. Sessions that Command Centre starts without a model or a role model also get Sonnet 5.5. Chats that you start in the app keep Opus 5.5. A model that is given explicitly always wins.
 
 ### Command Centre
 

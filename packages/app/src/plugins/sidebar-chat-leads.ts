@@ -7,7 +7,7 @@ import {
 import { chatStatusWord } from "@getpaseo/protocol/chat-status";
 
 // Fulcra 0.2.14: leads the sidebar finds in the chat list. The role directory lists only chats with a seat, so a
-// chat that reports to the main assistant without a seat (the AI gag games lead on the MacBook, 11 Oct) never showed.
+// chat that reports to the main assistant without a seat (a lead on another computer) never showed.
 
 interface ChatRecord {
   id: string;

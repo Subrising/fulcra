@@ -20,7 +20,8 @@ Fulcra 0.2.14 is based on Paseo v0.11.0-beta.5.
 
 ### Command Centre
 
-- A Command Centre create that you start keeps Opus 5.5. Only a create that names a parent chat gets the worker default (Sonnet 5.5). An explicit model always wins.
+- Model defaults changed from 0.2.13. In 0.2.13, every Command Centre create without a model or a role model got the worker default (Sonnet 5.5). Now only a create that names a parent chat gets the worker default. A Command Centre create that you start yourself keeps Opus 5.5, as a chat that you start in the app does. A request that a lead seat accepts names the lead as parent, so it gets Sonnet 5.5. An explicit model or role model always wins.
+- Known gap: a session that another computer books on this computer names no parent, so it gets Opus 5.5, not Sonnet 5.5.
 - A message that carries a trusted plugin's identity is refused while the target chat is busy, with a plain reason. Before, it waited and was then delivered as if it came from you.
 - When the 50-message limit refuses a held message, its pending receipt is cleared, so the same message ID can be sent again.
 

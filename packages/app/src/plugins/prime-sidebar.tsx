@@ -70,7 +70,7 @@ type FleetNode = Fleet["nodes"][number];
 // "Couldn't load", instead of waiting for someone to press Retry.
 export const SIDEBAR_READ_RETRIES = 6;
 // FULCRA(sidebar-leads): the lead reads had no timer, so a lead seated after the app opened stayed out of the sidebar
-// until the app was reopened (Music and video lead, 11 Oct). The Leads page already read every 30 s.
+// until the app was reopened (seen with a project lead). The Leads page already read every 30 s.
 export const SIDEBAR_REFRESH_MS = 30_000;
 export const sidebarRetryDelay = (attempt: number) => Math.min(1000 * 2 ** attempt, 10_000);
 async function availableDirectory<T extends { available?: boolean; unavailable?: string | null }>(
