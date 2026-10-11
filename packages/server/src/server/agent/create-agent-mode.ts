@@ -122,7 +122,7 @@ export function resolveDefaultAgentCreateConfig(
 // classifier `auto`, and the unattended modes); "restricted" is a mode the owner uses to keep a session in check;
 // anything not known here is "unknown" and is treated as restricted. Only Claude and Codex are classified.
 const RESTRICTED_MODES: Record<string, readonly string[]> = {
-  claude: ["default", "plan", "acceptEdits"],
+  claude: ["default", "plan", "acceptEdits", "dontAsk"],
   codex: ["auto-review", "auto", "read-only"],
 };
 const AUTOMATIC_MODES: Record<string, readonly string[]> = {

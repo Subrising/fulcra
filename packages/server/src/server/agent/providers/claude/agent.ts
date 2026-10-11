@@ -381,6 +381,12 @@ const DEFAULT_MODES: AgentMode[] = [
     description: "Uses a model classifier to review permission prompts automatically",
   },
   {
+    id: "dontAsk",
+    label: "Allow List Only",
+    description:
+      "Runs only the tools that are allowed in advance. Refuses every other tool, and never asks",
+  },
+  {
     id: "bypassPermissions",
     label: "Bypass",
     description: "Skip all permission prompts (use with caution)",
@@ -2898,9 +2904,10 @@ class ClaudeAgentSession implements AgentSession {
         const selectedActionId = response.selectedActionId;
         const shouldResumePriorMode =
           selectedActionId === "implement_resume" && this.planResumeMode === "bypassPermissions";
-        const targetMode: PermissionMode = shouldResumePriorMode
-          ? "bypassPermissions"
-          : "acceptEdits";
+        // An allow-list session stays an allow-list session after a plan is approved; it never widens to acceptEdits.
+        let targetMode: PermissionMode = "acceptEdits";
+        if (shouldResumePriorMode) targetMode = "bypassPermissions";
+        else if (this.planResumeMode === "dontAsk") targetMode = "dontAsk";
         await this.setMode(targetMode);
         this.pushToolCall(
           mapClaudeCompletedToolCall({
@@ -5069,6 +5076,14 @@ class ClaudeAgentSession implements AgentSession {
     input,
     options,
   ): Promise<PermissionResult> => {
+    // Allow List Only (FU-100): a tool that is not allowed in advance is refused here too, with no prompt that anyone could
+    // answer. The Claude CLI already refuses it in this mode; this keeps it refused if the CLI ever asks.
+    if (this.currentMode === "dontAsk") {
+      return {
+        behavior: "deny",
+        message: `${toolName} is not on the allow list for this session, so it was refused without asking.`,
+      };
+    }
     const requestId = `permission-${randomUUID()}`;
     const kind = resolvePermissionKind(toolName, input);
     const requestInput = normalizeClaudeAskUserQuestionRequestInput(toolName, input);
