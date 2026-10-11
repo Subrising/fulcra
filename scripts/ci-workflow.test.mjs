@@ -118,6 +118,8 @@ test("focused contracts stay inside existing required checks", () => {
 
   assert.match(server, /test:hub-cli-contract/);
   assert.match(server, /npm run test --workspace=@getpaseo\/server/);
+  // FU-90: the Command Centre plugin is packaged in CI, inside the typecheck check.
+  assert.match(jobs.get("typecheck")?.join("\n") ?? "", /node scripts\/build-command-centre\.mjs/);
   assert.ok(!jobs.has("hub-cli-contract"));
 
   assert.match(desktop, /test:e2e:renderer/);

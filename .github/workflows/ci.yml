@@ -154,6 +154,13 @@ jobs:
       - name: Verify built-in plugins from built output
         run: node --test scripts/builtin-plugins-dist.test.mjs
 
+      # FU-90: package the Command Centre plugin as the app build does. A plugin import that the staged bundle
+      # cannot resolve (0.2.16.2: ask.mjs -> ../../src/control) passed every test and only failed at packaging.
+      - name: Package the Command Centre plugin
+        env:
+          FULCRA_PLUGIN_OUTPUT: ${{ runner.temp }}/command-centre-plugin
+        run: node scripts/build-command-centre.mjs "$PWD/control"
+
       - name: Typecheck all packages
         run: npm run typecheck
 
