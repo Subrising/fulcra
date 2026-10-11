@@ -386,6 +386,7 @@ branding	A	54	0	RELEASE-NOTES-0.2.10.md
 branding	A	39	0	RELEASE-NOTES-0.2.11.md
 branding	A	36	0	RELEASE-NOTES-0.2.12.md
 branding	A	46	0	RELEASE-NOTES-0.2.13.md
+branding	A	29	0	RELEASE-NOTES-0.2.14.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -557,8 +558,8 @@ core-fixes	M	2	0	packages/app/e2e/browser/settings-toggle-tab-regression.spec.ts
 core-fixes	M	9	14	packages/app/e2e/browser/viewed-agent-timelines.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
 core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
-core-fixes	A	40	0	packages/cli/src/commands/agent/archive.test.ts
-core-fixes	M	21	8	packages/cli/src/commands/agent/archive.ts
+core-fixes	A	54	0	packages/cli/src/commands/agent/archive.test.ts
+core-fixes	M	25	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
@@ -621,7 +622,7 @@ core-fixes	A	189	0	packages/server/src/server/daemon-e2e/stored-timeline-read.e2
 core-fixes	A	75	0	packages/server/src/server/directory-access.test.ts
 core-fixes	A	121	0	packages/server/src/server/directory-access.ts
 core-fixes	A	159	0	packages/server/src/server/held-sends.test.ts
-core-fixes	A	156	0	packages/server/src/server/held-sends.trust.test.ts
+core-fixes	A	200	0	packages/server/src/server/held-sends.trust.test.ts
 core-fixes	A	160	0	packages/server/src/server/held-sends.ts
 core-fixes	A	41	0	packages/server/src/server/native-artifact-origin.ts
 core-fixes	A	262	0	packages/server/src/server/native-artifact-store.ts
@@ -1191,8 +1192,8 @@ orchestration	M	34	25	packages/server/src/server/hub/hub-cli-contract.test.ts
 orchestration	M	15	2	packages/server/src/server/hub/test-utils/relationship-harness.ts
 orchestration	A	149	0	packages/server/src/server/intercom-rates.test.ts
 orchestration	A	235	0	packages/server/src/server/intercom-rates.ts
-orchestration	M	545	2	packages/server/src/server/message-receipts/index.test.ts
-orchestration	M	1441	17	packages/server/src/server/message-receipts/index.ts
+orchestration	M	582	2	packages/server/src/server/message-receipts/index.test.ts
+orchestration	M	1454	17	packages/server/src/server/message-receipts/index.ts
 orchestration	A	672	0	packages/server/src/server/message-receipts/native-evidence.test.ts
 orchestration	M	38	17	packages/server/src/server/orchestration-skills/internal/controller.test.ts
 orchestration	M	4	1	packages/server/src/server/orchestration-skills/internal/controller.ts
@@ -1224,7 +1225,7 @@ orchestration	A	47	0	packages/server/src/server/report-inbox.ts
 orchestration	A	1558	0	packages/server/src/server/report-registry.ts
 orchestration	M	609	2	packages/server/src/server/session.test.ts
 orchestration	A	129	0	packages/server/src/server/session.trusted.test.ts
-orchestration	M	1867	120	packages/server/src/server/session.ts
+orchestration	M	1875	120	packages/server/src/server/session.ts
 orchestration	M	9	6	packages/server/src/server/session.workspace-git-watch.test.ts
 orchestration	M	14	9	packages/server/src/server/session.workspace-resolution-invariants.test.ts
 orchestration	M	11	7	packages/server/src/server/session.workspaces.test.ts
