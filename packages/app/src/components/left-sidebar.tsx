@@ -27,7 +27,6 @@ import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
 import { SidebarNavRows } from "@/components/sidebar/sidebar-nav-rows";
 import { SidebarHelpMenu } from "@/components/sidebar/sidebar-help-menu";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
-import { buttonControlHeight } from "@/components/ui/control-geometry";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
@@ -63,7 +62,11 @@ import {
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
-import { SIDEBAR_TOUCH_ROW_HEIGHT, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
+import {
+  SIDEBAR_TOUCH_ROW_HEIGHT,
+  sidebarFooterButtonSize,
+  useSidebarTouchRows,
+} from "@/components/sidebar/sidebar-touch";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
 
@@ -978,8 +981,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   // FU-62: a touch screen gets a 48 px touch target; a mouse keeps the small icon buttons.
   footerIconButton: (isCompact: boolean, touch: boolean) => ({
-    width: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
-    height: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
+    width: sidebarFooterButtonSize(isCompact, touch),
+    height: sidebarFooterButtonSize(isCompact, touch),
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[1],

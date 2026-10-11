@@ -170,7 +170,9 @@ async function measure(page: Page) {
         r.left >= box.left - 1 &&
         r.right <= box.right + 1;
       scroller!.scrollTop = 0;
-      return visible ? "reachable" : `not reachable (top ${Math.round(r.top)}, box ${Math.round(box.top)}-${Math.round(box.bottom)})`;
+      return visible
+        ? "reachable"
+        : `not reachable (top ${Math.round(r.top)}, box ${Math.round(box.top)}-${Math.round(box.bottom)})`;
     };
     const inside = [...scroller.querySelectorAll<HTMLElement>("*")].filter((el) => {
       const r = el.getBoundingClientRect();
@@ -178,7 +180,11 @@ async function measure(page: Page) {
     });
     // Text that an ancestor inside the sidebar cuts off (an ellipsis line) is not overflow.
     const clippedByAncestor = (el: HTMLElement) => {
-      for (let parent = el.parentElement; parent && parent !== scroller; parent = parent.parentElement) {
+      for (
+        let parent = el.parentElement;
+        parent && parent !== scroller;
+        parent = parent.parentElement
+      ) {
         if (getComputedStyle(parent).overflowX !== "visible") {
           const r = parent.getBoundingClientRect();
           if (r.right <= box.right + 1 && r.left >= box.left - 1) return true;
@@ -187,7 +193,11 @@ async function measure(page: Page) {
       return false;
     };
     const ellipsised = (el: HTMLElement) => {
-      for (let node: HTMLElement | null = el; node && node !== scroller; node = node.parentElement) {
+      for (
+        let node: HTMLElement | null = el;
+        node && node !== scroller;
+        node = node.parentElement
+      ) {
         if (getComputedStyle(node).textOverflow === "ellipsis") return true;
       }
       return false;
@@ -213,7 +223,11 @@ async function measure(page: Page) {
       })
       .map((el) => el.textContent?.slice(0, 60) ?? "");
     // Every visible sidebar control, including the footer outside the scroll.
-    const controls = [...document.querySelectorAll<HTMLElement>('[data-testid^="sidebar-"], [data-testid^="menu-button"]')]
+    const controls = [
+      ...document.querySelectorAll<HTMLElement>(
+        '[data-testid^="sidebar-"], [data-testid^="menu-button"]',
+      ),
+    ]
       .filter((el) => {
         const r = el.getBoundingClientRect();
         const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
@@ -222,7 +236,11 @@ async function measure(page: Page) {
       .map((el) => {
         const r = el.getBoundingClientRect();
         return {
-          name: el.getAttribute("aria-label") ?? el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? "",
+          name:
+            el.getAttribute("aria-label") ??
+            el.getAttribute("data-testid") ??
+            el.textContent?.slice(0, 40) ??
+            "",
           testId: el.getAttribute("data-testid"),
           width: Math.round(r.width),
           height: Math.round(r.height),
@@ -233,22 +251,28 @@ async function measure(page: Page) {
     const hits = (a: DOMRect, b: DOMRect) =>
       a.height > 0.5 &&
       b.height > 0.5 &&
-      a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+      a.left < b.right - 0.5 &&
+      b.left < a.right - 0.5 &&
+      a.top < b.bottom - 0.5 &&
+      b.top < a.bottom - 0.5;
     // A row inside the scroll is drawn only where the scroll shows it; rows scrolled under the footer are hidden.
     const seen = (el: Element) => {
       const r = el.getBoundingClientRect();
       if (!scroller!.contains(el)) return r;
-      const top = Math.max(r.top, box.top);
+      const clippedTop = Math.max(r.top, box.top);
       const bottom = Math.min(r.bottom, box.bottom);
-      return new DOMRect(r.left, top, r.width, Math.max(0, bottom - top));
+      return new DOMRect(r.left, clippedTop, r.width, Math.max(0, bottom - clippedTop));
     };
-    const named = (el: Element) => el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? el.tagName;
+    const named = (el: Element) =>
+      el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? el.tagName;
     const overlaps: string[] = [];
-    const rows = [...document.querySelectorAll<HTMLElement>('[data-testid^="sidebar-"]')].filter((el) => {
-      const r = el.getBoundingClientRect();
-      const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
-      return role && r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
-    });
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-testid^="sidebar-"]')].filter(
+      (el) => {
+        const r = el.getBoundingClientRect();
+        const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
+        return role && r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
+      },
+    );
     const lines = [...top.querySelectorAll<HTMLElement>("*")].filter((el) => {
       const r = el.getBoundingClientRect();
       const ownText = [...el.childNodes].some(
@@ -264,8 +288,7 @@ async function measure(page: Page) {
           if (nested(a, b)) continue;
           // Inline parts of one text line ("title", " · ", "status") share a line box by design.
           if (a.closest("[dir]") && a.closest("[dir]") === b.closest("[dir]")) continue;
-          if (hits(seen(a), seen(b)))
-            overlaps.push(`${named(a)} overlaps ${named(b)}`);
+          if (hits(seen(a), seen(b))) overlaps.push(`${named(a)} overlaps ${named(b)}`);
         }
     return {
       overlaps,
@@ -292,7 +315,11 @@ async function openSidebar(page: Page, workspaceId: string) {
   await expect(menu.or(leads).first()).toBeVisible({ timeout: 30_000 });
   if (!(await leads.isVisible())) await menu.click();
   await expect(leads).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("sidebar-lead-p-" + uuid(100)).or(page.getByText(/Synthetic project 1 /).first())).toBeVisible({
+  await expect(
+    page
+      .getByTestId("sidebar-lead-p-" + uuid(100))
+      .or(page.getByText(/Synthetic project 1 /).first()),
+  ).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -389,7 +416,8 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
       await setSize(page, size);
       await openSidebar(page, seeded[0]!.workspaceId);
       refuse = true;
-      for (const socket of sockets) await socket.close({ code: 1012, reason: "Synthetic daemon restart" });
+      for (const socket of sockets)
+        await socket.close({ code: 1012, reason: "Synthetic daemon restart" });
       sockets.clear();
       await expect(page.getByText(RECONNECTING).first()).toBeVisible({ timeout: 30_000 });
       const down = await measure(page);

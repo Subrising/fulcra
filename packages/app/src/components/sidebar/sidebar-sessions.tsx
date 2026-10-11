@@ -165,4 +165,3 @@ const styles = StyleSheet.create((theme) => ({
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
   metadata: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
 }));
-

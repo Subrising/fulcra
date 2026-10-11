@@ -13,9 +13,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { buttonControlHeight } from "@/components/ui/control-geometry";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { SIDEBAR_TOUCH_ROW_HEIGHT, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
+import { sidebarFooterButtonSize, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppDiagnosticStore } from "@/diagnostics/store";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
@@ -158,8 +157,8 @@ export function SidebarHelpMenu() {
 const styles = StyleSheet.create((theme) => ({
   // FU-62: the same touch target as the other footer buttons on a touch screen.
   trigger: (isCompact: boolean, touch: boolean) => ({
-    width: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
-    height: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
+    width: sidebarFooterButtonSize(isCompact, touch),
+    height: sidebarFooterButtonSize(isCompact, touch),
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[1],
