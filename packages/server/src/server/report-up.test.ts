@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
@@ -16,7 +19,10 @@ interface FakeChat {
 const LEAD = "11111111-1111-4111-8111-111111111111";
 const WORKER = "22222222-2222-4222-8222-222222222222";
 
-function fixture(chats: FakeChat[], options: { enabled?: boolean; now?: number } = {}) {
+function fixture(
+  chats: FakeChat[],
+  options: { enabled?: boolean; now?: number; statePath?: string } = {},
+) {
   const clock = { now: options.now ?? Date.now() };
   const timers: Array<{ run: () => void; ms: number }> = [];
   const byId = new Map(chats.map((chat) => [chat.id, chat]));
@@ -38,6 +44,7 @@ function fixture(chats: FakeChat[], options: { enabled?: boolean; now?: number }
     localServerId: "srv_local",
     logger: createTestLogger(),
     now: () => clock.now,
+    ...(options.statePath ? { statePath: options.statePath } : {}),
     setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
       delivered.push({ leadId, prompt });
@@ -302,5 +309,74 @@ describe("report-up and permission prompts", () => {
     f.stream(WORKER, ask("req-1", "ls"));
     await f.settle();
     expect(f.delivered).toHaveLength(0);
+  });
+});
+
+// Fulcra 0.2.17 (FU-63 follow-up): the limited state and the held reports survive a daemon restart.
+describe("report-up limit state across a restart", () => {
+  const NOW = Date.parse("2026-10-11T00:00:00Z");
+  const SESSION = "You've hit your session limit · resets 3pm (Australia/Brisbane)";
+
+  const home = () => mkdtempSync(join(tmpdir(), "report-up-state-"));
+
+  test("a limited lead stays limited after a restart: reports are held, then sent once after the reset", async () => {
+    const dir = home();
+    const statePath = join(dir, "report-up-limits.json");
+    const limitedLead: FakeChat = { ...lead, lastMessage: SESSION };
+    const before = fixture([limitedLead, worker()], { now: NOW, statePath });
+    before.turn(LEAD);
+    await before.settle();
+    before.turn(WORKER);
+    await before.settle();
+    expect(before.delivered).toHaveLength(0);
+
+    // The daemon restarts: a new service reads the same file.
+    const after = fixture([lead, worker()], { now: NOW + 60_000, statePath });
+    after.turn(WORKER);
+    await after.settle();
+    expect(after.delivered).toHaveLength(0); // still held: the lead is limited until the reset
+    after.clock.now = NOW + 6 * 3600_000;
+    for (const timer of after.timers) timer.run();
+    await after.settle();
+    expect(after.delivered).toHaveLength(1);
+    expect(after.delivered[0]!.prompt).toContain("2 reports held");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a limited chat is not told to its lead a second time after a restart", async () => {
+    const dir = home();
+    const statePath = join(dir, "report-up-limits.json");
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const before = fixture([lead, chat], { now: NOW, statePath });
+    before.turn(WORKER);
+    await before.settle();
+    expect(before.delivered).toHaveLength(1);
+    const after = fixture([lead, chat], { now: NOW + 60_000, statePath });
+    after.turn(WORKER);
+    await after.settle();
+    expect(after.delivered).toHaveLength(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a limit that has passed is dropped on load, and a damaged file is ignored", async () => {
+    const dir = home();
+    const statePath = join(dir, "report-up-limits.json");
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const before = fixture([lead, chat], { now: NOW, statePath });
+    before.turn(WORKER);
+    await before.settle();
+    const later = fixture([lead, { ...chat, lastMessage: "Done." }], {
+      now: NOW + 8 * 3600_000,
+      statePath,
+    });
+    later.turn(WORKER);
+    await later.settle();
+    expect(later.delivered).toHaveLength(1);
+    expect(later.delivered[0]!.prompt).toContain("finished a turn");
+    writeFileSync(statePath, "{not json");
+    expect(() => fixture([lead, worker()], { now: NOW, statePath })).not.toThrow();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

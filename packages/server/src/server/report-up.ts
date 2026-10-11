@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { writePrivateFileAtomicSync } from "./private-files.js";
 import type { Logger } from "pino";
 import { REPORTS_TO_OWNER, ROLE_REF_PREFIX } from "@getpaseo/protocol/agent-labels";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
@@ -66,6 +69,14 @@ export interface ReportUpDeps {
   /** The clock and the timer; tests replace them. */
   now?: () => number;
   setTimer?: (run: () => void, ms: number) => void;
+  /** Where the limited chats and the held reports are kept, so a daemon restart does not lose them. */
+  statePath?: string;
+}
+
+interface PersistedState {
+  v: 1;
+  limited: Record<string, LimitedChat>;
+  held: Record<string, string[]>;
 }
 
 /** A chat whose last turn ended on a usage limit. */
@@ -190,6 +201,55 @@ export class ReportUpService {
 
   constructor(private readonly deps: ReportUpDeps) {
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
+    this.load();
+  }
+
+  /** Reads the kept state: limits that have not passed, and reports still held. Held reports are released after the reset. */
+  private load(): void {
+    const file = this.deps.statePath;
+    if (!file) return;
+    let state: Partial<PersistedState> = {};
+    try {
+      state = JSON.parse(readFileSync(file, "utf8")) as Partial<PersistedState>;
+    } catch {
+      return;
+    }
+    const now = this.now();
+    for (const [id, limit] of Object.entries(state.limited ?? {})) {
+      if (typeof limit?.kind === "string" && Number.isFinite(limit.until) && limit.until > now)
+        this.limited.set(id, {
+          kind: limit.kind,
+          until: limit.until,
+          notified: limit.notified === true,
+        });
+    }
+    for (const [lead, held] of Object.entries(state.held ?? {})) {
+      const reports = Array.isArray(held)
+        ? held.filter((r): r is string => typeof r === "string").slice(-MAX_HELD_REPORTS)
+        : [];
+      if (!reports.length) continue;
+      this.held.set(lead, reports);
+      const wait = Math.max(0, (this.limited.get(lead)?.until ?? now) - now) + 5000;
+      (this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms).unref()))(
+        () => this.releaseHeld(lead),
+        wait,
+      );
+    }
+  }
+
+  private save(): void {
+    const file = this.deps.statePath;
+    if (!file) return;
+    const state: PersistedState = {
+      v: 1,
+      limited: Object.fromEntries(this.limited),
+      held: Object.fromEntries(this.held),
+    };
+    try {
+      writePrivateFileAtomicSync(file, JSON.stringify(state));
+    } catch (err) {
+      this.deps.logger.warn({ err }, "Report-up state not saved");
+    }
   }
 
   onEvent(event: AgentManagerEvent): void {
@@ -320,6 +380,7 @@ export class ReportUpService {
     if (!limit) return null;
     if (limit.until > this.now()) return limit;
     this.limited.delete(agentId);
+    this.save();
     return null;
   }
 
@@ -334,7 +395,10 @@ export class ReportUpService {
       : await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null);
     const stop = failed ? classifyFailedTurn(text, now) : classifyEndingAssistantMessage(last, now);
     if (!stop || stop.kind === "network") {
-      if (this.limited.delete(workerId)) this.releaseHeld(workerId);
+      if (this.limited.delete(workerId)) {
+        this.save();
+        this.releaseHeld(workerId);
+      }
       return false;
     }
     const previous = this.limited.get(workerId);
@@ -344,8 +408,12 @@ export class ReportUpService {
       notified: previous?.notified === true && previous.until > now,
     };
     this.limited.set(workerId, limit);
-    if (limit.notified) return true;
+    if (limit.notified) {
+      this.save();
+      return true;
+    }
     limit.notified = true;
+    this.save();
     const worker = await this.store.get(workerId);
     if (!worker || worker.archivedAt) return true;
     const lead = await this.leadOf(worker);
@@ -366,6 +434,7 @@ export class ReportUpService {
       held.push(prompt);
       if (held.length > MAX_HELD_REPORTS) held.shift();
       this.held.set(leadId, held);
+      this.save();
       this.deps.logger.info(
         { agentId: workerId, lead: leadId, until: leadLimit.until },
         "Report-up held: the lead is at a usage limit",
@@ -394,6 +463,7 @@ export class ReportUpService {
     const held = this.held.get(leadId);
     if (!held?.length) return;
     this.held.delete(leadId);
+    this.save();
     const body = held.map((prompt) => prompt.trim()).join("\n\n");
     const notice = `${held.length} report${held.length === 1 ? "" : "s"} held while you were at your usage limit:\n\n${body}`;
     void this.toLead(leadId, leadId, notice).catch((err: unknown) =>
@@ -469,6 +539,7 @@ export class ReportUpService {
 }
 
 export function startReportUp(input: {
+  paseoHome?: string;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   daemonConfigStore: DaemonConfigStore;
@@ -481,6 +552,7 @@ export function startReportUp(input: {
     isEnabled: () => input.daemonConfigStore.get().reportUpOnTurnEnd !== false,
     localServerId: input.localServerId,
     logger: input.logger,
+    ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),
   });
   return input.agentManager.subscribe((event) => service.onEvent(event), { replayState: false });
 }
