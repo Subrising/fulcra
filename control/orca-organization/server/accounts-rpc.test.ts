@@ -140,14 +140,15 @@ test("W3: Settings shows the default permission modes and their choices, and edi
   const root = scratch(),
     h = handlers(root);
   const view = await h.read(paseo as any);
-  assert.deepEqual(view.defaults.modes, { claude: "auto", codex: "full-access" });
+  // The Codex default is auto-review since 0.2.5 (SEED_MODES); full-access is a choice, never the seed.
+  assert.deepEqual(view.defaults.modes, { claude: "auto", codex: "auto-review" });
   assert.deepEqual(view.defaults.modeChoices.codex, ["full-access", "auto-review", "auto"]);
   assert.ok(!view.defaults.modeChoices.claude.includes("bypassPermissions"));
   assert.equal(
-    (await h.settings({ mode: { provider: "codex", modeId: "auto-review" } }, paseo as any)).ok,
+    (await h.settings({ mode: { provider: "codex", modeId: "full-access" } }, paseo as any)).ok,
     true,
   );
-  assert.deepEqual(readRoleDefaults(root).modes, { claude: "auto", codex: "auto-review" });
+  assert.deepEqual(readRoleDefaults(root).modes, { claude: "auto", codex: "full-access" });
   const bad = await h.settings(
     { mode: { provider: "claude", modeId: "bypassPermissions" } } as any,
     paseo as any,

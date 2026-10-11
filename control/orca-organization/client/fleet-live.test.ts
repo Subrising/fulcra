@@ -209,8 +209,18 @@ test("'Working now' counts live running, background jobs, or the recorded state,
 // The overlay is display-only: it may reach text and the "Working now" count, and nothing an action receives.
 // Every use of it in the Sessions page is listed here; anything else (a button, a link, the step-through, a
 // selection, the controller's node objects) fails this test.
+// The checks below read source text. They compare it with the formatter's choices removed from both sides: quote style,
+// line breaks, trailing commas, semicolons, and parentheses (arrow parameters, and the ones around multi-line JSX).
+const styleProof = (text: string): string =>
+  text
+    .replace(/\s+/g, "")
+    .replace(/'/g, '"')
+    .replace(/;/g, "")
+    .replace(/,([)\]}])/g, "$1")
+    .replace(/[()]/g, "");
+
 test("liveOverlayIsDisplayOnly: overlay values reach only display text and the display count", () => {
-  const source = fs.readFileSync(path.join(process.cwd(), "client/fleet.tsx"), "utf8");
+  const source = styleProof(fs.readFileSync(path.join(process.cwd(), "client/fleet.tsx"), "utf8"));
   const allowed = [
     'import { useLiveHostOverlay, describeLiveState, isWorkingForDisplay, useAppHostList, displayHostName, plainNodeError, useAppLinkSections, allHostsLabel, appLinkTargets, fleetReadState } from "./fleet-live";',
     'import { AppLinkSections } from "./fleet-app-link";',
@@ -231,8 +241,9 @@ test("liveOverlayIsDisplayOnly: overlay values reach only display text and the d
     "{liveLineFor(n.id) && <Text style={muted}>{liveLineFor(n.id)}</Text>}",
   ];
   let rest = source;
-  for (const fragment of allowed) {
-    assert(rest.includes(fragment), `expected display use is missing or changed: ${fragment}`);
+  for (const written of allowed) {
+    const fragment = styleProof(written);
+    assert(rest.includes(fragment), `expected display use is missing or changed: ${written}`);
     rest = rest.split(fragment).join("");
   }
   const stray = [
@@ -244,7 +255,9 @@ test("liveOverlayIsDisplayOnly: overlay values reach only display text and the d
   // The rows every action receives are the controller's, untouched.
   assert(
     source.includes(
-      "<Activity key={[props.host?.id,chosen.task,chosen.id].join(':')} node={chosen} fleet={d}",
+      styleProof(
+        "<Activity key={[props.host?.id,chosen.task,chosen.id].join(':')} node={chosen} fleet={d}",
+      ),
     ),
   );
 });
@@ -320,6 +333,8 @@ test("background work is referenced only by the Sessions display code", () => {
   const allowed = [
     "client/fleet-app-link.tsx",
     "client/fleet-live-model.ts",
+    // The team tree shows a session as working while it has background work: a display state, not an action input.
+    "client/team-tree.ts",
     "server/fleet.ts",
     "shared/fleet.ts",
   ];
@@ -343,11 +358,15 @@ test("background work is referenced only by the Sessions display code", () => {
     fs.existsSync(path.join(root, "index.host.js")) &&
       !MENTION.test(fs.readFileSync(path.join(root, "index.host.js"), "utf8")),
   );
+  // The controller does not read the overlay. Its one mention is the fresh-start check (0.2.5), which reads the
+  // daemon's own background-work count to see whether a session is busy; it never takes a value from this overlay.
   const controller = path.join(root, "../src/control");
   if (fs.existsSync(controller))
     assert.deepEqual(
-      walk(controller).filter((file) => MENTION.test(fs.readFileSync(file, "utf8"))),
-      [],
+      walk(controller)
+        .filter((file) => MENTION.test(fs.readFileSync(file, "utf8")))
+        .map((file) => path.relative(controller, file).split(path.sep).join("/")),
+      ["native.mjs"],
     );
 });
 
