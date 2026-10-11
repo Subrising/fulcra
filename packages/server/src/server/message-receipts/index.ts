@@ -33,7 +33,7 @@ import {
 } from "../report-batch.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { open, readdir } from "node:fs/promises";
+import { open, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { isNativeQueuedRefusal } from "../agent/native-queued-dispatch.js";
@@ -1411,7 +1411,20 @@ export class MessageReceipts {
       return true;
     });
     if (!shouldSend) return;
-    await input.send();
+    try {
+      await input.send();
+    } catch (error) {
+      // A refusal that is known to have sent nothing (the target's held queue is full) leaves no "pending" receipt:
+      // a retry with the same message ID is then tried again, not refused as "outcome unknown". Any other failure
+      // keeps its pending receipt, because a send that threw part-way may have been delivered.
+      if ((error as { code?: unknown } | null)?.code === "HELD_QUEUE_FULL") {
+        await this.serial(async () => {
+          await rm(file, { force: true });
+          this.diskCount = Math.max(0, this.diskCount - 1);
+        });
+      }
+      throw error;
+    }
     await this.serial(() =>
       writeJsonFileAtomic(file, { fingerprint, agentId: input.agentId, state: "completed" }),
     );
