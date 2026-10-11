@@ -409,7 +409,7 @@ build-ci	M	7	7	.github/ISSUE_TEMPLATE/config.yml
 build-ci	M	2	2	.github/PULL_REQUEST_TEMPLATE.md
 build-ci	A	22	0	.github/upstream-watch.json
 build-ci	M	9	1	.github/workflows/android-apk-release.yml
-build-ci	M	179	21	.github/workflows/ci.yml
+build-ci	M	186	21	.github/workflows/ci.yml
 build-ci	M	58	1	.github/workflows/deploy-app.yml
 build-ci	A	47	0	.github/workflows/deploy-fulcra-website.yml
 build-ci	M	45	1	.github/workflows/deploy-website.yml
@@ -498,7 +498,7 @@ build-ci	A	151	0	scripts/c2c-ui-fixture/source-smoke.test.mjs
 build-ci	A	15	0	scripts/c2c-ui-fixture/unistyles.tsx
 build-ci	A	87	0	scripts/check-machine-data.mjs
 build-ci	A	25	0	scripts/check-machine-data.test.mjs
-build-ci	M	25	19	scripts/ci-workflow.test.mjs
+build-ci	M	27	19	scripts/ci-workflow.test.mjs
 build-ci	A	35	0	scripts/client-reproducibility.test.mjs
 build-ci	A	22	0	scripts/command-centre-build-config.mjs
 build-ci	A	90	0	scripts/command-centre-build-config.test.mjs
@@ -986,7 +986,7 @@ features	M	17	6	packages/app/src/git/actions-store.ts
 features	A	41	0	packages/app/src/git/commit-topology.ts
 features	A	90	0	packages/app/src/git/git-ai-draft-model.ts
 features	A	177	0	packages/app/src/git/git-ai-draft-panel.tsx
-features	A	149	0	packages/app/src/git/git-ai-workspace-preview.test.tsx
+features	A	158	0	packages/app/src/git/git-ai-workspace-preview.test.tsx
 features	A	249	0	packages/app/src/git/git-ai-workspace-preview.tsx
 features	M	22	3	packages/app/src/git/use-actions.tsx
 features	M	9	2	packages/app/src/git/use-pr-status-query.ts
