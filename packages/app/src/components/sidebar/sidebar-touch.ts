@@ -1,16 +1,12 @@
 import { StyleSheet } from "react-native-unistyles";
-import { useIsCompactFormFactor } from "@/constants/layout";
-import { isNative } from "@/constants/platform";
-import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+import { TOUCH_TARGET, useTouchTargets } from "@/hooks/use-touch-targets";
 
 // FU-62: on a touch screen (native, a phone-size layout, or a browser with no mouse-like pointer) every sidebar row
 // is at least a 48 px touch target. A desktop with a mouse keeps the compact rows.
-export const SIDEBAR_TOUCH_ROW_HEIGHT = 48;
+export const SIDEBAR_TOUCH_ROW_HEIGHT = TOUCH_TARGET;
 
 export function useSidebarTouchRows(): boolean {
-  const isCompact = useIsCompactFormFactor();
-  const finePointer = useHasFinePointer();
-  return isNative || isCompact || !finePointer;
+  return useTouchTargets();
 }
 
 export const sidebarTouchStyles = StyleSheet.create({

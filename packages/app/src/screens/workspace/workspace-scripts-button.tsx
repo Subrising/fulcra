@@ -38,6 +38,7 @@ import type { Theme } from "@/styles/theme";
 import { useWorkspaceServiceRoutePreferencesStore } from "@/workspace-service-routes/store";
 import { buttonControlHeight, HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 import { extraMutedIconColorMapping } from "@/components/ui/icon-color";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 
 type RowActionIcon = "copy" | "open" | "restart" | "start" | "stop" | "terminal";
 
@@ -547,6 +548,8 @@ export function WorkspaceScriptsButton({
 }: WorkspaceScriptsButtonProps): ReactElement | null {
   const { t } = useTranslation();
   const toast = useToast();
+  // FU-73: a 48 px target on a touch screen.
+  const touch = useTouchTargets();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const activeConnection = useHostRuntimeSnapshot(serverId)?.activeConnection ?? null;
   const preferredRouteKind = useWorkspaceServiceRoutePreferencesStore(
@@ -631,8 +634,9 @@ export function WorkspaceScriptsButton({
       presentation === "ghost" ? styles.ghostButton : styles.splitButtonPrimary,
       (hovered || pressed || open) &&
         (presentation === "ghost" ? styles.ghostButtonHovered : styles.splitButtonPrimaryHovered),
+      touch && touchTargetStyles.icon,
     ],
-    [presentation],
+    [presentation, touch],
   );
 
   const handleStartScript = useCallback(
@@ -678,7 +682,12 @@ export function WorkspaceScriptsButton({
 
   return (
     <View style={styles.row}>
-      <View style={presentation === "ghost" ? styles.ghostButtonFrame : styles.splitButton}>
+      <View
+        style={[
+          presentation === "ghost" ? styles.ghostButtonFrame : styles.splitButton,
+          touch && touchTargetStyles.text,
+        ]}
+      >
         <DropdownMenu>
           <DropdownMenuTrigger
             testID="workspace-scripts-button"

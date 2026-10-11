@@ -27,7 +27,6 @@ import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels"
 import { SidebarFilterEmptyState } from "@/components/sidebar/empty-states";
 import type { HostBadgeModel } from "@/hosts/appearance";
 import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
-import { useIsCompactFormFactor } from "@/constants/layout";
 import { StyleSheet } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
@@ -86,6 +85,7 @@ import type { ToggleSidebarWorkspacePin } from "@/hooks/use-sidebar-workspace-pi
 import { DraggableList, type DraggableRenderItemInfo } from "@/components/draggable-list";
 import type { DraggableListDragHandleProps } from "@/components/draggable-list.types";
 import { useLongPressDragInteraction } from "@/components/sidebar/use-long-press-drag-interaction";
+import { useTouchTargets } from "@/hooks/use-touch-targets";
 
 // Themed icon wrappers
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -814,8 +814,8 @@ function StatusWorkspaceRowInnerContent({
 }: StatusWorkspaceRowInnerProps & {
   dragInteraction?: ReturnType<typeof useLongPressDragInteraction>;
 }) {
-  const isCompact = useIsCompactFormFactor();
-  const isTouchPlatform = platformIsNative || isCompact;
+  // FU-73: a touch tablet in a browser is a touch platform too: row actions show without hover.
+  const isTouchPlatform = useTouchTargets();
   const [isPressed, setIsPressed] = useState(false);
   const trailing = useSidebarWorkspaceTrailing();
   const {

@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/icon-button-chrome";
 import { composerPillStyles } from "@/composer/pill-styles";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useToast } from "@/contexts/toast-context";
 import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
 import type { Theme } from "@/styles/theme";
@@ -60,13 +61,21 @@ const errorIconMapping = (theme: Theme) => ({ color: theme.colors.statusDanger }
 const ThemedMoreIcon = withUnistyles(MoreHorizontal);
 const ThemedErrorIcon = withUnistyles(AlertCircle);
 
-function headerButtonStyle(compact: boolean, state: IconButtonChromeState, disabled = false) {
-  if (compact) return iconButtonChromeStyle({ size: "large", state, disabled });
+function headerButtonStyle(
+  compact: boolean,
+  state: IconButtonChromeState,
+  disabled = false,
+  touch = false,
+) {
+  // FU-73: a 48 px target on a touch screen.
+  const target = touch ? touchTargetStyles.icon : null;
+  if (compact) return iconButtonChromeStyle({ size: "large", state, disabled, style: target });
   return [
     styles.headerButton,
     styles.button,
     (state.hovered || state.pressed || state.open) && styles.active,
     disabled && styles.disabled,
+    target,
   ];
 }
 
@@ -254,6 +263,7 @@ function ButtonControl({ view }: { view: ButtonView }) {
   if (composer) label = button.label ?? button.title;
   else if (props.layout.compact) label = undefined;
   const press = useCallback(() => pressButton(view, []), [view]);
+  const touch = useTouchTargets();
   const setOpen = useCallback(
     (open: boolean) => pluginButtonStore.setOpen(entry.key, open),
     [entry.key],
@@ -267,8 +277,13 @@ function ButtonControl({ view }: { view: ButtonView }) {
             (hovered || pressed || entry.open) && styles.active,
             disabled && styles.disabled,
           ]
-        : headerButtonStyle(props.layout.compact, { hovered, pressed, open: entry.open }, disabled),
-    [composer, disabled, entry.open, props.layout.compact],
+        : headerButtonStyle(
+            props.layout.compact,
+            { hovered, pressed, open: entry.open },
+            disabled,
+            touch,
+          ),
+    [composer, disabled, entry.open, props.layout.compact, touch],
   );
   const contents = (
     <>
@@ -350,13 +365,14 @@ function BrokenButton({
   error: string;
   compact: boolean;
 }) {
+  const touch = useTouchTargets();
   return (
     <Tooltip>
       <TooltipTrigger
         accessibilityRole="button"
         accessibilityLabel={title}
         disabled
-        style={headerButtonStyle(compact, {}, true)}
+        style={headerButtonStyle(compact, {}, true, touch)}
       >
         <ThemedErrorIcon size={16} uniProps={errorIconMapping} />
       </TooltipTrigger>
@@ -574,9 +590,10 @@ export function PluginHeaderButtons({
   const limit = compact || width < 1100 ? 1 : 3;
   const visible = entries.slice(0, limit);
   const overflow = entries.slice(limit);
+  const touch = useTouchTargets();
   const overflowStyle = useCallback(
-    (state: IconButtonChromeState) => headerButtonStyle(compact, state),
-    [compact],
+    (state: IconButtonChromeState) => headerButtonStyle(compact, state, false, touch),
+    [compact, touch],
   );
   if (entries.length === 0) return null;
   return (
