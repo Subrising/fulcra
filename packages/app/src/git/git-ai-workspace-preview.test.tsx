@@ -66,7 +66,11 @@ vi.mock("react-native", () => ({
     select: (options: { web?: unknown; default?: unknown }) => options.web ?? options.default,
   },
 }));
-vi.mock("react-native-unistyles", () => ({ StyleSheet: { create: () => ({ root: {} }) } }));
+vi.mock("react-native-unistyles", () => ({
+  StyleSheet: { create: () => ({ root: {} }) },
+  // The touch-target hook reads the layout breakpoint.
+  useUnistyles: () => ({ theme: {}, rt: { breakpoint: "lg" } }),
+}));
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     onPress,
