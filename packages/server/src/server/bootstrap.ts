@@ -4,6 +4,7 @@ import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
 import { startReportUp } from "./report-up.js";
+import { recordOpenSessions, reviveAfterRestart } from "./revive-on-restart.js";
 import { heldSendsFor } from "./held-sends.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
@@ -443,6 +444,7 @@ export interface PaseoDaemonConfig {
   notificationMode?: "all" | "primes" | "off";
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
+  reviveOnRestart?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
@@ -664,6 +666,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     notificationMode: initialNotificationMode(config),
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
     reportUpOnTurnEnd: config.reportUpOnTurnEnd !== false,
+    reviveOnRestart: config.reviveOnRestart !== false,
     autoResumeOnLimit: config.autoResumeOnLimit ?? true,
     appendSystemPrompt: config.appendSystemPrompt ?? "",
     pluginsEnabled: config.pluginsEnabled ?? false,
@@ -2096,6 +2099,19 @@ export async function createPaseoDaemon(
       // model loading doesn't block the server from accepting connections.
       speechService.start();
       scriptHealthMonitor.start();
+      // FULCRA(orchestration): sessions open before this restart read open again; cut-off turns continue; leads hear
+      // which did not. Runs after listening, so providers, plugins and clients are ready (revive-on-restart.ts).
+      void reviveAfterRestart(
+        {
+          agentManager,
+          agentStorage,
+          paseoHome: config.paseoHome,
+          localServerId: serverId,
+          logger,
+          isEnabled: () => daemonConfigStore.get().reviveOnRestart !== false,
+        },
+        { records: persistedRecords, crashInterrupted: interrupted },
+      ).catch((err) => logger.warn({ err }, "Revive on restart failed"));
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
@@ -2129,6 +2145,11 @@ export async function createPaseoDaemon(
     // Freeze both ingress and registration before taking the agent closure snapshot.
     wsServer?.prepareForShutdown();
     agentManager.prepareForShutdown();
+    // FULCRA(orchestration): the next boot loads these sessions again (revive-on-restart.ts).
+    await recordOpenSessions({
+      paseoHome: config.paseoHome,
+      agents: agentManager.listAgents(),
+    }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
     await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage));
     await withTimeout({
       promise: pluginRuntime.drainEvents(),

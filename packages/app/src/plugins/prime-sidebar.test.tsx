@@ -98,16 +98,24 @@ vi.mock("@/runtime/host-runtime", () => ({
     new Map(ids.map((id) => [id, f.offline.has(id) ? "offline" : "online"])),
   getHostRuntimeStore: () => ({
     getHostRegistryStatus: () => (f.registryReady ? "ready" : "loading"),
-    getHosts: () => (f.registeredHost && f.host ? [{ serverId: f.host }] : []),
+    // The home computer, then every other computer the test lists as connected.
+    getHosts: () => [
+      ...(f.registeredHost && f.host ? [{ serverId: f.host }] : []),
+      ...f.hosts.filter((host) => host.serverId !== f.host).map(({ serverId }) => ({ serverId })),
+    ],
     getSnapshot: (serverId: string) =>
       f.remote[serverId]
         ? {
             client: {
-              invokePluginRpc: async (_plugin: string, method: string) =>
-                ({
-                  "organization.fleet": f.remote[serverId]!.fleet,
-                  "organization.projects": f.remote[serverId]!.projects,
-                })[method] ?? f.remote[serverId]!.directory,
+              invokePluginRpc: async (_plugin: string, method: string) => {
+                const answer =
+                  {
+                    "organization.fleet": f.remote[serverId]!.fleet,
+                    "organization.projects": f.remote[serverId]!.projects,
+                  }[method] ?? f.remote[serverId]!.directory;
+                if (answer instanceof Error) throw answer;
+                return answer;
+              },
             },
           }
         : undefined,
@@ -176,11 +184,13 @@ const fastRetry = () => 1;
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   clients.push(client);
-  render(
+  const tree = () => (
     <QueryClientProvider client={client}>
       <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(tree());
+  return { rerender: () => view.rerender(tree()) };
 }
 function mountPinned() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -670,8 +680,8 @@ it("lists the leads of another connected computer read-only, with that computer'
   expect(row.textContent).toContain("Remote project lead");
   expect(row.textContent).toContain("Lead · Example project · Idle · MacBook Pro");
   expect(row.textContent).not.toContain("macbook ·");
-  // Read-only: no new work from here; a lead of an archived project is hidden.
-  expect(screen.queryByTestId("sidebar-remote-lead-book-g1-new-work")).toBeNull();
+  // Like a home lead: "+" new work is offered (0.2.15). A lead of an archived project is hidden.
+  expect(screen.getByTestId("sidebar-remote-lead-book-g1-new-work")).toBeTruthy();
   expect(screen.queryByTestId("sidebar-remote-lead-book-old")).toBeNull();
 });
 
@@ -779,8 +789,8 @@ it("lists a chat that reports to the main assistant without a seat, on any conne
   ];
   f.chats = {
     book: {
-      "gag-lead": {
-        id: "gag-lead",
+      "other-lead": {
+        id: "other-lead",
         title: "Example project · Fulcra orchestrator",
         status: "idle",
         labels: { "fulcra.reports-to": "role:main-assistant" },
@@ -789,12 +799,12 @@ it("lists a chat that reports to the main assistant without a seat, on any conne
         id: "worker",
         title: "A worker",
         status: "idle",
-        labels: { "fulcra.reports-to": "gag-lead" },
+        labels: { "fulcra.reports-to": "other-lead" },
       },
     },
   };
   mount();
-  const row = await screen.findByTestId("sidebar-chat-lead-book-gag-lead");
+  const row = await screen.findByTestId("sidebar-chat-lead-book-other-lead");
   expect(row.textContent).toContain("Example project · Fulcra orchestrator");
   expect(row.textContent).toContain("Lead · Idle · last known · Second computer");
   expect(screen.queryByTestId("sidebar-chat-lead-book-worker")).toBeNull();
@@ -804,8 +814,8 @@ it("opens a chat lead's chat on its own computer", async () => {
   f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
   f.chats = {
     mini: {
-      "gag-lead": {
-        id: "gag-lead",
+      "other-lead": {
+        id: "other-lead",
         title: "Gag lead",
         status: "running",
         labels: { "fulcra.reports-to": "role:main-assistant" },
@@ -813,7 +823,7 @@ it("opens a chat lead's chat on its own computer", async () => {
     },
   };
   mount();
-  const row = await screen.findByTestId("sidebar-chat-lead-mini-gag-lead");
+  const row = await screen.findByTestId("sidebar-chat-lead-mini-other-lead");
   expect(row.textContent).toContain("Working · last known");
   fireEvent.click(row);
   expect(f.open).toHaveBeenCalled();
@@ -995,4 +1005,111 @@ it("explains why remembered leads are greyed, and says nothing while a computer 
   expect(rememberedNote("Book", false, true, null)).toBe("Command Centre not answering on Book");
   expect(rememberedNote("Book", false, true, undefined)).toBeNull();
   expect(typeof rememberedNote("Book", false, true, [])).toBe("symbol");
+});
+
+// Fulcra 0.2.15 (FU-57): a seated lead on another computer behaves like a home lead.
+const BOOK_LEAD = "99999999-9999-4999-8999-999999999999";
+const remoteBook = () => {
+  f.hosts = [
+    { serverId: "mini", label: "Mac mini" },
+    { serverId: "book", label: "Second computer" },
+  ];
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.remote.book = {
+    directory: {
+      available: true,
+      primes: [],
+      projectSeats: [
+        {
+          seat: "g1",
+          role: "project-orchestrator",
+          projectId: "proj-g",
+          state: "assigned",
+          sessionPresent: true,
+          sessionId: BOOK_LEAD,
+        },
+      ],
+    },
+    projects: { projects: [{ id: "proj-g", name: "Example project" }] },
+    fleet: {
+      nodes: [{ id: BOOK_LEAD, host: "book", status: "idle", pending: 0, title: "Remote lead" }],
+    },
+  };
+};
+
+it("a lead on another computer opens its chat on that computer, even before this app has loaded the chat", async () => {
+  remoteBook();
+  mount();
+  fireEvent.click(await screen.findByTestId("sidebar-remote-lead-book-g1"));
+  expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD });
+  expect(f.push).not.toHaveBeenCalled();
+});
+
+it("a lead on another computer takes + new work, sent on that computer, then opens its chat", async () => {
+  remoteBook();
+  f.send.mockResolvedValue(undefined);
+  mount();
+  fireEvent.click(await screen.findByTestId("sidebar-remote-lead-book-g1-new-work"));
+  fireEvent.change(screen.getByTestId("sidebar-new-work-input"), {
+    target: { value: "Plan the next level" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send to Remote lead" }));
+  await vi.waitFor(() => expect(f.send).toHaveBeenCalledWith(BOOK_LEAD, "Plan the next level"));
+  await vi.waitFor(() =>
+    expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD }),
+  );
+});
+
+// Fulcra 0.2.15 (FU-53): review findings on the other-computer lead rows.
+it("shows an offline switch's leads once: the old read is not shown beside the remembered row", async () => {
+  const SECOND = { ...GAG, seat: "s1", sessionId: "22222222-2222-4222-8222-222222222222" };
+  f.hosts = [...HOSTS, { serverId: "second", label: "Second computer" }];
+  f.remote.book = bookReads();
+  f.remote.second = {
+    ...bookReads(),
+    directory: {
+      available: true,
+      primes: [],
+      projectSeats: [
+        {
+          seat: "s1",
+          role: "project-orchestrator",
+          projectId: "proj-g",
+          state: "assigned",
+          sessionPresent: true,
+          sessionId: SECOND.sessionId,
+        },
+      ],
+    },
+  };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  const view = mount();
+  await screen.findByTestId("sidebar-remote-lead-second-s1");
+  await vi.waitFor(() => expect(useLeadsMemory.getState().byHost.second?.[0]?.seat).toBe("s1"));
+  f.offline = new Set(["second"]);
+  view.rerender();
+  await screen.findByTestId("sidebar-remembered-lead-second-s1");
+  expect(screen.queryByTestId("sidebar-remote-lead-second-s1")).toBeNull();
+  expect(screen.getByTestId("sidebar-remote-lead-book-g1")).toBeTruthy();
+});
+
+it("does not remember the placeholder project name when the projects read fails", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = { ...bookReads(), projects: new Error("unavailable") };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  mount();
+  await screen.findByTestId("sidebar-remote-lead-book-g1");
+  // Nothing remembered yet, so nothing is saved.
+  expect(useLeadsMemory.getState().byHost.book).toBeUndefined();
+});
+
+it("keeps the remembered project name when a later projects read fails", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = { ...bookReads(), projects: new Error("unavailable") };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  useLeadsMemory.setState({ byHost: { book: [GAG] } });
+  mount();
+  await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(useLeadsMemory.getState().byHost.book?.[0]?.project).toBe("Example project");
+  expect(useLeadsMemory.getState().byHost.book?.[0]?.title).toBe("Remote project lead");
 });

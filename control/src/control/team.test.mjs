@@ -621,7 +621,7 @@ test("on a local catalog without a programme row, a lead, a worker and the main 
     issues: [],
     realAuthority: true,
   });
-  const project = await w.dispatch("team-project-create", { name: "AI gag games", note: NOTE });
+  const project = await w.dispatch("team-project-create", { name: "Example project", note: NOTE });
   const programme = w.read().issues.filter((r) => r.id === PROGRAMME);
   assert.equal(programme.length, 1);
   assert.equal(programme[0].assigneeUserId, "local-board");
@@ -658,7 +658,7 @@ test("a catalog that already has a project but no programme row gets the row bef
         id: taskId,
         companyId: COMPANY,
         parentId: PROGRAMME,
-        title: "AI gag games",
+        title: "Example project",
         status: "in_progress",
         assigneeUserId: "local-board",
         assigneeAgentId: null,

@@ -327,7 +327,7 @@ export function WorkspacesSurface(props: SurfaceProps) {
                   label={`Find an existing project for ${workspace.name}`}
                   initialValue={state.projectSearch}
                   onChangeText={model.setProjectSearch}
-                  placeholder="Ship It or Demo Day"
+                  placeholder="Website or mobile app"
                 />
                 {catalog.projects
                   .filter(

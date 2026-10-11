@@ -11,10 +11,10 @@ test("a late main assistant reply cannot replace the human's explicit destinatio
   });
   const before = model.getState().choiceEpoch;
   model.setProject("chosen-project");
-  model.setText("Plan Ship It");
+  model.setText("Plan Alpha");
   model.applyPrimeDestination("other-project", before);
   assert.equal(model.getState().projectKey, "chosen-project");
-  assert.deepEqual(edits, ["Plan Ship It"]);
+  assert.deepEqual(edits, ["Plan Alpha"]);
   model.close();
 });
 test("late defaults do not replace an explicitly selected model or thinking option", () => {

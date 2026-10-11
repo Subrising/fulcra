@@ -275,7 +275,7 @@ export function IntakeSurface(props: Props) {
           initialValue={state.text}
           disabled={state.busy}
           onChangeText={model.setText}
-          placeholder="Improve Ship It onboarding"
+          placeholder="Improve the sign-up page"
         />
       )}
       {saved && (

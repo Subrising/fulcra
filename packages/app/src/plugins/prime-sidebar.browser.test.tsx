@@ -131,8 +131,8 @@ const SCENARIOS: Scenario[] = [
       "Main assistant · Idle · MacBook Pro",
       "Forecast",
       "Lead · weather-cli · Waiting for you · MacBook Pro",
-      "AI gag games lead: Ship It and Demo Day planning",
-      "Lead · AI gag games · Idle · Mac-mini.local",
+      "Example project lead: Alpha and Beta planning",
+      "Lead · Example project · Idle · Mac-mini.local",
     ],
     absentText: ["Lead · weather-cli conversation"],
   },
@@ -190,7 +190,7 @@ const FLEET = {
       host: "mini",
       status: "idle",
       pending: 0,
-      title: "AI gag games lead: Ship It and Demo Day planning",
+      title: "Example project lead: Alpha and Beta planning",
     },
   ],
 };
@@ -209,7 +209,9 @@ vi.mock("@/runtime/host-runtime", () => ({
               invokePluginRpc: async (_plugin: string, method: string) =>
                 ({
                   "organization.fleet": FLEET,
-                  "organization.projects": { projects: [{ id: "proj-g", name: "AI gag games" }] },
+                  "organization.projects": {
+                    projects: [{ id: "proj-g", name: "Example project" }],
+                  },
                 })[method] ?? f.scenario?.directories[serverId],
             },
           },
