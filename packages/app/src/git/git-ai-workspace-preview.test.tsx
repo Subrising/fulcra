@@ -57,7 +57,15 @@ vi.mock("./git-ai-draft-panel", () => ({
     return null;
   },
 }));
-vi.mock("react-native", () => ({ Text: "span", View: "div" }));
+vi.mock("react-native", () => ({
+  Text: "span",
+  View: "div",
+  // The touch-target hook reads the platform at import.
+  Platform: {
+    OS: "web",
+    select: (options: { web?: unknown; default?: unknown }) => options.web ?? options.default,
+  },
+}));
 vi.mock("react-native-unistyles", () => ({ StyleSheet: { create: () => ({ root: {} }) } }));
 vi.mock("@/components/ui/button", () => ({
   Button: ({

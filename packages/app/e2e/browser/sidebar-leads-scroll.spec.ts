@@ -353,6 +353,15 @@ async function measure(page: Page) {
 }
 
 // The host home is the controller surface, which has no shell menu on a phone; a workspace page has it.
+/** After a reload: wait for the page, open the phone menu when there is one, and wait for the Leads header. */
+async function reopenSidebar(page: Page) {
+  const menu = page.getByRole("button", { name: "Open menu" }).filter({ visible: true }).first();
+  const leads = page.getByTestId("sidebar-top-primes").filter({ visible: true }).first();
+  await expect(menu.or(leads).first()).toBeVisible({ timeout: 30_000 });
+  if (!(await leads.isVisible())) await menu.click();
+  await expect(leads).toBeVisible({ timeout: 30_000 });
+}
+
 async function openSidebar(page: Page, workspaceId: string) {
   await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
   // Wait for the page: a phone shows the menu, a wider screen shows the sidebar.
@@ -497,8 +506,7 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
     await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
     await page.screenshot({ path: path.join(SHOTS, "phone-375-leads-folded.png") });
     await page.reload();
-    const menu = page.getByRole("button", { name: "Open menu" });
-    if (await menu.isVisible().catch(() => false)) await menu.click();
+    await reopenSidebar(page);
     await expect(leadsArrow).toHaveAttribute("aria-expanded", "false", { timeout: 30_000 });
     await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
 
@@ -509,8 +517,8 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
     await allSessions.click();
     await expect(sessionRows).toHaveCount(0);
     await page.reload();
-    if (await menu.isVisible().catch(() => false)) await menu.click();
-    // The rows stay hidden after the reload (the group header shows before the saved fold is read).
+    await reopenSidebar(page);
+    // The header shows only once the sessions have loaded; the rows under it must stay hidden.
     await expect(allSessions).toBeVisible({ timeout: 30_000 });
     await expect(sessionRows).toHaveCount(0);
     await page.screenshot({ path: path.join(SHOTS, "phone-375-all-sessions-folded.png") });
