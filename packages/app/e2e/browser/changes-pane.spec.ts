@@ -877,6 +877,102 @@ test("compact Changes keeps its actions menu-only, with 48 px touch targets", as
   ).toContainText("Scroll long lines");
 });
 
+// The pointer type per size, never the runner's: pointer and hover queries answer from `window.__e2ePointer`.
+function installPointerQueries() {
+  const real = window.matchMedia.bind(window);
+  window.matchMedia = (query: string) => {
+    const list = real(query);
+    const mode = (window as unknown as { __e2ePointer?: "fine" | "coarse" }).__e2ePointer;
+    if (!mode) return list;
+    const fine = mode === "fine";
+    const known: Record<string, boolean> = {
+      "(hover: hover) and (pointer: fine)": fine,
+      "(pointer: fine)": fine,
+      "(pointer: coarse)": !fine,
+      "(any-pointer: fine)": fine,
+      "(any-pointer: coarse)": !fine,
+      "(hover: hover)": fine,
+      "(hover: none)": !fine,
+    };
+    const matches = known[query.toLowerCase().replace(/\s+/g, " ").trim()];
+    if (matches === undefined) return list;
+    return Object.defineProperty(list, "matches", { get: () => matches });
+  };
+}
+
+const TOOLBAR_SIZES = [
+  { name: "phone-375", width: 375, height: 812, touch: true },
+  { name: "phone-landscape", width: 812, height: 375, touch: true },
+  { name: "tablet-768", width: 768, height: 1024, touch: true },
+  { name: "desktop-1440", width: 1440, height: 900, touch: false },
+] as const;
+
+// FU-96, the owner's rule: no control smaller than 48 x 48 px on a touch screen. The Changes toolbar is measured at
+// phone, phone landscape, tablet and desktop sizes: every control is a touch target, and nothing overflows the bar
+// or scrolls the page sideways.
+test("Changes toolbar controls are 48 px touch targets and fit their bar at every size", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const workspace = await createWorkspaceWithMountedTabDiff();
+  await page.addInitScript(installPointerQueries);
+  const shots = process.env.PASEO_QA_SCREENSHOT_DIR;
+  for (const size of TOOLBAR_SIZES) {
+    await page.addInitScript(
+      (mode) => {
+        (window as unknown as { __e2ePointer?: string }).__e2ePointer = mode;
+      },
+      size.touch ? "coarse" : "fine",
+    );
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setTouchEmulationEnabled", {
+      enabled: size.touch,
+      maxTouchPoints: size.touch ? 5 : 1,
+    });
+    await page.setViewportSize({ width: size.width, height: size.height });
+    await openWorkspaceChanges(page, workspace);
+    const changesTab = page.getByTestId("explorer-tab-changes").filter({ visible: true });
+    if (!(await changesTab.isVisible())) {
+      await page.getByTestId("workspace-explorer-toggle").filter({ visible: true }).first().click();
+    }
+    await expect(changesTab).toBeVisible();
+    await changesTab.click();
+    const header = page.getByTestId("changes-header").filter({ visible: true }).first();
+    await expect(header).toBeVisible();
+    const measured = await header.evaluate((element) => {
+      const controls = [...element.querySelectorAll('[role="button"], button')]
+        .filter((control) => control.getClientRects().length > 0)
+        .map((control) => {
+          const rect = control.getBoundingClientRect();
+          return {
+            name: control.getAttribute("aria-label") ?? control.textContent?.trim() ?? "",
+            width: rect.width,
+            height: rect.height,
+            outside: rect.right > window.innerWidth + 0.5 || rect.left < -0.5,
+          };
+        });
+      return {
+        controls,
+        overflow: element.scrollWidth > element.clientWidth + 1,
+        sideways: document.documentElement.scrollWidth > window.innerWidth + 1,
+      };
+    });
+    if (shots)
+      await page.screenshot({ path: path.join(shots, `changes-toolbar-${size.name}.png`) });
+    expect.soft(measured.controls.length, `${size.name}: controls`).toBeGreaterThan(0);
+    expect.soft(measured.overflow, `${size.name}: toolbar overflow`).toBe(false);
+    expect.soft(measured.sideways, `${size.name}: sideways scroll`).toBe(false);
+    for (const control of measured.controls) {
+      expect.soft(control.outside, `${size.name}: ${control.name} outside the screen`).toBe(false);
+      if (!size.touch) continue;
+      expect.soft(control.width, `${size.name}: ${control.name} width`).toBeGreaterThanOrEqual(48);
+      expect
+        .soft(control.height, `${size.name}: ${control.name} height`)
+        .toBeGreaterThanOrEqual(48);
+    }
+  }
+});
+
 test("compact Changes jumps to a file from the changed-files sheet", async ({ page }) => {
   const workspace = await createWorkspaceWithMountedTabDiff({ includeNestedFolders: true });
   await useUnwrappedDiffLines(page);
