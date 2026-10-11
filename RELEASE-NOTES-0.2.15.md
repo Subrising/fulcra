@@ -28,6 +28,7 @@ Fulcra 0.2.15 is based on Paseo v0.11.0-beta.5.
 
 - The protected chat check reads its names from `protected-chats.txt` in the install folder, not from the code. The file must exist; it may be empty. A chat whose name or folder contains a listed name is never stopped by an update.
 - The script finds the PC user's folder from `USERPROFILE`. It no longer has a user name in the code.
+- Builds and their caches go to another drive: `-BuildsRoot`, then the user setting `FULCRA_BUILDS_ROOT`, then `E:\fulcra-builds`. The app starts through `explorer.exe`, so its window stays open after the scheduled task ends.
 - The update lists chats in every working folder (`paseo ls -g`). Before, the check before the stop and the health count after the start could miss chats in other folders.
 
 ### Tests
