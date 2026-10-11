@@ -88,7 +88,7 @@ export interface ReportUpDeps {
   /** Where the limited chats and the held reports are kept, so a daemon restart does not lose them. */
   statePath?: string;
   /** The open ledger rows; tests replace it. Default: the project ledgers under FULCRA_LEDGER_DIR or ~/shared-vault. */
-  readLedger?: () => readonly LedgerRow[];
+  readLedger?: () => readonly LedgerRow[] | Promise<readonly LedgerRow[]>;
 }
 
 interface PersistedState {
@@ -413,7 +413,7 @@ export class ReportUpService {
     const workers = await this.idleWorkersOf(leadId);
     if (!workers.length) return;
     const owned = rowsOwnedBy(
-      (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
+      await (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
       { id: leadId, title: titleOf(lead) },
     );
     if (!owned.length) return;
