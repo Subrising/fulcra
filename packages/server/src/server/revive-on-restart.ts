@@ -20,7 +20,7 @@ import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
 import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
 import { writeJsonFileAtomic } from "./atomic-file.js";
 import { heldSendsFor } from "./held-sends.js";
-import { classifyEndingAssistantMessage } from "./limit-resume/detect.js";
+import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import { INTERRUPTED_SETTLE_MS, STAGGER_MS } from "./limit-resume/service.js";
 import { leadChatOf, titleOf } from "./report-up.js";
 import { lineStoreOf } from "./reporting-lines.js";
@@ -296,7 +296,19 @@ async function continueOne(
     logger.info({ agentId: id, reason: before }, "Revive on restart: no continue prompt");
     return;
   }
-  const limited = await sessions.limitedUntil(id);
+  // FU-25: a session with no pool account has no account record to ask, so its limit is read from its own last
+  // messages. When that read fails, the session is not continued (fail closed): a stop at a limit looks the same.
+  let limited: Date | null | undefined;
+  try {
+    limited = await sessions.limitedUntil(id);
+  } catch (error) {
+    logger.warn(
+      { err: error, agentId: id },
+      "Revive on restart: the account limit could not be checked",
+    );
+    result.closed.push({ id, name, reason: "could not check its account limit" });
+    return;
+  }
   if (limited !== undefined) {
     result.closed.push({ id, name, reason: limitReason(limited) });
     return;
@@ -350,8 +362,14 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
       const marker = agentManager.getAgent(id)?.labels[LIMIT_RESUME_AT_LABEL];
       const markerAt = marker ? Date.parse(marker) : NaN;
       if (Number.isFinite(markerAt) && markerAt > now().getTime()) return new Date(markerAt);
-      const last = await agentManager.getLastAssistantMessage(id).catch(() => null);
-      const stop = classifyEndingAssistantMessage(last, now().getTime());
+      // Reads that fail throw: the caller treats an unreadable limit state as a refusal, never as "ready".
+      const last = await agentManager.getLastAssistantMessage(id);
+      const stored = await agentStorage.get(id);
+      // A failed turn carries its limit text as the error (Codex on a ChatGPT login ends a limited turn this way).
+      const failure = stored?.lastError
+        ? classifyFailedTurn(stored.lastError, now().getTime())
+        : null;
+      const stop = classifyEndingAssistantMessage(last, now().getTime()) ?? failure;
       if (!stop || stop.kind === "network") return undefined;
       return stop.resetAt && stop.resetAt > now().getTime() ? new Date(stop.resetAt) : null;
     },

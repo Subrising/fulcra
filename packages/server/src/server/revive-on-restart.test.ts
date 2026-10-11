@@ -41,6 +41,8 @@ async function fixture(input: {
   /** Per session, the answers of successive re-reads before the resume (null: unchanged). */
   changes?: Record<string, Array<string | null>>;
   enabled?: boolean;
+  /** Sessions whose limit state cannot be read (FU-25). */
+  limitUnreadable?: string[];
 }) {
   const home = await mkdtemp(path.join(tmpdir(), "revive-on-restart-"));
   cleanup.push(home);
@@ -86,7 +88,11 @@ async function fixture(input: {
       reads.push(`${id}@${cutAt}`);
       return input.changes?.[id]?.shift() ?? null;
     },
-    limitedUntil: async (id) => input.limited?.[id],
+    limitedUntil: async (id) => {
+      if (input.limitUnreadable?.includes(id))
+        throw new Error("timeline unreadable at /private/path");
+      return input.limited?.[id];
+    },
     sendContinue: async (id) => {
       prompts.push(id);
     },
@@ -391,6 +397,81 @@ describe("revive on restart", () => {
     expect(text).toBe(
       "Daemon restarted at 11 Oct, 09:49; 1 session closed: Weather app (folder missing)",
     );
+  });
+});
+
+describe("revive of a session with no pool account (FU-25)", () => {
+  test("a no-pool session is continued when its limit state reads clean, and is not when the read fails", async () => {
+    const reports = { [REPORTS_TO_LABEL]: LEAD };
+    const f = await fixture({
+      records: [
+        { id: LEAD, lastStatus: "idle", title: "Lead" },
+        { id: RUNNING, title: "Codex helper", labels: reports },
+        { id: LIMITED, title: "Claude helper", labels: reports },
+      ],
+      limitUnreadable: [LIMITED],
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [RUNNING, LIMITED].map((id) => ({ id, lifecycle: "running" })),
+      now: new Date("2026-10-11T09:40:00Z"),
+    });
+    const result = await f.run();
+    expect(f.prompts).toEqual([RUNNING]);
+    expect(result.closed).toEqual([
+      { id: LIMITED, name: "Claude helper", reason: "could not check its account limit" },
+    ]);
+    // The lead hears a fixed reason, never the read error (it can name a path).
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]!.prompt).toContain("Claude helper (could not check its account limit)");
+    expect(f.notices[0]!.prompt).not.toContain("/private/path");
+  });
+
+  function limits(input: { last?: string | null; lastError?: string | null; fails?: boolean }) {
+    const deps = {
+      agentManager: {
+        getAgent: () => ({ labels: {}, lastUserMessageAt: null }),
+        getLastAssistantMessage: async () => {
+          if (input.fails) throw new Error("store unreadable");
+          return input.last ?? null;
+        },
+      } as unknown as AgentManager,
+      agentStorage: {
+        get: async () => ({ id: RUNNING, lastError: input.lastError ?? null }),
+      } as unknown as AgentStorage,
+      paseoHome: "",
+      localServerId: null,
+      logger: createTestLogger(),
+      isEnabled: () => true,
+      now: () => new Date("2026-10-11T09:49:00Z"),
+    } satisfies ReviveDeps;
+    return defaultSessions(deps);
+  }
+
+  test("a clean session is ready; a limit line at its end, or a limit error on its last turn, is a limit", async () => {
+    expect(await limits({ last: "All done." }).limitedUntil(RUNNING)).toBeUndefined();
+    expect(
+      await limits({
+        last: "You've hit your session limit · resets 11:50pm (Australia/Brisbane)",
+      }).limitedUntil(RUNNING),
+    ).toBeInstanceOf(Date);
+    // Codex on a ChatGPT login ends a limited turn as a failed turn: the limit is in the error, not in a message.
+    expect(
+      await limits({
+        last: "Working on it.",
+        lastError: "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.",
+      }).limitedUntil(RUNNING),
+    ).not.toBeUndefined();
+    // A network blip is not a limit.
+    expect(
+      await limits({ last: "Working.", lastError: "ECONNRESET reading the stream" }).limitedUntil(
+        RUNNING,
+      ),
+    ).toBeUndefined();
+  });
+
+  test("an unreadable last message is an error, not 'ready'", async () => {
+    await expect(limits({ fails: true }).limitedUntil(RUNNING)).rejects.toThrow("store unreadable");
   });
 });
 
