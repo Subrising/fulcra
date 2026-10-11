@@ -5,7 +5,7 @@ test("bounded directory pagination retains exact host/project/session identity w
   let reads = 0;
   const api = {
     projects: {
-      list: async () => ({ projects: [{ projectId: "project", projectDisplayName: "Ship It" }] }),
+      list: async () => ({ projects: [{ projectId: "project", projectDisplayName: "Alpha" }] }),
     },
     workspaces: {
       list: async ({ page }) => {

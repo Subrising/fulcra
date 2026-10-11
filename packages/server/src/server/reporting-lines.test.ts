@@ -94,7 +94,7 @@ describe("reporting lines", () => {
       });
     expect(remote(main)).toEqual({ allowed: true, why: "main assistant" });
     expect(
-      remote(agent("w", "Ship It helper", { "fulcra.reports-to": `book-lead@${BOOK}` })),
+      remote(agent("w", "Alpha helper", { "fulcra.reports-to": `book-lead@${BOOK}` })),
     ).toEqual({ allowed: true, why: "child" });
     expect(remote(worker)).toEqual({
       allowed: false,

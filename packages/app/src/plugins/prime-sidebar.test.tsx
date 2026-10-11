@@ -789,8 +789,8 @@ it("lists a chat that reports to the main assistant without a seat, on any conne
   ];
   f.chats = {
     book: {
-      "gag-lead": {
-        id: "gag-lead",
+      "other-lead": {
+        id: "other-lead",
         title: "Example project · Fulcra orchestrator",
         status: "idle",
         labels: { "fulcra.reports-to": "role:main-assistant" },
@@ -799,12 +799,12 @@ it("lists a chat that reports to the main assistant without a seat, on any conne
         id: "worker",
         title: "A worker",
         status: "idle",
-        labels: { "fulcra.reports-to": "gag-lead" },
+        labels: { "fulcra.reports-to": "other-lead" },
       },
     },
   };
   mount();
-  const row = await screen.findByTestId("sidebar-chat-lead-book-gag-lead");
+  const row = await screen.findByTestId("sidebar-chat-lead-book-other-lead");
   expect(row.textContent).toContain("Example project · Fulcra orchestrator");
   expect(row.textContent).toContain("Lead · Idle · last known · Second computer");
   expect(screen.queryByTestId("sidebar-chat-lead-book-worker")).toBeNull();
@@ -814,8 +814,8 @@ it("opens a chat lead's chat on its own computer", async () => {
   f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
   f.chats = {
     mini: {
-      "gag-lead": {
-        id: "gag-lead",
+      "other-lead": {
+        id: "other-lead",
         title: "Gag lead",
         status: "running",
         labels: { "fulcra.reports-to": "role:main-assistant" },
@@ -823,7 +823,7 @@ it("opens a chat lead's chat on its own computer", async () => {
     },
   };
   mount();
-  const row = await screen.findByTestId("sidebar-chat-lead-mini-gag-lead");
+  const row = await screen.findByTestId("sidebar-chat-lead-mini-other-lead");
   expect(row.textContent).toContain("Working · last known");
   fireEvent.click(row);
   expect(f.open).toHaveBeenCalled();

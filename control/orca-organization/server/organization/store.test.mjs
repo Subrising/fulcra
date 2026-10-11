@@ -14,8 +14,8 @@ import {
   parsePrimeDestination,
 } from "../../shared/workspace-organization.mjs";
 const book = "srv_example_book";
-const ship = { serverId: book, projectId: "prj_ship_fixture", name: "Ship It" };
-const demo = { serverId: book, projectId: "prj_demo_fixture", name: "Demo Day" };
+const ship = { serverId: book, projectId: "prj_alpha_fixture", name: "Alpha" };
+const demo = { serverId: book, projectId: "prj_beta_fixture", name: "Beta" };
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-organization-test-"));
   const store = new OrganizationStore(path.join(root, "organization.sqlite"));
@@ -54,7 +54,7 @@ test("repeated request preserves one intake and conflicting reuse fails", (t) =>
     action: "begin-intake",
     workspaceId,
     intakeId,
-    text: "Improve Ship It onboarding",
+    text: "Improve Alpha onboarding",
     projectKey: null,
   };
   apply(command, requestId, expectedRevision);
@@ -117,7 +117,7 @@ test("route corrections retain conversation identity and prohibit creation repla
     action: "begin-intake",
     workspaceId,
     intakeId,
-    text: "Ship It onboarding",
+    text: "Alpha onboarding",
     projectKey: null,
   });
   const context = { ...ship, workspaceId: "wks_existing_ship" };
@@ -194,14 +194,14 @@ test("routing uses explicit names/recorded destination and asks only real ambigu
   const { store } = fixture(t),
     workspace = store.read().workspaces[0];
   assert.equal(
-    resolveIntakeDestination(workspace, "ship it onboarding").projectKey,
+    resolveIntakeDestination(workspace, "alpha onboarding").projectKey,
     projectReferenceKey(ship),
   );
   assert.equal(
     resolveIntakeDestination(workspace, "a new idea", projectReferenceKey(demo)).projectKey,
     projectReferenceKey(demo),
   );
-  assert.equal(resolveIntakeDestination(workspace, "Ship It and Demo Day").kind, "ambiguous");
+  assert.equal(resolveIntakeDestination(workspace, "Alpha and Beta").kind, "ambiguous");
   assert.equal(resolveIntakeDestination(workspace, "a new idea").kind, "needs-prime");
 });
 test("context resolution uses exact references, not matching names or paths", (t) => {
@@ -315,10 +315,10 @@ test("workspace names use word boundaries, and the configured umbrella resolves 
 test("a correlated main assistant clarification is readable and a prior reply cannot become this request's answer", () => {
   assert.equal(
     parsePrimeQuestion(
-      '{"intakeId":"request","question":"Is this for Ship It or Demo Day?"}',
+      '{"intakeId":"request","question":"Is this for Alpha or Beta?"}',
       "request",
     ),
-    "Is this for Ship It or Demo Day?",
+    "Is this for Alpha or Beta?",
   );
   assert.equal(parsePrimeQuestion('{"intakeId":"old","question":"Old question"}', "request"), null);
   assert.equal(
@@ -334,7 +334,7 @@ test("destination correction cannot authorize another chat allocation under a fr
   const { store, apply, workspaceId } = fixture(t),
     intakeId = randomUUID();
   const target = { serverId: book, projectId: ship.projectId, workspaceId: "wks_existing_ship" };
-  apply({ action: "begin-intake", workspaceId, intakeId, text: "Ship It", projectKey: null });
+  apply({ action: "begin-intake", workspaceId, intakeId, text: "Alpha", projectKey: null });
   apply({
     action: "route",
     workspaceId,

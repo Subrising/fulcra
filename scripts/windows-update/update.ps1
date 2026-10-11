@@ -27,7 +27,8 @@ $Lock = Join-Path $Root 'lock'
 $Log = Join-Path $Root 'update.log'
 $Node = Join-Path $Home_ 'tools\node24'
 $PaseoHome = Join-Path $Home_ 'AppData\Roaming\Orca\daemon'
-$SongStudio = Join-Path $Home_ 'song-studio'
+# One name or folder fragment per line; '#' starts a comment. Chats that match never stop for an update.
+$ProtectedFile = Join-Path $Root 'protected-chats.txt'
 $Legacy = Join-Path $Home_ 'fulcra\packages\desktop\release-preview\win-unpacked'
 
 function Say([string]$m) {
@@ -64,9 +65,16 @@ function DaemonProcesses {
     Where-Object { $_.CommandLine -match '\.[mc]?js|--type=' }
 }
 
-# --- Song Studio check. Refuse when a chat on this daemon could stop. ---
-function SongStudioCheck([string]$build) {
-  $r = Paseo $build @('ls', '-a', '--json')
+# --- Protected chat check. Refuse when a chat on this daemon could stop. ---
+# The protected names come from protected-chats.txt next to this script, not from the code.
+function ProtectedNames {
+  if (-not (Test-Path $ProtectedFile)) { Fail "missing $ProtectedFile (one name per line; it may be empty)" }
+  return @(Get-Content $ProtectedFile | ForEach-Object { ($_ -replace '#.*$', '').Trim() } | Where-Object { $_ })
+}
+function ProtectedChatCheck([string]$build) {
+  $names = ProtectedNames
+  # -g: every working folder, not only the current one.
+  $r = Paseo $build @('ls', '-a', '-g', '--json')
   if ($r.code -ne 0) {
     if ($r.text -match 'not running|ECONNREFUSED|unreachable') { Say 'daemon not running: no chats to stop'; return @() }
     Fail "paseo ls failed: $($r.text.Trim())"
@@ -75,10 +83,11 @@ function SongStudioCheck([string]$build) {
   $blocking = @()
   foreach ($a in $agents) {
     $text = "$($a.name) $($a.cwd)"
-    if ($text -match 'song-studio|song studio|songstudio') { $blocking += "$($a.name) ($($a.status), Song Studio)" }
+    $hit = $names | Where-Object { $text.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 } | Select-Object -First 1
+    if ($hit) { $blocking += "$($a.name) ($($a.status), protected: $hit)" }
     elseif ($a.status -notin @('idle', 'closed', 'archived', 'error')) { $blocking += "$($a.name) ($($a.status))" }
   }
-  Say ("chats on this daemon: {0}; blocking: {1}" -f $agents.Count, $blocking.Count)
+  Say ("chats on this daemon: {0}; protected names: {1}; blocking: {2}" -f $agents.Count, $names.Count, $blocking.Count)
   return $blocking
 }
 
@@ -101,7 +110,7 @@ function HealthCheck([string]$build, [string]$serverId, [int]$minAgents, [int]$s
       } catch { $problems += 'controller pipe does not accept a connection' }
     }
     if ($problems.Count -eq 0) {
-      $ls = Paseo $build @('ls', '-a', '--json')
+      $ls = Paseo $build @('ls', '-a', '-g', '--json')
       if ($ls.code -ne 0) { $problems += 'paseo ls failed' }
       elseif (@(($ls.text | ConvertFrom-Json)).Count -lt $minAgents) { $problems += 'fewer chats than before the update' }
     }
@@ -187,7 +196,7 @@ try {
     Say "free disk: $free GB"
     if ($free -lt 15) { Fail 'less than 15 GB free' }
     if ($Ref) { git ls-remote --exit-code --heads --tags $Repo $Ref | Out-Null; if ($LASTEXITCODE -ne 0) { Fail "ref not found: $Ref" }; Say "ref $Ref exists" }
-    $blocking = SongStudioCheck $state.current
+    $blocking = ProtectedChatCheck $state.current
     if ($blocking.Count -gt 0) { Say ('WOULD REFUSE: chats would stop: ' + ($blocking -join ', ')); exit 3 }
     Say 'check passed: no chat blocks a restart'
     exit 0
@@ -199,15 +208,15 @@ try {
   }
   if (-not (Test-Path (Join-Path $target 'Fulcra.exe'))) { Fail "no Fulcra.exe in $target" }
 
-  # Song Studio check, before anything stops.
-  $blocking = SongStudioCheck $state.current
+  # Protected chat check, before anything stops.
+  $blocking = ProtectedChatCheck $state.current
   if ($blocking.Count -gt 0) { Say ('REFUSED: these chats would stop: ' + ($blocking -join ', ')); exit 3 }
 
   # Record the state to keep.
   $before = Paseo $state.current @('daemon', 'status')
   $serverId = ''
   if ($before.text -match 'serverId:\s*(\S+)') { $serverId = $Matches[1] }
-  $lsBefore = Paseo $state.current @('ls', '-a', '--json')
+  $lsBefore = Paseo $state.current @('ls', '-a', '-g', '--json')
   $minAgents = 0
   if ($lsBefore.code -eq 0) { $minAgents = @(($lsBefore.text | ConvertFrom-Json)).Count }
   Say "before: serverId=$serverId chats=$minAgents"

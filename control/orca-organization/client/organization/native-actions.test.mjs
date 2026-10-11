@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { createIntakeChat, askIntakePrime } from "./native-actions.mjs";
 const context = {
   serverId: "srv_example_book",
-  projectId: "prj_ship",
+  projectId: "prj_alpha",
   workspaceId: "wks_existing",
 };
 const intake = {
   id: "retained-intake",
   context,
-  text: "Ship It onboarding",
+  text: "Alpha onboarding",
   conversations: [],
   prime: { serverId: "srv_example_mini", agentId: "original-prime", seat: "delivery" },
   primeRequest: null,
@@ -244,7 +244,7 @@ test("one protected routing request preserves the original main assistant, gener
   };
   const reply = await askIntakePrime({
     intake,
-    workspace: { projects: [{ key: "ship", name: "Ship It" }] },
+    workspace: { projects: [{ key: "ship", name: "Alpha" }] },
     api,
     binding,
     sendOwned,
