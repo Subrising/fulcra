@@ -6,11 +6,15 @@ import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager } from "./agent/agent-manager.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
+import { readFile, writeFile } from "node:fs/promises";
 import {
+  defaultSessions,
   formatRestartNotice,
   recordOpenSessions,
   REVIVE_FILE,
   reviveAfterRestart,
+  sealStopRecord,
+  type ReviveDeps,
   type ReviveSessions,
 } from "./revive-on-restart.js";
 
@@ -163,9 +167,9 @@ describe("revive on restart", () => {
     const f = await fixture({
       records: [
         { id: LEAD, lastStatus: "idle", title: "Lead" },
-        { id: NO_FOLDER, title: "Ship It", cwd: "/nonexistent/fulcra-revive", labels: reports },
-        { id: LIMITED, title: "Demo Day", labels: reports },
-        { id: NO_PROVIDER, title: "Gag game", labels: reports },
+        { id: NO_FOLDER, title: "Weather app", cwd: "/nonexistent/fulcra-revive", labels: reports },
+        { id: LIMITED, title: "Docs site", labels: reports },
+        { id: NO_PROVIDER, title: "Build bot", labels: reports },
         { id: POOL, title: "Pool chat", labels: reports },
         { id: RUNNING, title: "No lead", cwd: "/nonexistent/other" },
       ],
@@ -194,9 +198,11 @@ describe("revive on restart", () => {
     const notice = f.notices[0]!;
     expect(notice.leadId).toBe(LEAD);
     expect(notice.prompt).toContain("3 sessions closed");
-    expect(notice.prompt).toContain("Ship It (folder missing)");
-    expect(notice.prompt).toContain("Demo Day (account at a limit until");
-    expect(notice.prompt).toContain("Gag game (Provider 'codex' is not available.");
+    expect(notice.prompt).toContain("Weather app (folder missing)");
+    expect(notice.prompt).toContain("Docs site (account at a limit until");
+    // A fixed reason: the provider's error text stays in the log.
+    expect(notice.prompt).toContain("Build bot (provider missing)");
+    expect(notice.prompt).not.toContain("codex");
     expect(notice.prompt).not.toContain("Pool chat");
     expect(notice.prompt).toContain(
       formatRestartNotice({ restartedAt: new Date("2026-10-11T09:40:00Z"), closed: [] }).split(
@@ -216,8 +222,8 @@ describe("revive on restart", () => {
       changes: {
         // Changed before the first read (a user or limit-resume prompted it during the settle time).
         [RUNNING]: ["a new message arrived since the restart"],
-        // Unchanged at the first read, changed at the last read just before the prompt.
-        [LIMITED]: [null, "a new message arrived since the restart"],
+        // Unchanged before the load and after it, changed at the last read just before the prompt.
+        [LIMITED]: [null, null, "a new message arrived since the restart"],
       },
     });
     await recordOpenSessions({
@@ -230,9 +236,136 @@ describe("revive on restart", () => {
     expect(f.prompts).toEqual([IDLE]);
     expect(result.continued).toEqual([IDLE]);
     expect(result.closed).toEqual([]);
+    // Read before the load: a session that changed during the settle time is not even loaded.
+    expect(f.loads).not.toContain(RUNNING);
     // Every read compares with the last user message the restart cut off.
     expect(f.reads.every((read) => read.endsWith(`@${cutAt}`))).toBe(true);
-    expect(f.reads.filter((read) => read.startsWith(IDLE))).toHaveLength(2);
+    expect(f.reads.filter((read) => read.startsWith(IDLE))).toHaveLength(3);
+  });
+
+  test("a session archived or closed by hand during the settle time is not loaded, prompted or named to its lead", async () => {
+    const reports = { [REPORTS_TO_LABEL]: LEAD };
+    const f = await fixture({
+      records: [
+        { id: LEAD, lastStatus: "idle", title: "Lead" },
+        { id: RUNNING, title: "Archived chat", labels: reports },
+        { id: CLOSED_BY_HAND, title: "Closed chat", labels: reports },
+      ],
+      changes: {
+        [RUNNING]: ["archived or removed since the restart"],
+        [CLOSED_BY_HAND]: ["closed by hand since the restart"],
+      },
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [RUNNING, CLOSED_BY_HAND].map((id) => ({ id, lifecycle: "running" })),
+    });
+
+    const result = await f.run();
+
+    expect(f.loads).toEqual([]);
+    expect(f.prompts).toEqual([]);
+    expect(result.closed).toEqual([]);
+    expect(f.notices).toEqual([]);
+  });
+
+  test("the notice has fixed reasons: no path and no chat ID from a load error", async () => {
+    const reports = { [REPORTS_TO_LABEL]: LEAD };
+    const f = await fixture({
+      records: [
+        { id: LEAD, lastStatus: "idle", title: "Lead" },
+        { id: NO_PROVIDER, title: "Build bot", labels: reports },
+        { id: RUNNING, title: "Odd chat", labels: reports },
+      ],
+      failLoad: {
+        [NO_PROVIDER]: "spawn /opt/tools/bin/claude ENOENT",
+        [RUNNING]: `Agent is archived: ${RUNNING}`,
+      },
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [NO_PROVIDER, RUNNING].map((id) => ({ id, lifecycle: "running" })),
+    });
+
+    await f.run();
+
+    const prompt = f.notices[0]!.prompt;
+    expect(prompt).toContain("Build bot (provider missing)");
+    expect(prompt).toContain("Odd chat (could not load)");
+    expect(prompt).not.toContain("/opt/");
+    expect(prompt).not.toContain(RUNNING);
+  });
+
+  test("a stop record from before a rollback revives only sessions not used since the stop", async () => {
+    const stoppedAt = "2026-10-11T09:40:00.000Z";
+    const f = await fixture({
+      records: [
+        { id: IDLE, updatedAt: "2026-10-11T09:39:59.000Z" },
+        // Used by an older build after the stop (rolled back): its turn ended long ago.
+        { id: RUNNING, updatedAt: "2026-10-12T08:00:00.000Z" },
+        { id: LIMITED, updatedAt: "2026-10-12T08:00:00.000Z", lastStatus: "running" },
+      ],
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [
+        { id: IDLE, lifecycle: "idle" },
+        { id: RUNNING, lifecycle: "running" },
+      ],
+      now: new Date(stoppedAt),
+    });
+
+    // LIMITED was found still running by this boot (a crash): the stop record's time does not apply to it.
+    const result = await f.run([LIMITED]);
+
+    expect(result.reopened).toEqual([IDLE]);
+    expect(f.status(RUNNING)).toBe("closed");
+    expect(f.prompts).toEqual([LIMITED]);
+  });
+
+  test("the stop seals its record after the closes, so the stop's own writes are not later than it", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "revive-seal-"));
+    cleanup.push(home);
+    await recordOpenSessions({
+      paseoHome: home,
+      agents: [{ id: RUNNING, lifecycle: "running" }],
+      now: new Date("2026-10-11T09:40:00.000Z"),
+    });
+
+    await sealStopRecord({ paseoHome: home, now: new Date("2026-10-11T09:40:03.000Z") });
+
+    const sealed = JSON.parse(await readFile(path.join(home, REVIVE_FILE), "utf8"));
+    expect(sealed).toEqual({
+      v: 1,
+      stoppedAt: "2026-10-11T09:40:03.000Z",
+      openIds: [RUNNING],
+      interruptedIds: [RUNNING],
+    });
+    // No stop record (a crash, or a broken file): nothing is written.
+    const empty = await mkdtemp(path.join(tmpdir(), "revive-seal-"));
+    cleanup.push(empty);
+    await writeFile(path.join(empty, REVIVE_FILE), "not json");
+    await sealStopRecord({ paseoHome: empty });
+    expect(await readFile(path.join(empty, REVIVE_FILE), "utf8")).toBe("not json");
+  });
+
+  test("a lead closed by hand is not woken by the notice; the log names the sessions", async () => {
+    const reports = { [REPORTS_TO_LABEL]: LEAD };
+    const f = await fixture({
+      records: [
+        { id: LEAD, lastStatus: "closed", title: "Lead" },
+        { id: NO_FOLDER, title: "Weather app", cwd: "/nonexistent/fulcra-revive", labels: reports },
+      ],
+    });
+    await recordOpenSessions({
+      paseoHome: f.home,
+      agents: [{ id: NO_FOLDER, lifecycle: "running" }],
+    });
+
+    const result = await f.run();
+
+    expect(result.closed.map((entry) => entry.id)).toEqual([NO_FOLDER]);
+    expect(f.notices).toEqual([]);
   });
 
   test("turned off: nothing is reopened, loaded or prompted, and the stop record is removed", async () => {
@@ -253,10 +386,10 @@ describe("revive on restart", () => {
   test("the notice names the restart time and every closed session", () => {
     const text = formatRestartNotice({
       restartedAt: new Date(2026, 9, 11, 9, 49),
-      closed: [{ name: "Ship It", reason: "folder missing" }],
+      closed: [{ name: "Weather app", reason: "folder missing" }],
     });
     expect(text).toBe(
-      "Daemon restarted at 11 Oct, 09:49; 1 session closed: Ship It (folder missing)",
+      "Daemon restarted at 11 Oct, 09:49; 1 session closed: Weather app (folder missing)",
     );
   });
 });
@@ -290,5 +423,45 @@ describe("agent storage reopen after restart", () => {
     expect(changed).toEqual([IDLE]);
     expect((await storage.get(IDLE))?.lastStatus).toBe("idle");
     expect((await storage.get(RUNNING))?.lastStatus).toBe("closed");
+  });
+});
+
+describe("revive session reads", () => {
+  function reads(record: Partial<StoredAgentRecord> | null) {
+    const deps = {
+      agentManager: {
+        getAgent: () => (record ? { lastUserMessageAt: null } : null),
+      } as unknown as AgentManager,
+      agentStorage: {
+        get: async () => (record ? ({ id: RUNNING, ...record } as StoredAgentRecord) : null),
+      } as unknown as AgentStorage,
+      paseoHome: "",
+      localServerId: null,
+      logger: createTestLogger(),
+      isEnabled: () => true,
+    } satisfies ReviveDeps;
+    return defaultSessions(deps);
+  }
+
+  test("a session closed by hand, archived or removed since the restart is changed; an idle one is not", async () => {
+    expect(await reads({ lastStatus: "closed" }).changedSince(RUNNING, null)).toBe(
+      "closed by hand since the restart",
+    );
+    expect(
+      await reads({ lastStatus: "idle", archivedAt: "2026-10-11T09:41:00Z" }).changedSince(
+        RUNNING,
+        null,
+      ),
+    ).toBe("archived or removed since the restart");
+    expect(await reads(null).changedSince(RUNNING, null)).toBe(
+      "archived or removed since the restart",
+    );
+    expect(await reads({ lastStatus: "idle" }).changedSince(RUNNING, null)).toBeNull();
+    expect(
+      await reads({
+        lastStatus: "idle",
+        lastUserMessageAt: "2026-10-11T09:42:00.000Z",
+      }).changedSince(RUNNING, null),
+    ).toBe("a new message arrived since the restart");
   });
 });
