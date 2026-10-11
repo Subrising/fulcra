@@ -4,7 +4,7 @@ import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
 import { startReportUp } from "./report-up.js";
-import { recordOpenSessions, reviveAfterRestart } from "./revive-on-restart.js";
+import { recordOpenSessions, reviveAfterRestart, sealStopRecord } from "./revive-on-restart.js";
 import { heldSendsFor } from "./held-sends.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
@@ -2159,6 +2159,10 @@ export async function createPaseoDaemon(
     await agentManager.flushForShutdown().catch(() => undefined);
     detachAgentStoragePersistence();
     await agentStorage.flush().catch(() => undefined);
+    // The closes above wrote the session records: seal the stop time after them (revive-on-restart.ts).
+    await sealStopRecord({ paseoHome: config.paseoHome }).catch((err) =>
+      logger.warn({ err }, "Could not seal the stop record"),
+    );
     await agentProviderRuntime.shutdown();
     // W1 row 9: seal this boot at the end of the orderly shutdown, synchronously before the host closes, so no
     // input can be admitted after the counters are captured. A boot that never gets here has no seal.
