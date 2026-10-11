@@ -14,7 +14,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { sidebarFooterButtonSize, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
+import { useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
+import { sidebarFooterButtonSize } from "@/components/sidebar/sidebar-footer-size";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppDiagnosticStore } from "@/diagnostics/store";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
