@@ -1224,7 +1224,7 @@ orchestration	M	259	1	packages/protocol/src/messages.test.ts
 orchestration	M	1365	10	packages/protocol/src/messages.ts
 orchestration	M	1	1	packages/protocol/src/messages.wire-compat.test.ts
 orchestration	A	176	0	packages/protocol/src/native-intercom.ts
-orchestration	M	69	2	packages/protocol/src/provider-manifest.ts
+orchestration	M	77	2	packages/protocol/src/provider-manifest.ts
 orchestration	A	81	0	packages/protocol/src/session-ownership.ts
 orchestration	M	2	0	packages/server/src/server/agent/agent-loading.ts
 orchestration	M	3658	159	packages/server/src/server/agent/agent-manager.test.ts
@@ -1581,7 +1581,7 @@ session-launch	M	251	24	packages/server/src/server/agent/agent-prompt.test.ts
 session-launch	M	270	74	packages/server/src/server/agent/agent-prompt.ts
 session-launch	A	375	0	packages/server/src/server/agent/catalog-timeout.test.ts
 session-launch	M	1	1	packages/server/src/server/agent/create-agent-lifecycle-dispatch.ts
-session-launch	M	216	2	packages/server/src/server/agent/create-agent-mode.test.ts
+session-launch	M	217	2	packages/server/src/server/agent/create-agent-mode.test.ts
 session-launch	M	84	1	packages/server/src/server/agent/create-agent-mode.ts
 session-launch	M	171	0	packages/server/src/server/agent/create-agent/create.test.ts
 session-launch	M	29	5	packages/server/src/server/agent/create-agent/create.ts
@@ -1596,12 +1596,13 @@ session-launch	M	22	0	packages/server/src/server/agent/provider-registry.test.ts
 session-launch	M	9	0	packages/server/src/server/agent/provider-registry.ts
 session-launch	M	42	15	packages/server/src/server/agent/provider-snapshot-manager.test.ts
 session-launch	M	82	32	packages/server/src/server/agent/provider-snapshot-manager.ts
+session-launch	A	139	0	packages/server/src/server/agent/providers/claude/agent.dont-ask.test.ts
 session-launch	M	108	0	packages/server/src/server/agent/providers/claude/agent.env.test.ts
 session-launch	M	94	81	packages/server/src/server/agent/providers/claude/agent.image-rendering.test.ts
 session-launch	M	87	0	packages/server/src/server/agent/providers/claude/agent.interrupt-restart-regression.test.ts
 session-launch	M	17	0	packages/server/src/server/agent/providers/claude/agent.redesign.test.ts
 session-launch	M	614	10	packages/server/src/server/agent/providers/claude/agent.test.ts
-session-launch	M	382	17	packages/server/src/server/agent/providers/claude/agent.ts
+session-launch	M	400	20	packages/server/src/server/agent/providers/claude/agent.ts
 session-launch	A	106	0	packages/server/src/server/agent/providers/claude/background-work.test.ts
 session-launch	A	123	0	packages/server/src/server/agent/providers/claude/background-work.ts
 session-launch	M	3	1	packages/server/src/server/agent/providers/claude/feature-definitions.ts
