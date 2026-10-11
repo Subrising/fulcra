@@ -16,6 +16,7 @@ export interface Account {
 export interface AccountState {
   v: 1;
   policy: "priority" | "spread";
+  rotateOnLimit: boolean;
   accounts: Account[];
   assignments: Record<string, { accountId: string; provider: string; at: string; ended: boolean }>;
   rotations: any[];
@@ -49,6 +50,7 @@ export function setAccount(
 export function moveAccount(root: string, id: string, direction: "up" | "down"): Promise<Account>;
 export function removeAccount(root: string, id: string): Promise<Account>;
 export function setPolicy(root: string, policy: string): Promise<string>;
+export function setRotateOnLimit(root: string, value: boolean): Promise<boolean>;
 export function assign(
   root: string,
   sessionId: string,

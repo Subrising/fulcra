@@ -639,16 +639,23 @@ for (const provider of ["claude", "codex"]) {
     const out = await f.hook({ request: f.request });
     assert.equal(out.env.FULCRA_ACCOUNT_ID, f.accounts[8].id);
     assert.equal(out.env.KEEP, "yes");
+    // Since 6ebc34f40 (8 Oct) a missing Claude credential is not a provider rejection: the account stays retryable
+    // (auth ok) and the read is tried once more. Codex still marks signing-in.
     assert.equal(
       Object.values(readAccounts(f.root).accounts).filter((a) => a.auth !== "ok").length,
-      8,
+      provider === "claude" ? 0 : 8,
     );
     if (provider === "claude") assert.equal(new Set(f.reads).size, 9);
   });
   test(`admission ${provider}: all 32 unavailable credentials refuse without native fallback`, async (t) => {
     const f = await admissionFixture(t, provider, 32);
     await assert.rejects(f.hook({ request: f.request }), admissionFailure);
-    assert.equal(readAccounts(f.root).accounts.filter((a) => a.auth !== "ok").length, 32);
+    // Since 6ebc34f40 (8 Oct) a missing Claude credential is not a provider rejection: the account stays retryable
+    // (auth ok) and the read is tried once more. Codex still marks signing-in.
+    assert.equal(
+      readAccounts(f.root).accounts.filter((a) => a.auth !== "ok").length,
+      provider === "claude" ? 0 : 32,
+    );
     if (provider === "claude") assert.equal(new Set(f.reads).size, 32);
   });
   test(`admission ${provider}: history-unknown empty and disabled pools preserve native opt-out`, async (t) => {
@@ -830,7 +837,8 @@ test("Book local: unavailable enabled Work refuses ambient login before provider
     providerLaunches++;
   }, admissionFailure);
   assert.equal(providerLaunches, 0);
-  assert.deepEqual(f.reads, [work.id]);
+  // Only Work is read (Personal is disabled); since 6ebc34f40 an empty read is tried once more.
+  assert.deepEqual([...new Set(f.reads)], [work.id]);
   assert.equal(readAccounts(f.root).accounts.find((a) => a.id === personal.id).enabled, false);
   for (const key of Object.keys(inputEnv)) assert.equal(f.request.env[key] === inputEnv[key], true);
 });

@@ -519,7 +519,7 @@ test("a Book (remote) session is not read here; the notice carries metadata only
   });
   assert.match(
     t1.body,
-    /Session 4c111479 stopped at its usage limit; resets 12:50am \(Australia\/Brisbane\)\. It is under your control, so nothing was sent/,
+    /Session 00000000 stopped at its usage limit; resets 12:50am \(Australia\/Brisbane\)\. It is under your control, so nothing was sent/,
   );
   assert.throws(() => limitNoticeText({ session: "not-a-session", reset: "3pm" }));
   assert.throws(() =>
@@ -532,7 +532,8 @@ test("a Book (remote) session is not read here; the notice carries metadata only
 test("server.mjs is wired: agent updates, a startup pass, the watchdog tick, recovery-status (static)", () => {
   const src = fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
   assert.match(src, /control\.usageLimits = new UsageLimits\(control\)/);
-  assert.match(src, /native\.subscribe\(a => \{ void control\.usageLimits\.onAgent\(a\);/);
+  // The formatter writes (a) => { and a line break since b1f9a6c81; accept both forms.
+  assert.match(src, /native\.subscribe\(\(?a\)? => \{\s*void control\.usageLimits\.onAgent\(a\);/);
   assert.match(src, /await control\.usageLimits\.observe\(id\)/);
   assert.match(src, /void control\.usageLimits\.tick\(\);/);
   assert.match(src, /control\.limitNotifier = macLimitNotifier\(\)/);
