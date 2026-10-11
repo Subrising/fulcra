@@ -57,8 +57,17 @@ vi.mock("./git-ai-draft-panel", () => ({
     return null;
   },
 }));
-vi.mock("react-native", () => ({ Text: "span", View: "div" }));
-vi.mock("react-native-unistyles", () => ({ StyleSheet: { create: () => ({ root: {} }) } }));
+vi.mock("react-native", () => ({
+  Text: "span",
+  View: "div",
+  // The touch-target hook (FU-73) reads Platform through constants/platform.
+  Platform: { OS: "web", select: (o: Record<string, unknown>) => o.web ?? o.default },
+}));
+vi.mock("react-native-unistyles", () => ({
+  StyleSheet: { create: () => ({ root: {} }) },
+  // A desktop layout; the touch-target hook reads the breakpoint.
+  useUnistyles: () => ({ rt: { breakpoint: "lg" } }),
+}));
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     onPress,
