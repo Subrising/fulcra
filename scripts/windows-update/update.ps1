@@ -142,7 +142,8 @@ function StopApp([string]$build) {
 function StartApp {
   # explorer.exe starts the app outside this task's job object. A direct Start-Process child is ended when the
   # scheduled task ends, and the window closes while the daemon stays up.
-  Start-Process -FilePath explorer.exe -ArgumentList (Join-Path $Current 'Fulcra.exe')
+  # Quoted: a user folder with a space in its name splits an unquoted path.
+  Start-Process -FilePath explorer.exe -ArgumentList ('"' + (Join-Path $Current 'Fulcra.exe') + '"')
 }
 
 # --- Build ---
@@ -205,9 +206,12 @@ try {
   elseif ($Switch) { $target = $Switch }
 
   if ($Check) {
-    $free = [int]((Get-PSDrive C).Free / 1GB)
-    Say "free disk: $free GB"
-    if ($free -lt 15) { Fail 'less than 15 GB free' }
+    # The build goes to the builds drive (E: by default), so test that drive: it must exist and have the space.
+    $drive = try { Split-Path $Builds -Qualifier } catch { $null }
+    if (-not $drive -or -not (Test-Path "$drive\")) { Fail "builds drive not found: $Builds" }
+    $free = [int]((Get-PSDrive ($drive.TrimEnd(':'))).Free / 1GB)
+    Say "free disk on ${drive}: $free GB"
+    if ($free -lt 15) { Fail "less than 15 GB free on $drive" }
     if ($Ref) { git ls-remote --exit-code --heads --tags $Repo $Ref | Out-Null; if ($LASTEXITCODE -ne 0) { Fail "ref not found: $Ref" }; Say "ref $Ref exists" }
     $blocking = ProtectedChatCheck $state.current
     if ($blocking.Count -gt 0) { Say ('WOULD REFUSE: chats would stop: ' + ($blocking -join ', ')); exit 3 }

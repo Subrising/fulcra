@@ -1050,8 +1050,10 @@ function LeadRow({
     );
     return matches.length === 1 ? matches[0][0] : null;
   });
-  // The computer's own report names the host the chat lives on; a role-message address never does.
-  const ownerServerId = agentServerId ?? hostServerId ?? null;
+  // The computer's own report names the host the chat lives on; a role-message address never does. A row from that
+  // report keeps its host even when another host's list has a chat with the same ID and the reporting host's list
+  // has not loaded it yet (FU-67).
+  const ownerServerId = hostServerId ?? agentServerId ?? null;
   const canOpen = Boolean(
     seat.state === "assigned" && seat.sessionPresent && seat.sessionId && ownerServerId,
   );
