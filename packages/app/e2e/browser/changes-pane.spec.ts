@@ -931,13 +931,20 @@ test("Changes toolbar controls are 48 px touch targets and fit their bar at ever
     });
     await page.setViewportSize({ width: size.width, height: size.height });
     await openWorkspaceChanges(page, workspace);
-    const changesTab = page.getByTestId("explorer-tab-changes").filter({ visible: true });
-    if (!(await changesTab.isVisible())) {
-      await page.getByTestId("workspace-explorer-toggle").filter({ visible: true }).first().click();
-    }
-    await expect(changesTab).toBeVisible();
-    await changesTab.click();
+    // A wide screen shows Changes as a pane; a phone keeps it behind the explorer's Changes tab.
     const header = page.getByTestId("changes-header").filter({ visible: true }).first();
+    if (!(await header.isVisible())) {
+      const changesTab = page.getByTestId("explorer-tab-changes").filter({ visible: true });
+      if (!(await changesTab.isVisible())) {
+        await page
+          .getByTestId("workspace-explorer-toggle")
+          .filter({ visible: true })
+          .first()
+          .click();
+      }
+      await expect(changesTab).toBeVisible();
+      await changesTab.click();
+    }
     await expect(header).toBeVisible();
     const measured = await header.evaluate((element) => {
       const controls = [...element.querySelectorAll('[role="button"], button')]

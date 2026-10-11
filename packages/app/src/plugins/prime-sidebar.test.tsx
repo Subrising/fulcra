@@ -728,7 +728,11 @@ it("lists the leads of another connected computer read-only, with that computer'
         },
       ],
     },
-    projects: { projects: [{ id: "proj-g", name: "Example project" }] },
+    projects: {
+      available: true,
+      partial: false,
+      projects: [{ id: "proj-g", name: "Example project" }],
+    },
     fleet: {
       nodes: [
         { id: "remote", host: "macbook", status: "idle", pending: 0, title: "Remote project lead" },
