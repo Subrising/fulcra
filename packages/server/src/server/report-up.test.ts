@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-labels";
+import {
+  PARENT_AGENT_ID_LABEL,
+  REPORTS_TO_LABEL,
+  REPORTS_TO_OWNER,
+} from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
@@ -494,5 +498,45 @@ describe("ledger items", () => {
     ]);
     expect(readOpenLedgerRows(join(dir, "nowhere"))).toEqual([]);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// Fulcra 0.2.17 (FU-102): where a finished turn is reported. fulcra.reports-to first, else the parent label, so a chat
+// that a lead adopts (its parent label changes) reports to the new parent unless it has its own reporting line.
+describe("report-up after a parent is adopted", () => {
+  const NEW_LEAD = "44444444-4444-4444-8444-444444444444";
+  const newLead: FakeChat = { id: NEW_LEAD, title: "Gag lead", labels: {} };
+
+  test("a chat with no reporting line reports to its parent, and to the new parent after adoption", async () => {
+    const child: FakeChat = {
+      id: WORKER,
+      title: "Ship It lead",
+      labels: { [PARENT_AGENT_ID_LABEL]: LEAD },
+      lastMessage: "Level 2 is done.",
+    };
+    const f = fixture([lead, newLead, child]);
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((d) => d.leadId)).toEqual([LEAD]);
+    // Adoption: the host rewrites the parent label.
+    child.labels = { [PARENT_AGENT_ID_LABEL]: NEW_LEAD };
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((d) => d.leadId)).toEqual([LEAD, NEW_LEAD]);
+    expect(f.delivered[1]!.prompt).toContain("Ship It lead");
+    expect(f.delivered[1]!.prompt).toContain("Level 2 is done.");
+  });
+
+  test("a chat with its own reporting line keeps reporting there, whatever its parent", async () => {
+    const child: FakeChat = {
+      id: WORKER,
+      title: "Ship It lead",
+      labels: { [REPORTS_TO_LABEL]: LEAD, [PARENT_AGENT_ID_LABEL]: NEW_LEAD },
+      lastMessage: "Done.",
+    };
+    const f = fixture([lead, newLead, child]);
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((d) => d.leadId)).toEqual([LEAD]);
   });
 });
