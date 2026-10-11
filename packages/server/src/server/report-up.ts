@@ -28,6 +28,7 @@ import {
   rowsOwnedBy,
   type LedgerRow,
 } from "./ledger-items.js";
+import { lastAgentMessageAt } from "./agent-message-log.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
   decideSend,
@@ -52,6 +53,10 @@ import {
 //   never enters or cancels the lead's running turn (held-sends.ts).
 // - A lead (a chat that other chats report to) sends no "finished a turn" notice to the main assistant (FU-113): leads
 //   report up on purpose. A failed lead turn is still sent, and worker-to-lead notices are unchanged.
+// - "Finished a turn" notices for one lead are combined (FU-115): the first goes at once when the lead is idle and was
+//   not told in the last 5 minutes; others wait and go out as ONE message listing each worker with a short snippet,
+//   after the window and after the lead's running turn ends. A worker that already messaged its lead during its turn
+//   sends none. A failed turn is still sent at once. Waiting notices are in memory: a daemon restart drops them.
 // - daemon.reportUpOnTurnEnd = false turns it off.
 // - A lead that turns idle while it owns open ledger items and has idle workers gets ONE short message that lists them
 //   (FU-101). It is driven by the end of the lead's turn, not by a timer. It is sent at most once per idle period, and
@@ -74,7 +79,23 @@ interface TurnState {
   fromNotice: boolean | null;
   /** The first user message of this turn was an idle-lead nudge. */
   fromNudge?: boolean;
+  /** Epoch ms when the turn began; kept after it ends, so a notice can ask "did this worker message its lead?". */
+  startedAt?: number;
 }
+
+/** One worker's "finished a turn" line waiting to go to its lead (FU-115). */
+interface PendingFinish {
+  workerId: string;
+  worker: LineAgent;
+  lastMessage: string | null;
+}
+
+/** Between two combined "finished a turn" messages to one lead. */
+export const COALESCE_WINDOW_MS = 5 * 60 * 1000;
+/** Workers one combined message lists; the rest are counted. */
+export const COMBINED_LIST_LIMIT = 20;
+/** The snippet of each worker in a combined message. */
+export const COMBINED_SNIPPET_CHARS = 300;
 
 /** The message id prefix of an idle-lead nudge; it starts with the notice prefix, so it counts as a notice too. */
 export const NUDGE_MESSAGE_PREFIX = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}idle-nudge:`;
@@ -204,6 +225,30 @@ function isNoticeMessage(item: { text?: unknown; clientMessageId?: unknown }): b
   return id.startsWith(FINISH_NOTIFICATION_MESSAGE_PREFIX) || isSystemInjectedEnvelope(text);
 }
 
+/** One worker's finished turn, or the list of them when several finished since the lead was last told. */
+export function formatCombinedNotice(items: readonly PendingFinish[]): string {
+  const only = items.length === 1 ? items[0] : undefined;
+  if (only)
+    return formatReportUpNotice({
+      worker: only.worker,
+      failed: false,
+      lastMessage: only.lastMessage,
+    });
+  const line = (item: PendingFinish) => {
+    const text = (item.lastMessage ?? "").trim();
+    const snippet =
+      text.length > COMBINED_SNIPPET_CHARS ? `${text.slice(0, COMBINED_SNIPPET_CHARS)}…` : text;
+    return `- Worker ${titleOf(item.worker)} (${item.worker.id}): ${snippet || "(no message)"}`;
+  };
+  const shown = items.slice(0, COMBINED_LIST_LIMIT).map(line);
+  const rest = items.length - shown.length;
+  return [
+    `${items.length} workers finished a turn since your last update:`,
+    ...shown,
+    ...(rest > 0 ? [`…and ${rest} more.`] : []),
+  ].join("\n");
+}
+
 export function titleOf(agent: LineAgent): string {
   const config = agent.config as { title?: unknown } | null | undefined;
   const live = typeof config?.title === "string" ? config.title.trim() : "";
@@ -324,6 +369,7 @@ export class ReportUpService {
     }
     if (kind === "turn_started") {
       turn.open = true;
+      turn.startedAt = this.now();
       this.nudged.delete(agentId);
       return;
     }
@@ -332,12 +378,14 @@ export class ReportUpService {
       turn.open = false;
       turn.fromNotice = null;
       turn.fromNudge = false;
+      turn.startedAt = undefined;
       return;
     }
     if (kind === "timeline") {
       const item = event.event.item;
       if (item.type !== "user_message" || turn.fromNotice !== null) return;
       turn.open = true;
+      turn.startedAt ??= this.now();
       turn.fromNotice = isNoticeMessage(item);
       turn.fromNudge = isNudgeMessage(item);
       return;
@@ -355,6 +403,8 @@ export class ReportUpService {
     // A second end event for the same turn sends nothing.
     if (!turn.open) return;
     turn.open = false;
+    const startedAt = turn.startedAt;
+    turn.startedAt = undefined;
     // Read synchronously at the stop: a caller's armed finish notification removes itself after it delivers.
     const fromNotice = turn.fromNotice === true;
     turn.fromNotice = null;
@@ -380,7 +430,7 @@ export class ReportUpService {
       );
       return;
     }
-    void this.report(agentId, kind === "turn_failed", failureText(streamEvent)).catch(
+    void this.report(agentId, kind === "turn_failed", failureText(streamEvent), startedAt).catch(
       (err: unknown) => this.deps.logger.warn({ err, agentId }, "Report-up failed"),
     );
   }
@@ -394,6 +444,25 @@ export class ReportUpService {
     return (
       target.labels?.[SEAT_LABEL] === MAIN_ASSISTANT_ROLE && (await this.hasWorkers(reporterId))
     );
+  }
+
+  /** Why a finished-turn notice is not needed, or null. A failed turn is always sent. */
+  private async quietReason(input: {
+    workerId: string;
+    leadId: string;
+    leadAgent: LineAgent;
+    failed: boolean;
+    startedAt?: number;
+  }): Promise<string | null> {
+    if (input.failed) return null;
+    // FU-113: a lead reports to the main assistant on purpose. Its turns ending are not news.
+    if (await this.isLeadReportingToMain(input.workerId, input.leadAgent))
+      return "a lead's finished turn is not sent to the main assistant";
+    // FU-115: a worker that already messaged its lead during this turn needs no second message about the same turn.
+    const sentAt = lastAgentMessageAt(input.workerId, input.leadId);
+    if (input.startedAt !== undefined && sentAt !== null && sentAt >= input.startedAt)
+      return "the worker already messaged its lead this turn";
+    return null;
   }
 
   /** Whether any chat on this computer reports to this chat, which makes it a lead. */
@@ -599,7 +668,12 @@ export class ReportUpService {
     );
   }
 
-  private async report(workerId: string, failed: boolean, failure = ""): Promise<void> {
+  private async report(
+    workerId: string,
+    failed: boolean,
+    failure = "",
+    startedAt?: number,
+  ): Promise<void> {
     const skip = (reason: string) => {
       this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
     };
@@ -616,9 +690,14 @@ export class ReportUpService {
     if ("skip" in lead) return skip(lead.skip);
     const leadAgent = await this.store.get(lead.id);
     if (!leadAgent || leadAgent.archivedAt) return skip("lead not here or archived");
-    // FU-113: a lead reports to the main assistant on purpose. Its turns ending are not news; a failed turn still is.
-    if (!failed && (await this.isLeadReportingToMain(workerId, leadAgent)))
-      return skip("a lead's finished turn is not sent to the main assistant");
+    const quiet = await this.quietReason({
+      workerId,
+      leadId: lead.id,
+      leadAgent,
+      failed,
+      startedAt,
+    });
+    if (quiet) return skip(quiet);
     const decision = await decideSend(
       this.store,
       { agentId: workerId },
@@ -639,10 +718,92 @@ export class ReportUpService {
     const lastMessage = await this.deps.agentManager
       .getLastAssistantMessage(workerId)
       .catch(() => null);
-    const prompt = formatSystemNotificationPrompt(
-      formatReportUpNotice({ worker, failed, lastMessage }),
+    // A failed turn is sent at once. A finished turn is combined with the lead's other finished workers (FU-115).
+    if (failed) {
+      const prompt = formatSystemNotificationPrompt(
+        formatReportUpNotice({ worker, failed, lastMessage }),
+      );
+      await this.toLead(workerId, lead.id, prompt);
+      return;
+    }
+    await this.queueFinished(lead.id, { workerId, worker, lastMessage });
+  }
+
+  /**
+   * FU-115: "finished a turn" notices for one lead wait here and go out as ONE message: the first at once when the lead
+   * is idle and was not told in the last 5 minutes, the rest together after that window, and always after the lead's
+   * running turn ends (the held-send queue). A worker that finishes twice before delivery is listed once.
+   */
+  private readonly pendingFinished = new Map<string, PendingFinish[]>();
+  private readonly lastFinishedAt = new Map<string, number>();
+  private readonly flushing = new Set<string>();
+
+  private async queueFinished(leadId: string, item: PendingFinish): Promise<void> {
+    if (this.limitOf(leadId)) {
+      // A limited lead keeps its own held-report path (persisted, one notice after the reset).
+      const prompt = formatSystemNotificationPrompt(
+        formatReportUpNotice({ worker: item.worker, failed: false, lastMessage: item.lastMessage }),
+      );
+      await this.toLead(item.workerId, leadId, prompt);
+      return;
+    }
+    const list = (this.pendingFinished.get(leadId) ?? []).filter(
+      (entry) => entry.workerId !== item.workerId,
     );
-    await this.toLead(workerId, lead.id, prompt);
+    list.push(item);
+    this.pendingFinished.set(leadId, list);
+    if (this.flushing.has(leadId)) return;
+    this.flushing.add(leadId);
+    const wait = Math.max(
+      0,
+      (this.lastFinishedAt.get(leadId) ?? 0) + COALESCE_WINDOW_MS - this.now(),
+    );
+    if (wait === 0) {
+      await this.flushFinished(leadId);
+      return;
+    }
+    this.deps.logger.info(
+      { lead: leadId, waitMs: wait },
+      "Report-up held: the lead was told lately",
+    );
+    (this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms).unref()))(() => {
+      void this.flushFinished(leadId).catch((err: unknown) =>
+        this.deps.logger.warn({ err, leadId }, "Report-up flush failed"),
+      );
+    }, wait);
+  }
+
+  private takePending(leadId: string): PendingFinish[] {
+    const items = this.pendingFinished.get(leadId) ?? [];
+    this.pendingFinished.delete(leadId);
+    this.flushing.delete(leadId);
+    return items;
+  }
+
+  private async flushFinished(leadId: string): Promise<void> {
+    if (!this.deps.isEnabled()) {
+      this.takePending(leadId);
+      return;
+    }
+    if (this.deps.deliver) {
+      const items = this.takePending(leadId);
+      if (!items.length) return;
+      this.lastFinishedAt.set(leadId, this.now());
+      await this.deps.deliver(leadId, formatSystemNotificationPrompt(formatCombinedNotice(items)));
+      return;
+    }
+    // Built when the lead's turn has ended: notices that arrive while the lead works join this one message.
+    heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
+      const items = this.takePending(leadId);
+      if (!items.length) return;
+      this.lastFinishedAt.set(leadId, this.now());
+      await this.send(
+        leadId,
+        formatSystemNotificationPrompt(formatCombinedNotice(items)),
+        "report-up",
+      );
+      this.deps.logger.info({ lead: leadId, workers: items.length }, "Report-up delivered");
+    });
   }
 
   private send(leadId: string, prompt: string, kind: "report-up" | "idle-nudge"): Promise<void> {

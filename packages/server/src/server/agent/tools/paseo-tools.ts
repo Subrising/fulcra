@@ -105,6 +105,7 @@ import type {
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 import { checkPromptLine, decideSend, lineStoreOf } from "../../reporting-lines.js";
+import { noteAgentMessage } from "../../agent-message-log.js";
 
 export interface PaseoToolHostDependencies {
   nativeReportOrigin?: NativeReportOrigin;
@@ -2070,6 +2071,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           }),
         };
       };
+      if (callerAgentId) noteAgentMessage(callerAgentId, agentId);
       if (callerAgentId && agentManager.hasInFlightRun(agentId))
         return holdForTurnEnd(callerAgentId);
       const { disposition } = await dispatch();
