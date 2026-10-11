@@ -944,3 +944,27 @@ test("a usage limit records its kind with limitedUntil, shows it in the public v
   const cleared = readAccounts(root).accounts[0];
   assert.deepEqual([cleared.limitedUntil, cleared.limitKind], [null, null]);
 });
+
+// Fulcra 0.2.17 (FU-59): `fulcra run --account <name>` pins a new session to that account through the launch hook.
+test("a launch that names an account is pinned to it; a limited or unknown name is refused; a resume keeps its account", async () => {
+  const root = scratch();
+  const work = await addAccount(root, { provider: "claude", name: "Work" }, T0),
+    personal = await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  const keychain = { get: async (id) => "sk-ant-oat01-" + id.replaceAll("-", "") };
+  const hook = sessionOpenHook({ root: () => root, keychain, now: () => T0 });
+  const launch = (agentId, request) =>
+    hook({ request: { agentId, provider: "claude", env: { ...request } } });
+  // Priority would pick Work; the request pins Personal, by name in any case.
+  const out = await launch(S(1), { FULCRA_ACCOUNT_REQUEST: "personal" });
+  assert.equal(out.env.FULCRA_ACCOUNT_ID, personal.id);
+  assert.equal(accountOf(readAccounts(root), S(1)).id, personal.id);
+  // A resume of the same session keeps its account, whatever the request says.
+  const again = await launch(S(1), { FULCRA_ACCOUNT_REQUEST: "Work" });
+  assert.equal(again.env.FULCRA_ACCOUNT_ID, personal.id);
+  // Without a request the pool chooses as before.
+  assert.equal((await launch(S(2), {})).env.FULCRA_ACCOUNT_ID, work.id);
+  // An unknown name is refused; so is a limited account.
+  await assert.rejects(launch(S(3), { FULCRA_ACCOUNT_REQUEST: "Nobody" }));
+  await rotate(root, S(2), "claude", { resetAt: new Date(T0 + 3600000).toISOString() }, T0 + 10);
+  await assert.rejects(launch(S(4), { FULCRA_ACCOUNT_REQUEST: "Work" }));
+});

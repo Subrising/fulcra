@@ -118,11 +118,15 @@ import {
   sessionAccountsRpc,
   accountSwitchRpc,
   accountTakeoverRpc,
+  askRpc,
+  askResultRpc,
 } from "./shared/accounts";
 import { createAccountHandlers, controllerTakeOver } from "./server/accounts-rpc";
 import { portable } from "./server/portable";
 import { orchestrationHook } from "./server/orchestration";
-import { sessionOpenHook } from "./server/accounts.mjs";
+import { createKeychain, sessionOpenHook } from "./server/accounts.mjs";
+import { askOnce } from "./server/ask.mjs";
+import { createAskJobs } from "./server/ask-jobs";
 import { loadConfig } from "./server/config.mjs";
 import { readProjects } from "./server/projects";
 import { briefingRpc } from "./shared/briefing";
@@ -592,6 +596,18 @@ export default function contribute(
   handle(accountSwitchRpc, (input, { paseo }) => {
     if (authError) throw new Error(authError);
     return accounts.switch(input as any, paseo);
+  });
+  // One-shot model call for apps: a pooled account, no tools, no agent or workspace record (server/ask.mjs).
+  const askJobs = createAskJobs({
+    run: (input) => askOnce({ root: poolRoot(), keychain: createKeychain(), input }),
+  });
+  handle(askRpc, (input) => {
+    if (authError) throw new Error(authError);
+    return askJobs.start(input);
+  });
+  handleRead(askResultRpc, (input) => {
+    if (authError) throw new Error(authError);
+    return askJobs.result(input.id);
   });
   handle(accountTakeoverRpc, (input, { paseo }) => {
     if (authError) throw new Error(authError);
