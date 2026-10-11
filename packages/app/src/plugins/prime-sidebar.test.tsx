@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -152,14 +153,26 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
     label,
     accessibilityLabel,
     onPress,
+    testID,
+    trailing,
   }: {
     label: string;
     accessibilityLabel?: string;
     onPress: () => void;
+    testID?: string;
+    trailing?: React.ReactNode;
   }) => (
-    <button type="button" aria-label={accessibilityLabel ?? label} onClick={onPress}>
-      {label}
-    </button>
+    <>
+      <button
+        type="button"
+        aria-label={accessibilityLabel ?? label}
+        onClick={onPress}
+        data-testid={testID}
+      >
+        {label}
+      </button>
+      {trailing}
+    </>
   ),
 }));
 import {
@@ -201,6 +214,7 @@ const prime = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 beforeEach(() => {
+  useSidebarCollapsedSectionsStore.setState({ collapsedLeads: false });
   f.hosts = [{ serverId: "mini", label: "Mac-mini.local" }];
   f.remote = {};
   f.companyHost = null;
@@ -618,6 +632,28 @@ it("lists the main assistant first in Leads, by its chat name, then the project 
   expect(lead.textContent).toContain("Lead · Fulcra · Idle · Mac mini");
   // The main assistant comes first.
   expect(main.compareDocumentPosition(lead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it("the Leads arrow folds the lead rows to the header and remembers it; the header still opens Leadership", async () => {
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.fleet.mockResolvedValue({
+    nodes: [{ id: "original-prime", host: "host-a", status: "idle", pending: 0, title: "Chief" }],
+  });
+  mount();
+  await screen.findByTestId("sidebar-lead-main-assistant");
+  const arrow = screen.getByTestId("sidebar-leads-collapse");
+  expect(arrow.getAttribute("aria-expanded")).toBe("true");
+
+  fireEvent.click(arrow);
+
+  expect(screen.queryByTestId("sidebar-lead-main-assistant")).toBeNull();
+  expect(screen.getByTestId("sidebar-top-primes")).toBeTruthy();
+  expect(screen.getByTestId("sidebar-leads-collapse").getAttribute("aria-expanded")).toBe("false");
+  expect(useSidebarCollapsedSectionsStore.getState().collapsedLeads).toBe(true);
+
+  fireEvent.click(screen.getByTestId("sidebar-leads-collapse"));
+  expect(await screen.findByTestId("sidebar-lead-main-assistant")).toBeTruthy();
+  expect(f.push).not.toHaveBeenCalled();
 });
 
 it("a row without a known chat name keeps the role as its name", async () => {

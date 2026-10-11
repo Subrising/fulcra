@@ -1,3 +1,4 @@
+import { SidebarTopContent } from "@/components/sidebar/sidebar-top-content";
 import { WorkspaceOrganizationSidebar } from "@/plugins/workspace-organization-sidebar";
 import { SidebarSessions } from "./sidebar/sidebar-sessions";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -157,6 +158,7 @@ import type { HostBadgeModel } from "@/hosts/appearance";
 import { useHostBadges } from "@/hosts/use-host-badges";
 import { useSidebarRowItems } from "@/components/sidebar/display-preferences/model";
 import { PullRequestStateIcon } from "@/git/pull-request-state-icon";
+import { sidebarTouchStyles, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 
 const workspaceKeyExtractor = (workspace: SidebarWorkspacePlacement) => workspace.workspaceKey;
 
@@ -370,14 +372,17 @@ function getProjectWorkspaceRowStyle({
   isPressed,
   selected,
   isHovered,
+  touchRows,
 }: {
   isDragging: boolean;
   isPressed: boolean;
   selected: boolean;
   isHovered: boolean;
+  touchRows: boolean;
 }) {
   return [
     styles.workspaceRow,
+    touchRows && sidebarTouchStyles.stack,
     isHovered && styles.workspaceRowHovered,
     selected && styles.sidebarRowSelected,
     isDragging && styles.workspaceRowDragging,
@@ -810,13 +815,15 @@ function NewWorkspaceGhostRow({
       }) as Href,
     );
   }, [displayName, onWorkspacePress, worktreeTarget]);
+  const touchRows = useSidebarTouchRows();
   const rowStyle = useCallback(
     ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.newWorkspaceGhostRow,
+      touchRows && sidebarTouchStyles.row,
       hovered && !pressed && styles.newWorkspaceGhostRowHovered,
       pressed && styles.newWorkspaceGhostRowPressed,
     ],
-    [],
+    [touchRows],
   );
 
   return (
@@ -935,15 +942,17 @@ function ProjectHeaderRow({
     interaction.handlePressOut();
   }, [interaction]);
 
+  const touchRows = useSidebarTouchRows();
   const projectRowStyle = useCallback(
     ({ pressed }: PressableStateCallbackType) => [
       styles.projectRow,
+      touchRows && sidebarTouchStyles.row,
       isDragging && styles.projectRowDragging,
       selected && styles.sidebarRowSelected,
       isHovered && styles.projectRowHovered,
       pressed && styles.projectRowPressed,
     ],
-    [isDragging, selected, isHovered],
+    [isDragging, selected, isHovered, touchRows],
   );
 
   const rowChildren = (
@@ -1085,6 +1094,7 @@ function WorkspaceRowInner({
   const isCompact = useIsCompactFormFactor();
   const [isPressed, setIsPressed] = useState(false);
   const isTouchPlatform = platformIsNative || isCompact;
+  const touchRows = useSidebarTouchRows();
   const interaction = useLongPressDragInteraction({
     drag,
     menuController,
@@ -1127,6 +1137,7 @@ function WorkspaceRowInner({
           isPressed,
           selected,
           isHovered,
+          touchRows,
         });
         const backdrop = getSidebarRowBackdrop({ isDragging, isPressed, selected, isHovered });
         return (
@@ -2487,6 +2498,7 @@ function ProjectModeList({
 
   const content = (
     <>
+      <SidebarTopContent inset />
       {pinnedChats.length > 0 ? (
         <View style={styles.pinnedSection} testID="sidebar-pinned-section">
           <PinnedSectionHeader collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} />

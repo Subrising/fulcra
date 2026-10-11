@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { buttonControlHeight } from "@/components/ui/control-geometry";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { SIDEBAR_TOUCH_ROW_HEIGHT, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppDiagnosticStore } from "@/diagnostics/store";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
@@ -69,6 +70,7 @@ function HostVersionHint({ host }: { host: HostProfile }) {
 
 export function SidebarHelpMenu() {
   const isCompact = useIsCompactFormFactor();
+  const touchRows = useSidebarTouchRows();
   const { t } = useTranslation();
   const shortcutsAvailable = useKeyboardShortcutsAvailable();
   const openAppDiagnostic = useAppDiagnosticStore((state) => state.open);
@@ -92,14 +94,14 @@ export function SidebarHelpMenu() {
         <TooltipTrigger asChild>
           <View>
             <DropdownMenuTrigger
-              style={styles.trigger(isCompact)}
+              style={styles.trigger(isCompact, touchRows)}
               testID="sidebar-help"
               accessibilityRole="button"
               accessibilityLabel={t("sidebar.help.trigger")}
             >
               {({ hovered }) => (
                 <ThemedCircleHelp
-                  size={isCompact ? ICON_SIZE.lg : ICON_SIZE.md}
+                  size={isCompact || touchRows ? ICON_SIZE.lg : ICON_SIZE.md}
                   uniProps={hovered ? foregroundColorMapping : foregroundMutedColorMapping}
                 />
               )}
@@ -154,9 +156,10 @@ export function SidebarHelpMenu() {
 }
 
 const styles = StyleSheet.create((theme) => ({
-  trigger: (isCompact: boolean) => ({
-    width: isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
-    height: isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
+  // FU-62: the same touch target as the other footer buttons on a touch screen.
+  trigger: (isCompact: boolean, touch: boolean) => ({
+    width: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
+    height: touch ? SIDEBAR_TOUCH_ROW_HEIGHT : isCompact ? buttonControlHeight.md : buttonControlHeight.xs,
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[1],
