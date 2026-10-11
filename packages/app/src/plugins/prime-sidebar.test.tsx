@@ -658,17 +658,17 @@ it("lists the leads of another connected computer read-only, with that computer'
         },
       ],
     },
-    projects: { projects: [{ id: "proj-g", name: "AI gag games" }] },
+    projects: { projects: [{ id: "proj-g", name: "Example project" }] },
     fleet: {
       nodes: [
-        { id: "remote", host: "macbook", status: "idle", pending: 0, title: "Gag games lead" },
+        { id: "remote", host: "macbook", status: "idle", pending: 0, title: "Remote project lead" },
       ],
     },
   };
   mount();
   const row = await screen.findByTestId("sidebar-remote-lead-book-g1");
-  expect(row.textContent).toContain("Gag games lead");
-  expect(row.textContent).toContain("Lead · AI gag games · Idle · MacBook Pro");
+  expect(row.textContent).toContain("Remote project lead");
+  expect(row.textContent).toContain("Lead · Example project · Idle · MacBook Pro");
   expect(row.textContent).not.toContain("macbook ·");
   // Read-only: no new work from here; a lead of an archived project is hidden.
   expect(screen.queryByTestId("sidebar-remote-lead-book-g1-new-work")).toBeNull();
@@ -781,7 +781,7 @@ it("lists a chat that reports to the main assistant without a seat, on any conne
     book: {
       "gag-lead": {
         id: "gag-lead",
-        title: "AI gag games · Fulcra orchestrator",
+        title: "Example project · Fulcra orchestrator",
         status: "idle",
         labels: { "fulcra.reports-to": "role:main-assistant" },
       },
@@ -795,7 +795,7 @@ it("lists a chat that reports to the main assistant without a seat, on any conne
   };
   mount();
   const row = await screen.findByTestId("sidebar-chat-lead-book-gag-lead");
-  expect(row.textContent).toContain("AI gag games · Fulcra orchestrator");
+  expect(row.textContent).toContain("Example project · Fulcra orchestrator");
   expect(row.textContent).toContain("Lead · Idle · last known · Second computer");
   expect(screen.queryByTestId("sidebar-chat-lead-book-worker")).toBeNull();
 });
@@ -875,8 +875,8 @@ const HOSTS = [
 const GAG = {
   seat: "g1",
   sessionId: "11111111-1111-4111-8111-111111111111",
-  project: "AI gag games",
-  title: "Gag games lead",
+  project: "Example project",
+  title: "Remote project lead",
 };
 const bookReads = (available = true) => ({
   directory: {
@@ -893,7 +893,7 @@ const bookReads = (available = true) => ({
       },
     ],
   },
-  projects: { projects: [{ id: "proj-g", name: "AI gag games" }] },
+  projects: { projects: [{ id: "proj-g", name: "Example project" }] },
   fleet: {
     nodes: [{ id: GAG.sessionId, host: "macbook", status: "idle", pending: 0, title: GAG.title }],
   },
@@ -906,8 +906,8 @@ it("shows an offline computer's last known leads, greyed, with '<computer> offli
   useLeadsMemory.setState({ byHost: { book: [GAG] } });
   mount();
   const row = await screen.findByTestId("sidebar-remembered-lead-book-g1");
-  expect(row.textContent).toContain("Gag games lead");
-  expect(row.textContent).toContain("Lead · AI gag games · MacBook Pro offline");
+  expect(row.textContent).toContain("Remote project lead");
+  expect(row.textContent).toContain("Lead · Example project · MacBook Pro offline");
   expect(screen.queryByTestId("sidebar-remote-lead-book-g1")).toBeNull();
 });
 
@@ -931,7 +931,7 @@ it("keeps the remembered leads when an online computer does not answer", async (
   mount();
   const row = await screen.findByTestId("sidebar-remembered-lead-book-g1");
   // Until the read answers the row is plain "last known"; then it says why it is greyed.
-  expect(row.textContent).toContain("Lead · AI gag games · last known");
+  expect(row.textContent).toContain("Lead · Example project · last known");
   await vi.waitFor(() =>
     expect(screen.getByTestId("sidebar-remembered-lead-book-g1").textContent).toContain(
       "Command Centre not answering on MacBook Pro",
@@ -947,7 +947,7 @@ it("shows a read computer's leads live, remembers them, and lists no remembered 
   await screen.findByTestId("sidebar-remote-lead-book-g1");
   expect(screen.queryByTestId("sidebar-remembered-lead-book-g1")).toBeNull();
   await vi.waitFor(() => expect(useLeadsMemory.getState().byHost.book?.[0]?.seat).toBe("g1"));
-  expect(useLeadsMemory.getState().byHost.book?.[0]?.title).toBe("Gag games lead");
+  expect(useLeadsMemory.getState().byHost.book?.[0]?.title).toBe("Remote project lead");
 });
 
 it("lists a seated lead on another computer once, even when its chat reports to the main assistant", async () => {

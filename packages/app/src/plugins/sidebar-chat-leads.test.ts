@@ -16,13 +16,13 @@ describe("chatLeads", () => {
       mini: { agents: new Map([["b", chat("b", "Zed lead", line)]]) },
       book: {
         agents: new Map([
-          ["a", chat("a", "AI gag games lead", line)],
+          ["a", chat("a", "Remote project lead", line)],
           ["w", chat("w", "Worker", { "fulcra.reports-to": "a" })],
         ]),
       },
     };
     expect(chatLeads(sessions, new Set()).map((l) => [l.serverId, l.agentId, l.title])).toEqual([
-      ["book", "a", "AI gag games lead"],
+      ["book", "a", "Remote project lead"],
       ["mini", "b", "Zed lead"],
     ]);
   });
