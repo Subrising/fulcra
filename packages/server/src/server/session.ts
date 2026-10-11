@@ -9751,6 +9751,14 @@ export class Session {
         await dispatch("steer", this.delivery.requestSignal);
       } catch (error) {
         if (!(error instanceof SteerUnavailableError)) throw error;
+        // A message that carries a plugin's provenance token cannot wait: its token is bound to this attempt, and a
+        // later delivery would run as plain owner input, a different source than the plugin sent it as
+        // (0.2.13 review). It is refused instead, with the reason, and the sender sends it again when the chat is idle.
+        if (msg.inputProvenance !== undefined)
+          throw new Error(
+            "This message came from a plugin and the chat is busy. It was not queued, because a queued message loses the plugin as its source. Send it again when the chat is idle.",
+            { cause: error },
+          );
         const deliver = whenIdle((run) => trusted.rpc(undefined, run));
         held.hold(agentId, async () => {
           try {
