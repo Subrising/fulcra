@@ -391,7 +391,7 @@ branding	A	38	0	RELEASE-NOTES-0.2.15.md
 branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
 branding	A	10	0	RELEASE-NOTES-0.2.16.2.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
-branding	A	70	0	RELEASE-NOTES-0.2.17.md
+branding	A	69	0	RELEASE-NOTES-0.2.17.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -569,8 +569,6 @@ core-fixes	M	2	0	packages/app/e2e/browser/settings-toggle-tab-regression.spec.ts
 core-fixes	M	9	14	packages/app/e2e/browser/viewed-agent-timelines.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
 core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
-core-fixes	A	76	0	packages/cli/src/commands/agent/adopt.test.ts
-core-fixes	A	121	0	packages/cli/src/commands/agent/adopt.ts
 core-fixes	A	54	0	packages/cli/src/commands/agent/archive.test.ts
 core-fixes	M	25	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	A	75	0	packages/cli/src/commands/agent/mcp-options.test.ts
@@ -664,7 +662,7 @@ core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
-core-fixes	A	542	0	packages/server/src/server/report-up.test.ts
+core-fixes	A	498	0	packages/server/src/server/report-up.test.ts
 core-fixes	A	666	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
@@ -1002,7 +1000,7 @@ features	A	193	0	packages/app/src/hooks/persist-provider-preferences.reducer.tes
 features	A	146	0	packages/app/src/hooks/persist-provider-preferences.test.ts
 features	A	239	0	packages/app/src/hooks/sidebar-conversation-labels.test.ts
 features	A	145	0	packages/app/src/hooks/sidebar-conversation-labels.ts
-features	A	121	0	packages/app/src/hooks/sidebar-session-model.test.ts
+features	A	105	0	packages/app/src/hooks/sidebar-session-model.test.ts
 features	A	144	0	packages/app/src/hooks/sidebar-session-model.ts
 features	M	1	0	packages/app/src/hooks/sidebar-status-view-model.test.ts
 features	M	66	0	packages/app/src/hooks/sidebar-workspaces-view-model.test.ts
@@ -1201,7 +1199,6 @@ orchestration	A	60	0	packages/app/src/stores/organization-intake-preferences-sto
 orchestration	M	8	2	packages/app/src/styles/unistyles-module-scope.test.ts
 orchestration	M	19	4	packages/app/src/utils/connection-selection.test.ts
 orchestration	M	18	1	packages/app/src/utils/connection-selection.ts
-orchestration	M	9	0	packages/cli/src/commands/agent/index.ts
 orchestration	M	204	0	packages/cli/src/commands/agent/run.test.ts
 orchestration	M	102	13	packages/cli/src/commands/agent/run.ts
 orchestration	A	51	0	packages/cli/src/commands/agent/run.workspace.test.ts
