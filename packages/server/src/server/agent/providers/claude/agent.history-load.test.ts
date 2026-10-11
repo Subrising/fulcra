@@ -93,7 +93,7 @@ describe("ClaudeAgentSession persisted history load", () => {
     );
   });
 
-  test("a resumed transcript is replayed after an async read, and resume returns before it is read", async () => {
+  test("a resumed transcript is replayed after the async read", async () => {
     mkdirSync(path.dirname(transcriptPath()), { recursive: true });
     const line = JSON.stringify({
       type: "user",
