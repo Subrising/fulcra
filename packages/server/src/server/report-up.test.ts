@@ -13,6 +13,7 @@ import {
   PERMISSION_COMMAND_CHARS,
   REPORT_UP_SNIPPET_CHARS,
   ReportUpService,
+  reportUpSwitches,
 } from "./report-up.js";
 import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
 import { parseOpenRows, readOpenLedgerRows, rowsOwnedBy } from "./ledger-items.js";
@@ -33,6 +34,8 @@ function fixture(
   chats: FakeChat[],
   options: {
     enabled?: boolean;
+    /** The permission, limit and idle-lead notices; default on, as the service does. */
+    otherEnabled?: boolean;
     now?: number;
     statePath?: string;
     ledger?: Array<{ project: string; id: string; owner: string; status: string }>;
@@ -56,6 +59,7 @@ function fixture(
     agentManager: manager,
     agentStorage: storage,
     isEnabled: () => enabled,
+    ...(options.otherEnabled === undefined ? {} : { isOtherEnabled: () => options.otherEnabled! }),
     localServerId: "srv_local",
     logger: createTestLogger(),
     now: () => clock.now,
@@ -151,7 +155,7 @@ describe("report-up", () => {
   });
 
   test("nothing when turned off, when a new turn starts at once, or when the lead is on another computer", async () => {
-    const off = fixture([lead, worker()], { enabled: false });
+    const off = fixture([lead, worker()], { enabled: false, otherEnabled: false });
     off.turn(WORKER);
     const busy = fixture([lead, worker()]);
     busy.turn(WORKER);
@@ -327,7 +331,7 @@ describe("report-up and permission prompts", () => {
   });
 
   test("it stays quiet when report-up is turned off", async () => {
-    const f = fixture([lead, worker()], { enabled: false });
+    const f = fixture([lead, worker()], { enabled: false, otherEnabled: false });
     f.stream(WORKER, ask("req-1", "ls"));
     await f.settle();
     expect(f.delivered).toHaveLength(0);
@@ -444,7 +448,7 @@ describe("idle-lead nudge", () => {
           { project: "fulcra", id: "FU-1", owner: "Another lead (99999999)", status: "OPEN" },
         ],
       }),
-      fixture([lead, idleWorker()], { ledger: owned, enabled: false }),
+      fixture([lead, idleWorker()], { ledger: owned, enabled: false, otherEnabled: false }),
     ]) {
       setup.turn(LEAD);
       await setup.settle();
@@ -659,5 +663,55 @@ describe("report-up coalescing", () => {
     await off.settle();
     expect(off.delivered).toEqual([]);
     expect(off.timers).toEqual([]);
+  });
+});
+
+// Fulcra 0.2.17 (FU-115): report-up is the fallback. Native notifyOnFinish is the standard, so "finished a turn" is off
+// unless daemon.reportUpOnTurnEnd is true.
+describe("report-up default", () => {
+  test("the setting maps to two switches: unset is the other notices only, true adds finished turns, false is nothing", () => {
+    expect(reportUpSwitches(undefined)).toEqual({ finishedTurns: false, otherNotices: true });
+    expect(reportUpSwitches(true)).toEqual({ finishedTurns: true, otherNotices: true });
+    expect(reportUpSwitches(false)).toEqual({ finishedTurns: false, otherNotices: false });
+  });
+
+  test("by default no 'finished a turn' or error notice is sent, but a usage-limit notice still is", async () => {
+    const byDefault = reportUpSwitches(undefined);
+    const f = fixture([lead, worker()], {
+      enabled: byDefault.finishedTurns,
+      otherEnabled: byDefault.otherNotices,
+    });
+    f.turn(WORKER);
+    f.failedTurn(WORKER, "Provider crashed");
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.failedTurn(WORKER, "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.");
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("limit");
+  });
+
+  test("turned on, the fallback sends finished turns (and the coalescing and FU-113 rules apply)", async () => {
+    const on = reportUpSwitches(true);
+    const f = fixture([lead, worker()], {
+      enabled: on.finishedTurns,
+      otherEnabled: on.otherNotices,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("finished a turn");
+  });
+
+  test("turned off with false, nothing is sent, not even a limit notice", async () => {
+    const off = reportUpSwitches(false);
+    const f = fixture([lead, worker()], {
+      enabled: off.finishedTurns,
+      otherEnabled: off.otherNotices,
+    });
+    f.turn(WORKER);
+    f.failedTurn(WORKER, "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.");
+    await f.settle();
+    expect(f.delivered).toEqual([]);
   });
 });
