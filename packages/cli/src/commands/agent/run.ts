@@ -728,7 +728,9 @@ export async function runRunCommand(
 
       const output = await fetchStructuredOutput(callStructuredTurn, prompt, outputSchema);
 
-      if (!structuredAgent) {
+      // Set inside the turn callback, which control-flow analysis does not follow; read it once here.
+      const finishedAgent = structuredAgent as AgentSnapshotPayload | null;
+      if (!finishedAgent) {
         const error: CommandError = {
           code: "OUTPUT_SCHEMA_FAILED",
           message: "Agent finished without a structured output message",
@@ -739,10 +741,10 @@ export async function runRunCommand(
       await client.close();
 
       // FU-60: the agent id is not lost. It goes to stderr, and with an explicit --json the answer is wrapped with it.
-      console.error(`Agent ${structuredAgent.id}`);
+      console.error(`Agent ${finishedAgent.id}`);
       return {
         type: "single",
-        data: toRunResult(structuredAgent, "completed"),
+        data: toRunResult(finishedAgent, "completed"),
         schema: structuredRunSchema(output, options.json === true),
       };
     }
