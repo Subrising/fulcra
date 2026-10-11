@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { Pressable, Text, View } from "react-native";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -326,7 +327,6 @@ function LeadRows({
           lead={lead}
           hostLabel={hosts.find((host) => host.serverId === lead.serverId)?.label}
           navigation={navigation}
-          leadership={leadership}
           onBeforeNavigate={onBeforeNavigate}
         />
       ))}
@@ -831,30 +831,43 @@ export function leadStatusLine(
 }
 
 /**
- * A lead found in the chat list: a chat that reports to the main assistant and holds no seat. It opens its chat; there
- * is no "+" new work here, and its computer is named.
+ * A lead found in the chat list: a chat that reports to the main assistant and holds no seat (for example a lead on
+ * another computer that is not seated in this computer's Command Centre). It opens its chat on the computer it lives
+ * on and takes "+" new work there, as a seated lead does (0.2.15, FU-57). Its computer is named.
  */
 function ChatLeadRow({
   lead,
   hostLabel,
   navigation,
-  leadership,
   onBeforeNavigate,
 }: {
   lead: { serverId: string; agentId: string; title: string; status: string | undefined };
   hostLabel: string | undefined;
   navigation: ReturnType<typeof usePluginHostNavigation>;
-  leadership: () => void;
   onBeforeNavigate?: () => void;
 }) {
   const status = ["Lead", lastKnownStatusLine(lead.status), hostLabel ?? "another computer"].join(
     " · ",
   );
+  // The navigation of the computer the chat lives on, as for a remembered lead.
+  const hostNavigation = usePluginHostNavigation(lead.serverId);
+  const [composing, setComposing] = useState(false);
   const open = useCallback(() => {
-    const result = navigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId });
-    if (result !== "requested") return leadership();
+    const result =
+      hostNavigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId }) ??
+      navigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId });
+    if (result !== "requested") {
+      // The chat is in this computer's loaded chat list, so its computer is there: open it anyway, instead of the
+      // Leads page, when the host registry check refuses (the owner saw the Leads page, 11 Oct).
+      navigateToAgent({ serverId: lead.serverId, agentId: lead.agentId });
+    }
     onBeforeNavigate?.();
-  }, [lead.agentId, lead.serverId, leadership, navigation, onBeforeNavigate]);
+  }, [hostNavigation, lead.agentId, lead.serverId, navigation, onBeforeNavigate]);
+  const toggleCompose = useCallback(() => setComposing((value) => !value), []);
+  const sent = useCallback(() => {
+    setComposing(false);
+    open();
+  }, [open]);
   return (
     <View style={styles.row}>
       <View style={styles.line}>
@@ -875,7 +888,25 @@ function ChatLeadRow({
             </Text>
           </View>
         </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`New work for ${lead.title}`}
+          onPress={toggleCompose}
+          testID={`sidebar-chat-lead-${lead.serverId}-${lead.agentId}-new-work`}
+          style={styles.plus}
+        >
+          <ThemedPlus size={14} uniProps={mutedColor} />
+        </Pressable>
       </View>
+      {composing ? (
+        <NewWorkBox
+          title={lead.title}
+          serverId={lead.serverId}
+          agentId={lead.agentId}
+          onSent={sent}
+          onCancel={toggleCompose}
+        />
+      ) : null}
     </View>
   );
 }

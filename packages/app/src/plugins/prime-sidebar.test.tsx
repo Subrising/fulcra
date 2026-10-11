@@ -1134,3 +1134,58 @@ it("shows another computer's lead status from that computer's chat list when the
   // The same row takes "+" new work (FU-57).
   expect(screen.getByTestId("sidebar-remote-lead-book-g1-new-work")).toBeTruthy();
 });
+
+// Fulcra 0.2.15 (FU-57): the lead the owner saw without "+" and opening the Leads page. It is a chat on another
+// computer with the lead's real labels (role, project, reports to the main assistant) and no seat in this
+// computer's Command Centre, so it is a chat-list lead row.
+const GAG_CHAT = "66c90f4a-6930-4de1-ae64-1caeb0380b7c";
+const gagChat = () => {
+  f.hosts = HOSTS;
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  f.chats = {
+    book: {
+      [GAG_CHAT]: {
+        id: GAG_CHAT,
+        title: "Lead of AI gag games",
+        status: "idle",
+        labels: {
+          "fulcra.role": "lead",
+          "fulcra.project": "ai-gag-games",
+          "fulcra.reports-to": "role:main-assistant",
+        },
+      },
+    },
+  };
+};
+
+it("a chat-list lead on another computer opens its chat there, not the Leads page", async () => {
+  gagChat();
+  mount();
+  fireEvent.click(await screen.findByTestId(`sidebar-chat-lead-book-${GAG_CHAT}`));
+  expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: GAG_CHAT });
+  expect(f.push).not.toHaveBeenCalled();
+});
+
+it("a chat-list lead on another computer takes + new work, sent on that computer, then opens its chat", async () => {
+  gagChat();
+  f.send.mockResolvedValue(undefined);
+  mount();
+  fireEvent.click(await screen.findByTestId(`sidebar-chat-lead-book-${GAG_CHAT}-new-work`));
+  fireEvent.change(screen.getByTestId("sidebar-new-work-input"), {
+    target: { value: "Plan the next level" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send to Lead of AI gag games" }));
+  await vi.waitFor(() => expect(f.send).toHaveBeenCalledWith(GAG_CHAT, "Plan the next level"));
+  await vi.waitFor(() =>
+    expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: GAG_CHAT }),
+  );
+});
+
+it("a chat-list lead opens its chat even when the host registry check refuses, never the Leads page", async () => {
+  gagChat();
+  f.registryReady = false;
+  mount();
+  fireEvent.click(await screen.findByTestId(`sidebar-chat-lead-book-${GAG_CHAT}`));
+  expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: GAG_CHAT });
+  expect(f.push).not.toHaveBeenCalled();
+});
