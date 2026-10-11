@@ -1045,6 +1045,19 @@ it("a lead on another computer opens its chat on that computer, even before this
   expect(f.push).not.toHaveBeenCalled();
 });
 
+// FU-67 (0.2.15 review): the reporting computer has not loaded the chat yet, and the home computer's list has a chat
+// with the same ID. The row stays on the reporting computer for its status, open and "+".
+it("a lead on another computer keeps that computer when only the home list has a chat with the same ID", async () => {
+  remoteBook();
+  f.chats = { mini: { [BOOK_LEAD]: { id: BOOK_LEAD, title: "Home chat", status: "running" } } };
+  mount();
+  const row = await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(row.textContent).not.toContain("Working");
+  fireEvent.click(row);
+  expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: BOOK_LEAD });
+  expect(f.open).not.toHaveBeenCalledWith({ serverId: "mini", agentId: BOOK_LEAD });
+});
+
 it("a lead on another computer takes + new work, sent on that computer, then opens its chat", async () => {
   remoteBook();
   f.send.mockResolvedValue(undefined);
