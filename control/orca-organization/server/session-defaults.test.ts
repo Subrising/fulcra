@@ -27,7 +27,7 @@ const ROLES = {
     claude: { model: "claude/claude-sonnet-5-5", thinkingOptionId: "high" },
   },
 };
-interface Req {
+type Req = Record<string, unknown> & {
   config: {
     provider: string;
     cwd?: string;
@@ -37,7 +37,7 @@ interface Req {
   };
   env?: Record<string, string>;
   labels?: Record<string, string>;
-}
+};
 const request = (labels?: Record<string, string>, config: Partial<Req["config"]> = {}): Req => ({
   config: { provider: "claude", cwd: "/project", ...config },
   env: {},

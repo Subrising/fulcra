@@ -286,6 +286,7 @@ export function createAccountHandlers(d: Deps) {
         role?: string;
         defaults?: any;
         orchestrationGuard?: boolean;
+        rotateOnLimit?: boolean;
         defaultAccount?: { provider: "claude" | "codex"; id: string | null };
         mode?: { provider: "claude" | "codex"; modeId: string };
       },

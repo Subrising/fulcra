@@ -127,6 +127,10 @@ import { orchestrationHook } from "./server/orchestration";
 import { createKeychain, sessionOpenHook } from "./server/accounts.mjs";
 import { askOnce } from "./server/ask.mjs";
 import { createAskJobs } from "./server/ask-jobs";
+import type { Fetcher } from "./server/trackers/http.mjs";
+
+// Node's fetch body is a ReadableStream, which is async iterable at runtime; the DOM lib type does not declare it.
+const trackerFetch = fetch as unknown as Fetcher;
 import { loadConfig } from "./server/config.mjs";
 import { readProjects } from "./server/projects";
 import { briefingRpc } from "./shared/briefing";
@@ -663,9 +667,9 @@ export default function contribute(
   const trackers = createTrackerService({
     controller: localCall,
     connectors: {
-      github: createGithubConnector({ fetcher: fetch, secrets, gh: createGhRunner() }),
-      jira: createJiraConnector({ fetcher: fetch, secrets }),
-      bitbucket: createBitbucketConnector({ fetcher: fetch, secrets }),
+      github: createGithubConnector({ fetcher: trackerFetch, secrets, gh: createGhRunner() }),
+      jira: createJiraConnector({ fetcher: trackerFetch, secrets }),
+      bitbucket: createBitbucketConnector({ fetcher: trackerFetch, secrets }),
     },
   });
   const gated = <T>(run: () => T): T => {
