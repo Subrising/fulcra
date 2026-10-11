@@ -51,6 +51,16 @@ interface SidebarHeaderRowProps {
   tall?: boolean;
 }
 
+// The lone "header" strip has its own fixed height; rows inside a group grow to a touch target.
+function useTallHeaderRow(tall: boolean, variant: SidebarHeaderRowVariant): boolean {
+  const touchRows = useSidebarTouchRows();
+  return tall || (touchRows && variant !== "header");
+}
+
+function headerRowIconSize(variant: SidebarHeaderRowVariant) {
+  return variant === "header" ? ICON_SIZE.md : ICON_SIZE.sm;
+}
+
 export function SidebarHeaderRow({
   icon: Icon,
   label,
@@ -70,10 +80,8 @@ export function SidebarHeaderRow({
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const ThemedIcon = useMemo(() => (Icon ? withUnistyles(Icon) : null), [Icon]);
   const isHighlighted = isHovered || isActive;
-  // The lone "header" strip has its own fixed height; rows inside a group grow to a touch target.
-  const touchRows = useSidebarTouchRows();
-  const tallRow = tall || (touchRows && variant !== "header");
-  const iconSize = variant === "header" ? ICON_SIZE.md : ICON_SIZE.sm;
+  const tallRow = useTallHeaderRow(tall, variant);
+  const iconSize = headerRowIconSize(variant);
 
   let right = trailing ?? null;
   if (right === null && shortcutKeys && isHovered) {
@@ -83,7 +91,11 @@ export function SidebarHeaderRow({
   return (
     <View ref={rowRef} collapsable={false} style={getContainerStyle(variant)}>
       <View
-        style={[styles.row, tallRow && sidebarTouchStyles.row, isHighlighted && styles.rowHighlighted]}
+        style={[
+          styles.row,
+          tallRow && sidebarTouchStyles.row,
+          isHighlighted && styles.rowHighlighted,
+        ]}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
       >
