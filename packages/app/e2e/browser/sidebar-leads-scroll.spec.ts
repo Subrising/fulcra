@@ -88,11 +88,17 @@ function expectSidebarPasses(label: string, size: Size, result: Measured) {
       control.testId?.startsWith("sidebar-lead-"),
   );
   expect.soft(leads.length, `${label}: lead controls found`).toBeGreaterThan(2);
-  // On a touch screen every control is a touch target; with a mouse only the Leads block is.
-  // The page header's menu toggle belongs to the header, not the sidebar: it is recorded in the measurements
-  // and checked on the phone home page, but the header's own control size is outside FU-62.
-  const sidebarControls = result.controls.filter((control) => control.testId !== "menu-button");
-  const targets = size.touch ? sidebarControls : leads;
+  // On a touch screen every control is a touch target, the page header's buttons and the row menus included
+  // (FU-73); with a mouse only the Leads block is.
+  const targets = size.touch ? result.controls : leads;
+  if (size.touch) {
+    const rowMenus = result.controls.filter((control) =>
+      /^sidebar-(workspace|project)-kebab-/.test(control.testId ?? ""),
+    );
+    expect.soft(rowMenus.length, `${label}: row menus found`).toBeGreaterThan(0);
+    const header = result.controls.filter((control) => control.header);
+    expect.soft(header.length, `${label}: header buttons found`).toBeGreaterThan(0);
+  }
   const small = targets.filter((control) => control.width < 48 || control.height < 48);
   expect.soft(small, `${label}: controls under 48x48 px`).toEqual([]);
   if (!size.touch) {
@@ -250,15 +256,26 @@ async function measure(page: Page) {
         );
       })
       .map((el) => el.textContent?.slice(0, 60) ?? "");
-    // Every visible sidebar control, including the footer outside the scroll.
+    // Every visible sidebar control, including the footer outside the scroll, and every page header button.
+    const header = document.querySelector('[data-testid="composer-dock-header"]');
+    const headerButtons = header
+      ? [...header.querySelectorAll<HTMLElement>('[role="button"], button')]
+      : [];
     const controls = [
-      ...document.querySelectorAll<HTMLElement>(
-        '[data-testid^="sidebar-"], [data-testid^="menu-button"]',
-      ),
+      ...new Set([
+        ...document.querySelectorAll<HTMLElement>(
+          '[data-testid^="sidebar-"], [data-testid^="menu-button"]',
+        ),
+        ...headerButtons,
+      ]),
     ]
       .filter((el) => {
         const r = el.getBoundingClientRect();
-        const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
+        // Row menus are buttons with no role attribute on web; they are matched by their test ID.
+        const rowMenu = /^sidebar-(workspace|project)-kebab-/.test(
+          el.getAttribute("data-testid") ?? "",
+        );
+        const role = rowMenu || el.getAttribute("role") === "button" || el.tagName === "BUTTON";
         return role && r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
       })
       .map((el) => {
@@ -270,6 +287,7 @@ async function measure(page: Page) {
             el.textContent?.slice(0, 40) ??
             "",
           testId: el.getAttribute("data-testid"),
+          header: Boolean(header?.contains(el)),
           width: Math.round(r.width),
           height: Math.round(r.height),
         };
@@ -287,9 +305,9 @@ async function measure(page: Page) {
     const seen = (el: Element) => {
       const r = el.getBoundingClientRect();
       if (!scroller!.contains(el)) return r;
-      const clippedTop = Math.max(r.top, box.top);
-      const bottom = Math.min(r.bottom, box.bottom);
-      return new DOMRect(r.left, clippedTop, r.width, Math.max(0, bottom - clippedTop));
+      const shownTop = Math.max(r.top, box.top);
+      const shownBottom = Math.min(r.bottom, box.bottom);
+      return new DOMRect(r.left, shownTop, r.width, Math.max(0, shownBottom - shownTop));
     };
     const named = (el: Element) =>
       el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? el.tagName;

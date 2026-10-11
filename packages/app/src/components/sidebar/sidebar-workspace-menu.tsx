@@ -44,6 +44,7 @@ import {
   WORKSPACE_LABEL_PAGE_ID,
   type WorkspaceLabelTarget,
 } from "@/workspace-labels/picker";
+import { TOUCH_TARGET, useTouchTargets } from "@/hooks/use-touch-targets";
 
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -277,11 +278,13 @@ export function SidebarWorkspaceMenu({
     [serverId, workspaceId, workspaceLabels],
   );
   const pages = useWorkspaceLabelMenuPages(workspaceTarget);
+  // FU-73: a 48 px target on a touch screen.
+  const touch = useTouchTargets();
   return (
     <DropdownMenu compactMode="sheet" open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger
         hitSlop={8}
-        style={triggerStyle}
+        style={touch ? touchTriggerStyle : triggerStyle}
         accessibilityRole={isWeb ? undefined : "button"}
         accessibilityLabel={t("sidebar.workspace.actions.menu")}
         testID={`sidebar-workspace-kebab-${workspaceKey}`}
@@ -436,6 +439,12 @@ function triggerStyle({ hovered = false }: PressableStateCallbackType & { hovere
   return [styles.trigger, hovered && styles.triggerHovered];
 }
 
+function touchTriggerStyle({
+  hovered = false,
+}: PressableStateCallbackType & { hovered?: boolean }) {
+  return [styles.trigger, styles.triggerTouch, hovered && styles.triggerHovered];
+}
+
 const styles = StyleSheet.create((theme) => ({
   trigger: {
     padding: 2,
@@ -447,5 +456,12 @@ const styles = StyleSheet.create((theme) => ({
   },
   triggerHovered: {
     backgroundColor: theme.colors.surface2,
+  },
+  // The dots stay centred in the larger target.
+  triggerTouch: {
+    minWidth: TOUCH_TARGET,
+    minHeight: TOUCH_TARGET,
+    alignItems: "center",
+    justifyContent: "center",
   },
 }));

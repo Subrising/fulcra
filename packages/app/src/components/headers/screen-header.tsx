@@ -12,6 +12,7 @@ import {
 } from "@/constants/layout";
 import { WindowChromeSafeArea } from "@/utils/desktop-window";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
+import { useTouchTargets } from "@/hooks/use-touch-targets";
 
 interface ScreenHeaderProps {
   left?: ReactNode;
@@ -45,7 +46,12 @@ export function ScreenHeader({
     () => [styles.inner, { paddingTop: insets.top + topPadding }],
     [insets.top, topPadding],
   );
-  const rowStyle = useMemo(() => [styles.row, borderless && styles.borderless], [borderless]);
+  // FU-73: on a touch screen the header holds 48 px buttons, so a tablet gets the phone's header height.
+  const touch = useTouchTargets();
+  const rowStyle = useMemo(
+    () => [styles.row, touch && styles.touchRow, borderless && styles.borderless],
+    [borderless, touch],
+  );
   const leftCombinedStyle = useMemo(() => [styles.left, leftStyle], [leftStyle]);
   const rightCombinedStyle = useMemo(() => [styles.right, rightStyle], [rightStyle]);
 
@@ -97,6 +103,9 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
     flexShrink: 0,
+  },
+  touchRow: {
+    height: HEADER_INNER_HEIGHT_MOBILE,
   },
   borderless: {
     borderBottomColor: "transparent",

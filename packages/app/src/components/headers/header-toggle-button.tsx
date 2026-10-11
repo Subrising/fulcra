@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Shortcut } from "@/components/ui/shortcut";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { isWeb } from "@/constants/platform";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   iconButtonChromeFrameStyle,
   iconButtonChromeStyle,
@@ -46,6 +47,8 @@ export function HeaderToggleButton({
       ? ({ "aria-expanded": expandedState } as Record<string, boolean>)
       : null;
 
+  // FU-73: a 48 px target on a touch screen; the drawn icon frame stays the same.
+  const touch = useTouchTargets();
   const combinedStyle = useMemo(
     () =>
       ({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) =>
@@ -53,9 +56,9 @@ export function HeaderToggleButton({
           size: "large",
           state: { hovered: Boolean(hovered), pressed },
           disabled: Boolean(disabled),
-          style,
+          style: touch ? [style, touchTargetStyles.icon] : style,
         }),
-    [disabled, style],
+    [disabled, style, touch],
   );
 
   return (

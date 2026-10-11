@@ -159,6 +159,7 @@ import { useHostBadges } from "@/hosts/use-host-badges";
 import { useSidebarRowItems } from "@/components/sidebar/display-preferences/model";
 import { PullRequestStateIcon } from "@/git/pull-request-state-icon";
 import { sidebarTouchStyles, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 
 const workspaceKeyExtractor = (workspace: SidebarWorkspacePlacement) => workspace.workspaceKey;
 
@@ -367,6 +368,16 @@ function projectKebabStyle({
   return [styles.projectKebabButton, hovered && styles.projectKebabButtonHovered];
 }
 
+function touchProjectKebabStyle({
+  hovered = false,
+}: PressableStateCallbackType & { hovered?: boolean }) {
+  return [
+    styles.projectKebabButton,
+    touchTargetStyles.icon,
+    hovered && styles.projectKebabButtonHovered,
+  ];
+}
+
 function getProjectWorkspaceRowStyle({
   isDragging,
   isPressed,
@@ -437,7 +448,9 @@ function ProjectRowTrailingActions({
   onRemoveProject?: () => void;
   removeProjectStatus: "idle" | "pending" | "success";
 }) {
-  const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint;
+  // FU-73: a touch tablet has no hover, so the actions show there too.
+  const touch = useTouchTargets();
+  const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint || touch;
   return (
     <View style={styles.projectTrailingActions}>
       {worktreeTarget ? (
@@ -496,11 +509,13 @@ function ProjectKebabMenu({
   removeProjectStatus: "idle" | "pending" | "success";
 }) {
   const { t } = useTranslation();
+  // FU-73: a 48 px target on a touch screen.
+  const touch = useTouchTargets();
   return (
     <DropdownMenu compactMode="sheet">
       <DropdownMenuTrigger
         hitSlop={8}
-        style={projectKebabStyle}
+        style={touch ? touchProjectKebabStyle : projectKebabStyle}
         accessibilityRole={platformIsWeb ? undefined : "button"}
         accessibilityLabel={t("sidebar.project.actions.menu")}
         testID={`sidebar-project-kebab-${projectViewKey}`}
@@ -1091,9 +1106,9 @@ function WorkspaceRowInner({
   onTogglePin,
   reserveIdleStatusIndicatorSpace = true,
 }: WorkspaceRowInnerProps) {
-  const isCompact = useIsCompactFormFactor();
   const [isPressed, setIsPressed] = useState(false);
-  const isTouchPlatform = platformIsNative || isCompact;
+  // FU-73: a touch tablet in a browser is a touch platform too: row actions show without hover.
+  const isTouchPlatform = useTouchTargets();
   const touchRows = useSidebarTouchRows();
   const interaction = useLongPressDragInteraction({
     drag,
