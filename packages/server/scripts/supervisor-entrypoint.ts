@@ -9,6 +9,7 @@ import {
   updatePidLock,
 } from "../src/server/pid-lock.js";
 import { resolvePaseoHome } from "../src/server/paseo-home.js";
+import { packagedInspectorFlags } from "../src/server/inspector-flavour.js";
 import { daemonLogPath } from "../src/server/daemon-instance.js";
 import { PRIVATE_FILE_MODE } from "../src/server/private-files.js";
 import { loadPersistedConfig } from "../src/server/persisted-config.js";
@@ -72,7 +73,7 @@ function resolveDevWorkerEntry(): string {
 function resolveWorkerExecArgv(workerEntry: string, devMode: boolean): string[] {
   const execArgv = workerEntry.endsWith(".ts") ? ["--import", "tsx"] : [];
   if (!devMode) {
-    return execArgv;
+    return [...packagedInspectorFlags(), ...execArgv];
   }
   const devArgs = [
     "--heapsnapshot-near-heap-limit=3",

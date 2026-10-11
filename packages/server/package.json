@@ -28,6 +28,11 @@
       "source": "./src/terminal/agent-hooks/provider-registry.ts",
       "default": "./dist/server/terminal/agent-hooks/provider-registry.js"
     },
+    "./inspector-flavour": {
+      "types": "./dist/server/server/inspector-flavour.d.ts",
+      "source": "./src/server/inspector-flavour.ts",
+      "default": "./dist/server/server/inspector-flavour.js"
+    },
     "./daemon-control": {
       "types": "./dist/server/server/daemon-instance.d.ts",
       "source": "./src/server/daemon-instance.ts",

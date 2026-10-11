@@ -9,6 +9,10 @@ protocols:
   - name: Fulcra sign-in link
     schemes:
       - fulcra
+# FU-79: the daemon runs as the Electron binary in Node mode, so RunAsNode stays on. No --inspect flag is wanted.
+electronFuses:
+  runAsNode: true
+  enableNodeCliInspectArguments: false
 afterPack: ./scripts/after-pack.js
 afterSign: ./scripts/after-sign.js
 directories:
