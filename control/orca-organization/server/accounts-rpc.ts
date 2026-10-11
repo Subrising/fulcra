@@ -2,7 +2,7 @@
 // a Claude token is accepted on add/replace and goes straight to the Keychain, never to a store, a log or a reply.
 import fs from "node:fs";
 import {
-  readAccounts,
+  readAccountsAsync,
   publicView,
   addAccount,
   setAccount,
@@ -74,7 +74,7 @@ async function providerOf(paseo: Paseo, root: string, agentId: string): Promise<
     const p = h?.current?.()?.provider;
     if (typeof p === "string") return p;
   } catch {}
-  return readAccounts(root).assignments[agentId]?.provider ?? null;
+  return (await readAccountsAsync(root)).assignments[agentId]?.provider ?? null;
 }
 
 // The controller takeover adapter lives beside switchSession (accounts.mjs), so the controller's tests reach it too.
@@ -144,11 +144,11 @@ export function createAccountHandlers(d: Deps) {
   const readable = () => {
     if (!accountAuthority().allowed) throw new Error(ask());
   };
-  const nameOf = (id: string | null | undefined) =>
-    readAccounts(d.root()).accounts.find((x) => x.id === id)?.name ?? null;
+  const nameOf = async (id: string | null | undefined) =>
+    (await readAccountsAsync(d.root())).accounts.find((x) => x.id === id)?.name ?? null;
   const handlers = {
     async read(paseo: Paseo): Promise<AccountsView> {
-      const v = publicView(readAccounts(d.root()), now());
+      const v = publicView(await readAccountsAsync(d.root()), now());
       const t = readRoleDefaults(
         d.root(),
         d.configRoles() as any,
@@ -206,7 +206,7 @@ export function createAccountHandlers(d: Deps) {
       remove?: true;
       move?: "up" | "down";
     }) {
-      const a = readAccounts(d.root()).accounts.find((x) => x.id === input.id);
+      const a = (await readAccountsAsync(d.root())).accounts.find((x) => x.id === input.id);
       if (!a) return refused("No such account");
       try {
         if (input.move) {
@@ -243,7 +243,7 @@ export function createAccountHandlers(d: Deps) {
       if (!provider || !(PROVIDERS as readonly string[]).includes(provider))
         return { provider: null, current: null, accounts: [] };
       return sessionAccounts(
-        readAccounts(d.root()),
+        await readAccountsAsync(d.root()),
         input.agentId,
         provider,
         now(),
@@ -266,7 +266,7 @@ export function createAccountHandlers(d: Deps) {
           { takeOver: d.takeOver ?? null },
           now(),
         );
-        const s = readAccounts(d.root()),
+        const s = await readAccountsAsync(d.root()),
           want = input.account.trim().toLowerCase();
         const to = s.accounts.find(
           (x) =>
@@ -343,7 +343,7 @@ export function createAccountHandlers(d: Deps) {
             d.configRoles() as any,
           );
         const label = input.defaultAccount
-          ? (nameOf(input.defaultAccount.id) ?? "First ready account")
+          ? ((await nameOf(input.defaultAccount.id)) ?? "First ready account")
           : input.mode
             ? `Permission mode for ${input.mode.provider === "claude" ? "Claude" : "Codex"}`
             : input.rotateOnLimit !== undefined
@@ -387,7 +387,7 @@ export function createAccountHandlers(d: Deps) {
       }),
     update: (input: Parameters<typeof update>[0]) =>
       gate(async () => {
-        const before = nameOf(input.id),
+        const before = await nameOf(input.id),
           reply = await update(input);
         return {
           reply,
