@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
@@ -217,6 +220,30 @@ describe("explicit run cwd workspace precedence", () => {
       command,
     );
   }
+  it("sends mcpServers and toolPolicy.preapproved in the same create request (FU-107)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-mcp-"));
+    const file = join(dir, "mcp.json");
+    writeFileSync(
+      file,
+      JSON.stringify({ mcpServers: { songstudio: { command: "node", args: ["s.mjs"] } } }),
+    );
+    try {
+      const client = fakeClient();
+      await parsedRun(["--mcp-config", file, "--preapprove", "songstudio.analyze"]);
+      expect(client.createAgent).toHaveBeenCalledTimes(1);
+      expect(client.createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServers: { songstudio: { command: "node", args: ["s.mjs"], type: "stdio" } },
+          toolPolicy: { preapproved: [{ kind: "mcp", server: "songstudio", tool: "analyze" }] },
+        }),
+      );
+      await expect(
+        parsedRun(["--mcp-config", file, "--preapprove", "other.analyze"]),
+      ).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   // FU-60: the only workspace read is the lookup for the run directory; ambient or caller workspaces are not read.
   function expectOnlyDirectoryLookup(client: ReturnType<typeof fakeClient>) {
     expect(client.fetchWorkspaces).toHaveBeenCalledTimes(1);

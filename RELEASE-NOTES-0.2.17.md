@@ -12,6 +12,7 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 - Options: `--model` (default `claude-sonnet-5-5`), `--output-schema`, `--timeout`, `--account`, `--host` and `--home`.
 - If the account is at its usage limit, the call marks it limited and moves once to the next usable account. If that also fails, the call stops with a clear error.
 - On Windows, `fulcra ask` never uses a shell. It refuses a `.cmd` or `.bat` Claude file with a clear error; use the native `claude.exe`. Send the prompt on standard input (`-`) and give `--output-schema` as a file path, because `cmd.exe` changes `&`, `|`, `<`, `>`, `^`, `%` and `"` in a command line. See docs/windows.md.
+- (FU-107) `fulcra run --mcp-config <file> --preapprove <server.tool>` (repeatable) starts an agent with MCP servers, and the named MCP tools run without a prompt. Both go in the same create request. A Claude settings file cannot allow an MCP tool for a server that the SDK supplies, so use this with the new "Allow List Only" mode.
 - When `fulcra ask` times out, it ends at once and stops the Claude process and everything it started.
 - `fulcra run --account <name>` checks that the account exists and is usable, then pins the new session to it.
 
