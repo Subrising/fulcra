@@ -376,6 +376,7 @@ describe("resolveOwnDefaultCreateConfig (Claude, Codex)", () => {
     expect(childModeClass("codex", "full-access")).toBe("automatic");
     expect(childModeClass("claude", "bypassPermissions")).toBe("automatic");
     expect(childModeClass("claude", "plan")).toBe("restricted");
+    expect(childModeClass("claude", "dontAsk")).toBe("restricted");
     expect(childModeClass("codex", "auto-review")).toBe("restricted");
     expect(childModeClass("codex", null)).toBe("unknown");
     expect(childModeClass("opencode", "build")).toBe("unknown");
