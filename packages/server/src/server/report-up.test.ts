@@ -15,7 +15,9 @@ interface FakeChat {
 const LEAD = "11111111-1111-4111-8111-111111111111";
 const WORKER = "22222222-2222-4222-8222-222222222222";
 
-function fixture(chats: FakeChat[], options: { enabled?: boolean } = {}) {
+function fixture(chats: FakeChat[], options: { enabled?: boolean; now?: number } = {}) {
+  const clock = { now: options.now ?? Date.now() };
+  const timers: Array<{ run: () => void; ms: number }> = [];
   const byId = new Map(chats.map((chat) => [chat.id, chat]));
   const delivered: Array<{ leadId: string; prompt: string }> = [];
   const manager = {
@@ -34,6 +36,8 @@ function fixture(chats: FakeChat[], options: { enabled?: boolean } = {}) {
     isEnabled: () => enabled,
     localServerId: "srv_local",
     logger: createTestLogger(),
+    now: () => clock.now,
+    setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
       delivered.push({ leadId, prompt });
     },
@@ -49,12 +53,24 @@ function fixture(chats: FakeChat[], options: { enabled?: boolean } = {}) {
     });
     stream(agentId, { type: "turn_completed", provider: "claude" });
   };
+  const failedTurn = (agentId: string, error: string) => {
+    stream(agentId, { type: "turn_started", provider: "claude" });
+    stream(agentId, {
+      type: "timeline",
+      provider: "claude",
+      item: { type: "user_message", text: "do the task" },
+    });
+    stream(agentId, { type: "turn_failed", provider: "claude", error });
+  };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
   return {
     delivered,
     stream,
     turn,
     settle,
+    clock,
+    timers,
+    failedTurn,
     setEnabled: (value: boolean) => (enabled = value),
   };
 }
@@ -153,5 +169,87 @@ describe("report-up", () => {
     f.turn(WORKER, { text: "notice", clientMessageId: "paseo-notify:y" });
     await f.settle();
     expect(f.delivered).toEqual([]);
+  });
+});
+
+// Fulcra 0.2.17 (FU-63): a limit text is limit state, never "finished a turn".
+describe("report-up and usage limits", () => {
+  const NOW = Date.parse("2026-10-11T00:00:00Z");
+  const SESSION = "You've hit your session limit · resets 3pm (Australia/Brisbane)";
+  const WEEKLY = "You've hit your weekly limit · resets Oct 13 at 8am (Australia/Brisbane)";
+
+  test("a worker that ends on a session limit tells its lead once and is never reported as finished", async () => {
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const f = fixture([lead, chat], { now: NOW });
+    for (let i = 0; i < 3; i++) {
+      f.turn(WORKER);
+      await f.settle();
+    }
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(f.delivered[0]!.prompt).toContain("Builder is at its session limit until");
+    expect(f.delivered[0]!.prompt).not.toContain("finished a turn");
+  });
+
+  test("a failed turn with a weekly limit text is the same: one notice, kind weekly", async () => {
+    const f = fixture([lead, worker()], { now: NOW });
+    f.failedTurn(WORKER, WEEKLY);
+    await f.settle();
+    f.failedTurn(WORKER, WEEKLY);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Builder is at its weekly limit until");
+  });
+
+  test("a worker that recovers reports normally again, and a later limit is told again", async () => {
+    const chat = worker();
+    chat.lastMessage = SESSION;
+    const f = fixture([lead, chat], { now: NOW });
+    f.turn(WORKER);
+    await f.settle();
+    chat.lastMessage = "Done: tests pass.";
+    f.clock.now = NOW + 6 * 3600_000;
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[1]!.prompt).toContain("finished a turn: Done: tests pass.");
+    chat.lastMessage = SESSION;
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(3);
+    expect(f.delivered[2]!.prompt).toContain("session limit");
+  });
+
+  test("worker reports to a limited lead are held, then sent as one notice after the reset", async () => {
+    const SECOND = "33333333-3333-4333-8333-333333333333";
+    const limitedLead: FakeChat = { ...lead, lastMessage: SESSION };
+    const second: FakeChat = { ...worker(), id: SECOND, title: "Tester" };
+    const f = fixture([limitedLead, worker(), second], { now: NOW });
+    f.turn(LEAD);
+    await f.settle();
+    f.turn(WORKER);
+    f.turn(SECOND);
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
+    // The reset passes and the timer fires.
+    f.clock.now = NOW + 6 * 3600_000;
+    for (const timer of f.timers) timer.run();
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    expect(f.delivered[0]!.prompt).toContain("2 reports held");
+    expect(f.delivered[0]!.prompt).toContain("Builder");
+    expect(f.delivered[0]!.prompt).toContain("Tester");
+  });
+
+  test("a limit that names no reset time holds for 15 minutes", async () => {
+    const chat = worker();
+    chat.lastMessage = "Claude AI usage limit reached|0000000000";
+    const f = fixture([lead, chat], { now: NOW });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("usage limit until");
   });
 });
