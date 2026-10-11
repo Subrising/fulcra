@@ -20,6 +20,7 @@ Fulcra 0.2.15 is based on Paseo v0.11.0-beta.5.
 
 ### Sidebar leads
 
+- A lead on another computer now takes new work from the + button and opens its chat on that computer, like a lead on this computer. Leads on offline or untrusted computers show only as greyed remembered rows, without the + button.
 - When a computer goes offline, its leads no longer show twice for one read. The sidebar shows only reads from the computers that are online now, plus the greyed remembered rows.
 - A failed projects read no longer saves the placeholder name "project" as a remembered lead's project. The sidebar keeps the name it remembered before. If it remembered none, it saves nothing until a read works.
 

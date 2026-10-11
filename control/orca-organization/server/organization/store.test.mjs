@@ -314,10 +314,7 @@ test("workspace names use word boundaries, and the configured umbrella resolves 
 });
 test("a correlated main assistant clarification is readable and a prior reply cannot become this request's answer", () => {
   assert.equal(
-    parsePrimeQuestion(
-      '{"intakeId":"request","question":"Is this for Alpha or Beta?"}',
-      "request",
-    ),
+    parsePrimeQuestion('{"intakeId":"request","question":"Is this for Alpha or Beta?"}', "request"),
     "Is this for Alpha or Beta?",
   );
   assert.equal(parsePrimeQuestion('{"intakeId":"old","question":"Old question"}', "request"), null);
