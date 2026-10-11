@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import type { Logger } from "pino";
-import { REPORTS_TO_OWNER, ROLE_REF_PREFIX } from "@getpaseo/protocol/agent-labels";
+import {
+  MAIN_ASSISTANT_ROLE,
+  REPORTS_TO_OWNER,
+  ROLE_REF_PREFIX,
+  SEAT_LABEL,
+} from "@getpaseo/protocol/agent-labels";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
@@ -45,6 +50,8 @@ import {
 //   notice instead; report-up stays quiet for it.
 // - The notice uses the daemon source, like the finish notification, and waits in the lead's held-send queue: it
 //   never enters or cancels the lead's running turn (held-sends.ts).
+// - A lead (a chat that other chats report to) sends no "finished a turn" notice to the main assistant (FU-113): leads
+//   report up on purpose. A failed lead turn is still sent, and worker-to-lead notices are unchanged.
 // - daemon.reportUpOnTurnEnd = false turns it off.
 // - A lead that turns idle while it owns open ledger items and has idle workers gets ONE short message that lists them
 //   (FU-101). It is driven by the end of the lead's turn, not by a timer. It is sent at most once per idle period, and
@@ -383,6 +390,22 @@ export class ReportUpService {
     return leadChatOf(this.store, worker, this.deps.localServerId);
   }
 
+  private async isLeadReportingToMain(reporterId: string, target: LineAgent): Promise<boolean> {
+    return (
+      target.labels?.[SEAT_LABEL] === MAIN_ASSISTANT_ROLE && (await this.hasWorkers(reporterId))
+    );
+  }
+
+  /** Whether any chat on this computer reports to this chat, which makes it a lead. */
+  private async hasWorkers(leadId: string): Promise<boolean> {
+    for (const chat of await this.store.list()) {
+      if (chat.id === leadId || chat.archivedAt || !reportsTo(chat)) continue;
+      const owner = await this.leadOf(chat);
+      if ("id" in owner && owner.id === leadId) return true;
+    }
+    return false;
+  }
+
   /** The chats on this computer that report to the lead and are idle now. */
   private async idleWorkersOf(leadId: string): Promise<LineAgent[]> {
     const workers: LineAgent[] = [];
@@ -593,6 +616,9 @@ export class ReportUpService {
     if ("skip" in lead) return skip(lead.skip);
     const leadAgent = await this.store.get(lead.id);
     if (!leadAgent || leadAgent.archivedAt) return skip("lead not here or archived");
+    // FU-113: a lead reports to the main assistant on purpose. Its turns ending are not news; a failed turn still is.
+    if (!failed && (await this.isLeadReportingToMain(workerId, leadAgent)))
+      return skip("a lead's finished turn is not sent to the main assistant");
     const decision = await decideSend(
       this.store,
       { agentId: workerId },
