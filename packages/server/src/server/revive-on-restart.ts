@@ -33,7 +33,13 @@ import { lineStoreOf } from "./reporting-lines.js";
 //   after limit-resume's settle time. Pool-account sessions stay with limit-resume, which continues them by binding.
 // - Not continued: a session whose account is at a limit, or that does not load (folder or provider missing). Its
 //   lead chat gets one notice per restart that lists them: "daemon restarted at <time>; N sessions closed: <names>".
-// - A session closed by hand, archived or internal is left alone. Subagents follow the same rules.
+// - A session closed by hand, archived or internal is left alone, also when that happens during the settle time.
+//   Subagents follow the same rules. A lead closed by hand is not woken by the notice; the log says why.
+// - The notice has fixed reasons ("folder missing", "provider missing", "could not load"), never an error text: load
+//   errors can name a path or a chat ID. The full error goes to the log.
+// - A stop record is used only for sessions not written after the stop (`updatedAt <= stoppedAt`). The stop seals
+//   `stoppedAt` after every session is closed, so a stop record left by a rolled-back build reopens nothing that
+//   the older build used since.
 //
 // A clean stop saves every open session as "closed", so the stop first records them in $PASEO_HOME/revive-at-boot.json.
 // After a crash the records still say "idle"/"running". daemon.reviveOnRestart = false turns it off.
@@ -71,14 +77,33 @@ export async function recordOpenSessions(input: {
   });
 }
 
+/**
+ * Clean stop, after every session is closed and flushed: moves `stoppedAt` to now, so that the stop's own writes are
+ * not later than it. A session written after this belongs to a later run (a rollback to a build without revive).
+ */
+export async function sealStopRecord(input: { paseoHome: string; now?: Date }): Promise<void> {
+  const file = path.join(input.paseoHome, REVIVE_FILE);
+  let record: z.infer<typeof ReviveFileSchema>;
+  try {
+    record = ReviveFileSchema.parse(JSON.parse(await fs.readFile(file, "utf8")));
+  } catch {
+    return;
+  }
+  await writeJsonFileAtomic(file, {
+    ...record,
+    stoppedAt: (input.now ?? new Date()).toISOString(),
+  });
+}
+
 /** What revive needs from a loaded session; the default reads the agent manager, tests replace it. */
 export interface ReviveSessions {
   load(agentId: string): Promise<void>;
   /** Why the loaded session must not get the continue prompt, or null. */
   refusal(agentId: string): string | null;
   /**
-   * Read again just before each resume: why the session is no longer the turn the restart cut off (archived, or a
-   * user, limit-resume or a held send gave it a new message since `cutAt`), or null when it still is.
+   * Read again before the load and just before each resume: why the session is no longer the turn the restart cut
+   * off (archived, closed by hand, or a user, limit-resume or a held send gave it a new message since `cutAt`), or
+   * null when it still is.
    */
   changedSince(agentId: string, cutAt: string | null): Promise<string | null>;
   /** The session's account is at a limit: the reset time when known, null when not. Undefined when it is ready. */
@@ -147,9 +172,12 @@ async function folderProblem(cwd: string): Promise<string | null> {
   }
 }
 
-function reasonOf(error: unknown): string {
+/** A fixed reason for the lead notice. The error text can name a path or a chat ID, so it goes to the log only. */
+function reasonOf(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.split("\n", 1)[0]!.slice(0, 160) || "could not load";
+  if (/\bENOENT\b|\bspawn\b|not available|not installed|command not found/i.test(message))
+    return "provider missing";
+  return fallback;
 }
 
 function limitReason(until: Date | null): string {
@@ -188,15 +216,26 @@ export async function reviveAfterRestart(
     const record = byId.get(id);
     return Boolean(record && !record.archivedAt && !record.internal);
   };
+  // A session written after the stop was used by a later run (a rollback): the stop record no longer describes it.
+  const stoppedAtMs = stopRecord ? Date.parse(stopRecord.stoppedAt) : NaN;
+  const notLaterThanStop = (id: string) => {
+    const updatedMs = Date.parse(byId.get(id)?.updatedAt ?? "");
+    const later = updatedMs > stoppedAtMs;
+    if (later) logger.info({ agentId: id }, "Revive on restart: used after the stop, not revived");
+    return !later;
+  };
   const isLoaded = (id: string) => agentManager.getAgent(id) !== null;
 
   result.reopened = await agentStorage.reopenAfterRestart(
-    (stopRecord?.openIds ?? []).filter(eligible),
+    (stopRecord?.openIds ?? []).filter(eligible).filter(notLaterThanStop),
     isLoaded,
   );
   await fs.rm(file, { force: true });
   const interrupted = [
-    ...new Set([...(stopRecord?.interruptedIds ?? []), ...input.crashInterrupted]),
+    ...new Set([
+      ...(stopRecord?.interruptedIds ?? []).filter(notLaterThanStop),
+      ...input.crashInterrupted,
+    ]),
   ].filter(eligible);
   logger.info(
     { reopened: result.reopened, interrupted },
@@ -231,6 +270,14 @@ async function continueOne(
   logger: Logger,
 ): Promise<void> {
   const name = titleOf(record);
+  // The boot snapshot is at least the settle time old: read the session again so it is never resumed twice, and so
+  // a session archived or closed by hand in the meantime is neither loaded nor named in a notice.
+  const cutAt = record.lastUserMessageAt ?? null;
+  const changed = await sessions.changedSince(id, cutAt);
+  if (changed) {
+    logger.info({ agentId: id, reason: changed }, "Revive on restart: not loaded");
+    return;
+  }
   const problem = await folderProblem(record.cwd);
   if (problem) {
     result.closed.push({ id, name, reason: problem });
@@ -239,11 +286,10 @@ async function continueOne(
   try {
     await sessions.load(id);
   } catch (error) {
-    result.closed.push({ id, name, reason: reasonOf(error) });
+    logger.warn({ err: error, agentId: id }, "Revive on restart: the session did not load");
+    result.closed.push({ id, name, reason: reasonOf(error, "could not load") });
     return;
   }
-  // The boot snapshot is at least the settle time old: read the session again so it is never resumed twice.
-  const cutAt = record.lastUserMessageAt ?? null;
   const skip = async () => sessions.refusal(id) ?? (await sessions.changedSince(id, cutAt));
   const before = await skip();
   if (before) {
@@ -264,11 +310,13 @@ async function continueOne(
     await sessions.sendContinue(id, cutAt);
     result.continued.push(id);
   } catch (error) {
-    result.closed.push({ id, name, reason: reasonOf(error) });
+    logger.warn({ err: error, agentId: id }, "Revive on restart: the continue prompt failed");
+    result.closed.push({ id, name, reason: reasonOf(error, "could not continue") });
   }
 }
 
-function defaultSessions(deps: ReviveDeps): ReviveSessions {
+/** The real session reads and the continue prompt. Exported for tests. */
+export function defaultSessions(deps: ReviveDeps): ReviveSessions {
   const { agentManager, agentStorage, logger } = deps;
   const now = deps.now ?? (() => new Date());
   const refusal = (id: string): string | null => {
@@ -292,6 +340,8 @@ function defaultSessions(deps: ReviveDeps): ReviveSessions {
     changedSince: async (id, cutAt) => {
       const stored = await agentStorage.get(id);
       if (!stored || stored.archivedAt) return "archived or removed since the restart";
+      // Boot set every open session back to idle: "closed" now means a user closed it during the settle time.
+      if (stored.lastStatus === "closed") return "closed by hand since the restart";
       if ((stored.lastUserMessageAt ?? null) !== cutAt || liveMessageAt(id) !== cutAt)
         return "a new message arrived since the restart";
       return null;
@@ -348,6 +398,15 @@ async function tellLeads(
     }
     const leadRecord = await store.get(lead.id);
     if (!leadRecord || leadRecord.archivedAt) continue;
+    // Agent decision (FU-67, the owner can change it): a lead closed by hand stays closed. The notice would load it and
+    // start a turn, so only the log names the closed sessions.
+    if ((await deps.agentStorage.get(lead.id))?.lastStatus === "closed") {
+      deps.logger.info(
+        { agentId: entry.id, leadId: lead.id, reason: entry.reason },
+        "Revive on restart: the lead is closed, not woken",
+      );
+      continue;
+    }
     perLead.set(lead.id, [...(perLead.get(lead.id) ?? []), entry]);
   }
   const deliver = deps.deliver ?? ((leadId, prompt) => holdNotice(deps, leadId, prompt));
