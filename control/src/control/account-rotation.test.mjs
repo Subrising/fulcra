@@ -11,7 +11,7 @@ import { ControlStore } from "./store.mjs";
 import { Controller } from "./controller.mjs";
 import { Recovery } from "./recovery.mjs";
 import { COMPANY, PROGRAMME } from "./authority.mjs";
-import { UsageLimits, parseRevokedLine } from "./usage-limits.mjs";
+import { UsageLimits, detectStop, parseRevokedLine } from "./usage-limits.mjs";
 import { ProviderRecovery } from "./provider-recovery.mjs";
 import { codexResetAt } from "./account-rotation.mjs";
 import {
@@ -603,5 +603,14 @@ test("FU-112: ordinary text that mentions a token or a 401 is never read as a re
   ])
     assert.equal(parseRevokedLine(text), null, text.slice(0, 40));
   assert.equal(parseRevokedLine(REVOKED).kind, "revoked");
+  // The exact final message in the 12 Oct session logs (the whole message).
+  const LOGGED =
+    "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.";
+  assert.equal(parseRevokedLine(LOGGED).kind, "revoked");
+  const stop = detectStop({
+    ...tail(),
+    entries: [entry(7, { type: "assistant_message", text: LOGGED, messageId: "m-logged" })],
+  });
+  assert.deepEqual([stop.kind, stop.resetAt, stop.line], ["revoked", null, LOGGED]);
   assert.equal(parseRevokedLine("API Error: 401 · Please run /login").kind, "revoked");
 });
