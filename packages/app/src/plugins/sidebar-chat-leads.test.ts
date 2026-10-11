@@ -27,7 +27,7 @@ describe("chatLeads", () => {
     ]);
   });
 
-  it("leaves out shown, archived, closed, main assistant and other-line chats", () => {
+  it("leaves out shown, archived, main assistant and other-line chats; a closed lead chat stays (FU-51)", () => {
     const sessions = {
       mini: {
         agents: new Map([
@@ -42,8 +42,9 @@ describe("chatLeads", () => {
       },
     };
     const found = chatLeads(sessions, new Set(["seated"]));
-    expect(found.map((l) => l.agentId)).toEqual(["ok"]);
+    expect(found.map((l) => l.agentId)).toEqual(["ok", "shut"]);
     expect(found[0]!.title).toBe("Lead");
+    expect(found[1]!.status).toBe("closed");
   });
 });
 

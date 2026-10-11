@@ -36,7 +36,8 @@ export function chatLeads(sessions: Sessions, shownIds: ReadonlySet<string>): Ch
   const leads: ChatLead[] = [];
   for (const [serverId, session] of Object.entries(sessions)) {
     for (const agent of session?.agents.values() ?? []) {
-      if (agent.archivedAt || agent.status === "closed" || shownIds.has(agent.id)) continue;
+      // FU-51: a closed lead chat (not reopened since a restart) is still a lead; only an archived chat is not.
+      if (agent.archivedAt || shownIds.has(agent.id)) continue;
       if (agent.labels?.[REPORTS_TO_LABEL]?.trim() !== MAIN_ASSISTANT_REF) continue;
       if (agent.labels?.[SEAT_LABEL]?.trim() === MAIN_ASSISTANT_ROLE) continue;
       leads.push({
