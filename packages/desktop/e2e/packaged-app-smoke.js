@@ -6,6 +6,7 @@ const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const { chromium } = require("playwright");
 const { extractFile } = require("@electron/asar");
+const { assertTestHome } = require("../../../scripts/test-support/test-home.cjs");
 const { WebSocket } = require("ws");
 const assert = require("node:assert/strict");
 
@@ -164,6 +165,7 @@ function createDefaultDaemonEnv(extraEnv) {
 }
 
 function createIsolatedDesktopEnv({ home, listen, userData, cdpPort }) {
+  assertTestHome(home, "the packaged app smoke");
   return {
     ...createDefaultDaemonEnv({ HOME: home, USERPROFILE: home }),
     PASEO_HOME: home,
@@ -694,6 +696,7 @@ async function smokeCliShim({ appPath, env }) {
 
 async function smokeColdCliDaemonStart({ appPath }) {
   const home = createTempDir("paseo-smoke-cli-daemon-home-");
+  assertTestHome(home, "the packaged CLI daemon smoke");
   const pidPath = path.join(home, "paseo.pid");
   const port = await reserveLocalTcpPort();
   const listen = `127.0.0.1:${port}`;

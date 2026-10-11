@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from launch import validate, guard_human_chain
+from launch import background_executable, validate, guard_human_chain
 from launchd import configuration
 
 
@@ -172,3 +172,36 @@ class HumanChainTests(unittest.TestCase):
         self.assertIsNone(guard_human_chain(self.profile, 'controller'))
         self.assertIsNone(guard_human_chain({}, 'paseo'))
         self.assertEqual(len(self.armed()), 1)
+
+
+class BackgroundExecutableTests(unittest.TestCase):
+    """FU-80: the service must not show as an app. The main bundle executable is a foreground app on macOS;
+    its LSUIElement Helper is not."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        contents = Path(self.temp.name).resolve() / 'Fulcra.app' / 'Contents'
+        self.main = contents / 'MacOS' / 'Fulcra'
+        self.helper = contents / 'Frameworks' / 'Fulcra Helper.app' / 'Contents' / 'MacOS' / 'Fulcra Helper'
+        for path in (self.main, self.helper):
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b'')
+            path.chmod(0o700)
+
+    def test_main_bundle_executable_runs_through_its_helper(self):
+        self.assertEqual(background_executable(str(self.main)), str(self.helper))
+
+    def test_other_executables_and_bundles_without_helper_are_unchanged(self):
+        self.assertEqual(background_executable('/opt/homebrew/bin/python3'), '/opt/homebrew/bin/python3')
+        self.assertEqual(background_executable('/'), '/')
+        self.helper.unlink()
+        self.assertEqual(background_executable(str(self.main)), str(self.main))
+
+    def test_writable_or_symlinked_helper_refuses(self):
+        self.helper.chmod(0o722)
+        with self.assertRaises(ValueError): background_executable(str(self.main))
+        self.helper.chmod(0o700)
+        actual = self.helper.with_name('actual')
+        self.helper.rename(actual)
+        self.helper.symlink_to(actual)
+        with self.assertRaises(ValueError): background_executable(str(self.main))

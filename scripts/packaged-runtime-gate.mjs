@@ -1,5 +1,6 @@
 // Run under the build scheduler after packaging, before any app replacement.
 import assert from "node:assert/strict";
+import { assertTestHome } from "./test-support/test-home.cjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +41,7 @@ for (const file of [
 }
 const scratch = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "fulcra-packaged-gate-"));
 const home = path.join(scratch, "home");
+assertTestHome(home, "the packaged runtime gate");
 fs.mkdirSync(home, { mode: 0o700 });
 fs.writeFileSync(
   path.join(home, "config.json"),
@@ -86,6 +88,7 @@ try {
   run("daemon", "stop", "--json");
   started = false;
   const ccHome = path.join(scratch, "home-command-centre");
+  assertTestHome(ccHome, "the packaged runtime gate (Command Centre)");
   fs.mkdirSync(ccHome, { mode: 0o700 });
   fs.copyFileSync(path.join(home, "config.json"), path.join(ccHome, "config.json"));
   const ccEnv = {
