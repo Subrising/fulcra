@@ -7,11 +7,15 @@ import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import {
+  COALESCE_WINDOW_MS,
+  COMBINED_LIST_LIMIT,
   NUDGE_MESSAGE_PREFIX,
   PERMISSION_COMMAND_CHARS,
   REPORT_UP_SNIPPET_CHARS,
   ReportUpService,
+  reportUpSwitches,
 } from "./report-up.js";
+import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
 import { parseOpenRows, readOpenLedgerRows, rowsOwnedBy } from "./ledger-items.js";
 
 interface FakeChat {
@@ -30,6 +34,8 @@ function fixture(
   chats: FakeChat[],
   options: {
     enabled?: boolean;
+    /** The permission, limit and idle-lead notices; default on, as the service does. */
+    otherEnabled?: boolean;
     now?: number;
     statePath?: string;
     ledger?: Array<{ project: string; id: string; owner: string; status: string }>;
@@ -53,6 +59,7 @@ function fixture(
     agentManager: manager,
     agentStorage: storage,
     isEnabled: () => enabled,
+    ...(options.otherEnabled === undefined ? {} : { isOtherEnabled: () => options.otherEnabled! }),
     localServerId: "srv_local",
     logger: createTestLogger(),
     now: () => clock.now,
@@ -132,17 +139,23 @@ describe("report-up", () => {
     expect(f.delivered).toEqual([]);
   });
 
-  test("three quick turns send three notices, in order, and no more", async () => {
+  test("quick turns of one worker are one notice now and one more after the window (FU-115)", async () => {
     const f = fixture([lead, worker()]);
     f.turn(WORKER);
     f.turn(WORKER);
     f.turn(WORKER);
     await f.settle();
-    expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD, LEAD, LEAD]);
+    // The first goes at once. The other two wait for the window and are one notice for the one worker.
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD]);
+    expect(f.timers.map((timer) => timer.ms)).toEqual([COALESCE_WINDOW_MS]);
+    f.clock.now += COALESCE_WINDOW_MS;
+    f.timers[0]!.run();
+    await f.settle();
+    expect(f.delivered.map((notice) => notice.leadId)).toEqual([LEAD, LEAD]);
   });
 
   test("nothing when turned off, when a new turn starts at once, or when the lead is on another computer", async () => {
-    const off = fixture([lead, worker()], { enabled: false });
+    const off = fixture([lead, worker()], { enabled: false, otherEnabled: false });
     off.turn(WORKER);
     const busy = fixture([lead, worker()]);
     busy.turn(WORKER);
@@ -318,7 +331,7 @@ describe("report-up and permission prompts", () => {
   });
 
   test("it stays quiet when report-up is turned off", async () => {
-    const f = fixture([lead, worker()], { enabled: false });
+    const f = fixture([lead, worker()], { enabled: false, otherEnabled: false });
     f.stream(WORKER, ask("req-1", "ls"));
     await f.settle();
     expect(f.delivered).toHaveLength(0);
@@ -435,7 +448,7 @@ describe("idle-lead nudge", () => {
           { project: "fulcra", id: "FU-1", owner: "Another lead (99999999)", status: "OPEN" },
         ],
       }),
-      fixture([lead, idleWorker()], { ledger: owned, enabled: false }),
+      fixture([lead, idleWorker()], { ledger: owned, enabled: false, otherEnabled: false }),
     ]) {
       setup.turn(LEAD);
       await setup.settle();
@@ -494,5 +507,211 @@ describe("ledger items", () => {
     ]);
     expect(readOpenLedgerRows(join(dir, "nowhere"))).toEqual([]);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+// Fulcra 0.2.18 (FU-113): leads report up on purpose, so a lead's finished turn is not sent to the main assistant.
+describe("report-up from a lead to the main assistant", () => {
+  const MAIN = "33333333-3333-4333-8333-333333333333";
+  const mainAssistant: FakeChat = {
+    id: MAIN,
+    title: "Main",
+    labels: { "fulcra.seat": "main-assistant" },
+  };
+  const leadIds = (f: { delivered: Array<{ leadId: string }> }) => f.delivered.map((d) => d.leadId);
+  const leadToMain: FakeChat = { ...lead, labels: { [REPORTS_TO_LABEL]: MAIN } };
+
+  test("a lead that has workers sends no 'finished a turn' notice to the main assistant", async () => {
+    const f = fixture([mainAssistant, leadToMain, worker()]);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
+  test("worker-to-lead notices stay, and a lead with no workers still reports to the main assistant", async () => {
+    const f = fixture([mainAssistant, leadToMain, worker()]);
+    f.turn(WORKER);
+    await f.settle();
+    expect(leadIds(f)).toEqual([LEAD]);
+    const alone = fixture([mainAssistant, leadToMain]);
+    alone.turn(LEAD);
+    await alone.settle();
+    expect(leadIds(alone)).toEqual([MAIN]);
+  });
+
+  test("a failed lead turn is still sent to the main assistant", async () => {
+    const f = fixture([mainAssistant, leadToMain, worker()]);
+    f.failedTurn(LEAD, "Provider crashed");
+    await f.settle();
+    expect(leadIds(f)).toEqual([MAIN]);
+  });
+
+  test("a lead's turn still reaches a lead that is not the main assistant", async () => {
+    const top: FakeChat = { id: MAIN, title: "Top lead", labels: {} };
+    const f = fixture([top, leadToMain, worker()]);
+    f.turn(LEAD);
+    await f.settle();
+    expect(leadIds(f)).toEqual([MAIN]);
+  });
+});
+
+// Fulcra 0.2.17 (FU-115): "finished a turn" notices for one lead are combined, and skipped when the worker already wrote.
+describe("report-up coalescing", () => {
+  const WORKER_B = "55555555-5555-4555-8555-555555555555";
+  const WORKER_C = "66666666-6666-4666-8666-666666666666";
+  const named = (id: string, title: string, lastMessage: string): FakeChat => ({
+    id,
+    title,
+    labels: { [REPORTS_TO_LABEL]: LEAD },
+    lastMessage,
+  });
+
+  test("while the lead was told in the last 5 minutes, finished workers wait and go out as ONE message", async () => {
+    const f = fixture([
+      lead,
+      named(WORKER, "Alpha", "alpha done"),
+      named(WORKER_B, "Beta", "beta done"),
+      named(WORKER_C, "Gamma", "gamma done"),
+    ]);
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Worker Alpha");
+    f.turn(WORKER_B);
+    f.turn(WORKER_C);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    f.clock.now += COALESCE_WINDOW_MS;
+    f.timers[0]!.run();
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    const combined = f.delivered[1]!.prompt;
+    expect(combined).toContain("2 workers finished a turn since your last update");
+    expect(combined).toContain(`Worker Beta (${WORKER_B}): beta done`);
+    expect(combined).toContain(`Worker Gamma (${WORKER_C}): gamma done`);
+    expect(combined).not.toContain("Alpha");
+  });
+
+  test("after the window has passed, the next worker is told at once", async () => {
+    const f = fixture([lead, named(WORKER, "Alpha", "a"), named(WORKER_B, "Beta", "b")]);
+    f.turn(WORKER);
+    await f.settle();
+    f.clock.now += COALESCE_WINDOW_MS + 1;
+    f.turn(WORKER_B);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.timers).toEqual([]);
+  });
+
+  test("a long list is cut, and the rest are counted", async () => {
+    const many = Array.from({ length: COMBINED_LIST_LIMIT + 3 }, (_, i) =>
+      named(`7000000${String(i).padStart(2, "0")}-0000-4000-8000-000000000000`, `W${i}`, "ok"),
+    );
+    const f = fixture([lead, named(WORKER, "First", "go"), ...many]);
+    f.turn(WORKER);
+    await f.settle();
+    for (const chat of many) f.turn(chat.id);
+    await f.settle();
+    f.clock.now += COALESCE_WINDOW_MS;
+    f.timers[0]!.run();
+    await f.settle();
+    const text = f.delivered[1]!.prompt;
+    expect(text).toContain(`${many.length} workers finished a turn`);
+    expect(text).toContain("…and 3 more.");
+  });
+
+  test("a failed turn is sent at once, whatever the window", async () => {
+    const f = fixture([lead, worker()]);
+    f.turn(WORKER);
+    await f.settle();
+    f.failedTurn(WORKER, "Provider crashed");
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[1]!.prompt).toContain("ended a turn with an error");
+  });
+
+  test("a worker that messaged its lead during the turn sends no notice; one that did not still does", async () => {
+    resetAgentMessageLogForTests();
+    const f = fixture([lead, named(WORKER, "Alpha", "a"), named(WORKER_B, "Beta", "b")]);
+    f.stream(WORKER, { type: "turn_started", provider: "claude" });
+    noteAgentMessage(WORKER, LEAD, f.clock.now + 1000);
+    f.clock.now += 2000;
+    f.stream(WORKER, { type: "turn_completed", provider: "claude" });
+    f.turn(WORKER_B);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("Worker Beta");
+    // A message from an earlier turn does not silence the next one.
+    f.clock.now += COALESCE_WINDOW_MS + 1;
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered.map((d) => d.prompt.includes("Worker Alpha"))).toEqual([false, true]);
+    resetAgentMessageLogForTests();
+  });
+
+  test("turned off: nothing is held or sent, and a message already waiting is dropped", async () => {
+    const f = fixture([lead, named(WORKER, "Alpha", "a"), named(WORKER_B, "Beta", "b")]);
+    f.turn(WORKER);
+    f.turn(WORKER_B);
+    await f.settle();
+    f.setEnabled(false);
+    f.clock.now += COALESCE_WINDOW_MS;
+    f.timers[0]?.run();
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    const off = fixture([lead, worker()], { enabled: false });
+    off.turn(WORKER);
+    await off.settle();
+    expect(off.delivered).toEqual([]);
+    expect(off.timers).toEqual([]);
+  });
+});
+
+// Fulcra 0.2.17 (FU-115): report-up is the fallback. Native notifyOnFinish is the standard, so "finished a turn" is off
+// unless daemon.reportUpOnTurnEnd is true.
+describe("report-up default", () => {
+  test("the setting maps to two switches: unset is the other notices only, true adds finished turns, false is nothing", () => {
+    expect(reportUpSwitches(undefined)).toEqual({ finishedTurns: false, otherNotices: true });
+    expect(reportUpSwitches(true)).toEqual({ finishedTurns: true, otherNotices: true });
+    expect(reportUpSwitches(false)).toEqual({ finishedTurns: false, otherNotices: false });
+  });
+
+  test("by default no 'finished a turn' or error notice is sent, but a usage-limit notice still is", async () => {
+    const byDefault = reportUpSwitches(undefined);
+    const f = fixture([lead, worker()], {
+      enabled: byDefault.finishedTurns,
+      otherEnabled: byDefault.otherNotices,
+    });
+    f.turn(WORKER);
+    f.failedTurn(WORKER, "Provider crashed");
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.failedTurn(WORKER, "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.");
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("limit");
+  });
+
+  test("turned on, the fallback sends finished turns (and the coalescing and FU-113 rules apply)", async () => {
+    const on = reportUpSwitches(true);
+    const f = fixture([lead, worker()], {
+      enabled: on.finishedTurns,
+      otherEnabled: on.otherNotices,
+    });
+    f.turn(WORKER);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("finished a turn");
+  });
+
+  test("turned off with false, nothing is sent, not even a limit notice", async () => {
+    const off = reportUpSwitches(false);
+    const f = fixture([lead, worker()], {
+      enabled: off.finishedTurns,
+      otherEnabled: off.otherNotices,
+    });
+    f.turn(WORKER);
+    f.failedTurn(WORKER, "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.");
+    await f.settle();
+    expect(f.delivered).toEqual([]);
   });
 });
