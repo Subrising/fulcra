@@ -78,6 +78,14 @@ const CLAUDE_MODES: AgentProviderModeDefinition[] = [
     isAutomaticApproval: true,
   },
   {
+    id: "dontAsk",
+    label: "Allow List Only",
+    description:
+      "Runs only the tools that are allowed in advance. Refuses every other tool, and never asks",
+    icon: "Shield",
+    colorTier: "safe",
+  },
+  {
     id: "bypassPermissions",
     label: "Bypass",
     description: "Skip all permission prompts (use with caution)",
