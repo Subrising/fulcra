@@ -1113,3 +1113,24 @@ it("keeps the remembered project name when a later projects read fails", async (
   expect(useLeadsMemory.getState().byHost.book?.[0]?.project).toBe("Example project");
   expect(useLeadsMemory.getState().byHost.book?.[0]?.title).toBe("Remote project lead");
 });
+
+// Fulcra 0.2.15 (FU-57): another computer's seated lead reads its status from that computer's chat list.
+it("shows another computer's lead status from that computer's chat list when the fleet has no node", async () => {
+  f.hosts = HOSTS;
+  f.remote.book = { ...bookReads(), fleet: { nodes: [] } };
+  f.read.mockResolvedValue({ available: true, primes: [prime()], projectSeats: [] });
+  // The same chat ID is also in the home computer's list (an ambiguous match), so the row must use the reporting
+  // computer's own chat list.
+  const chat = { id: GAG.sessionId, title: GAG.title };
+  f.chats = {
+    book: { [GAG.sessionId]: { ...chat, status: "running" } },
+    mini: { [GAG.sessionId]: { ...chat, status: "closed" } },
+  };
+  mount();
+  const row = await screen.findByTestId("sidebar-remote-lead-book-g1");
+  expect(row.textContent).toContain("Working · last known");
+  expect(row.textContent).not.toContain("Unavailable");
+  expect(row.textContent).not.toContain("Status unknown");
+  // The same row takes "+" new work (FU-57).
+  expect(screen.getByTestId("sidebar-remote-lead-book-g1-new-work")).toBeTruthy();
+});
