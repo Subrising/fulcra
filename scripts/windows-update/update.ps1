@@ -21,7 +21,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $Home_ = 'C:\Users\dzgra'
 $Root = Join-Path $Home_ 'fulcra-update'
-$Builds = if ($BuildsRoot) { $BuildsRoot } else { Join-Path $Home_ 'fulcra-builds' }
+# FU-64: builds and caches go to E:, not C:. -BuildsRoot wins, then the user setting FULCRA_BUILDS_ROOT, then E:.
+$Builds = if ($BuildsRoot) { $BuildsRoot } elseif ($env:FULCRA_BUILDS_ROOT) { $env:FULCRA_BUILDS_ROOT } else { 'E:\fulcra-builds' }
 $Current = Join-Path $Home_ 'fulcra-current'
 $StateFile = Join-Path $Root 'state.json'
 $Lock = Join-Path $Root 'lock'
