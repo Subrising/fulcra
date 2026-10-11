@@ -41,3 +41,6 @@ Exit codes: 0 done, 2 unhealthy and rolled back, 3 refused (chats would stop), o
 - Run the update from a scheduled task or a desktop PowerShell. The task runs as the signed-in user.
 - First live run (10 Oct 2026): the build was fine. Two script faults showed first: the variable `$state` hid the path variable `$State`, and native `paseo` error text stopped the script. Both are fixed in this copy.
 - The first health check ran with the daemon already stopped, so its baseline (server ID, chat count) was empty. Normal runs record both before the stop.
+
+## Build on another drive
+`-BuildsRoot E:\fulcra-builds` puts the clone, the build and the caches (npm, electron, electron-builder, temp) on that drive, in `E:\fulcra-cache`. The junction `fulcra-current` can point across drives. Use it when C: is low on space. Without the option the builds go to `fulcra-builds` in the user profile.

@@ -15,12 +15,13 @@ param(
   [switch]$BuildOnly,
   [switch]$Rollback,
   [string]$Repo = 'https://github.com/Subrising/fulcra.git',
-  [int]$HealthSeconds = 150
+  [int]$HealthSeconds = 150,
+  [string]$BuildsRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 $Home_ = 'C:\Users\<user>'
 $Root = Join-Path $Home_ 'fulcra-update'
-$Builds = Join-Path $Home_ 'fulcra-builds'
+$Builds = if ($BuildsRoot) { $BuildsRoot } else { Join-Path $Home_ 'fulcra-builds' }
 $Current = Join-Path $Home_ 'fulcra-current'
 $StateFile = Join-Path $Root 'state.json'
 $Lock = Join-Path $Root 'lock'
@@ -137,6 +138,13 @@ function Build([string]$ref) {
   $safe = ($ref -replace '[^A-Za-z0-9._-]', '_')
   $dir = Join-Path $Builds "$stamp-$safe"
   $env:Path = "$Node;" + $env:Path
+  # Caches live beside the builds, so a build on another drive does not fill C:.
+  $cache = Join-Path (Split-Path $Builds -Parent) 'fulcra-cache'
+  foreach ($n in 'npm', 'electron', 'electron-builder', 'tmp') { New-Item -ItemType Directory -Force -Path (Join-Path $cache $n) | Out-Null }
+  $env:npm_config_cache = Join-Path $cache 'npm'
+  $env:ELECTRON_CACHE = Join-Path $cache 'electron'
+  $env:ELECTRON_BUILDER_CACHE = Join-Path $cache 'electron-builder'
+  $env:TEMP = Join-Path $cache 'tmp'; $env:TMP = $env:TEMP
   Say "clone $ref into $dir"
   git clone --quiet --depth 1 --branch $ref $Repo $dir
   if ($LASTEXITCODE -ne 0) { Fail 'git clone failed' }
