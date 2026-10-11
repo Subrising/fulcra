@@ -10,6 +10,7 @@ import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useSessionStore } from "@/stores/session-store";
 import { useCheckoutGitActionsStore } from "./actions-store";
 import { GitAiDraftPanel } from "./git-ai-draft-panel";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { GitAiDraftKind, GitAiTextDraft } from "./git-ai-draft-model";
 
 export type GitAiStartKind = "commit-message" | "pull-request";
@@ -30,6 +31,8 @@ export function GitAiWorkspacePreview(props: {
   const [open, setOpen] = useState<{ startWith?: GitAiStartKind } | null>(null);
   const show = useCallback(() => setOpen({}), []);
   const close = useCallback(() => setOpen(null), []);
+  // FU-73: a 48 px target on a touch screen.
+  const touch = useTouchTargets();
   const nonce = props.start?.nonce;
   const startKind = props.start?.kind;
   useEffect(() => {
@@ -38,7 +41,12 @@ export function GitAiWorkspacePreview(props: {
   if (supported !== true) return null;
   return (
     <>
-      <Button size="sm" variant="outline" onPress={show}>
+      <Button
+        size="sm"
+        variant="outline"
+        onPress={show}
+        style={touch ? touchTargetStyles.text : undefined}
+      >
         Write with AI
       </Button>
       {open ? (

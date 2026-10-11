@@ -72,6 +72,8 @@ vi.mock("react-native-unistyles", () => ({
   StyleSheet: {
     create: (factory: unknown) => (typeof factory === "function" ? factory(theme) : factory),
   },
+  // A desktop layout; the touch-target hook reads the breakpoint.
+  useUnistyles: () => ({ theme, rt: { breakpoint: "lg" } }),
   withUnistyles:
     (Component: React.ComponentType<Record<string, unknown>>) =>
     ({

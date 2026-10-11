@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/icon-button-chrome";
 import { TerminalProfileIcon } from "@/components/terminal-profile-icon";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   getTerminalProfileIcon,
   resolveTerminalProfiles,
@@ -134,16 +135,27 @@ function WorkspaceHeaderWorkspaceActionItems({
   );
 }
 
-function workspaceHeaderMenuButtonStyle({
-  hovered,
-  pressed,
-  open,
-}: {
+interface HeaderMenuButtonState {
   hovered: boolean;
   pressed: boolean;
   open: boolean;
-}) {
+}
+
+function workspaceHeaderMenuButtonStyle({ hovered, pressed, open }: HeaderMenuButtonState) {
   return iconButtonChromeStyle({ size: "large", state: { hovered, pressed, open } });
+}
+
+function touchHeaderMenuButtonStyle({ hovered, pressed, open }: HeaderMenuButtonState) {
+  return iconButtonChromeStyle({
+    size: "large",
+    state: { hovered, pressed, open },
+    style: touchTargetStyles.icon,
+  });
+}
+
+/** FU-73: a 48 px target on a touch screen. */
+function useHeaderMenuButtonStyle() {
+  return useTouchTargets() ? touchHeaderMenuButtonStyle : workspaceHeaderMenuButtonStyle;
 }
 
 /**
@@ -151,11 +163,12 @@ function workspaceHeaderMenuButtonStyle({
  */
 export function WorkspaceHeaderMenuDesktop(props: WorkspaceHeaderWorkspaceActions) {
   const { t } = useTranslation();
+  const buttonStyle = useHeaderMenuButtonStyle();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         testID="workspace-header-menu-trigger"
-        style={workspaceHeaderMenuButtonStyle}
+        style={buttonStyle}
         accessibilityRole="button"
         accessibilityLabel={t("workspace.header.actions.workspaceActions")}
       >
@@ -225,6 +238,7 @@ export function WorkspaceHeaderMenuMobile({
 }: WorkspaceHeaderMenuMobileProps) {
   const { t } = useTranslation();
   const router = useRouter();
+  const buttonStyle = useHeaderMenuButtonStyle();
   const { config } = useDaemonConfig(normalizedServerId);
   const profiles = useMemo(
     () => resolveTerminalProfiles(config?.terminalProfiles),
@@ -239,7 +253,7 @@ export function WorkspaceHeaderMenuMobile({
     <DropdownMenu compactMode="sheet">
       <DropdownMenuTrigger
         testID="workspace-header-menu-trigger"
-        style={workspaceHeaderMenuButtonStyle}
+        style={buttonStyle}
         hitSlop={COMPACT_HEADER_BUTTON_HIT_SLOP}
         accessibilityRole="button"
         accessibilityLabel={t("workspace.header.actions.workspaceActions")}

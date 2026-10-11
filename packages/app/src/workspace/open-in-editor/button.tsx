@@ -28,6 +28,7 @@ import type { Theme } from "@/styles/theme";
 import { ForgeBrandIcon } from "@/git/forge-icon";
 import { getForgePresentation } from "@/git/forge";
 import { buttonControlHeight, HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { extraMutedIconColorMapping } from "@/components/ui/icon-button-chrome";
 
 interface WorkspaceOpenInEditorButtonProps {
@@ -88,6 +89,8 @@ export function WorkspaceOpenInEditorButton({
 }: WorkspaceOpenInEditorButtonProps) {
   const { t } = useTranslation();
   const toast = useToast();
+  // FU-73: a 48 px target for each part on a touch screen.
+  const touch = useTouchTargets();
   const isConnected = useHostRuntimeIsConnected(serverId);
   const isLocalDaemon = useIsLocalDaemon(serverId);
   const { preferredEditorId, updatePreferredEditor } = usePreferredEditor();
@@ -195,16 +198,18 @@ export function WorkspaceOpenInEditorButton({
       hideLabels ? styles.splitButtonPrimaryIconOnly : styles.splitButtonPrimary,
       (Boolean(hovered) || pressed) && styles.splitButtonPrimaryHovered,
       openMutation.isPending && styles.splitButtonPrimaryDisabled,
+      touch && touchTargetStyles.icon,
     ],
-    [hideLabels, openMutation.isPending],
+    [hideLabels, openMutation.isPending, touch],
   );
 
   const caretTriggerStyle = useCallback(
     ({ hovered, pressed, open }: { hovered: boolean; pressed: boolean; open: boolean }) => [
       styles.splitButtonCaret,
       (hovered || pressed || open) && styles.splitButtonCaretHovered,
+      touch && touchTargetStyles.icon,
     ],
-    [],
+    [touch],
   );
 
   const handlePrimaryPress = useCallback(() => {
@@ -219,7 +224,7 @@ export function WorkspaceOpenInEditorButton({
 
   return (
     <View style={styles.row}>
-      <View style={styles.splitButton}>
+      <View style={[styles.splitButton, touch && touchTargetStyles.text]}>
         <Pressable
           testID="workspace-open-in-editor-primary"
           style={primaryPressableStyle}
