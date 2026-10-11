@@ -60,11 +60,17 @@ function expectSidebarPasses(label: string, size: Size, result: Measured) {
       control.testId?.startsWith("sidebar-lead-"),
   );
   expect.soft(leads.length, `${label}: lead controls found`).toBeGreaterThan(2);
-  // On a touch screen every control is a touch target; with a mouse only the Leads block is.
-  // The page header's menu toggle belongs to the header, not the sidebar: it is recorded in the measurements
-  // and checked on the phone home page, but the header's own control size is outside FU-62.
-  const sidebarControls = result.controls.filter((control) => control.testId !== "menu-button");
-  const targets = size.touch ? sidebarControls : leads;
+  // On a touch screen every control is a touch target, the page header's buttons and the row menus included
+  // (FU-73); with a mouse only the Leads block is.
+  const targets = size.touch ? result.controls : leads;
+  if (size.touch) {
+    const rowMenus = result.controls.filter((control) =>
+      /^sidebar-(workspace|project)-kebab-/.test(control.testId ?? ""),
+    );
+    expect.soft(rowMenus.length, `${label}: row menus found`).toBeGreaterThan(0);
+    const header = result.controls.filter((control) => control.header);
+    expect.soft(header.length, `${label}: header buttons found`).toBeGreaterThan(0);
+  }
   const small = targets.filter((control) => control.width < 48 || control.height < 48);
   expect.soft(small, `${label}: controls under 48x48 px`).toEqual([]);
   if (!size.touch) {
@@ -170,7 +176,9 @@ async function measure(page: Page) {
         r.left >= box.left - 1 &&
         r.right <= box.right + 1;
       scroller!.scrollTop = 0;
-      return visible ? "reachable" : `not reachable (top ${Math.round(r.top)}, box ${Math.round(box.top)}-${Math.round(box.bottom)})`;
+      return visible
+        ? "reachable"
+        : `not reachable (top ${Math.round(r.top)}, box ${Math.round(box.top)}-${Math.round(box.bottom)})`;
     };
     const inside = [...scroller.querySelectorAll<HTMLElement>("*")].filter((el) => {
       const r = el.getBoundingClientRect();
@@ -178,7 +186,11 @@ async function measure(page: Page) {
     });
     // Text that an ancestor inside the sidebar cuts off (an ellipsis line) is not overflow.
     const clippedByAncestor = (el: HTMLElement) => {
-      for (let parent = el.parentElement; parent && parent !== scroller; parent = parent.parentElement) {
+      for (
+        let parent = el.parentElement;
+        parent && parent !== scroller;
+        parent = parent.parentElement
+      ) {
         if (getComputedStyle(parent).overflowX !== "visible") {
           const r = parent.getBoundingClientRect();
           if (r.right <= box.right + 1 && r.left >= box.left - 1) return true;
@@ -187,7 +199,11 @@ async function measure(page: Page) {
       return false;
     };
     const ellipsised = (el: HTMLElement) => {
-      for (let node: HTMLElement | null = el; node && node !== scroller; node = node.parentElement) {
+      for (
+        let node: HTMLElement | null = el;
+        node && node !== scroller;
+        node = node.parentElement
+      ) {
         if (getComputedStyle(node).textOverflow === "ellipsis") return true;
       }
       return false;
@@ -212,18 +228,38 @@ async function measure(page: Page) {
         );
       })
       .map((el) => el.textContent?.slice(0, 60) ?? "");
-    // Every visible sidebar control, including the footer outside the scroll.
-    const controls = [...document.querySelectorAll<HTMLElement>('[data-testid^="sidebar-"], [data-testid^="menu-button"]')]
+    // Every visible sidebar control, including the footer outside the scroll, and every page header button.
+    const header = document.querySelector('[data-testid="composer-dock-header"]');
+    const headerButtons = header
+      ? [...header.querySelectorAll<HTMLElement>('[role="button"], button')]
+      : [];
+    const controls = [
+      ...new Set([
+        ...document.querySelectorAll<HTMLElement>(
+          '[data-testid^="sidebar-"], [data-testid^="menu-button"]',
+        ),
+        ...headerButtons,
+      ]),
+    ]
       .filter((el) => {
         const r = el.getBoundingClientRect();
-        const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
+        // Row menus are buttons with no role attribute on web; they are matched by their test ID.
+        const rowMenu = /^sidebar-(workspace|project)-kebab-/.test(
+          el.getAttribute("data-testid") ?? "",
+        );
+        const role = rowMenu || el.getAttribute("role") === "button" || el.tagName === "BUTTON";
         return role && r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
       })
       .map((el) => {
         const r = el.getBoundingClientRect();
         return {
-          name: el.getAttribute("aria-label") ?? el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? "",
+          name:
+            el.getAttribute("aria-label") ??
+            el.getAttribute("data-testid") ??
+            el.textContent?.slice(0, 40) ??
+            "",
           testId: el.getAttribute("data-testid"),
+          header: Boolean(header?.contains(el)),
           width: Math.round(r.width),
           height: Math.round(r.height),
         };
@@ -233,22 +269,28 @@ async function measure(page: Page) {
     const hits = (a: DOMRect, b: DOMRect) =>
       a.height > 0.5 &&
       b.height > 0.5 &&
-      a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+      a.left < b.right - 0.5 &&
+      b.left < a.right - 0.5 &&
+      a.top < b.bottom - 0.5 &&
+      b.top < a.bottom - 0.5;
     // A row inside the scroll is drawn only where the scroll shows it; rows scrolled under the footer are hidden.
     const seen = (el: Element) => {
       const r = el.getBoundingClientRect();
       if (!scroller!.contains(el)) return r;
-      const top = Math.max(r.top, box.top);
-      const bottom = Math.min(r.bottom, box.bottom);
-      return new DOMRect(r.left, top, r.width, Math.max(0, bottom - top));
+      const shownTop = Math.max(r.top, box.top);
+      const shownBottom = Math.min(r.bottom, box.bottom);
+      return new DOMRect(r.left, shownTop, r.width, Math.max(0, shownBottom - shownTop));
     };
-    const named = (el: Element) => el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? el.tagName;
+    const named = (el: Element) =>
+      el.getAttribute("data-testid") ?? el.textContent?.slice(0, 40) ?? el.tagName;
     const overlaps: string[] = [];
-    const rows = [...document.querySelectorAll<HTMLElement>('[data-testid^="sidebar-"]')].filter((el) => {
-      const r = el.getBoundingClientRect();
-      const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
-      return role && r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
-    });
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-testid^="sidebar-"]')].filter(
+      (el) => {
+        const r = el.getBoundingClientRect();
+        const role = el.getAttribute("role") === "button" || el.tagName === "BUTTON";
+        return role && r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
+      },
+    );
     const lines = [...top.querySelectorAll<HTMLElement>("*")].filter((el) => {
       const r = el.getBoundingClientRect();
       const ownText = [...el.childNodes].some(
@@ -264,8 +306,7 @@ async function measure(page: Page) {
           if (nested(a, b)) continue;
           // Inline parts of one text line ("title", " · ", "status") share a line box by design.
           if (a.closest("[dir]") && a.closest("[dir]") === b.closest("[dir]")) continue;
-          if (hits(seen(a), seen(b)))
-            overlaps.push(`${named(a)} overlaps ${named(b)}`);
+          if (hits(seen(a), seen(b))) overlaps.push(`${named(a)} overlaps ${named(b)}`);
         }
     return {
       overlaps,
@@ -292,7 +333,11 @@ async function openSidebar(page: Page, workspaceId: string) {
   await expect(menu.or(leads).first()).toBeVisible({ timeout: 30_000 });
   if (!(await leads.isVisible())) await menu.click();
   await expect(leads).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("sidebar-lead-p-" + uuid(100)).or(page.getByText(/Synthetic project 1 /).first())).toBeVisible({
+  await expect(
+    page
+      .getByTestId("sidebar-lead-p-" + uuid(100))
+      .or(page.getByText(/Synthetic project 1 /).first()),
+  ).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -376,6 +421,8 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
         await menu.click();
       }
       await expect(page.getByTestId("sidebar-top-primes").first()).toBeVisible({ timeout: 30_000 });
+      // The lead rows load after the Leads header.
+      await expect(page.getByText(/Synthetic project 1 /).first()).toBeVisible({ timeout: 30_000 });
       const result = await measure(page);
       results[`home-${size.name}`] = result;
       await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
@@ -389,7 +436,8 @@ test("the sidebar scrolls as one area with many leads, at phone, tablet and desk
       await setSize(page, size);
       await openSidebar(page, seeded[0]!.workspaceId);
       refuse = true;
-      for (const socket of sockets) await socket.close({ code: 1012, reason: "Synthetic daemon restart" });
+      for (const socket of sockets)
+        await socket.close({ code: 1012, reason: "Synthetic daemon restart" });
       sockets.clear();
       await expect(page.getByText(RECONNECTING).first()).toBeVisible({ timeout: 30_000 });
       const down = await measure(page);

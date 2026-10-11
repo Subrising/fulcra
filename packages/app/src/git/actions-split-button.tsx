@@ -18,6 +18,7 @@ import type { ShortcutKey } from "@/utils/format-shortcut";
 import type { GitAction, GitActions } from "@/git/policy";
 import { useGitActionRunner } from "@/git/use-actions";
 import { buttonControlHeight, HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 
 interface GitActionsSplitButtonProps {
   gitActions: GitActions;
@@ -98,7 +99,13 @@ export function GitActionsSplitButton({
     runGitAction(gitActions.primary);
   }, [gitActions.primary, runGitAction]);
 
-  const overflowMenuButtonStyle = useMemo(() => [styles.iconButton, styles.overflowMenuButton], []);
+  // FU-73: each part is a 48 px target on a touch screen.
+  const touch = useTouchTargets();
+  const target = touch ? touchTargetStyles.icon : null;
+  const overflowMenuButtonStyle = useMemo(
+    () => [styles.iconButton, styles.overflowMenuButton, target],
+    [target],
+  );
 
   const primaryDisabled = gitActions.primary?.disabled;
   const primaryPressableStyle = useCallback(
@@ -107,8 +114,9 @@ export function GitActionsSplitButton({
       (Boolean(hovered) || pressed) &&
         inlineUnistylesStyle({ backgroundColor: theme.colors.surface2 }),
       primaryDisabled && styles.splitButtonPrimaryDisabled,
+      target,
     ],
-    [primaryDisabled, theme.colors.surface2],
+    [primaryDisabled, theme.colors.surface2, target],
   );
 
   const caretTriggerStyle = useCallback(
@@ -116,8 +124,9 @@ export function GitActionsSplitButton({
       styles.splitButtonCaret,
       (hovered || pressed || open) &&
         inlineUnistylesStyle({ backgroundColor: theme.colors.surface2 }),
+      target,
     ],
-    [theme.colors.surface2],
+    [theme.colors.surface2, target],
   );
 
   const menuOnlyTriggerStyle = useCallback(
@@ -125,8 +134,9 @@ export function GitActionsSplitButton({
       styles.menuOnlyTrigger,
       (hovered || pressed || open) &&
         inlineUnistylesStyle({ backgroundColor: theme.colors.surface2 }),
+      target,
     ],
-    [theme.colors.surface2],
+    [theme.colors.surface2, target],
   );
 
   const menuOnlyActions = useMemo(
@@ -183,7 +193,7 @@ export function GitActionsSplitButton({
   return (
     <View style={styles.row}>
       {gitActions.primary ? (
-        <View style={styles.splitButton}>
+        <View style={[styles.splitButton, touch && touchTargetStyles.text]}>
           <Pressable
             testID="changes-primary-cta"
             style={primaryPressableStyle}

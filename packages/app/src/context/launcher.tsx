@@ -9,6 +9,7 @@ import {
   useWorkspaceLayoutStore,
 } from "@/stores/workspace-layout-store";
 import { useWorkspace } from "@/stores/session-store-hooks";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { openWorkspaceContext } from "@/workspace-tabs/open-supporting-view";
 import { contextWorkspaceKey, makeContextSelection, useContextScope } from "./scope";
 
@@ -56,10 +57,13 @@ export function ContextButton({
     });
   }, [workspace, selectedAgentId, selectCurrentAgent, isCompact, workspaceKey, serverId]);
   const label = t("context.open", { defaultValue: "Context" });
+  // FU-73: a 48 px target on a touch screen.
+  const touch = useTouchTargets();
   return (
     <Button
       variant="ghost"
       size="sm"
+      style={touch ? touchTargetStyles.icon : undefined}
       accessibilityLabel={label}
       disabled={!workspace}
       onPress={open}
