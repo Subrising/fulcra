@@ -76,9 +76,15 @@ export interface ReviveSessions {
   load(agentId: string): Promise<void>;
   /** Why the loaded session must not get the continue prompt, or null. */
   refusal(agentId: string): string | null;
+  /**
+   * Read again just before each resume: why the session is no longer the turn the restart cut off (archived, or a
+   * user, limit-resume or a held send gave it a new message since `cutAt`), or null when it still is.
+   */
+  changedSince(agentId: string, cutAt: string | null): Promise<string | null>;
   /** The session's account is at a limit: the reset time when known, null when not. Undefined when it is ready. */
   limitedUntil(agentId: string): Promise<Date | null | undefined>;
-  sendContinue(agentId: string): Promise<void>;
+  /** Sends the continue prompt; refuses at the provider handoff if the session got a message after `cutAt`. */
+  sendContinue(agentId: string, cutAt: string | null): Promise<void>;
 }
 
 export interface ReviveDeps {
@@ -236,9 +242,12 @@ async function continueOne(
     result.closed.push({ id, name, reason: reasonOf(error) });
     return;
   }
-  const refusal = sessions.refusal(id);
-  if (refusal) {
-    logger.info({ agentId: id, reason: refusal }, "Revive on restart: no continue prompt");
+  // The boot snapshot is at least the settle time old: read the session again so it is never resumed twice.
+  const cutAt = record.lastUserMessageAt ?? null;
+  const skip = async () => sessions.refusal(id) ?? (await sessions.changedSince(id, cutAt));
+  const before = await skip();
+  if (before) {
+    logger.info({ agentId: id, reason: before }, "Revive on restart: no continue prompt");
     return;
   }
   const limited = await sessions.limitedUntil(id);
@@ -246,8 +255,13 @@ async function continueOne(
     result.closed.push({ id, name, reason: limitReason(limited) });
     return;
   }
+  const last = await skip();
+  if (last) {
+    logger.info({ agentId: id, reason: last }, "Revive on restart: no continue prompt");
+    return;
+  }
   try {
-    await sessions.sendContinue(id);
+    await sessions.sendContinue(id, cutAt);
     result.continued.push(id);
   } catch (error) {
     result.closed.push({ id, name, reason: reasonOf(error) });
@@ -268,11 +282,20 @@ function defaultSessions(deps: ReviveDeps): ReviveSessions {
     if (live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
     return null;
   };
+  const liveMessageAt = (id: string) =>
+    agentManager.getAgent(id)?.lastUserMessageAt?.toISOString() ?? null;
   return {
     load: async (id) => {
       await ensureUnarchivedAgentLoaded(id, { agentManager, agentStorage, logger });
     },
     refusal,
+    changedSince: async (id, cutAt) => {
+      const stored = await agentStorage.get(id);
+      if (!stored || stored.archivedAt) return "archived or removed since the restart";
+      if ((stored.lastUserMessageAt ?? null) !== cutAt || liveMessageAt(id) !== cutAt)
+        return "a new message arrived since the restart";
+      return null;
+    },
     limitedUntil: async (id) => {
       const marker = agentManager.getAgent(id)?.labels[LIMIT_RESUME_AT_LABEL];
       const markerAt = marker ? Date.parse(marker) : NaN;
@@ -282,12 +305,17 @@ function defaultSessions(deps: ReviveDeps): ReviveSessions {
       if (!stop || stop.kind === "network") return undefined;
       return stop.resetAt && stop.resetAt > now().getTime() ? new Date(stop.resetAt) : null;
     },
-    sendContinue: async (id) => {
+    sendContinue: async (id, cutAt) => {
       const live = agentManager.getAgent(id);
       if (!live) throw new Error("session not loaded");
       const checkCurrent = () => {
         const current = agentManager.getAgent(id);
-        if (!current || current.instanceId !== live.instanceId || refusal(id))
+        if (
+          !current ||
+          current.instanceId !== live.instanceId ||
+          refusal(id) ||
+          liveMessageAt(id) !== cutAt
+        )
           throw new Error("Continue after restart refused");
       };
       checkCurrent();
