@@ -599,7 +599,8 @@ export default function contribute(
   });
   // One-shot model call for apps: a pooled account, no tools, no agent or workspace record (server/ask.mjs).
   const askJobs = createAskJobs({
-    run: (input) => askOnce({ root: poolRoot(), keychain: createKeychain(), input }),
+    run: (input: Parameters<typeof askOnce>[0]["input"]) =>
+      askOnce({ root: poolRoot(), keychain: createKeychain(), input }),
   });
   handle(askRpc, (input) => {
     if (authError) throw new Error(authError);
