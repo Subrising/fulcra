@@ -807,7 +807,7 @@ features	M	4	4	packages/app/e2e/browser/settings-navigation.spec.ts
 features	A	105	0	packages/app/e2e/browser/sidebar-background-work.spec.ts
 features	A	182	0	packages/app/e2e/browser/sidebar-busy-quiet-hosts.spec.ts
 features	M	16	71	packages/app/e2e/browser/sidebar-help.spec.ts
-features	A	464	0	packages/app/e2e/browser/sidebar-leads-scroll.spec.ts
+features	A	495	0	packages/app/e2e/browser/sidebar-leads-scroll.spec.ts
 features	A	160	0	packages/app/e2e/browser/sidebar-multihost-offline.spec.ts
 features	M	6	0	packages/app/e2e/browser/sidebar-nav-settings.spec.ts
 features	M	27	2	packages/app/e2e/support/helpers/command-center-file-search.ts
@@ -884,12 +884,12 @@ features	M	78	58	packages/app/src/components/left-sidebar.tsx
 features	M	1	1	packages/app/src/components/message.tsx
 features	M	6	30	packages/app/src/components/schedules/schedule-form-sheet.tsx
 features	M	22	6	packages/app/src/components/settings/index.tsx
-features	M	148	1	packages/app/src/components/sidebar-callout.test.tsx
+features	M	149	1	packages/app/src/components/sidebar-callout.test.tsx
 features	M	91	0	packages/app/src/components/sidebar-workspace-list.test.tsx
 features	M	92	8	packages/app/src/components/sidebar-workspace-list.tsx
 features	A	42	0	packages/app/src/components/sidebar/background-work-badge.tsx
 features	M	2	1	packages/app/src/components/sidebar/display-preferences/menu.tsx
-features	A	103	0	packages/app/src/components/sidebar/pinned-section-header.test.tsx
+features	A	108	0	packages/app/src/components/sidebar/pinned-section-header.test.tsx
 features	M	92	4	packages/app/src/components/sidebar/pinned-section-header.tsx
 features	A	8	0	packages/app/src/components/sidebar/sidebar-footer-size.ts
 features	M	22	3	packages/app/src/components/sidebar/sidebar-header-row.tsx
@@ -1401,7 +1401,7 @@ plugin-host	M	5	5	packages/app/src/plugins/hosts/index.test.ts
 plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
-plugin-host	A	367	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
+plugin-host	A	369	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
 plugin-host	A	1227	0	packages/app/src/plugins/prime-sidebar.test.tsx
 plugin-host	A	1255	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
