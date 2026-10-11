@@ -39,6 +39,7 @@ import {
   useSidebarWorkspaceTrailing,
   type SidebarWorkspaceTrailing,
 } from "@/components/sidebar/workspace-trailing";
+import { sidebarTouchStyles, useSidebarTouchRows } from "@/components/sidebar/sidebar-touch";
 
 function noop() {}
 
@@ -234,6 +235,7 @@ function WorkspaceRowBody({
 }: WorkspaceRowBodyProps) {
   const isCompact = useIsCompactFormFactor();
   const isTouchPlatform = platformIsNative || isCompact;
+  const touchRows = useSidebarTouchRows();
   const [isPressed, setIsPressed] = useState(false);
   const trailing = useSidebarWorkspaceTrailing();
   const draggable = Boolean(drag);
@@ -279,6 +281,7 @@ function WorkspaceRowBody({
           isPressed,
           selected,
           isHovered,
+          touchRows,
         });
         const backdrop = getSidebarRowBackdrop({ isDragging, isPressed, selected, isHovered });
         return (
@@ -463,14 +466,17 @@ function getWorkspaceRowStyle({
   isPressed,
   selected,
   isHovered,
+  touchRows,
 }: {
   isDragging: boolean;
   isPressed: boolean;
   selected: boolean;
   isHovered: boolean;
+  touchRows: boolean;
 }) {
   return [
     styles.workspaceRow,
+    touchRows && sidebarTouchStyles.stack,
     isHovered && styles.workspaceRowHovered,
     selected && styles.sidebarRowSelected,
     isDragging && styles.workspaceRowDragging,

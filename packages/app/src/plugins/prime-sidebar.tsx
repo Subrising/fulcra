@@ -3,7 +3,16 @@ import { Pressable, Text, View } from "react-native";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useFetchQuery } from "@/data/query";
-import { Crown, Network, Plus, RefreshCw, Users } from "lucide-react-native";
+import {
+  ChevronDown,
+  ChevronRight,
+  Crown,
+  Network,
+  Plus,
+  RefreshCw,
+  Users,
+} from "lucide-react-native";
+import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
 import { router } from "expo-router";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import {
@@ -37,6 +46,8 @@ import type { Theme } from "@/styles/theme";
 const mutedColor = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const ThemedCrown = withUnistyles(Crown);
 const ThemedUsers = withUnistyles(Users);
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedPlus = withUnistyles(Plus);
 
 // The leads at the top of the sidebar: a one-click Team map, then the main assistant and every project lead with a
@@ -165,6 +176,13 @@ export function PrimeSidebarRows({
     void refetchProjects();
   }, [refetch, refetchFleet, refetchProjects]);
   const available = !query.isError && query.data?.available === true;
+  // FU-62: folding Leads keeps Pinned and Working in view on a small screen; the choice is remembered.
+  const leadsCollapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedLeads);
+  const toggleLeads = useSidebarCollapsedSectionsStore((state) => state.toggleLeadsCollapsed);
+  const leadsToggle = useMemo(
+    () => <LeadsCollapseToggle collapsed={leadsCollapsed} onToggle={toggleLeads} />,
+    [leadsCollapsed, toggleLeads],
+  );
   const nodes = new Map((fleet.data?.nodes ?? []).map((node) => [node.id, node]));
   const projectName = new Map((projects.data?.projects ?? []).map((p) => [p.id, p.name]));
   return (
@@ -184,33 +202,84 @@ export function PrimeSidebarRows({
         onPress={leadership}
         variant="compact"
         testID="sidebar-top-primes"
+        trailing={leadsToggle}
+        tall
       />
+      {leadsCollapsed ? null : (
+        <LeadsBody
+          available={available}
+          failure={query.error ?? query.failureReason}
+          hostLabel={hostLabel}
+          retry={retry}
+        >
+          {available && !mainAssistant(query.data!.primes) ? (
+            <MainAssistantChoice serverId={serverId} leadership={leadership} />
+          ) : null}
+          <LeadRows
+            serverId={serverId}
+            directory={available ? query.data! : null}
+            nodes={nodes}
+            projectName={projectName}
+            projectsKnown={projects.data !== undefined}
+            navigation={navigation}
+            leadership={leadership}
+            onBeforeNavigate={onBeforeNavigate}
+          />
+        </LeadsBody>
+      )}
+    </>
+  );
+}
+
+/** The Leads rows below their header: a loading or failure row until the directory reads. */
+function LeadsBody({
+  available,
+  failure,
+  hostLabel,
+  retry,
+  children,
+}: {
+  available: boolean;
+  failure: unknown;
+  hostLabel: string;
+  retry: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
       {available ? null : (
         <SidebarHeaderRow
           icon={RefreshCw}
-          label={
-            (query.error ?? query.failureReason)
-              ? leadsFailureLabel(query.error ?? query.failureReason, hostLabel)
-              : "Loading leads…"
-          }
+          label={failure ? leadsFailureLabel(failure, hostLabel) : "Loading leads…"}
           variant="compact"
           onPress={retry}
         />
       )}
-      {available && !mainAssistant(query.data!.primes) ? (
-        <MainAssistantChoice serverId={serverId} leadership={leadership} />
-      ) : null}
-      <LeadRows
-        serverId={serverId}
-        directory={available ? query.data! : null}
-        nodes={nodes}
-        projectName={projectName}
-        projectsKnown={projects.data !== undefined}
-        navigation={navigation}
-        leadership={leadership}
-        onBeforeNavigate={onBeforeNavigate}
-      />
+      {children}
     </>
+  );
+}
+
+/** FU-62: the arrow on the Leads header. The header itself still opens the Leadership page. */
+function LeadsCollapseToggle({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const Chevron = collapsed ? ThemedChevronRight : ThemedChevronDown;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={collapsed ? "Show leads" : "Hide leads"}
+      aria-expanded={!collapsed}
+      onPress={onToggle}
+      style={styles.collapse}
+      testID="sidebar-leads-collapse"
+    >
+      <Chevron size={14} uniProps={mutedColor} />
+    </Pressable>
   );
 }
 
@@ -706,14 +775,7 @@ function RememberedMainAssistantRow({
           style={styles.main}
         >
           <ThemedCrown size={14} uniProps={mutedColor} />
-          <View style={styles.text}>
-            <Text style={styles.title} numberOfLines={2}>
-              {title}
-            </Text>
-            <Text style={styles.status} numberOfLines={1}>
-              {offline ? "Not connected" : "Status unknown"}
-            </Text>
-          </View>
+          <LeadLine title={title} status={offline ? "Not connected" : "Status unknown"} />
         </Pressable>
       </View>
     </View>
@@ -845,14 +907,7 @@ function ChatLeadRow({
           style={styles.main}
         >
           <ThemedUsers size={14} uniProps={mutedColor} />
-          <View style={styles.text}>
-            <Text style={styles.title} numberOfLines={2}>
-              {lead.title}
-            </Text>
-            <Text style={styles.status} numberOfLines={2}>
-              {status}
-            </Text>
-          </View>
+          <LeadLine title={lead.title} status={status} />
         </Pressable>
       </View>
     </View>
@@ -890,14 +945,7 @@ function RememberedLeadRow({
           style={styles.main}
         >
           <ThemedUsers size={14} uniProps={mutedColor} />
-          <View style={styles.text}>
-            <Text style={styles.title} numberOfLines={2}>
-              {lead.title}
-            </Text>
-            <Text style={styles.status} numberOfLines={2}>
-              {status}
-            </Text>
-          </View>
+          <LeadLine title={lead.title} status={status} />
         </Pressable>
       </View>
     </View>
@@ -982,14 +1030,7 @@ function LeadRow({
           style={styles.main}
         >
           <Icon size={14} uniProps={mutedColor} />
-          <View style={styles.text}>
-            <Text style={styles.title} numberOfLines={2}>
-              {title}
-            </Text>
-            <Text style={styles.status} numberOfLines={2}>
-              {status}
-            </Text>
-          </View>
+          <LeadLine title={title} status={status} />
         </Pressable>
         {canOpen && !readOnly ? (
           <Pressable
@@ -1013,6 +1054,17 @@ function LeadRow({
         />
       ) : null}
     </View>
+  );
+}
+
+/** FU-62: one line per lead, "title · status", so a long Leads list does not fill the sidebar. */
+function LeadLine({ title, status }: { title: string; status: string }) {
+  return (
+    <Text style={styles.text} numberOfLines={1}>
+      <Text style={styles.title}>{title}</Text>
+      <Text style={styles.status}>{" · "}</Text>
+      <Text style={styles.status}>{status}</Text>
+    </Text>
   );
 }
 
@@ -1099,6 +1151,13 @@ const styles = StyleSheet.create((theme) => ({
   text: { flex: 1, minWidth: 0 },
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
   status: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm - 1 },
+  collapse: {
+    minWidth: 48,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.borderRadius.md,
+  },
   plus: {
     minWidth: 48,
     minHeight: 48,

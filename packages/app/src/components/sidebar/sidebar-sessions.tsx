@@ -11,6 +11,7 @@ import {
 } from "@/hooks/sidebar-session-model";
 import { SessionAccountInfo } from "@/sessions/session-account-info";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
+import { sidebarTouchStyles, useSidebarTouchRows } from "./sidebar-touch";
 
 const PREVIEW_LIMIT = 8;
 
@@ -38,6 +39,7 @@ export function SidebarSessions({
   const rows = useStoreWithEqualityFn(useSessionStore, selector, equalSidebarSessionRows);
   const [expanded, setExpanded] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const headingStyle = useSidebarTouchRows() ? touchStyles.heading : styles.heading;
   const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
   const toggleExpanded = useCallback(() => setExpanded((value) => !value), []);
   const toggleAll = useCallback(() => setShowAll((value) => !value), []);
@@ -51,7 +53,7 @@ export function SidebarSessions({
         accessibilityState={accessibilityState}
         accessibilityLabel={`All sessions (${rows.length})`}
         testID="sidebar-all-sessions-toggle"
-        style={styles.heading}
+        style={headingStyle}
       >
         <Text style={styles.headingText}>All sessions ({rows.length})</Text>
       </Pressable>
@@ -69,7 +71,7 @@ export function SidebarSessions({
           accessibilityRole="button"
           onPress={toggleAll}
           testID="sidebar-all-sessions-more"
-          style={styles.heading}
+          style={headingStyle}
         >
           <Text style={styles.metadata}>
             {showAll ? "Show fewer sessions" : `Show all ${rows.length} sessions`}
@@ -101,13 +103,14 @@ function SessionItem({
     onSelect?.();
     navigateToAgent({ serverId: row.serverId, agentId: row.agentId, workspaceId: row.workspaceId });
   }, [onSelect, row.serverId, row.agentId, row.workspaceId]);
+  const openStyle = useSidebarTouchRows() ? touchStyles.open : styles.open;
   return (
     <View style={styles.row} testID={`sidebar-session-${row.serverId}-${row.agentId}`}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={row.lead ? `${row.title}. ${row.lead}` : row.title}
         testID={`sidebar-session-open-${row.serverId}-${row.agentId}`}
-        style={styles.open}
+        style={openStyle}
         onPress={openSession}
       >
         <Text numberOfLines={1} style={styles.title}>
@@ -154,3 +157,9 @@ const styles = StyleSheet.create((theme) => ({
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
   metadata: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
 }));
+
+const touchStyles = {
+  heading: [styles.heading, sidebarTouchStyles.stack],
+  open: [styles.open, sidebarTouchStyles.stack],
+};
+

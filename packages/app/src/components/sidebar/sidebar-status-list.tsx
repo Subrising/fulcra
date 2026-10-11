@@ -1,3 +1,4 @@
+import { SidebarTopContent } from "@/components/sidebar/sidebar-top-content";
 import {
   memo,
   useCallback,
@@ -207,6 +208,7 @@ export function SidebarStatusWorkspaceList({
   );
   const content = (
     <>
+      <SidebarTopContent inset />
       {pinnedWorkspaces.length > 0 ? (
         <View style={styles.pinnedSection} testID="sidebar-pinned-section">
           <PinnedSectionHeader collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} />
