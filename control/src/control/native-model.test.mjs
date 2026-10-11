@@ -130,7 +130,11 @@ test("creation asks this function for the model instead of choosing one inline",
     0,
     "create() not found in native.mjs; this guard is reading the wrong text",
   );
-  assert.match(create, /resolveProviderModel\(client, creationModel\(a\.provider, chosen\), cwd\)/);
+  assert.match(
+    create,
+    /resolveProviderModel\(client, creationModel\(a\.provider, chosen\), cwd, \{\s*worker: uuidLike\(parent\),?\s*\}\)/,
+    "only a create that names a parent is a worker",
+  );
   // And nothing else in create() may name a provider inventory or a model of its own (the capability check reads the
   // inventory inside provider-model.mjs, not here).
   assert.doesNotMatch(create, /listModels|providers\[/);
@@ -162,7 +166,7 @@ test("a session the controller creates uses the host's worker default, else the 
     ],
   };
   assert.equal(
-    await resolveProviderModel(hostClient(withWorker), "claude", "/owned"),
+    await resolveProviderModel(hostClient(withWorker), "claude", "/owned", { worker: true }),
     "claude/claude-sonnet-5-5",
   );
   // An old Claude Code does not offer it: the host's default is used.
@@ -171,7 +175,17 @@ test("a session the controller creates uses the host's worker default, else the 
       hostClient({ ...withWorker, models: withWorker.models.slice(0, 1) }),
       "claude",
       "/owned",
+      { worker: true },
     ),
+    "claude/claude-opus-5-5",
+  );
+  // A session the owner creates (no parent) keeps the host's default (0.2.14, review of 0.2.13).
+  assert.equal(
+    await resolveProviderModel(hostClient(withWorker), "claude", "/owned"),
+    "claude/claude-opus-5-5",
+  );
+  assert.equal(
+    await resolveProviderModel(hostClient(withWorker), "claude", "/owned", { worker: false }),
     "claude/claude-opus-5-5",
   );
   // An unselectable worker default is ignored; an explicit provider/model is returned as given.
@@ -180,7 +194,7 @@ test("a session the controller creates uses the host's worker default, else the 
     models: [withWorker.models[0], { ...withWorker.models[1], isSelectable: false }],
   };
   assert.equal(
-    await resolveProviderModel(hostClient(hidden), "claude", "/owned"),
+    await resolveProviderModel(hostClient(hidden), "claude", "/owned", { worker: true }),
     "claude/claude-opus-5-5",
   );
   assert.equal(
