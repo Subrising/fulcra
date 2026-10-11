@@ -24,11 +24,13 @@ export interface AccountState {
 }
 export function accountsDir(root: string): string;
 export function readAccounts(root: string): AccountState;
+export function readAccountsAsync(root: string): Promise<AccountState>;
 export function update<T>(root: string, fn: (s: AccountState) => T | Promise<T>): Promise<T>;
 export function withStoreLock<T>(root: string, fn: () => T | Promise<T>): Promise<T>;
 export function accountStatus(a: Account, now?: number): { state: string; until?: string };
 export const WEEKLY_LAUNCH_CAP_PCT: number;
 export function readUsage(root: string, now?: number): Record<string, number>;
+export function readUsageAsync(root: string, now?: number): Promise<Record<string, number>>;
 export function choose(
   s: AccountState,
   provider: string,

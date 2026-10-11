@@ -28,6 +28,8 @@ import {
   switchSession,
   sessionAccounts,
   readUsage,
+  readAccountsAsync,
+  readUsageAsync,
 } from "./accounts.mjs";
 
 const T0 = Date.parse("2026-10-01T00:00:00Z");
@@ -975,4 +977,44 @@ test("a launch that names an account is pinned to it; a limited or unknown name 
   await assert.rejects(launch(S(3), { FULCRA_ACCOUNT_REQUEST: "Nobody" }));
   await rotate(root, S(2), "claude", { resetAt: new Date(T0 + 3600000).toISOString() }, T0 + 10);
   await assert.rejects(launch(S(4), { FULCRA_ACCOUNT_REQUEST: "Work" }));
+});
+
+// FU-77: the store reads and writes do not block the daemon's main thread on the disk.
+test("the account store updates and launch assignment use no synchronous disk read, and the async read matches the sync one", async () => {
+  const root = scratch();
+  const sites = [];
+  globalThis[Symbol.for("fulcra.syncIoMeter")] = {
+    timed: (site, call) => (sites.push(site), call()),
+  };
+  try {
+    await addAccount(root, { provider: "claude", name: "Work" }, T0);
+    await addAccount(root, { provider: "claude", name: "Tommi" }, T0);
+    await assign(root, S(1), "claude", T0);
+    await update(root, (s) => {
+      s.policy = "spread";
+    });
+    assert.deepEqual(sites, [], "no accounts.read or accounts.usage call on the main thread");
+    assert.deepEqual(await readAccountsAsync(root), readAccounts(root));
+    assert.deepEqual(await readUsageAsync(root, T0), readUsage(root, T0));
+    assert.deepEqual(
+      sites,
+      ["accounts.read", "accounts.usage"],
+      "only the explicit sync reads are counted",
+    );
+  } finally {
+    delete globalThis[Symbol.for("fulcra.syncIoMeter")];
+  }
+});
+
+test("two updates at once both land, and a missing store reads as empty", async () => {
+  const root = scratch();
+  assert.equal((await readAccountsAsync(root)).accounts.length, 0);
+  await Promise.all([
+    addAccount(root, { provider: "claude", name: "Work" }, T0),
+    addAccount(root, { provider: "claude", name: "Tommi" }, T0),
+  ]);
+  assert.deepEqual((await readAccountsAsync(root)).accounts.map((a) => a.name).sort(), [
+    "Tommi",
+    "Work",
+  ]);
 });

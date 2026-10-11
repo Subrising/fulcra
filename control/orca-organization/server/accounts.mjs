@@ -16,6 +16,7 @@
 //             the state db in the home it runs in).
 // Nothing here is logged, returned to a client, or placed in argv.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -53,14 +54,7 @@ const empty = () => ({
 });
 
 // ---- store
-export function readAccounts(root) {
-  let raw;
-  try {
-    raw = fs.readFileSync(file(root), "utf8");
-  } catch (e) {
-    if (e.code === "ENOENT") return empty();
-    throw e;
-  }
+function parseAccounts(raw) {
   const s = JSON.parse(raw);
   if (s?.v !== 1 || !Array.isArray(s.accounts)) throw Error("Unreadable account store");
   return {
@@ -75,9 +69,35 @@ export function readAccounts(root) {
     ),
   };
 }
-function writeAccounts(root, s) {
+// FU-77: the daemon puts a meter on globalThis; without it the call just runs.
+const timed = (site, call) => {
+  const meter = globalThis[Symbol.for("fulcra.syncIoMeter")];
+  return meter ? meter.timed(site, call) : call();
+};
+export function readAccounts(root) {
+  let raw;
+  try {
+    raw = timed("accounts.read", () => fs.readFileSync(file(root), "utf8"));
+  } catch (e) {
+    if (e.code === "ENOENT") return empty();
+    throw e;
+  }
+  return parseAccounts(raw);
+}
+// The same read without blocking the daemon's main thread on the disk (FU-77). Use this one in async code.
+export async function readAccountsAsync(root) {
+  let raw;
+  try {
+    raw = await fsp.readFile(file(root), "utf8");
+  } catch (e) {
+    if (e.code === "ENOENT") return empty();
+    throw e;
+  }
+  return parseAccounts(raw);
+}
+async function writeAccounts(root, s) {
   const dir = accountsDir(root);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const ids = Object.keys(s.assignments);
   if (ids.length > MAX_ASSIGNMENTS)
     for (const id of ids
@@ -86,33 +106,33 @@ function writeAccounts(root, s) {
       delete s.assignments[id];
   s.rotations = s.rotations.slice(-MAX_ROTATIONS);
   const tmp = path.join(dir, `.accounts-${randomUUID()}.json`);
-  fs.writeFileSync(tmp, JSON.stringify(s, null, 1) + "\n", { mode: 0o600, flag: "wx" });
-  fs.renameSync(tmp, file(root));
+  await fsp.writeFile(tmp, JSON.stringify(s, null, 1) + "\n", { mode: 0o600, flag: "wx" });
+  await fsp.rename(tmp, file(root));
 }
 // One writer at a time across the plugin host and the controller (separate processes): an exclusive lock file; a lock
 // older than LOCK_STALE_MS is taken over (a crashed writer), since every write is a single rename.
 // The lock alone is withStoreLock, so the other Fulcra-owned files in this directory (role defaults) take the same one.
 export async function update(root, fn) {
   return withStoreLock(root, async () => {
-    const s = readAccounts(root);
+    const s = await readAccountsAsync(root);
     const out = await fn(s);
-    writeAccounts(root, s);
+    await writeAccounts(root, s);
     return out;
   });
 }
 export async function withStoreLock(root, fn) {
   const dir = accountsDir(root);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const lock = path.join(dir, ".lock");
   for (let i = 0; ; i++) {
     try {
-      fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      await fsp.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
       break;
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
       try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.rmSync(lock, { force: true });
+        if (Date.now() - (await fsp.stat(lock)).mtimeMs > LOCK_STALE_MS) {
+          await fsp.rm(lock, { force: true });
           continue;
         }
       } catch {}
@@ -123,7 +143,7 @@ export async function withStoreLock(root, fn) {
   try {
     return await fn();
   } finally {
-    fs.rmSync(lock, { force: true });
+    await fsp.rm(lock, { force: true });
   }
 }
 
@@ -144,10 +164,10 @@ export function activeCount(s, accountId) {
 export const WEEKLY_LAUNCH_CAP_PCT = 90;
 // Each account's weekly use in percent, from <root>/accounts/usage.json (the daemon writes it from its usage readings).
 // A figure past its reset is dropped: that window has started over. Unreadable or absent: {} (no account is held back).
-export function readUsage(root, now = Date.now()) {
+function parseUsage(text, now) {
   let raw;
   try {
-    raw = JSON.parse(fs.readFileSync(path.join(accountsDir(root), "usage.json"), "utf8"));
+    raw = JSON.parse(text);
   } catch {
     return {};
   }
@@ -159,6 +179,25 @@ export function readUsage(root, now = Date.now()) {
     out[id] = x.weeklyUsedPct;
   }
   return out;
+}
+export function readUsage(root, now = Date.now()) {
+  try {
+    return parseUsage(
+      timed("accounts.usage", () =>
+        fs.readFileSync(path.join(accountsDir(root), "usage.json"), "utf8"),
+      ),
+      now,
+    );
+  } catch {
+    return {};
+  }
+}
+export async function readUsageAsync(root, now = Date.now()) {
+  try {
+    return parseUsage(await fsp.readFile(path.join(accountsDir(root), "usage.json"), "utf8"), now);
+  } catch {
+    return {};
+  }
 }
 // The account a NEW launch should use: available ones only -- the provider's default account while it is ready, else by
 // the pool's policy. `except` excludes accounts (the one that just hit its limit). `usage` (weekly percent by account)
@@ -340,7 +379,7 @@ export async function setPolicy(root, policy) {
 // machine's own login, as before the pool). When every account is limited -> the account with the earliest reset
 // (the launch will stop at the limit again, and the controller waits for that reset), flagged allLimited.
 export async function assign(root, sessionId, provider, now = Date.now()) {
-  const usage = readUsage(root, now);
+  const usage = await readUsageAsync(root, now);
   return update(root, (s) => assignInStore(s, sessionId, provider, now, [], usage));
 }
 // `usage` applies only when the session needs an account: a session keeps its own account (no automatic switch).
@@ -517,7 +556,7 @@ export async function switchSession(
     return { to, from: from ?? null };
   };
   if (takeOver) {
-    const r = pick(readAccounts(root));
+    const r = pick(await readAccountsAsync(root));
     if (r.refused) return no(r.refused);
     if (r.same) return { ok: true, message: `This session already uses ${r.same}.` };
     let t;
@@ -947,7 +986,7 @@ export function sessionOpenHook({
         seen = [],
         sessionId = request.agentId,
         provider = request.provider;
-      const usage = readUsage(storeRoot, now());
+      const usage = await readUsageAsync(storeRoot, now());
       let expected,
         started = false;
       // Absence is history unknown: the bounded store prunes old assignments. Only an ordinary
@@ -997,7 +1036,7 @@ export function sessionOpenHook({
           for (let readAttempt = 0; readAttempt < 2; readAttempt++) {
             // A retry is still this exact reservation, never permission to select
             // another account or revive a revoked one after awaiting Keychain.
-            const current = readAccounts(storeRoot);
+            const current = await readAccountsAsync(storeRoot);
             const account = current.accounts.find(
               (a) => a.id === r.account.id && a.provider === provider,
             );
