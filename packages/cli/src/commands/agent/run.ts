@@ -21,6 +21,7 @@ import { collectMultiple } from "../../utils/command-options.js";
 import { resolveProviderAndModel } from "../../utils/provider-model.js";
 import { buildWorkspaceSource } from "../workspace/create.js";
 import { ACCOUNT_REQUEST_ENV, resolveRunAccount } from "../account.js";
+import { buildRunToolOptions } from "./mcp-options.js";
 
 export { resolveProviderAndModel } from "../../utils/provider-model.js";
 
@@ -71,6 +72,16 @@ export function addRunOptions(cmd: Command): Command {
       .option(
         "--env <key=value>",
         "Set environment variable(s) for the agent process (can be used multiple times)",
+        collectMultiple,
+        [],
+      )
+      .option(
+        "--mcp-config <file>",
+        "JSON file with MCP servers for this agent ({ mcpServers: { name: {...} } })",
+      )
+      .option(
+        "--preapprove <server.tool>",
+        "Run this MCP tool without a prompt (repeatable; the server must be in --mcp-config)",
         collectMultiple,
         [],
       )
@@ -139,6 +150,8 @@ export interface AgentRunOptions extends CommandOptions {
   cwd?: string;
   env?: string[];
   account?: string;
+  mcpConfig?: string;
+  preapprove?: string[];
   label?: string[];
   waitTimeout?: string;
   outputSchema?: string;
@@ -663,6 +676,11 @@ export async function runRunCommand(
       env[ACCOUNT_REQUEST_ENV] = wanted;
     }
     const requestEnv = Object.keys(env).length > 0 ? env : undefined;
+    // FU-107: the MCP servers and the tools that need no prompt go in the same create request.
+    const toolOptions = buildRunToolOptions({
+      mcpConfig: options.mcpConfig,
+      preapprove: options.preapprove,
+    });
 
     const callerAgentId = await resolveRunCallerAgentId(client);
     addReportingLine(labels, callerAgentId);
@@ -688,6 +706,7 @@ export async function runRunCommand(
             outputSchema,
             images,
             env: requestEnv,
+            ...toolOptions,
             labels: Object.keys(labels).length > 0 ? labels : undefined,
           });
         } else {
@@ -760,6 +779,7 @@ export async function runRunCommand(
       initialPrompt: withReportingLine(prompt, callerAgentId),
       images,
       env: requestEnv,
+      ...toolOptions,
       labels: Object.keys(labels).length > 0 ? labels : undefined,
     });
 
