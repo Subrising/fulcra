@@ -501,6 +501,8 @@ test("C12: mappings and links survive a controller restart; tracker item data is
 
 // Structural guard (mutation M21): nothing but the operator-gated RPC branch and the controller's own wiring
 // may reach the tracker records, so no channel message, seat lane or delegated tool can create a link.
+// Source text is compared with the quote style removed, so a formatter run cannot break this check.
+const doubleQuoted = (text) => text.replace(/'/g, '"');
 test("C14: tracker records are reachable only from the operator-gated RPC branch and controller wiring", () => {
   const root = path.dirname(new URL(import.meta.url).pathname),
     files = [];
@@ -515,18 +517,18 @@ test("C14: tracker records are reachable only from the operator-gated RPC branch
   walk(path.resolve(root, ".."));
   const touching = files
     .filter((f) => {
-      const s = fs.readFileSync(f, "utf8");
+      const s = doubleQuoted(fs.readFileSync(f, "utf8"));
       return (
         s.includes("control.trackers") ||
         s.includes("trackers(control)") ||
-        s.includes("from './trackers.mjs'")
+        s.includes('from "./trackers.mjs"')
       );
     })
     .map((f) => path.relative(root, f))
     .sort();
   assert.deepEqual(touching, ["rpc.mjs", "server.mjs"]);
-  const rpcSource = fs.readFileSync(path.join(root, "rpc.mjs"), "utf8"),
-    gate = rpcSource.indexOf("throw new Error('Operator authorization required')");
+  const rpcSource = doubleQuoted(fs.readFileSync(path.join(root, "rpc.mjs"), "utf8")),
+    gate = rpcSource.indexOf('throw new Error("Operator authorization required")');
   assert.ok(gate > 0);
   for (
     let i = rpcSource.indexOf("trackers(control)");
