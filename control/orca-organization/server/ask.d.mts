@@ -3,6 +3,7 @@ export class AskError extends Error {
 }
 export const MAX_ASK_TIMEOUT_MS: number;
 export const DEFAULT_ASK_TIMEOUT_MS: number;
+export const RATE_LIMIT_HOLD_MS: number;
 export function spawnClaudeOnce(o: {
   token: string;
   model: string;

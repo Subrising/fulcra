@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { parseLimitLine } from "../../src/control/usage-limits.mjs";
+import { parseLimitLine } from "./limit-line.mjs";
 import { accountStatus, choose, markAccountLimited, readAccounts, readUsage } from "./accounts.mjs";
 
 export class AskError extends Error {
@@ -81,14 +81,14 @@ export function spawnClaudeOnce({
     child.stderr.resume();
     child.on("error", (e) => {
       clearTimeout(timer);
-      fs.rmSync(scratch, { recursive: true, force: true });
+      removeScratch(scratch);
       reject(
         new AskError(`The Claude CLI could not start: ${e.code ?? e.message}`, "CLI_UNAVAILABLE"),
       );
     });
     child.on("close", () => {
       clearTimeout(timer);
-      fs.rmSync(scratch, { recursive: true, force: true });
+      removeScratch(scratch);
       if (timedOut) return reject(new AskError("The call timed out", "TIMEOUT"));
       try {
         resolve(JSON.parse(out));
@@ -96,6 +96,8 @@ export function spawnClaudeOnce({
         reject(new AskError("The Claude CLI gave no JSON result", "BAD_RESULT"));
       }
     });
+    // EPIPE when the CLI exits before it reads the prompt: the close handler reports the failure.
+    child.stdin.on("error", () => {});
     child.stdin.end(prompt);
   });
 }
@@ -108,6 +110,17 @@ const namedAccount = (state, name) => {
   const wanted = String(name).trim().toLowerCase();
   return state.accounts.find((a) => a.provider === "claude" && a.name.toLowerCase() === wanted);
 };
+
+// On Windows a file can still be open (antivirus, an orphan): removal throws EBUSY or EPERM. A scratch folder that
+// stays is better than a throw inside an event handler, which would stop the plugin process.
+function removeScratch(scratch) {
+  try {
+    fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 3 });
+  } catch {}
+}
+
+/** A 429 with no limit line (a short rate limit, not a usage limit) holds the account this long, not 5 hours. */
+export const RATE_LIMIT_HOLD_MS = 10 * 60_000;
 
 /**
  * One call. Returns { output, account, model, costUsd }. With `account` named, only that account is used and a limit
@@ -181,7 +194,9 @@ export async function askOnce({
       const marked = await markAccountLimited(
         root,
         picked.id,
-        { resetAt: parsed?.resetAt ?? null, kind: parsed?.kind ?? "usage", note: line },
+        parsed
+          ? { resetAt: parsed.resetAt, kind: parsed.kind, note: line }
+          : { resetAt: new Date(at + RATE_LIMIT_HOLD_MS).toISOString(), kind: "rate", note: line },
         at,
       );
       tried.push({
