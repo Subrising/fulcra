@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { addAccount, readAccounts, setAccount } from "./accounts.mjs";
-import { askOnce, AskError } from "./ask.mjs";
+import { askOnce, AskError, spawnClaudeOnce } from "./ask.mjs";
 
 const T0 = Date.parse("2026-10-11T00:00:00Z");
 const scratch = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-ask-test-")));
@@ -206,3 +206,65 @@ test("the real weekly-limit result of the Claude CLI (11 Oct, exit 1, is_error, 
   const work = readAccounts(root).accounts.find((a) => a.name === "Work");
   assert.deepEqual([work.limitKind, work.limitedUntil], ["weekly", "2026-10-12T22:00:00.000Z"]);
 });
+
+test("a 429 with no limit line holds the account for a short time only, and the call moves on", async () => {
+  const { root } = await pool();
+  let calls = 0;
+  const rate = { is_error: true, api_error_status: 429, result: "Rate limited, try again shortly" };
+  const r = await askOnce({
+    root,
+    keychain,
+    input: input(),
+    now: () => T0,
+    spawnClaude: async () => (++calls === 1 ? rate : ok()),
+  });
+  assert.equal(r.account, "Personal");
+  const work = readAccounts(root).accounts.find((a) => a.name === "Work");
+  assert.deepEqual(
+    [work.limitKind, work.limitedUntil],
+    ["rate", new Date(T0 + 10 * 60_000).toISOString()],
+  );
+});
+
+test(
+  "a CLI that exits before it reads a large prompt fails the call; the EPIPE does not crash the process",
+  { skip: process.platform === "win32" },
+  async () => {
+    await assert.rejects(
+      spawnClaudeOnce({
+        token: "T",
+        model: "claude-haiku-5-5",
+        prompt: "x".repeat(5_000_000),
+        timeoutMs: 20_000,
+        bin: "/usr/bin/false",
+      }),
+      (e) => e instanceof AskError && e.code === "BAD_RESULT",
+    );
+  },
+);
+
+test(
+  "a scratch folder that cannot be removed does not throw; the answer still comes back",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async () => {
+    const dir = scratch();
+    const bin = path.join(dir, "fake-claude.sh");
+    // Leaves a folder that rmSync cannot empty (no write permission), then answers with its own scratch path.
+    fs.writeFileSync(
+      bin,
+      '#!/bin/sh\ncat > /dev/null\nmkdir locked && touch locked/f && chmod 500 locked\nprintf \'{"is_error":false,"result":"%s"}\' "$PWD"\n',
+      { mode: 0o700 },
+    );
+    const r = await spawnClaudeOnce({
+      token: "T",
+      model: "claude-haiku-5-5",
+      prompt: "hi",
+      timeoutMs: 20_000,
+      bin,
+    });
+    assert.equal(r.is_error, false);
+    fs.chmodSync(path.join(r.result, "locked"), 0o700);
+    fs.rmSync(r.result, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  },
+);
