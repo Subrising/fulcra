@@ -14,7 +14,6 @@ import { addReloadOptions, runReloadCommand } from "./reload.js";
 import { addImportOptions, runImportCommand } from "./import.js";
 import { runUpdateCommand } from "./update.js";
 import { runDetachCommand } from "./detach.js";
-import { runAdoptCommand } from "./adopt.js";
 import { addOpenOptions, runOpenCommand } from "./open.js";
 import { withOutput } from "../../output/index.js";
 import {
@@ -94,14 +93,6 @@ export function createAgentCommand(): Command {
       .description("Make a subagent independent without stopping or moving it")
       .argument("<id>", "Agent ID, prefix, or name"),
   ).action(withOutput(runDetachCommand));
-
-  addJsonAndDaemonHostOptions(
-    agent
-      .command("adopt")
-      .description("Make an existing chat the child of another chat (owner only)")
-      .argument("<child>", "Agent ID, prefix, or name of the chat to adopt")
-      .requiredOption("--parent <id>", "Agent ID, prefix, or name of the new parent chat"),
-  ).action(withOutput(runAdoptCommand));
 
   addJsonAndDaemonHostOptions(
     agent

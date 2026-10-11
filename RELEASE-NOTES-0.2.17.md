@@ -23,7 +23,6 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 ### Run and leads
 
 - Claude agents can use the permission mode "Allow List Only" (`dontAsk`): tools that are allowed run, and every other tool is refused without a permission prompt.
-- `fulcra agent adopt <child> --parent <id>` makes an existing chat the child of another chat. Only the owner's own connection can do this. It fails with a plain message for an unknown chat, the same chat, or a chat that has no provider session yet.
 - `fulcra run` uses the workspace that already owns the run directory, instead of creating a new workspace for each run. `--new-workspace` still creates one.
 - `fulcra run --output-schema` prints the agent id on standard error. With an explicit `--json`, the answer is `{"agentId": ..., "output": ...}`. Without `--json`, the output is the same as before.
 - A lead that turns idle while it owns open ledger items and has idle workers gets one short message that lists them. The daemon reads the project ledgers in `~/shared-vault/projects` (or `FULCRA_LEDGER_DIR`) and sends the message when the lead's turn ends. It sends it at most once per idle period, and never after a turn that a nudge started.
