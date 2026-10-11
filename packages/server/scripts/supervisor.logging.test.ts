@@ -29,6 +29,8 @@ async function runSupervisorFixture(options: {
   blockLogPath?: boolean;
   /** Close the reading end of the supervisor's stdout and stderr as soon as it starts. */
   closeOutput?: boolean;
+  /** A shorter forced-kill deadline than the 30 s default. */
+  terminationGraceMs?: number;
 }): Promise<{
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -62,6 +64,7 @@ async function runSupervisorFixture(options: {
         workerEnv: process.env,
         workerExecArgv: [],
         restartOnCrash: ${JSON.stringify(options.restartOnCrash ?? false)},
+        ${options.terminationGraceMs === undefined ? "" : `timings: { terminationGraceMs: ${options.terminationGraceMs} },`}
         logFile: {
           path: ${JSON.stringify(logPath)},
           rotate: { maxSize: "1m", maxFiles: 2 },
@@ -336,6 +339,7 @@ describe("supervisor durable logging", () => {
   test("forces shutdown when a worker ignores the graceful shutdown request", async () => {
     const result = await runSupervisorFixture({
       timeoutMs: 15_000,
+      terminationGraceMs: 2_000,
       workerSource: `
           process.send?.({ type: "paseo:shutdown", reason: "stalled_worker_shutdown" });
           setInterval(() => {}, 1_000);

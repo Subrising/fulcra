@@ -204,6 +204,7 @@ export function createChildSupervisor({
         log(`recovery refused: ${String(error?.message ?? error).slice(0, 200)}`);
         stopped = true;
         recoveryRefused = true;
+        scheduleStaleRecovery();
         return;
       }
       if (!stopped && restarts < maxRestarts) {
@@ -232,6 +233,27 @@ export function createChildSupervisor({
     } catch {
       terminate(owner);
     }
+  }
+  // FU-74: a refused recovery no longer waits for a person to press Retry. On the slow retry list it tries to clear the
+  // stale controller files and starts the controller when that works. An explicit stop() ends these tries.
+  function scheduleStaleRecovery() {
+    if (slowRetryMs.length === 0) return;
+    const delay = slowRetryMs[Math.min(slowRetries, slowRetryMs.length - 1)];
+    const attempt = ++slowRetries;
+    nextRetryAt = now() + delay;
+    cancelRestart = schedule(() => {
+      nextRetryAt = null;
+      if (!recoveryRefused || stopping || current) return;
+      if (!recoverStale()) {
+        log(`retry ${attempt}: the controller files are still held; trying again later`);
+        scheduleStaleRecovery();
+        return;
+      }
+      stopped = false;
+      recoveryRefused = false;
+      log(`retry ${attempt}: stale controller files cleared; starting the controller`);
+      launch();
+    }, delay);
   }
   const isReady = () => Boolean(current?.ready && !current.revoked && !stopped);
   return {
@@ -283,10 +305,14 @@ export function createChildSupervisor({
     },
     async stop() {
       if (stopping) return stopping;
-      if (stopped && !current) return;
-      stopped = true;
-      nextRetryAt = null;
+      // An explicit stop also ends a waiting retry after a refused recovery.
       cancelRestart();
+      nextRetryAt = null;
+      if (stopped && !current) {
+        recoveryRefused = false;
+        return;
+      }
+      stopped = true;
       const owner = current;
       if (!owner) return;
       revoke(owner);
