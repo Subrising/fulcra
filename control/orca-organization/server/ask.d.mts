@@ -1,6 +1,7 @@
 export class AskError extends Error {
   code: string;
 }
+export function refuseShellShim(command: string): void;
 export const MAX_ASK_TIMEOUT_MS: number;
 export const DEFAULT_ASK_TIMEOUT_MS: number;
 export function spawnClaudeOnce(o: {
