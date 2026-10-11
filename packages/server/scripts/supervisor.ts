@@ -7,7 +7,11 @@ import {
 import { signalProcessTree } from "../src/utils/tree-kill.js";
 
 const WORKER_HEARTBEAT_INTERVAL_MS = 1_000;
-const WORKER_TERMINATION_GRACE_MS = 10_000;
+// FU-74: every stop has a hard deadline. A worker that has not exited 30 s after the request is killed with its tree.
+const WORKER_TERMINATION_GRACE_MS = 30_000;
+// FU-74: a worker that answers no heartbeat for this long has a blocked main thread (no RPC, no signal handling);
+// it is restarted. Armed only after the worker's first answer, so a worker that never answers is left alone.
+const WORKER_UNRESPONSIVE_MS = 180_000;
 
 interface SupervisorLogFileOptions {
   path: string;
@@ -30,6 +34,9 @@ type WorkerLifecycleMessage =
   | {
       type: "paseo:restart";
       reason?: string;
+    }
+  | {
+      type: "paseo:worker-heartbeat";
     };
 
 interface SupervisorHeartbeatMessage {
@@ -58,6 +65,8 @@ interface SupervisorOptions {
   restartOnCrash?: boolean;
   onSupervisorExit?: () => Promise<void> | void;
   logFile?: SupervisorLogFileOptions;
+  /** Tests only: shorter liveness and termination times. */
+  timings?: { heartbeatIntervalMs?: number; terminationGraceMs?: number; unresponsiveMs?: number };
 }
 
 export interface SupervisorController {
@@ -89,6 +98,9 @@ function parseLifecycleMessage(msg: unknown): WorkerLifecycleMessage | null {
       return null;
     }
     return { type: "paseo:ready", listen, serverId };
+  }
+  if (type === "paseo:worker-heartbeat") {
+    return { type: "paseo:worker-heartbeat" };
   }
   if (type === "paseo:restart") {
     const reason = (msg as { reason?: unknown }).reason;
@@ -181,6 +193,9 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   const workerEnv = options.workerEnv ?? process.env;
   const workerExecArgv = options.workerExecArgv ?? ["--import", "tsx"];
   const resolveWorkerSpawnSpec = options.resolveWorkerSpawnSpec;
+  const heartbeatIntervalMs = options.timings?.heartbeatIntervalMs ?? WORKER_HEARTBEAT_INTERVAL_MS;
+  const terminationGraceMs = options.timings?.terminationGraceMs ?? WORKER_TERMINATION_GRACE_MS;
+  const unresponsiveMs = options.timings?.unresponsiveMs ?? WORKER_UNRESPONSIVE_MS;
 
   let child: ChildProcess | null = null;
   let restarting = false;
@@ -266,7 +281,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
           workerPid: currentChild.pid ?? null,
         });
       });
-    }, WORKER_TERMINATION_GRACE_MS);
+    }, terminationGraceMs);
     forceKillTimer.unref();
   };
 
@@ -299,8 +314,24 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
 
     const currentChild = child;
     let reachedReady = false;
+    let lastAnswerAt: number | null = null;
     // Serialize endpoint writes with exit/clear before allowing another worker to spawn.
     const heartbeat = setInterval(() => {
+      if (
+        lastAnswerAt !== null &&
+        child === currentChild &&
+        !restarting &&
+        !shuttingDown &&
+        Date.now() - lastAnswerAt > unresponsiveMs
+      ) {
+        writeLifecycleLog("Worker answered no heartbeat; restarting it", {
+          silentMs: Date.now() - lastAnswerAt,
+          workerPid: currentChild.pid ?? null,
+        });
+        lastAnswerAt = null;
+        requestRestart("worker_unresponsive");
+        return;
+      }
       const message: SupervisorHeartbeatMessage = { type: "paseo:supervisor-heartbeat" };
       if (currentChild.connected) {
         currentChild.send?.(message, (error) => {
@@ -313,7 +344,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       } else {
         writeLifecycleLog("Worker heartbeat skipped because IPC channel is disconnected");
       }
-    }, WORKER_HEARTBEAT_INTERVAL_MS);
+    }, heartbeatIntervalMs);
     heartbeat.unref();
 
     child.on("disconnect", () => {
@@ -333,6 +364,11 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     child.on("message", (msg: unknown) => {
       const lifecycleMessage = parseLifecycleMessage(msg);
       if (!lifecycleMessage || child !== currentChild) {
+        return;
+      }
+
+      if (lifecycleMessage.type === "paseo:worker-heartbeat") {
+        lastAnswerAt = Date.now();
         return;
       }
 
