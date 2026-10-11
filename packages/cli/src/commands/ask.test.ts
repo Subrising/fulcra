@@ -117,3 +117,11 @@ describe("fulcra run --account", () => {
     });
   });
 });
+
+describe("fulcra ask on Windows", () => {
+  it("tells the user in --help to send the prompt on stdin and the schema as a file", () => {
+    const help = createAskCommand().helpInformation().replace(/\s+/g, " ");
+    expect(help).toMatch(/On Windows, send the prompt on standard input/);
+    expect(help).toMatch(/On Windows, use a file path/);
+  });
+});

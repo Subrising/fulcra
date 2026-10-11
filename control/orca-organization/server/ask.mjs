@@ -18,6 +18,19 @@ export class AskError extends Error {
   }
 }
 
+/**
+ * A Windows shell shim (.cmd or .bat) runs only through cmd.exe, which loses empty arguments (so --tools "" could turn
+ * tools back on) and runs `&`, `|` and `^` in the schema as commands. Fulcra never uses a shell here, so a shim is
+ * refused with a plain error (FU-92). Use the native claude.exe.
+ */
+export function refuseShellShim(command) {
+  if (/\.(cmd|bat)$/i.test(String(command)))
+    throw new AskError(
+      "FULCRA_CLAUDE_BIN names a .cmd or .bat file. Fulcra does not run those, because a shell would change the arguments. Use the native claude.exe.",
+      "CLI_UNSUPPORTED",
+    );
+}
+
 const MAX_PROMPT_CHARS = 200_000;
 export const MAX_ASK_TIMEOUT_MS = 10 * 60_000;
 // Most calls end in seconds; the bound keeps a stuck call from holding the controller.
@@ -61,13 +74,19 @@ export function spawnClaudeOnce({
     ANTHROPIC_AUTH_TOKEN: "",
   };
   const command = bin ?? env.FULCRA_CLAUDE_BIN ?? "claude";
+  try {
+    refuseShellShim(command);
+  } catch (error) {
+    fs.rmSync(scratch, { recursive: true, force: true });
+    return Promise.reject(error);
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: scratch,
       env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-      shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(command),
+      shell: false,
     });
     let out = "";
     let timedOut = false;

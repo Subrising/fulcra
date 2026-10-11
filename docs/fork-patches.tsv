@@ -273,7 +273,7 @@ branding	A	0	0	docs/presentation/social-preview.png
 branding	M	16	0	docs/product.md
 branding	M	34	0	docs/providers.md
 branding	A	10	0	docs/release-checklist.md
-branding	A	76	0	docs/windows.md
+branding	A	84	0	docs/windows.md
 branding	A	10	0	fastlane/metadata/android/en-US/changelogs/100011.txt
 branding	A	10	0	fastlane/metadata/android/en-US/changelogs/100012.txt
 branding	A	10	0	fastlane/metadata/android/en-US/changelogs/100013.txt
@@ -391,7 +391,7 @@ branding	A	38	0	RELEASE-NOTES-0.2.15.md
 branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
 branding	A	10	0	RELEASE-NOTES-0.2.16.2.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
-branding	A	51	0	RELEASE-NOTES-0.2.17.md
+branding	A	52	0	RELEASE-NOTES-0.2.17.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -572,8 +572,8 @@ core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	A	54	0	packages/cli/src/commands/agent/archive.test.ts
 core-fixes	M	25	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
-core-fixes	A	119	0	packages/cli/src/commands/ask.test.ts
-core-fixes	A	178	0	packages/cli/src/commands/ask.ts
+core-fixes	A	127	0	packages/cli/src/commands/ask.test.ts
+core-fixes	A	181	0	packages/cli/src/commands/ask.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
 core-fixes	M	22	0	packages/cli/src/commands/daemon/restart.ts
