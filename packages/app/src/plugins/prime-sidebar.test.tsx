@@ -12,6 +12,9 @@ const f = vi.hoisted(() => ({
   open: vi.fn(),
   push: vi.fn(),
   host: "mini" as string | null,
+  // FU-86: the controller plugin and whether this device has connected to its computer yet.
+  controller: null as object | null,
+  connected: true,
   registryReady: true,
   registeredHost: true,
   // Fulcra 0.2.8: each connected computer's role directory and fleet, for the pinned main assistant.
@@ -88,11 +91,11 @@ vi.mock("@/stores/leads-memory-store", async () => {
 });
 vi.mock("./registry", () => ({
   useUntrustedPlugins: () => f.untrusted,
-  useControllerPlugin: () => null,
+  useControllerPlugin: () => f.controller,
   pluginRegistry: { controllerPluginId: () => "orca-organization-next" },
 }));
 vi.mock("@/runtime/host-runtime", () => ({
-  useHostRuntimeClient: () => ({ sendAgentMessage: f.send }),
+  useHostRuntimeClient: () => (f.connected ? { sendAgentMessage: f.send } : null),
   useHosts: () => f.hosts,
   useHostRegistryLoaded: () => true,
   useHostRuntimeConnectionStatuses: (ids: readonly string[]) =>
@@ -186,6 +189,7 @@ vi.mock("@/components/sidebar/sidebar-header-row", () => ({
 import {
   leadsFailureLabel,
   PinnedMainAssistant,
+  PrimeSidebar,
   PrimeSidebarRows,
   rememberedNote,
   SIDEBAR_REFRESH_MS,
@@ -242,6 +246,8 @@ beforeEach(() => {
   f.fleet.mockReset().mockResolvedValue({ nodes: [] });
   f.projects.mockReset().mockResolvedValue({ projects: [] });
   f.host = "mini";
+  f.controller = null;
+  f.connected = true;
   f.registryReady = true;
   f.registeredHost = true;
 });
@@ -664,6 +670,24 @@ it("the Leads arrow folds the lead rows to the header and remembers it; the head
   fireEvent.click(screen.getByTestId("sidebar-leads-collapse"));
   expect(await screen.findByTestId("sidebar-lead-main-assistant")).toBeTruthy();
   expect(f.push).not.toHaveBeenCalled();
+});
+
+it("while this device still connects to the computer, Leads shows a loading row, not nothing", () => {
+  f.controller = { id: "orca-organization-next", serverId: "mini", surfaces: [] };
+  f.connected = false;
+  render(<PrimeSidebar serverId="mini" />);
+  expect(screen.getByTestId("sidebar-top-primes")).toBeTruthy();
+  expect(screen.getByTestId("sidebar-leads-connecting").textContent).toBe(
+    "Connecting to Mac-mini.local…",
+  );
+
+  // A folded Leads block stays folded while it connects.
+  fireEvent.click(screen.getByTestId("sidebar-leads-collapse"));
+  expect(screen.queryByTestId("sidebar-leads-connecting")).toBeNull();
+  expect(useSidebarCollapsedSectionsStore.getState().collapsedLeads).toBe(true);
+
+  fireEvent.click(screen.getByTestId("sidebar-top-primes"));
+  expect(f.push).toHaveBeenCalledTimes(1);
 });
 
 it("a row without a known chat name keeps the role as its name", async () => {
