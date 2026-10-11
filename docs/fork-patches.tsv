@@ -45,9 +45,9 @@ accounts	M	495	210	packages/app/src/screens/settings-screen.tsx
 accounts	A	111	0	packages/app/src/sessions/session-account-info.tsx
 accounts	A	34	0	packages/app/src/sessions/session-account.ts
 accounts	M	9	0	packages/app/src/subagents/track.tsx
-accounts	M	4	2	packages/cli/src/cli.ts
+accounts	M	6	2	packages/cli/src/cli.ts
 accounts	A	53	0	packages/cli/src/commands/account.test.ts
-accounts	A	129	0	packages/cli/src/commands/account.ts
+accounts	A	163	0	packages/cli/src/commands/account.ts
 accounts	M	226	0	packages/client/src/index.test.ts
 accounts	M	71	0	packages/client/src/index.ts
 accounts	A	29	0	packages/client/src/pairing-secrets.test.ts
@@ -100,8 +100,8 @@ accounts	A	626	0	packages/server/src/server/integrations/sign-in-flows.ts
 accounts	A	285	0	packages/server/src/server/limit-resume-settings.test.ts
 accounts	A	44	0	packages/server/src/server/limit-resume-settings.ts
 accounts	A	57	0	packages/server/src/server/limit-resume/binding.ts
-accounts	A	75	0	packages/server/src/server/limit-resume/detect.test.ts
-accounts	A	56	0	packages/server/src/server/limit-resume/detect.ts
+accounts	A	97	0	packages/server/src/server/limit-resume/detect.test.ts
+accounts	A	76	0	packages/server/src/server/limit-resume/detect.ts
 accounts	A	27	0	packages/server/src/server/limit-resume/feature.e2e.test.ts
 accounts	A	458	0	packages/server/src/server/limit-resume/owner-route.posix.test.ts
 accounts	A	86	0	packages/server/src/server/limit-resume/parse-reset.test.ts
@@ -389,6 +389,7 @@ branding	A	46	0	RELEASE-NOTES-0.2.13.md
 branding	A	30	0	RELEASE-NOTES-0.2.14.md
 branding	A	38	0	RELEASE-NOTES-0.2.15.md
 branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
+branding	A	10	0	RELEASE-NOTES-0.2.16.2.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
@@ -569,6 +570,8 @@ core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	A	54	0	packages/cli/src/commands/agent/archive.test.ts
 core-fixes	M	25	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
+core-fixes	A	119	0	packages/cli/src/commands/ask.test.ts
+core-fixes	A	178	0	packages/cli/src/commands/ask.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
 core-fixes	M	22	0	packages/cli/src/commands/daemon/restart.ts
@@ -593,8 +596,8 @@ core-fixes	M	9	0	packages/protocol/src/agent-deep-link.test.ts
 core-fixes	M	1	1	packages/protocol/src/agent-deep-link.ts
 core-fixes	M	13	0	packages/protocol/src/agent-types.ts
 core-fixes	A	84	0	packages/protocol/src/automatic-approval-mode.test.ts
-core-fixes	A	18	0	packages/protocol/src/chat-status.test.ts
-core-fixes	A	21	0	packages/protocol/src/chat-status.ts
+core-fixes	A	36	0	packages/protocol/src/chat-status.test.ts
+core-fixes	A	40	0	packages/protocol/src/chat-status.ts
 core-fixes	M	2	0	packages/protocol/src/client-capabilities.ts
 core-fixes	A	59	0	packages/protocol/src/git-ai-draft.test.ts
 core-fixes	A	51	0	packages/protocol/src/git-ai-draft.ts
@@ -654,8 +657,8 @@ core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
-core-fixes	A	157	0	packages/server/src/server/report-up.test.ts
-core-fixes	A	256	0	packages/server/src/server/report-up.ts
+core-fixes	A	382	0	packages/server/src/server/report-up.test.ts
+core-fixes	A	558	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
 core-fixes	A	294	0	packages/server/src/server/revive-on-restart.test.ts
@@ -763,7 +766,7 @@ desktop-runtime	A	64	0	packages/desktop/src/window/renderer-crash-recovery.test.
 desktop-runtime	A	68	0	packages/desktop/src/window/renderer-crash-recovery.ts
 desktop-runtime	A	126	0	packages/server/src/server/bootstrap-interrupted-turn.test.ts
 desktop-runtime	M	75	5	packages/server/src/server/bootstrap.smoke.test.ts
-desktop-runtime	M	387	20	packages/server/src/server/bootstrap.ts
+desktop-runtime	M	388	20	packages/server/src/server/bootstrap.ts
 desktop-runtime	M	3	1	packages/server/src/server/config.test.ts
 desktop-runtime	M	54	20	packages/server/src/server/config.ts
 desktop-runtime	M	47	2	packages/server/src/server/daemon-worker.ts
@@ -1183,7 +1186,7 @@ orchestration	M	8	2	packages/app/src/styles/unistyles-module-scope.test.ts
 orchestration	M	19	4	packages/app/src/utils/connection-selection.test.ts
 orchestration	M	18	1	packages/app/src/utils/connection-selection.ts
 orchestration	M	148	0	packages/cli/src/commands/agent/run.test.ts
-orchestration	M	21	6	packages/cli/src/commands/agent/run.ts
+orchestration	M	37	7	packages/cli/src/commands/agent/run.ts
 orchestration	A	240	0	packages/cli/src/commands/agent/send.test.ts
 orchestration	M	141	7	packages/cli/src/commands/agent/send.ts
 orchestration	M	12	1	packages/cli/tests/03-daemon.test.ts
@@ -1421,8 +1424,8 @@ plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
 plugin-host	A	369	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
-plugin-host	A	1227	0	packages/app/src/plugins/prime-sidebar.test.tsx
-plugin-host	A	1255	0	packages/app/src/plugins/prime-sidebar.tsx
+plugin-host	A	1268	0	packages/app/src/plugins/prime-sidebar.test.tsx
+plugin-host	A	1257	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
 plugin-host	A	138	0	packages/app/src/plugins/radius-scratch-owner.ts
 plugin-host	A	290	0	packages/app/src/plugins/react-native/pan-surface.test.tsx
@@ -1440,7 +1443,7 @@ plugin-host	M	256	6	packages/app/src/plugins/registry.ts
 plugin-host	M	8	0	packages/app/src/plugins/routes.test.ts
 plugin-host	M	9	1	packages/app/src/plugins/settings/index.tsx
 plugin-host	A	58	0	packages/app/src/plugins/sidebar-chat-leads.test.ts
-plugin-host	A	56	0	packages/app/src/plugins/sidebar-chat-leads.ts
+plugin-host	A	58	0	packages/app/src/plugins/sidebar-chat-leads.ts
 plugin-host	M	75	0	packages/app/src/plugins/sidebar-groups.test.ts
 plugin-host	M	39	1	packages/app/src/plugins/sidebar-groups.ts
 plugin-host	A	173	0	packages/app/src/plugins/sidebar-items.test.tsx
