@@ -53,6 +53,11 @@ export async function rotateOnLimit(
     try {
       control.wakes?.accountRotated?.(session, r);
     } catch {}
+  // FU-112: the lead and the main assistant hear once per account, even when several sessions fail on it.
+  if (r.newlyRevoked)
+    try {
+      control.wakes?.accountDown?.(session, r);
+    } catch {}
   return r;
 }
 // Whether a session runs on a pooled account now. Cheap (one file read), so a stranger session costs no timeline read.
@@ -84,6 +89,8 @@ export function codexResetAt(text, now = Date.now()) {
   return Number.isFinite(t) && t > now ? new Date(t).toISOString() : null;
 }
 export function rotationNote(r) {
+  if (r.reason === "revoked")
+    return `This session's account "${r.fromName}" has a revoked or invalid token; Fulcra moved the session to account "${r.toName}" with its history.`;
   return `This session's account "${r.fromName}" reached its usage limit (resets ${r.resetAt}); Fulcra moved the session to account "${r.toName}" with its history.`;
 }
 // The fenced in-place relaunch provider-recovery uses: delegated, same generation, no human activity or changed
