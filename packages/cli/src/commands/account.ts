@@ -9,7 +9,7 @@ const account = z.object({
   id: z.string(),
   name: z.string(),
   provider: z.string().optional(),
-  status: z.object({ state: z.string() }),
+  status: z.object({ state: z.string(), until: z.string().optional() }),
   isDefault: z.boolean().optional(),
 });
 const listing = z.object({ accounts: z.array(account) });
@@ -72,6 +72,40 @@ export async function switchAccountSession(
   );
   if (!result.ok) throw new Error(result.message ?? "The account could not be switched.");
   return result.message ?? "Switched account.";
+}
+
+/** The environment name the host's account hook reads to pin a launch to one pooled account (FU-59). */
+export const ACCOUNT_REQUEST_ENV = "FULCRA_ACCOUNT_REQUEST";
+
+/**
+ * Checks a named account for `fulcra run --account`: it must exist for the provider and be usable now. Returns the
+ * account's name, which the host's launch hook pins the new session to. Errors name the account and the reason.
+ */
+export async function resolveRunAccount(
+  client: AccountClient,
+  name: string,
+  provider: string,
+): Promise<string> {
+  const wanted = name.trim().toLowerCase();
+  if (!wanted) throw { code: "INVALID_ACCOUNT", message: "--account needs an account name" };
+  const found = (await listAccounts(client)).find(
+    (a) =>
+      (a.provider === undefined || a.provider === provider) &&
+      (a.name.toLowerCase() === wanted || a.id.toLowerCase() === wanted),
+  );
+  if (!found)
+    throw {
+      code: "ACCOUNT_NOT_FOUND",
+      message: `No ${provider} account is named "${name.trim()}"`,
+    };
+  if (found.status.state !== "ok") {
+    const until = (found.status as { until?: string }).until;
+    throw {
+      code: found.status.state === "limited" ? "ACCOUNT_LIMITED" : "ACCOUNT_UNAVAILABLE",
+      message: `Account "${found.name}" cannot be used now (${found.status.state}${until ? ` until ${until}` : ""})`,
+    };
+  }
+  return found.name;
 }
 
 const schema: OutputSchema<Account> = {

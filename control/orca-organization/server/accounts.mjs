@@ -405,6 +405,26 @@ export async function sessionEnded(root, sessionId) {
     return null;
   });
 }
+// A usage limit seen on a one-shot call (`fulcra ask`): no session, so the account is marked directly. Same record as
+// rotate() keeps: limitedUntil, limitKind and limitNote; a later reset is never shortened.
+export async function markAccountLimited(
+  root,
+  accountId,
+  { resetAt = null, kind = null, note = null } = {},
+  now = Date.now(),
+) {
+  return update(root, (s) => {
+    const a = s.accounts.find((x) => x.id === accountId);
+    if (!a) return null;
+    const until = resetAt && Date.parse(resetAt) > now ? resetAt : iso(now + DEFAULT_LIMIT_MS);
+    if (!a.limitedUntil || Date.parse(a.limitedUntil) < Date.parse(until)) {
+      a.limitedUntil = until;
+      a.limitKind = typeof kind === "string" && kind ? kind.slice(0, 24) : null;
+      a.limitNote = note ? String(note).slice(0, 200) : null;
+    }
+    return { id: a.id, name: a.name, limitedUntil: a.limitedUntil, limitKind: a.limitKind };
+  });
+}
 // A usage limit on `sessionId`'s account: mark that account limited until `resetAt` (or DEFAULT_LIMIT_MS) and, only when
 // the pool's rotateOnLimit is on, move the session to the next available account. Off (the default), the rotation is
 // recorded as held and the session stays on its account; the usage-limit resume picks it up after the reset. Returns { from, to, earliestReset } -- `to` null when every account is limited.
@@ -941,7 +961,28 @@ export function sessionOpenHook({
             if (!started && !cur) return null;
             throw refused();
           }
-          const result = assignInStore(s, sessionId, provider, now(), seen, usage);
+          // FU-59: `fulcra run --account <name>` pins a NEW session to that account; a resumed session keeps its own.
+          const wanted =
+            !cur && !started && typeof request.env?.FULCRA_ACCOUNT_REQUEST === "string"
+              ? request.env.FULCRA_ACCOUNT_REQUEST.trim().toLowerCase()
+              : "";
+          let result;
+          if (wanted) {
+            const pinned = s.accounts.find(
+              (a) =>
+                a.provider === provider &&
+                (a.id.toLowerCase() === wanted || a.name.toLowerCase() === wanted),
+            );
+            if (!pinned || accountStatus(pinned, now()).state !== "ok") throw refused();
+            pinned.lastUsedAt = iso(now());
+            s.assignments[sessionId] = {
+              accountId: pinned.id,
+              provider,
+              at: iso(now()),
+              ended: false,
+            };
+            result = { account: { ...pinned }, allLimited: false };
+          } else result = assignInStore(s, sessionId, provider, now(), seen, usage);
           if (!result?.account || seen.includes(result.account.id)) throw refused();
           return { result, assignment: JSON.stringify(s.assignments[sessionId]) };
         });
