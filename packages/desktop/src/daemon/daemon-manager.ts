@@ -625,7 +625,8 @@ export async function stopDesktopDaemon(
   logDesktopDaemonLifecycle("stopping captured supervisor", { reason, pid: instance.pid, owned });
   await stopDaemonInstance(home, {
     instance,
-    timeoutMs: 15_000,
+    // Above the supervisor's 30 s termination grace (FU-74).
+    timeoutMs: 40_000,
     requestShutdown: async (ready) => {
       await runExternalCliJsonCommand(["daemon", "stop", "--host", ready.listen, "--json"]);
     },

@@ -33,6 +33,15 @@ export function resolveBackgroundExecPath(input: {
   return input.exists(helper) ? helper : null;
 }
 
+/** The Helper's argv: Node flags such as --disable-warning stay (they are in execArgv, not argv). */
+export function backgroundExecArgv(
+  helper: string,
+  execArgv: readonly string[],
+  argv: readonly string[],
+): string[] {
+  return [helper, ...execArgv, ...argv.slice(1)];
+}
+
 // Before anything else: replace this process image with the Helper. The PID stays, so launchd, the
 // CLI and the desktop app still track the same process.
 function becomeBackgroundProcess(): void {
@@ -42,7 +51,7 @@ function becomeBackgroundProcess(): void {
     exists: existsSync,
   });
   if (!helper || typeof process.execve !== "function") return;
-  process.execve(helper, [helper, ...process.argv.slice(1)], process.env);
+  process.execve(helper, backgroundExecArgv(helper, process.execArgv, process.argv), process.env);
 }
 
 export async function main(): Promise<void> {

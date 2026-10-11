@@ -161,7 +161,8 @@ export async function stopDaemonInstance(
   forced: boolean;
   usedLifecycleRpc: boolean;
 }> {
-  const { timeoutMs = 15_000, killTimeoutMs = 3_000 } = options;
+  // 0.2.16.1: above the supervisor's 30 s termination grace (FU-74), so a normal stop is not reported as a timeout.
+  const { timeoutMs = 40_000, killTimeoutMs = 3_000 } = options;
   const deadline = Date.now() + timeoutMs;
   const instance = await getPidLockInfo(home);
   if (options.instance && instance && !isSamePidLock(instance, options.instance)) {
@@ -312,7 +313,7 @@ export async function startDaemonInstance(input: {
       cancel();
       const stopped = await Promise.race([
         exited.then(() => true),
-        delay(15_000, false, { ref: false }),
+        delay(40_000, false, { ref: false }),
       ]);
       if (!stopped && child.pid) {
         await killTree(child.pid, "SIGKILL");

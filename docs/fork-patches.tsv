@@ -388,6 +388,7 @@ branding	A	36	0	RELEASE-NOTES-0.2.12.md
 branding	A	46	0	RELEASE-NOTES-0.2.13.md
 branding	A	30	0	RELEASE-NOTES-0.2.14.md
 branding	A	38	0	RELEASE-NOTES-0.2.15.md
+branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
@@ -571,7 +572,7 @@ core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
 core-fixes	M	22	0	packages/cli/src/commands/daemon/restart.ts
-core-fixes	M	16	1	packages/cli/src/commands/daemon/stop.ts
+core-fixes	M	19	3	packages/cli/src/commands/daemon/stop.ts
 core-fixes	M	1	1	packages/cli/src/commands/heartbeat/index.ts
 core-fixes	M	8	10	packages/cli/src/commands/open.ts
 core-fixes	M	2	2	packages/cli/src/commands/script/shared.ts
@@ -607,9 +608,9 @@ core-fixes	A	56	0	packages/protocol/src/permission-wire.ts
 core-fixes	A	61	0	packages/protocol/src/provider-default-mode.test.ts
 core-fixes	A	77	0	packages/protocol/src/radius-scratch.ts
 core-fixes	A	51	0	packages/protocol/src/session-roles.ts
-core-fixes	A	113	0	packages/server/scripts/supervisor.liveness.test.ts
+core-fixes	A	139	0	packages/server/scripts/supervisor.liveness.test.ts
 core-fixes	M	4	0	packages/server/scripts/supervisor.logging.test.ts
-core-fixes	M	39	3	packages/server/scripts/supervisor.ts
+core-fixes	M	45	3	packages/server/scripts/supervisor.ts
 core-fixes	A	71	0	packages/server/src/server/agent/background-work/process-tree.posix.test.ts
 core-fixes	A	144	0	packages/server/src/server/agent/background-work/process-tree.test.ts
 core-fixes	A	121	0	packages/server/src/server/agent/background-work/process-tree.ts
@@ -733,13 +734,13 @@ desktop-runtime	A	35	0	packages/desktop/src/daemon/command-centre-owner.ts
 desktop-runtime	A	50	0	packages/desktop/src/daemon/command-centre-target.test.ts
 desktop-runtime	A	31	0	packages/desktop/src/daemon/command-centre-target.ts
 desktop-runtime	M	781	3	packages/desktop/src/daemon/daemon-manager.test.ts
-desktop-runtime	M	360	24	packages/desktop/src/daemon/daemon-manager.ts
+desktop-runtime	M	362	25	packages/desktop/src/daemon/daemon-manager.ts
 desktop-runtime	M	81	6	packages/desktop/src/daemon/desktop-packaging.test.ts
 desktop-runtime	M	26	7	packages/desktop/src/daemon/linux-launcher.posix.test.ts
 desktop-runtime	A	65	0	packages/desktop/src/daemon/managed-restart.test.ts
 desktop-runtime	A	23	0	packages/desktop/src/daemon/managed-restart.ts
-desktop-runtime	M	41	1	packages/desktop/src/daemon/node-entrypoint-runner.test.ts
-desktop-runtime	M	46	0	packages/desktop/src/daemon/node-entrypoint-runner.ts
+desktop-runtime	M	62	1	packages/desktop/src/daemon/node-entrypoint-runner.test.ts
+desktop-runtime	M	55	0	packages/desktop/src/daemon/node-entrypoint-runner.ts
 desktop-runtime	M	25	0	packages/desktop/src/features/auto-updater.test.ts
 desktop-runtime	M	27	0	packages/desktop/src/features/auto-updater.ts
 desktop-runtime	M	5	4	packages/desktop/src/features/menu.ts
@@ -1613,7 +1614,7 @@ session-launch	M	170	33	packages/server/src/server/agent/tools/paseo-tools.ts
 session-launch	M	5	0	packages/server/src/server/agent/tools/types.ts
 session-launch	M	244	1	packages/server/src/server/daemon-client.e2e.test.ts
 session-launch	M	86	0	packages/server/src/server/daemon-instance.test.ts
-session-launch	M	16	0	packages/server/src/server/daemon-instance.ts
+session-launch	M	19	2	packages/server/src/server/daemon-instance.ts
 session-launch	A	128	0	packages/server/src/server/plugins/catalog-controller.test.ts
 session-launch	A	91	0	packages/server/src/server/plugins/catalog-headroom.test.ts
 session-launch	A	39	0	packages/server/src/server/plugins/catalog-limit.test.ts
