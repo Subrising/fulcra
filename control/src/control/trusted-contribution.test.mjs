@@ -1408,6 +1408,25 @@ test("FIX-8 M: a daemon finish notice to a delegated lead keeps it delegated", a
   assert.deepEqual([after.mode, after.generation], ["delegated", before.generation]);
   assert.deepEqual(transfers(f), []);
 });
+// FU-103: revive on restart continues a lead seat whose turn the restart cut as a host notice (source 'daemon', message
+// id 'paseo-notify:restart-continue:<uuid>', revive-on-restart.ts). The lead keeps its delegation and its queued work;
+// the plain daemon prompt that revive sent before would have ended it (the last case below).
+test("FU-103: the revive continue to a delegated lead keeps it delegated", async (t) => {
+  const f = await fixture(t),
+    before = f.store.get(f.id);
+  f.host.daemon(() =>
+    f.host.input(
+      f.manager.agents.get(f.id),
+      "prompt",
+      "paseo-notify:restart-continue:" + randomUUID(),
+      () => {},
+      sendPayload("Continue the task you were doing before the daemon restarted."),
+    ),
+  );
+  const after = f.store.get(f.id);
+  assert.deepEqual([after.mode, after.generation], ["delegated", before.generation]);
+  assert.deepEqual(transfers(f), []);
+});
 for (const [label, messageId, wrap] of [
   [
     "a human prompt with the notice prefix",
