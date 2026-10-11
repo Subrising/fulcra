@@ -391,7 +391,7 @@ branding	A	38	0	RELEASE-NOTES-0.2.15.md
 branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
 branding	A	10	0	RELEASE-NOTES-0.2.16.2.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
-branding	A	69	0	RELEASE-NOTES-0.2.17.md
+branding	A	75	0	RELEASE-NOTES-0.2.17.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -618,6 +618,8 @@ core-fixes	A	51	0	packages/protocol/src/session-roles.ts
 core-fixes	A	139	0	packages/server/scripts/supervisor.liveness.test.ts
 core-fixes	M	4	0	packages/server/scripts/supervisor.logging.test.ts
 core-fixes	M	45	3	packages/server/scripts/supervisor.ts
+core-fixes	A	27	0	packages/server/src/server/agent-message-log.test.ts
+core-fixes	A	28	0	packages/server/src/server/agent-message-log.ts
 core-fixes	A	71	0	packages/server/src/server/agent/background-work/process-tree.posix.test.ts
 core-fixes	A	144	0	packages/server/src/server/agent/background-work/process-tree.test.ts
 core-fixes	A	121	0	packages/server/src/server/agent/background-work/process-tree.ts
@@ -662,8 +664,9 @@ core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
-core-fixes	A	498	0	packages/server/src/server/report-up.test.ts
-core-fixes	A	666	0	packages/server/src/server/report-up.ts
+core-fixes	A	97	0	packages/server/src/server/report-up-held.test.ts
+core-fixes	A	717	0	packages/server/src/server/report-up.test.ts
+core-fixes	A	883	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
 core-fixes	A	467	0	packages/server/src/server/revive-on-restart.test.ts
@@ -773,7 +776,7 @@ desktop-runtime	A	126	0	packages/server/src/server/bootstrap-interrupted-turn.te
 desktop-runtime	M	75	5	packages/server/src/server/bootstrap.smoke.test.ts
 desktop-runtime	M	392	20	packages/server/src/server/bootstrap.ts
 desktop-runtime	M	3	1	packages/server/src/server/config.test.ts
-desktop-runtime	M	54	20	packages/server/src/server/config.ts
+desktop-runtime	M	56	20	packages/server/src/server/config.ts
 desktop-runtime	M	47	2	packages/server/src/server/daemon-worker.ts
 desktop-runtime	M	1	1	packages/server/src/server/session/daemon/daemon-self-updater.test.ts
 desktop-runtime	M	1	1	packages/server/src/server/session/daemon/daemon-self-updater.ts
@@ -1276,7 +1279,7 @@ orchestration	A	47	0	packages/server/src/server/report-inbox.ts
 orchestration	A	1558	0	packages/server/src/server/report-registry.ts
 orchestration	M	609	2	packages/server/src/server/session.test.ts
 orchestration	A	129	0	packages/server/src/server/session.trusted.test.ts
-orchestration	M	1871	120	packages/server/src/server/session.ts
+orchestration	M	1873	120	packages/server/src/server/session.ts
 orchestration	M	9	6	packages/server/src/server/session.workspace-git-watch.test.ts
 orchestration	M	14	9	packages/server/src/server/session.workspace-resolution-invariants.test.ts
 orchestration	M	11	7	packages/server/src/server/session.workspaces.test.ts
@@ -1630,7 +1633,7 @@ session-launch	M	60	53	packages/server/src/server/agent/providers/pi/agent.test.
 session-launch	M	1	1	packages/server/src/server/agent/providers/pi/extensions/tintinweb-pi-subagents/index.ts
 session-launch	M	22	0	packages/server/src/server/agent/providers/provider-availability.test.ts
 session-launch	M	11	2	packages/server/src/server/agent/runtime-mcp-config.ts
-session-launch	M	170	33	packages/server/src/server/agent/tools/paseo-tools.ts
+session-launch	M	172	33	packages/server/src/server/agent/tools/paseo-tools.ts
 session-launch	M	5	0	packages/server/src/server/agent/tools/types.ts
 session-launch	M	244	1	packages/server/src/server/daemon-client.e2e.test.ts
 session-launch	M	86	0	packages/server/src/server/daemon-instance.test.ts
