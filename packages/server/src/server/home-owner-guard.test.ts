@@ -9,7 +9,7 @@ import { findOtherHomeOwner } from "./home-owner-guard.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  for (const step of cleanup.splice(0).reverse()) await step();
+  for (const step of cleanup.splice(0).toReversed()) await step();
 });
 
 async function makeHome(): Promise<string> {
@@ -57,9 +57,7 @@ describe("one daemon per home", () => {
 
     const supervisor = startIdleProcess();
     await writeLock(home, supervisor.pid!);
-    expect(
-      await findOtherHomeOwner({ paseoHome: home, parentPid: supervisor.pid! }),
-    ).toBeNull();
+    expect(await findOtherHomeOwner({ paseoHome: home, parentPid: supervisor.pid! })).toBeNull();
   });
 
   test("a live lock owner that is not the worker's parent is another daemon", async () => {
