@@ -311,10 +311,14 @@ export async function resolveStructuredResponseMessage(options: {
   return null;
 }
 
-function structuredRunSchema(output: Record<string, unknown>): OutputSchema<AgentRunResult> {
+export function structuredRunSchema(
+  output: Record<string, unknown>,
+  withAgentId = false,
+): OutputSchema<AgentRunResult> {
   return {
     ...agentRunSchema,
-    serialize: () => output,
+    // Without --json the answer is printed as it is (older callers parse it). With --json it carries the agent id.
+    serialize: withAgentId ? (data) => ({ agentId: data.agentId, output }) : () => output,
   };
 }
 
@@ -532,12 +536,33 @@ export async function resolveExistingRunWorkspace(
   } satisfies CommandError;
 }
 
+const sameDirectory = (a: string, b: string): boolean => {
+  const clean = (value: string) => resolve(value).replace(/[\\/]+$/, "");
+  return process.platform === "win32"
+    ? clean(a).toLowerCase() === clean(b).toLowerCase()
+    : clean(a) === clean(b);
+};
+
+/** The existing workspace whose directory is `cwd`, or null. A failed lookup is not an error: the run makes a new one. */
+export async function findWorkspaceForDirectory(
+  client: RunWorkspaceLookupClient,
+  cwd: string,
+): Promise<{ id: string; cwd: string } | null> {
+  try {
+    const result = await client.fetchWorkspaces({ filter: { query: cwd }, page: { limit: 200 } });
+    const found = result.entries.find((entry) => sameDirectory(entry.workspaceDirectory, cwd));
+    return found ? { id: found.id, cwd: found.workspaceDirectory } : null;
+  } catch {
+    return null;
+  }
+}
+
 // Workspace policy for `paseo run`. Precedence:
 //   1. --workspace <id>            -> run in that existing workspace
 //   2. --cwd / --new-workspace     -> explicitly select a directory/workspace source
 //   3. caller agent                -> daemon resolves the caller's workspace
 //   4. $PASEO_WORKSPACE_ID         -> exported by workspace terminals
-//   5. bare run                    -> mint a new local-backed workspace for cwd
+//   5. bare run                    -> the workspace that owns cwd, else a new local-backed one (FU-60)
 async function resolveRunWorkspace(
   client: ConnectedDaemonClient,
   options: AgentRunOptions,
@@ -561,6 +586,16 @@ async function resolveRunWorkspace(
   if (ambientWorkspaceId) {
     console.error(`Using workspace ${ambientWorkspaceId}`);
     return resolveExistingRunWorkspace(client, ambientWorkspaceId);
+  }
+
+  // FU-60: a run without --new-workspace reuses the workspace that already owns this directory, instead of making
+  // a new one for every run (clutter in the workspace list).
+  if (!newWorkspace) {
+    const existing = await findWorkspaceForDirectory(client, cwd);
+    if (existing) {
+      console.error(`Using workspace ${existing.id} for ${existing.cwd}`);
+      return existing;
+    }
   }
 
   // TODO: thread the run `prompt` as firstAgentContext so workspace-level
@@ -703,10 +738,12 @@ export async function runRunCommand(
 
       await client.close();
 
+      // FU-60: the agent id is not lost. It goes to stderr, and with an explicit --json the answer is wrapped with it.
+      console.error(`Agent ${structuredAgent.id}`);
       return {
         type: "single",
         data: toRunResult(structuredAgent, "completed"),
-        schema: structuredRunSchema(output),
+        schema: structuredRunSchema(output, options.json === true),
       };
     }
 
