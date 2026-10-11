@@ -93,6 +93,22 @@ describe("reportingLeadLine", () => {
       ),
     ).toBe("Reports to you");
   });
+
+  // Fulcra 0.2.17 (FU-102): after a lead adopts a chat, the sidebar shows the new parent as its lead.
+  it("shows the new parent after an adoption rewrites the parent label", () => {
+    const tree = {
+      mini: {
+        agents: new Map([
+          ["lead-1", agent("lead-1", "Gag lead")],
+          ["lead-2", agent("lead-2", "Ship It lead", { "paseo.parent-agent-id": "lead-1" })],
+        ]),
+      },
+    };
+    const line = (labels: Record<string, string>) => reportingLeadLine(labels, "mini", tree);
+    expect(line({})).toBeNull();
+    expect(line({ "paseo.parent-agent-id": "lead-1" })).toBe("Reports to Gag lead");
+    expect(line({ "paseo.parent-agent-id": "lead-2" })).toBe("Reports to Ship It lead");
+  });
 });
 
 describe("selectSidebarSessionRows", () => {

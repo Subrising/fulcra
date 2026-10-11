@@ -217,13 +217,42 @@ describe("explicit run cwd workspace precedence", () => {
       command,
     );
   }
+  // FU-60: the only workspace read is the lookup for the run directory; ambient or caller workspaces are not read.
+  function expectOnlyDirectoryLookup(client: ReturnType<typeof fakeClient>) {
+    expect(client.fetchWorkspaces).toHaveBeenCalledTimes(1);
+    expect(client.fetchWorkspaces).toHaveBeenCalledWith({
+      filter: { query: "/fixtures/requested" },
+      page: { limit: 200 },
+    });
+  }
+  it("reuses the workspace that already owns --cwd instead of creating another (FU-60)", async () => {
+    const client = fakeClient();
+    client.fetchWorkspaces.mockResolvedValue({
+      entries: [{ id: "owned-workspace", workspaceDirectory: "/fixtures/requested" }],
+      pageInfo: { nextCursor: null },
+    } as never);
+    await parsedRun(["--cwd", "/fixtures/requested"]);
+    expect(client.createWorkspace).not.toHaveBeenCalled();
+    expect(client.createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/fixtures/requested", workspaceId: "owned-workspace" }),
+    );
+  });
+  it("creates a workspace for --new-workspace even when one owns the directory (FU-60)", async () => {
+    const client = fakeClient();
+    client.fetchWorkspaces.mockResolvedValue({
+      entries: [{ id: "owned-workspace", workspaceDirectory: "/fixtures/requested" }],
+      pageInfo: { nextCursor: null },
+    } as never);
+    await parsedRun(["--cwd", "/fixtures/requested", "--new-workspace", "local"]);
+    expect(client.createWorkspace).toHaveBeenCalled();
+  });
   it("honors parsed --cwd over caller and ambient placement while retaining caller identity", async () => {
     const client = fakeClient();
     await parsedRun(["--cwd", "/fixtures/requested"]);
     expect(client.createWorkspace).toHaveBeenCalledWith({
       source: { kind: "directory", path: "/fixtures/requested" },
     });
-    expect(client.fetchWorkspaces).not.toHaveBeenCalled();
+    expectOnlyDirectoryLookup(client);
     expect(client.createAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: "/fixtures/requested",
@@ -258,7 +287,7 @@ describe("explicit run cwd workspace precedence", () => {
         callerAgentId: undefined,
       }),
     );
-    expect(client.fetchWorkspaces).not.toHaveBeenCalled();
+    expectOnlyDirectoryLookup(client);
   });
   it("keeps implicit runs in the caller workspace", async () => {
     const client = fakeClient();
@@ -300,7 +329,7 @@ describe("explicit run cwd workspace precedence", () => {
       code: "WORKSPACE_CREATE_FAILED",
     });
     expect(client.createAgent).not.toHaveBeenCalled();
-    expect(client.fetchWorkspaces).not.toHaveBeenCalled();
+    expectOnlyDirectoryLookup(client);
     expect(client.close).toHaveBeenCalledOnce();
   });
 });
