@@ -827,7 +827,7 @@ test("Changes keeps review navigation and controls inside its workspace tab", as
   );
 });
 
-test("compact Changes keeps its actions compact and menu-only", async ({ page }) => {
+test("compact Changes keeps its actions menu-only, with 48 px touch targets", async ({ page }) => {
   const workspace = await createWorkspaceWithMountedTabDiff();
   await useUnwrappedDiffLines(page);
   await openWorkspaceChanges(page, workspace);
@@ -852,10 +852,11 @@ test("compact Changes keeps its actions compact and menu-only", async ({ page })
   if (!actionsBox || !optionsBox || !glyphBox) {
     throw new Error("Compact Changes toolbar geometry could not be measured");
   }
-  expect(actionsBox.width).toBe(48);
-  expect(actionsBox.height).toBe(28);
-  expect(optionsBox.width).toBe(32);
-  expect(optionsBox.height).toBe(32);
+  // A phone layout is a touch screen: no control is smaller than 48 x 48 px, and the drawn glyph stays compact.
+  expect(actionsBox.width).toBeGreaterThanOrEqual(48);
+  expect(actionsBox.height).toBeGreaterThanOrEqual(48);
+  expect(optionsBox.width).toBeGreaterThanOrEqual(48);
+  expect(optionsBox.height).toBeGreaterThanOrEqual(48);
   expect(glyphBox.width).toBe(18);
   expect(glyphBox.height).toBe(18);
 
