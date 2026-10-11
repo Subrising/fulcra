@@ -5,6 +5,7 @@ import {
 } from "./native-bootstrap.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -21,6 +22,11 @@ import { automaticPermissionProof, permissionMode } from "./automatic-permission
 export { PLUGIN_ID as OWN_ID } from "./plugin-identity.mjs";
 import { PLUGIN_ID as OWN_ID } from "./plugin-identity.mjs";
 export const hostContract = "1.1";
+// FU-77: the daemon puts a meter on globalThis; without it the call just runs.
+const timed = (site, call) => {
+  const meter = globalThis[Symbol.for("fulcra.syncIoMeter")];
+  return meter ? meter.timed(site, call) : call();
+};
 const fail = (reason) => {
   throw Error("Orca native admission refused: " + reason);
 };
@@ -139,17 +145,67 @@ export function createTrustedContribution({
         Atomics.wait(lockSleep, 0, 0, Math.min(25, remaining));
       }
     };
+    const journalFile = path.join(home, "journal.sqlite");
+    // FU-77: reads share one read-only connection. Opening a database and setting its pragmas on every permission
+    // request and input was the common synchronous disk cost. Each read is its own short transaction, so it sees
+    // fresh data; the connection is dropped when the file is replaced or when a call on it fails.
+    let reader = null;
+    let readerInode = null;
+    const dropReader = () => {
+      try {
+        reader?.close();
+      } catch {
+        /* the connection is already unusable */
+      }
+      reader = null;
+      readerInode = null;
+    };
+    const sharedReader = () => {
+      const inode = timed("journal.stat", () => fs.statSync(journalFile)).ino;
+      if (reader && inode !== readerInode) dropReader();
+      if (!reader) {
+        reader = timed("journal.open", () => {
+          const db = new DatabaseSync(journalFile, { readOnly: true });
+          db.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=FULL");
+          return db;
+        });
+        readerInode = inode;
+      }
+      return reader;
+    };
+    const readShared = (callback) => {
+      for (let attempt = 0; ; attempt++) {
+        let db;
+        try {
+          db = sharedReader();
+          timed("journal.read", () => db.exec("BEGIN"));
+        } catch (error) {
+          dropReader();
+          if (attempt > 0) throw error;
+          continue;
+        }
+        try {
+          return timed("journal.read", () => callback(db));
+        } finally {
+          try {
+            db.exec("COMMIT");
+          } catch {
+            dropReader();
+          }
+        }
+      }
+    };
     const read = (write, callback, deadline) => {
+      if (!write) return readShared(callback);
       let db;
       try {
-        db = new DatabaseSync(path.join(home, "journal.sqlite"), { readOnly: !write });
+        db = timed("journal.open", () => new DatabaseSync(journalFile, { readOnly: false }));
         // SQLite's busy handler budgets requested sleep, not elapsed time.
         // Keep every SQLite operation non-waiting; only BEGIN gets the shared deadline.
         db.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=FULL");
-        if (write) beginWrite(db, deadline);
-        else db.exec("BEGIN");
+        timed("journal.begin", () => beginWrite(db, deadline));
         const result = callback(db);
-        if (write) db.exec("COMMIT");
+        timed("journal.commit", () => db.exec("COMMIT"));
         return result;
       } finally {
         db?.close();
@@ -284,16 +340,15 @@ export function createTrustedContribution({
       )
         return;
       const deadline = performance.now() + 2000;
-      let observedDb, mode;
+      let mode;
       try {
         // A plain WAL read must not compete with unrelated controller writers.
-        observedDb = new DatabaseSync(path.join(home, "journal.sqlite"), { readOnly: true });
-        mode = observedDb.prepare("SELECT mode FROM sessions WHERE id=?").get(agent.id)?.mode;
+        mode = readShared(
+          (db) => db.prepare("SELECT mode FROM sessions WHERE id=?").get(agent.id)?.mode,
+        );
       } catch (error) {
         if (input.source === "human") return; // Human input continues when authority is unreadable.
         throw error;
-      } finally {
-        observedDb?.close();
       }
       if (mode !== "delegated") return;
       return read(
