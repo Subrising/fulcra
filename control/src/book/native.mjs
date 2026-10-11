@@ -108,7 +108,10 @@ function displayMetadata(snapshot) {
 // host's inventory); otherwise the enrolled value is kept and the fallback is reported back. Never launches an unoffered pair.
 export async function bookSelection(client, provider, p, enrolled) {
   const out = { model: enrolled, thinkingOptionId: "medium", fallback: [] };
-  if (p.model === undefined && p.thinkingOptionId === undefined) return out;
+  // Fulcra 0.2.15: a booked session is a worker. With no model forwarded, Claude uses the worker default this host
+  // marks (metadata.workerDefault). No mark, or no list: the enrolled model stays. The release is named by the host.
+  const workerDefault = provider === "claude" && p.model === undefined;
+  if (p.model === undefined && p.thinkingOptionId === undefined && !workerDefault) return out;
   let models = null;
   try {
     const inv = await client.providers?.listModels?.(provider, {});
@@ -120,6 +123,10 @@ export async function bookSelection(client, provider, p, enrolled) {
     /* unavailable: keep the enrolled values */
   }
   const why = (reason) => (models ? reason : "catalog-unavailable");
+  if (workerDefault) {
+    const marked = (models ?? []).filter((m) => m.metadata?.workerDefault === true);
+    if (marked.length === 1) out.model = marked[0].id;
+  }
   if (p.model !== undefined) {
     if (models?.some((m) => m.id === p.model)) out.model = p.model;
     else

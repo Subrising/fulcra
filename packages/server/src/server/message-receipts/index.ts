@@ -38,6 +38,7 @@ import path from "node:path";
 import { z } from "zod";
 import { isNativeQueuedRefusal } from "../agent/native-queued-dispatch.js";
 import { writeJsonFileAtomic, writeJsonFileDurable } from "../atomic-file.js";
+import { SENT_NOTHING_CODES } from "../held-sends.js";
 
 const LegacyReceiptSchema = z.object({
   fingerprint: z.string(),
@@ -1414,10 +1415,12 @@ export class MessageReceipts {
     try {
       await input.send();
     } catch (error) {
-      // A refusal that is known to have sent nothing (the target's held queue is full) leaves no "pending" receipt:
+      // A refusal that is known to have sent nothing (the target's held queue is full, or a plugin message the busy
+      // chat cannot take as a steer) leaves no "pending" receipt:
       // a retry with the same message ID is then tried again, not refused as "outcome unknown". Any other failure
       // keeps its pending receipt, because a send that threw part-way may have been delivered.
-      if ((error as { code?: unknown } | null)?.code === "HELD_QUEUE_FULL") {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (typeof code === "string" && SENT_NOTHING_CODES.has(code)) {
         await this.serial(async () => {
           await rm(file, { force: true });
           this.diskCount = Math.max(0, this.diskCount - 1);

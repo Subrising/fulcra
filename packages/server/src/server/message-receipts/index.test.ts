@@ -642,6 +642,25 @@ test("a refusal that sent nothing (held queue full) can be retried with the same
   expect(deliveries).toBe(1);
 });
 
+test("a refused plugin message (provenance refused) can be retried with the same message ID", async () => {
+  const { requests } = await fixture();
+  let refuse = true;
+  let deliveries = 0;
+  const input = {
+    agentId: "agent",
+    messageId: "plugin-arrival",
+    request: {},
+    send: async () => {
+      if (refuse) throw Object.assign(new Error("chat is busy"), { code: "PROVENANCE_REFUSED" });
+      deliveries++;
+    },
+  };
+  await expect(requests.send(input)).rejects.toThrow("chat is busy");
+  refuse = false;
+  await requests.send(input);
+  expect(deliveries).toBe(1);
+});
+
 test("any other failed send keeps its pending receipt", async () => {
   const { requests } = await fixture();
   const input = {
