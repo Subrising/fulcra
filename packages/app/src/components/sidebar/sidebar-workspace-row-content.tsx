@@ -345,6 +345,9 @@ export const sidebarWorkspaceRowStyles = StyleSheet.create((theme) => ({
     position: "absolute",
     top: 0,
     right: 0,
+    // The 48 px touch kebab hangs below the title line. Later lines (labels) come after it in
+    // the DOM and would take the tap at its centre, which opens the row instead of the menu.
+    zIndex: 1,
   },
 }));
 
