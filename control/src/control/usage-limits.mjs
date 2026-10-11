@@ -205,14 +205,11 @@ export class UsageLimits {
     if (a?.provider !== "claude" || a.status !== "idle" || !uuid(a.id)) return null;
     // A Claude session this controller did not enrol (for example `fulcra run --output-schema`) is never resumed or
     // moved, but its account is still marked limited, so the pool skips it (FU-61).
-    if (!this.store.get(a.id)) {
-      if (this.seen.get(a.id) === a.updatedAt) return null;
-      this.seen.set(a.id, a.updatedAt);
-      return this.observePoolOnly(a.id);
-    }
+    // One read per daemon update. The map is trimmed here, before the not-enrolled branch, so it cannot grow without end.
     if (this.seen.get(a.id) === a.updatedAt) return null;
     this.seen.set(a.id, a.updatedAt);
     if (this.seen.size > 1024) this.seen.delete(this.seen.keys().next().value);
+    if (!this.store.get(a.id)) return this.observePoolOnly(a.id);
     return this.observe(a.id);
   }
   observe(id) {

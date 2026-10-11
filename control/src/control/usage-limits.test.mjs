@@ -563,3 +563,16 @@ test("a limit on a session that is not enrolled marks its pool account limited, 
   assert.equal(f.sent.length, 0);
   assert.equal(readAccounts(root).assignments[id].accountId, work.id);
 });
+
+// Fulcra 0.2.17 (FU-94): the per-update memory is trimmed for sessions that are not enrolled too.
+test("the seen map stays bounded when many sessions that are not enrolled update", async (t) => {
+  const f = fixture(t);
+  for (let i = 0; i < 1100; i++)
+    await f.limits.onAgent({
+      id: randomUUID(),
+      provider: "claude",
+      status: "idle",
+      updatedAt: "u",
+    });
+  assert.ok(f.limits.seen.size <= 1024, `seen has ${f.limits.seen.size} entries`);
+});

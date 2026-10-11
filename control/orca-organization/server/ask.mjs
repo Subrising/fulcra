@@ -77,55 +77,100 @@ export function spawnClaudeOnce({
   try {
     refuseShellShim(command);
   } catch (error) {
-    fs.rmSync(scratch, { recursive: true, force: true });
+    removeScratch(scratch);
     return Promise.reject(error);
   }
   return new Promise((resolve, reject) => {
+    // On Unix the child leads its own process group, so a timeout can stop it and everything it started (FU-93).
     const child = spawn(command, args, {
       cwd: scratch,
       env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      detached: process.platform !== "win32",
       shell: false,
     });
     let out = "";
-    let timedOut = false;
+    let settled = false;
+    const finish = (settle) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      removeScratch(scratch);
+      settle();
+    };
+    // The call ends at the timeout, without waiting for a process that holds the pipes.
     const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
+      killProcessTree(child);
+      finish(() => reject(new AskError("The call timed out", "TIMEOUT")));
     }, timeoutMs);
     child.stdout.on("data", (d) => {
       if (out.length < 5_000_000) out += d;
     });
     child.stderr.resume();
+    // A CLI that exits before it reads a large prompt closes the pipe; the close handler reports it (FU-93 review).
+    child.stdin.on("error", () => {});
     child.on("error", (e) => {
-      clearTimeout(timer);
-      fs.rmSync(scratch, { recursive: true, force: true });
-      reject(
-        new AskError(`The Claude CLI could not start: ${e.code ?? e.message}`, "CLI_UNAVAILABLE"),
+      finish(() =>
+        reject(
+          new AskError(`The Claude CLI could not start: ${e.code ?? e.message}`, "CLI_UNAVAILABLE"),
+        ),
       );
     });
     child.on("close", () => {
-      clearTimeout(timer);
-      fs.rmSync(scratch, { recursive: true, force: true });
-      if (timedOut) return reject(new AskError("The call timed out", "TIMEOUT"));
-      try {
-        resolve(JSON.parse(out));
-      } catch {
-        reject(new AskError("The Claude CLI gave no JSON result", "BAD_RESULT"));
-      }
+      finish(() => {
+        try {
+          resolve(JSON.parse(out));
+        } catch {
+          reject(new AskError("The Claude CLI gave no JSON result", "BAD_RESULT"));
+        }
+      });
     });
     child.stdin.end(prompt);
   });
+}
+
+/** Removes the scratch folder. A file that is still open (Windows) must not throw inside an event handler. */
+function removeScratch(folder) {
+  try {
+    fs.rmSync(folder, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    /* the folder is in the temp directory; the next run does not depend on it */
+  }
+}
+
+/** Stops the child and everything it started: the process group on Unix, `taskkill /T /F` on Windows. */
+export function killProcessTree(child, { platform = process.platform, run = spawn } = {}) {
+  const pid = child.pid;
+  try {
+    if (platform === "win32" && pid) {
+      run("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
+        .on("error", () => {})
+        .unref?.();
+    } else if (pid) {
+      process.kill(-pid, "SIGKILL");
+    }
+  } catch {
+    /* already gone, or no group: fall back to the child itself */
+  }
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    /* already gone */
+  }
 }
 
 const isLimit = (result, now) =>
   result?.is_error === true &&
   (result.api_error_status === 429 || parseLimitLine(String(result.result ?? ""), now) !== null);
 
+// A name (any case) or an ID, as `fulcra run --account` takes it.
 const namedAccount = (state, name) => {
   const wanted = String(name).trim().toLowerCase();
-  return state.accounts.find((a) => a.provider === "claude" && a.name.toLowerCase() === wanted);
+  return state.accounts.find(
+    (a) =>
+      a.provider === "claude" && (a.name.toLowerCase() === wanted || a.id.toLowerCase() === wanted),
+  );
 };
 
 /**
