@@ -17,6 +17,12 @@ import {
 import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
+import {
+  defaultLedgerDir,
+  readOpenLedgerRows,
+  rowsOwnedBy,
+  type LedgerRow,
+} from "./ledger-items.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
   decideSend,
@@ -40,6 +46,9 @@ import {
 // - The notice uses the daemon source, like the finish notification, and waits in the lead's held-send queue: it
 //   never enters or cancels the lead's running turn (held-sends.ts).
 // - daemon.reportUpOnTurnEnd = false turns it off.
+// - A lead that turns idle while it owns open ledger items and has idle workers gets ONE short message that lists them
+//   (FU-101). It is driven by the end of the lead's turn, not by a timer. It is sent at most once per idle period, and
+//   never after a turn that a nudge started, so a lead that does nothing is not nudged again and again.
 // - A new pending permission prompt in a chat sends its lead ONE notice (chat, tool, the start of the command, folder)
 //   (FU-68), so the lead can allow or deny it. It is driven by the daemon's own permission event, not by polling, and
 //   it changes no guard or ask rule.
@@ -56,7 +65,14 @@ interface TurnState {
   open: boolean;
   /** The first user message of this turn was a daemon notice. */
   fromNotice: boolean | null;
+  /** The first user message of this turn was an idle-lead nudge. */
+  fromNudge?: boolean;
 }
+
+/** The message id prefix of an idle-lead nudge; it starts with the notice prefix, so it counts as a notice too. */
+export const NUDGE_MESSAGE_PREFIX = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}idle-nudge:`;
+/** Most workers and items the nudge lists. */
+export const NUDGE_LIST_LIMIT = 8;
 
 export interface ReportUpDeps {
   agentManager: AgentManager;
@@ -71,6 +87,8 @@ export interface ReportUpDeps {
   setTimer?: (run: () => void, ms: number) => void;
   /** Where the limited chats and the held reports are kept, so a daemon restart does not lose them. */
   statePath?: string;
+  /** The open ledger rows; tests replace it. Default: the project ledgers under FULCRA_LEDGER_DIR or ~/shared-vault. */
+  readLedger?: () => readonly LedgerRow[];
 }
 
 interface PersistedState {
@@ -124,6 +142,25 @@ export function permissionCommandOf(request: PermissionRequest): string {
     : text;
 }
 
+/** The idle-lead nudge: a short list of the lead's open items and its idle workers. */
+export function formatNudge(workers: readonly LineAgent[], items: readonly LedgerRow[]): string {
+  const more = (count: number) =>
+    count > NUDGE_LIST_LIMIT ? `, and ${count - NUDGE_LIST_LIMIT} more` : "";
+  const itemList = items
+    .slice(0, NUDGE_LIST_LIMIT)
+    .map((row) => row.id)
+    .join(", ");
+  const workerList = workers
+    .slice(0, NUDGE_LIST_LIMIT)
+    .map((worker) => `${titleOf(worker)} (${worker.id})`)
+    .join(", ");
+  return [
+    `You are idle. You own ${items.length} open ledger item${items.length === 1 ? "" : "s"}: ${itemList}${more(items.length)}.`,
+    `${workers.length} of your worker${workers.length === 1 ? " is" : "s are"} idle: ${workerList}${more(workers.length)}.`,
+    "Send each idle worker its next task, or close the item it finished.",
+  ].join("\n");
+}
+
 export function formatPermissionNotice(input: {
   worker: LineAgent;
   request: PermissionRequest;
@@ -145,6 +182,13 @@ function failureText(event: object): string {
     .filter((part) => part !== undefined && part !== null)
     .map(String)
     .join(" ");
+}
+
+function isNudgeMessage(item: { clientMessageId?: unknown }): boolean {
+  return (
+    typeof item.clientMessageId === "string" &&
+    item.clientMessageId.startsWith(NUDGE_MESSAGE_PREFIX)
+  );
 }
 
 function isNoticeMessage(item: { text?: unknown; clientMessageId?: unknown }): boolean {
@@ -198,6 +242,8 @@ export class ReportUpService {
   private readonly held = new Map<string, string[]>();
   /** Permission prompts already sent to a lead, as "<chat>:<request>"; a request is told once. */
   private readonly askedPermission = new Set<string>();
+  /** Leads already nudged in this idle period; cleared when the lead starts a turn. */
+  private readonly nudged = new Set<string>();
 
   constructor(private readonly deps: ReportUpDeps) {
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
@@ -271,12 +317,14 @@ export class ReportUpService {
     }
     if (kind === "turn_started") {
       turn.open = true;
+      this.nudged.delete(agentId);
       return;
     }
     // A canceled turn (interrupt, stop, archive) sends nothing, and its first message must not decide for the next.
     if (kind === "turn_canceled") {
       turn.open = false;
       turn.fromNotice = null;
+      turn.fromNudge = false;
       return;
     }
     if (kind === "timeline") {
@@ -284,6 +332,7 @@ export class ReportUpService {
       if (item.type !== "user_message" || turn.fromNotice !== null) return;
       turn.open = true;
       turn.fromNotice = isNoticeMessage(item);
+      turn.fromNudge = isNudgeMessage(item);
       return;
     }
     if (kind !== "turn_completed" && kind !== "turn_failed") return;
@@ -302,6 +351,12 @@ export class ReportUpService {
     // Read synchronously at the stop: a caller's armed finish notification removes itself after it delivers.
     const fromNotice = turn.fromNotice === true;
     turn.fromNotice = null;
+    const fromNudge = turn.fromNudge === true;
+    turn.fromNudge = false;
+    if (kind === "turn_completed" && !fromNudge)
+      void this.nudgeIdleLead(agentId).catch((err: unknown) =>
+        this.deps.logger.warn({ err, agentId }, "Idle-lead nudge failed"),
+      );
     const leadHint = reportsTo(this.deps.agentManager.getAgent(agentId) ?? null);
     const armed = leadHint
       ? hasArmedFinishNotification(this.deps.agentManager, agentId, leadHint) ||
@@ -326,6 +381,51 @@ export class ReportUpService {
   /** The lead chat on this computer, or null with the reason. */
   private leadOf(worker: LineAgent): Promise<{ id: string } | { skip: string }> {
     return leadChatOf(this.store, worker, this.deps.localServerId);
+  }
+
+  /** The chats on this computer that report to the lead and are idle now. */
+  private async idleWorkersOf(leadId: string): Promise<LineAgent[]> {
+    const workers: LineAgent[] = [];
+    for (const chat of await this.store.list()) {
+      if (chat.id === leadId || chat.archivedAt || !reportsTo(chat)) continue;
+      if (this.deps.agentManager.getAgent(chat.id)?.lifecycle !== "idle") continue;
+      const owner = await this.leadOf(chat);
+      if ("id" in owner && owner.id === leadId) workers.push(chat);
+    }
+    return workers;
+  }
+
+  /**
+   * A lead that is idle while it owns open ledger items and has idle workers gets one message that lists them.
+   * Event-driven: it runs when the lead's turn ends. Nothing is sent when there are no idle workers, no open items,
+   * when the lead is at a usage limit, or when the nudge was already sent in this idle period.
+   */
+  private async nudgeIdleLead(leadId: string): Promise<void> {
+    if (!this.deps.isEnabled() || this.nudged.has(leadId)) return;
+    await new Promise((resolve) => setImmediate(resolve));
+    if (this.turns.get(leadId)?.open || this.nudged.has(leadId) || this.limitOf(leadId)) return;
+    const lead = await this.store.get(leadId);
+    const live = this.deps.agentManager.getAgent(leadId);
+    if (!lead || lead.archivedAt || live?.internal) return;
+    const last = await this.deps.agentManager.getLastAssistantMessage(leadId).catch(() => null);
+    const stop = classifyEndingAssistantMessage(last, this.now());
+    if (stop && stop.kind !== "network") return;
+    const workers = await this.idleWorkersOf(leadId);
+    if (!workers.length) return;
+    const owned = rowsOwnedBy(
+      (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
+      { id: leadId, title: titleOf(lead) },
+    );
+    if (!owned.length) return;
+    // The lead may have started a turn while the lists were read.
+    if (this.turns.get(leadId)?.open || this.nudged.has(leadId)) return;
+    this.nudged.add(leadId);
+    await this.toLead(
+      leadId,
+      leadId,
+      formatSystemNotificationPrompt(formatNudge(workers, owned)),
+      "idle-nudge",
+    );
   }
 
   /** A new prompt is told to the lead once; a resolved prompt may be asked again under a new request. */
@@ -427,7 +527,12 @@ export class ReportUpService {
   }
 
   /** Sends a notice to a lead, or holds it while the lead is at a limit (sent as one notice after the reset). */
-  private async toLead(workerId: string, leadId: string, prompt: string): Promise<void> {
+  private async toLead(
+    workerId: string,
+    leadId: string,
+    prompt: string,
+    kind: "report-up" | "idle-nudge" = "report-up",
+  ): Promise<void> {
     const leadLimit = this.limitOf(leadId);
     if (leadLimit) {
       const held = this.held.get(leadId) ?? [];
@@ -452,8 +557,8 @@ export class ReportUpService {
     }
     // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
     heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
-      await this.send(leadId, prompt);
-      this.deps.logger.info({ agentId: workerId, lead: leadId }, "Report-up delivered");
+      await this.send(leadId, prompt, kind);
+      this.deps.logger.info({ agentId: workerId, lead: leadId, kind }, "Report-up delivered");
     });
   }
 
@@ -514,7 +619,7 @@ export class ReportUpService {
     await this.toLead(workerId, lead.id, prompt);
   }
 
-  private send(leadId: string, prompt: string): Promise<void> {
+  private send(leadId: string, prompt: string, kind: "report-up" | "idle-nudge"): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
       if (!this.deps.isEnabled()) throw new Error("Report-up was turned off");
@@ -526,7 +631,10 @@ export class ReportUpService {
         agentStorage,
         agentId: leadId,
         prompt,
-        messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`,
+        messageId:
+          kind === "idle-nudge"
+            ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
+            : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`,
         runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
         activeTurnBehavior: "steer",
         steerOnly: true,

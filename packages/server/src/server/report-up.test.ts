@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -6,7 +6,13 @@ import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-lab
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
-import { PERMISSION_COMMAND_CHARS, REPORT_UP_SNIPPET_CHARS, ReportUpService } from "./report-up.js";
+import {
+  NUDGE_MESSAGE_PREFIX,
+  PERMISSION_COMMAND_CHARS,
+  REPORT_UP_SNIPPET_CHARS,
+  ReportUpService,
+} from "./report-up.js";
+import { parseOpenRows, readOpenLedgerRows, rowsOwnedBy } from "./ledger-items.js";
 
 interface FakeChat {
   id: string;
@@ -14,6 +20,7 @@ interface FakeChat {
   labels: Record<string, string>;
   lastMessage?: string;
   cwd?: string;
+  lifecycle?: string;
 }
 
 const LEAD = "11111111-1111-4111-8111-111111111111";
@@ -21,7 +28,12 @@ const WORKER = "22222222-2222-4222-8222-222222222222";
 
 function fixture(
   chats: FakeChat[],
-  options: { enabled?: boolean; now?: number; statePath?: string } = {},
+  options: {
+    enabled?: boolean;
+    now?: number;
+    statePath?: string;
+    ledger?: Array<{ project: string; id: string; owner: string; status: string }>;
+  } = {},
 ) {
   const clock = { now: options.now ?? Date.now() };
   const timers: Array<{ run: () => void; ms: number }> = [];
@@ -45,6 +57,7 @@ function fixture(
     logger: createTestLogger(),
     now: () => clock.now,
     ...(options.statePath ? { statePath: options.statePath } : {}),
+    readLedger: () => options.ledger ?? [],
     setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
       delivered.push({ leadId, prompt });
@@ -377,6 +390,109 @@ describe("report-up limit state across a restart", () => {
     expect(later.delivered[0]!.prompt).toContain("finished a turn");
     writeFileSync(statePath, "{not json");
     expect(() => fixture([lead, worker()], { now: NOW, statePath })).not.toThrow();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// Fulcra 0.2.17 (FU-101): a lead that turns idle with open ledger items and idle workers is nudged once.
+describe("idle-lead nudge", () => {
+  const owned = [
+    { project: "fulcra", id: "FU-12", owner: "Lead (11111111)", status: "IN PROGRESS" },
+  ];
+  const idleWorker = (): FakeChat => ({ ...worker(), lifecycle: "idle" });
+
+  test("the lead gets one short message that lists its open items and idle workers", async () => {
+    const f = fixture([lead, idleWorker()], { ledger: owned });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.leadId).toBe(LEAD);
+    const prompt = f.delivered[0]!.prompt;
+    expect(prompt).toContain("You are idle. You own 1 open ledger item: FU-12.");
+    expect(prompt).toContain(`1 of your worker is idle: Builder (${WORKER})`);
+    expect(prompt).not.toContain("Done: tests pass");
+  });
+
+  test("a turn that a nudge started is not nudged again; the next turn from a worker report is", async () => {
+    const f = fixture([lead, idleWorker()], { ledger: owned });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    f.turn(LEAD, { text: "nudge", clientMessageId: `${NUDGE_MESSAGE_PREFIX}abc` });
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    f.turn(LEAD, { text: "Worker finished a turn", clientMessageId: "daemon-finish:report-up:x" });
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+  });
+
+  test("it sends nothing without an idle worker, without open items it owns, or when disabled", async () => {
+    for (const setup of [
+      fixture([lead, { ...worker(), lifecycle: "running" }], { ledger: owned }),
+      fixture([lead, idleWorker()], { ledger: [] }),
+      fixture([lead, idleWorker()], {
+        ledger: [
+          { project: "fulcra", id: "FU-1", owner: "Another lead (99999999)", status: "OPEN" },
+        ],
+      }),
+      fixture([lead, idleWorker()], { ledger: owned, enabled: false }),
+    ]) {
+      setup.turn(LEAD);
+      await setup.settle();
+      expect(setup.delivered).toHaveLength(0);
+    }
+  });
+
+  test("a lead that ended on a usage limit is not nudged, and a worker's own end is not a lead nudge", async () => {
+    const limitedLead: FakeChat = {
+      ...lead,
+      lastMessage: "You've hit your session limit · resets 3pm (Australia/Brisbane)",
+    };
+    const f = fixture([limitedLead, idleWorker()], {
+      ledger: owned,
+      now: Date.parse("2026-10-11T00:00:00Z"),
+    });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(0);
+    const g = fixture([lead, idleWorker()], { ledger: owned });
+    g.turn(WORKER);
+    await g.settle();
+    expect(g.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(0);
+  });
+});
+
+describe("ledger items", () => {
+  const table = [
+    "# fulcra: open items ledger",
+    "| id | item | kind | owner | status | evidence | source |",
+    "|---|---|---|---|---|---|---|",
+    "| FU-1 | Fix the thing | FIX | Lead (11111111) | IN PROGRESS | — | the owner |",
+    "| FU-2 | Old thing | FIX | Lead (11111111) | DONE | abc123 | the owner |",
+    "| FU-3 | Moved thing | BUILD | Lead (11111111) | MOVED to fmc | — | the owner |",
+    "| FU-4 | Other | BUILD | Someone else | OPEN | — | the owner |",
+  ].join("\n");
+
+  test("reads only the rows that are not DONE or MOVED, and matches the owner by short id or title", () => {
+    const rows = parseOpenRows("fulcra", table);
+    expect(rows.map((row) => row.id)).toEqual(["FU-1", "FU-4"]);
+    expect(rowsOwnedBy(rows, { id: LEAD, title: "Lead" }).map((row) => row.id)).toEqual(["FU-1"]);
+    expect(
+      rowsOwnedBy(rows, { id: "22222222-x", title: "Someone else" }).map((row) => row.id),
+    ).toEqual(["FU-4"]);
+    expect(rowsOwnedBy(rows, { id: "33333333-x", title: "Le" })).toEqual([]);
+  });
+
+  test("reads every project ledger in a folder, and a missing folder gives no rows", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ledger-items-"));
+    mkdirSync(join(dir, "fulcra"));
+    writeFileSync(join(dir, "fulcra", "OPEN-ITEMS.md"), table);
+    mkdirSync(join(dir, "empty"));
+    expect(readOpenLedgerRows(dir).map((row) => `${row.project}:${row.id}`)).toEqual([
+      "fulcra:FU-1",
+      "fulcra:FU-4",
+    ]);
+    expect(readOpenLedgerRows(join(dir, "nowhere"))).toEqual([]);
     rmSync(dir, { recursive: true, force: true });
   });
 });
