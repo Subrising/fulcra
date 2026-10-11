@@ -970,9 +970,12 @@ function LeadRow({
   const canOpen = Boolean(
     seat.state === "assigned" && seat.sessionPresent && seat.sessionId && ownerServerId,
   );
+  // The status comes from the chat list of the computer the chat lives on: for another computer's lead, that is the
+  // computer that reported it, as for a home lead (0.2.15, FU-57).
+  const statusServerId = ownerServerId;
   const chatStatus = useSessionStore((state) =>
-    agentServerId && seat.sessionId
-      ? state.sessions[agentServerId]?.agents.get(seat.sessionId)?.status
+    statusServerId && seat.sessionId
+      ? state.sessions[statusServerId]?.agents.get(seat.sessionId)?.status
       : undefined,
   );
   const state = leadStatusLine(seat, node, canOpen, unavailableText, hostLabel, chatStatus);
