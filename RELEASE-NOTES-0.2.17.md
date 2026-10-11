@@ -11,6 +11,7 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 - `fulcra ask` runs one model call on an account from the account pool. It uses no tools, an empty scratch folder and no agent, workspace or session record. It prints JSON: `output`, `account`, `model` and `costUsd`.
 - Options: `--model` (default `claude-sonnet-5-5`), `--output-schema`, `--timeout`, `--account`, `--host` and `--home`.
 - If the account is at its usage limit, the call marks it limited and moves once to the next usable account. If that also fails, the call stops with a clear error.
+- On Windows, `fulcra ask` never uses a shell. It refuses a `.cmd` or `.bat` Claude file with a clear error; use the native `claude.exe`. Send the prompt on standard input (`-`) and give `--output-schema` as a file path, because `cmd.exe` changes `&`, `|`, `<`, `>`, `^`, `%` and `"` in a command line. See docs/windows.md.
 - `fulcra run --account <name>` checks that the account exists and is usable, then pins the new session to it.
 
 ### Usage limits
