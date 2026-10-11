@@ -18,7 +18,7 @@ def configuration(role, release, logs):
         'RunAtLoad': True,
         'KeepAlive': True,
         'ThrottleInterval': 30,
-        'ExitTimeOut': 30,
+        'ExitTimeOut': 45,
         'ProcessType': 'Background',
         'Umask': 0o077,
         'StandardOutPath': str(logs / (role + '.log')),

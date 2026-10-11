@@ -12,7 +12,7 @@ import { parseTimeoutMs } from "./local-daemon.js";
 
 export function daemonStopCommand(): Command {
   return addJsonAndDaemonHostOptions(new Command("stop").description("Stop the selected daemon"))
-    .option("--timeout <seconds>", "Graceful exit deadline (default: 15)")
+    .option("--timeout <seconds>", "Graceful exit deadline (default: 40)")
     .option("--force", "Permit forced local process cleanup")
     .option("--kill-timeout <seconds>", "Forced exit deadline (default: 3)")
     .option(
@@ -24,7 +24,8 @@ export function daemonStopCommand(): Command {
 
 export async function runStopCommand(options: CommandOptions, _command: Command) {
   const target = options.daemonTarget;
-  const timeoutMs = parseTimeoutMs(options.timeout, 15_000);
+  // Above the supervisor's 30 s termination grace (FU-74).
+  const timeoutMs = parseTimeoutMs(options.timeout, 40_000);
   const deadline = Date.now() + timeoutMs;
   const remaining = () => Math.max(1, deadline - Date.now());
   const override = options.overrideSessionGuard === true;

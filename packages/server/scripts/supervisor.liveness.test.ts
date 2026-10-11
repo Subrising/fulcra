@@ -97,6 +97,32 @@ test("a worker that stops answering heartbeats is killed and replaced", async ()
   expect(result.code).toBe(0);
 }, 30_000);
 
+// 0.2.16.1: a laptop sleep pauses the supervisor; on resume the wall time since the last answer is long, but the
+// worker is healthy. Missed ticks, not wall time, decide.
+test("a supervisor that was paused longer than the limit does not restart a healthy worker", async () => {
+  const result = await runSupervised(
+    `
+    process.on("message", (message) => {
+      if (message.type === "paseo:supervisor-heartbeat") process.send({ type: "paseo:worker-heartbeat" });
+      if (message.type === "paseo:graceful-shutdown") process.exit(0);
+    });
+    process.send({ type: "paseo:ready", listen: "only", serverId: "srv_test" });
+  `,
+    `
+    const { spawn } = await import("node:child_process");
+    // Paused for about 1 s (the limit is 400 ms); a detached helper resumes it.
+    setTimeout(() => {
+      spawn("sh", ["-c", "sleep 1; kill -CONT " + process.pid], { detached: true, stdio: "ignore" }).unref();
+      process.kill(process.pid, "SIGSTOP");
+    }, 300);
+    setTimeout(() => controller.requestShutdown("test_done"), 2500);
+  `,
+  );
+  expect(result.output).not.toContain("worker_unresponsive");
+  expect(result.events, result.output).toEqual(["only", null]);
+  expect(result.code).toBe(0);
+}, 30_000);
+
 test("a worker that never answers heartbeats (an older build) is not restarted for it", async () => {
   const result = await runSupervised(
     `

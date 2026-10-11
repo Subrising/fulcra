@@ -11,6 +11,8 @@ const WORKER_HEARTBEAT_INTERVAL_MS = 1_000;
 const WORKER_TERMINATION_GRACE_MS = 30_000;
 // FU-74: a worker that answers no heartbeat for this long has a blocked main thread (no RPC, no signal handling);
 // it is restarted. Armed only after the worker's first answer, so a worker that never answers is left alone.
+// 0.2.16.1: counted as missed heartbeat ticks, not wall time. After a sleep the interval fires once, so a
+// healthy worker misses at most one tick and is not restarted.
 const WORKER_UNRESPONSIVE_MS = 180_000;
 
 interface SupervisorLogFileOptions {
@@ -196,6 +198,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   const heartbeatIntervalMs = options.timings?.heartbeatIntervalMs ?? WORKER_HEARTBEAT_INTERVAL_MS;
   const terminationGraceMs = options.timings?.terminationGraceMs ?? WORKER_TERMINATION_GRACE_MS;
   const unresponsiveMs = options.timings?.unresponsiveMs ?? WORKER_UNRESPONSIVE_MS;
+  const maxMissedTicks = Math.max(1, Math.ceil(unresponsiveMs / heartbeatIntervalMs));
 
   let child: ChildProcess | null = null;
   let restarting = false;
@@ -314,23 +317,25 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
 
     const currentChild = child;
     let reachedReady = false;
-    let lastAnswerAt: number | null = null;
+    // Armed by the worker's first answer. A tick with no answer since the previous tick is a missed tick.
+    let answering = false;
+    let answeredSinceTick = false;
+    let missedTicks = 0;
     // Serialize endpoint writes with exit/clear before allowing another worker to spawn.
     const heartbeat = setInterval(() => {
-      if (
-        lastAnswerAt !== null &&
-        child === currentChild &&
-        !restarting &&
-        !shuttingDown &&
-        Date.now() - lastAnswerAt > unresponsiveMs
-      ) {
-        writeLifecycleLog("Worker answered no heartbeat; restarting it", {
-          silentMs: Date.now() - lastAnswerAt,
-          workerPid: currentChild.pid ?? null,
-        });
-        lastAnswerAt = null;
-        requestRestart("worker_unresponsive");
-        return;
+      if (answering && child === currentChild && !restarting && !shuttingDown) {
+        missedTicks = answeredSinceTick ? 0 : missedTicks + 1;
+        answeredSinceTick = false;
+        if (missedTicks >= maxMissedTicks) {
+          writeLifecycleLog("Worker answered no heartbeat; restarting it", {
+            missedTicks,
+            workerPid: currentChild.pid ?? null,
+          });
+          answering = false;
+          missedTicks = 0;
+          requestRestart("worker_unresponsive");
+          return;
+        }
       }
       const message: SupervisorHeartbeatMessage = { type: "paseo:supervisor-heartbeat" };
       if (currentChild.connected) {
@@ -368,7 +373,8 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       }
 
       if (lifecycleMessage.type === "paseo:worker-heartbeat") {
-        lastAnswerAt = Date.now();
+        answering = true;
+        answeredSinceTick = true;
         return;
       }
 

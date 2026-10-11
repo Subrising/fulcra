@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { main, resolveBackgroundExecPath } from "./node-entrypoint-runner";
+import { backgroundExecArgv, main, resolveBackgroundExecPath } from "./node-entrypoint-runner";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -16,6 +16,27 @@ declare global {
 }
 
 describe("node-entrypoint-runner", () => {
+  it("keeps Node flags such as --disable-warning when it execs into the Helper", () => {
+    expect(
+      backgroundExecArgv(
+        "/A.app/Contents/Frameworks/A Helper.app/Contents/MacOS/A Helper",
+        ["--disable-warning=DEP0040"],
+        [
+          "/A.app/Contents/MacOS/A",
+          "/A.app/Contents/Resources/runner.js",
+          "node-script",
+          "/entry.js",
+        ],
+      ),
+    ).toEqual([
+      "/A.app/Contents/Frameworks/A Helper.app/Contents/MacOS/A Helper",
+      "--disable-warning=DEP0040",
+      "/A.app/Contents/Resources/runner.js",
+      "node-script",
+      "/entry.js",
+    ]);
+  });
+
   it("preserves Electron node-mode env before loading the target entrypoint", async () => {
     const originalArgv = process.argv;
     const originalRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
