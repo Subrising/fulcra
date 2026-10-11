@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { parseLimitLine } from "../../src/control/usage-limits.mjs";
+import { parseLimitLine } from "./limit-line.mjs";
 import { accountStatus, choose, markAccountLimited, readAccounts, readUsage } from "./accounts.mjs";
 
 export class AskError extends Error {
