@@ -11,7 +11,7 @@ import { ControlStore } from "./store.mjs";
 import { Controller } from "./controller.mjs";
 import { Recovery } from "./recovery.mjs";
 import { COMPANY, PROGRAMME } from "./authority.mjs";
-import { UsageLimits } from "./usage-limits.mjs";
+import { UsageLimits, parseRevokedLine } from "./usage-limits.mjs";
 import { ProviderRecovery } from "./provider-recovery.mjs";
 import { codexResetAt } from "./account-rotation.mjs";
 import {
@@ -510,3 +510,98 @@ for (const change of ["provider", "disabled", "expired", "limited"])
     assert.equal(w.recovers.length, 0);
     assert.equal(readAccounts(w.root).rotations.length, 0);
   });
+
+// FU-112: a revoked or invalid account token is an account-down, not a usage limit.
+const REVOKED =
+  'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has been revoked."}}';
+const revokedTail = () => {
+  const x = tail();
+  x.entries[1] = entry(7, { type: "assistant_message", text: REVOKED, messageId: "m-revoked" });
+  return x;
+};
+const agentUpdate = (id, n) => ({ id, provider: "claude", status: "idle", updatedAt: `u${n}` });
+
+test("FU-112: a revoked token marks the account down with its reason, moves the session even with limit-rotation off, continues it once, and tells the lead once per account", async (t) => {
+  const w = world(t);
+  const down = [];
+  w.control.wakes.accountDown = (session, r) => down.push({ session, from: r.fromName });
+  const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now),
+    b = await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  assert.equal(readAccounts(w.root).rotateOnLimit, false, "the owner's limit setting is off");
+  const one = await w.enrol(),
+    two = await w.enrol();
+  for (const id of [one, two]) {
+    w.tails.set(id, revokedTail());
+    assert.equal((await assign(w.root, id, "claude", w.clock.now)).account.id, a.id);
+  }
+  const stop = await w.control.usageLimits.onAgent(agentUpdate(one, 1));
+  assert.match(stop.outcome, /moving to account "Personal"/);
+  const state = readAccounts(w.root);
+  const work = state.accounts.find((x) => x.id === a.id);
+  assert.equal(work.limitedUntil, null, "no reset time: it is not a usage limit");
+  assert.match(work.revoked.reason, /OAuth token has been revoked/);
+  assert.equal(accountOf(state, one).name, "Personal");
+  // `account ls` shows the state and the reason.
+  const shown = publicView(state, w.clock.now).accounts.find((x) => x.id === a.id);
+  assert.equal(shown.status.state, "revoked");
+  assert.match(shown.status.reason, /revoked/);
+  // The second session on the same account moves too, but the lead hears about the account only once.
+  await w.control.usageLimits.onAgent(agentUpdate(two, 2));
+  assert.equal(accountOf(readAccounts(w.root), two).name, "Personal");
+  assert.deepEqual(down, [{ session: one, from: "Work" }], "one notice for the account");
+  assert.equal(w.rotated.length, 2, "each session's owner still hears that it moved");
+  // The stopped session is relaunched in place and continued once, with a text that names the token.
+  w.clock.now += 60000;
+  await w.control.usageLimits.tick();
+  assert.deepEqual([...w.recovers].sort(), [one, two].sort());
+  assert.equal(w.sent.length, 2);
+  assert.match(w.sent[0].text, /token of your account was revoked or invalid/);
+  assert.match(w.sent[0].text, /moved the session to account "Personal" with its history/);
+  assert.equal(readAccounts(w.root).rotations[0].reason, "revoked");
+  // A new session avoids the revoked account; signing the account in again brings it back.
+  assert.equal((await assign(w.root, randomUUID(), "claude", w.clock.now)).account.id, b.id);
+  await setAccount(w.root, a.id, { auth: "ok" });
+  assert.equal(readAccounts(w.root).accounts.find((x) => x.id === a.id).revoked, null);
+});
+
+test("FU-112: with no other account ready, a revoked token is recorded, nothing is sent, and the stop says why", async (t) => {
+  const w = world(t);
+  await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  const id = await w.enrol();
+  w.tails.set(id, revokedTail());
+  await assign(w.root, id, "claude", w.clock.now);
+  const stop = await w.control.usageLimits.onAgent(agentUpdate(id, 1));
+  assert.equal(stop.state, "unresolved");
+  assert.match(stop.outcome, /revoked or invalid and no other account is ready/);
+  w.clock.now += 3600000;
+  await w.control.usageLimits.tick();
+  assert.equal(w.sent.length, 0);
+  assert.deepEqual(w.recovers, []);
+});
+
+test("FU-112: a human-held session on a revoked account is not moved; the account is still marked down", async (t) => {
+  const w = world(t);
+  const a = await addAccount(w.root, { provider: "claude", name: "Work" }, w.clock.now);
+  await addAccount(w.root, { provider: "claude", name: "Personal" }, w.clock.now + 1);
+  const id = randomUUID();
+  w.store.created(id, T(1), path.join(w.dir, id)); // enrolled, never delegated
+  w.tails.set(id, revokedTail());
+  await assign(w.root, id, "claude", w.clock.now);
+  await w.control.usageLimits.onAgent(agentUpdate(id, 1));
+  assert.equal(accountOf(readAccounts(w.root), id).name, "Work", "not moved");
+  assert.ok(readAccounts(w.root).accounts.find((x) => x.id === a.id).revoked);
+  assert.deepEqual(w.rotated, []);
+  assert.equal(w.sent.length, 0);
+});
+
+test("FU-112: ordinary text that mentions a token or a 401 is never read as a revoked account", () => {
+  for (const text of [
+    "I fixed the 401 error in the login handler.",
+    "The OAuth token is stored in the Keychain.\nFailed to authenticate is the message users see.",
+    "Failed to authenticate with the staging server, so I used the cached build instead. " +
+      "x".repeat(400),
+  ])
+    assert.equal(parseRevokedLine(text), null, text.slice(0, 40));
+  assert.equal(parseRevokedLine(REVOKED).kind, "revoked");
+  assert.equal(parseRevokedLine("API Error: 401 · Please run /login").kind, "revoked");
+});

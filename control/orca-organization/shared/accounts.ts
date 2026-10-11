@@ -19,6 +19,8 @@ const status = z.union([
   z.object({ state: z.literal("ok") }).strict(),
   z.object({ state: z.literal("disabled") }).strict(),
   z.object({ state: z.literal("auth-expired") }).strict(),
+  // FU-112: the token was revoked or is invalid. `reason` is the CLI's own one-line text; there is no reset time.
+  z.object({ state: z.literal("revoked"), reason: z.string().max(200) }).strict(),
   z.object({ state: z.literal("signing-in") }).strict(),
   z.object({ state: z.literal("limited"), until: z.string().max(40) }).strict(),
 ]);
@@ -70,7 +72,7 @@ export const accountsView = z
             to: z.string().max(60).nullable(),
             resetAt: z.string().nullable(),
             earliestReset: z.string().nullable(),
-            reason: z.literal("manual").optional(),
+            reason: z.enum(["manual", "revoked"]).optional(),
           })
           .strict(),
       )

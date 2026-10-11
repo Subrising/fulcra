@@ -32,8 +32,12 @@ import {
   fencedRelaunch,
 } from "./account-rotation.mjs";
 // The limit-line parser lives with the Command Centre plugin, which bundles it on its own (fulcra ask, FU-58).
-import { parseLimitLine, MAX_RESET_AHEAD_MS } from "../../orca-organization/server/limit-line.mjs";
-export { parseLimitLine, MAX_RESET_AHEAD_MS };
+import {
+  parseLimitLine,
+  parseRevokedLine,
+  MAX_RESET_AHEAD_MS,
+} from "../../orca-organization/server/limit-line.mjs";
+export { parseLimitLine, parseRevokedLine, MAX_RESET_AHEAD_MS };
 
 export const RESUME_JITTER_MS = [30000, 120000],
   MAX_ATTEMPTS = 6,
@@ -58,7 +62,8 @@ export function detectStop(tail) {
     return null; // something newer exists
   if (last.item?.type !== "assistant_message") return null;
   const stoppedAt = Date.parse(last.timestamp ?? tail.updatedAt ?? "");
-  const parsed = parseLimitLine(last.item.text, stoppedAt);
+  // FU-112: a revoked or invalid account token ends the turn the same way; it has no reset time.
+  const parsed = parseLimitLine(last.item.text, stoppedAt) ?? parseRevokedLine(last.item.text);
   if (!parsed) return null;
   return {
     turnId: last.turnId ?? null,
@@ -70,6 +75,13 @@ export function detectStop(tail) {
   };
 }
 export function continuationText(stop, rotation = null) {
+  if (parseRevokedLine(stop.line))
+    return (
+      `[Orca controller: your previous turn stopped because the token of your account was revoked or invalid ("${String(stop.line).slice(0, 200)}", recorded ${stop.stoppedAt}). ` +
+      `${rotation?.to ? rotationNote(rotation) : "No other account was ready."}]\n` +
+      "Continue exactly where you stopped. First check your working tree, git log and any receipts or artifacts to see how far that turn got, " +
+      "and do NOT repeat an external action (push, merge, deploy, message, channel send, session start, or a write outside your directory) unless you have verified it did not happen."
+    );
   const lead = rotation?.to
     ? `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}). ${rotationNote(rotation)}]\n`
     : `[Orca controller: your previous turn stopped at the Claude usage limit ("${stop.line}", recorded ${stop.stoppedAt}); the limit has now reset.]\n`;
@@ -210,7 +222,13 @@ export class UsageLimits {
         );
       return this.row(row.id);
     }
-    if (!row.resetAt)
+    if (stop.kind === "revoked")
+      this.finish(
+        row.id,
+        "unresolved",
+        "The account token is revoked or invalid and no other account is ready; nothing is resumed automatically",
+      );
+    else if (!row.resetAt)
       this.finish(
         row.id,
         "unresolved",

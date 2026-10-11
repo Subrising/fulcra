@@ -51,6 +51,18 @@ const validZone = (zone) => {
     return false;
   }
 };
+// A revoked or invalid account token (FU-112). The CLI ends every turn with one line such as "Failed to authenticate.
+// API Error: 401 {...OAuth token has been revoked...}". Matched on the whole single line only, so prose that mentions a
+// token never counts. A token is a property of the account, not a usage window: there is no reset time.
+const REVOKED_LINE =
+  /^(?:Failed to authenticate\b|API Error: 401\b|(?:Invalid|Expired) (?:bearer )?token\b|OAuth token (?:has been )?(?:revoked|expired|invalid)\b)[^\n]{0,300}$/i;
+const REVOKED_WORDS = /revoked|invalid|expired|authentication_error|401|unauthori[sz]ed|\/login/i;
+export function parseRevokedLine(text) {
+  if (typeof text !== "string") return null;
+  const line = text.trim();
+  if (line.length > 400 || !REVOKED_LINE.test(line) || !REVOKED_WORDS.test(line)) return null;
+  return { kind: "revoked", reset: null, zone: null, resetAt: null };
+}
 // Pure. Returns null when the text is not the CLI's limit line; otherwise { kind, reset, zone, resetAt } where resetAt
 // is null if the time cannot be resolved (then nothing is resumed automatically; the stop is still recorded).
 export function parseLimitLine(

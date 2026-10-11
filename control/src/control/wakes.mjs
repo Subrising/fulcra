@@ -201,9 +201,44 @@ export class Wakes {
         to: r.toName,
         resetAt: r.resetAt,
         earliestReset: r.earliestReset,
+        ...(r.reason === "revoked" ? { revoked: true } : {}),
       })
         ? 1
         : 0;
+    if (n) this.pump();
+    return n;
+  }
+  // FU-112: an account's token was revoked or is invalid. The session's lead (and its manager) and the main assistant
+  // hear it once per account: the identity holds the holder and the account, not the session.
+  accountDown(session, r) {
+    if (!r?.from) return 0;
+    const holders = [];
+    if (uuid(session))
+      for (const o of this.owned({ session })) holders.push({ holder: o.holder, seat: o.seat });
+    if (uuid(session) && this.has("manager_workers"))
+      for (const m of this.db
+        .prepare("SELECT DISTINCT supervisor FROM manager_workers WHERE worker=?")
+        .all(session))
+        if (uuid(m.supervisor)) holders.push({ holder: m.supervisor, seat: null });
+    if (this.has("role_bindings"))
+      for (const b of this.db
+        .prepare(
+          "SELECT DISTINCT session FROM role_bindings WHERE role='prime' AND state='assigned' AND session IS NOT NULL",
+        )
+        .all())
+        if (uuid(b.session)) holders.push({ holder: b.session, seat: null });
+    const seen = new Set();
+    let n = 0;
+    for (const h of holders) {
+      if (seen.has(h.holder)) continue;
+      seen.add(h.holder);
+      n += this.enqueue({ ...h, session: null }, "account-down", ["account-down", r.from], {
+        account: r.fromName,
+        moved: r.toName ?? null,
+      })
+        ? 1
+        : 0;
+    }
     if (n) this.pump();
     return n;
   }
@@ -337,6 +372,12 @@ export class Wakes {
           : `- [needs input] ${who} is waiting on "${p.requestTitle || p.name}" (${p.requestKind ?? "permission"}). Inspect it with role_inspect_session; an operator decides permissions.`;
       if (w.kind === "error")
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
+      if (w.kind === "account-down")
+        return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
+      if (w.kind === "account-rotated" && p.revoked)
+        return p.to
+          ? `- [account] ${who} stopped on account "${p.from}" because its token is revoked or invalid; Fulcra moved it to account "${p.to}" and it continues with its history.`
+          : `- [account] ${who} stopped on account "${p.from}" because its token is revoked or invalid, and no other account is ready.`;
       if (w.kind === "account-rotated")
         return p.to
           ? `- [account] ${who} reached the usage limit on account "${p.from}" (resets ${p.resetAt}); Fulcra moved it to account "${p.to}" and it continues with its history.`

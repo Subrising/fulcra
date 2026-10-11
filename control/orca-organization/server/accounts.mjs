@@ -150,6 +150,8 @@ export async function withStoreLock(root, fn) {
 // ---- status and choice (pure)
 export function accountStatus(a, now = Date.now()) {
   if (!a.enabled) return { state: "disabled" };
+  // FU-112: the account's token was revoked or is invalid. Down until the owner signs it in again; no reset time.
+  if (a.revoked) return { state: "revoked", reason: String(a.revoked.reason ?? "").slice(0, 200) };
   if (a.auth === "expired") return { state: "auth-expired" };
   if (a.auth === "signing-in") return { state: "signing-in" };
   if (a.limitedUntil && Date.parse(a.limitedUntil) > now)
@@ -303,8 +305,10 @@ export async function setAccount(root, id, patch) {
     if (patch.auth !== undefined) {
       if (!["ok", "expired", "signing-in"].includes(patch.auth)) throw Error("Unknown auth state");
       a.auth = patch.auth;
+      if (patch.auth === "ok") a.revoked = null;
     }
     if (patch.clearLimit === true) {
+      a.revoked = null;
       a.limitedUntil = null;
       a.limitKind = null;
       a.limitNote = null;
@@ -444,6 +448,17 @@ export async function sessionEnded(root, sessionId) {
     return null;
   });
 }
+// A revoked or invalid token seen on a one-shot call (`fulcra ask`): no session, so the account is marked directly.
+// `fresh` is true only for the call that changed the account, so the owner is told once per account (FU-112).
+export async function markAccountRevoked(root, accountId, { note = null } = {}, now = Date.now()) {
+  return update(root, (s) => {
+    const a = s.accounts.find((x) => x.id === accountId);
+    if (!a) return null;
+    const fresh = !a.revoked;
+    if (fresh) a.revoked = { at: iso(now), reason: note ? String(note).slice(0, 200) : "" };
+    return { id: a.id, name: a.name, fresh };
+  });
+}
 // A usage limit seen on a one-shot call (`fulcra ask`): no session, so the account is marked directly. Same record as
 // rotate() keeps: limitedUntil, limitKind and limitNote; a later reset is never shortened.
 export async function markAccountLimited(
@@ -481,8 +496,16 @@ export async function rotate(
     if (cur?.takeover) return null; // an in-flight/uncertain switch owns this assignment
     const from = cur ? s.accounts.find((a) => a.id === cur.accountId) : null;
     if (!from) return null; // not a pooled launch: nothing to rotate
-    const until = resetAt && Date.parse(resetAt) > now ? resetAt : iso(now + DEFAULT_LIMIT_MS);
-    if (!from.limitedUntil || Date.parse(from.limitedUntil) < Date.parse(until)) {
+    const revoked = kind === "revoked";
+    const freshRevoked = revoked && !from.revoked;
+    if (freshRevoked)
+      from.revoked = { at: iso(now), reason: note ? String(note).slice(0, 200) : "" };
+    const until = revoked
+      ? null
+      : resetAt && Date.parse(resetAt) > now
+        ? resetAt
+        : iso(now + DEFAULT_LIMIT_MS);
+    if (!revoked && (!from.limitedUntil || Date.parse(from.limitedUntil) < Date.parse(until))) {
       from.limitedUntil = until;
       // The kind of limit the text named ("session", "weekly", ...). Kept with limitedUntil so the pair can be sent to
       // another computer as one record.
@@ -490,7 +513,8 @@ export async function rotate(
       from.limitNote = note ? String(note).slice(0, 200) : null;
     }
     // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
-    const move = reassign && s.rotateOnLimit === true;
+    // A revoked token cannot work again by waiting, so it moves the session whatever the owner's limit setting is.
+    const move = reassign && (revoked || s.rotateOnLimit === true);
     const to = move ? choose(s, provider, now, [from.id]) : null;
     if (to) {
       s.assignments[sessionId] = { accountId: to.id, provider, at: iso(now), ended: false };
@@ -506,7 +530,8 @@ export async function rotate(
       toName: to?.name ?? null,
       resetAt: until,
       stopId,
-      reason: "limit",
+      reason: revoked ? "revoked" : "limit",
+      ...(freshRevoked ? { newlyRevoked: true } : {}),
       earliestReset: to ? null : earliestReset(s, provider, now),
       ...(move ? {} : { held: true }),
     };
@@ -684,7 +709,7 @@ export function publicView(s, now = Date.now()) {
       to: r.toName,
       resetAt: r.resetAt,
       earliestReset: r.earliestReset,
-      ...(r.reason === "manual" ? { reason: "manual" } : {}),
+      ...(r.reason === "manual" || r.reason === "revoked" ? { reason: r.reason } : {}),
     })),
     defaultAccounts: { ...s.defaults },
     rotateOnLimit: s.rotateOnLimit === true,

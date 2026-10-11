@@ -719,3 +719,79 @@ test("one deadline covers the whole ask: the retry gets the time that is left, a
   );
   assert.equal(calls.length, 1);
 });
+
+// FU-112: a revoked or invalid token is an account-down, not a usage limit.
+const REVOKED_TEXT =
+  'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has been revoked."}}';
+// A fake Claude CLI that prints the revoked-token error for the first account's token and answers for any other.
+const revokedFor = (token) =>
+  fakeClaude(`
+    process.stdin.resume();
+    process.stdin.on("end", () => {
+      const revoked = process.env.CLAUDE_CODE_OAUTH_TOKEN === ${JSON.stringify(token)};
+      process.stdout.write(JSON.stringify(revoked
+        ? { is_error: true, api_error_status: 401, result: ${JSON.stringify(REVOKED_TEXT)} }
+        : { is_error: false, result: "hello from the next account", modelUsage: { "claude-haiku-5-5": {} } }));
+    });
+  `).file;
+
+test(
+  "an ask whose account token is revoked marks the account down with its reason and tries the next one",
+  posix,
+  async () => {
+    const { root, a, b } = await pool();
+    const bin = revokedFor(`sk-ant-oat01-${a.id}`);
+    const r = await askOnce({
+      root,
+      keychain,
+      input: input(),
+      now: () => T0,
+      spawnClaude: (o) => spawnClaudeOnce({ ...o, bin }),
+    });
+    assert.equal(r.output, "hello from the next account");
+    assert.equal(r.account, "Personal");
+    const stored = readAccounts(root).accounts.find((x) => x.id === a.id);
+    assert.equal(stored.limitedUntil, null, "not a usage limit: no reset time");
+    assert.match(stored.revoked.reason, /OAuth token has been revoked/);
+    assert.equal(readAccounts(root).accounts.find((x) => x.id === b.id).revoked ?? null, null);
+    // The revoked account stays out of the next call, with no new probe of it.
+    const used = [];
+    await askOnce({
+      root,
+      keychain,
+      input: input(),
+      now: () => T0 + 1000,
+      spawnClaude: async (o) => (used.push(o.token), ok()),
+    });
+    assert.deepEqual(used, [`sk-ant-oat01-${b.id}`]);
+  },
+);
+
+test("an ask for a named account with a revoked token says so and does not use another", async () => {
+  const { root, a } = await pool();
+  await rejects(
+    askOnce({
+      root,
+      keychain,
+      input: input({ account: "Work" }),
+      now: () => T0,
+      spawnClaude: async () => ({ is_error: true, api_error_status: 401, result: REVOKED_TEXT }),
+    }),
+    "ACCOUNT_REVOKED",
+  );
+  assert.ok(readAccounts(root).accounts.find((x) => x.id === a.id).revoked);
+});
+
+test("a revoked token on every account ends with a clear error, never a limit message", async () => {
+  const { root } = await pool();
+  await rejects(
+    askOnce({
+      root,
+      keychain,
+      input: input(),
+      now: () => T0,
+      spawnClaude: async () => ({ is_error: true, result: REVOKED_TEXT }),
+    }),
+    "ALL_REVOKED",
+  );
+});

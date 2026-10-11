@@ -9,7 +9,11 @@ const account = z.object({
   id: z.string(),
   name: z.string(),
   provider: z.string().optional(),
-  status: z.object({ state: z.string(), until: z.string().optional() }),
+  status: z.object({
+    state: z.string(),
+    until: z.string().optional(),
+    reason: z.string().optional(),
+  }),
   isDefault: z.boolean().optional(),
 });
 const listing = z.object({ accounts: z.array(account) });
@@ -100,12 +104,19 @@ export async function resolveRunAccount(
     };
   if (found.status.state !== "ok") {
     const until = (found.status as { until?: string }).until;
+    const reason = (found.status as { reason?: string }).reason;
     throw {
       code: found.status.state === "limited" ? "ACCOUNT_LIMITED" : "ACCOUNT_UNAVAILABLE",
-      message: `Account "${found.name}" cannot be used now (${found.status.state}${until ? ` until ${until}` : ""})`,
+      message: `Account "${found.name}" cannot be used now (${found.status.state}${until ? ` until ${until}` : ""}${reason ? `: ${reason}` : ""})`,
     };
   }
   return found.name;
+}
+
+export function statusReason(status: { state: string; until?: string; reason?: string }): string {
+  if (status.state === "revoked") return status.reason || "token revoked or invalid";
+  if (status.state === "limited") return `limit until ${status.until ?? "unknown"}`;
+  return "";
 }
 
 const schema: OutputSchema<Account> = {
@@ -114,6 +125,8 @@ const schema: OutputSchema<Account> = {
     { header: "ACCOUNT", field: "name" },
     { header: "PROVIDER", field: (row) => row.provider ?? "" },
     { header: "STATUS", field: (row) => row.status.state },
+    // Why an account is down: the CLI's own line for a revoked token, or the reset time of a usage limit.
+    { header: "REASON", field: (row) => statusReason(row.status) },
   ],
 };
 
