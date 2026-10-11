@@ -128,7 +128,9 @@ function StopApp([string]$build) {
   if (@(DaemonProcesses).Count -gt 0) { Fail 'daemon processes still run after a graceful stop' }
 }
 function StartApp {
-  Start-Process -FilePath (Join-Path $Current 'Fulcra.exe') -WorkingDirectory $Current
+  # explorer.exe starts the app outside this task's job object. A direct Start-Process child is ended when the
+  # scheduled task ends, and the window closes while the daemon stays up.
+  Start-Process -FilePath explorer.exe -ArgumentList (Join-Path $Current 'Fulcra.exe')
 }
 
 # --- Build ---

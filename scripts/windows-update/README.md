@@ -44,3 +44,6 @@ Exit codes: 0 done, 2 unhealthy and rolled back, 3 refused (chats would stop), o
 
 ## Build on another drive
 `-BuildsRoot E:\fulcra-builds` puts the clone, the build and the caches (npm, electron, electron-builder, temp) on that drive, in `E:\fulcra-cache`. The junction `fulcra-current` can point across drives. Use it when C: is low on space. Without the option the builds go to `fulcra-builds` in the user profile.
+
+## Starting the app
+The script starts the app with `explorer.exe`, so the window is not a child of the scheduled task. In the 13:37 run on 11 Oct the window process had ended by the time the health check passed, with the daemon still up (INFERRED: the task ended it). Starting it with `explorer.exe` from a task kept the window alive. The change inside the script itself was not re-run end to end.
