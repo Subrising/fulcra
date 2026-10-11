@@ -8,6 +8,7 @@ import { useCallback, useMemo, type ComponentType } from "react";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { HeaderIconBadge } from "@/components/headers/header-icon-badge";
+import { SidebarMenuToggle } from "@/components/headers/menu-header";
 import { HeaderToggleButton } from "@/components/headers/header-toggle-button";
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { ScreenTitle } from "@/components/headers/screen-title";
@@ -211,6 +212,8 @@ export function PluginSurfaceScreen() {
   const headerLeft = useMemo(
     () => (
       <>
+        {/* FU-62: the host home is this screen; like a workspace it needs the menu to reach the sidebar. */}
+        <SidebarMenuToggle />
         {Icon ? (
           <HeaderIconBadge>
             <ThemedPluginHeaderIcon Icon={Icon} uniProps={mutedColorMapping} />

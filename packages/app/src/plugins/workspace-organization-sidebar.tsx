@@ -1,3 +1,4 @@
+import { SidebarTopContent } from "@/components/sidebar/sidebar-top-content";
 import React, { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { router } from "expo-router";
 import { FolderKanban, FolderGit2, MessageSquare } from "lucide-react-native";
@@ -137,6 +138,7 @@ function OrganizationRows(
   const names = useMemo(() => new Map(hosts.map((host) => [host.serverId, host.label])), [hosts]);
   return (
     <ScrollView keyboardShouldPersistTaps="handled" style={styles.scroll}>
+      <SidebarTopContent />
       {props.header}
       {props.offline && (
         <Text style={styles.notice}>Company connection unavailable · showing saved grouping.</Text>
