@@ -387,14 +387,14 @@ branding	A	39	0	RELEASE-NOTES-0.2.11.md
 branding	A	36	0	RELEASE-NOTES-0.2.12.md
 branding	A	46	0	RELEASE-NOTES-0.2.13.md
 branding	A	30	0	RELEASE-NOTES-0.2.14.md
-branding	A	33	0	RELEASE-NOTES-0.2.15.md
+branding	A	38	0	RELEASE-NOTES-0.2.15.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
 branding	A	17	0	RELEASE-NOTES-v0.2.0.md
 branding	A	13	0	release/README.md
 branding	A	46	0	scripts/c2c-ui-fixture/README.md
-branding	A	44	0	scripts/windows-update/README.md
+branding	A	56	0	scripts/windows-update/README.md
 branding	M	26	34	SECURITY.md
 branding	A	178	0	skills/fulcra/SKILL.md
 build-ci	A	15	0	.gitattributes
@@ -533,7 +533,7 @@ build-ci	A	264	0	scripts/updater-dependency-overrides.test.mjs
 build-ci	A	247	0	scripts/upstream-watch.mjs
 build-ci	A	11	0	scripts/vitest-global-setup.mjs
 build-ci	A	135	0	scripts/websocket-dependency-overrides.test.mjs
-build-ci	A	248	0	scripts/windows-update/update.ps1
+build-ci	A	261	0	scripts/windows-update/update.ps1
 build-ci	M	4	0	vitest.config.ts
 core-fixes	M	10	8	packages/app/e2e/browser/agent-message-submission.spec.ts
 core-fixes	M	3	0	packages/app/e2e/browser/agent-timeline-scroll-smoothness.spec.ts
@@ -646,8 +646,8 @@ core-fixes	A	157	0	packages/server/src/server/report-up.test.ts
 core-fixes	A	256	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
-core-fixes	A	257	0	packages/server/src/server/revive-on-restart.test.ts
-core-fixes	A	354	0	packages/server/src/server/revive-on-restart.ts
+core-fixes	A	294	0	packages/server/src/server/revive-on-restart.test.ts
+core-fixes	A	382	0	packages/server/src/server/revive-on-restart.ts
 core-fixes	M	1	1	packages/server/src/server/selective-timeline-delivery.e2e.test.ts
 core-fixes	M	9	0	packages/server/src/server/server-id.ts
 core-fixes	M	145	1	packages/server/src/server/session/checkout/checkout-session.test.ts
@@ -1391,8 +1391,8 @@ plugin-host	M	4	3	packages/app/src/plugins/hosts/index.ts
 plugin-host	A	87	0	packages/app/src/plugins/observed-agents-model.ts
 plugin-host	A	52	0	packages/app/src/plugins/observed-agents.ts
 plugin-host	A	347	0	packages/app/src/plugins/prime-sidebar.browser.test.tsx
-plugin-host	A	1115	0	packages/app/src/plugins/prime-sidebar.test.tsx
-plugin-host	A	1156	0	packages/app/src/plugins/prime-sidebar.tsx
+plugin-host	A	1136	0	packages/app/src/plugins/prime-sidebar.test.tsx
+plugin-host	A	1159	0	packages/app/src/plugins/prime-sidebar.tsx
 plugin-host	A	315	0	packages/app/src/plugins/radius-scratch-owner.test.tsx
 plugin-host	A	138	0	packages/app/src/plugins/radius-scratch-owner.ts
 plugin-host	A	290	0	packages/app/src/plugins/react-native/pan-surface.test.tsx

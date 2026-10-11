@@ -10,6 +10,7 @@ Fulcra 0.2.15 is based on Paseo v0.11.0-beta.5.
 
 - After a daemon restart (a clean stop or a crash), the sessions that were open read idle again, so the app and the leads see them as open. They load when they get their next message or held send. Before, a clean stop closed every open session.
 - A turn that the restart cut off is loaded and continued with the limit-resume "continue" prompt, 2 sessions at a time with a gap, after the daemon settles. Sessions on a pool account stay with limit-resume.
+- Just before it sends "continue", the daemon reads the session again. A session that was archived or got a new message in the meantime is not resumed.
 - A cut-off turn is not continued if its folder or provider is missing, it does not load, or its account is at a limit. Its lead gets one held notice: "Daemon restarted at <time>; N sessions closed: <names>".
 - A clean stop records the open sessions in revive-at-boot.json first. The setting daemon.reviveOnRestart = false turns this off.
 
@@ -21,6 +22,7 @@ Fulcra 0.2.15 is based on Paseo v0.11.0-beta.5.
 ### Sidebar leads
 
 - A lead on another computer now takes new work from the + button and opens its chat on that computer, like a lead on this computer. Leads on offline or untrusted computers show only as greyed remembered rows, without the + button.
+- The status of a lead on another computer comes from that computer's chat list, as for a lead on this computer. Before, the row could show no status when the fleet had no entry for the chat.
 - When a computer goes offline, its leads no longer show twice for one read. The sidebar shows only reads from the computers that are online now, plus the greyed remembered rows.
 - A failed projects read no longer saves the placeholder name "project" as a remembered lead's project. The sidebar keeps the name it remembered before. If it remembered none, it saves nothing until a read works.
 
