@@ -924,3 +924,23 @@ test("windows keychain: refuses bad ids and tokens; a failing runner is unavaila
   });
   await assert.rejects(broken.get(id), (e) => e.code === "ACCOUNT_KEYCHAIN_UNAVAILABLE");
 });
+
+test("a usage limit records its kind with limitedUntil, shows it in the public view, and clearing the limit clears it", async () => {
+  const root = scratch();
+  const a = await addAccount(root, { provider: "claude", name: "A" }, T0);
+  assert.equal((await assign(root, S(1), "claude", T0)).account.id, a.id);
+  const reset = new Date(T0 + 3600000).toISOString();
+  await rotate(
+    root,
+    S(1),
+    "claude",
+    { resetAt: reset, kind: "weekly", note: "weekly limit" },
+    T0 + 10,
+  );
+  const stored = readAccounts(root).accounts[0];
+  assert.deepEqual([stored.limitedUntil, stored.limitKind], [reset, "weekly"]);
+  assert.equal(publicView(readAccounts(root), T0 + 20).accounts[0].limitKind, "weekly");
+  await setAccount(root, a.id, { clearLimit: true });
+  const cleared = readAccounts(root).accounts[0];
+  assert.deepEqual([cleared.limitedUntil, cleared.limitKind], [null, null]);
+});

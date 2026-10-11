@@ -8,6 +8,7 @@ export interface Account {
   priority: number;
   auth: "ok" | "expired" | "signing-in";
   limitedUntil: string | null;
+  limitKind?: string | null;
   limitNote: string | null;
   createdAt: string;
   lastUsedAt: string | null;

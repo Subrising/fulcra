@@ -229,6 +229,7 @@ export async function addAccount(root, { provider, name, priority }, now = Date.
         : s.accounts.filter((x) => x.provider === provider).length + 1,
       auth: provider === "codex" ? "signing-in" : "ok",
       limitedUntil: null,
+      limitKind: null,
       limitNote: null,
       createdAt: iso(now),
       lastUsedAt: null,
@@ -266,6 +267,7 @@ export async function setAccount(root, id, patch) {
     }
     if (patch.clearLimit === true) {
       a.limitedUntil = null;
+      a.limitKind = null;
       a.limitNote = null;
     }
     return a;
@@ -412,7 +414,7 @@ export async function rotate(
   root,
   sessionId,
   provider,
-  { resetAt = null, note = null, stopId = null, reassign = true } = {},
+  { resetAt = null, note = null, stopId = null, reassign = true, kind = null } = {},
   now = Date.now(),
 ) {
   return update(root, (s) => {
@@ -423,6 +425,9 @@ export async function rotate(
     const until = resetAt && Date.parse(resetAt) > now ? resetAt : iso(now + DEFAULT_LIMIT_MS);
     if (!from.limitedUntil || Date.parse(from.limitedUntil) < Date.parse(until)) {
       from.limitedUntil = until;
+      // The kind of limit the text named ("session", "weekly", ...). Kept with limitedUntil so the pair can be sent to
+      // another computer as one record.
+      from.limitKind = typeof kind === "string" && kind ? kind.slice(0, 24) : null;
       from.limitNote = note ? String(note).slice(0, 200) : null;
     }
     // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
@@ -599,6 +604,7 @@ export function publicView(s, now = Date.now()) {
       priority: a.priority,
       status: accountStatus(a, now),
       limitNote: a.limitNote,
+      limitKind: a.limitKind ?? null,
       sessions: Object.entries(s.assignments)
         .filter(([, x]) => x.accountId === a.id && !x.ended)
         .map(([id]) => id)

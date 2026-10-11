@@ -31,6 +31,7 @@ const account = z
     priority: z.number().int(),
     status,
     limitNote: z.string().max(200).nullable(),
+    limitKind: z.string().max(24).nullable().optional(),
     sessions: z.array(z.string().max(80)).max(50),
     lastUsedAt: z.string().max(40).nullable(),
   })
