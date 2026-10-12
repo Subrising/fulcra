@@ -31,3 +31,27 @@ export function registerRecoveryHooks(server, service) {
   ];
   return () => off.forEach((remove) => remove());
 }
+
+export function registerReportHooks(server, observer) {
+  const off = [
+    server.on("agent.turn_started", ({ agent }) => observer.turnStarted(agent.id)),
+    server.on("agent.turn_ended", ({ agent, outcome, timeline }) =>
+      observer.turnEnded(
+        agent.id,
+        outcome.kind,
+        outcome.kind === "failed"
+          ? [outcome.error.message, outcome.error.code].filter(Boolean).join(" ")
+          : "",
+        timeline.findLast((item) => item.type === "assistant_message")?.text ?? null,
+      ),
+    ),
+    server.on("agent.permission_requested", ({ agent, request }) =>
+      observer.permissionRequested(agent.id, request),
+    ),
+    server.on("agent.permission_resolved", ({ agent, requestId }) =>
+      observer.permissionResolved(agent.id, requestId),
+    ),
+    server.on("agent.closed", ({ agent }) => observer.close(agent.id)),
+  ];
+  return () => off.forEach((remove) => remove());
+}

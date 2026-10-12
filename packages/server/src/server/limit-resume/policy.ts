@@ -7,6 +7,8 @@ interface Modules {
   "parse-reset": typeof import("../../../../../plugins/fulcra-agent-policy/server/parse-reset.mjs");
   service: typeof import("../../../../../plugins/fulcra-agent-policy/server/service.mjs");
   hooks: typeof import("../../../../../plugins/fulcra-agent-policy/index.host.mjs");
+  "report-observer": typeof import("../../../../../plugins/fulcra-agent-policy/server/report-observer.mjs");
+  "report-notices": typeof import("../../../../../plugins/fulcra-agent-policy/server/report-notices.mjs");
 }
 const require = createRequire(import.meta.url);
 

@@ -412,6 +412,9 @@ answer a permission through its own daemon session. Awaiting it there deadlocks 
 
 The bundled host policy resource observes native lifecycle events through a private in-process adapter.
 `agent.turn_ended` drives stop detection and reset timers. The host retains private queue writes and guarded provider handoff.
+`agent.turn_ended` and `agent.permission_requested` also select report-up notices.
+The host timeline supplies first-message provenance. A synchronous host check captures finish ownership before native observation.
+Cleanup removes observers and stops pending notice timers.
 Controller-owned sessions stay with controller recovery. A missing or unreadable ownership decision refuses host fallback.
 The host checks every automatic prompt route against the same limit gate. Direct human input has a separate route.
 
