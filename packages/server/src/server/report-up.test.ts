@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -713,5 +713,41 @@ describe("report-up default", () => {
     f.failedTurn(WORKER, "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.");
     await f.settle();
     expect(f.delivered).toEqual([]);
+  });
+});
+
+// 0.2.17 delta review: a combined report that waits must not bypass a limit the lead reaches while it waits.
+describe("combined reports and a limit that starts later", () => {
+  const WORKER_B = "55555555-5555-4555-8555-555555555555";
+  const LIMIT_TEXT = "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.";
+  const named = (id: string, title: string, lastMessage: string): FakeChat => ({
+    id,
+    title,
+    labels: { [REPORTS_TO_LABEL]: LEAD },
+    lastMessage,
+  });
+
+  test("the lead reaches a limit after the report was queued: nothing is sent, and the report is held until the reset", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "report-up-late-limit-"));
+    const statePath = join(dir, "limits.json");
+    const f = fixture([lead, named(WORKER, "Alpha", "a"), named(WORKER_B, "Beta", "b")], {
+      statePath,
+      now: Date.parse("2026-10-12T00:00:00Z"),
+    });
+    f.turn(WORKER);
+    await f.settle();
+    f.turn(WORKER_B);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    // The lead's own turn ends on a usage limit while Beta's report waits.
+    f.failedTurn(LEAD, LIMIT_TEXT);
+    await f.settle();
+    f.clock.now += COALESCE_WINDOW_MS;
+    f.timers.find((timer) => timer.ms === COALESCE_WINDOW_MS)!.run();
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    const kept = JSON.parse(readFileSync(statePath, "utf8")) as { held: Record<string, string[]> };
+    expect(kept.held[LEAD]?.join("\n")).toContain("Beta");
+    rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -12,6 +12,7 @@ export function killProcessTree(
 ): void;
 export function closePipes(child: { stdin?: any; stdout?: any; stderr?: any }): void;
 export const REDACTED: string;
+export const TOO_DEEP: string;
 export const MIN_ATTEMPT_MS: number;
 export function scrubCredential<T>(value: T, token: string): T;
 export function refuseShellShim(command: string): void;
