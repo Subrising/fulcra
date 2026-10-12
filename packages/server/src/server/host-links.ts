@@ -172,6 +172,11 @@ export class HostLinks {
     return cfg;
   }
   private requiredConfig(): HostLinkConfig {
+    if (process.platform === "win32")
+      throw new HostLinkError(
+        "unavailable",
+        "Durable host-link operations are unavailable on Windows.",
+      );
     const cfg = this.config();
     if (!cfg) throw new HostLinkError("unavailable", "Host links are not configured.");
     if (!this.deps.protected())
@@ -198,7 +203,7 @@ export class HostLinks {
     const data = JSON.stringify(journal);
     if (Buffer.byteLength(data) > 8 * 1024 * 1024)
       throw new HostLinkError("refused", "Host-link receipt storage is full.");
-    writePrivateFileAtomicSync(file, data);
+    writePrivateFileAtomicSync(file, data, { durable: true });
   }
   private incoming(token: string | null): IncomingHostLink {
     const link = this.requiredConfig().incoming.find((item) =>
@@ -304,7 +309,7 @@ export class HostLinks {
     const retained = this.journal(this.outboxFile)[key];
     if (retained && (retained.hash !== entry.hash || retained.grant !== entry.grant))
       throw new HostLinkError("conflict", "The retained request or destination changed.");
-    if (!retained) this.save(this.outboxFile, key, entry);
+    this.save(this.outboxFile, key, retained ?? entry);
     const current = this.outgoing(this.requiredConfig(), link.id);
     if (digest(current) !== entry.grant)
       throw new HostLinkError("refused", "The outbound link changed.");
@@ -356,6 +361,8 @@ export class HostLinks {
     if (retained) {
       if (retained.hash !== digest(wire) || retained.grant !== digest(link))
         throw new HostLinkError("conflict", "The retained request changed.");
+      // A prior rename may have succeeded while its directory flush failed.
+      this.save(this.inboxFile, key, retained);
       return retained.receipt;
     }
     const agentId = wire.kind === "spawn" ? randomUUID() : this.deps.mainAssistant();

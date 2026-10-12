@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { Logger } from "pino";
@@ -17,7 +18,14 @@ import { ensureAgentLoaded } from "./agent/agent-loading.js";
 import { createFinalInputCheck } from "./agent/final-input-check.js";
 import { writeJsonQueueFile } from "./atomic-file.js";
 import { HeldQueueFullError, MAX_HELD_PER_TARGET } from "./held-sends.js";
-import { decideSend, lineStoreOf } from "./reporting-lines.js";
+import {
+  checkReportingLine,
+  decideSend,
+  findRoleHolder,
+  lineStoreOf,
+  reportsTo,
+  type LineAgent,
+} from "./reporting-lines.js";
 import { tellSenderUndelivered } from "./undelivered-notice.js";
 
 const RequestSchema = SendAgentMessageRequestSchema.pick({
@@ -43,6 +51,12 @@ const RecordSchema = z.object({
   batchId: z.string().optional(),
 });
 type Record = z.infer<typeof RecordSchema>;
+class QueuedLinesChangedError extends Error {
+  constructor(readonly refused: Array<{ record: Record; reason: string }>) {
+    super("The reporting line changed before delivery");
+  }
+}
+
 interface Deps {
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -59,6 +73,7 @@ export class QueuedAgentMessages {
   private stopped = false;
   private active = false;
   private unhealthy = false;
+  private readonly deliveryListeners = new Set<() => void>();
   private readonly draining = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly unsubscribe: () => void;
@@ -90,8 +105,10 @@ export class QueuedAgentMessages {
   private async save(): Promise<void> {
     try {
       await writeJsonQueueFile(this.deps.agentStorage.heldMessagesPath, this.records);
+      for (const listener of this.deliveryListeners) listener();
     } catch (error) {
       this.unhealthy = true;
+      for (const listener of this.deliveryListeners) listener();
       throw error;
     }
   }
@@ -184,12 +201,44 @@ export class QueuedAgentMessages {
     this.kick(agentId);
   }
 
+  /** A queue receipt identifies the batch that accepted this message, including rebuilt batches. */
+  async waitForDelivery(agentId: string, messageId: string, signal: AbortSignal): Promise<string> {
+    await this.serial(() => this.load());
+    signal.throwIfAborted();
+    const record = this.records.find(
+      (r) => r.agentId === agentId && r.request.messageId === messageId,
+    );
+    // Direct and held owner sends receive their identity from the submitted provider prompt instead.
+    if (!record) return messageId;
+    return new Promise<string>((resolve, reject) => {
+      const finish = (error?: Error, batchId?: string) => {
+        this.deliveryListeners.delete(check);
+        signal.removeEventListener("abort", aborted);
+        if (error) reject(error);
+        else resolve(batchId!);
+      };
+      const aborted = () => finish(new DOMException("Message delivery wait aborted", "AbortError"));
+      const check = () => {
+        if (signal.aborted) return aborted();
+        if (this.stopped || this.unhealthy)
+          return finish(new Error("The message queue needs host recovery"));
+        if (record.state === "delivered") return finish(undefined, record.batchId!);
+        if (["refused", "uncertain"].includes(record.state))
+          finish(new Error(record.reason ?? `Message delivery ${record.state}`));
+      };
+      this.deliveryListeners.add(check);
+      signal.addEventListener("abort", aborted, { once: true });
+      check();
+    });
+  }
+
   pending(agentId: string): number {
     return this.records.filter((r) => r.agentId === agentId && r.state === "queued").length;
   }
 
   async close(): Promise<void> {
     this.stopped = true;
+    for (const listener of this.deliveryListeners) listener();
     this.unsubscribe();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
@@ -264,6 +313,67 @@ export class QueuedAgentMessages {
     return eligible;
   }
 
+  private captureLineCheck(record: Record, agentId: string): () => string | null {
+    const { agentManager, agentStorage } = this.deps;
+    const read = () => {
+      const agents = new Map<string, LineAgent>(
+        agentStorage
+          .listCached()
+          .filter((a) => !a.internal)
+          .map((a) => [a.id, a]),
+      );
+      for (const live of agentManager.listAgents()) agents.set(live.id, live);
+      const target = agents.get(agentId) ?? null;
+      const remote = Boolean(
+        record.request.sender.serverId && record.request.sender.serverId !== record.localServerId,
+      );
+      const senderAgent = remote ? null : (agents.get(record.request.sender.agentId) ?? null);
+      const holder = findRoleHolder([...agents.values()], MAIN_ASSISTANT_ROLE);
+      const mainAssistantId = holder && "id" in holder ? holder.id : null;
+      const identity = (agent: LineAgent | null) =>
+        agent
+          ? [
+              agent.id,
+              reportsTo(agent),
+              agent.labels?.[DIRECT_LINK_LABEL] ?? null,
+              agent.archivedAt ?? null,
+            ]
+          : null;
+      const snapshot = JSON.stringify([
+        identity(senderAgent),
+        identity(target),
+        holder,
+        identity(mainAssistantId ? (agents.get(mainAssistantId) ?? null) : null),
+      ]);
+      let reason: string | null = null;
+      if (!target || target.archivedAt) reason = "The receiver is closed or archived";
+      else if (!remote && (!senderAgent || senderAgent.archivedAt))
+        reason = "The sending chat is closed or archived";
+      else {
+        const decision = checkReportingLine({
+          sender: record.request.sender,
+          senderAgent,
+          target,
+          senderParent: null,
+          localServerId: record.localServerId,
+          mainAssistantId,
+        });
+        if (!decision.allowed) reason = decision.reason;
+      }
+      return { snapshot, reason };
+    };
+    const selected = read();
+    return () => {
+      const current = read();
+      return (
+        current.reason ??
+        (current.snapshot !== selected.snapshot
+          ? "The reporting line changed before delivery"
+          : selected.reason)
+      );
+    };
+  }
+
   private async drain(agentId: string): Promise<void> {
     await this.load();
     const { agentManager } = this.deps;
@@ -289,6 +399,9 @@ export class QueuedAgentMessages {
       eligible.length === 1
         ? (eligible[0]!.request.messageId ?? eligible[0]!.id)
         : `queued-batch:${randomUUID()}`;
+    const lineChecks = new Map(
+      eligible.map((record) => [record, this.captureLineCheck(record, agentId)]),
+    );
     for (const record of eligible) {
       record.state = "dispatching";
       record.batchId = batchId;
@@ -300,11 +413,16 @@ export class QueuedAgentMessages {
       if (this.pending(agentId)) setTimeout(() => this.kick(agentId), 0).unref?.();
       return;
     }
-    await this.dispatchBatch(agentId, eligible, batchId);
+    await this.dispatchBatch(agentId, eligible, batchId, lineChecks);
     await this.save();
   }
 
-  private async dispatchBatch(agentId: string, eligible: Record[], batchId: string): Promise<void> {
+  private async dispatchBatch(
+    agentId: string,
+    eligible: Record[],
+    batchId: string,
+    lineChecks: Map<Record, () => string | null>,
+  ): Promise<void> {
     const { agentManager, logger } = this.deps;
     const prompt = promptForBatch(eligible);
     try {
@@ -317,6 +435,13 @@ export class QueuedAgentMessages {
           agentId,
           eligible[0]!.sessionId,
           () => this.stopped,
+          () => {
+            const refused = eligible.flatMap((record) => {
+              const reason = lineChecks.get(record)!();
+              return reason ? [{ record, reason }] : [];
+            });
+            if (refused.length) throw new QueuedLinesChangedError(refused);
+          },
         );
         for (const record of eligible) {
           if (record.request.notifyOnFinish)
@@ -341,6 +466,27 @@ export class QueuedAgentMessages {
       });
       for (const record of eligible) record.state = "delivered";
     } catch (error) {
+      if (error instanceof QueuedLinesChangedError) {
+        for (const { record, reason } of error.refused) {
+          record.state = "refused";
+          record.reason = reason;
+          if (record.request.notifyOnFinish)
+            disarmFinishNotification(agentManager, agentId, record.request.sender.agentId);
+          this.tell(record, reason);
+        }
+        const remaining = eligible.filter((record) => record.state !== "refused");
+        if (remaining.length) {
+          await agentManager.waitForFailedRunSettlement(agentId);
+          const rebuiltId =
+            remaining.length === 1
+              ? (remaining[0]!.request.messageId ?? remaining[0]!.id)
+              : `queued-batch:${randomUUID()}`;
+          for (const record of remaining) record.batchId = rebuiltId;
+          await this.save();
+          await this.dispatchBatch(agentId, remaining, rebuiltId, lineChecks);
+        }
+        return;
+      }
       this.batchFailed(agentId, eligible, error);
     }
   }
@@ -412,10 +558,12 @@ export function queuedReceiverCheck(
   agentId: string,
   sessionId: string | null,
   stopped = () => false,
+  checkLines = () => {},
 ): object {
   const receiver = agentManager.getAgent(agentId);
   return createFinalInputCheck(
     () => {
+      checkLines();
       const current = agentManager.getAgent(agentId);
       if (!current || current.archivedAt)
         throw Object.assign(new Error("The receiver is closed or archived"), {

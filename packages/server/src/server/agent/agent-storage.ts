@@ -164,6 +164,17 @@ export class AgentStorage {
     return this.cache.get(agentId) ?? null;
   }
 
+  /** Synchronous delivery fences use the initialized cache without yielding to a line change. */
+  getCached(agentId: string): StoredAgentRecord | null {
+    if (!this.loaded) throw new Error("Agent storage is not initialized");
+    return this.cache.get(agentId) ?? null;
+  }
+
+  listCached(): StoredAgentRecord[] {
+    if (!this.loaded) throw new Error("Agent storage is not initialized");
+    return Array.from(this.cache.values());
+  }
+
   /** Sidecars survive snapshot replacement and retain the original rollback handle. */
   async writeContextRotation(
     agentId: string,

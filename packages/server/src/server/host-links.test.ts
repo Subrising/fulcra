@@ -1,10 +1,17 @@
 import express from "express";
 import { mkdtemp, rm, chmod } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import {
+  realpathSync,
+  fsyncSync,
+  fstatSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   HostLinks,
   type HostLinkChat,
@@ -21,6 +28,11 @@ import {
   createRequireBearerMiddleware,
 } from "./auth.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
+});
+
 const linkToken = `hlink1.${"A".repeat(43)}`;
 const chatToken = `hchat1.${"B".repeat(43)}`;
 const messageId = "11111111-1111-4111-8111-111111111111";
@@ -35,6 +47,8 @@ const spawn = {
 };
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
+  vi.mocked(fsyncSync).mockRestore();
+  vi.mocked(renameSync).mockRestore();
   for (const cleanup of cleanups.splice(0).toReversed()) await cleanup();
 });
 function emptyConfig(): HostLinkConfig {
@@ -383,6 +397,72 @@ test("pending creation after a lost reply and restart requires reconciliation", 
   expect(receipt.token).toBe(null);
   expect(f.created).toEqual([]);
 });
+test("a crash after durable pending save never starts a second worker", async () => {
+  const f = await fixture();
+  const inbox = path.join(f.deps.home, "host-links-inbox.json");
+  let durable = "{}";
+  const events: string[] = [];
+  const realFsync = vi.mocked(fsyncSync).getMockImplementation()!;
+  vi.mocked(fsyncSync).mockImplementation((fd) => {
+    realFsync(fd);
+    if (fstatSync(fd).isDirectory()) {
+      events.push("directory flush");
+      durable = readFileSync(inbox, "utf8");
+    } else events.push("file flush");
+  });
+  const realRename = vi.mocked(renameSync).getMockImplementation()!;
+  vi.mocked(renameSync).mockImplementation((from, to) => {
+    events.push("rename");
+    realRename(from, to);
+  });
+  const crashed = new HostLinks({
+    ...f.deps,
+    create: async () => {
+      events.push("provider boundary");
+      throw new Error("Simulated crash before provider call");
+    },
+  });
+  await expect(crashed.receive(linkToken, f.wire)).rejects.toThrow("Simulated crash");
+  // Restore only bytes committed by a file flush followed by the directory flush.
+  writeFileSync(inbox, durable, { mode: 0o600 });
+  expect(events).toEqual(["file flush", "rename", "directory flush", "provider boundary"]);
+  events.length = 0;
+  const receipt = await new HostLinks(f.deps).receive(linkToken, f.wire);
+  expect(f.created).toEqual([]);
+  expect(receipt.state).toBe("pending");
+  expect(events).toEqual(["file flush", "rename", "directory flush"]);
+});
+
+test("a directory flush failure stops effects and receipt acknowledgement", async () => {
+  const f = await fixture();
+  const realFsync = vi.mocked(fsyncSync).getMockImplementation()!;
+  vi.mocked(fsyncSync).mockImplementation((fd) => {
+    if (fstatSync(fd).isDirectory()) throw new Error("Directory flush failed");
+    realFsync(fd);
+  });
+  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("Directory flush failed");
+  await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow("Directory flush failed");
+  expect(f.created).toEqual([]);
+  vi.mocked(fsyncSync).mockImplementation(realFsync);
+  expect((await f.target.receive(linkToken, f.wire)).state).toBe("pending");
+  expect(f.created).toEqual([]);
+});
+
+test("Windows refuses host-link effects without a durable journal", async () => {
+  const f = await fixture();
+  const platform = process.platform;
+  try {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    await expect(f.target.receive(linkToken, f.wire)).rejects.toThrow(
+      "Durable host-link operations are unavailable on Windows.",
+    );
+    expect(f.created).toEqual([]);
+    expect(f.notices).toEqual([]);
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform });
+  }
+});
+
 test("an actual lost HTTP reply reuses the committed worker receipt", async () => {
   const f = await fixture();
   f.state.afterCreate = () => f.targetListener.server.closeAllConnections();

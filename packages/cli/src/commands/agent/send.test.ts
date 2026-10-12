@@ -185,10 +185,21 @@ describe("send explicit native queue", () => {
     expect(client.waitForFinish).not.toHaveBeenCalled();
     expect(result.data.status).toBe("sent");
   });
+  it("waits with the identity of its own queued message", async () => {
+    senderStamp.mockReturnValue({ agentId: "sender" });
+    await parsedSend(["target", "second task"]);
+    const options = client.sendAgentMessage.mock.calls[0]![2];
+    expect(options.messageId).toEqual(expect.any(String));
+    expect(client.waitForFinish).toHaveBeenCalledExactlyOnceWith("target", 600000, {
+      messageId: options.messageId,
+    });
+  });
   it("preserves ordinary send completion waiting", async () => {
     const result = await parsedSend(["target", "ordinary"]);
     expect(client.sendNativeQueuedMessage).not.toHaveBeenCalled();
-    expect(client.waitForFinish).toHaveBeenCalledExactlyOnceWith("target", 600000);
+    expect(client.waitForFinish).toHaveBeenCalledExactlyOnceWith("target", 600000, {
+      messageId: expect.any(String),
+    });
     expect(result.data.status).toBe("completed");
     expect(result.data.agentId).toBe("resolved-target");
   });

@@ -44,8 +44,8 @@ Queued worker prompts recheck the grant, reporting line, and permission mode bef
 ## Configuration
 
 Use private files with mode `0600` on POSIX systems.
-On Windows, restrict the private home and credential files to the service account with Windows ACLs.
-POSIX file modes do not set Windows ACLs.
+Host-link operations refuse Windows because Node cannot flush directory entries there.
+They require a durable journal before provider input or receipt acknowledgement.
 Generate each credential from 32 random bytes encoded with base64url, after its prefix.
 Keep credentials out of shell arguments and terminal output.
 
@@ -118,7 +118,8 @@ fulcra host-link prompt --receipt-file worker-receipt.json \
 ```
 
 The CLI stores the worker credential in the private receipt file. It does not print that credential.
-The receiver records the request before provider creation.
+The receiver flushes the temporary receipt file, renames it, and flushes its parent directory before provider creation.
+A flush failure stops the operation. Retained retries repeat the flush before acknowledgement.
 An identical retry returns the retained receipt. A changed body or destination under that UUID fails.
 `created` means the initial prompt reached the provider. It does not mean the task finished.
 `pending` after a crash requires destination-owner reconciliation against the retained worker ID.

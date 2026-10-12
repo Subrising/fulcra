@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type Command } from "commander";
 import type { PaseoAgentSendOptions } from "@getpaseo/client";
 import { collectMultiple } from "../../utils/command-options.js";
@@ -357,13 +358,13 @@ export async function runSendCommand(
 
     // Send the message
     let deliveryNote: string | undefined;
-    await client.sendAgentMessage(
-      agentIdArg,
-      promptInput,
-      sendOptions(options, sender, images, (note) => {
+    const completionMessageId = options.wait === false ? undefined : randomUUID();
+    await client.sendAgentMessage(agentIdArg, promptInput, {
+      ...sendOptions(options, sender, images, (note) => {
         deliveryNote = note;
       }),
-    );
+      ...(completionMessageId ? { messageId: completionMessageId } : {}),
+    });
 
     // If --no-wait, return immediately
     if (options.wait === false) {
@@ -378,7 +379,9 @@ export async function runSendCommand(
       };
     }
 
-    const state = await client.waitForFinish(agentIdArg, 600000); // 10 minute timeout
+    const state = await client.waitForFinish(agentIdArg, 600000, {
+      messageId: completionMessageId!,
+    }); // 10 minute timeout
 
     const result = buildSendResult(agentIdArg, state);
     return {

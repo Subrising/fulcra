@@ -8010,6 +8010,52 @@ test("agent message queue gates explicit queue and stamped steer before sending"
   expect(nativeQueueRequests(mock)).toHaveLength(0);
 });
 
+test("message completion wait refuses an old host without an uncorrelated wait", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  const before = mock.sent.length;
+  await expect(client.waitForFinish("target", 1000, { messageId: "second-task" })).rejects.toThrow(
+    "Update the host",
+  );
+  expect(mock.sent).toHaveLength(before);
+});
+
+test("message completion wait retains the message identity on the wire", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "status",
+      payload: {
+        status: "server_info",
+        serverId: "queue-host",
+        hostname: "fixture",
+        version: "0.2.18",
+        features: { messageCompletionWait: true },
+      },
+    }),
+  );
+  const pending = client.waitForFinish("target", 1000, { messageId: "second-task" });
+  const request = parseSentFrame(mock.sent.at(-1));
+  expect(request).toMatchObject({
+    type: "wait_for_finish_request",
+    agentId: "target",
+    messageId: "second-task",
+    timeoutMs: 1000,
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "wait_for_finish_response",
+      payload: {
+        requestId: request.requestId,
+        status: "idle",
+        final: null,
+        error: null,
+        lastMessage: "second answer",
+      },
+    }),
+  );
+  await expect(pending).resolves.toMatchObject({ lastMessage: "second answer" });
+});
+
 test("agent message queue reports the daemon delivery note", async () => {
   const { client, mock } = await nativeQueueClient(false);
   mock.triggerMessage(
