@@ -15,7 +15,7 @@ import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import { ReportUpService, reportUpSwitches, type ReportUpDeps } from "./report-up.js";
 
 const sent: Array<{ agentId: string; prompt: string }> = [];
-let beforeSend: (() => void) | undefined;
+let beforeSend: (() => void | Promise<void>) | undefined;
 vi.mock("./agent/agent-prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent/agent-prompt.js")>()),
   sendPromptToAgent: async (input: {
@@ -23,7 +23,7 @@ vi.mock("./agent/agent-prompt.js", async (importOriginal) => ({
     prompt: string;
     runOptions: { [FINAL_INPUT_CHECK]: object };
   }) => {
-    beforeSend?.();
+    await beforeSend?.();
     assertFinalInputCheck(input.runOptions[FINAL_INPUT_CHECK]);
     sent.push({ agentId: input.agentId, prompt: input.prompt });
     recordFinalInputHandoff(input.runOptions[FINAL_INPUT_CHECK]);
@@ -312,5 +312,165 @@ test("a queued nudge records its fingerprint only after actual delivery", async 
   } finally {
     beforeSend = undefined;
     f.service.stop();
+  }
+});
+
+const nudgeLedger = () => [
+  { project: "fulcra", id: "FU-12", owner: "Lead (11111111)", status: "OPEN" },
+];
+const flushNudge = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("stalled nudge dispatch expires and a later idle event retries", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const f = setup(undefined, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  f.leadTurnEnds();
+  let attempts = 0;
+  beforeSend = () => {
+    attempts += 1;
+    return new Promise<void>(() => {});
+  };
+  try {
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(attempts).toBe(1);
+    expect(sent).toHaveLength(0);
+    beforeSend = () => {
+      attempts += 1;
+    };
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+    expect(sent).toHaveLength(1);
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+  } finally {
+    f.service.stop();
+    beforeSend = undefined;
+    vi.useRealTimers();
+  }
+});
+
+test("an expired nudge generation cannot settle a newer pending attempt", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const f = setup(undefined, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  f.leadTurnEnds();
+  let finishOld!: () => void;
+  let finishNew!: () => void;
+  let attempts = 0;
+  beforeSend = () => {
+    attempts += 1;
+    return new Promise<void>((resolve) => {
+      if (attempts === 1) finishOld = resolve;
+      else finishNew = resolve;
+    });
+  };
+  try {
+    f.finish(LEAD);
+    await flushNudge();
+    await vi.advanceTimersByTimeAsync(60_000);
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+    finishOld();
+    await flushNudge();
+    expect(sent).toHaveLength(0);
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+    finishNew();
+    await flushNudge();
+    expect(sent).toHaveLength(1);
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+  } finally {
+    f.service.stop();
+    finishOld?.();
+    finishNew?.();
+    beforeSend = undefined;
+    vi.useRealTimers();
+  }
+});
+
+test("a changed fingerprint replaces a stalled nudge generation before timeout", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const ledger = nudgeLedger();
+  const f = setup(undefined, { readLedger: () => ledger });
+  f.chats.get(A)!.lifecycle = "idle";
+  f.leadTurnEnds();
+  let finishOld!: () => void;
+  let finishNew!: () => void;
+  let attempts = 0;
+  beforeSend = () => {
+    attempts += 1;
+    return new Promise<void>((resolve) => {
+      if (attempts === 1) finishOld = resolve;
+      else finishNew = resolve;
+    });
+  };
+  try {
+    f.finish(LEAD);
+    await flushNudge();
+    ledger.push({ ...ledger[0]!, id: "FU-13" });
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+    finishOld();
+    await flushNudge();
+    expect(sent).toHaveLength(0);
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+    finishNew();
+    await flushNudge();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.prompt).toContain("FU-13");
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(2);
+  } finally {
+    f.service.stop();
+    finishOld?.();
+    finishNew?.();
+    beforeSend = undefined;
+    vi.useRealTimers();
+  }
+});
+
+test("permission and limit notices survive a stalled nudge dispatch", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const f = setup(undefined, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  f.leadTurnEnds();
+  let attempts = 0;
+  beforeSend = () => {
+    attempts += 1;
+    if (attempts === 1) return new Promise<void>(() => {});
+  };
+  try {
+    f.finish(LEAD);
+    await flushNudge();
+    f.stream(A, {
+      type: "permission_requested",
+      request: { id: "request", name: "Bash", input: { command: "ls" } },
+    });
+    f.stream(A, { type: "turn_started" });
+    f.stream(A, { type: "turn_failed", error: "Claude AI usage limit reached|0000000000" });
+    await flushNudge();
+    expect(sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushNudge();
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.prompt).toContain("waiting for permission");
+    expect(sent[1]!.prompt).toContain("usage limit until");
+  } finally {
+    f.service.stop();
+    beforeSend = undefined;
+    vi.useRealTimers();
   }
 });
