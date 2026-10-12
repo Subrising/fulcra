@@ -124,4 +124,28 @@ describe("fulcra ask on Windows", () => {
     expect(help).toMatch(/On Windows, send the prompt on standard input/);
     expect(help).toMatch(/On Windows, use a file path/);
   });
+
+  it("measures the whole ask from before the start call, so the host's single deadline is never outlasted", async () => {
+    let time = 0;
+    let polls = 0;
+    const c = {
+      invokePluginRpc: async (_plugin: string, method: string) => {
+        if (method === "organization.ask.start") {
+          time += 20_000; // a slow start
+          return { id: "11111111-1111-4111-8111-111111111111" };
+        }
+        polls += 1;
+        return { state: "running" };
+      },
+    };
+    const error = await runAsk(c, input, {
+      sleep: async () => {
+        time += 20_000;
+      },
+      now: () => time,
+    }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "TIMEOUT" });
+    // Deadline = start (0) + 5 s + 30 s margin: the first poll, at 40 s, is already past it.
+    expect(polls).toBe(1);
+  });
 });
