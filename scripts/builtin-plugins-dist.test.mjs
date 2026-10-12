@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import test from "node:test";
@@ -12,9 +12,31 @@ import {
 import { compilePlugin } from "../packages/server/dist/server/server/plugins/compiler.js";
 import { readPluginManifest } from "../packages/server/dist/server/server/plugins/manifest.js";
 import { PluginRuntime } from "../packages/server/dist/server/server/plugins/runtime.js";
+import { assertBuiltinRuntimeImports } from "./builtin-plugin-runtime.mjs";
+import { createRequire } from "node:module";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packagedRoot = path.join(repoRoot, "packages/server/dist/server/builtin-plugins");
+
+test("physical built-in runtime modules load without checkout dependencies", async (t) => {
+  await assertBuiltinRuntimeImports(packagedRoot);
+  const isolated = await mkdtemp(path.join(os.tmpdir(), "builtin-isolated-runtime-"));
+  t.after(() => rm(isolated, { recursive: true, force: true }));
+  await cp(packagedRoot, isolated, { recursive: true });
+  const require = createRequire(path.join(isolated, "entry.cjs"));
+  for (const name of [
+    "index.host.mjs",
+    "server/service.mjs",
+    "server/detect.mjs",
+    "server/parse-reset.mjs",
+    "server/report-observer.mjs",
+    "server/report-notices.mjs",
+  ]) {
+    const module = require(path.join(isolated, "fulcra-agent-policy", name));
+    assert.ok(Object.keys(module).length, `${name} retains its host exports`);
+    if (name === "server/service.mjs") assert.equal(typeof module.LimitResumeService, "function");
+  }
+});
 
 async function findEntry(directory, names) {
   for (const name of names) {
