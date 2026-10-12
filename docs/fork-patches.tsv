@@ -391,7 +391,7 @@ branding	A	38	0	RELEASE-NOTES-0.2.15.md
 branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
 branding	A	10	0	RELEASE-NOTES-0.2.16.2.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
-branding	A	76	0	RELEASE-NOTES-0.2.17.md
+branding	A	81	0	RELEASE-NOTES-0.2.17.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -665,8 +665,8 @@ core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
 core-fixes	A	121	0	packages/server/src/server/report-up-held.test.ts
-core-fixes	A	753	0	packages/server/src/server/report-up.test.ts
-core-fixes	A	894	0	packages/server/src/server/report-up.ts
+core-fixes	A	789	0	packages/server/src/server/report-up.test.ts
+core-fixes	A	904	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
 core-fixes	A	467	0	packages/server/src/server/revive-on-restart.test.ts
