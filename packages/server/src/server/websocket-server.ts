@@ -2043,6 +2043,7 @@ export class VoiceAssistantWebSocketServer {
         ...(this.pluginRuntime?.catalogPaging?.() ? { pluginCatalogPaging: true } : {}),
         // Explicit authenticated delegated queue; not ordinary human/Claude conversion.
         nativeQueuedMessages: true,
+        agentMessageQueue: true,
         autoResumeOnLimit: true,
         notificationPolicy: true,
         pooledAccountUsageObservation: true,

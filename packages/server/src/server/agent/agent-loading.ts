@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 
 import type { AgentProvider } from "./agent-sdk-types.js";
 import type { AgentManager, ManagedAgent } from "./agent-manager.js";
-import type { AgentStorage } from "./agent-storage.js";
+import type { AgentStorage, StoredAgentRecord } from "./agent-storage.js";
 import {
   buildConfigOverrides,
   buildSessionConfig,
@@ -35,6 +35,8 @@ export interface EnsureAgentLoadedDeps {
   validProviders?: Iterable<AgentProvider>;
   broadcastTimeline?: boolean;
   logger: Logger;
+  /** Refusal-only freshness check for a delayed automatic message. */
+  requireRecord?: (record: StoredAgentRecord | null) => void;
 }
 
 export async function ensureUnarchivedAgentLoaded(
@@ -93,6 +95,7 @@ export async function ensureAgentLoaded(
   };
   const initPromise = (async () => {
     const record = await deps.agentStorage.get(agentId);
+    deps.requireRecord?.(record);
     if (!record) {
       throw new Error(`Agent not found: ${agentId}`);
     }
@@ -103,6 +106,10 @@ export async function ensureAgentLoaded(
     }
 
     const handle = toAgentPersistenceHandle(validProviders, record.persistence);
+    if (!handle && deps.requireRecord)
+      throw Object.assign(new Error("The receiver has no saved provider session"), {
+        code: "QUEUED_RECEIVER_CHANGED",
+      });
 
     let snapshot: ManagedAgent;
     if (handle) {
@@ -112,6 +119,7 @@ export async function ensureAgentLoaded(
         agentId,
         { ...extractTimestamps(record), attention: extractAttention(record) },
         record.archivedAt ? { purpose: "history" } : undefined,
+        ...(deps.requireRecord ? ([deps.requireRecord] as const) : ([] as const)),
       );
       deps.logger.info({ agentId, provider: record.provider }, "Agent resumed from persistence");
     } else {

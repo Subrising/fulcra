@@ -5,6 +5,7 @@ import {
   commitFinalInputCheck,
   recordFinalInputHandoff,
   waitForFinalInputHandoff,
+  requiresProviderInputHandoff,
 } from "./final-input-check.js";
 
 test("early/repeated refusal checks do not consume; concrete handoff commits once", async () => {
@@ -32,6 +33,20 @@ test("early/repeated refusal checks do not consume; concrete handoff commits onc
   expect(() => commitFinalInputCheck(handle)).toThrow("revoked");
   expect(checks).toBe(5);
   expect(commits).toBe(1);
+});
+
+test("manager-only queue checks cannot commit native authority", () => {
+  const native = createFinalInputCheck(() => undefined);
+  const queue = createFinalInputCheck(() => undefined, undefined, true);
+  expect(requiresProviderInputHandoff(native)).toBe(true);
+  expect(requiresProviderInputHandoff(queue)).toBe(false);
+  expect(() =>
+    createFinalInputCheck(
+      () => undefined,
+      () => undefined,
+      true,
+    ),
+  ).toThrow("cannot commit native authority");
 });
 
 test("refusal before handoff leaves commitment unspent", async () => {

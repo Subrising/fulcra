@@ -1,10 +1,9 @@
 import type { Logger } from "pino";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 
-// FULCRA(orchestration): held sends (the owner, 10 Oct: "human messages should steer"). A message from another chat or
-// from the daemon never enters or cancels a running turn: it waits in one queue per target, in order, and is
-// delivered when the target's turn ends. Each delivery starts a turn, so the next one waits for that turn to end.
-// The queue is in memory: a daemon restart drops held messages.
+// FULCRA(orchestration): callback deliveries and unavailable human steers wait for the current turn.
+// Each callback keeps its own admission context and lifecycle fences. This queue is in memory.
+// Plain agent messages use the durable combined queue in queued-agent-messages.ts.
 
 export type HeldDelivery = () => Promise<void>;
 
@@ -37,6 +36,7 @@ export class ProvenanceRefusedError extends Error {
 export const SENT_NOTHING_CODES: ReadonlySet<string> = new Set([
   "HELD_QUEUE_FULL",
   "PROVENANCE_REFUSED",
+  "QUEUED_RECEIVER_CLOSED",
 ]);
 
 const isRequeue = (error: unknown) =>

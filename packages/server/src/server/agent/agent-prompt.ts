@@ -1,4 +1,8 @@
-import { createFinalInputCheck, waitForFinalInputHandoff } from "./final-input-check.js";
+import {
+  assertFinalInputCheck,
+  createFinalInputCheck,
+  waitForFinalInputHandoff,
+} from "./final-input-check.js";
 import { randomUUID } from "node:crypto";
 import { deferredPromptPayload as promptPayload } from "./trusted-operation.js";
 import { TRUSTED_OPERATION, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
@@ -109,6 +113,8 @@ async function startOrReplaceRun(
     ? { ...options.runOptions, clearPendingQuestions: true }
     : options?.runOptions;
   const replaced = Boolean(options?.replaceRunning && agentManager.hasInFlightRun(agentId));
+  if (options?.replaceRunning === false && agentManager.hasInFlightRun(agentId))
+    throw new SteerUnavailableError(agentId);
   const iterator = replaced
     ? await agentManager.replaceAgentRun(agentId, prompt, runOptions)
     : agentManager.streamAgent(agentId, prompt, runOptions);
@@ -308,6 +314,8 @@ export interface SendPromptToAgentParams {
   activeTurnBehavior?: ActiveTurnBehavior;
   /** With "steer": never replace a running turn; throws SteerUnavailableError instead. */
   steerOnly?: boolean;
+  /** Queue delivery starts a fresh turn. It never steers or replaces a racing turn. */
+  queuedOnly?: boolean;
   runOptions?: AgentRunOptions;
   /** Optional mode to set on the agent before the run starts. */
   sessionMode?: string;
@@ -387,6 +395,7 @@ export async function sendPromptToAgent(
 ): Promise<{ disposition: PromptDispatchDisposition }> {
   const finishCheck = finishDispatchChecks.get(params);
   finishCheck?.();
+  assertFinalInputCheck(params.runOptions?.[FINAL_INPUT_CHECK]);
   return params.agentManager.withInput(
     params.agentId,
     "prompt",
@@ -401,6 +410,7 @@ export async function sendPromptToAgent(
 
       const record = await params.agentStorage.get(params.agentId);
       finishCheck?.();
+      assertFinalInputCheck(params.runOptions?.[FINAL_INPUT_CHECK]);
       if (record?.archivedAt) {
         params.agentManager.trustedPlugins.input(
           record,
@@ -410,7 +420,7 @@ export async function sendPromptToAgent(
           promptPayload(params.prompt, params.runOptions, {
             sessionMode: params.sessionMode,
             unarchive: params.unarchive ?? true,
-            replaceRunning: true,
+            replaceRunning: !params.queuedOnly,
             activeTurnBehavior: params.activeTurnBehavior,
             clearPendingPermissions: params.clearPendingPermissions ?? false,
           }),
@@ -446,8 +456,9 @@ export async function sendPromptToAgent(
         : params.runOptions;
 
       finishCheck?.();
+      assertFinalInputCheck(params.runOptions?.[FINAL_INPUT_CHECK]);
       const startOptions: StartAgentRunOptions = {
-        replaceRunning: true,
+        replaceRunning: !params.queuedOnly,
         activeTurnBehavior: params.activeTurnBehavior,
         clearPendingPermissions: params.clearPendingPermissions,
         steerOnly: params.steerOnly,
@@ -465,12 +476,41 @@ export async function sendPromptToAgent(
     promptPayload(params.prompt, params.runOptions, {
       sessionMode: params.sessionMode,
       unarchive: params.unarchive ?? true,
-      replaceRunning: true,
+      replaceRunning: !params.queuedOnly,
       activeTurnBehavior: params.activeTurnBehavior,
       clearPendingPermissions: params.clearPendingPermissions ?? false,
     }),
     params.runOptions?.[TRUSTED_OPERATION],
   );
+}
+
+/** Observe startup before dispatch so an immediately completed turn still counts as an accepted start. */
+export async function sendPromptToAgentAndWaitForStart(
+  params: SendPromptToAgentParams,
+): Promise<{ disposition: PromptDispatchDisposition }> {
+  let started = false;
+  const stop = params.agentManager.subscribe(
+    (event) => {
+      if (
+        event.type === "agent_stream" &&
+        event.agentId === params.agentId &&
+        event.event.type === "turn_started"
+      )
+        started = true;
+    },
+    { replayState: false },
+  );
+  try {
+    const result = await sendPromptToAgent(params);
+    if (result.disposition === "turn_started") {
+      const check = params.runOptions?.[FINAL_INPUT_CHECK];
+      if (check) await waitForFinalInputHandoff(check);
+      if (!started) await waitForAgentRunStartWithTimeout(params.agentManager, params.agentId);
+    }
+    return result;
+  } finally {
+    stop();
+  }
 }
 
 export async function startCreatedAgentInitialPrompt(
@@ -512,6 +552,8 @@ export interface SetupFinishNotificationParams {
   childAgentId: string;
   callerAgentId: string;
   requireParentOwnership?: boolean;
+  /** Arm before dispatch without reporting the previous turn's current outcome. */
+  forNextTurn?: boolean;
   logger: Logger;
 }
 
@@ -572,6 +614,18 @@ export const FINISH_NOTIFICATION_MESSAGE_PREFIX = "paseo-notify:";
 // next finish reaches the caller once.
 const armedFinishNotifications = new WeakMap<AgentManager, Map<string, () => void>>();
 
+/** A queued follow-up replaces the earlier finish notice before that turn can finish. */
+export function disarmFinishNotification(
+  agentManager: AgentManager,
+  childId: string,
+  callerId: string,
+): void {
+  const arms = armedFinishNotifications.get(agentManager);
+  const key = JSON.stringify([childId, callerId]);
+  arms?.get(key)?.();
+  arms?.delete(key);
+}
+
 /** FULCRA(orchestration): a caller already waits on this child's finish, so report-up stays quiet for it. */
 export function hasArmedFinishNotification(
   agentManager: AgentManager,
@@ -595,6 +649,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     logger,
   } = params;
   let hasSeenRunning = false;
+  let waitingForTurn = params.forNextTurn === true;
   let stopped = false;
   let superseded = false;
   const checkIdentity = agentManager.captureFinishNotificationCheck(childAgentId, callerAgentId);
@@ -716,12 +771,14 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
           }
         }
         if (event.agent.lifecycle === "running") {
+          waitingForTurn = false;
           if (event.agent.pendingPermissions.size === 0) {
             hasSeenRunning = true;
           }
           return;
         }
         if (event.agent.lifecycle === "error") {
+          if (waitingForTurn) return;
           notifySafely("errored");
           return;
         }
@@ -771,6 +828,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
   // Do NOT treat an immediate "idle" as "finished" — the agent may
   // not have started yet (streamAgent sets a pending run before
   // transitioning to "running").
+  if (params.forNextTurn) return;
   const childSnapshot = agentManager.getAgent(childAgentId);
   if (!childSnapshot || childSnapshot.lifecycle === "closed") {
     stop();

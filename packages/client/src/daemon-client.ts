@@ -507,8 +507,11 @@ export interface DaemonClientTrace {
 }
 
 export interface SendMessageOptions {
+  queue?: boolean;
+  /** Reports queue admission or a steering fallback. This is not task completion. */
+  onDelivery?: (note: string) => void;
   messageId?: string;
-  /** What happens when the agent is mid-turn. The daemon interrupts the turn when omitted. */
+  /** Human input steers while busy. Agent input queues unless steering is requested. */
   activeTurnBehavior?: ActiveTurnBehavior;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: SendAgentMessageRequest["attachments"];
@@ -3901,11 +3904,28 @@ export class DaemonClient {
   // Agent Interaction
   // ============================================================================
 
+  private requireAgentMessageQueue(options?: SendMessageOptions): void {
+    // COMPAT(agentMessageQueue): added in v0.2.18; remove after 2027-04-12 once the daemon floor includes v0.2.18.
+    if (
+      (options?.queue || (options?.sender && options.activeTurnBehavior === "steer")) &&
+      this.lastServerInfoMessage?.features?.agentMessageQueue !== true
+    )
+      throw new Error("Update the host to queue or steer agent messages.");
+  }
+
+  private notifyMessageDelivery(
+    options: SendMessageOptions | undefined,
+    note: string | undefined,
+  ): void {
+    if (note) options?.onDelivery?.(note);
+  }
+
   async sendAgentMessage(
     agentId: string,
     text: string,
     options?: SendMessageOptions,
   ): Promise<void> {
+    this.requireAgentMessageQueue(options);
     const requestId = this.createRequestId();
     const messageId = options?.messageId ?? crypto.randomUUID();
     const message = SessionInboundMessageSchema.parse({
@@ -3913,6 +3933,7 @@ export class DaemonClient {
       requestId,
       agentId,
       text,
+      ...(options?.queue ? { queue: true } : {}),
       ...(messageId ? { messageId } : {}),
       ...(options?.activeTurnBehavior ? { activeTurnBehavior: options.activeTurnBehavior } : {}),
       ...(options?.images ? { images: options.images } : {}),
@@ -3936,6 +3957,7 @@ export class DaemonClient {
     if (!payload.accepted) {
       throw new Error(payload.error ?? "sendAgentMessage rejected");
     }
+    this.notifyMessageDelivery(options, payload.deliveryNote);
   }
 
   /** Explicit host-owner metadata read. Capability advertisement never grants read authority. */
