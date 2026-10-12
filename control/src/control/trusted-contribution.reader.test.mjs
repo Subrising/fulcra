@@ -72,3 +72,13 @@ test("a replaced journal file is reopened, and a missing one asks", (t) => {
   assert.notEqual(decide(), "ask", "the new file is read, not the old connection");
   assert.equal(opens(), before + 1);
 });
+
+test("a corrupt replacement cannot use retained WAL data for permission decisions", (t) => {
+  const { home, make, decide } = setup(t);
+  make("human").close();
+  assert.notEqual(decide(), "ask");
+  const journal = path.join(home, "journal.sqlite");
+  fs.rmSync(journal);
+  fs.writeFileSync(journal, "invalid replacement".repeat(8));
+  assert.equal(decide(), "ask");
+});

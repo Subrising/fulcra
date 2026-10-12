@@ -398,11 +398,11 @@ test("context details support keyboard entry and dismiss when the viewport moves
   const details = contextWindowDetails(page);
   await expect(details).toBeVisible();
   await expect(
-    details.getByRole("button", { name: "Update readings", exact: true }).first(),
+    details.getByRole("button", { name: "Refresh Claude", exact: true }).first(),
   ).toBeVisible();
   await trigger.press("ArrowDown");
   await expect(
-    details.getByRole("button", { name: "Update readings", exact: true }).first(),
+    details.getByRole("button", { name: "Refresh Claude", exact: true }).first(),
   ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(details).toHaveCount(0);

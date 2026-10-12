@@ -48,6 +48,7 @@ function fixture(setup: (server: TrustedPluginServerV11) => void = () => undefin
     runtimeInfo: { model: "model-a", sessionId: "native-a" },
     features: [],
     lastUserMessageAt: new Date("2030-01-01T00:00:00Z"),
+    updatedAt: new Date("2030-01-01T00:00:00Z"),
     pendingPermissions: new Map([
       [
         "request",
@@ -67,6 +68,7 @@ function fixture(setup: (server: TrustedPluginServerV11) => void = () => undefin
   };
   const manager = new AgentManager({ logger: createTestLogger(), trustedPlugins: host });
   Reflect.get(manager, "agents").set(id, live);
+  Reflect.get(manager, "timelineStore").initialize(id);
   const token = (
     payload: TrustedPayloadV11,
     kind: TrustedInputKind = "prompt",
@@ -599,8 +601,10 @@ test("R1 minor 1: strict prompt and index validation activates only for V1.1", (
   // withInput loads through getAgent; the OOB implementation uses its live map.
   Reflect.get(manager, "agents").set(id, {
     id,
+    updatedAt: new Date(),
     session: { tryHandleOutOfBand: provider },
   });
+  Reflect.get(manager, "timelineStore").initialize(id);
   expect(() => manager.tryRunOutOfBand(id, { text: "legacy" } as never)).not.toThrow();
   expect(provider).toHaveBeenCalled();
   expect(() => host.registerV11("modern", true, noop)).toThrow();

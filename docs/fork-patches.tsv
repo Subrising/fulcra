@@ -173,7 +173,7 @@ admission	A	153	0	packages/server/src/server/plugins/trusted-facts.ts
 admission	A	85	0	packages/server/src/server/plugins/trusted-ownership.test.ts
 admission	A	91	0	packages/server/src/server/plugins/trusted-ownership.ts
 admission	A	227	0	packages/server/src/server/plugins/trusted-pipeline.test.ts
-admission	A	739	0	packages/server/src/server/plugins/trusted-v11.test.ts
+admission	A	743	0	packages/server/src/server/plugins/trusted-v11.test.ts
 admission	A	423	0	packages/server/src/server/plugins/trusted.test.ts
 admission	A	1229	0	packages/server/src/server/plugins/trusted.ts
 admission	M	16	6	packages/server/src/server/session-admission-auth.ts
@@ -1113,7 +1113,7 @@ features	M	39	0	packages/app/src/stores/sidebar-collapsed-sections-store/state.t
 features	M	27	1	packages/app/src/stores/sidebar-collapsed-sections-store/state.ts
 features	A	35	0	packages/app/src/stores/workspace-layout-storage.test.ts
 features	M	2	0	packages/app/src/stores/workspace-layout-storage.ts
-features	M	16	5	packages/app/src/terminal/runtime/terminal-find.browser.test.ts
+features	M	16	4	packages/app/src/terminal/runtime/terminal-find.browser.test.ts
 features	A	18	0	packages/app/src/types/host-connection-endpoint.test.ts
 features	M	13	4	packages/app/src/utils/__tests__/split-markdown-blocks.test.ts
 features	M	22	0	packages/app/src/utils/agent-snapshots.test.ts
@@ -1667,7 +1667,7 @@ session-launch	M	189	40	packages/server/src/server/agent/tools/paseo-tools.ts
 session-launch	M	5	0	packages/server/src/server/agent/tools/types.ts
 session-launch	M	110	8	packages/server/src/server/cli-run-workspace-precedence.e2e.test.ts
 session-launch	M	244	1	packages/server/src/server/daemon-client.e2e.test.ts
-session-launch	M	85	0	packages/server/src/server/daemon-instance.test.ts
+session-launch	M	86	1	packages/server/src/server/daemon-instance.test.ts
 session-launch	M	19	2	packages/server/src/server/daemon-instance.ts
 session-launch	A	128	0	packages/server/src/server/plugins/catalog-controller.test.ts
 session-launch	A	91	0	packages/server/src/server/plugins/catalog-headroom.test.ts
