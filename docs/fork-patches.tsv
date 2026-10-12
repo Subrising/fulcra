@@ -373,7 +373,7 @@ branding	A	108	0	packages/website/public/fulcra/social-preview.html
 branding	A	6	0	packages/website/scripts/prepare-fulcra-site.d.mts
 branding	A	82	0	packages/website/scripts/prepare-fulcra-site.mjs
 branding	A	107	0	packages/website/src/fulcra-public-site.test.ts
-branding	M	25	32	public-docs/cli.md
+branding	M	28	33	public-docs/cli.md
 branding	M	20	20	public-docs/connectivity.md
 branding	M	9	9	public-docs/sdk/quickstart.md
 branding	M	18	9	public-docs/skills.md
@@ -444,14 +444,15 @@ build-ci	M	28	2	packages/app/e2e/support/global-setup.ts
 build-ci	M	3	2	packages/app/e2e/support/helpers/agent-stream.ts
 build-ci	M	4	1	packages/app/e2e/support/helpers/app.ts
 build-ci	M	2	1	packages/app/e2e/support/helpers/assistant-images.ts
-build-ci	M	2	1	packages/app/e2e/support/helpers/creation.ts
+build-ci	M	41	4	packages/app/e2e/support/helpers/creation.ts
 build-ci	M	8	3	packages/app/e2e/support/helpers/daemon-registry.ts
 build-ci	M	5	1	packages/app/e2e/support/helpers/daemon-websocket-gate.ts
 build-ci	M	9	1	packages/app/e2e/support/helpers/host-confirmation.ts
 build-ci	M	13	4	packages/app/e2e/support/helpers/hosts.ts
 build-ci	M	3	1	packages/app/e2e/support/helpers/import-session.ts
-build-ci	M	2	0	packages/app/e2e/support/helpers/isolated-host-daemon.ts
+build-ci	M	5	0	packages/app/e2e/support/helpers/isolated-host-daemon.ts
 build-ci	M	1	0	packages/app/e2e/support/helpers/new-workspace.ts
+build-ci	A	85	0	packages/app/e2e/support/helpers/pane-toolbar.ts
 build-ci	M	2	0	packages/app/e2e/support/helpers/plugin-buttons.ts
 build-ci	M	2	3	packages/app/e2e/support/helpers/plugin-provider-icons.ts
 build-ci	M	1	1	packages/app/e2e/support/helpers/plugin-requirements.ts
@@ -550,6 +551,7 @@ core-fixes	M	10	8	packages/app/e2e/browser/agent-message-submission.spec.ts
 core-fixes	M	3	0	packages/app/e2e/browser/agent-timeline-scroll-smoothness.spec.ts
 core-fixes	M	1	1	packages/app/e2e/browser/appearance-theme-picker.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/assistant-fork-menu.spec.ts
+core-fixes	M	115	6	packages/app/e2e/browser/changes-pane.spec.ts
 core-fixes	M	19	0	packages/app/e2e/browser/client-slash-commands.spec.ts
 core-fixes	M	2	2	packages/app/e2e/browser/codex-speed.spec.ts
 core-fixes	M	6	2	packages/app/e2e/browser/context-window-meter.spec.ts
@@ -810,6 +812,7 @@ desktop-runtime	A	279	0	scripts/orca/bootstrap.test.mjs
 durability	A	138	0	docs/session-timeline.md
 durability	M	15	4	docs/timeline-sync.md
 durability	M	3	0	packages/app/e2e/browser/agent-consecutive-turns.spec.ts
+durability	M	36	0	packages/app/e2e/browser/creation-old-daemon.spec.ts
 durability	M	5	2	packages/app/src/workspace/project-workspace-archive.ts
 durability	M	275	0	packages/server/src/server/agent/agent-storage.test.ts
 durability	M	143	2	packages/server/src/server/agent/agent-storage.ts
@@ -839,6 +842,7 @@ features	M	1	5	packages/app/assets/images/favicon-dark-attention.svg
 features	M	0	0	packages/app/assets/images/favicon-light-attention.png
 features	M	1	5	packages/app/assets/images/favicon-light-attention.svg
 features	A	125	0	packages/app/e2e/browser/architecture-map.spec.ts
+features	M	9	4	packages/app/e2e/browser/command-center-file-search.spec.ts
 features	M	4	1	packages/app/e2e/browser/schedules-project-target.spec.ts
 features	M	4	4	packages/app/e2e/browser/settings-navigation.spec.ts
 features	A	105	0	packages/app/e2e/browser/sidebar-background-work.spec.ts
@@ -847,8 +851,9 @@ features	M	16	71	packages/app/e2e/browser/sidebar-help.spec.ts
 features	A	526	0	packages/app/e2e/browser/sidebar-leads-scroll.spec.ts
 features	A	160	0	packages/app/e2e/browser/sidebar-multihost-offline.spec.ts
 features	M	6	0	packages/app/e2e/browser/sidebar-nav-settings.spec.ts
-features	M	27	2	packages/app/e2e/support/helpers/command-center-file-search.ts
+features	M	72	8	packages/app/e2e/support/helpers/command-center-file-search.ts
 features	M	18	10	packages/app/e2e/support/helpers/sidebar-nav-settings.ts
+features	M	4	1	packages/app/e2e/support/helpers/sidebar.ts
 features	M	7	0	packages/app/e2e/support/helpers/workspace-tabs.ts
 features	M	3	29	packages/app/src/agent-skills/index.tsx
 features	A	10	0	packages/app/src/app/insights.tsx
@@ -913,6 +918,7 @@ features	M	166	27	packages/app/src/components/agent-list.tsx
 features	D	0	66	packages/app/src/components/community-links.tsx
 features	M	52	1	packages/app/src/components/compact-explorer-sidebar.tsx
 features	M	1	0	packages/app/src/components/context-window-meter.tsx
+features	M	22	2	packages/app/src/components/file-explorer-pane.tsx
 features	M	5	2	packages/app/src/components/headers/header-toggle-button.tsx
 features	M	11	0	packages/app/src/components/headers/menu-header.tsx
 features	M	10	1	packages/app/src/components/headers/screen-header.tsx
@@ -963,7 +969,6 @@ features	M	3	2	packages/app/src/components/workspace-rename-modal.tsx
 features	M	14	0	packages/app/src/components/workspace-shortcut-targets-subscriber.test.tsx
 features	A	36	0	packages/app/src/composer/agent-controls/draft-effort.test.ts
 features	A	23	0	packages/app/src/composer/agent-controls/draft-effort.ts
-features	M	5	1	packages/app/src/composer/draft/input-draft.live.test.tsx
 features	A	129	0	packages/app/src/composer/draft/role-picker.tsx
 features	A	43	0	packages/app/src/composer/draft/use-draft-role.ts
 features	A	392	0	packages/app/src/context/checkout.tsx
@@ -1183,7 +1188,6 @@ orchestration	A	0	0	docs/assets/features/leadership-dark.png
 orchestration	A	0	0	docs/assets/features/leadership-light.png
 orchestration	A	0	0	docs/assets/screens/leadership-dark.png
 orchestration	A	0	0	docs/assets/screens/leadership-light.png
-orchestration	M	82	5	packages/app/e2e/browser/changes-pane.spec.ts
 orchestration	M	12	25	packages/app/e2e/browser/plugin-management.spec.ts
 orchestration	M	57	12	packages/app/src/app/h/[serverId]/index.tsx
 orchestration	M	52	15	packages/app/src/components/hosts/host-picker.tsx
@@ -1212,8 +1216,8 @@ orchestration	M	8	2	packages/app/src/styles/unistyles-module-scope.test.ts
 orchestration	M	19	4	packages/app/src/utils/connection-selection.test.ts
 orchestration	M	18	1	packages/app/src/utils/connection-selection.ts
 orchestration	M	204	0	packages/cli/src/commands/agent/run.test.ts
-orchestration	M	102	13	packages/cli/src/commands/agent/run.ts
-orchestration	A	51	0	packages/cli/src/commands/agent/run.workspace.test.ts
+orchestration	M	115	15	packages/cli/src/commands/agent/run.ts
+orchestration	A	94	0	packages/cli/src/commands/agent/run.workspace.test.ts
 orchestration	A	240	0	packages/cli/src/commands/agent/send.test.ts
 orchestration	M	141	7	packages/cli/src/commands/agent/send.ts
 orchestration	M	12	1	packages/cli/tests/03-daemon.test.ts
@@ -1309,6 +1313,8 @@ pairing	A	93	0	docs/ios-personal-device.md
 pairing	A	35	0	docs/relay-self-host.md
 pairing	M	15	11	packages/app/e2e/browser/host-confirmation.spec.ts
 pairing	A	139	0	packages/app/e2e/browser/host-repair-screenshots.spec.ts
+pairing	A	20	0	packages/app/e2e/mobile/agent-device/pane-toolbar.android.ad
+pairing	A	20	0	packages/app/e2e/mobile/agent-device/pane-toolbar.ios.ad
 pairing	M	48	43	packages/app/e2e/support/helpers/pair-device.ts
 pairing	A	19	0	packages/app/modules/paseo-device-key/android/build.gradle
 pairing	A	3	0	packages/app/modules/paseo-device-key/android/src/main/AndroidManifest.xml
@@ -1538,8 +1544,11 @@ plugin-host	M	92	9	public-docs/plugins/reference.md
 plugin-host	A	31	0	scripts/assert-bundled-plugins.mjs
 plugin-host	A	30	0	scripts/assert-bundled-plugins.test.mjs
 session-launch	A	87	0	docs/codex-public-baseline-transport.md
+session-launch	M	16	3	packages/app/e2e/browser/agent-profile-modeless-preferences.spec.ts
+session-launch	M	10	37	packages/app/e2e/browser/bottom-sheet-reopen.spec.ts
 session-launch	M	4	1	packages/app/e2e/browser/new-workspace-codex-mode-preferences.spec.ts
 session-launch	M	3	4	packages/app/e2e/browser/new-workspace-model-recovery.spec.ts
+session-launch	M	2	1	packages/app/e2e/browser/provider-settings-refresh.spec.ts
 session-launch	M	2	2	packages/app/e2e/browser/settings-host-page.spec.ts
 session-launch	M	3	0	packages/app/e2e/browser/workspace-draft-thinking-preferences.spec.ts
 session-launch	M	6	5	packages/app/e2e/browser/workspace-model-restart.spec.ts
@@ -1556,11 +1565,16 @@ session-launch	M	14	6	packages/app/src/composer/agent-controls/index.tsx
 session-launch	M	3	1	packages/app/src/composer/agent-controls/mode-control.tsx
 session-launch	A	33	0	packages/app/src/composer/draft/create-agent-request.test.ts
 session-launch	M	5	0	packages/app/src/composer/draft/create-agent-request.ts
+session-launch	M	5	1	packages/app/src/composer/draft/input-draft.live.test.tsx
+session-launch	M	1	1	packages/app/src/composer/draft/input-draft.ts
 session-launch	M	44	8	packages/app/src/composer/draft/workspace-tab.tsx
 session-launch	M	48	2	packages/app/src/composer/index.tsx
 session-launch	M	118	2	packages/app/src/create-agent-preferences/preferences.test.ts
 session-launch	M	108	2	packages/app/src/create-agent-preferences/preferences.ts
+session-launch	M	30	0	packages/app/src/hooks/feature-preferences.test.ts
+session-launch	M	5	1	packages/app/src/hooks/feature-preferences.ts
 session-launch	M	70	23	packages/app/src/hooks/use-agent-form-state.ts
+session-launch	M	28	26	packages/app/src/hooks/use-draft-agent-features.ts
 session-launch	A	26	0	packages/app/src/plugins/catalog-hash.test.ts
 session-launch	A	16	0	packages/app/src/plugins/catalog-hash.ts
 session-launch	A	386	0	packages/app/src/plugins/catalog-sync.test.tsx
@@ -1645,6 +1659,7 @@ session-launch	M	22	0	packages/server/src/server/agent/providers/provider-availa
 session-launch	M	11	2	packages/server/src/server/agent/runtime-mcp-config.ts
 session-launch	M	172	33	packages/server/src/server/agent/tools/paseo-tools.ts
 session-launch	M	5	0	packages/server/src/server/agent/tools/types.ts
+session-launch	M	110	8	packages/server/src/server/cli-run-workspace-precedence.e2e.test.ts
 session-launch	M	244	1	packages/server/src/server/daemon-client.e2e.test.ts
 session-launch	M	85	0	packages/server/src/server/daemon-instance.test.ts
 session-launch	M	19	2	packages/server/src/server/daemon-instance.ts
