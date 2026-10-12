@@ -664,9 +664,9 @@ core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
-core-fixes	A	97	0	packages/server/src/server/report-up-held.test.ts
-core-fixes	A	717	0	packages/server/src/server/report-up.test.ts
-core-fixes	A	883	0	packages/server/src/server/report-up.ts
+core-fixes	A	121	0	packages/server/src/server/report-up-held.test.ts
+core-fixes	A	753	0	packages/server/src/server/report-up.test.ts
+core-fixes	A	894	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
 core-fixes	A	467	0	packages/server/src/server/revive-on-restart.test.ts
