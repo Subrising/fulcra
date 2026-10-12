@@ -21,26 +21,62 @@ import { WORKSPACE_DECK_MAX_MOUNTED_WORKSPACES } from "@/screens/workspace/works
 import type { installDaemonWebSocketGate } from "./daemon-websocket-gate";
 
 /** Capture the submitted agent options; optionally stop provisioning for wire-only assertions. */
-export async function captureWorkspaceAgentRequest(page: Page, options: { block: boolean }) {
+export async function captureWorkspaceAgentRequest(
+  page: Page,
+  options: { block: boolean; holdFeatureCatalogFor?: string },
+) {
   const frames = await loadSessionMessageReaders();
   type AgentIntent = NonNullable<WorkspaceCreateRequest["agent"]>;
   let resolveRequest!: (agent: AgentIntent) => void;
   const request = new Promise<AgentIntent>((resolve) => {
     resolveRequest = resolve;
   });
+  let resolveFeatureRequest!: () => void;
+  const featureRequest = new Promise<void>((resolve) => {
+    resolveFeatureRequest = resolve;
+  });
+  let holdFeatures = Boolean(options.holdFeatureCatalogFor);
+  const featureRequestIds = new Set<string>();
+  const releaseFeatures: Array<() => void> = [];
   await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
     const server = ws.connectToServer();
     ws.onMessage((frame) => {
       const message = frames.client(frame);
+      if (
+        message?.type === "list_provider_features_request" &&
+        message.draftConfig.provider === options.holdFeatureCatalogFor
+      ) {
+        featureRequestIds.add(message.requestId);
+        resolveFeatureRequest();
+      }
       if (message?.type === "workspace.create.request" && message.agent) {
         resolveRequest(message.agent);
         if (options.block) return;
       }
       server.send(frame);
     });
-    server.onMessage((frame) => ws.send(frame));
+    server.onMessage((frame) => {
+      const message = frames.server(frame);
+      if (
+        holdFeatures &&
+        message?.type === "list_provider_features_response" &&
+        featureRequestIds.delete(message.payload.requestId)
+      ) {
+        releaseFeatures.push(() => ws.send(frame));
+        return;
+      }
+      ws.send(frame);
+    });
   });
-  return { waitForRequest: () => request };
+  return {
+    waitForRequest: () => request,
+    waitForFeatureRequest: () => featureRequest,
+    releaseFeatureCatalog() {
+      holdFeatures = false;
+      featureRequestIds.clear();
+      for (const send of releaseFeatures.splice(0)) send();
+    },
+  };
 }
 
 export async function pressSubmitBeforeTheNextRender(page: Page, name: string): Promise<void> {

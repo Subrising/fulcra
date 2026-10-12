@@ -40,10 +40,14 @@ export function applyFeatureValues(
 }
 
 export function resolveFeatureValues(args: {
-  features: AgentFeature[];
+  features: AgentFeature[] | undefined;
   persistedFeatureValues: Record<string, unknown>;
   localFeatureValues: Record<string, unknown>;
 }): Record<string, unknown> {
+  // A pending catalog has no availability facts. Keep explicit choices until it arrives.
+  if (args.features === undefined) {
+    return args.localFeatureValues;
+  }
   const next: Record<string, unknown> = {};
 
   for (const feature of args.features) {
