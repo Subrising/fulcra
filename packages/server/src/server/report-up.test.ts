@@ -38,6 +38,7 @@ function fixture(
   chats: FakeChat[],
   options: {
     enabled?: boolean;
+    deliver?: (leadId: string, prompt: string) => Promise<void>;
     /** The permission, limit and idle-lead notices; default on, as the service does. */
     otherEnabled?: boolean;
     now?: number;
@@ -79,6 +80,7 @@ function fixture(
     readLedger: () => options.ledger ?? [],
     setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
+      await options.deliver?.(leadId, prompt);
       delivered.push({ leadId, prompt });
     },
   });
@@ -576,7 +578,7 @@ describe("idle-lead nudge", () => {
     expect(f.delivered).toHaveLength(1);
   });
 
-  test("a worker turn starts a new idle period", async () => {
+  test("a worker turn alone does not repeat an unchanged idle worker list", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned });
     f.turn(LEAD);
     await f.settle();
@@ -587,13 +589,13 @@ describe("idle-lead nudge", () => {
     await f.settle();
     f.turn(LEAD);
     await f.settle();
-    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(2);
+    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(1);
     f.turn(LEAD);
     await f.settle();
-    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(2);
+    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(1);
   });
 
-  test("a lead message to its worker re-arms the nudge, but an old message does not", async () => {
+  test("lead messages do not repeat an unchanged fingerprint", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned, now: 10000 });
     noteAgentMessage(LEAD, WORKER, 9999);
     f.turn(LEAD);
@@ -606,11 +608,11 @@ describe("idle-lead nudge", () => {
     noteAgentMessage(LEAD, WORKER, f.clock.now + 1);
     f.stream(LEAD, { type: "turn_completed", provider: "claude" });
     await f.settle();
-    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered).toHaveLength(1);
     f.clock.now += 1000;
     f.turn(LEAD);
     await f.settle();
-    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered).toHaveLength(1);
   });
 
   test("background jobs exclude only busy workers from the nudge", async () => {
@@ -656,7 +658,7 @@ describe("idle-lead nudge", () => {
     expect(f.delivered[1]!.prompt).toContain("usage limit until");
   });
 
-  test("native worker starts re-arm the nudge without notice reply loops", async () => {
+  test("native worker turns keep an unchanged fingerprint without notice reply loops", async () => {
     const f = nativeFixture([lead, idleWorker()], { ledger: owned });
     try {
       f.begin(LEAD);
@@ -676,10 +678,119 @@ describe("idle-lead nudge", () => {
       f.begin(LEAD);
       f.end(LEAD);
       await f.settle();
-      expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(2);
+      expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(1);
     } finally {
       f.cleanup();
     }
+  });
+
+  test("a late worker completion changes the idle worker fingerprint", async () => {
+    const late = { ...idleWorker(), id: "late-worker", title: "Late", lifecycle: "running" };
+    const f = fixture([lead, idleWorker(), late], { ledger: owned });
+    f.stream(late.id, { type: "turn_started", provider: "claude" });
+    f.stream(late.id, { type: "timeline", item: { type: "user_message", text: "do work" } });
+    await f.settle();
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).not.toContain("Late (late-worker)");
+    late.lifecycle = "idle";
+    f.stream(late.id, { type: "turn_completed", provider: "claude" });
+    await f.settle();
+    f.turn(LEAD);
+    await f.settle();
+    const nudges = f.delivered.filter((d) => d.prompt.includes("You are idle"));
+    expect(nudges).toHaveLength(2);
+    expect(nudges[1]!.prompt).toContain("Late (late-worker)");
+  });
+
+  test("background count zero changes the idle worker fingerprint after an earlier nudge", async () => {
+    const busy = {
+      ...idleWorker(),
+      id: "busy-worker",
+      title: "Busy",
+      backgroundWork: { count: 1 },
+    };
+    const f = fixture([lead, idleWorker(), busy], { ledger: owned });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    busy.backgroundWork.count = 0;
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[1]!.prompt).toContain("Busy (busy-worker)");
+  });
+
+  test("a new owned open item changes the ledger fingerprint", async () => {
+    const ledger = [...owned];
+    const f = fixture([lead, idleWorker()], { ledger });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    ledger.push({ ...owned[0]!, id: "FU-13" });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[1]!.prompt).toContain("FU-12, FU-13");
+  });
+
+  test("a rejected nudge delivery can recover with the same fingerprint", async () => {
+    let reject = true;
+    const f = fixture([lead, idleWorker()], {
+      ledger: owned,
+      deliver: async () => {
+        if (reject) throw new Error("delivery refused");
+      },
+    });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
+    reject = false;
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("a nudge fingerprint is stored only after delivery succeeds", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let attempts = 0;
+    const f = fixture([lead, idleWorker()], {
+      ledger: owned,
+      deliver: async () => {
+        attempts += 1;
+        await pending;
+      },
+    });
+    f.turn(LEAD);
+    await f.settle();
+    f.turn(LEAD);
+    await f.settle();
+    expect(attempts).toBe(1);
+    expect(f.delivered).toHaveLength(0);
+    release();
+    await f.settle();
+    f.turn(LEAD, { text: "nudge reply", clientMessageId: `${NUDGE_MESSAGE_PREFIX}reply` });
+    await f.settle();
+    expect(attempts).toBe(1);
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("the owned item fingerprint uses sorted IDs", async () => {
+    const ledger = [...owned, { ...owned[0]!, id: "FU-13" }];
+    const f = fixture([lead, idleWorker()], { ledger });
+    f.turn(LEAD);
+    await f.settle();
+    ledger.reverse();
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
   });
 
   test("it sends nothing without an idle worker, without open items it owns, or when disabled", async () => {

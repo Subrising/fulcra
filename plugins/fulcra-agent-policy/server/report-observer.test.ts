@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest";
 import { ReportUpObserver, type ReportTurnEnd } from "./report-observer.mjs";
 
 function fixture() {
-  const work: string[] = [];
   const ends: ReportTurnEnd[] = [];
   const permissions: string[] = [];
   const observer = new ReportUpObserver({
@@ -10,15 +9,14 @@ function fixture() {
     noticePrefix: "daemon-finish:",
     isSystemInjectedEnvelope: (text) => text.startsWith("<paseo-system>"),
     onStarted: () => {},
-    onWorkStarted: (id) => work.push(id),
     onEnded: (end) => ends.push(end),
     onPermission: (_id, request) => permissions.push(request.id),
   });
-  return { observer, work, ends, permissions };
+  return { observer, ends, permissions };
 }
 
-describe("report observer worker activity", () => {
-  test("a real prompt records work once with either native event order", () => {
+describe("report observer provenance", () => {
+  test("a real prompt keeps its provenance with either native event order", () => {
     for (const firstMessageFirst of [false, true]) {
       const f = fixture();
       const message = { type: "user_message", text: "start the task" };
@@ -27,12 +25,11 @@ describe("report observer worker activity", () => {
       f.observer.firstMessage("worker", message);
       f.observer.firstMessage("worker", message);
       f.observer.turnEnded("worker", "completed");
-      expect(f.work).toEqual(["worker"]);
       expect(f.ends).toMatchObject([{ fromNotice: false, fromNudge: false }]);
     }
   });
 
-  test("nudge and notice replies record no worker activity", () => {
+  test("nudge and notice replies keep their provenance", () => {
     const f = fixture();
     for (const message of [
       { type: "user_message", clientMessageId: "daemon-finish:idle-nudge:one" },
@@ -43,7 +40,6 @@ describe("report observer worker activity", () => {
       f.observer.firstMessage("worker", message);
       f.observer.turnEnded("worker", "completed");
     }
-    expect(f.work).toEqual([]);
     expect(f.ends.map((end) => end.fromNotice)).toEqual([true, true, true]);
     expect(f.ends.map((end) => end.fromNudge)).toEqual([true, false, false]);
   });

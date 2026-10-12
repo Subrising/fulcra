@@ -12,7 +12,7 @@ import { DaemonConfigStore } from "./daemon-config-store.js";
 import { resolveConfigFromPersisted } from "./config.js";
 import { assertFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
-import { ReportUpService, reportUpSwitches } from "./report-up.js";
+import { ReportUpService, reportUpSwitches, type ReportUpDeps } from "./report-up.js";
 
 const sent: Array<{ agentId: string; prompt: string }> = [];
 let beforeSend: (() => void) | undefined;
@@ -39,6 +39,7 @@ function setup(
   store?: DaemonConfigStore,
   options: {
     statePath?: string;
+    readLedger?: ReportUpDeps["readLedger"];
     now?: () => number;
     setTimer?: (run: () => void, ms: number) => void;
   } = {},
@@ -114,7 +115,7 @@ function setup(
         },
       } as AgentManagerEvent);
   };
-  return { finish, stream, leadTurnEnds, leadHitsLimit };
+  return { finish, stream, leadTurnEnds, leadHitsLimit, chats, service };
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -271,4 +272,45 @@ describe("report-up reload while delivery waits", () => {
       }
     },
   );
+});
+
+test("a queued nudge records its fingerprint only after actual delivery", async () => {
+  const f = setup(undefined, {
+    readLedger: () => [
+      { project: "fulcra", id: "FU-12", owner: "Lead (11111111)", status: "OPEN" },
+    ],
+  });
+  f.chats.get(A)!.lifecycle = "idle";
+  let attempts = 0;
+  beforeSend = () => {
+    attempts += 1;
+    throw new Error("delivery refused");
+  };
+  try {
+    f.finish(LEAD);
+    await settle();
+    f.finish(LEAD);
+    await settle();
+    expect(attempts).toBe(0);
+    expect(sent).toHaveLength(0);
+    f.leadTurnEnds();
+    await settle();
+    expect(attempts).toBe(1);
+    expect(sent).toHaveLength(0);
+    beforeSend = () => {
+      attempts += 1;
+    };
+    f.finish(LEAD);
+    await settle();
+    expect(attempts).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.prompt).toContain("You are idle");
+    f.finish(LEAD);
+    await settle();
+    expect(attempts).toBe(2);
+    expect(sent).toHaveLength(1);
+  } finally {
+    beforeSend = undefined;
+    f.service.stop();
+  }
 });
