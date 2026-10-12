@@ -58,8 +58,8 @@ import {
 //   after the window and after the lead's running turn ends. A worker that already messaged its lead during its turn
 //   sends none. A failed turn is still sent at once. Waiting notices are in memory: a daemon restart drops them.
 // - OFF BY DEFAULT (0.2.17): native notifyOnFinish is the standard way a lead hears a worker finish. daemon.reportUpOnTurnEnd
-//   = true turns these "finished a turn" notices and idle-lead nudges on. Permission and limit notices stay on unless
-//   daemon.reportUpOnTurnEnd = false turns every report-up notice off.
+//   = true turns these "finished a turn" notices on, as a fallback. The permission, limit and idle-lead notices are not
+//   "finished a turn" notices: they stay on unless daemon.reportUpOnTurnEnd = false turns every report-up notice off.
 // - A lead that turns idle while it owns open ledger items and has idle workers gets ONE short message that lists them
 //   (FU-101). It is driven by the end of the lead's turn, not by a timer. It is sent at most once per idle period, and
 //   never after a turn that a nudge started, so a lead that does nothing is not nudged again and again.
@@ -109,10 +109,8 @@ export interface ReportUpDeps {
   agentStorage: AgentStorage;
   /** "Finished a turn" notices: off unless the owner turned the fallback on. */
   isEnabled: () => boolean;
-  /** The permission and limit notices: on unless every report-up notice is turned off. Default: on. */
+  /** The permission, limit and idle-lead notices: on unless every report-up notice is turned off. Default: on. */
   isOtherEnabled?: () => boolean;
-  /** Idle-lead nudges are off unless the owner enables them. */
-  isNudgeEnabled?: () => boolean;
   localServerId: string | null;
   logger: Logger;
   /** The delivery step; tests replace it. */
@@ -417,8 +415,7 @@ export class ReportUpService {
     turn.fromNotice = null;
     const fromNudge = turn.fromNudge === true;
     turn.fromNudge = false;
-    const nudgeEnabled = this.deps.isNudgeEnabled?.() === true;
-    if (kind === "turn_completed" && !fromNudge && nudgeEnabled)
+    if (kind === "turn_completed" && !fromNudge)
       void this.nudgeIdleLead(agentId).catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Idle-lead nudge failed"),
       );
@@ -864,19 +861,14 @@ export class ReportUpService {
 }
 
 /**
- * daemon.reportUpOnTurnEnd opts into finished-turn notices and idle-lead nudges.
- * Unset keeps permission and limit notices on. False turns all report-up notices off.
+ * What daemon.reportUpOnTurnEnd turns on. Unset: only the notices that are not "finished a turn" (permission, limit,
+ * idle lead). true: the "finished a turn" fallback too. false: every report-up notice is off.
  */
 export function reportUpSwitches(setting: boolean | undefined): {
   finishedTurns: boolean;
   otherNotices: boolean;
-  idleLeadNudge: boolean;
 } {
-  return {
-    finishedTurns: setting === true,
-    otherNotices: setting !== false,
-    idleLeadNudge: setting === true,
-  };
+  return { finishedTurns: setting === true, otherNotices: setting !== false };
 }
 
 export function startReportUp(input: {
@@ -894,8 +886,6 @@ export function startReportUp(input: {
       reportUpSwitches(input.daemonConfigStore.get().reportUpOnTurnEnd).finishedTurns,
     isOtherEnabled: () =>
       reportUpSwitches(input.daemonConfigStore.get().reportUpOnTurnEnd).otherNotices,
-    isNudgeEnabled: () =>
-      reportUpSwitches(input.daemonConfigStore.get().reportUpOnTurnEnd).idleLeadNudge,
     localServerId: input.localServerId,
     logger: input.logger,
     ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),
