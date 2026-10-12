@@ -1,7 +1,7 @@
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { SessionUsage } from "@/provider-usage/session-usage";
+import { AgentUsage } from "@/usage";
 import { formatTokenCount } from "./context-window-meter.utils";
 
 interface ContextWindowDetailsProps {
@@ -55,7 +55,7 @@ export function ContextWindowDetails({
           <Text style={styles.detail}>{t("contextWindow.sessionCost", { cost: sessionCost })}</Text>
         ) : null}
       </View>
-      <SessionUsage serverId={serverId} agentId={agentId} refreshable={refreshable} />
+      <AgentUsage serverId={serverId} agentId={agentId} refreshable={refreshable} />
     </>
   );
 }

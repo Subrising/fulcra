@@ -1,3 +1,5 @@
+import { loadAgentPolicy } from "./policy.js";
+import type { PolicyHooks } from "../../../../../plugins/fulcra-agent-policy/index.host.mjs";
 import type { Logger } from "pino";
 import { FINAL_INPUT_CHECK } from "../agent/agent-sdk-types.js";
 import { createFinalInputCheck, waitForFinalInputHandoff } from "../agent/final-input-check.js";
@@ -11,6 +13,7 @@ import { LIMIT_RESUME_OPT_OUT_LABEL, LimitResumeService } from "./service.js";
 export function startLimitResume(input: {
   paseoHome: string;
   now?: () => number;
+  hooks?: PolicyHooks;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   daemonConfigStore: DaemonConfigStore;
@@ -86,14 +89,22 @@ export function startLimitResume(input: {
     onSkip: (agentId, reason) => logger.info({ agentId, reason }, "Auto-resume skipped"),
   });
   service.start();
-  service.onStop(
-    agentManager.subscribe(
-      (event) =>
-        void service
-          .onAgentEvent(event)
-          .catch((e) => logger.warn({ err: e }, "Auto-resume event failed")),
-      { replayState: false },
-    ),
+  const offHooks = input.hooks
+    ? loadAgentPolicy("hooks").registerRecoveryHooks(input.hooks, service)
+    : undefined;
+  const offStream = agentManager.subscribe(
+    (event) => {
+      // Native hooks own turn endings. Timeline-only binding snapshots retain restart protection.
+      if (input.hooks && (event.type !== "agent_stream" || event.event.type !== "timeline")) return;
+      void service
+        .onAgentEvent(event)
+        .catch((error) => logger.warn({ err: error }, "Auto-resume event failed"));
+    },
+    { replayState: false },
   );
+  service.onStop(() => {
+    offHooks?.();
+    offStream();
+  });
   return service;
 }

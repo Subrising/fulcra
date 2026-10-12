@@ -245,27 +245,30 @@ describe("LimitResumeService", () => {
     });
   });
 
-  describe("controller handoff", () => {
-    it("steps aside when the controller resumed the session inside its own window", async () => {
-      agents.set("a", idle());
+  describe("one recovery owner", () => {
+    it("leaves controller-owned stops to the controller", async () => {
+      agents.set("a", { ...idle(), unscopedResumeAllowed: false });
       const svc = make();
       svc.start();
       await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
-      // The controller resumes at reset + 30..120 s; that starts a turn on the session.
-      await vi.advanceTimersByTimeAsync(3_600_000 + 60_000);
-      await svc.onAgentEvent(started("a"));
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(svc.pendingResumeAt("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(4_000_000);
       expect(sent).toEqual([]);
-      expect(markers.get("a")).toBeNull();
+      expect(markers.has("a")).toBe(false);
     });
-
-    it("never acts before the controller's window has closed", async () => {
+    it("rechecks ownership at reset without a competing-owner delay", async () => {
       agents.set("a", idle());
       const svc = make();
       svc.start();
       await svc.onAgentEvent(failed("a", resetIn(60 * 60_000)));
-      await vi.advanceTimersByTimeAsync(3_600_000 + 120_000);
+      expect(svc.pendingResumeAt("a")).toBe(T0 + 3_600_000);
+      await vi.advanceTimersByTimeAsync(3_599_000);
       expect(sent).toEqual([]);
+      agents.get("a")!.unscopedResumeAllowed = false;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sent).toEqual([]);
+      expect(svc.pendingResumeAt("a")).toBeNull();
+      expect(markers.get("a")).toBeNull();
     });
   });
 

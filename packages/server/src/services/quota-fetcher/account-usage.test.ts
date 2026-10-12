@@ -1,12 +1,11 @@
 import pino from "pino";
 import { describe, expect, it } from "vitest";
 import type { ProviderUsage, SessionOutboundMessage } from "../../server/messages.js";
-import { ProviderCatalogSession } from "../../server/session/provider/provider-catalog-session.js";
-import type { ProviderSnapshotManager } from "../../server/agent/provider-snapshot-manager.js";
+import { AccountUsageSession as ProviderCatalogSession } from "../../server/session/usage/account-usage-session.js";
 import { AccountUsageRegistry } from "./account-usage-registry.js";
 import type { AccountUsageReading, PooledAccount } from "./account-usage-types.js";
 import type { ProviderUsageFetcher } from "./provider.js";
-import { ProviderUsageService } from "./service.js";
+import { ProviderUsageService } from "../../server/test-utils/provider-usage.js";
 
 // Fulcra account pool: the usage panel of a pooled session shows the account THAT session runs on -- its name and its
 // figures -- while the Mac's own login is a different account (here: Personal at 97% weekly, the case that was wrong).
@@ -67,7 +66,6 @@ function harness(
   const session = new ProviderCatalogSession({
     logger,
     providerUsageService: new ProviderUsageService({ logger, fetchers: [macLogin] }),
-    providerSnapshotManager: { on() {}, off() {} } as unknown as ProviderSnapshotManager,
     usageCredential: (agentId) =>
       agentId === "pooled"
         ? {

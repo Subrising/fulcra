@@ -105,6 +105,8 @@ function sessionRoutes(
   scope: Extract<UsageScope, { kind: "session" }>,
   lookup: StoreLookup,
 ): CodexUsageInput[] {
+  // Fulcra's pool source owns this launch. Never add the host's default login or a duplicate account card.
+  if (scope.env.FULCRA_ACCOUNT_ID) return [];
   const env = scope.env;
   const home = lookup.home ?? homedir();
   if (scope.provider === "codex") {

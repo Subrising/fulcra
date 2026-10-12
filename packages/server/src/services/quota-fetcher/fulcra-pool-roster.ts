@@ -149,6 +149,24 @@ export function writeUsageSnapshot(root: string, rows: AccountUsageRow[]): boole
       weeklyResetsAt: row.weekly.resetsAt,
     };
   }
+  // Native usage sources read the same bounded observations. Credentials never enter this file.
+  const reports = rows
+    .filter((row) => row.accountId && UUID.test(row.accountId))
+    .map((row) => ({
+      accountId: row.accountId,
+      provider: row.provider,
+      status: row.status,
+      observedAt: row.observedAt,
+      fiveHour: row.fiveHour,
+      weekly: row.weekly,
+    }));
+  const reportsFile = path.join(accountsDir, "usage-reports.json");
+  const reportsBody = `${JSON.stringify({ v: 1, reports })}\n`;
+  let reportsChanged = true;
+  try {
+    reportsChanged = readFileSync(reportsFile, "utf8") !== reportsBody;
+  } catch {}
+  if (reportsChanged) writePrivateFileAtomicSync(reportsFile, reportsBody);
   const file = path.join(accountsDir, "usage.json");
   const body = `${JSON.stringify({ v: 1, accounts })}\n`;
   try {

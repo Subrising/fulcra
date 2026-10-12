@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { normalizeAgentSnapshot, projectAgentSnapshot } from "./agent-snapshots";
-import { runtimeUsageRevision } from "@/provider-usage/runtime-snapshot";
+import { runtimeUsageRevision } from "@/context/account-session-revision";
 
 function createSnapshot(
   input: Partial<Omit<AgentSnapshotPayload, "labels">> & {
