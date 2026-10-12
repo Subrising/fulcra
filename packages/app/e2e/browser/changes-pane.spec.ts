@@ -832,7 +832,7 @@ test("Changes keeps review navigation and controls inside its workspace tab", as
 
 /**
  * The visible Changes toolbar is at least 48 px tall and holds each control: no control leaves the bar, the
- * content below starts under it, and a tap just inside each control edge lands on that control.
+ * content below starts under it, and a tap just inside the middle of each control edge lands on that control.
  */
 async function expectToolbarContainsTouchControls(
   toolbar: Locator,
@@ -855,12 +855,15 @@ async function expectToolbarContainsTouchControls(
       if (box.top < bar.top - 0.5 || box.bottom > bar.bottom + 0.5) {
         problems.push(`${name}: ${box.top}-${box.bottom} outside the bar ${bar.top}-${bar.bottom}`);
       }
+      // The middle of each edge, 1 px inside. Corners are rounded, so a corner tap is not a hit in any browser.
       const inset = 1;
+      const midX = box.left + box.width / 2;
+      const midY = box.top + box.height / 2;
       const edges: [number, number][] = [
-        [box.left + inset, box.top + inset],
-        [box.right - inset, box.top + inset],
-        [box.left + inset, box.bottom - inset],
-        [box.right - inset, box.bottom - inset],
+        [box.left + inset, midY],
+        [box.right - inset, midY],
+        [midX, box.top + inset],
+        [midX, box.bottom - inset],
       ];
       for (const [x, y] of edges) {
         const hit = document.elementFromPoint(x, y);
