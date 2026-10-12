@@ -33,6 +33,7 @@ export class ReportUpObserver {
       messageId.startsWith(this.deps.noticePrefix) || this.deps.isSystemInjectedEnvelope(text);
     turn.fromNudge = messageId.startsWith(`${this.deps.noticePrefix}idle-nudge:`);
     this.turns.set(id, turn);
+    if (!turn.fromNotice) this.deps.onWorkStarted?.(id);
   }
 
   turnEnded(id, kind, failure = "", lastAssistant) {

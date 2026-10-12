@@ -167,7 +167,7 @@ export class ReportUpService {
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
   private readonly held = new Map<string, HeldReport[]>();
-  /** Leads already nudged in this idle period; cleared when the lead starts a turn. */
+  /** Leads already nudged; only worker activity starts a new idle period. */
   private readonly nudged = new Set<string>();
 
   constructor(private readonly deps: ReportUpDeps) {
@@ -177,8 +177,12 @@ export class ReportUpService {
       noticePrefix: FINISH_NOTIFICATION_MESSAGE_PREFIX,
       isSystemInjectedEnvelope,
       onStarted: (id) => {
-        this.nudged.delete(id);
         this.finishOwners.delete(id);
+      },
+      onWorkStarted: (id) => {
+        void this.workerStarted(id).catch((err: unknown) =>
+          this.deps.logger.warn({ err, agentId: id }, "Worker activity check failed"),
+        );
       },
       onClosed: (id) => this.finishOwners.delete(id),
       onEnded: (input) => this.onTurnEnd(input),
@@ -308,7 +312,7 @@ export class ReportUpService {
     if (this.stopped) return;
     const { agentId, failed, fromNotice, fromNudge, startedAt, failure, lastAssistant } = input;
     if (!failed && !fromNudge)
-      void this.nudgeIdleLead(agentId).catch((err: unknown) =>
+      void this.nudgeIdleLead(agentId, startedAt).catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Idle-lead nudge failed"),
       );
     const armed = this.finishOwners.get(agentId) ?? this.hasFinishOwner(agentId);
@@ -375,16 +379,38 @@ export class ReportUpService {
     return false;
   }
 
+  private async workerStarted(workerId: string): Promise<void> {
+    const worker = await this.store.get(workerId);
+    if (!worker || worker.archivedAt) return;
+    const lead = await this.leadOf(worker);
+    if ("id" in lead) this.nudged.delete(lead.id);
+  }
+
   /** The chats on this computer that report to the lead and are idle now. */
   private async idleWorkersOf(leadId: string): Promise<LineAgent[]> {
     const workers: LineAgent[] = [];
     for (const chat of await this.store.list()) {
       if (chat.id === leadId || chat.archivedAt || !reportsTo(chat)) continue;
-      if (this.deps.agentManager.getAgent(chat.id)?.lifecycle !== "idle") continue;
+      const live = this.deps.agentManager.getAgent(chat.id);
+      if (live?.lifecycle !== "idle" || (live.backgroundWork?.count ?? 0) > 0) continue;
       const owner = await this.leadOf(chat);
       if ("id" in owner && owner.id === leadId) workers.push(chat);
     }
     return workers;
+  }
+
+  private async rearmAfterWorkerMessage(leadId: string, startedAt?: number): Promise<void> {
+    if (!this.nudged.has(leadId) || startedAt === undefined) return;
+    for (const worker of await this.store.list()) {
+      if (worker.archivedAt || worker.id === leadId || !reportsTo(worker)) continue;
+      const sentAt = lastAgentMessageAt(leadId, worker.id);
+      if (sentAt === null || sentAt < startedAt) continue;
+      const owner = await this.leadOf(worker);
+      if ("id" in owner && owner.id === leadId) {
+        this.nudged.delete(leadId);
+        break;
+      }
+    }
   }
 
   /**
@@ -392,8 +418,10 @@ export class ReportUpService {
    * Event-driven: it runs when the lead's turn ends. Nothing is sent when there are no idle workers, no open items,
    * when the lead is at a usage limit, or when the nudge was already sent in this idle period.
    */
-  private async nudgeIdleLead(leadId: string): Promise<void> {
-    if (!this.otherEnabled() || this.nudged.has(leadId)) return;
+  private async nudgeIdleLead(leadId: string, startedAt?: number): Promise<void> {
+    if (!this.otherEnabled()) return;
+    await this.rearmAfterWorkerMessage(leadId, startedAt);
+    if (this.nudged.has(leadId)) return;
     await new Promise((resolve) => setImmediate(resolve));
     if (this.observer.isOpen(leadId) || this.nudged.has(leadId) || this.limitOf(leadId)) return;
     const lead = await this.store.get(leadId);

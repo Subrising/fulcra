@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
@@ -28,6 +28,7 @@ interface FakeChat {
   lastMessage?: string;
   cwd?: string;
   lifecycle?: string;
+  backgroundWork?: { count: number };
 }
 
 const LEAD = "11111111-1111-4111-8111-111111111111";
@@ -542,6 +543,7 @@ describe("report-up limit state across a restart", () => {
 
 // Fulcra 0.2.17 (FU-101): a lead that turns idle with open ledger items and idle workers is nudged once.
 describe("idle-lead nudge", () => {
+  beforeEach(() => resetAgentMessageLogForTests());
   const owned = [
     { project: "fulcra", id: "FU-12", owner: "Lead (11111111)", status: "IN PROGRESS" },
   ];
@@ -559,7 +561,7 @@ describe("idle-lead nudge", () => {
     expect(prompt).not.toContain("Done: tests pass");
   });
 
-  test("a turn that a nudge started is not nudged again; the next turn from a worker report is", async () => {
+  test("notice replies and lead turns without worker activity do not re-arm the nudge", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned });
     f.turn(LEAD);
     await f.settle();
@@ -569,7 +571,115 @@ describe("idle-lead nudge", () => {
     expect(f.delivered).toHaveLength(1);
     f.turn(LEAD, { text: "Worker finished a turn", clientMessageId: "daemon-finish:report-up:x" });
     await f.settle();
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("a worker turn starts a new idle period", async () => {
+    const f = fixture([lead, idleWorker()], { ledger: owned });
+    f.turn(LEAD);
+    await f.settle();
+    f.stream(WORKER, { type: "turn_started", provider: "claude" });
+    f.stream(WORKER, { type: "timeline", item: { type: "user_message", text: "start the task" } });
+    await f.settle();
+    f.stream(WORKER, { type: "turn_completed", provider: "claude" });
+    await f.settle();
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(2);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(2);
+  });
+
+  test("a lead message to its worker re-arms the nudge, but an old message does not", async () => {
+    const f = fixture([lead, idleWorker()], { ledger: owned, now: 10000 });
+    noteAgentMessage(LEAD, WORKER, 9999);
+    f.turn(LEAD);
+    await f.settle();
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    f.clock.now += 1000;
+    f.stream(LEAD, { type: "turn_started", provider: "claude" });
+    noteAgentMessage(LEAD, WORKER, f.clock.now + 1);
+    f.stream(LEAD, { type: "turn_completed", provider: "claude" });
+    await f.settle();
     expect(f.delivered).toHaveLength(2);
+    f.clock.now += 1000;
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+  });
+
+  test("background jobs exclude only busy workers from the nudge", async () => {
+    const busy = { ...idleWorker(), backgroundWork: { count: 1 } };
+    const f = fixture([lead, busy], { ledger: owned });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(0);
+    busy.backgroundWork.count = 0;
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    const g = fixture(
+      [
+        lead,
+        { ...busy, backgroundWork: { count: 1 } },
+        { ...idleWorker(), id: "idle-other", title: "Other" },
+      ],
+      { ledger: owned },
+    );
+    g.turn(LEAD);
+    await g.settle();
+    expect(g.delivered).toHaveLength(1);
+    expect(g.delivered[0]!.prompt).toContain("Other (idle-other)");
+    expect(g.delivered[0]!.prompt).not.toContain("Builder");
+  });
+
+  test("background jobs do not suppress permission and limit notices", async () => {
+    const f = fixture([lead, { ...idleWorker(), backgroundWork: { count: 1 } }], {
+      ledger: owned,
+      enabled: false,
+    });
+    f.stream(WORKER, {
+      type: "permission_requested",
+      provider: "claude",
+      request: { id: "busy-permission", name: "Bash", input: { command: "ls" } },
+    });
+    await f.settle();
+    f.failedTurn(WORKER, "Claude AI usage limit reached|0000000000");
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[0]!.prompt).toContain("waiting for permission");
+    expect(f.delivered[1]!.prompt).toContain("usage limit until");
+  });
+
+  test("native worker starts re-arm the nudge without notice reply loops", async () => {
+    const f = nativeFixture([lead, idleWorker()], { ledger: owned });
+    try {
+      f.begin(LEAD);
+      f.end(LEAD);
+      await f.settle();
+      f.begin(LEAD, { clientMessageId: `${NUDGE_MESSAGE_PREFIX}native`, text: "nudge" });
+      f.end(LEAD);
+      await f.settle();
+      f.begin(LEAD);
+      f.end(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      f.begin(WORKER);
+      await f.settle();
+      f.end(WORKER);
+      await f.settle();
+      f.begin(LEAD);
+      f.end(LEAD);
+      await f.settle();
+      expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(2);
+    } finally {
+      f.cleanup();
+    }
   });
 
   test("it sends nothing without an idle worker, without open items it owns, or when disabled", async () => {
