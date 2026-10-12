@@ -4,6 +4,10 @@ import path from "node:path";
 import { type Locator, type Page } from "@playwright/test";
 import { buildHostWorkspaceRoute, buildSettingsSectionRoute } from "../../src/utils/host-routes";
 import { test, expect } from "../support/fixtures";
+import {
+  expectToolbarContainsTouchControls,
+  tapControlEdges,
+} from "../support/helpers/pane-toolbar";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { getServerId } from "../support/helpers/server-id";
 import { connectSeedClient } from "../support/helpers/seed-client";
@@ -761,10 +765,13 @@ test("shows a revert error returned by the daemon", async ({ page }) => {
     .toBe(AFTER);
 });
 
-test("Changes keeps review navigation and controls inside its workspace tab", async ({ page }) => {
+test("Changes keeps review navigation and controls inside its workspace tab", async ({
+  page,
+}, testInfo) => {
   const workspace = await createWorkspaceWithMountedTabDiff({ includeDeletedFile: true });
   await useUnwrappedDiffLines(page);
   await openWorkspaceChanges(page, workspace);
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   const visiblePanel = page.getByTestId("working-diff-panel").filter({ visible: true });
   await expect(visiblePanel).toBeVisible();
@@ -776,6 +783,7 @@ test("Changes keeps review navigation and controls inside its workspace tab", as
   // A desktop with a mouse keeps the compact 36 px toolbar; only touch screens grow it to 48 px.
   const desktopHeader = await visiblePanel.getByTestId("changes-header").boundingBox();
   expect(desktopHeader?.height).toBe(36);
+  await page.screenshot({ path: testInfo.outputPath("desktop-toolbar.png") });
   await expect(diffHeaderForPath(visiblePanel, "src/use-mounted-tab-set.ts")).toHaveAccessibleName(
     "src/use-mounted-tab-set.ts, +37, -1",
   );
@@ -829,63 +837,6 @@ test("Changes keeps review navigation and controls inside its workspace tab", as
     "src/zz-deleted.ts, +0, -1",
   );
 });
-
-/**
- * The visible Changes toolbar is at least 48 px tall and holds each control: no control leaves the bar, the
- * content below starts under it, and a tap just inside the middle of each control edge lands on that control.
- */
-async function expectToolbarContainsTouchControls(
-  toolbar: Locator,
-  controls: string[],
-): Promise<void> {
-  const report = await toolbar.evaluate((element, names) => {
-    const header = element as HTMLElement;
-    const bar = header.getBoundingClientRect();
-    const next = header.nextElementSibling?.getBoundingClientRect() ?? null;
-    const problems: string[] = [];
-    for (const name of names) {
-      const control =
-        header.querySelector<HTMLElement>(`[data-testid="${name}"]`) ??
-        header.querySelector<HTMLElement>(`[aria-label="${name}"]`);
-      if (!control) {
-        problems.push(`${name}: not in the toolbar`);
-        continue;
-      }
-      const box = control.getBoundingClientRect();
-      if (box.top < bar.top - 0.5 || box.bottom > bar.bottom + 0.5) {
-        problems.push(`${name}: ${box.top}-${box.bottom} outside the bar ${bar.top}-${bar.bottom}`);
-      }
-      // The middle of each edge, 1 px inside. Corners are rounded, so a corner tap is not a hit in any browser.
-      const inset = 1;
-      const midX = box.left + box.width / 2;
-      const midY = box.top + box.height / 2;
-      const edges: [number, number][] = [
-        [box.left + inset, midY],
-        [box.right - inset, midY],
-        [midX, box.top + inset],
-        [midX, box.bottom - inset],
-      ];
-      for (const [x, y] of edges) {
-        const hit = document.elementFromPoint(x, y);
-        if (!hit || !control.contains(hit)) {
-          const owner = hit?.closest("[data-testid]")?.getAttribute("data-testid") ?? "-";
-          const hitBox = hit?.getBoundingClientRect();
-          const where = hitBox
-            ? `${hitBox.left},${hitBox.top} ${hitBox.width}x${hitBox.height}`
-            : "";
-          problems.push(
-            `${name} ${box.left},${box.top}: a tap at ${x},${y} lands on ${hit?.tagName ?? "nothing"} in ${owner} (${where})`,
-          );
-        }
-      }
-    }
-    return { barHeight: bar.height, barBottom: bar.bottom, nextTop: next?.top ?? null, problems };
-  }, controls);
-  expect(report.barHeight).toBeGreaterThanOrEqual(48);
-  if (report.nextTop !== null)
-    expect(report.nextTop).toBeGreaterThanOrEqual(report.barBottom - 0.5);
-  expect(report.problems).toEqual([]);
-}
 
 test("compact Changes keeps its actions menu-only, with 48 px touch targets", async ({ page }) => {
   const workspace = await createWorkspaceWithMountedTabDiff();
@@ -942,6 +893,87 @@ test("compact Changes keeps its actions menu-only, with 48 px touch targets", as
   await expect(
     page.getByTestId("changes-options-menu-content").getByTestId("changes-toggle-wrap-lines"),
   ).toContainText("Scroll long lines");
+});
+
+test.describe("pane toolbars on touch screens", () => {
+  test.use({ hasTouch: true });
+  for (const size of [
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 812, height: 375 },
+    { width: 1440, height: 900 },
+  ]) {
+    test(`Changes and Files contain edge touch targets at ${size.width}x${size.height}`, async ({
+      page,
+    }, testInfo) => {
+      test.setTimeout(120_000);
+      const workspace = await createWorkspaceWithMountedTabDiff();
+      await useUnwrappedDiffLines(page);
+      await openWorkspaceChanges(page, workspace);
+      await page.setViewportSize(size);
+      const compact = size.width < 720;
+      const explorer = page
+        .getByTestId(compact ? "explorer-content-area" : "workspace-explorer-sidebar")
+        .filter({ visible: true });
+      if (compact) {
+        const changesTab = page.getByTestId("explorer-tab-changes").filter({ visible: true });
+        if (!(await changesTab.isVisible()))
+          await page.getByTestId("workspace-explorer-toggle").first().click();
+        await changesTab.click();
+      } else {
+        await expect(explorer).toBeVisible();
+        await explorer.getByTestId("workspace-tab-changes_tree").click();
+      }
+      const options = explorer.getByRole("button", { name: "Diff options" });
+      await expect(options).toBeVisible();
+      await expectToolbarContainsTouchControls(explorer.getByTestId("changes-header"), [
+        "Diff options",
+      ]);
+      await tapControlEdges(page, options, async () => {
+        await expect(page.getByTestId("changes-options-menu-content")).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(page.getByTestId("changes-options-menu-content")).toHaveCount(0);
+      });
+      if (size.width < 720) {
+        const actions = explorer.getByTestId("changes-actions-menu-trigger");
+        await expectToolbarContainsTouchControls(
+          explorer.getByTestId("changes-repository-header"),
+          ["changes-actions-menu-trigger"],
+        );
+        await tapControlEdges(page, actions, async () => {
+          await expect(page.getByTestId("changes-primary-cta-menu")).toBeVisible();
+          await page.keyboard.press("Escape");
+          await expect(page.getByTestId("changes-primary-cta-menu")).toHaveCount(0);
+        });
+      }
+      await page.screenshot({ path: testInfo.outputPath("changes-toolbar.png") });
+      const filesTab = compact
+        ? page.getByTestId("explorer-tab-files").filter({ visible: true })
+        : explorer.getByTestId("workspace-tab-files");
+      await filesTab.click();
+      const filesBar = explorer.getByTestId("files-pane-header");
+      await expect(filesBar).toBeVisible();
+      await expectToolbarContainsTouchControls(filesBar, [
+        "files-sort-trigger",
+        "files-hidden-toggle",
+        "files-refresh",
+        "files-new-file",
+        "files-new-folder",
+      ]);
+      await page.screenshot({ path: testInfo.outputPath("files-toolbar.png") });
+      const hidden = filesBar.getByTestId("files-hidden-toggle");
+      await expect(hidden).toHaveAttribute("aria-label", "Hide hidden files");
+      await tapControlEdges(page, hidden, async () => {
+        await expect(hidden).toHaveAttribute("aria-label", "Show hidden files");
+        // Restore the setting before checking the next edge.
+        await hidden.tap();
+        await expect(hidden).toHaveAttribute("aria-label", "Hide hidden files");
+      });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+    });
+  }
 });
 
 test("compact Changes jumps to a file from the changed-files sheet", async ({ page }) => {

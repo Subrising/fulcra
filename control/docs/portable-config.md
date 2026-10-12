@@ -14,6 +14,7 @@ From the built controller package run `node dist/tools/init-config.mjs` with tha
 | `localHost`                                    | `{name: "This Mac", serverId: null}`; host identity is explicitly configured/discovered by the host                                               |
 | `hosts`                                        | Zero to 64 remote `{name, serverId, sshTarget?}` records; default `[]`. Names and non-null server IDs must be unique, including the local host.   |
 | `defaults`                                     | Existing optional `thinkingOptionId`, `modes`, `ask`, `models` settings; default `{}`. Provider policy validation remains in `provider-mode.mjs`. |
+| `automaticContextRotation`                     | Boolean; default `false` when unset. Set `true` to enable the idle 60% context trigger.                                                           |
 | `artifacts`                                    | UUID-keyed arrays of relative artifact paths; default `{}`                                                                                        |
 
 Objects reject unknown fields. `all` and `unknown` are reserved host names. URL credentials and URL fragments are rejected. SSH targets are configuration metadata; the portable controller refuses remote execution because the legacy remote transport is outside v0.2.

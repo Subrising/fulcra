@@ -28,6 +28,7 @@ export const KNOWN_SETTINGS = Object.freeze([
   "worktreeLifecycle",
   "outcomesRoot",
   "memoryRoot",
+  "automaticContextRotation",
 ]);
 export const KNOWN_DEFAULTS = Object.freeze([
   "modes",
@@ -134,6 +135,8 @@ export function validateConfig(c) {
     "defaults",
     "artifacts",
   ]);
+  if (c.automaticContextRotation !== undefined && typeof c.automaticContextRotation !== "boolean")
+    throw Error("Invalid setting automaticContextRotation");
   if (c.version !== 2) throw Error("Invalid setting version (expected 2)");
   object(c.daemon, ["url"], "daemon", ["url"]);
   object(c.authority, ["companyId", "programmeId", "issueApi"], "authority", [

@@ -98,7 +98,7 @@ test("startup history establishes a baseline and broken continuity refuses", () 
   );
   assert.throws(() => observeCompactions(initial(), page([], { gap: true }), 0), /continuity/);
 });
-function fixture(t) {
+function fixture(t, config = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "compaction-check-")));
   const store = new ControlStore(path.join(home, "journal.sqlite"));
   const id = randomUUID(),
@@ -145,7 +145,7 @@ function fixture(t) {
       },
     },
   };
-  const loops = new CompactionLoops(control, { home, now: () => now });
+  const loops = new CompactionLoops(control, { home, now: () => now, config });
   t.after(async () => {
     await loops.stop();
     store.close();
@@ -264,22 +264,104 @@ const idle = (used, limit = 100, extra = {}) => ({
   ...extra,
 });
 
-test("context size never triggers a fresh context", () => {
-  for (const used of [59, 60, 61, 90, 100, 200, 600_000])
+test("context rotation needs explicit opt-in and valid idle provider usage", () => {
+  for (const used of [59, 60, 61, 90, 100, 200, 600_000]) {
     assert.equal(contextTrigger(idle(used)), null);
-  assert.equal(contextTrigger(idle(59)), null);
-  assert.equal(contextTrigger({ ...idle(90), status: "running" }), null);
-  assert.equal(contextTrigger(idle(90, 100, { background: 1 })), null);
-  assert.equal(contextTrigger(idle(90, 100, { pending: 1 })), null);
-  assert.equal(contextTrigger(idle(90, null)), null);
-  assert.equal(contextTrigger(idle(null)), null);
-  assert.equal(contextTrigger(null), null);
+    assert.equal(contextTrigger(idle(used), false), null);
+    assert.equal(contextTrigger(idle(used), 1), null);
+  }
+  assert.equal(contextTrigger(idle(60), true), "Context reached 60% of the window");
+  for (const usage of [
+    idle(59),
+    { ...idle(90), status: "running" },
+    idle(90, 100, { background: 1 }),
+    idle(90, 100, { pending: 1 }),
+    idle(90, null),
+    idle(null),
+    idle(NaN),
+    idle(90, Infinity),
+    idle(90, 0),
+    idle(90, -1),
+    idle(Infinity),
+    idle(-1),
+    null,
+  ])
+    assert.equal(contextTrigger(usage, true), null);
+});
+
+test("opt-in rotates once and keeps the cooldown and daily cap", async (t) => {
+  const f = fixture(t, { automaticContextRotation: true });
+  f.page(null);
+  f.usage(idle(60));
+  await f.loops.observe(f.id);
+  assert.equal(f.rotations.length, 1);
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.loops.status().contextTrigger, 0.6);
+  assert.equal(f.loops.status().freshStart, false);
+  await f.loops.observe(f.id);
+  assert.equal(f.rotations.length, 1);
+  f.clock(600_002);
+  f.usage(idle(90, 100, { lastUserMessageAt: new Date(600_002).toISOString() }));
+  await f.loops.observe(f.id);
+  assert.equal(f.rotations.length, 2);
+  f.clock(1_200_003);
+  f.usage(idle(90, 100, { lastUserMessageAt: new Date(1_200_003).toISOString() }));
+  await f.loops.observe(f.id);
+  assert.equal(f.rotations.length, 2);
+});
+
+test("enabled context rotation refuses busy usage and rechecks it inside the lock", async (t) => {
+  const f = fixture(t, { automaticContextRotation: true });
+  f.page(null);
+  for (const usage of [
+    idle(90, 100, { status: "running" }),
+    idle(90, 100, { pending: 1 }),
+    idle(90, 100, { background: 1 }),
+  ]) {
+    f.usage(usage);
+    await f.loops.observe(f.id);
+  }
+  assert.equal(f.rotations.length, 0);
+  f.usage(idle(90));
+  let reads = 0;
+  f.control.native.contextUsage = async () =>
+    ++reads === 1 ? idle(90) : idle(90, 100, { status: "running" });
+  await f.loops.observe(f.id);
+  assert.equal(f.rotations.length, 0);
+  assert.equal(f.sends.length, 0);
+  assert.equal(reads, 2);
+  assert.match(f.loops.lastError.message, /no longer idle/);
+});
+
+test("the enable setting is rechecked before rotation", async (t) => {
+  const config = { automaticContextRotation: false };
+  const f = fixture(t, config);
+  f.page(null);
+  f.usage(idle(90));
+  await f.loops.observe(f.id);
+  assert.equal(f.rotations.length, 0);
+  config.automaticContextRotation = true;
+  assert.equal(f.loops.status().contextTrigger, 0.6);
+  const usage = f.control.native.contextUsage;
+  let reads = 0;
+  f.control.native.contextUsage = async (id) => {
+    const result = await usage(id);
+    if (++reads === 2) config.automaticContextRotation = false;
+    return result;
+  };
+  await f.loops.observe(f.id);
+  assert.equal(f.rotations.length, 0);
+  assert.equal(f.loops.status().contextTrigger, null);
+  assert.equal(reads, 2);
 });
 
 test("an idle lead with full context keeps its session and the app offers no fresh start", async (t) => {
   const f = fixture(t);
   f.page(null);
   f.usage(idle(100));
+  f.control.native.contextUsage = async () => {
+    throw Error("Disabled context trigger queried usage");
+  };
   await f.loops.observe(f.id);
   f.clock(86_400_000);
   f.usage({ ...idle(200), lastUserMessageAt: new Date(86_400_000).toISOString() });
@@ -289,6 +371,7 @@ test("an idle lead with full context keeps its session and the app offers no fre
   assert.equal(f.loops.status().freshStart, false);
   assert.equal(f.loops.status().contextTrigger, null);
   assert.deepEqual(f.loops.status().rotations, []);
+  assert.equal(f.loops.lastError, null);
 });
 
 test("Fresh start goes through the same rotation, settles parent events, and a retry never rotates twice", async (t) => {

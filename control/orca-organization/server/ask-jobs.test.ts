@@ -50,11 +50,12 @@ test("a start past the running limit is refused, and old finished jobs are dropp
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { askOnce } from "./ask.mjs";
+import { askOnce, scrubCredential, TOO_DEEP } from "./ask.mjs";
 import { addAccount } from "./accounts.mjs";
 
-test("a child that prints the account credential leaks it into no job result and no job error", async () => {
+test("a child that prints the account credential leaks it into no job result and no job error", async (t) => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-ask-jobs-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const account = await addAccount(root, { provider: "claude", name: "Work" }, Date.now());
   const token = `sk-ant-oat01-${account.id}-SECRET`;
   const keychain = { get: async () => token };
@@ -67,6 +68,7 @@ test("a child that prints the account credential leaks it into no job result and
   const leak = {
     good: async () => ({ is_error: false, result: `answer ${token}`, modelUsage: { [token]: {} } }),
     bad: async () => ({ is_error: true, api_error_status: 500, result: `diagnostic ${token}` }),
+    structured: async () => ({ is_error: false, structured_output: { note: token } }),
     deepValue: async () => ({
       is_error: false,
       result: "ok",
@@ -78,18 +80,36 @@ test("a child that prints the account credential leaks it into no job result and
     },
   };
   for (const [name, spawnClaude] of Object.entries(leak)) {
-    const jobs = createAskJobs<{ prompt: string; model: string }>({
-      run: (input) => askOnce({ root, keychain, input, spawnClaude }),
+    const schema =
+      name === "structured" || name.startsWith("deep") ? { type: "object" } : undefined;
+    let finished!: Promise<unknown>;
+    const jobs = createAskJobs<{ prompt: string; model: string; schema?: unknown }>({
+      run: (input) => {
+        const pending = askOnce({ root, keychain, input, spawnClaude });
+        finished = pending.catch(() => undefined);
+        return pending;
+      },
     });
-    const { id } = jobs.start({ prompt: "x", model: "claude-haiku-5-5" });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const { id } = jobs.start({ prompt: "x", model: "claude-haiku-5-5", schema });
+    // Await the real runner, then allow the job store to record its outcome.
+    await finished;
+    await tick();
     const view = jobs.result(id);
-    assert.notEqual(view.state, "running", name);
+    if (name.startsWith("deep")) {
+      assert.equal(view.state, "failed", name);
+      assert.equal(view.error?.code, "OUTPUT_SCHEMA_FAILED", name);
+      assert.equal(view.result, undefined, name);
+      const cleaned = JSON.stringify(scrubCredential(deep(token, name === "deepKey"), token));
+      assert.equal(cleaned.includes(TOO_DEEP), true, name);
+      assert.equal(cleaned.includes(token), false, name);
+    } else if (name === "structured") {
+      assert.equal(view.state, "done");
+      assert.deepEqual(view.result?.output, { note: "[redacted]" });
+    } else assert.notEqual(view.state, "running", name);
     assert.equal(
       JSON.stringify(view).includes(token),
       false,
       `${name}: the job view holds the credential`,
     );
   }
-  fs.rmSync(root, { recursive: true, force: true });
 });
