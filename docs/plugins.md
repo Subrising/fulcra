@@ -98,9 +98,11 @@ checks cover that registry. Unlisted directories do not load.
 Desktop packaging ships the entire built-in plugin directory as an external resource,
 including declarations. The external esbuild compiler cannot read Electron's `app.asar`
 filesystem, and packaging dependencies excludes `.d.ts` files needed for import validation.
-Built-ins can import only host modules (`@getpaseo/plugin/*`, `zod`) and Node built-ins:
-outside the archive, nothing resolves an npm dependency, and the dist build test cannot catch
-one because it resolves through the repository's `node_modules`.
+Built-in TypeScript entries use host modules (`@getpaseo/plugin/*`, `zod`) and Node built-ins.
+The build bundles package imports into JavaScript runtime resources. These files run outside
+`app.asar` and can resolve only Node built-ins and relative files.
+Built-output checks reject external package imports and load the policy from an isolated directory.
+This prevents checkout dependencies from hiding a missing packaged dependency.
 The packaged-app smoke check requires every listed built-in to start without relying on
 account credentials.
 
