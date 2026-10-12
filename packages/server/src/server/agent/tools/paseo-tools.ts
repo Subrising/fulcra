@@ -1,6 +1,6 @@
 import { NativeArtifactProduceInputSchema } from "@getpaseo/protocol/native-evidence";
 import { stat } from "node:fs/promises";
-import type { NativeReportOrigin } from "../../report-origin.js";
+import { requireNativeReportOrigin, type NativeReportOrigin } from "../../report-origin.js";
 import { z } from "zod";
 import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
@@ -616,9 +616,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       inputSchema: config.inputSchema,
       outputSchema: config.outputSchema,
       handler: ((input, context) =>
-        agentManager.trustedPlugins.agentInput(() =>
-          handler(input, context),
-        )) as PaseoToolDefinition["handler"],
+        agentManager.trustedPlugins.agentInput(() => {
+          if (options.nativeReportOrigin) requireNativeReportOrigin(options.nativeReportOrigin);
+          return handler(input, context);
+        })) as PaseoToolDefinition["handler"],
     });
   };
   if (options.nativeReportOrigin)
@@ -651,6 +652,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       input: unknown,
       context: PaseoToolExecutionContext = {},
     ): Promise<PaseoToolResult> {
+      if (options.nativeReportOrigin) requireNativeReportOrigin(options.nativeReportOrigin);
       const tool = tools.get(name);
       if (!tool) {
         throw new Error(`Fulcra tool not found: ${name}`);

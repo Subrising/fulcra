@@ -1,5 +1,5 @@
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
-import { checkNativeReportOriginPublication } from "./report-origin.js";
+import { checkNativeReportOriginPublication, requireNativeReportOrigin } from "./report-origin.js";
 import type { NativeReportOrigin } from "./report-origin.js";
 import { startInsightsRecorder } from "../utils/insights/recorder.js";
 import { startLimitResume } from "./limit-resume/start.js";
@@ -1781,7 +1781,9 @@ export async function createPaseoDaemon(
           callerAgentId,
           req.header("x-paseo-report-origin"),
         );
-        if (nativeReportOrigin) {
+        const requests = Array.isArray(req.body) ? req.body : [req.body];
+        if (nativeReportOrigin && requests.some((request) => request?.method === "tools/call")) {
+          requireNativeReportOrigin(nativeReportOrigin);
           // SDK preparation/serialization may await. Fence inside the actual synchronous HTTP write, not before SDK send.
           const write = res.write.bind(res),
             end = res.end.bind(res);
