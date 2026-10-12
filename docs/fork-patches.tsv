@@ -1103,6 +1103,7 @@ features	M	39	0	packages/app/src/stores/sidebar-collapsed-sections-store/state.t
 features	M	27	1	packages/app/src/stores/sidebar-collapsed-sections-store/state.ts
 features	A	35	0	packages/app/src/stores/workspace-layout-storage.test.ts
 features	M	2	0	packages/app/src/stores/workspace-layout-storage.ts
+features	M	16	5	packages/app/src/terminal/runtime/terminal-find.browser.test.ts
 features	A	18	0	packages/app/src/types/host-connection-endpoint.test.ts
 features	M	13	4	packages/app/src/utils/__tests__/split-markdown-blocks.test.ts
 features	M	22	0	packages/app/src/utils/agent-snapshots.test.ts
@@ -1229,7 +1230,7 @@ orchestration	A	176	0	packages/protocol/src/native-intercom.ts
 orchestration	M	77	2	packages/protocol/src/provider-manifest.ts
 orchestration	A	81	0	packages/protocol/src/session-ownership.ts
 orchestration	M	2	0	packages/server/src/server/agent/agent-loading.ts
-orchestration	M	3658	159	packages/server/src/server/agent/agent-manager.test.ts
+orchestration	M	3663	157	packages/server/src/server/agent/agent-manager.test.ts
 orchestration	M	3922	583	packages/server/src/server/agent/agent-manager.ts
 orchestration	M	30	0	packages/server/src/server/agent/import-sessions.test.ts
 orchestration	M	24	5	packages/server/src/server/agent/import-sessions.ts
@@ -1402,7 +1403,7 @@ pairing	A	162	0	packages/server/src/server/relay-dns-lookup.test.ts
 pairing	A	76	0	packages/server/src/server/relay-dns-lookup.ts
 pairing	M	30	0	packages/server/src/server/relay-runtime.test.ts
 pairing	M	39	2	packages/server/src/server/relay-runtime.ts
-pairing	M	125	19	packages/server/src/server/relay-transport.test.ts
+pairing	M	129	19	packages/server/src/server/relay-transport.test.ts
 pairing	M	98	25	packages/server/src/server/relay-transport.ts
 pairing	A	113	0	scripts/verify-pairing-mutations.mjs
 plugin-host	M	185	2	docs/plugins.md
@@ -1604,7 +1605,7 @@ session-launch	M	94	81	packages/server/src/server/agent/providers/claude/agent.i
 session-launch	M	87	0	packages/server/src/server/agent/providers/claude/agent.interrupt-restart-regression.test.ts
 session-launch	M	17	0	packages/server/src/server/agent/providers/claude/agent.redesign.test.ts
 session-launch	M	614	10	packages/server/src/server/agent/providers/claude/agent.test.ts
-session-launch	M	416	23	packages/server/src/server/agent/providers/claude/agent.ts
+session-launch	M	426	23	packages/server/src/server/agent/providers/claude/agent.ts
 session-launch	A	106	0	packages/server/src/server/agent/providers/claude/background-work.test.ts
 session-launch	A	123	0	packages/server/src/server/agent/providers/claude/background-work.ts
 session-launch	M	3	1	packages/server/src/server/agent/providers/claude/feature-definitions.ts
