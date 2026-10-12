@@ -98,12 +98,13 @@ async function fixture(provider: "claude" | "opencode" = "claude") {
     host.close();
     await rm(home, { recursive: true, force: true });
   });
-  const send = async (text: string, from?: string, steer = false) => {
+  const send = async (text: string, from?: string, steer = false, messageId?: string) => {
     await session.handleMessage({
       type: "send_agent_message_request",
       requestId: randomUUID(),
       agentId: target.id,
       text,
+      ...(messageId ? { messageId } : {}),
       ...(from ? { sender: { agentId: from } } : {}),
       ...(steer ? { activeTurnBehavior: "steer" as const } : {}),
     });
@@ -492,6 +493,122 @@ test("closing the receiver during dispatch preparation refuses the batch before 
   expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0]).toMatchObject({
     state: "refused",
     reason: "The receiver is closed or archived",
+  });
+});
+
+test("a reporting-line move after batch selection never reaches the provider", async () => {
+  const f = await fixture();
+  await f.host.daemon(() => f.manager.setLabels(f.sender.id, { "fulcra.reports-to": "owner" }));
+  await f.host.daemon(() => f.manager.setLabels(f.target.id, { "fulcra.reports-to": f.sender.id }));
+  f.busy.add(f.target.id);
+  await f.send("old task", f.sender.id);
+  const start = f.target.session!.startTurn.bind(f.target.session!);
+  vi.spyOn(f.target.session!, "startTurn").mockImplementation(async (...args) => {
+    await f.host.daemon(() =>
+      f.manager.setLabels(f.target.id, { "fulcra.reports-to": "another-lead" }),
+    );
+    return start(...args);
+  });
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await f.queue.close();
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(f.prompts).not.toContain("old task");
+  expect(records[0].state).toBe("refused");
+  await vi.waitFor(() =>
+    expect(f.prompts.some((p) => String(p).includes("was not delivered"))).toBe(true),
+  );
+});
+
+test("a sender line move rebuilds the batch with only unchanged members", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  await f.send("changed member", f.sender.id);
+  await f.send("unchanged member", f.target.id);
+  const start = f.target.session!.startTurn.bind(f.target.session!);
+  let move = true;
+  vi.spyOn(f.target.session!, "startTurn").mockImplementation(async (...args) => {
+    if (move) {
+      move = false;
+      await f.host.daemon(() =>
+        f.manager.setLabels(f.sender.id, { "fulcra.reports-to": "another-lead" }),
+      );
+    }
+    return start(...args);
+  });
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await f.queue.close();
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(records.map((r: { state: string }) => r.state)).toEqual(["refused", "delivered"]);
+  expect(f.prompts).toContain("unchanged member");
+  expect(f.prompts.some((p) => String(p).includes("Message 1 from"))).toBe(false);
+});
+
+test("a role-holder move during provider preparation refuses the selected message", async () => {
+  const f = await fixture();
+  await f.host.daemon(() => f.manager.setLabels(f.sender.id, { "fulcra.seat": "main-assistant" }));
+  f.busy.add(f.target.id);
+  await f.send("old role task", f.sender.id);
+  const start = f.target.session!.startTurn.bind(f.target.session!);
+  vi.spyOn(f.target.session!, "startTurn").mockImplementation(async (...args) => {
+    await f.host.daemon(() => f.manager.setLabels(f.sender.id, { "fulcra.seat": "other-role" }));
+    return start(...args);
+  });
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await f.queue.close();
+  expect(f.prompts).not.toContain("old role task");
+  expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0].state).toBe("refused");
+});
+
+test("a message wait ignores the running turn while its second task is held", async () => {
+  const f = await fixture();
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const emit = Reflect.get(f.target.session!, "emitTurnEvents").bind(f.target.session!);
+  let first = true;
+  Reflect.set(f.target.session!, "emitTurnEvents", async (prompt: unknown) => {
+    if (first) {
+      first = false;
+      await firstGate;
+    }
+    await emit(prompt);
+  });
+  Reflect.set(f.target.session!, "buildAssistantText", (prompt: string) => `Answer: ${prompt}`);
+  await f.send("first task");
+  f.busy.add(f.target.id);
+  await f.send("second task", f.sender.id, false, "second-message");
+  const session = Object.create(Session.prototype) as Session;
+  Object.assign(session, {
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    sessionLogger: f.logger,
+    delivery: { requestSignal: new AbortController().signal },
+    emit: (message: SessionOutboundMessage) => f.messages.push(message),
+    getAgentPayloadById: async (id: string) => ({ id }),
+  });
+  const waiting = Reflect.get(session, "handleWaitForFinish").call(
+    session,
+    f.target.id,
+    "wait-second",
+    5000,
+    "second-message",
+  );
+  const firstFinished = f.manager.waitForAgentEvent(f.target.id, { waitForActive: true });
+  releaseFirst();
+  await firstFinished;
+  await f.queue.start();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(f.messages.filter((m) => m.type === "wait_for_finish_response")).toEqual([]);
+  f.busy.delete(f.target.id);
+  await f.queue.start();
+  await waiting;
+  expect(f.messages.findLast((m) => m.type === "wait_for_finish_response")).toMatchObject({
+    payload: {
+      requestId: "wait-second",
+      status: "idle",
+      lastMessage: expect.stringContaining("second task"),
+    },
   });
 });
 

@@ -1553,6 +1553,8 @@ export const WaitForFinishRequestSchema = z.object({
   /** Accepts full ID, unique prefix, or exact full title (server resolves). */
   agentId: z.string(),
   timeoutMs: z.number().int().positive().optional(),
+  /** Wait for this message delivery and its resulting provider turn. */
+  messageId: z.string().optional(),
 });
 
 export const DaemonGetStatusRequestSchema = z.object({
@@ -4198,6 +4200,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentRequestReceipts: z.boolean().optional(),
         nativeQueuedMessages: z.boolean().optional(),
         agentMessageQueue: z.boolean().optional(),
+        messageCompletionWait: z.boolean().optional(),
         // Absent on older hosts means the usage-limit resume setting is unsupported.
         autoResumeOnLimit: z.boolean().optional(),
         // COMPAT(notificationPolicy): added 2026-10-04; remove optional gate after 2027-10-04.

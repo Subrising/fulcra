@@ -1,4 +1,4 @@
-import { test, expect, beforeAll, afterAll } from "vitest";
+import { test, expect, beforeAll, afterAll, vi } from "vitest";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
@@ -12,6 +12,8 @@ import {
   type DaemonTestContext,
   DaemonClient,
 } from "./test-utils/index.js";
+import { createTestLogger } from "../test-utils/test-logger.js";
+import { queuedAgentMessagesFor } from "./queued-agent-messages.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
 import { createTestAgentClients } from "./test-utils/fake-agent-client.js";
 import { getFullAccessConfig, getAskModeConfig } from "./daemon-e2e/agent-configs.js";
@@ -135,6 +137,102 @@ test("createAgent without an initial prompt returns an idle snapshot", async () 
   } finally {
     await client.close();
     await daemon.close();
+  }
+});
+
+test("message completion wait uses its delivered turn over a real WebSocket", async () => {
+  const daemon = await createTestPaseoDaemon();
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  const cwd = tmpCwd();
+  let releaseFirst = () => {};
+  let restore = () => {};
+  try {
+    await client.connect();
+    const agent = await client.createAgent({ provider: "claude", cwd });
+    const manager = daemon.daemon.agentManager;
+    const session = manager.getAgent(agent.id)!.session!;
+    const emit = Reflect.get(session, "emitTurnEvents").bind(session);
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let first = true;
+    Reflect.set(session, "emitTurnEvents", async (prompt: unknown) => {
+      if (first) {
+        first = false;
+        await firstGate;
+      }
+      await emit(prompt);
+    });
+    await client.sendAgentMessage(agent.id, "respond with exactly: first answer", {
+      messageId: "first-task",
+    });
+    const inFlight = manager.hasInFlightRun.bind(manager);
+    let held = true;
+    const busy = vi
+      .spyOn(manager, "hasInFlightRun")
+      .mockImplementation((id) => (id === agent.id && held) || inFlight(id));
+    restore = () => busy.mockRestore();
+    await client.sendAgentMessage(agent.id, "respond with exactly: second answer", {
+      messageId: "second-task",
+      sender: { agentId: agent.id },
+      queue: true,
+    });
+    await client.sendAgentMessage(agent.id, "also inspect sibling", {
+      messageId: "sibling-task",
+      sender: { agentId: agent.id },
+      queue: true,
+    });
+    let settled = false;
+    const waiting = client
+      .waitForFinish(agent.id, 5000, { messageId: "second-task" })
+      .finally(() => {
+        settled = true;
+      });
+    const firstFinished = manager.waitForAgentEvent(agent.id, { waitForActive: true });
+    releaseFirst();
+    await firstFinished;
+    await client.fetchAgent(agent.id);
+    expect(settled).toBe(false);
+    held = false;
+    await queuedAgentMessagesFor({
+      agentManager: manager,
+      agentStorage: daemon.daemon.agentStorage,
+      logger: createTestLogger(),
+    }).start();
+    const secondResult = await waiting;
+    expect(secondResult.error).toBeNull();
+    expect(secondResult).toMatchObject({ status: "idle", lastMessage: "second answer" });
+    expect(await client.waitForFinish(agent.id, 5000, { messageId: "sibling-task" })).toMatchObject(
+      { lastMessage: "second answer" },
+    );
+    await client.sendAgentMessage(agent.id, "respond with exactly: third answer", {
+      messageId: "third-task",
+    });
+    expect(await client.waitForFinish(agent.id, 5000, { messageId: "third-task" })).toMatchObject({
+      lastMessage: "third answer",
+    });
+    expect(await client.waitForFinish(agent.id, 5000, { messageId: "second-task" })).toMatchObject({
+      lastMessage: "second answer",
+    });
+    await client.sendAgentMessage(agent.id, "emit a turn failure", { messageId: "failed-task" });
+    expect(await client.waitForFinish(agent.id, 5000, { messageId: "failed-task" })).toMatchObject({
+      status: "error",
+      error: "Requested fake provider failure",
+    });
+    await client.sendAgentMessage(agent.id, "respond with exactly: next answer", {
+      messageId: "next-task",
+    });
+    await client.waitForFinish(agent.id, 5000, { messageId: "next-task" });
+    expect(await client.waitForFinish(agent.id, 5000, { messageId: "failed-task" })).toMatchObject({
+      status: "error",
+      error: "Requested fake provider failure",
+    });
+  } finally {
+    releaseFirst();
+    restore();
+    await client.close();
+    await daemon.close();
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 
