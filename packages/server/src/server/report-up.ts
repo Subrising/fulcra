@@ -124,10 +124,22 @@ export interface ReportUpDeps {
   readLedger?: () => readonly LedgerRow[] | Promise<readonly LedgerRow[]>;
 }
 
+type NoticeKind = "report-up" | "idle-nudge" | "finished-turn";
+interface HeldReport {
+  prompt: string;
+  kind: NoticeKind;
+}
+
+class ReportUpDisabledError extends Error {
+  constructor() {
+    super("Report-up was turned off");
+  }
+}
+
 interface PersistedState {
   v: 1;
   limited: Record<string, LimitedChat>;
-  held: Record<string, string[]>;
+  held: Record<string, Array<string | HeldReport>>;
 }
 
 /** A chat whose last turn ended on a usage limit. */
@@ -296,7 +308,7 @@ export class ReportUpService {
   private readonly turns = new Map<string, TurnState>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
-  private readonly held = new Map<string, string[]>();
+  private readonly held = new Map<string, HeldReport[]>();
   /** Permission prompts already sent to a lead, as "<chat>:<request>"; a request is told once. */
   private readonly askedPermission = new Set<string>();
   /** Leads already nudged in this idle period; cleared when the lead starts a turn. */
@@ -328,7 +340,26 @@ export class ReportUpService {
     }
     for (const [lead, held] of Object.entries(state.held ?? {})) {
       const reports = Array.isArray(held)
-        ? held.filter((r): r is string => typeof r === "string").slice(-MAX_HELD_REPORTS)
+        ? held
+            .flatMap((report): HeldReport[] => {
+              // COMPAT(reportUpHeldKind): added in v0.2.18, remove after 2027-04-12 once old held reports expire.
+              if (typeof report === "string") {
+                const heading = report.replace(/^<paseo-system>\n/, "").split("\n", 1)[0] ?? "";
+                const finished =
+                  /^Worker .* \([^)]+\) (?:finished a turn|ended a turn with an error):/.test(
+                    heading,
+                  ) || /^\d+ workers finished a turn since your last update:/.test(heading);
+                return [{ prompt: report, kind: finished ? "finished-turn" : "report-up" }];
+              }
+              if (
+                report &&
+                typeof report.prompt === "string" &&
+                ["report-up", "idle-nudge", "finished-turn"].includes(report.kind)
+              )
+                return [report];
+              return [];
+            })
+            .slice(-MAX_HELD_REPORTS)
         : [];
       if (!reports.length) continue;
       this.held.set(lead, reports);
@@ -636,12 +667,13 @@ export class ReportUpService {
     workerId: string,
     leadId: string,
     prompt: string,
-    kind: "report-up" | "idle-nudge" = "report-up",
+    kind: NoticeKind = "report-up",
   ): Promise<void> {
+    if (!this.noticeEnabled(kind)) return;
     const leadLimit = this.limitOf(leadId);
     if (leadLimit) {
       const held = this.held.get(leadId) ?? [];
-      held.push(prompt);
+      held.push({ prompt, kind });
       if (held.length > MAX_HELD_REPORTS) held.shift();
       this.held.set(leadId, held);
       this.save();
@@ -662,6 +694,7 @@ export class ReportUpService {
     }
     // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
     heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
+      if (!this.noticeEnabled(kind)) return;
       await this.send(leadId, prompt, kind);
       this.deps.logger.info({ agentId: workerId, lead: leadId, kind }, "Report-up delivered");
     });
@@ -674,11 +707,49 @@ export class ReportUpService {
     if (!held?.length) return;
     this.held.delete(leadId);
     this.save();
-    const body = held.map((prompt) => prompt.trim()).join("\n\n");
-    const notice = `${held.length} report${held.length === 1 ? "" : "s"} held while you were at your usage limit:\n\n${body}`;
-    void this.toLead(leadId, leadId, notice).catch((err: unknown) =>
-      this.deps.logger.warn({ err, leadId }, "Held reports failed"),
-    );
+    if (this.deps.deliver) {
+      void this.deliverHeld(leadId, held).catch((err: unknown) =>
+        this.deps.logger.warn({ err, leadId }, "Held reports failed"),
+      );
+      return;
+    }
+    // Keep notice kinds until the busy lead can receive the message. Reload can change them while it waits.
+    try {
+      heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, () =>
+        this.deliverHeld(leadId, held),
+      );
+    } catch (err) {
+      this.deps.logger.warn({ err, leadId }, "Held reports failed");
+    }
+  }
+
+  private async deliverHeld(leadId: string, held: readonly HeldReport[]): Promise<void> {
+    const enabled = held.filter((report) => this.noticeEnabled(report.kind));
+    if (!enabled.length) return;
+    if (this.limitOf(leadId)) {
+      for (const report of enabled) await this.toLead(leadId, leadId, report.prompt, report.kind);
+      return;
+    }
+    const body = enabled.map(({ prompt }) => prompt.trim()).join("\n\n");
+    const notice = `${enabled.length} report${enabled.length === 1 ? "" : "s"} held while you were at your usage limit:\n\n${body}`;
+    if (this.deps.deliver) await this.deps.deliver(leadId, notice);
+    else {
+      const kind = enabled.some((report) => report.kind === "finished-turn")
+        ? "finished-turn"
+        : "report-up";
+      try {
+        await this.send(leadId, notice, kind);
+      } catch (err) {
+        // The final check refused input. Retry only the notices that remain enabled, with no provider input repeated.
+        const remaining = enabled.filter((report) => this.noticeEnabled(report.kind));
+        if (err instanceof ReportUpDisabledError && remaining.length < enabled.length) {
+          await this.deliverHeld(leadId, remaining);
+          return;
+        }
+        throw err;
+      }
+      this.deps.logger.info({ lead: leadId }, "Report-up delivered");
+    }
   }
 
   private async report(
@@ -738,7 +809,7 @@ export class ReportUpService {
       const prompt = formatSystemNotificationPrompt(
         formatReportUpNotice({ worker, failed, lastMessage }),
       );
-      await this.toLead(workerId, lead.id, prompt);
+      await this.toLead(workerId, lead.id, prompt, "finished-turn");
       return;
     }
     await this.queueFinished(lead.id, { workerId, worker, lastMessage });
@@ -759,7 +830,7 @@ export class ReportUpService {
       const prompt = formatSystemNotificationPrompt(
         formatReportUpNotice({ worker: item.worker, failed: false, lastMessage: item.lastMessage }),
       );
-      await this.toLead(item.workerId, leadId, prompt);
+      await this.toLead(item.workerId, leadId, prompt, "finished-turn");
       return;
     }
     const list = (this.pendingFinished.get(leadId) ?? []).filter(
@@ -819,24 +890,29 @@ export class ReportUpService {
    * takes the limit-aware path (toLead), which keeps it in the persisted held reports until the reset (FU-63).
    */
   private async deliverCombined(leadId: string, items: readonly PendingFinish[]): Promise<void> {
+    // Reload can disable finished turns after flushFinished queues delivery for a busy lead.
+    if (!this.deps.isEnabled()) return;
     const prompt = formatSystemNotificationPrompt(formatCombinedNotice(items));
     if (this.limitOf(leadId)) {
-      await this.toLead(items[0]!.workerId, leadId, prompt);
+      await this.toLead(items[0]!.workerId, leadId, prompt, "finished-turn");
       return;
     }
     this.lastFinishedAt.set(leadId, this.now());
     if (this.deps.deliver) await this.deps.deliver(leadId, prompt);
     else {
-      await this.send(leadId, prompt, "report-up");
+      await this.send(leadId, prompt, "finished-turn");
       this.deps.logger.info({ lead: leadId, workers: items.length }, "Report-up delivered");
     }
   }
 
-  private send(leadId: string, prompt: string, kind: "report-up" | "idle-nudge"): Promise<void> {
+  private noticeEnabled(kind: NoticeKind): boolean {
+    return kind === "finished-turn" ? this.deps.isEnabled() : this.otherEnabled();
+  }
+
+  private send(leadId: string, prompt: string, kind: NoticeKind): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
-      if (!this.deps.isEnabled() && !this.otherEnabled())
-        throw new Error("Report-up was turned off");
+      if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
     };
     return agentManager.trustedPlugins.daemon(async () => {
       const finalCheck = createFinalInputCheck(checkCurrent);

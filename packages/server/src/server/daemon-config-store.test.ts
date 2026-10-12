@@ -37,6 +37,7 @@ function reloadableConfig(
     ...notificationModeOf(daemon),
     enableTerminalAgentHooks: daemon.enableTerminalAgentHooks ?? false,
     ...autoResumeOf(daemon),
+    reportUpOnTurnEnd: daemon.reportUpOnTurnEnd,
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
     terminalProfiles: daemon.terminalProfiles,
     agentProfiles: daemon.agentProfiles,
@@ -1036,6 +1037,19 @@ describe("DaemonConfigStore reload", () => {
   function writeConfig(paseoHome: string, config: unknown): void {
     writeFileSync(path.join(paseoHome, "config.json"), `${JSON.stringify(config, null, 2)}\n`);
   }
+
+  test("removing report-up opt-in reloads the unset setting and notifies live readers", () => {
+    const { paseoHome, store } = createReloadableStore({
+      initialPersisted: { daemon: { reportUpOnTurnEnd: true } },
+    });
+    const changes: unknown[] = [];
+    store.onFieldChange("reportUpOnTurnEnd", (value) => changes.push(value));
+    writeConfig(paseoHome, { daemon: {} });
+    expect(store.reload().appliedPaths).toEqual(["daemon.reportUpOnTurnEnd"]);
+    expect(store.get().reportUpOnTurnEnd).toBeUndefined();
+    expect(changes).toEqual([undefined]);
+    expect(store.reload().appliedPaths).toEqual([]);
+  });
 
   test("combined notification and auto-resume edits retain independent persisted preferences", () => {
     const { paseoHome, store } = createReloadableStore();

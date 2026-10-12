@@ -281,7 +281,7 @@ export const MutableDaemonConfigSchema = z
     explainDailyLimit: z.number().int().min(0).max(1000).optional(),
     notificationMode: z.enum(["all", "primes", "off"]).default("primes"),
     enableTerminalAgentHooks: z.boolean().default(false),
-    // FULCRA(orchestration): a worker's finished turn is sent to its lead as one short notice. Unset means on.
+    // FULCRA(orchestration): true enables finished-turn and error notices. Unset enables other notices. False disables all notices.
     reportUpOnTurnEnd: z.boolean().optional(),
     // FULCRA(orchestration): after a restart, open sessions show as open and cut-off turns continue. Unset means on.
     reviveOnRestart: z.boolean().optional(),
