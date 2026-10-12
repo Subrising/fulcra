@@ -9,6 +9,7 @@ import {
   passwordFromProtocol,
 } from "@getpaseo/protocol/daemon-credential";
 import { matchesLocalCredential } from "./local-credential.js";
+import { isHostLinkCredential } from "./host-link-credential.js";
 
 export const DAEMON_PASSWORD_BCRYPT_COST = 12;
 
@@ -29,6 +30,7 @@ interface BearerValidationInput {
 }
 
 export async function isBearerTokenValidAsync(input: BearerValidationInput): Promise<boolean> {
+  if (isHostLinkCredential(input.token)) return false;
   if (!input.password) {
     return true;
   }
@@ -44,6 +46,7 @@ export function isBearerTokenValid(input: BearerValidationInput): boolean {
 }
 
 export function isBearerTokenValidSync(input: BearerValidationInput): boolean {
+  if (isHostLinkCredential(input.token)) return false;
   if (!input.password) {
     return true;
   }
@@ -113,6 +116,10 @@ export function createRequireBearerMiddleware(
 ): RequestHandler {
   const password = auth?.password;
   return (req, res, next) => {
+    if (isHostLinkCredential(extractHttpBearerToken(req.header("authorization")))) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
     if (!password || shouldBypassBearerAuth(req.method, req.path)) {
       next();
       return;
@@ -173,7 +180,7 @@ export async function isAgentMcpRequestAuthorized(input: {
 }): Promise<boolean> {
   const token = extractHttpBearerToken(input.authorizationHeader);
   // Reserved report credentials select only native metadata read/consume, never the agent action endpoint.
-  if (token?.startsWith("report1.")) return false;
+  if (token?.startsWith("report1.") || isHostLinkCredential(token)) return false;
   if (!input.password) {
     return true;
   }

@@ -465,6 +465,8 @@ type ProviderEnabledMap = Partial<Record<AgentProvider, ProviderEnabledFlag>>;
 type ProviderClientMap = Partial<Record<AgentProvider, AgentClient>>;
 
 export interface CreateAgentOptions {
+  /** Host-only fence after plugin/config preparation, at the provider creation handoff. Never a wire field. */
+  creationAdmission?: (config: AgentSessionConfig) => void;
   reportCreation?: NativeReportCreation;
   labels?: Record<string, string>;
   initialPrompt?: string;
@@ -2582,9 +2584,10 @@ export class AgentManager {
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
-    const session = await nativeDispatch(() =>
-      client.createSession(providerLaunchConfig, launchContext, createOptions),
-    );
+    const session = await nativeDispatch(() => {
+      options.creationAdmission?.(providerLaunchConfig);
+      return client.createSession(providerLaunchConfig, launchContext, createOptions);
+    });
     await this.requireExternalMcpSupport(session, storedConfig);
     const agent = await this.registerSession(session, storedConfig, resolvedAgentId, {
       labels: options.labels,
