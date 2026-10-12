@@ -27,17 +27,3 @@ export function runtimeUsageRevision(
   records.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return JSON.stringify(records);
 }
-
-export async function readUsageSnapshot<T>(
-  revision: string,
-  read: () => Promise<T>,
-): Promise<{ revision: string; payload: T }> {
-  return { revision, payload: await read() };
-}
-
-export function currentUsageSnapshot<T>(
-  snapshot: { revision: string; payload: T } | undefined,
-  revision: string,
-): T | null {
-  return snapshot?.revision === revision ? snapshot.payload : null;
-}

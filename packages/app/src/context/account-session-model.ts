@@ -1,6 +1,8 @@
 import type { Agent } from "@/stores/session-store";
-import type { ProviderUsageListPayload, AccountUsageRow } from "@/provider-usage/types";
-import { runtimeUsageRevision } from "@/provider-usage/runtime-snapshot";
+import type { ProviderUsageListResponseMessage } from "@getpaseo/protocol/messages";
+export type ProviderUsageListPayload = ProviderUsageListResponseMessage["payload"];
+export type AccountUsageRow = NonNullable<ProviderUsageListPayload["accounts"]>[number];
+import { runtimeUsageRevision } from "./account-session-revision";
 import { sessionAccount } from "@/sessions/session-account";
 
 /** A label is presentation only. It never joins an account row or grants access. */

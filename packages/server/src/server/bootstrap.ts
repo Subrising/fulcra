@@ -1549,6 +1549,7 @@ export async function createPaseoDaemon(
   });
   // Resumes sessions that stopped on a usage limit once it resets (durable queue; Settings toggle).
   const limitResume = startLimitResume({
+    hooks: pluginRuntime,
     paseoHome: config.paseoHome,
     agentManager,
     agentStorage,

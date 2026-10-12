@@ -128,7 +128,13 @@ export function publishAgentStream(
       agent,
       turnId: event.turnId ?? null,
       timeline,
-      outcome: { kind: "failed", error: { message: event.error, code: event.code } },
+      outcome: {
+        kind: "failed",
+        error: {
+          message: [event.error, event.diagnostic].filter(Boolean).join(" "),
+          code: event.code,
+        },
+      },
     });
   } else if (event.type === "turn_canceled") {
     lifecycle.emit("agent.turn_ended", {

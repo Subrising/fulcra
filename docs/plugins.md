@@ -410,6 +410,11 @@ Emit from the operation owner, not a client subscription. Provider history repla
 live hooks. Observers must not be awaited inside agent mutations: a callback can send a prompt or
 answer a permission through its own daemon session. Awaiting it there deadlocks that command.
 
+The bundled host policy resource observes native lifecycle events through a private in-process adapter.
+`agent.turn_ended` drives stop detection and reset timers. The host retains private queue writes and guarded provider handoff.
+Controller-owned sessions stay with controller recovery. A missing or unreadable ownership decision refuses host fallback.
+The host checks every automatic prompt route against the same limit gate. Direct human input has a separate route.
+
 ## Contribute a provider
 
 Register a provider from `index.server.ts`. The provider connection is callback-based and owns all
@@ -501,6 +506,13 @@ SVG or URL.
 Register a usage source from `index.server.ts` with `server.registerUsageSource()`. Import `UsageSourceRegistration` and normalization helpers from `@getpaseo/plugin/server/usage`. The plugin owns account discovery, harness labels, and credential-store reads; the daemon owns account grouping and the fetch cache. Agent popovers use only the agent's own login. The host-wide Usage screen falls back across an account's logins; any success shows usage only, and all failures show every login's labeled error and remedy. Follow the [usage source discovery contract](../public-docs/plugins/reference.md#usage-sources). The resolved launch environment crosses into the trusted, unsandboxed plugin subprocess for session discovery. Usage queries never run lifecycle hooks. Inputs are validated in the plugin process and remain daemon-side. `icon` uses the same sanitized SVG file rules as provider icons.
 
 The daemon calls discovery for `usage.list_reports`; the client gates this RPC on `server_info.features.usageSources`. The old `provider.usage.list` RPC maps discovered reports for older clients.
+
+The bundled Command Centre registers `fulcra-pool` for pooled Claude and Codex accounts.
+Session discovery uses `FULCRA_ACCOUNT_ID` from that launch. The provider sources leave pooled sessions to this source.
+The source reads the pool's bounded observations. It makes no extra provider request and shows the last observation time.
+Keep unreadable, disabled, and held accounts visible. Never substitute the host login for a pooled account.
+Use native Usage cards for quota. Account controls retain selection, credentials, switches, and local session counts.
+Token and context records stay separate from quota.
 
 ## Contribute sidebar items
 

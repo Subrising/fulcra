@@ -1,3 +1,9 @@
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { DaemonClient } from "../../server/test-utils/daemon-client.js";
+import { createTestPaseoDaemon } from "../../server/test-utils/paseo-daemon.js";
+import { createTestAgentClient } from "../../server/test-utils/fake-agent-client.js";
+import { BuiltinPluginLoader } from "../../server/plugins/builtin/index.js";
 import {
   existsSync,
   mkdirSync,
@@ -10,6 +16,8 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createPoolUsage } from "../../../../../control/orca-organization/server/pool-usage.js";
+import { UsageSourceRegistry } from "../../server/plugins/usage-sources/index.js";
 import { readUsage } from "../../../../../control/orca-organization/server/accounts.mjs";
 import type { AccountUsageRow } from "./account-usage-types.js";
 import { createFulcraPoolRoster, writeUsageSnapshot } from "./fulcra-pool-roster.js";
@@ -111,7 +119,7 @@ describe("Fulcra pool usage snapshot", () => {
   });
   const resetsAt = new Date(Date.now() + 86_400_000).toISOString();
 
-  it("writes each account's weekly use, which the pool reads back, and nothing else", () => {
+  it("writes pool admission and native usage snapshots without credentials", () => {
     const root = home([acct(WORK, "claude", "Work")]);
     const rows = [
       row(WORK, { usedPct: 91.5, resetsAt }),
@@ -126,6 +134,26 @@ describe("Fulcra pool usage snapshot", () => {
       accounts: { [WORK]: { provider: "claude", weeklyUsedPct: 91.5, weeklyResetsAt: resetsAt } },
     });
     expect(statSync(file).mode & 0o777).toBe(0o600);
+    const reportsFile = path.join(root, "accounts", "usage-reports.json");
+    expect(statSync(reportsFile).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(reportsFile, "utf8")).reports).toEqual([
+      {
+        accountId: WORK,
+        provider: "claude",
+        status: "ok",
+        observedAt: rows[0].observedAt,
+        fiveHour: rows[0].fiveHour,
+        weekly: rows[0].weekly,
+      },
+      {
+        accountId: OFF,
+        provider: "claude",
+        status: "ok",
+        observedAt: rows[1].observedAt,
+        fiveHour: rows[1].fiveHour,
+        weekly: null,
+      },
+    ]);
     expect(readUsage(root)).toEqual({ [WORK]: 91.5 });
     expect(writeUsageSnapshot(root, rows)).toBe(false); // unchanged figures: no write
   });
@@ -137,3 +165,191 @@ describe("Fulcra pool usage snapshot", () => {
     expect(existsSync(path.join(root, "accounts"))).toBe(false);
   });
 });
+
+describe("native pool usage source", () => {
+  it("maps one session to its account and keeps unavailable accounts visible", async () => {
+    const root = home([
+      acct(WORK, "claude", "Work"),
+      acct(OFF, "claude", "Off", { enabled: false }),
+      acct(CODEX, "codex", "Codex"),
+    ]);
+    const source = createPoolUsage(() => root);
+    const registry = new UsageSourceRegistry(Date.now, 300000, undefined, {
+      hasAgent: () => true,
+      usageSession: () => ({
+        sessionKey: "launch-1",
+        provider: "claude",
+        env: { FULCRA_ACCOUNT_ID: WORK },
+      }),
+    });
+    registry.register({ id: "fulcra-pool", label: "Pooled accounts", ...source });
+    const all = await registry.listReports();
+    expect(all.map((r) => r.id)).toEqual([
+      `fulcra-pool:claude.${WORK}`,
+      `fulcra-pool:claude.${OFF}`,
+      `fulcra-pool:codex.${CODEX}`,
+    ]);
+    expect(all.map((r) => r.report.status)).toEqual(["unavailable", "unavailable", "unavailable"]);
+    const bound = await registry.listReports({ agentId: "session" });
+    expect(bound.map((r) => r.id)).toEqual([`fulcra-pool:claude.${WORK}`]);
+    expect(await source.discover({ kind: "session", provider: "claude", env: {} })).toEqual([]);
+    expect(
+      await source.discover({
+        kind: "session",
+        provider: "codex",
+        env: { FULCRA_ACCOUNT_ID: WORK },
+      }),
+    ).toEqual([]);
+    expect(JSON.stringify(all)).not.toContain(root);
+  });
+
+  it("preserves observed windows and pool holds; rechecks disable and removal at fetch", async () => {
+    const now = Date.parse("2026-10-12T00:00:00Z");
+    const until = "2026-10-12T01:00:00Z";
+    const root = home([acct(WORK, "claude", "Work", { limitedUntil: until })]);
+    writeUsageSnapshot(root, [
+      {
+        accountId: WORK,
+        name: "Work",
+        provider: "claude",
+        status: "ok",
+        observedAt: "2026-10-11T23:59:00Z",
+        source: "session",
+        fiveHour: { usedPct: 100, resetsAt: until },
+        weekly: { usedPct: 80, resetsAt: null },
+        inUse: true,
+      },
+    ]);
+    const source = createPoolUsage(
+      () => root,
+      () => now,
+    );
+    const input = { accountId: WORK, provider: "claude" };
+    expect(await source.fetch(input)).toMatchObject({
+      status: "available",
+      windows: [
+        { id: "five_hour", usedPct: 100, resetsAt: until, tone: "danger" },
+        { id: "weekly", usedPct: 80, tone: "warning" },
+      ],
+      details: [
+        { id: "observed-at", value: "2026-10-11T23:59:00Z" },
+        { id: "pool-hold", value: until },
+      ],
+    });
+    writeFileSync(
+      path.join(root, "accounts", "accounts.json"),
+      JSON.stringify({ accounts: [acct(WORK, "claude", "Work", { enabled: false })] }),
+    );
+    expect(await source.fetch(input)).toEqual({
+      status: "unavailable",
+      problem: { kind: "no_quota", detail: "This pooled account is disabled." },
+    });
+    writeFileSync(path.join(root, "accounts", "accounts.json"), JSON.stringify({ accounts: [] }));
+    expect(await source.fetch(input)).toEqual({
+      status: "unavailable",
+      problem: { kind: "no_quota", detail: "This pooled account is no longer available." },
+    });
+    await expect(source.fetch({ ...input, accountId: "../credentials" })).rejects.toThrow();
+  });
+});
+
+it("native pool usage crosses the plugin subprocess and WebSocket with one bound account", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "native-pool-source-"));
+  const pluginRoot = path.join(root, "plugins", "pool");
+  const poolRoot = path.join(root, "pool");
+  const work = "11111111-1111-4111-8111-111111111111";
+  const off = "22222222-2222-4222-8222-222222222222";
+  await mkdir(path.join(pluginRoot, "server"), { recursive: true });
+  await mkdir(path.join(poolRoot, "accounts"), { recursive: true });
+  await writeFile(
+    path.join(poolRoot, "accounts", "accounts.json"),
+    JSON.stringify({
+      accounts: [
+        { id: work, provider: "claude", name: "Work", enabled: true },
+        { id: off, provider: "claude", name: "Off", enabled: false },
+      ],
+    }),
+  );
+  writeUsageSnapshot(poolRoot, [
+    {
+      accountId: work,
+      name: "Work",
+      provider: "claude",
+      status: "ok",
+      observedAt: "2026-10-12T00:00:00Z",
+      source: "session",
+      fiveHour: { usedPct: 40, resetsAt: null },
+      weekly: { usedPct: 80, resetsAt: null },
+      inUse: true,
+    },
+  ]);
+  await cp(
+    fileURLToPath(
+      new URL("../../../../../control/orca-organization/server/pool-usage.ts", import.meta.url),
+    ),
+    path.join(pluginRoot, "server", "pool-usage.ts"),
+  );
+  await writeFile(
+    path.join(pluginRoot, "paseo-plugin.json"),
+    JSON.stringify({ id: "pool", requirements: { paseo: ">=0.11.0-beta.5" } }),
+  );
+  await writeFile(
+    path.join(pluginRoot, "index.server.ts"),
+    `import { registerPoolUsage } from './server/pool-usage'; export default function contribute(server) { registerPoolUsage(server, () => ${JSON.stringify(poolRoot)}); return () => {}; }`,
+  );
+  const provider = createTestAgentClient("claude");
+  const create = provider.createSession.bind(provider);
+  provider.createSession = async (...args) => {
+    const session = await create(...args);
+    session.usageSession = () => ({
+      provider: "claude",
+      sessionKey: "pooled-launch",
+      env: { FULCRA_ACCOUNT_ID: work },
+    });
+    return session;
+  };
+  const daemon = await createTestPaseoDaemon({
+    daemonVersion: "0.11.0-beta.5",
+    builtinPlugins: new BuiltinPluginLoader(path.join(root, "plugins"), ["pool"]),
+    agentClients: { claude: provider },
+  });
+  const client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemon.port}/ws`,
+    appVersion: "0.11.0-beta.5",
+  });
+  try {
+    await client.connect();
+    const global = await client.listUsageReports();
+    expect(global.reports.map((report) => [report.id, report.report.status])).toEqual([
+      [`fulcra-pool:claude.${work}`, "available"],
+      [`fulcra-pool:claude.${off}`, "unavailable"],
+    ]);
+    const agent = await daemon.daemon.agentManager.createAgent(
+      { provider: "claude", cwd: root },
+      undefined,
+      {},
+    );
+    const bound = await client.listUsageReports({ agentId: agent.id });
+    expect(bound.reports.map((report) => report.id)).toEqual([`fulcra-pool:claude.${work}`]);
+    expect(bound.reports[0]?.report).toMatchObject({
+      status: "available",
+      windows: [
+        { id: "five_hour", usedPct: 40 },
+        { id: "weekly", usedPct: 80 },
+      ],
+    });
+    expect(JSON.stringify(bound)).not.toContain(poolRoot);
+    const legacy = await client.listProviderUsage();
+    expect(legacy.providers.map((entry) => entry.providerId)).toEqual([
+      "fulcra-pool",
+      "fulcra-pool",
+    ]);
+    await writeFile(path.join(poolRoot, "accounts", "usage-reports.json"), "invalid snapshot");
+    const failed = await client.listUsageReports({ agentId: agent.id, forceRefresh: true });
+    expect(failed.reports[0]?.report.status).toBe("unavailable");
+  } finally {
+    await client.close();
+    await daemon.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60000);

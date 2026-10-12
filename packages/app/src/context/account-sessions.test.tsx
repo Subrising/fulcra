@@ -3,17 +3,18 @@ import React from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@/stores/session-store";
-import type { AccountUsageRow, ProviderUsageListPayload } from "@/provider-usage/types";
-import { describeAccountRow } from "@/provider-usage/account-rundown-format";
-import { useProviderUsage } from "@/provider-usage/use-provider-usage";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ProviderUsageListPayload } from "./account-session-model";
 import { ContextAccountSummary, ContextSessionMetadata } from "./account-sessions";
 
 const harness = vi.hoisted(() => ({
   info: {
     serverId: "host",
     permissions: ["workspace.read", "daemon.read"],
-    features: { providerUsageList: true, pooledAccountUsageList: true },
+    features: {
+      providerUsageList: true,
+      pooledAccountUsageList: true,
+      pooledAccountUsageObservation: true,
+    },
   },
   connected: true,
   events: new Set<() => void>(),
@@ -97,17 +98,6 @@ vi.mock("@/sessions/session-account-info", () => ({
   SessionAccountInfo: ({ account }: { account: { name: string | null } | null }) =>
     account?.name ? <span>{`Account: ${account.name}`}</span> : null,
 }));
-vi.mock("@/provider-usage/account-rundown", () => ({
-  AccountRundown: ({ accounts }: { accounts: AccountUsageRow[] }) => (
-    <div>
-      {accounts.map((row) => (
-        <span key={row.accountId}>
-          {row.name} · {describeAccountRow(row).sessionCountLabel}
-        </span>
-      ))}
-    </div>
-  ),
-}));
 
 function agent(runtimeInstanceId = "instance-1", name = "A"): Agent {
   return {
@@ -175,17 +165,13 @@ function held() {
 }
 const props = { serverId: "host", workspaceId: "workspace", active: true, agentId: "agent" };
 
-function UsageProbe({ active }: { active: boolean }) {
-  const { view } = useProviderUsage("host", { accounts: true, enabled: active });
-  return <span>{view.kind === "ready" ? view.payload.accounts?.[0]?.name : view.kind}</span>;
-}
-
 beforeEach(() => {
   // This unit runner uses classic JSX; Expo uses the automatic runtime.
   vi.stubGlobal("React", React);
   harness.generation = 1;
   harness.connected = true;
   harness.info.permissions = ["workspace.read", "daemon.read"];
+  harness.info.features.pooledAccountUsageObservation = true;
   harness.agents = new Map([["agent", agent()]]);
   harness.read.mockReset().mockResolvedValue(payload("fresh", 0));
 });
@@ -198,39 +184,15 @@ afterEach(() => {
 });
 
 describe("Context account surface lifecycle", () => {
-  it.each([false, true])(
-    "reopening quota after an account runtime changes refreshes a fresh cache (remount: %s)",
-    async (remount) => {
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false, gcTime: Infinity } },
-      });
-      const surface = (active: boolean) => (
-        <QueryClientProvider client={queryClient}>
-          <UsageProbe active={active} />
-        </QueryClientProvider>
-      );
-      let view = render(surface(true));
-      try {
-        expect(await screen.findByText("fresh")).toBeTruthy();
-        expect(harness.read).toHaveBeenCalledTimes(1);
-        if (remount) view.unmount();
-        else view.rerender(surface(false));
-        act(() => {
-          harness.agents = new Map([["agent", agent("instance-2", "B")]]);
-          notifyAll(harness.storeListeners);
-        });
-        harness.read.mockResolvedValue(payload("current-B", 1));
-        if (remount) view = render(surface(true));
-        else view.rerender(surface(true));
-        expect(await screen.findByText("current-B")).toBeTruthy();
-        expect(screen.queryByText("fresh")).toBeNull();
-        expect(harness.read).toHaveBeenCalledTimes(2);
-      } finally {
-        view.unmount();
-        queryClient.clear();
-      }
-    },
-  );
+  it("retains local session counts without a parallel quota display", async () => {
+    const data = payload("Work", 1);
+    data.accounts![0]!.weekly = { usedPct: 88, resetsAt: null };
+    harness.read.mockResolvedValue(data);
+    render(<ContextAccountSummary {...props} />);
+    expect(await screen.findByText("Work · 1 session on this host")).toBeTruthy();
+    expect(screen.queryByText(/88%/)).toBeNull();
+    expect(screen.queryByText(/Weekly/)).toBeNull();
+  });
 
   it("shows each managed row's own live label and updates it on switch", () => {
     const view = render(<ContextSessionMetadata agent={agent("one", "child-own")} />);
@@ -248,7 +210,7 @@ describe("Context account surface lifecycle", () => {
     const view = render(<ContextAccountSummary {...props} />);
     expect(await screen.findByText("fresh · 0 sessions on this host")).toBeTruthy();
     expect(screen.getByText(/across workspaces/)).toBeTruthy();
-    expect(harness.read).toHaveBeenCalledWith({ accounts: true });
+    expect(harness.read).toHaveBeenCalledWith({ accounts: true, observationOnly: true });
     view.unmount();
     harness.read.mockResolvedValue(payload("legacy"));
     render(<ContextAccountSummary {...props} />);
@@ -262,6 +224,13 @@ describe("Context account surface lifecycle", () => {
     expect(harness.read).not.toHaveBeenCalled();
     view.rerender(<ContextAccountSummary {...props} active={false} />);
     expect(view.container.textContent).toBe("");
+    expect(harness.read).not.toHaveBeenCalled();
+  });
+
+  it("does not start a quota read when the host has no observation feature", () => {
+    harness.info.features.pooledAccountUsageObservation = false;
+    render(<ContextAccountSummary {...props} />);
+    expect(screen.getByText("Update the host to view account usage.")).toBeTruthy();
     expect(harness.read).not.toHaveBeenCalled();
   });
 

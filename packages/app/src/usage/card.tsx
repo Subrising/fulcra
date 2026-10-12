@@ -2,11 +2,7 @@ import { RotateCw } from "lucide-react-native";
 import { useCallback, useMemo } from "react";
 import { Text, View, type StyleProp, type TextStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import {
-  extraMutedIconColorMapping,
-  iconButtonChromeGlyphSize,
-  smallIconButtonChromeFrameSize,
-} from "@/components/ui/icon-button-chrome";
+import { extraMutedIconColorMapping } from "@/components/ui/icon-button-chrome";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-content-toolbar";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -251,7 +247,7 @@ function UsageRefreshButton({
       compact={compact}
       disabled={isPending}
       onPress={onRefresh}
-      style={compact ? styles.refreshButtonCompact : styles.refreshButton}
+      style={styles.refreshButton}
       testID="usage-refresh"
     >
       {isPending ? (
@@ -279,14 +275,6 @@ function UsageFreshness({
       {formatUsageFreshness(elapsed)}
     </Text>
   );
-}
-
-// The Refresh glyph lands on the card's right rail and the header keeps its text height;
-// the button's larger hitbox overhangs both instead of pushing them.
-function iconHitboxOverhang(compact: boolean) {
-  const overhang =
-    (smallIconButtonChromeFrameSize(compact) - iconButtonChromeGlyphSize("small", compact)) / 2;
-  return { marginRight: -overhang, marginVertical: -overhang };
 }
 
 const styles = StyleSheet.create((theme) => ({
@@ -381,6 +369,5 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.popoverForeground,
     fontSize: theme.fontSize.sm,
   },
-  refreshButton: iconHitboxOverhang(false),
-  refreshButtonCompact: iconHitboxOverhang(true),
+  refreshButton: { minWidth: 48, minHeight: 48 },
 }));

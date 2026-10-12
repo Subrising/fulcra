@@ -43,7 +43,7 @@ export const PATCHES = [
     owner: "Fulcra prime (accounts)",
     reason:
       "Account pool, per-launch credentials, plugin secrets/credential store (including plugin-saved secrets, used by Deploy for a cluster sign-in), connectors, account usage, quota and limit resume. Paseo has no secret store or multi-account launch.",
-    path: /limit-resume|quota|usage|account|credential|plugin-secrets|secret|integrations\/|oauth|keychain|connector/i,
+    path: /limit-resume|fulcra-agent-policy\/server\/(detect|parse-reset|service)|quota|usage|account|credential|plugin-secrets|secret|integrations\/|oauth|keychain|connector/i,
     words: /account|quota|usage|credential|secret|\bpool\b|rate.?limit|oauth/i,
   },
   {

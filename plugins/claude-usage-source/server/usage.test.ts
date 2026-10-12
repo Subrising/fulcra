@@ -1134,3 +1134,13 @@ it("session Keychain input retains the selected config-directory locator through
   });
   expect(reads).toEqual(Array(3).fill(`${service}:fixture-user`));
 });
+
+it("pooled session discovery belongs to the pool source", async () => {
+  expect(
+    await discover({
+      kind: "session",
+      provider: "claude",
+      env: { FULCRA_ACCOUNT_ID: "11111111-1111-4111-8111-111111111111" },
+    }),
+  ).toEqual([]);
+});
