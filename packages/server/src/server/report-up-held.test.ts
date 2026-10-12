@@ -16,6 +16,7 @@ import { ReportUpService, reportUpSwitches, type ReportUpDeps } from "./report-u
 
 const sent: Array<{ agentId: string; prompt: string }> = [];
 let beforeSend: (() => void | Promise<void>) | undefined;
+let afterHandoff: (() => void | Promise<void>) | undefined;
 vi.mock("./agent/agent-prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent/agent-prompt.js")>()),
   sendPromptToAgent: async (input: {
@@ -27,6 +28,7 @@ vi.mock("./agent/agent-prompt.js", async (importOriginal) => ({
     assertFinalInputCheck(input.runOptions[FINAL_INPUT_CHECK]);
     sent.push({ agentId: input.agentId, prompt: input.prompt });
     recordFinalInputHandoff(input.runOptions[FINAL_INPUT_CHECK]);
+    await afterHandoff?.();
     return { disposition: "turn_started" };
   },
 }));
@@ -46,6 +48,7 @@ function setup(
 ) {
   sent.length = 0;
   beforeSend = undefined;
+  afterHandoff = undefined;
   const chats = new Map(
     [
       { id: LEAD, title: "Lead", labels: {} },
@@ -471,6 +474,39 @@ test("permission and limit notices survive a stalled nudge dispatch", async () =
   } finally {
     f.service.stop();
     beforeSend = undefined;
+    vi.useRealTimers();
+  }
+});
+
+test("confirmed nudge handoff prevents retry when the dispatch reply never settles", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const f = setup(undefined, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  f.leadTurnEnds();
+  let attempts = 0;
+  beforeSend = () => {
+    attempts += 1;
+  };
+  afterHandoff = () => new Promise<void>(() => {});
+  try {
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(1);
+    expect(sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(1);
+    expect(sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    f.finish(LEAD);
+    await flushNudge();
+    expect(attempts).toBe(1);
+    expect(sent).toHaveLength(1);
+  } finally {
+    f.service.stop();
+    beforeSend = undefined;
+    afterHandoff = undefined;
     vi.useRealTimers();
   }
 });
