@@ -30,7 +30,11 @@ import {
   isSystemInjectedEnvelope,
   sendPromptToAgent,
 } from "./agent/agent-prompt.js";
-import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
+import {
+  createFinalInputCheck,
+  hasFinalInputHandoff,
+  waitForFinalInputHandoff,
+} from "./agent/final-input-check.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
 import {
@@ -161,6 +165,7 @@ export async function leadChatOf(
 
 const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
 interface PendingNudge {
+  handoff?: object;
   generation: number;
   startedAt: number;
   fingerprint: string;
@@ -441,7 +446,8 @@ export class ReportUpService {
       const unchanged = pending.fingerprint === fingerprint;
       const withinDeadline = this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS;
       if (unchanged && withinDeadline && !pending.abort.signal.aborted) return;
-      pending.abort.abort(new Error("Idle nudge state changed or expired"));
+      if (!withinDeadline) this.expireNudge(leadId, pending);
+      else pending.abort.abort(new Error("Idle nudge state changed or expired"));
     }
     if (this.nudged.get(leadId) === fingerprint) return;
     await this.deliverNudge(
@@ -453,6 +459,17 @@ export class ReportUpService {
 
   private cancelNudge(leadId: string, reason: string): void {
     this.nudging.get(leadId)?.abort.abort(new Error(reason));
+  }
+
+  private expireNudge(leadId: string, pending: PendingNudge): void {
+    if (
+      this.nudging.get(leadId)?.generation === pending.generation &&
+      !pending.abort.signal.aborted &&
+      hasFinalInputHandoff(pending.handoff)
+    ) {
+      this.nudged.set(leadId, pending.fingerprint);
+    }
+    pending.abort.abort(new Error("Idle nudge delivery timed out"));
   }
 
   private async deliverNudge(leadId: string, fingerprint: string, prompt: string): Promise<void> {
@@ -474,13 +491,16 @@ export class ReportUpService {
     });
     // Bound queueing and dispatch before either can start. Expiry never creates another nudge.
     const timer = setTimeout(() => {
-      pending.abort.abort(new Error("Idle nudge delivery timed out"));
+      this.expireNudge(leadId, pending);
     }, NUDGE_DELIVERY_TIMEOUT_MS);
     this.timers.add(timer);
     const dispatch = async () => {
       if (!current() || !this.noticeEnabled("idle-nudge") || this.limitOf(leadId)) return;
       if (this.deps.deliver) await this.deps.deliver(leadId, prompt);
-      else await this.send(leadId, prompt, "idle-nudge", current);
+      else
+        await this.send(leadId, prompt, "idle-nudge", current, (handle) => {
+          pending.handoff = handle;
+        });
       if (current()) this.nudged.set(leadId, fingerprint);
     };
     // Cancellation also settles the held callback, so a stalled dispatch cannot block the queue.
@@ -863,6 +883,7 @@ export class ReportUpService {
     prompt: string,
     kind: NoticeKind,
     currentNudge?: () => boolean,
+    captureHandoff?: (handle: object) => void,
   ): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
@@ -871,6 +892,7 @@ export class ReportUpService {
     };
     return agentManager.trustedPlugins.daemon(async () => {
       const finalCheck = createFinalInputCheck(checkCurrent);
+      captureHandoff?.(finalCheck);
       await sendPromptToAgent({
         agentManager,
         agentStorage,

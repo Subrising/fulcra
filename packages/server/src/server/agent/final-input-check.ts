@@ -5,6 +5,7 @@ interface State {
   committed: boolean;
   managerOnly: boolean;
   promise: Promise<void>;
+  handoffConfirmed: () => boolean;
   resolve: () => void;
   reject: (error: unknown) => void;
 }
@@ -18,9 +19,16 @@ export function createFinalInputCheck(
     throw new Error("A manager-only check cannot commit native authority");
   const handle = Object.freeze({});
   let resolve!: () => void, reject!: (error: unknown) => void;
+  let outcome: "pending" | "confirmed" | "failed" = "pending";
   const promise = new Promise<void>((yes, no) => {
-    resolve = yes;
-    reject = no;
+    resolve = () => {
+      if (outcome === "pending") outcome = "confirmed";
+      yes();
+    };
+    reject = (error) => {
+      if (outcome === "pending") outcome = "failed";
+      no(error);
+    };
   });
   void promise.catch(() => {});
   checks.set(handle, {
@@ -29,6 +37,7 @@ export function createFinalInputCheck(
     managerOnly,
     committed: false,
     promise,
+    handoffConfirmed: () => outcome === "confirmed",
     resolve,
     reject,
   });
@@ -84,6 +93,10 @@ export function recordFinalInputHandoff(handle: object | undefined): void {
 }
 export function failFinalInputHandoff(handle: object | undefined, error: unknown): void {
   if (handle) checks.get(handle)?.reject(error);
+}
+/** Read the native receipt without waiting for the dispatch reply or changing its timeout. */
+export function hasFinalInputHandoff(handle: object | undefined): boolean {
+  return Boolean(handle && checks.get(handle)?.handoffConfirmed());
 }
 export function waitForFinalInputHandoff(handle: object): Promise<void> {
   const state = checks.get(handle);

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   createFinalInputCheck,
+  hasFinalInputHandoff,
   assertFinalInputCheck,
   commitFinalInputCheck,
   recordFinalInputHandoff,
@@ -27,10 +28,13 @@ test("early/repeated refusal checks do not consume; concrete handoff commits onc
   commitFinalInputCheck(handle);
   expect(() => commitFinalInputCheck(handle)).toThrow("already committed");
   expect(commits).toBe(1);
+  expect(hasFinalInputHandoff(handle)).toBe(false);
   recordFinalInputHandoff(handle);
+  expect(hasFinalInputHandoff(handle)).toBe(true);
   await waitForFinalInputHandoff(handle);
   allowed = false;
   expect(() => commitFinalInputCheck(handle)).toThrow("revoked");
+  expect(hasFinalInputHandoff(handle)).toBe(true);
   expect(checks).toBe(5);
   expect(commits).toBe(1);
 });
@@ -63,6 +67,9 @@ test("refusal before handoff leaves commitment unspent", async () => {
   assertFinalInputCheck(handle);
   allowed = false;
   expect(() => commitFinalInputCheck(handle)).toThrow("stopped");
+  expect(hasFinalInputHandoff(handle)).toBe(false);
+  recordFinalInputHandoff(handle);
+  expect(hasFinalInputHandoff(handle)).toBe(false);
   await expect(waitForFinalInputHandoff(handle)).rejects.toThrow("stopped");
   expect(commits).toBe(0);
 });
