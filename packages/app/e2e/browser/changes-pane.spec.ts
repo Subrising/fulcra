@@ -834,12 +834,12 @@ test("Changes keeps review navigation and controls inside its workspace tab", as
  * The visible Changes toolbar is at least 48 px tall and holds each control: no control leaves the bar, the
  * content below starts under it, and a tap just inside each control edge lands on that control.
  */
-async function expectToolbarContainsTouchControls(page: Page, controls: string[]): Promise<void> {
-  const report = await page.evaluate((names) => {
-    const header = [
-      ...document.querySelectorAll<HTMLElement>('[data-testid="changes-header"]'),
-    ].find((element) => element.offsetParent !== null);
-    if (!header) return { error: "no visible changes-header" };
+async function expectToolbarContainsTouchControls(
+  toolbar: Locator,
+  controls: string[],
+): Promise<void> {
+  const report = await toolbar.evaluate((element, names) => {
+    const header = element as HTMLElement;
     const bar = header.getBoundingClientRect();
     const next = header.nextElementSibling?.getBoundingClientRect() ?? null;
     const problems: string[] = [];
@@ -871,7 +871,6 @@ async function expectToolbarContainsTouchControls(page: Page, controls: string[]
     }
     return { barHeight: bar.height, barBottom: bar.bottom, nextTop: next?.top ?? null, problems };
   }, controls);
-  if ("error" in report) throw new Error(report.error);
   expect(report.barHeight).toBeGreaterThanOrEqual(48);
   if (report.nextTop !== null)
     expect(report.nextTop).toBeGreaterThanOrEqual(report.barBottom - 0.5);
@@ -910,7 +909,10 @@ test("compact Changes keeps its actions menu-only, with 48 px touch targets", as
   expect(optionsBox.height).toBeGreaterThanOrEqual(48);
   expect(glyphBox.width).toBe(18);
   expect(glyphBox.height).toBe(18);
-  await expectToolbarContainsTouchControls(page, ["changes-actions-menu-trigger", "Diff options"]);
+  await expectToolbarContainsTouchControls(compactExplorer.getByTestId("changes-header"), [
+    "changes-actions-menu-trigger",
+    "Diff options",
+  ]);
 
   await expect(actions).not.toContainText("Commit");
   await expect(actions.locator("svg")).toHaveCount(2);
@@ -2233,7 +2235,7 @@ async function longPressFileHeader(page: Page, header: Locator): Promise<void> {
 
 async function headerCanvasPixel(
   canvas: Locator,
-  header: Locator,
+  toolbar: Locator,
   offsetY: number,
 ): Promise<string> {
   const [canvasBounds, headerBounds] = await Promise.all([
