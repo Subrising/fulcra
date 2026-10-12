@@ -347,7 +347,7 @@ for (const principal of [
         ),
     );
     assert.equal(result.state, "delivered");
-    assert.match(result.message, /Continued on account "B"/);
+    assert.match(result.message, /Switched to account "B"/);
     assert.deepEqual(
       { ...w.store.get(w.id) },
       before,

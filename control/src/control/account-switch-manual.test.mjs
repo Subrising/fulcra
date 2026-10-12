@@ -20,6 +20,7 @@ import {
 import {
   addAccount,
   assign,
+  setAccount,
   readAccounts,
   accountOf,
   switchSession,
@@ -42,7 +43,7 @@ const owner = {
   permissions: ["command-centre.manage", "daemon.manage"],
 };
 
-async function world(t) {
+async function world(t, provider = "claude") {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orca-manual-switch-")));
   const store = new ControlStore(path.join(dir, "journal.sqlite"));
   t.after(() => {
@@ -69,7 +70,7 @@ async function world(t) {
     },
     snapshot: async (id) => ({
       id,
-      provider: "claude",
+      provider,
       status: "idle",
       lastError: null,
       pendingPermissions: [],
@@ -89,9 +90,10 @@ async function world(t) {
   const id = randomUUID();
   store.created(id, T(1), path.join(dir, id));
   await control.handback(id, "Delegated for the manual switch verification");
-  const a = await addAccount(control.poolRoot, { provider: "claude", name: "Work" }),
-    b = await addAccount(control.poolRoot, { provider: "claude", name: "Personal" });
-  await assign(control.poolRoot, id, "claude");
+  const a = await addAccount(control.poolRoot, { provider, name: "Work" }),
+    b = await addAccount(control.poolRoot, { provider, name: "Personal" });
+  for (const account of [a, b]) await setAccount(control.poolRoot, account.id, { auth: "ok" });
+  await assign(control.poolRoot, id, provider);
   // What the plugin host's localCall does: a management invocation, answered by the controller's dispatcher.
   const call = (method, input) =>
     withManagementInvocation(
@@ -102,63 +104,78 @@ async function world(t) {
   const sw = (account) =>
     switchSession(
       control.poolRoot,
-      { sessionId: id, provider: "claude", account },
+      { sessionId: id, provider, account },
       { takeOver: controllerTakeOver(call) },
     );
   return { store, control, native, sent, snaps, recovers, id, a, b, sw, root: control.poolRoot };
 }
 
-test("switch -> the controller takeover moves the session with its history: one canonical entry, delegation and input identity untouched, no prompt", async (t) => {
-  const w = await world(t),
-    before = { ...w.store.get(w.id) },
-    inputBefore = await w.native.inspect(w.id);
-  const r = await w.sw("Personal");
-  assert.equal(r.ok, true);
-  assert.match(r.message, /Continued on account "Personal"/);
-  assert.equal(accountOf(readAccounts(w.root), w.id).id, w.b.id);
-  assert.deepEqual(w.recovers, [w.id]); // the quiet in-place reconnect
-  const entries = w.store.db
-    .prepare("SELECT id,body FROM deliveries WHERE session=? AND kind='account-switch'")
-    .all(w.id);
-  assert.equal(entries.length, 1);
-  assert.equal(JSON.parse(entries[0].body).reason, "manual");
-  // One pool row per move: W2's projection of the journal switch, keyed by its switchId (R1 re-check 3). The plugin
-  // writes none of its own. That row is what Settings "Recent moves" labels "(your switch)".
-  const rows = readAccounts(w.root).rotations;
-  assert.equal(rows.length, 1);
-  assert.deepEqual(
-    [rows[0].reason, rows[0].switchId, rows[0].fromName, rows[0].toName],
-    ["manual", entries[0].id, "Work", "Personal"],
-  );
-  assert.deepEqual(
-    publicView(readAccounts(w.root)).rotations.map((r) => [r.from, r.to, r.reason]),
-    [["Work", "Personal", "manual"]],
-  );
-  // COORD hazard: an owner's switch is never human input and never revokes a delegation.
-  assert.deepEqual({ ...w.store.get(w.id) }, before);
-  assert.deepEqual(await w.native.inspect(w.id), inputBefore);
-  assert.equal(w.sent.length, 0, "no prompt is sent into the session");
-});
-test("switch -> a running turn is refused by the controller, and the session is still on its old account", async (t) => {
-  const w = await world(t),
-    before = { ...w.store.get(w.id) };
-  w.snaps.set(w.id, { status: "running" });
-  const r = await w.sw("Personal");
-  assert.equal(r.ok, false);
-  assert.match(r.message, /turn|finish|running/i);
-  assert.equal(accountOf(readAccounts(w.root), w.id).id, w.a.id);
-  assert.equal(
-    w.store.db
-      .prepare(
-        "SELECT count(*) n FROM deliveries WHERE session=? AND kind='account-switch' AND state='delivered'",
-      )
-      .get(w.id).n,
-    0,
-  );
-  assert.deepEqual({ ...w.store.get(w.id) }, before);
-  assert.deepEqual(w.recovers, []);
-  assert.equal(JSON.stringify(r).includes("sk-ant-"), false);
-});
+for (const provider of ["claude", "codex"]) {
+  test(`${provider}: idle switch rebinds the account without a continuation, input change or delegation change`, async (t) => {
+    const w = await world(t, provider),
+      before = { ...w.store.get(w.id) },
+      inputBefore = await w.native.inspect(w.id);
+    const r = await w.sw("Personal");
+    assert.equal(r.ok, true);
+    assert.match(r.message, /Switched to account "Personal"/);
+    assert.equal(accountOf(readAccounts(w.root), w.id).id, w.b.id);
+    assert.deepEqual(w.recovers, [w.id]); // the quiet in-place reconnect
+    const entries = w.store.db
+      .prepare("SELECT id,body FROM deliveries WHERE session=? AND kind='account-switch'")
+      .all(w.id);
+    assert.equal(entries.length, 1);
+    assert.equal(JSON.parse(entries[0].body).reason, "manual");
+    // One pool row per move: W2's projection of the journal switch, keyed by its switchId (R1 re-check 3). The plugin
+    // writes none of its own. That row is what Settings "Recent moves" labels "(your switch)".
+    const rows = readAccounts(w.root).rotations;
+    assert.equal(rows.length, 1);
+    assert.deepEqual(
+      [rows[0].reason, rows[0].switchId, rows[0].fromName, rows[0].toName],
+      ["manual", entries[0].id, "Work", "Personal"],
+    );
+    assert.deepEqual(
+      publicView(readAccounts(w.root)).rotations.map((r) => [r.from, r.to, r.reason]),
+      [["Work", "Personal", "manual"]],
+    );
+    // COORD hazard: an owner's switch is never human input and never revokes a delegation.
+    assert.deepEqual({ ...w.store.get(w.id) }, before);
+    assert.deepEqual(await w.native.inspect(w.id), inputBefore);
+    assert.equal(w.sent.length, 0, "no prompt is sent into the session");
+  });
+  test(`${provider}: limit-stopped switch rebinds the account without sending a manual continuation`, async (t) => {
+    const w = await world(t, provider);
+    w.snaps.set(w.id, { status: "error", lastError: "You've hit your usage limit." });
+    const before = { ...w.store.get(w.id) };
+    const result = await w.sw("Personal");
+    assert.equal(result.ok, true);
+    assert.match(result.message, /Switched to account "Personal"/);
+    assert.equal(accountOf(readAccounts(w.root), w.id).id, w.b.id);
+    assert.deepEqual(w.recovers, [w.id]);
+    assert.deepEqual(w.sent, []);
+    assert.deepEqual({ ...w.store.get(w.id) }, before);
+  });
+  test(`${provider}: a running turn refuses a switch and retains its account`, async (t) => {
+    const w = await world(t, provider),
+      before = { ...w.store.get(w.id) };
+    w.snaps.set(w.id, { status: "running" });
+    const r = await w.sw("Personal");
+    assert.equal(r.ok, false);
+    assert.match(r.message, /turn|finish|running/i);
+    assert.equal(accountOf(readAccounts(w.root), w.id).id, w.a.id);
+    assert.equal(
+      w.store.db
+        .prepare(
+          "SELECT count(*) n FROM deliveries WHERE session=? AND kind='account-switch' AND state='delivered'",
+        )
+        .get(w.id).n,
+      0,
+    );
+    assert.deepEqual({ ...w.store.get(w.id) }, before);
+    assert.deepEqual(w.recovers, []);
+    assert.deepEqual(w.sent, []);
+    assert.equal(JSON.stringify(r).includes("sk-ant-"), false);
+  });
+}
 
 // ---- accounts.manage (U7 W1-REMOTE-ACCOUNTS, control side): session-takeover through the controller's management
 // dispatcher accepts a paired device ONLY when the host admitted it with accounts.manage; never the read tier.
