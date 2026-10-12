@@ -8,6 +8,9 @@ import { startReportUp } from "./report-up.js";
 import { recordOpenSessions, reviveAfterRestart, sealStopRecord } from "./revive-on-restart.js";
 import { heldSendsFor } from "./held-sends.js";
 import { queuedAgentMessagesFor } from "./queued-agent-messages.js";
+import { mountHostLinkRoutes } from "./host-link-routes.js";
+import { createHostLinkRuntime } from "./host-link-runtime.js";
+import type { HostLinks } from "./host-links.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
@@ -946,6 +949,8 @@ export async function createPaseoDaemon(
   // remain protected.
   mountWebUi(app, config, logger);
 
+  let hostLinks: HostLinks | null = null;
+  mountHostLinkRoutes(app, () => hostLinks);
   let localCredential: string | null = null;
   const daemonAuth = { ...config.auth, localCredential: () => localCredential };
   app.use(
@@ -1367,6 +1372,16 @@ export async function createPaseoDaemon(
   };
   const createAgent = (input: Parameters<typeof createAgentCommand>[1]) =>
     createAgentCommand(createAgentCommandDependencies, input);
+  const hostLinkRuntime = await createHostLinkRuntime({
+    home: config.paseoHome,
+    serverId,
+    protected: () => Boolean(config.auth?.password),
+    agentManager,
+    agentStorage,
+    logger,
+    workspace: ensureWorkspaceForCreateAndBroadcastExternal,
+  });
+  hostLinks = hostLinkRuntime.service;
   const archiveWorkspaceByIdExternal = (workspaceId: string, requestId: string) =>
     archiveByScope(
       {
@@ -1573,6 +1588,7 @@ export async function createPaseoDaemon(
     daemonConfigStore,
     localServerId: serverId,
     logger,
+    remoteNotice: (id, text, kind) => hostLinkRuntime.service.remoteNotice(id, text, kind),
   });
   // Automations ("when X, do Y") drive the Schedule service above; see automations/automation-service.ts.
   const automationService = await startHostAutomations({
@@ -2148,6 +2164,7 @@ export async function createPaseoDaemon(
     stopSyncIoMeter();
     limitResume.stop();
     stopReportUp();
+    hostLinkRuntime.close();
     heldSends.close();
     await queuedAgentMessages.close();
     await distribution?.stop();
