@@ -345,6 +345,9 @@ export const sidebarWorkspaceRowStyles = StyleSheet.create((theme) => ({
     position: "absolute",
     top: 0,
     right: 0,
+    // The 48 px touch kebab hangs below the title line. Later lines (labels) come after it in
+    // the DOM and would take the tap at its centre, which opens the row instead of the menu.
+    zIndex: 1,
   },
 }));
 
@@ -490,6 +493,9 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: theme.spacing[2],
+    // The 48 px touch kebab hangs below this line into the meta line. Native hit testing checks
+    // later siblings first and zIndex only orders siblings, so this line must sit above them.
+    zIndex: 1,
   },
   shortcutBadgeOverlay: {
     position: "absolute",

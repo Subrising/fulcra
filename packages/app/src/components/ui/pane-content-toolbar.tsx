@@ -12,6 +12,7 @@ import { DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { WORKSPACE_SECONDARY_HEADER_HEIGHT } from "@/constants/layout";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import {
   iconButtonChromeGlyphSize,
@@ -90,6 +91,8 @@ export function ToolbarButton({
   testID,
   ...props
 }: ToolbarButtonProps) {
+  // FU-96: on a touch screen every toolbar button is a 48 px target; the drawn icon keeps its size.
+  const touch = useTouchTargets();
   const buttonStyle = useMemo(
     () => (state: { hovered?: boolean; pressed: boolean; open?: boolean }) =>
       iconButtonChromeStyle({
@@ -97,9 +100,9 @@ export function ToolbarButton({
         compact,
         state: { ...state, active: selected },
         disabled: Boolean(disabled),
-        style,
+        style: touch ? [style, touchTargetStyles.icon] : style,
       }),
-    [compact, disabled, selected, style],
+    [compact, disabled, selected, style, touch],
   );
   const accessibilityState = useMemo(
     () => ({ disabled: Boolean(disabled), selected }),
