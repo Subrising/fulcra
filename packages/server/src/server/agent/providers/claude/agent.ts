@@ -2511,6 +2511,15 @@ class ClaudeAgentSession implements AgentSession {
       );
   }
 
+  private refuseCanceledPreparedInput(params: {
+    queued: (() => void) | undefined;
+    finishCheck: object | undefined;
+  }): void {
+    if (params.queued || params.finishCheck) {
+      throw new Error("Prepared Claude input was canceled before handoff");
+    }
+  }
+
   async startTurn(
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
@@ -2578,10 +2587,10 @@ class ClaudeAgentSession implements AgentSession {
 
     try {
       const preparedQuery = await this.ensureQuery();
-      if (cancelIssued && !queued && !finishCheck) {
-        // Stopped while Claude was still starting up: withdrawn by never sending it. The native queued and
-        // final-input paths keep their own refusal below, so they never report success for an unsent message.
+      if (cancelIssued) {
+        // Stopped while Claude was still starting up: withdrawn by never sending it.
         this.withdrawUnstartedMessage(sdkUserMessageId);
+        this.refuseCanceledPreparedInput({ queued, finishCheck });
         return { turnId };
       }
       if (!this.input) {
@@ -2762,8 +2771,15 @@ class ClaudeAgentSession implements AgentSession {
     const normalized = isPermissionMode(modeId) ? modeId : "default";
     assertClaudeModeCanRun(normalized, this.harnessEnvironment);
     const previousMode = this.currentMode;
-    const activeQuery = await this.ensureQuery();
-    await activeQuery.setPermissionMode(normalized);
+    const launchesQuery = !this.query || this.queryRestartNeeded;
+    const activeQuery = await this.ensureQuery(normalized);
+    try {
+      await activeQuery.setPermissionMode(normalized);
+    } catch (error) {
+      // The query was launched in the rejected mode; relaunch in the current mode next time.
+      if (launchesQuery) this.queryRestartNeeded = true;
+      throw error;
+    }
     if (normalized === "plan") {
       if (previousMode !== "plan") {
         this.planResumeMode = previousMode;
@@ -3454,7 +3470,7 @@ class ClaudeAgentSession implements AgentSession {
     return { kind: "fresh-session" };
   }
 
-  private async ensureQuery(): Promise<Query> {
+  private async ensureQuery(launchMode: PermissionMode = this.currentMode): Promise<Query> {
     if (this.query && !this.queryRestartNeeded) {
       return this.query;
     }
@@ -3508,7 +3524,7 @@ class ClaudeAgentSession implements AgentSession {
     this.persistence = null;
 
     const input = createAsyncMessageInput<SDKUserMessage>();
-    const options = await this.buildOptions();
+    const options = await this.buildOptions(launchMode);
     this.logger.debug({ options: summarizeClaudeOptionsForLog(options) }, "claude query");
     this.input = input;
     // A fresh Claude process has no turn of its own in flight.
@@ -3643,7 +3659,9 @@ class ClaudeAgentSession implements AgentSession {
     });
   }
 
-  private async buildOptions(): Promise<ClaudeOptions> {
+  private async buildOptions(
+    permissionMode: PermissionMode = this.currentMode,
+  ): Promise<ClaudeOptions> {
     const { thinking, effort, ultracode } = this.resolveThinkingConfig();
     const appendedSystemPrompt = this.buildAppendedSystemPrompt();
     const providerOptions = applyClaudeToolPolicy(
@@ -3652,7 +3670,7 @@ class ClaudeAgentSession implements AgentSession {
     );
     const settingsOptions = this.buildSettingsOptions(providerOptions, { ultracode });
     const sdkEnv = this.harnessEnvironment;
-    assertClaudeModeCanRun(this.currentMode, sdkEnv);
+    assertClaudeModeCanRun(permissionMode, sdkEnv);
 
     const claudeBinary = await this.resolveBinary();
     this.logger.debug(
@@ -3672,11 +3690,11 @@ class ClaudeAgentSession implements AgentSession {
       sessionBinding.resume = this.claudeSessionId;
     }
 
-    this.launchedMode = this.currentMode;
+    this.launchedMode = permissionMode;
     const base: ClaudeOptions = {
       cwd: this.config.cwd,
       includePartialMessages: true,
-      permissionMode: this.currentMode,
+      permissionMode,
       // Dynamic mode switching can recreate the underlying Claude query. Keep the
       // bypass launch capability available so later setPermissionMode("bypassPermissions")
       // calls do not fail after a model/thinking/rewind-driven restart.

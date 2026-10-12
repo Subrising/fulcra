@@ -279,7 +279,7 @@ function tables(rows, base) {
 function main() {
   const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
   const args = process.argv.slice(2);
-  const base = args.includes("--base") ? args[args.indexOf("--base") + 1] : "v0.11.0-beta.5";
+  const base = args.includes("--base") ? args[args.indexOf("--base") + 1] : "v0.11.2";
   const rows = ledger(root, base).sort(
     (x, y) => x.patch.localeCompare(y.patch) || x.file.localeCompare(y.file),
   );

@@ -5,7 +5,6 @@ accounts	A	0	0	docs/assets/features/accounts-dark.png
 accounts	A	0	0	docs/assets/features/accounts-light.png
 accounts	A	0	0	docs/assets/screens/accounts-dark.png
 accounts	A	0	0	docs/assets/screens/accounts-light.png
-accounts	M	20	6	packages/app/e2e/mobile/native-text-reflow/ios.py
 accounts	A	56	0	packages/app/src/app/oauth/[flowId].tsx
 accounts	M	2	2	packages/app/src/components/context-window-details.tsx
 accounts	A	133	0	packages/app/src/components/limit-resume-banner.tsx
@@ -46,8 +45,8 @@ accounts	A	111	0	packages/app/src/sessions/session-account-info.tsx
 accounts	A	34	0	packages/app/src/sessions/session-account.ts
 accounts	M	9	0	packages/app/src/subagents/track.tsx
 accounts	M	6	2	packages/cli/src/cli.ts
-accounts	A	53	0	packages/cli/src/commands/account.test.ts
-accounts	A	163	0	packages/cli/src/commands/account.ts
+accounts	A	77	0	packages/cli/src/commands/account.test.ts
+accounts	A	176	0	packages/cli/src/commands/account.ts
 accounts	M	226	0	packages/client/src/index.test.ts
 accounts	M	71	0	packages/client/src/index.ts
 accounts	A	29	0	packages/client/src/pairing-secrets.test.ts
@@ -71,7 +70,7 @@ accounts	A	28	0	packages/protocol/src/oauth-callback-link.ts
 accounts	M	12	1	packages/protocol/src/plugin-config.ts
 accounts	A	28	0	packages/protocol/src/recorded-usage.ts
 accounts	M	77	55	packages/server/scripts/supervisor-entrypoint.env.test.ts
-accounts	M	10	2	packages/server/scripts/supervisor-entrypoint.ts
+accounts	M	12	3	packages/server/scripts/supervisor-entrypoint.ts
 accounts	A	109	0	packages/server/src/server/agent/providers/claude/claude-launch-credential.test.ts
 accounts	A	257	0	packages/server/src/server/agent/providers/claude/passive-usage-observer.test.ts
 accounts	A	140	0	packages/server/src/server/agent/providers/claude/passive-usage-observer.ts
@@ -321,7 +320,7 @@ branding	D	0	0	packages/app/e2e/mobile/diff-tree/evidence/light.png
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/android-after.mp4
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/android-before.mp4
 branding	D	0	0	packages/app/e2e/mobile/modal-sheet/evidence/browser.webm
-branding	M	10	0	packages/app/e2e/mobile/native-text-reflow/README.md
+branding	A	36	0	packages/app/e2e/mobile/native-text-reflow/README.md
 branding	D	0	29	packages/app/e2e/support/helpers/changelog.ts
 branding	M	0	0	packages/app/public/apple-touch-icon.png
 branding	M	5	7	packages/app/public/index.html
@@ -341,7 +340,7 @@ branding	M	34	6	packages/app/src/i18n/resources.test.ts
 branding	M	578	42	packages/app/src/i18n/resources/ar.ts
 branding	M	745	43	packages/app/src/i18n/resources/en.ts
 branding	M	597	42	packages/app/src/i18n/resources/es.ts
-branding	M	603	42	packages/app/src/i18n/resources/fr.ts
+branding	M	619	58	packages/app/src/i18n/resources/fr.ts
 branding	M	597	40	packages/app/src/i18n/resources/ja.ts
 branding	M	587	41	packages/app/src/i18n/resources/ko.ts
 branding	M	599	42	packages/app/src/i18n/resources/pt-BR.ts
@@ -380,7 +379,7 @@ branding	M	9	9	public-docs/sdk/quickstart.md
 branding	M	18	9	public-docs/skills.md
 branding	M	3	1	README.ja.md
 branding	M	3	1	README.ko.md
-branding	M	223	134	README.md
+branding	M	220	143	README.md
 branding	M	3	1	README.zh-CN.md
 branding	A	54	0	RELEASE-NOTES-0.2.10.md
 branding	A	39	0	RELEASE-NOTES-0.2.11.md
@@ -392,6 +391,7 @@ branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
 branding	A	10	0	RELEASE-NOTES-0.2.16.2.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
 branding	A	81	0	RELEASE-NOTES-0.2.17.md
+branding	A	18	0	RELEASE-NOTES-0.2.18.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -471,7 +471,7 @@ build-ci	M	50	1	packages/app/vitest.config.ts
 build-ci	M	1	0	packages/cli/package.json
 build-ci	M	10	0	packages/client/package.json
 build-ci	M	1	1	packages/expo-two-way-audio/package.json
-build-ci	M	8	5	packages/server/package.json
+build-ci	M	13	5	packages/server/package.json
 build-ci	M	12	0	packages/server/src/test-utils/vitest-setup.ts
 build-ci	M	11	1	packages/server/vitest.config.ts
 build-ci	A	14	0	patches/app-builder-lib+26.8.1.patch
@@ -479,7 +479,7 @@ build-ci	A	30	0	patches/eas-cli+16.32.0.patch
 build-ci	A	44	0	patches/electron-updater++builder-util-runtime+9.7.0.patch
 build-ci	A	12	0	patches/electron-updater+6.8.9.patch
 build-ci	M	18	0	patches/react-native-markdown-display+7.0.2.patch
-build-ci	M	38	10	patches/react-native-uitextview+2.2.0.patch
+build-ci	A	100	0	patches/react-native-uitextview+2.2.0.patch
 build-ci	A	16	0	release/common.sh
 build-ci	A	16	0	release/control-suites.sh
 build-ci	A	60	0	release/package.sh
@@ -490,6 +490,7 @@ build-ci	A	8	0	release/run-control-test.sh
 build-ci	A	13	0	release/run-with-timeout.py
 build-ci	A	162	0	scripts/brace-dependency-overrides.test.mjs
 build-ci	A	144	0	scripts/build-command-centre.mjs
+build-ci	A	31	0	scripts/build-gate-flavour.mjs
 build-ci	A	7	0	scripts/c2c-ui-fixture/adapters.tsx
 build-ci	A	120	0	scripts/c2c-ui-fixture/capture.mjs
 build-ci	A	177	0	scripts/c2c-ui-fixture/fixture.tsx
@@ -529,7 +530,7 @@ build-ci	A	116	0	scripts/packaged-desktop-launch-gate.mjs
 build-ci	A	79	0	scripts/packaged-http-dependencies.test.mjs
 build-ci	A	162	0	scripts/packaged-runtime-gate.mjs
 build-ci	A	55	0	scripts/packaged-speech-gate.cjs
-build-ci	M	17	0	scripts/postinstall-patches.mjs
+build-ci	M	21	0	scripts/postinstall-patches.mjs
 build-ci	A	70	0	scripts/prepare-client-repro-test.mjs
 build-ci	M	4	0	scripts/release-version-utils.mjs
 build-ci	M	19	0	scripts/release-version-utils.test.mjs
@@ -551,6 +552,7 @@ core-fixes	M	1	1	packages/app/e2e/browser/appearance-theme-picker.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/assistant-fork-menu.spec.ts
 core-fixes	M	19	0	packages/app/e2e/browser/client-slash-commands.spec.ts
 core-fixes	M	2	2	packages/app/e2e/browser/codex-speed.spec.ts
+core-fixes	M	6	2	packages/app/e2e/browser/context-window-meter.spec.ts
 core-fixes	M	6	0	packages/app/e2e/browser/file-explorer-context-actions.spec.ts
 core-fixes	M	8	7	packages/app/e2e/browser/launcher-tab.spec.ts
 core-fixes	A	38	0	packages/app/e2e/browser/menu-button-size.spec.ts
@@ -567,7 +569,8 @@ core-fixes	M	11	3	packages/app/e2e/browser/sessions-search.spec.ts
 core-fixes	M	2	0	packages/app/e2e/browser/settings-toggle-tab-regression.spec.ts
 core-fixes	M	9	14	packages/app/e2e/browser/viewed-agent-timelines.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
-core-fixes	M	1	1	packages/app/e2e/mobile/native-text-reflow/ios.sh
+core-fixes	A	69	0	packages/app/e2e/mobile/native-text-reflow/ios.py
+core-fixes	A	18	0	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	A	54	0	packages/cli/src/commands/agent/archive.test.ts
 core-fixes	M	25	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	A	75	0	packages/cli/src/commands/agent/mcp-options.test.ts
@@ -576,7 +579,6 @@ core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
 core-fixes	A	151	0	packages/cli/src/commands/ask.test.ts
 core-fixes	A	184	0	packages/cli/src/commands/ask.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
-core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
 core-fixes	M	22	0	packages/cli/src/commands/daemon/restart.ts
 core-fixes	M	19	3	packages/cli/src/commands/daemon/stop.ts
 core-fixes	M	1	1	packages/cli/src/commands/heartbeat/index.ts
@@ -645,7 +647,9 @@ core-fixes	A	225	0	packages/server/src/server/held-sends.trust.test.ts
 core-fixes	A	178	0	packages/server/src/server/held-sends.ts
 core-fixes	A	101	0	packages/server/src/server/home-owner-guard.test.ts
 core-fixes	A	20	0	packages/server/src/server/home-owner-guard.ts
-core-fixes	A	75	0	packages/server/src/server/ledger-items.ts
+core-fixes	A	50	0	packages/server/src/server/inspector-flavour.test.ts
+core-fixes	A	11	0	packages/server/src/server/inspector-flavour.ts
+core-fixes	A	79	0	packages/server/src/server/ledger-items.ts
 core-fixes	A	41	0	packages/server/src/server/native-artifact-origin.ts
 core-fixes	A	262	0	packages/server/src/server/native-artifact-store.ts
 core-fixes	A	79	0	packages/server/src/server/native-evidence-origin.test.ts
@@ -663,13 +667,13 @@ core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
-core-fixes	A	121	0	packages/server/src/server/report-up-held.test.ts
-core-fixes	A	753	0	packages/server/src/server/report-up.test.ts
-core-fixes	A	894	0	packages/server/src/server/report-up.ts
+core-fixes	A	274	0	packages/server/src/server/report-up-held.test.ts
+core-fixes	A	884	0	packages/server/src/server/report-up.test.ts
+core-fixes	A	970	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
-core-fixes	A	467	0	packages/server/src/server/revive-on-restart.test.ts
-core-fixes	A	441	0	packages/server/src/server/revive-on-restart.ts
+core-fixes	A	548	0	packages/server/src/server/revive-on-restart.test.ts
+core-fixes	A	459	0	packages/server/src/server/revive-on-restart.ts
 core-fixes	M	1	1	packages/server/src/server/selective-timeline-delivery.e2e.test.ts
 core-fixes	M	9	0	packages/server/src/server/server-id.ts
 core-fixes	M	145	1	packages/server/src/server/session/checkout/checkout-session.test.ts
@@ -679,6 +683,8 @@ core-fixes	A	128	0	packages/server/src/server/session/checkout/git-ai-draft-gene
 core-fixes	A	135	0	packages/server/src/server/session/checkout/git-ai-draft-help.ts
 core-fixes	M	187	1	packages/server/src/server/session/checkout/git-metadata-generator.test.ts
 core-fixes	M	14	3	packages/server/src/server/session/checkout/git-metadata-generator.ts
+core-fixes	A	63	0	packages/server/src/server/sync-io-meter.test.ts
+core-fixes	A	77	0	packages/server/src/server/sync-io-meter.ts
 core-fixes	A	41	0	packages/server/src/server/test-utils/frozen-v11a-permissions.ts
 core-fixes	A	86	0	packages/server/src/server/worker-watchdog.test.ts
 core-fixes	A	108	0	packages/server/src/server/worker-watchdog.ts
@@ -726,7 +732,7 @@ desktop-runtime	A	218	0	packages/desktop/e2e/smoke-personal-scan.js
 desktop-runtime	M	164	156	packages/desktop/e2e/support/runtime.ts
 desktop-runtime	M	1	1	packages/desktop/e2e/updates.spec.ts
 desktop-runtime	A	10	0	packages/desktop/electron-builder.preview.yml
-desktop-runtime	M	37	19	packages/desktop/electron-builder.yml
+desktop-runtime	M	41	19	packages/desktop/electron-builder.yml
 desktop-runtime	M	12	5	packages/desktop/package.json
 desktop-runtime	M	18	7	packages/desktop/scripts/after-pack.js
 desktop-runtime	M	17	2	packages/desktop/scripts/after-sign.js
@@ -749,6 +755,8 @@ desktop-runtime	M	81	6	packages/desktop/src/daemon/desktop-packaging.test.ts
 desktop-runtime	M	26	7	packages/desktop/src/daemon/linux-launcher.posix.test.ts
 desktop-runtime	A	65	0	packages/desktop/src/daemon/managed-restart.test.ts
 desktop-runtime	A	23	0	packages/desktop/src/daemon/managed-restart.ts
+desktop-runtime	M	2	0	packages/desktop/src/daemon/node-entrypoint-launcher.test.ts
+desktop-runtime	M	3	0	packages/desktop/src/daemon/node-entrypoint-launcher.ts
 desktop-runtime	M	62	1	packages/desktop/src/daemon/node-entrypoint-runner.test.ts
 desktop-runtime	M	55	0	packages/desktop/src/daemon/node-entrypoint-runner.ts
 desktop-runtime	M	25	0	packages/desktop/src/features/auto-updater.test.ts
@@ -773,7 +781,7 @@ desktop-runtime	A	64	0	packages/desktop/src/window/renderer-crash-recovery.test.
 desktop-runtime	A	68	0	packages/desktop/src/window/renderer-crash-recovery.ts
 desktop-runtime	A	126	0	packages/server/src/server/bootstrap-interrupted-turn.test.ts
 desktop-runtime	M	75	5	packages/server/src/server/bootstrap.smoke.test.ts
-desktop-runtime	M	392	20	packages/server/src/server/bootstrap.ts
+desktop-runtime	M	397	20	packages/server/src/server/bootstrap.ts
 desktop-runtime	M	3	1	packages/server/src/server/config.test.ts
 desktop-runtime	M	56	20	packages/server/src/server/config.ts
 desktop-runtime	M	47	2	packages/server/src/server/daemon-worker.ts
@@ -783,8 +791,8 @@ desktop-runtime	M	63	4	packages/server/src/server/session/daemon/daemon-session.
 desktop-runtime	M	50	6	packages/server/src/server/session/daemon/daemon-session.ts
 desktop-runtime	M	2	2	packages/server/src/server/session/daemon/diagnostics.ts
 desktop-runtime	M	2	0	packages/server/src/server/speech/providers/local/models.ts
-desktop-runtime	M	21	0	packages/server/src/server/speech/providers/local/sherpa/model-downloader.test.ts
-desktop-runtime	M	4	8	packages/server/src/server/speech/providers/local/sherpa/model-downloader.ts
+desktop-runtime	M	24	0	packages/server/src/server/speech/providers/local/sherpa/model-downloader.test.ts
+desktop-runtime	M	5	1	packages/server/src/server/speech/providers/local/sherpa/model-downloader.ts
 desktop-runtime	A	92	0	packages/server/src/server/speech/providers/local/sherpa/model-integrity.ts
 desktop-runtime	A	27	0	packages/server/src/server/speech/providers/local/sherpa/silero-vad-provider.test.ts
 desktop-runtime	M	36	18	packages/server/src/server/speech/providers/local/sherpa/silero-vad-provider.ts
@@ -794,8 +802,8 @@ desktop-runtime	M	59	7	packages/server/src/server/speech/providers/local/worker-
 desktop-runtime	M	2	2	packages/server/src/server/speech/providers/local/worker-process.ts
 desktop-runtime	M	2	0	packages/server/src/server/speech/providers/local/worker-protocol.ts
 desktop-runtime	M	3	0	packages/server/src/server/speech/speech-config-resolver.ts
-desktop-runtime	M	36	1	packages/server/src/server/speech/speech-runtime.test.ts
-desktop-runtime	M	14	22	packages/server/src/server/speech/speech-runtime.ts
+desktop-runtime	M	30	1	packages/server/src/server/speech/speech-runtime.test.ts
+desktop-runtime	M	37	5	packages/server/src/server/speech/speech-runtime.ts
 desktop-runtime	M	7	1	packages/server/src/server/speech/turn-detection-provider.ts
 desktop-runtime	A	616	0	scripts/orca/bootstrap.mjs
 desktop-runtime	A	279	0	scripts/orca/bootstrap.test.mjs
@@ -810,7 +818,7 @@ durability	M	799	0	packages/server/src/server/agent/agent-timeline-store.test.ts
 durability	M	9	2	packages/server/src/server/agent/agent-timeline-store.ts
 durability	A	928	0	packages/server/src/server/agent/file-agent-timeline-store.ts
 durability	M	41	0	packages/server/src/server/atomic-file.ts
-durability	M	156	1	packages/server/src/server/daemon-config-store.test.ts
+durability	M	170	1	packages/server/src/server/daemon-config-store.test.ts
 durability	M	150	3	packages/server/src/server/daemon-config-store.ts
 durability	M	108	5	packages/server/src/server/persisted-config.ts
 durability	M	5	5	packages/server/src/server/pid-lock.test.ts
@@ -840,7 +848,7 @@ features	A	526	0	packages/app/e2e/browser/sidebar-leads-scroll.spec.ts
 features	A	160	0	packages/app/e2e/browser/sidebar-multihost-offline.spec.ts
 features	M	6	0	packages/app/e2e/browser/sidebar-nav-settings.spec.ts
 features	M	27	2	packages/app/e2e/support/helpers/command-center-file-search.ts
-features	M	18	7	packages/app/e2e/support/helpers/sidebar-nav-settings.ts
+features	M	18	10	packages/app/e2e/support/helpers/sidebar-nav-settings.ts
 features	M	7	0	packages/app/e2e/support/helpers/workspace-tabs.ts
 features	M	3	29	packages/app/src/agent-skills/index.tsx
 features	A	10	0	packages/app/src/app/insights.tsx
@@ -925,11 +933,11 @@ features	M	92	4	packages/app/src/components/sidebar/pinned-section-header.tsx
 features	A	8	0	packages/app/src/components/sidebar/sidebar-footer-size.ts
 features	M	22	3	packages/app/src/components/sidebar/sidebar-header-row.tsx
 features	M	25	52	packages/app/src/components/sidebar/sidebar-help-menu.tsx
-features	A	108	0	packages/app/src/components/sidebar/sidebar-host-visibility.test.ts
+features	A	110	0	packages/app/src/components/sidebar/sidebar-host-visibility.test.ts
 features	M	1	0	packages/app/src/components/sidebar/sidebar-labels.test.ts
 features	M	3	1	packages/app/src/components/sidebar/sidebar-labels.ts
 features	M	21	1	packages/app/src/components/sidebar/sidebar-model.tsx
-features	A	380	0	packages/app/src/components/sidebar/sidebar-multihost.test.ts
+features	A	382	0	packages/app/src/components/sidebar/sidebar-multihost.test.ts
 features	M	52	2	packages/app/src/components/sidebar/sidebar-nav-rows.tsx
 features	A	72	0	packages/app/src/components/sidebar/sidebar-new-chat-row.test.tsx
 features	A	56	0	packages/app/src/components/sidebar/sidebar-new-chat-row.tsx
@@ -1103,6 +1111,7 @@ features	M	39	0	packages/app/src/stores/sidebar-collapsed-sections-store/state.t
 features	M	27	1	packages/app/src/stores/sidebar-collapsed-sections-store/state.ts
 features	A	35	0	packages/app/src/stores/workspace-layout-storage.test.ts
 features	M	2	0	packages/app/src/stores/workspace-layout-storage.ts
+features	M	16	5	packages/app/src/terminal/runtime/terminal-find.browser.test.ts
 features	A	18	0	packages/app/src/types/host-connection-endpoint.test.ts
 features	M	13	4	packages/app/src/utils/__tests__/split-markdown-blocks.test.ts
 features	M	22	0	packages/app/src/utils/agent-snapshots.test.ts
@@ -1175,7 +1184,6 @@ orchestration	A	0	0	docs/assets/features/leadership-light.png
 orchestration	A	0	0	docs/assets/screens/leadership-dark.png
 orchestration	A	0	0	docs/assets/screens/leadership-light.png
 orchestration	M	82	5	packages/app/e2e/browser/changes-pane.spec.ts
-orchestration	M	8	276	packages/app/e2e/browser/context-window-meter.spec.ts
 orchestration	M	12	25	packages/app/e2e/browser/plugin-management.spec.ts
 orchestration	M	57	12	packages/app/src/app/h/[serverId]/index.tsx
 orchestration	M	52	15	packages/app/src/components/hosts/host-picker.tsx
@@ -1230,7 +1238,7 @@ orchestration	A	176	0	packages/protocol/src/native-intercom.ts
 orchestration	M	77	2	packages/protocol/src/provider-manifest.ts
 orchestration	A	81	0	packages/protocol/src/session-ownership.ts
 orchestration	M	2	0	packages/server/src/server/agent/agent-loading.ts
-orchestration	M	3658	159	packages/server/src/server/agent/agent-manager.test.ts
+orchestration	M	3663	157	packages/server/src/server/agent/agent-manager.test.ts
 orchestration	M	3922	583	packages/server/src/server/agent/agent-manager.ts
 orchestration	M	30	0	packages/server/src/server/agent/import-sessions.test.ts
 orchestration	M	24	5	packages/server/src/server/agent/import-sessions.ts
@@ -1403,7 +1411,7 @@ pairing	A	162	0	packages/server/src/server/relay-dns-lookup.test.ts
 pairing	A	76	0	packages/server/src/server/relay-dns-lookup.ts
 pairing	M	30	0	packages/server/src/server/relay-runtime.test.ts
 pairing	M	39	2	packages/server/src/server/relay-runtime.ts
-pairing	M	125	19	packages/server/src/server/relay-transport.test.ts
+pairing	M	129	19	packages/server/src/server/relay-transport.test.ts
 pairing	M	98	25	packages/server/src/server/relay-transport.ts
 pairing	A	113	0	scripts/verify-pairing-mutations.mjs
 plugin-host	M	185	2	docs/plugins.md
@@ -1572,7 +1580,7 @@ session-launch	M	2	0	packages/app/src/workspace-tabs/launcher/internal/catalog.t
 session-launch	M	1	1	packages/cli/src/commands/agent/import.ts
 session-launch	M	2	1	packages/cli/src/commands/provider/index.ts
 session-launch	M	5	0	packages/cli/src/commands/provider/models.ts
-session-launch	M	30	130	packages/cli/tests/15-provider.test.ts
+session-launch	M	30	135	packages/cli/tests/15-provider.test.ts
 session-launch	A	140	0	packages/client/src/plugin-catalog-paging.test.ts
 session-launch	A	188	0	packages/client/src/plugin-catalog-paging.ts
 session-launch	A	73	0	packages/protocol/src/plugin-catalog-paging.test.ts
@@ -1581,7 +1589,7 @@ session-launch	M	18	12	packages/server/src/server/agent/agent-mcp.e2e.test.ts
 session-launch	M	181	0	packages/server/src/server/agent/agent-projections.test.ts
 session-launch	M	53	12	packages/server/src/server/agent/agent-projections.ts
 session-launch	M	251	24	packages/server/src/server/agent/agent-prompt.test.ts
-session-launch	M	270	74	packages/server/src/server/agent/agent-prompt.ts
+session-launch	M	270	86	packages/server/src/server/agent/agent-prompt.ts
 session-launch	A	375	0	packages/server/src/server/agent/catalog-timeout.test.ts
 session-launch	M	1	1	packages/server/src/server/agent/create-agent-lifecycle-dispatch.ts
 session-launch	M	217	2	packages/server/src/server/agent/create-agent-mode.test.ts
@@ -1601,18 +1609,19 @@ session-launch	M	42	15	packages/server/src/server/agent/provider-snapshot-manage
 session-launch	M	82	32	packages/server/src/server/agent/provider-snapshot-manager.ts
 session-launch	A	139	0	packages/server/src/server/agent/providers/claude/agent.dont-ask.test.ts
 session-launch	M	108	0	packages/server/src/server/agent/providers/claude/agent.env.test.ts
+session-launch	M	32	1	packages/server/src/server/agent/providers/claude/agent.history-load.test.ts
 session-launch	M	94	81	packages/server/src/server/agent/providers/claude/agent.image-rendering.test.ts
 session-launch	M	87	0	packages/server/src/server/agent/providers/claude/agent.interrupt-restart-regression.test.ts
 session-launch	M	17	0	packages/server/src/server/agent/providers/claude/agent.redesign.test.ts
 session-launch	M	614	10	packages/server/src/server/agent/providers/claude/agent.test.ts
-session-launch	M	400	20	packages/server/src/server/agent/providers/claude/agent.ts
+session-launch	M	460	50	packages/server/src/server/agent/providers/claude/agent.ts
 session-launch	A	106	0	packages/server/src/server/agent/providers/claude/background-work.test.ts
 session-launch	A	123	0	packages/server/src/server/agent/providers/claude/background-work.ts
 session-launch	M	3	1	packages/server/src/server/agent/providers/claude/feature-definitions.ts
 session-launch	A	306	0	packages/server/src/server/agent/providers/claude/model-discovery.test.ts
 session-launch	A	302	0	packages/server/src/server/agent/providers/claude/model-discovery.ts
-session-launch	M	36	10	packages/server/src/server/agent/providers/claude/model-manifest.ts
-session-launch	M	27	3	packages/server/src/server/agent/providers/claude/models.test.ts
+session-launch	M	25	9	packages/server/src/server/agent/providers/claude/model-manifest.ts
+session-launch	M	25	2	packages/server/src/server/agent/providers/claude/models.test.ts
 session-launch	M	22	5	packages/server/src/server/agent/providers/claude/models.ts
 session-launch	M	22	1	packages/server/src/server/agent/providers/claude/query.ts
 session-launch	M	712	201	packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
@@ -1637,7 +1646,7 @@ session-launch	M	11	2	packages/server/src/server/agent/runtime-mcp-config.ts
 session-launch	M	172	33	packages/server/src/server/agent/tools/paseo-tools.ts
 session-launch	M	5	0	packages/server/src/server/agent/tools/types.ts
 session-launch	M	244	1	packages/server/src/server/daemon-client.e2e.test.ts
-session-launch	M	86	0	packages/server/src/server/daemon-instance.test.ts
+session-launch	M	85	0	packages/server/src/server/daemon-instance.test.ts
 session-launch	M	19	2	packages/server/src/server/daemon-instance.ts
 session-launch	A	128	0	packages/server/src/server/plugins/catalog-controller.test.ts
 session-launch	A	91	0	packages/server/src/server/plugins/catalog-headroom.test.ts

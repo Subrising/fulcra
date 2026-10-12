@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { buildStatusGroups } from "@/hooks/sidebar-status-view-model";
 import {
   splitPinnedSidebarGroups,
@@ -56,6 +57,7 @@ export interface SidebarProjectionInput {
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
+  t: TFunction;
 }
 
 export function buildSidebarProjection(input: SidebarProjectionInput): SidebarProjection {
@@ -128,9 +130,9 @@ function buildStatusModeGroups(
   for (const workspace of unpinnedWorkspaces) {
     (workspace.hostOffline ? offline : live).push(workspace);
   }
-  const groups = statusWorkspaceGroups(buildStatusGroups(live, input.projectNamesByViewKey)).map(
-    (group) => withHostCounts(group, input.hostNames),
-  );
+  const groups = statusWorkspaceGroups(
+    buildStatusGroups(live, input.projectNamesByViewKey, input.t),
+  ).map((group) => withHostCounts(group, input.hostNames));
   if (offline.length === 0) return groups;
   const offlineHosts = input.offlineHosts ?? new Map<string, OfflineHostSummary>();
   const hostsInGroup = [...new Set(offline.map((workspace) => workspace.serverId))].map(
