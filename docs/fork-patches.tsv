@@ -340,7 +340,7 @@ branding	M	34	6	packages/app/src/i18n/resources.test.ts
 branding	M	578	42	packages/app/src/i18n/resources/ar.ts
 branding	M	745	43	packages/app/src/i18n/resources/en.ts
 branding	M	597	42	packages/app/src/i18n/resources/es.ts
-branding	M	621	60	packages/app/src/i18n/resources/fr.ts
+branding	M	619	58	packages/app/src/i18n/resources/fr.ts
 branding	M	597	40	packages/app/src/i18n/resources/ja.ts
 branding	M	587	41	packages/app/src/i18n/resources/ko.ts
 branding	M	599	42	packages/app/src/i18n/resources/pt-BR.ts
