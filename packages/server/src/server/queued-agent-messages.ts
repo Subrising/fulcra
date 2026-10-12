@@ -73,6 +73,7 @@ export class QueuedAgentMessages {
   private stopped = false;
   private active = false;
   private unhealthy = false;
+  private readonly deliveryListeners = new Set<() => void>();
   private readonly draining = new Set<string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly unsubscribe: () => void;
@@ -104,8 +105,10 @@ export class QueuedAgentMessages {
   private async save(): Promise<void> {
     try {
       await writeJsonQueueFile(this.deps.agentStorage.heldMessagesPath, this.records);
+      for (const listener of this.deliveryListeners) listener();
     } catch (error) {
       this.unhealthy = true;
+      for (const listener of this.deliveryListeners) listener();
       throw error;
     }
   }
@@ -198,12 +201,44 @@ export class QueuedAgentMessages {
     this.kick(agentId);
   }
 
+  /** A queue receipt identifies the batch that accepted this message, including rebuilt batches. */
+  async waitForDelivery(agentId: string, messageId: string, signal: AbortSignal): Promise<string> {
+    await this.serial(() => this.load());
+    signal.throwIfAborted();
+    const record = this.records.find(
+      (r) => r.agentId === agentId && r.request.messageId === messageId,
+    );
+    // Direct and held owner sends receive their identity from the submitted provider prompt instead.
+    if (!record) return messageId;
+    return new Promise<string>((resolve, reject) => {
+      const finish = (error?: Error, batchId?: string) => {
+        this.deliveryListeners.delete(check);
+        signal.removeEventListener("abort", aborted);
+        if (error) reject(error);
+        else resolve(batchId!);
+      };
+      const aborted = () => finish(new DOMException("Message delivery wait aborted", "AbortError"));
+      const check = () => {
+        if (signal.aborted) return aborted();
+        if (this.stopped || this.unhealthy)
+          return finish(new Error("The message queue needs host recovery"));
+        if (record.state === "delivered") return finish(undefined, record.batchId!);
+        if (["refused", "uncertain"].includes(record.state))
+          finish(new Error(record.reason ?? `Message delivery ${record.state}`));
+      };
+      this.deliveryListeners.add(check);
+      signal.addEventListener("abort", aborted, { once: true });
+      check();
+    });
+  }
+
   pending(agentId: string): number {
     return this.records.filter((r) => r.agentId === agentId && r.state === "queued").length;
   }
 
   async close(): Promise<void> {
     this.stopped = true;
+    for (const listener of this.deliveryListeners) listener();
     this.unsubscribe();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();

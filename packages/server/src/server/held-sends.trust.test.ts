@@ -98,12 +98,13 @@ async function fixture(provider: "claude" | "opencode" = "claude") {
     host.close();
     await rm(home, { recursive: true, force: true });
   });
-  const send = async (text: string, from?: string, steer = false) => {
+  const send = async (text: string, from?: string, steer = false, messageId?: string) => {
     await session.handleMessage({
       type: "send_agent_message_request",
       requestId: randomUUID(),
       agentId: target.id,
       text,
+      ...(messageId ? { messageId } : {}),
       ...(from ? { sender: { agentId: from } } : {}),
       ...(steer ? { activeTurnBehavior: "steer" as const } : {}),
     });
@@ -556,6 +557,59 @@ test("a role-holder move during provider preparation refuses the selected messag
   await f.queue.close();
   expect(f.prompts).not.toContain("old role task");
   expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0].state).toBe("refused");
+});
+
+test("a message wait ignores the running turn while its second task is held", async () => {
+  const f = await fixture();
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const emit = Reflect.get(f.target.session!, "emitTurnEvents").bind(f.target.session!);
+  let first = true;
+  Reflect.set(f.target.session!, "emitTurnEvents", async (prompt: unknown) => {
+    if (first) {
+      first = false;
+      await firstGate;
+    }
+    await emit(prompt);
+  });
+  Reflect.set(f.target.session!, "buildAssistantText", (prompt: string) => `Answer: ${prompt}`);
+  await f.send("first task");
+  f.busy.add(f.target.id);
+  await f.send("second task", f.sender.id, false, "second-message");
+  const session = Object.create(Session.prototype) as Session;
+  Object.assign(session, {
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    sessionLogger: f.logger,
+    delivery: { requestSignal: new AbortController().signal },
+    emit: (message: SessionOutboundMessage) => f.messages.push(message),
+    getAgentPayloadById: async (id: string) => ({ id }),
+  });
+  const waiting = Reflect.get(session, "handleWaitForFinish").call(
+    session,
+    f.target.id,
+    "wait-second",
+    5000,
+    "second-message",
+  );
+  const firstFinished = f.manager.waitForAgentEvent(f.target.id, { waitForActive: true });
+  releaseFirst();
+  await firstFinished;
+  await f.queue.start();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(f.messages.filter((m) => m.type === "wait_for_finish_response")).toEqual([]);
+  f.busy.delete(f.target.id);
+  await f.queue.start();
+  await waiting;
+  expect(f.messages.findLast((m) => m.type === "wait_for_finish_response")).toMatchObject({
+    payload: {
+      requestId: "wait-second",
+      status: "idle",
+      lastMessage: expect.stringContaining("second task"),
+    },
+  });
 });
 
 test("a full queue refuses the next message without removing the first fifty", async () => {

@@ -7303,13 +7303,20 @@ export class DaemonClient {
     });
   }
 
-  async waitForFinish(agentId: string, timeout = 60000): Promise<WaitForFinishResult> {
+  async waitForFinish(
+    agentId: string,
+    timeout = 60000,
+    options?: { messageId: string },
+  ): Promise<WaitForFinishResult> {
+    if (options && this.lastServerInfoMessage?.features?.messageCompletionWait !== true)
+      throw new Error("Update the host to wait for a specific message completion");
     const requestId = this.createRequestId();
     const hasTimeout = Number.isFinite(timeout) && timeout > 0;
     const message = SessionInboundMessageSchema.parse({
       type: "wait_for_finish_request",
       requestId,
       agentId,
+      ...(options ? { messageId: options.messageId } : {}),
       ...(hasTimeout ? { timeoutMs: timeout } : {}),
     });
     const payload = await this.sendCorrelatedRequest({

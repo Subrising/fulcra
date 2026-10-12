@@ -174,7 +174,11 @@ import {
   type WorkspaceLabelService,
 } from "./workspace-labels/index.js";
 
-import { AgentManager, AgentRunCancellationError } from "./agent/agent-manager.js";
+import {
+  AgentManager,
+  AgentRunCancellationError,
+  type WaitForAgentResult,
+} from "./agent/agent-manager.js";
 import { buildTimelinePromptIndex } from "./agent/timeline-prompt-index.js";
 import { getTimelineFileHistory, listTimelineTurns } from "./agent/timeline-turn-index.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
@@ -422,9 +426,11 @@ function beginAgentDeleteIfSupported(agentStorage: AgentStorage, agentId: string
 const FETCH_AGENTS_SORT_KEYS = ["status_priority", "created_at", "updated_at", "title"] as const;
 
 export function resolveWaitForFinishError(options: {
+  turnError?: string;
   status: "permission" | "error" | "idle";
   final: AgentSnapshotPayload | null;
 }): string | null {
+  if (options.turnError) return options.turnError;
   if (options.status !== "error") {
     return null;
   }
@@ -3621,7 +3627,7 @@ export class Session {
       case "send_agent_message_request":
         return this.handleSendAgentMessageRequest(msg);
       case "wait_for_finish_request":
-        return this.handleWaitForFinish(msg.agentId, msg.requestId, msg.timeoutMs);
+        return this.handleWaitForFinish(msg.agentId, msg.requestId, msg.timeoutMs, msg.messageId);
       case "create_agent_request":
         return this.handleCreateAgentRequest(msg);
       case "resume_agent_request":
@@ -9987,10 +9993,26 @@ export class Session {
     }
   }
 
+  private async waitForRequestedTurn(
+    agentId: string,
+    messageId: string | undefined,
+    signal: AbortSignal,
+  ): Promise<WaitForAgentResult> {
+    if (!messageId)
+      return this.agentManager.waitForAgentEvent(agentId, { signal, waitForActive: true });
+    const deliveredId = await queuedAgentMessagesFor({
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      logger: this.sessionLogger,
+    }).waitForDelivery(agentId, messageId, signal);
+    return this.agentManager.waitForMessageTurn(agentId, deliveredId, signal);
+  }
+
   private async handleWaitForFinish(
     agentIdOrIdentifier: string,
     requestId: string,
     timeoutMs?: number,
+    messageId?: string,
   ): Promise<void> {
     const sourceSignal = this.delivery.requestSignal;
     sourceSignal.throwIfAborted();
@@ -10011,7 +10033,7 @@ export class Session {
 
     const agentId = resolved.agentId;
     const live = this.agentManager.getAgent(agentId);
-    if (!live) {
+    if (!live && !messageId) {
       const record = await this.agentStorage.get(agentId);
       if (!record || record.internal) {
         this.emit({
@@ -10052,10 +10074,8 @@ export class Session {
       : null;
 
     try {
-      let result = await this.agentManager.waitForAgentEvent(agentId, {
-        signal: AbortSignal.any([abortController.signal, sourceSignal]),
-        waitForActive: true,
-      });
+      const signal = AbortSignal.any([abortController.signal, sourceSignal]);
+      const result = await this.waitForRequestedTurn(agentId, messageId, signal);
       let final = await this.getAgentPayloadById(agentId);
       if (!final) {
         throw new Error(`Agent ${agentId} disappeared while waiting`);
@@ -10069,7 +10089,7 @@ export class Session {
       } else {
         status = "idle";
       }
-      const error = resolveWaitForFinishError({ status, final });
+      const error = resolveWaitForFinishError({ status, final, turnError: result.error });
 
       this.emit({
         type: "wait_for_finish_response",
