@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import { describe, expect, it } from "vitest";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
 import { buildSidebarProjection } from "./sidebar-projection";
@@ -57,6 +58,7 @@ function doneGroup() {
     pinnedCollapsed: false,
     collapsedProjectKeys: new Set<string>(),
     collapsedWorkspaceGroupKeys: new Set<string>(),
+    t: i18n.t,
   }).workspaceGroups.find((group) => group.key === "done")!;
 }
 

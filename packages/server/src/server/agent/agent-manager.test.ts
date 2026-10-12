@@ -1,4 +1,11 @@
 import { expect, test, vi } from "vitest";
+
+// Manager cases use fake providers. The real-file baseline suite owns public instruction loading.
+// Keep these cases independent of the host's installed public baseline.
+vi.mock("./host-public-baseline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./host-public-baseline.js")>();
+  return { ...actual, readHostPublicCodexBaseline: async () => null };
+});
 import { Session } from "../session.js";
 import { SessionAuthorization, OWNER_PERMISSIONS } from "../authorization/index.js";
 import { spawn } from "node:child_process";

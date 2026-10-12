@@ -151,11 +151,22 @@ test("preserves inspection through multiple real parser turns of queued output",
   const subscription = term.onWriteParsed(() => {
     samples.push({ viewport: term.buffer.active.viewportY, base: term.buffer.active.baseY });
   });
-  for (let i = 0; i < 150; i++) {
-    runtime.write({ data: encodeTerminalOutput("\rprogress".repeat(1000)) });
-  }
-  await write("\r\nnew output".repeat(100));
-  await new Promise((resolve) => setTimeout(resolve, 350));
+  // Wait for each real parser turn so queue coalescing cannot make this depend on CPU speed.
+  const parsed = async (enqueue: () => void) => {
+    await new Promise<void>((resolve) => {
+      const completed = term.onWriteParsed(() => {
+        completed.dispose();
+        resolve();
+      });
+      enqueue();
+    });
+  };
+  await parsed(() => {
+    for (let i = 0; i < 150; i++) {
+      runtime.write({ data: encodeTerminalOutput("\rprogress".repeat(1000)) });
+    }
+  });
+  await parsed(() => runtime.write({ data: encodeTerminalOutput("\r\nnew output".repeat(100)) }));
   subscription.dispose();
   expect(samples.length).toBeGreaterThan(1);
   expect(samples[0].base).toBe(inspected);

@@ -36,8 +36,7 @@ vi.mock("./providers/openai/runtime.js", () => ({
 
 vi.mock("./providers/local/models.js", () => ({
   ensureLocalSpeechModels: ensureLocalSpeechModelsMock,
-  getLocalSpeechModelDir: vi.fn(() => ""),
-  listLocalSpeechModels: vi.fn(() => []),
+  listMissingLocalSpeechModels: vi.fn(async ({ modelIds }: { modelIds: string[] }) => modelIds),
 }));
 
 function createStubStt(id: string): SpeechToTextProvider {
@@ -214,8 +213,6 @@ it("detects VAD-only absence even when every selected STT component is complete"
   const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const path = await import("node:path");
-  const { listLocalSpeechModels, getLocalSpeechModelDir } =
-    await import("./providers/local/models.js");
   const { listSherpaOnnxModels } = await import("./providers/local/sherpa/model-catalog.js");
   const { recordModelCompletion } = await import("./providers/local/sherpa/model-integrity.js");
   const { ensureSileroVadModel } = await import("./providers/local/sherpa/silero-vad-provider.js");
@@ -229,8 +226,6 @@ it("detects VAD-only absence even when every selected STT component is complete"
     for (const file of spec.requiredFiles)
       await writeFile(path.join(modelDir, file), "complete component fixture");
     await recordModelCompletion(modelDir, spec.requiredFiles);
-    vi.mocked(listLocalSpeechModels).mockReturnValue(specs);
-    vi.mocked(getLocalSpeechModelDir).mockReturnValue(modelDir);
     expect(
       await findMissingRequiredLocalModels({ modelsDir: root, requiredModelIds: [modelId] }),
     ).toEqual([modelId]);
@@ -239,8 +234,6 @@ it("detects VAD-only absence even when every selected STT component is complete"
       await findMissingRequiredLocalModels({ modelsDir: root, requiredModelIds: [modelId] }),
     ).toEqual([]);
   } finally {
-    vi.mocked(listLocalSpeechModels).mockReturnValue([]);
-    vi.mocked(getLocalSpeechModelDir).mockReturnValue("");
     await rm(root, { recursive: true, force: true });
   }
 });
