@@ -26,13 +26,18 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 
 - Claude agents can use the permission mode "Allow List Only" (`dontAsk`): tools that are allowed run, and every other tool is refused without a permission prompt.
 - `fulcra run --output-schema` prints the agent id on standard error. With an explicit `--json`, the answer is `{"agentId": ..., "output": ...}`. Without `--json`, the output is the same as before.
-- A lead that turns idle while it owns open ledger items and has idle workers gets one short message that lists them. The daemon reads the project ledgers in `~/shared-vault/projects` (or `FULCRA_LEDGER_DIR`) and sends the message when the lead's turn ends. It sends it at most once per idle period, and never after a turn that a nudge started.
+- Optional idle-lead nudge, off by default (on only with `daemon.reportUpOnTurnEnd: true`): a lead that turns idle while it owns open ledger items and has idle workers gets one short message that lists them. The daemon reads the project ledgers in `~/shared-vault/projects` (or `FULCRA_LEDGER_DIR`) and sends the message when the lead's turn ends. It sends it at most once per idle period, and never after a turn that a nudge started.
 
 ### Notices to leads
 
 - The automatic "finished a turn" notice from a worker to its lead is now OFF by default. A lead hears a worker finish through the native notice on finish. To turn the old notice back on as a fallback, set `daemon.reportUpOnTurnEnd` to `true`.
 - With the fallback on: finished workers are combined into one message per lead (at most one every 5 minutes, and only after the lead's running turn ends). A worker that already wrote to its lead during its turn sends no notice. A failed turn is still sent at once. A lead sends no such notice to the main assistant.
 - The permission, usage-limit and idle-lead notices stay on. `daemon.reportUpOnTurnEnd` set to `false` turns all of them off.
+
+### Quieter defaults
+
+- The Command Centre no longer rotates a session to a fresh context when its context reaches a size limit. Recovery reports `freshStart` as false.
+- The controller's idle-owner heartbeat is off by default (`heartbeatMinutes` 0).
 
 ### Usage limits
 
