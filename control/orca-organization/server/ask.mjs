@@ -209,19 +209,24 @@ export function killProcessTree(child, { platform = process.platform, run = spaw
 export const REDACTED = "[redacted]";
 export const TOO_DEEP = "[too deep to check]";
 const MAX_SCRUB_DEPTH = 20;
-export function scrubCredential(value, token) {
+export function scrubCredential(value, token, { onCutoff = () => {} } = {}) {
   if (typeof token !== "string" || token.length < 8) return value;
   const forms = [
     ...new Set([token, JSON.stringify(token).slice(1, -1), encodeURIComponent(token)]),
   ];
   const clean = (text) => forms.reduce((s, form) => s.split(form).join(REDACTED), text);
-  const walk = (v, depth) => {
+  const walk = (v, depth, rootKey) => {
     if (typeof v === "string") return clean(v);
     if (v === null || typeof v !== "object") return v;
     // Never return child data that was not walked: a subtree below the bound is replaced whole.
-    if (depth > MAX_SCRUB_DEPTH) return TOO_DEEP;
-    if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [clean(k), walk(x, depth + 1)]));
+    if (depth > MAX_SCRUB_DEPTH) {
+      onCutoff(rootKey);
+      return TOO_DEEP;
+    }
+    if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1, rootKey));
+    return Object.fromEntries(
+      Object.entries(v).map(([k, x]) => [clean(k), walk(x, depth + 1, depth === 0 ? k : rootKey)]),
+    );
   };
   return walk(value, 0);
 }
@@ -327,10 +332,16 @@ export async function askOnce({
     const spawnMs = deadline - now();
     if (spawnMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
     let result;
+    let structuredCutoff = false;
     try {
       result = scrubCredential(
         await spawnClaude({ token, model, prompt, schema, timeoutMs: spawnMs }),
         token,
+        {
+          onCutoff: (key) => {
+            if (key === "structured_output") structuredCutoff = true;
+          },
+        },
       );
     } catch (error) {
       // Only an error this module made is passed on; anything else has no text of its own here.
@@ -368,10 +379,25 @@ export async function askOnce({
     const text = String(result?.result ?? "");
     let output = text;
     if (schema) {
+      if (structuredCutoff)
+        throw new AskError(
+          "The structured answer exceeds the privacy check depth",
+          "OUTPUT_SCHEMA_FAILED",
+        );
       output = result.structured_output ?? null;
       if (output === null)
         try {
-          output = JSON.parse(text);
+          let cutoff = false;
+          output = scrubCredential(JSON.parse(text), token, {
+            onCutoff: () => {
+              cutoff = true;
+            },
+          });
+          if (cutoff)
+            throw new AskError(
+              "The structured answer exceeds the privacy check depth",
+              "OUTPUT_SCHEMA_FAILED",
+            );
         } catch {
           throw new AskError("The answer did not match the output schema", "OUTPUT_SCHEMA_FAILED");
         }
