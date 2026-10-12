@@ -64,13 +64,20 @@ import {
   waitForAgentWithTimeout,
 } from "../mcp-shared.js";
 import {
+  sendPromptToAgentAndWaitForStart,
   sendPromptToAgent,
+  waitForAgentRunStartWithTimeout,
+  disarmFinishNotification,
   setupFinishNotification,
   SteerUnavailableError,
-  waitForAgentRunStartWithTimeout,
 } from "../agent-prompt.js";
-import { deliveryWithReceipt, heldSendsFor } from "../../held-sends.js";
-import { tellSenderUndelivered } from "../../undelivered-notice.js";
+import { FINAL_INPUT_CHECK } from "../agent-sdk-types.js";
+import {
+  recipientLimit,
+  queuedAgentMessagesFor,
+  queuedReceiverCheck,
+  loadQueuedReceiver,
+} from "../../queued-agent-messages.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -104,7 +111,7 @@ import type {
 } from "./types.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
-import { checkPromptLine, decideSend, lineStoreOf } from "../../reporting-lines.js";
+import { checkPromptLine, lineStoreOf } from "../../reporting-lines.js";
 import { noteAgentMessage } from "../../agent-message-log.js";
 
 export interface PaseoToolHostDependencies {
@@ -1964,7 +1971,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     "You will get notified when the prompted agent finishes, errors, or needs permission. Do not poll for status; continue with other work until the notification arrives.";
 
   const HELD_PROMPT_GUIDANCE =
-    "The agent is busy. Your prompt waits until its current turn ends and is then delivered; you will be notified when it finishes. Do not poll.";
+    "Your prompt is queued for combined delivery after the current turn or usage limit ends. A finish notice follows if requested. Do not poll.";
 
   registerTool(
     "send_agent_prompt",
@@ -1995,7 +2002,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         callerAgentId,
         requestedAgentId,
       );
-      function armFinishNotification(): boolean {
+      function armFinishNotification(forNextTurn = false): boolean {
         if (!callerAgentId || !notifyOnFinish) {
           return false;
         }
@@ -2004,61 +2011,59 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           agentStorage,
           childAgentId: agentId,
           callerAgentId,
+          forNextTurn,
           logger: childLogger,
         });
         return !agentManager.nativeReportOwnsFinish(agentId, callerAgentId);
       }
 
-      // FULCRA(orchestration): a prompt from another chat never enters or cancels a running turn. A busy target
-      // gets it when its turn ends (held-sends.ts); the finish notification is armed only when it is delivered.
-      const dispatch = () =>
-        sendPromptToAgent({
-          agentManager,
-          agentStorage,
+      let backgroundNotify = false;
+      const dispatch = async () => {
+        if (callerAgentId) {
+          const record = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
+          await loadQueuedReceiver(
+            { agentManager, agentStorage, logger: childLogger },
+            agentId,
+            record?.persistence?.sessionId ?? null,
+          );
+        }
+        const receiver = agentManager.getAgent(agentId);
+        const check = callerAgentId
+          ? queuedReceiverCheck(agentManager, agentId, receiver?.persistence?.sessionId ?? null)
+          : undefined;
+        if (background && callerAgentId) backgroundNotify = armFinishNotification(true);
+        try {
+          const send = callerAgentId ? sendPromptToAgentAndWaitForStart : sendPromptToAgent;
+          const result = await send({
+            agentManager,
+            agentStorage,
+            agentId,
+            prompt,
+            sessionMode,
+            queuedOnly: Boolean(callerAgentId),
+            ...(check ? { runOptions: { [FINAL_INPUT_CHECK]: check }, unarchive: false } : {}),
+            logger: childLogger,
+          });
+          if (!callerAgentId && background && result.disposition === "turn_started")
+            await waitForAgentRunStartWithTimeout(agentManager, agentId);
+          if (result.disposition !== "turn_started") clearBackgroundNotification();
+          return result;
+        } catch (error) {
+          clearBackgroundNotification();
+          throw error;
+        }
+      };
+      function clearBackgroundNotification(): void {
+        if (backgroundNotify && callerAgentId)
+          disarmFinishNotification(agentManager, agentId, callerAgentId);
+        backgroundNotify = false;
+      }
+      const queueForTurnEnd = async (senderId: string, resumeAt?: number) => {
+        await queuedAgentMessagesFor({ agentManager, agentStorage, logger: childLogger }).enqueue(
           agentId,
-          prompt,
-          sessionMode,
-          logger: childLogger,
-        });
-      const holdForTurnEnd = (caller: string) => {
-        const store = lineStoreOf({ agentManager, agentStorage });
-        heldSendsFor(agentManager, childLogger).hold(
-          agentId,
-          deliveryWithReceipt({
-            // The line can change while the prompt waits: check it again, and tell the caller why if refused.
-            recheck: async () => {
-              const decision = await decideSend(store, { agentId: caller }, agentId, null);
-              return decision && !decision.allowed ? decision.reason : null;
-            },
-            // In the caller's own trust context (agent input), never in the turn-end event's context.
-            deliver: () =>
-              agentManager.trustedPlugins.agentInput(async () => {
-                if (agentManager.hasInFlightRun(agentId)) throw new SteerUnavailableError(agentId);
-                // Armed while the child is idle, so it sees the delivered turn run and end.
-                armFinishNotification();
-                // Steer-only: a turn that starts after the check keeps the prompt waiting, never replaced.
-                await sendPromptToAgent({
-                  agentManager,
-                  agentStorage,
-                  agentId,
-                  prompt,
-                  sessionMode,
-                  activeTurnBehavior: "steer",
-                  steerOnly: true,
-                  logger: childLogger,
-                });
-              }),
-            tellSender: (reason) =>
-              tellSenderUndelivered({
-                agentManager,
-                agentStorage,
-                logger: childLogger,
-                localServerId: null,
-                sender: { agentId: caller },
-                targetId: agentId,
-                reason,
-              }),
-          }),
+          { text: prompt, sender: { agentId: senderId }, sessionMode, notifyOnFinish },
+          undefined,
+          resumeAt,
         );
         return {
           content: [],
@@ -2073,8 +2078,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       };
       if (callerAgentId) noteAgentMessage(callerAgentId, agentId);
       if (callerAgentId && agentManager.hasInFlightRun(agentId))
-        return holdForTurnEnd(callerAgentId);
-      const { disposition } = await dispatch();
+        return queueForTurnEnd(callerAgentId);
+      try {
+        await dispatch();
+      } catch (error) {
+        const limit = recipientLimit(error);
+        if (callerAgentId && (limit || error instanceof SteerUnavailableError))
+          return queueForTurnEnd(callerAgentId, limit?.resumeAt);
+        throw error;
+      }
 
       // If not running in background, wait for completion
       if (!background) {
@@ -2104,12 +2116,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         return response;
       }
 
-      const notifying = armFinishNotification();
+      const notifying = backgroundNotify;
 
-      // Return once the provider has accepted the turn, so the status reports it running.
-      if (disposition === "turn_started") {
-        await waitForAgentRunStartWithTimeout(agentManager, agentId);
-      }
       const currentSnapshot = agentManager.getAgent(agentId);
 
       const responseData = {

@@ -24,6 +24,26 @@ export async function writeJsonFileAtomic(filePath: string, value: unknown): Pro
   await writeFileAtomic(filePath, JSON.stringify(value, null, 2));
 }
 
+/** Ordinary queue data uses file sync on Windows. This does not create native operation authority. */
+export async function writeJsonQueueFile(filePath: string, value: unknown): Promise<void> {
+  if (process.platform !== "win32") return writeJsonFileDurable(filePath, value);
+  const directory = path.dirname(filePath);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+  try {
+    const file = await fs.open(temporary, "wx", 0o600);
+    try {
+      await file.writeFile(JSON.stringify(value));
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await fs.rename(temporary, filePath);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}
+
 /** Commit an admission/attempt before acknowledging it or invoking a provider. */
 export async function writeJsonFileDurable(
   filePath: string,

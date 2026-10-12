@@ -35,7 +35,58 @@ beforeEach(() => {
   client = fakeClient();
   connection.mockResolvedValue(client);
 });
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  senderStamp.mockReturnValue(null);
+});
+
+describe("agent queue and steer", () => {
+  it.each([{ flags: [] }, { flags: ["--queue"] }])(
+    "queues agent sends by default: %j",
+    async ({ flags }) => {
+      senderStamp.mockReturnValue({ agentId: "sender" });
+      await parsedSend(["target", "draft", "--no-wait", ...flags]);
+      expect(client.sendAgentMessage).toHaveBeenCalledExactlyOnceWith("target", "draft", {
+        images: undefined,
+        sender: { agentId: "sender" },
+        queue: true,
+        onDelivery: expect.any(Function),
+      });
+    },
+  );
+  it("requests native steering and shows a queue fallback", async () => {
+    senderStamp.mockReturnValue({ agentId: "sender" });
+    client.sendAgentMessage.mockImplementation(async (_id, _prompt, options) => {
+      options.onDelivery("Native steering is unavailable. Message queued for the end of the turn.");
+    });
+    const result = await parsedSend(["target", "draft", "--steer", "--no-wait"]);
+    expect(client.sendAgentMessage).toHaveBeenCalledExactlyOnceWith("target", "draft", {
+      images: undefined,
+      sender: { agentId: "sender" },
+      activeTurnBehavior: "steer",
+      onDelivery: expect.any(Function),
+    });
+    expect(result.data.message).toBe(
+      "Native steering is unavailable. Message queued for the end of the turn.",
+    );
+  });
+  it("refuses conflicting modes before connecting", async () => {
+    await expect(parsedSend(["target", "draft", "--queue", "--steer"])).rejects.toMatchObject({
+      code: "CONFLICTING_SEND_MODE",
+    });
+    expect(connection).not.toHaveBeenCalled();
+  });
+  it("keeps the steer fallback note when waiting for completion", async () => {
+    senderStamp.mockReturnValue({ agentId: "sender" });
+    client.sendAgentMessage.mockImplementation(async (_id, _prompt, options) => {
+      options.onDelivery("Native steering is unavailable. Message queued for the end of the turn.");
+    });
+    const result = await parsedSend(["target", "draft", "--steer"]);
+    expect(result.data.message).toContain(
+      "Native steering is unavailable. Message queued for the end of the turn.",
+    );
+  });
+});
 
 describe("send slash commands", () => {
   it.each(["/Volumes/x", "/Volumes/work/repo/foo.ts fix this", "/tmp/x.log why did this fail"])(
@@ -220,6 +271,8 @@ describe("send reporting lines", () => {
     expect(client.sendAgentMessage).toHaveBeenLastCalledWith("target", "hello", {
       images: undefined,
       sender: { agentId: "lead-1" },
+      queue: true,
+      onDelivery: expect.any(Function),
     });
     await parsedSend(["target", "hello", "--no-wait"]);
     expect(client.sendAgentMessage).toHaveBeenLastCalledWith("target", "hello", {

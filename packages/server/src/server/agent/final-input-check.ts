@@ -3,12 +3,19 @@ interface State {
   check: () => void;
   beforeHandoff?: () => void;
   committed: boolean;
+  managerOnly: boolean;
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: unknown) => void;
 }
 const checks = new WeakMap<object, State>();
-export function createFinalInputCheck(check: () => void, beforeHandoff?: () => void): object {
+export function createFinalInputCheck(
+  check: () => void,
+  beforeHandoff?: () => void,
+  managerOnly = false,
+): object {
+  if (managerOnly && beforeHandoff)
+    throw new Error("A manager-only check cannot commit native authority");
   const handle = Object.freeze({});
   let resolve!: () => void, reject!: (error: unknown) => void;
   const promise = new Promise<void>((yes, no) => {
@@ -16,9 +23,25 @@ export function createFinalInputCheck(check: () => void, beforeHandoff?: () => v
     reject = no;
   });
   void promise.catch(() => {});
-  checks.set(handle, { check, beforeHandoff, committed: false, promise, resolve, reject });
+  checks.set(handle, {
+    check,
+    beforeHandoff,
+    managerOnly,
+    committed: false,
+    promise,
+    resolve,
+    reject,
+  });
   return handle;
 }
+/** Plain queue checks can stop at the manager's provider call. Native authority checks require transport support. */
+export function requiresProviderInputHandoff(handle: object | undefined): boolean {
+  return Boolean(handle && !checks.get(handle)?.managerOnly);
+}
+export function recordManagerInputHandoff(handle: object | undefined): void {
+  if (handle && !requiresProviderInputHandoff(handle)) recordFinalInputHandoff(handle);
+}
+
 export function assertFinalInputCheck(handle: object | undefined): void {
   if (!handle) return;
   const state = checks.get(handle);

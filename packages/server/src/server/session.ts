@@ -150,8 +150,12 @@ import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import { decideSend, lineStoreOf, resolveRoleTarget, type LineStore } from "./reporting-lines.js";
 import { noteAgentMessage } from "./agent-message-log.js";
-import { deliveryWithReceipt, heldSendsFor, ProvenanceRefusedError } from "./held-sends.js";
-import { tellSenderUndelivered } from "./undelivered-notice.js";
+import { heldSendsFor, ProvenanceRefusedError } from "./held-sends.js";
+import {
+  queuedAgentMessagesFor,
+  recipientLimit,
+  loadQueuedReceiver,
+} from "./queued-agent-messages.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
@@ -9619,12 +9623,18 @@ export class Session {
     }
   }
 
-  private async prepareAgentMessage(agentId: string, text: string): Promise<void> {
-    await ensureAgentLoaded(agentId, {
+  private async prepareAgentMessage(
+    agentId: string,
+    text: string,
+    queuedSessionId?: string | null,
+  ): Promise<void> {
+    const deps = {
       agentManager: this.agentManager,
       agentStorage: this.agentStorage,
       logger: this.sessionLogger,
-    });
+    };
+    if (queuedSessionId !== undefined) await loadQueuedReceiver(deps, agentId, queuedSessionId);
+    else await ensureAgentLoaded(agentId, deps);
     const stored = await this.agentStorage.get(agentId);
     if (stored && !stored.title && !stored.lastUserMessageAt) {
       const { provisionalTitle } = resolveCreateAgentTitles({ initialPrompt: text });
@@ -9688,10 +9698,10 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
     agentId: string,
     prompt: ReturnType<typeof buildAgentPrompt>,
+    deliveryNote: (note: string) => void,
   ): () => Promise<void> {
     // FULCRA(orchestration): The owner, 10 Oct: "human messages should steer". Nothing changes for an idle target.
-    // - A send from another chat (stamped) never enters or cancels a running turn: it is held until the target's
-    //   turn ends, then sent as before (held-sends.ts).
+    // - Stamped sends combine after the current turn. Explicit steers use the native turn and queue on refusal.
     // - A send from the owner to a busy target steers into the running turn, and is held, not replaced, when the
     //   turn cannot take it. An explicit "interrupt" (an operator's choice, the controller's sends) still interrupts.
     const requested = msg.activeTurnBehavior ?? "interrupt";
@@ -9721,30 +9731,66 @@ export class Session {
         if (this.agentManager.hasInFlightRun(agentId)) throw new SteerUnavailableError(agentId);
         await dispatch("steer");
       });
+    const tryAgentSteer = async (): Promise<{ delivered: boolean; resumeAt?: number }> => {
+      try {
+        await trusted.agentInput(() => dispatch("steer", this.delivery.requestSignal));
+        deliveryNote("Message delivered through native steering.");
+        return { delivered: true };
+      } catch (error) {
+        const limit = recipientLimit(error);
+        if (limit) {
+          deliveryNote(
+            "The receiver is at its usage limit. Message queued until the limit resets.",
+          );
+          return { delivered: false, resumeAt: limit.resumeAt };
+        }
+        if (!(error instanceof SteerUnavailableError)) throw error;
+        deliveryNote("Native steering is unavailable. Message queued for the end of the turn.");
+        return { delivered: false };
+      }
+    };
     const sender = msg.sender;
     return async () => {
       if (sender) noteAgentMessage(sender.agentId, agentId);
       if (sender) {
-        held.hold(
+        if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
+        let resumeAt: number | undefined;
+        if (msg.activeTurnBehavior === "steer") {
+          const result = await tryAgentSteer();
+          if (result.delivered) return;
+          resumeAt = result.resumeAt;
+        } else
+          deliveryNote(
+            "Message queued. The receiver takes queued messages in one combined delivery.",
+          );
+        await queuedAgentMessagesFor({
+          agentManager: this.agentManager,
+          agentStorage: this.agentStorage,
+          logger: this.sessionLogger,
+        }).enqueue(
           agentId,
-          deliveryWithReceipt({
-            recheck: () => this.reportingLineRefusal(sender, agentId),
-            deliver: whenIdle((run) => trusted.agentInput(run)),
-            tellSender: (reason) =>
-              tellSenderUndelivered({
-                agentManager: this.agentManager,
-                agentStorage: this.agentStorage,
-                logger: this.sessionLogger,
-                localServerId: this.localServerId,
-                sender,
-                targetId: agentId,
-                reason,
-              }),
-          }),
+          {
+            text: msg.text,
+            images: msg.images,
+            attachments: msg.attachments,
+            messageId: msg.messageId,
+            sender,
+          },
+          this.localServerId,
+          resumeAt,
         );
         return;
       }
       const busy = this.agentManager.hasInFlightRun(agentId);
+      if (msg.queue) {
+        if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
+        held.hold(
+          agentId,
+          whenIdle((run) => trusted.rpc(undefined, run)),
+        );
+        deliveryNote("Message queued for the end of the turn.");
+        return;
+      }
       if (!busy || msg.activeTurnBehavior === "interrupt") {
         await dispatch(requested, this.delivery.requestSignal);
         return;
@@ -9769,6 +9815,51 @@ export class Session {
         });
       }
     };
+  }
+
+  private async queuedMessageSessionId(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    agentId: string,
+  ): Promise<string | null | undefined> {
+    if (!msg.sender) return undefined;
+    const target = this.agentManager.getAgent(agentId) ?? (await this.agentStorage.get(agentId));
+    if (
+      !target ||
+      target.archivedAt ||
+      ("lifecycle" in target ? target.lifecycle : target.lastStatus) === "closed"
+    )
+      throw Object.assign(new Error("The receiver is closed or archived"), {
+        code: "QUEUED_RECEIVER_CLOSED",
+      });
+    return target.persistence?.sessionId ?? null;
+  }
+
+  private agentMessageReceiptRequest(
+    msg: Extract<SessionInboundMessage, { type: "send_agent_message_request" }>,
+    prompt: ReturnType<typeof buildAgentPrompt>,
+  ) {
+    return {
+      prompt,
+      activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt",
+      ...(msg.queue ? { queue: true } : {}),
+    };
+  }
+
+  private emitAgentMessageAccepted(
+    requestId: string,
+    agentId: string,
+    deliveryNote?: string,
+  ): void {
+    this.emit({
+      type: "send_agent_message_response",
+      payload: {
+        requestId,
+        agentId,
+        accepted: true,
+        ...(deliveryNote ? { deliveryNote } : {}),
+        error: null,
+      },
+    });
   }
 
   private async handleSendAgentMessageRequest(
@@ -9808,7 +9899,7 @@ export class Session {
       if (msg.nativeQueue) {
         if (!msg.messageId || msg.messageId.length > 256)
           throw new Error("Native queue requires a stable bounded message ID");
-        if (msg.activeTurnBehavior || msg.images?.length || msg.attachments?.length)
+        if (msg.queue || msg.activeTurnBehavior || msg.images?.length || msg.attachments?.length)
           throw new Error("Native queue refuses steering, interruption and attachments");
         const requireSource = () => {
           if (
@@ -9850,14 +9941,18 @@ export class Session {
         },
         "agent.session.send_agent_message",
       );
-      const send = this.agentMessageSender(msg, agentId, prompt);
+      let deliveryNote: string | undefined;
+      const queuedSessionId = await this.queuedMessageSessionId(msg, agentId);
+      const send = this.agentMessageSender(msg, agentId, prompt, (note) => {
+        deliveryNote = note;
+      });
       if (msg.messageId) {
         await this.messageReceipts.send({
           agentId,
           messageId: msg.messageId,
-          request: { prompt, activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt" },
+          request: this.agentMessageReceiptRequest(msg, prompt),
           prepare: async () => {
-            await this.prepareAgentMessage(agentId, msg.text);
+            await this.prepareAgentMessage(agentId, msg.text, queuedSessionId);
           },
           send,
         });
@@ -9865,15 +9960,7 @@ export class Session {
         await send();
       }
 
-      this.emit({
-        type: "send_agent_message_response",
-        payload: {
-          requestId: msg.requestId,
-          agentId,
-          accepted: true,
-          error: null,
-        },
-      });
+      this.emitAgentMessageAccepted(msg.requestId, agentId, deliveryNote);
     } catch (error) {
       if (admissionOutcome(error)) throw error;
       if (this.delivery.requestSignal.aborted) return;
