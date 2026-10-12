@@ -186,7 +186,6 @@ export function killProcessTree(child, { platform = process.platform, run = spaw
       });
       proc.on("error", killLeader);
       proc.on("exit", killLeader);
-      setTimeout(killLeader, 5000).unref?.(); // taskkill never ended
       proc.unref?.();
       return;
     } catch {
@@ -208,6 +207,8 @@ export function killProcessTree(child, { platform = process.platform, run = spaw
  * exact credential (and its JSON and URL forms) replaced. Too short a value is not replaced: it would mangle text.
  */
 export const REDACTED = "[redacted]";
+export const TOO_DEEP = "[too deep to check]";
+const MAX_SCRUB_DEPTH = 20;
 export function scrubCredential(value, token) {
   if (typeof token !== "string" || token.length < 8) return value;
   const forms = [
@@ -216,11 +217,29 @@ export function scrubCredential(value, token) {
   const clean = (text) => forms.reduce((s, form) => s.split(form).join(REDACTED), text);
   const walk = (v, depth) => {
     if (typeof v === "string") return clean(v);
-    if (depth > 20 || v === null || typeof v !== "object") return v;
+    if (v === null || typeof v !== "object") return v;
+    // Never return child data that was not walked: a subtree below the bound is replaced whole.
+    if (depth > MAX_SCRUB_DEPTH) return TOO_DEEP;
     if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [clean(k), walk(x, depth + 1)]));
   };
   return walk(value, 0);
+}
+
+/** The credential, or null when it is missing; a lookup that outlasts the ask's deadline is a timeout. */
+async function lookupCredential(keychain, id, budgetMs) {
+  let timer;
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new AskError("The call timed out", "TIMEOUT")),
+      Math.max(0, budgetMs),
+    );
+  });
+  try {
+    return await Promise.race([keychain.get(id).catch(() => null), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const isLimit = (result, now) =>
@@ -301,18 +320,16 @@ export async function askOnce({
         );
       }
     }
-    let token = null;
-    try {
-      token = await keychain.get(picked.id);
-    } catch {
-      token = null;
-    }
+    // The lookup is bounded by the same deadline, and the time left is worked out again right before the spawn.
+    const token = await lookupCredential(keychain, picked.id, deadline - now());
     if (!token)
       throw new AskError(`The credential for "${picked.name}" is not available`, "NO_CREDENTIAL");
+    const spawnMs = deadline - now();
+    if (spawnMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
     let result;
     try {
       result = scrubCredential(
-        await spawnClaude({ token, model, prompt, schema, timeoutMs: remainingMs }),
+        await spawnClaude({ token, model, prompt, schema, timeoutMs: spawnMs }),
         token,
       );
     } catch (error) {
