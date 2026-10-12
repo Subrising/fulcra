@@ -36,6 +36,7 @@ export interface Config {
   worktreeLifecycle?: { retentionDays: number | "never" };
   outcomesRoot?: string;
   memoryRoot?: string;
+  automaticContextRotation?: boolean;
 }
 export type LoadedConfig = Config & {
   home: string;

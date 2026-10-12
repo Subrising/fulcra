@@ -2,12 +2,14 @@ import { reconcileBootstrap } from "./native-bootstrap.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { portable } from "../portable-config.mjs";
 import { assertColumns } from "./schema.mjs";
 
 export const COMPACTION_WINDOW_MS = 10 * 60_000;
 export const COMPACTION_STALL_MS = 15 * 60_000;
 export const COMPACTION_COUNT = 3;
 export const MAX_CONTEXT_ROTATIONS_PER_DAY = 2;
+export const CONTEXT_FRESH_START_RATIO = 0.6;
 export const FRESH_START_COOLDOWN_MS = 10 * 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -20,9 +22,15 @@ export function idleUsage(usage) {
     usage && usage.status === "idle" && !(usage.background > 0) && !(usage.pending > 0),
   );
 }
-// Context size must not cause a handoff. Provider compaction and stalled-compaction recovery keep their own rules.
-export function contextTrigger() {
-  return null;
+// Context size causes a handoff only after an operator opts in. Compaction recovery keeps its own rules.
+export function contextTrigger(usage, enabled = false) {
+  if (enabled !== true || !idleUsage(usage)) return null;
+  const { used, limit } = usage;
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0 || used < 0) return null;
+  const ratio = used / limit;
+  return ratio >= CONTEXT_FRESH_START_RATIO
+    ? `Context reached ${Math.round(ratio * 100)}% of the window`
+    : null;
 }
 
 /**
@@ -142,7 +150,8 @@ export function writeCompactionHandoff(directory, id, value) {
 }
 
 export class CompactionLoops {
-  constructor(control, { home, now = Date.now } = {}) {
+  constructor(control, { home, now = Date.now, config = portable } = {}) {
+    this.config = config;
     this.control = control;
     this.db = control.store.db;
     this.home = home;
@@ -201,6 +210,9 @@ export class CompactionLoops {
     if (prior && !["rotated"].includes(prior.state)) return; // ambiguous/failing operations are never replayed
     await this.rotate(s, observed);
   }
+  get automaticContextRotation() {
+    return this.config.automaticContextRotation === true;
+  }
   latestRotation(id, generation) {
     return this.db
       .prepare(
@@ -217,9 +229,10 @@ export class CompactionLoops {
   }
   /** The idle-time context trigger. Never pauses at the daily cap; it simply waits for tomorrow. */
   async contextCheck(s, saved) {
+    if (!this.automaticContextRotation) return;
     const usage = await this.control.native.contextUsage?.(s.id);
     if (!usage || this.stopped || this.control.closing) return;
-    const reason = contextTrigger(usage);
+    const reason = contextTrigger(usage, this.automaticContextRotation);
     if (!reason) return;
     const cur = this.control.store.get(s.id);
     if (cur?.mode !== "delegated" || cur.generation !== s.generation) return;
@@ -319,7 +332,11 @@ export class CompactionLoops {
             throw Error("Daily fresh start limit reached");
           const usage = await control.native.contextUsage?.(s.id);
           check();
-          if (!usage || !idleUsage(usage) || (trigger === "context" && !contextTrigger(usage)))
+          if (
+            !usage ||
+            !idleUsage(usage) ||
+            (trigger === "context" && !contextTrigger(usage, this.automaticContextRotation))
+          )
             throw Error("Session is no longer idle below its context check; not rotated");
         } else pauseOnly = rotated >= MAX_CONTEXT_ROTATIONS_PER_DAY;
         const before = await control.native.inspect(s.id);
@@ -488,7 +505,7 @@ export class CompactionLoops {
     return {
       // The app shows Fresh start only when this is true (control/orca-organization/client/fresh-start.ts).
       freshStart: false,
-      contextTrigger: null,
+      contextTrigger: this.automaticContextRotation ? CONTEXT_FRESH_START_RATIO : null,
       rotations: this.db
         .prepare(
           "SELECT id,session AS sessionId,state,handoff,outcome,at,previous AS previousSessionId,current AS sessionIdAfter FROM context_rotations ORDER BY at DESC LIMIT 64",
