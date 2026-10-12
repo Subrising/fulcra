@@ -35,6 +35,8 @@ const MAX_PROMPT_CHARS = 200_000;
 export const MAX_ASK_TIMEOUT_MS = 10 * 60_000;
 // Most calls end in seconds; the bound keeps a stuck call from holding the controller.
 export const DEFAULT_ASK_TIMEOUT_MS = 120_000;
+/** A retry with less time than this left is not started. */
+export const MIN_ATTEMPT_MS = 1000;
 
 /** Runs the Claude CLI once. The credential goes in the environment of this one process, never in argv or a file. */
 export function spawnClaudeOnce({
@@ -92,6 +94,7 @@ export function spawnClaudeOnce({
     });
     let out = "";
     let settled = false;
+    let leaderExited = false;
     const finish = (settle) => {
       if (settled) return;
       settled = true;
@@ -99,9 +102,15 @@ export function spawnClaudeOnce({
       removeScratch(scratch);
       settle();
     };
-    // The call ends at the timeout, without waiting for a process that holds the pipes.
+    child.on("exit", () => {
+      leaderExited = true;
+    });
+    // The call ends at the deadline, without waiting for a process that holds the pipes. While the leader runs, its
+    // process tree is stopped. Once it has exited, its numeric ID may belong to another process now, so nothing is
+    // killed by that number: the pipes are closed and the call is rejected on its own (0.2.17 review).
     const timer = setTimeout(() => {
-      killProcessTree(child);
+      if (leaderExited) closePipes(child);
+      else killProcessTree(child);
       finish(() => reject(new AskError("The call timed out", "TIMEOUT")));
     }, timeoutMs);
     child.stdout.on("data", (d) => {
@@ -111,10 +120,11 @@ export function spawnClaudeOnce({
     // A CLI that exits before it reads a large prompt closes the pipe; the close handler reports it (FU-93 review).
     child.stdin.on("error", () => {});
     child.on("error", (e) => {
+      // A fixed text, with only a short system code: a spawn error's own message can name the command line.
+      const code =
+        typeof e?.code === "string" && /^[A-Z0-9_]{2,24}$/.test(e.code) ? e.code : "unknown";
       finish(() =>
-        reject(
-          new AskError(`The Claude CLI could not start: ${e.code ?? e.message}`, "CLI_UNAVAILABLE"),
-        ),
+        reject(new AskError(`The Claude CLI could not start (${code})`, "CLI_UNAVAILABLE")),
       );
     });
     child.on("close", () => {
@@ -139,25 +149,78 @@ function removeScratch(folder) {
   }
 }
 
-/** Stops the child and everything it started: the process group on Unix, `taskkill /T /F` on Windows. */
+/** Closes the child's pipes so a process that still holds them cannot keep the call waiting. */
+export function closePipes(child) {
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    try {
+      stream?.destroy();
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
+const hasExited = (child) => child.exitCode != null || child.signalCode != null;
+
+/**
+ * Stops the child and what it started, as far as this process can. Unix: the child's process group, only while the
+ * child has not exited (the number then names its group and nothing else). Windows: `taskkill /T /F`, and the child
+ * itself is killed only after taskkill has finished, because taskkill looks the child up by its ID. A descendant that
+ * left the group or the tree (detached) is not stopped: that needs a retained handle such as a Windows Job Object.
+ */
 export function killProcessTree(child, { platform = process.platform, run = spawn } = {}) {
   const pid = child.pid;
-  try {
-    if (platform === "win32" && pid) {
-      run("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
-        .on("error", () => {})
-        .unref?.();
-    } else if (pid) {
-      process.kill(-pid, "SIGKILL");
+  const killLeader = () => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
     }
-  } catch {
-    /* already gone, or no group: fall back to the child itself */
+  };
+  if (!pid || hasExited(child)) return;
+  if (platform === "win32") {
+    try {
+      const proc = run("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      proc.on("error", killLeader);
+      proc.on("exit", killLeader);
+      setTimeout(killLeader, 5000).unref?.(); // taskkill never ended
+      proc.unref?.();
+      return;
+    } catch {
+      killLeader();
+      return;
+    }
   }
   try {
-    child.kill("SIGKILL");
+    process.kill(-pid, "SIGKILL");
   } catch {
-    /* already gone */
+    /* no group: fall back to the child itself */
   }
+  killLeader();
+}
+
+/**
+ * FU-112 follow-up (0.2.17 review): the selected account's credential must not reach an error, a result, a model name
+ * or a saved limit note, whatever the child prints. Every string and every object key in child-derived data has the
+ * exact credential (and its JSON and URL forms) replaced. Too short a value is not replaced: it would mangle text.
+ */
+export const REDACTED = "[redacted]";
+export function scrubCredential(value, token) {
+  if (typeof token !== "string" || token.length < 8) return value;
+  const forms = [
+    ...new Set([token, JSON.stringify(token).slice(1, -1), encodeURIComponent(token)]),
+  ];
+  const clean = (text) => forms.reduce((s, form) => s.split(form).join(REDACTED), text);
+  const walk = (v, depth) => {
+    if (typeof v === "string") return clean(v);
+    if (depth > 20 || v === null || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [clean(k), walk(x, depth + 1)]));
+  };
+  return walk(value, 0);
 }
 
 const isLimit = (result, now) =>
@@ -197,9 +260,14 @@ export async function askOnce({
     Math.max(Number(input.timeoutMs) || DEFAULT_ASK_TIMEOUT_MS, 1000),
     MAX_ASK_TIMEOUT_MS,
   );
+  // One absolute deadline for the whole ask: a retry on the next account gets only the time that is left, so the
+  // caller's own wait (timeout plus a margin) is never shorter than the host's work (0.2.17 review).
+  const deadline = now() + timeoutMs;
   const tried = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     const at = now();
+    const remainingMs = deadline - at;
+    if (remainingMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
     const state = readAccounts(root);
     let picked;
     if (account) {
@@ -241,7 +309,17 @@ export async function askOnce({
     }
     if (!token)
       throw new AskError(`The credential for "${picked.name}" is not available`, "NO_CREDENTIAL");
-    const result = await spawnClaude({ token, model, prompt, schema, timeoutMs });
+    let result;
+    try {
+      result = scrubCredential(
+        await spawnClaude({ token, model, prompt, schema, timeoutMs: remainingMs }),
+        token,
+      );
+    } catch (error) {
+      // Only an error this module made is passed on; anything else has no text of its own here.
+      if (error instanceof AskError) throw error;
+      throw new AskError("The Claude call failed", "ASK_FAILED");
+    }
     if (isLimit(result, at)) {
       const line = String(result.result ?? "");
       const parsed = parseLimitLine(line, at);

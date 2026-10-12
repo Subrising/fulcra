@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { addAccount, readAccounts, setAccount } from "./accounts.mjs";
+import { addAccount, readAccounts, setAccount, publicView } from "./accounts.mjs";
 import { askOnce, AskError, refuseShellShim, spawnClaudeOnce } from "./ask.mjs";
 
 const T0 = Date.parse("2026-10-11T00:00:00Z");
@@ -410,7 +410,7 @@ test("killProcessTree uses taskkill /T /F on Windows and the process group elsew
   const killed = [];
   killProcessTree({ pid: 4242, kill: (s) => killed.push(s) }, { platform: "win32", run });
   assert.deepEqual(calls[0].slice(0, 2), ["taskkill", ["/pid", "4242", "/T", "/F"]]);
-  assert.deepEqual(killed, ["SIGKILL"]);
+  assert.deepEqual(killed, [], "the leader is killed after taskkill has run, not at once");
   assert.doesNotThrow(() => killProcessTree({ pid: undefined, kill() {} }, { platform: "linux" }));
 });
 
@@ -426,4 +426,227 @@ test("an ask with --account takes a name or an ID, in any case", async () => {
     });
     assert.equal(r.account, "Personal");
   }
+});
+
+// 0.2.17 review: the credential never leaves, the leader's old ID is never killed, and one deadline covers the ask.
+import { scrubCredential, REDACTED, closePipes, MIN_ATTEMPT_MS } from "./ask.mjs";
+import { mock } from "node:test";
+
+test("scrubCredential removes the exact credential, its JSON and URL forms, from values and keys", () => {
+  const token = "sk-ant-oat01-AAAA+BBBB/CCCC=DDDD";
+  const out = scrubCredential(
+    {
+      result: `bad ${token} and ${encodeURIComponent(token)}`,
+      nested: [{ [`key ${token}`]: `quoted \\"${token}\\"` }],
+      n: 3,
+      ok: null,
+    },
+    token,
+  );
+  const text = JSON.stringify(out);
+  assert.equal(text.includes(token), false);
+  assert.equal(text.includes(encodeURIComponent(token)), false);
+  assert.ok(text.includes(REDACTED));
+  assert.equal(out.n, 3);
+  // A short or missing credential changes nothing.
+  assert.deepEqual(scrubCredential({ a: "abc" }, "abc"), { a: "abc" });
+  assert.deepEqual(scrubCredential({ a: "abc" }, undefined), { a: "abc" });
+});
+
+test("a child that prints the credential in an error, an answer, a model name or a limit line leaks it nowhere", async () => {
+  const { root, a } = await pool();
+  const token = `sk-ant-oat01-${a.id}`;
+  const leak = (extra) => async () => ({ is_error: false, result: `x ${token}`, ...extra });
+  // 1. A failed call's text.
+  const failed = await askOnce({
+    root,
+    keychain,
+    input: input(),
+    now: () => T0,
+    spawnClaude: async () => ({ is_error: true, api_error_status: 500, result: `boom ${token}` }),
+  }).catch((e) => e);
+  assert.ok(failed instanceof AskError);
+  assert.equal(failed.message.includes(token), false);
+  // 2. A good answer, structured output and the model name.
+  const good = await askOnce({
+    root,
+    keychain,
+    input: input({ schema: { type: "object" } }),
+    now: () => T0 + 1,
+    spawnClaude: leak({
+      structured_output: { note: token, [token]: 1 },
+      modelUsage: { [`claude-haiku-5-5-${token}`]: {} },
+    }),
+  });
+  assert.equal(JSON.stringify(good).includes(token), false);
+  // 3. A limit line: the saved note and the account view hold no credential.
+  await askOnce({
+    root,
+    keychain,
+    input: input({ account: "Work" }),
+    now: () => T0 + 2,
+    spawnClaude: async () => ({
+      is_error: true,
+      api_error_status: 429,
+      result: `rate limited for ${token}`,
+    }),
+  }).catch(() => {});
+  assert.equal(JSON.stringify(readAccounts(root)).includes(token), false);
+  assert.equal(JSON.stringify(publicView(readAccounts(root), T0 + 3)).includes(token), false);
+  // 4. A spawn function that throws its own text.
+  const thrown = await askOnce({
+    root,
+    keychain,
+    input: input({ account: "Personal" }),
+    now: () => T0 + 4,
+    spawnClaude: async () => {
+      throw new Error(`spawn failed for ${token}`);
+    },
+  }).catch((e) => e);
+  assert.equal(thrown.code, "ASK_FAILED");
+  assert.equal(thrown.message.includes(token), false);
+});
+
+test("a spawn error has a fixed text: no command line, no path", posix, async () => {
+  const error = await run("/nonexistent/dir/claude-with-secret-name").catch((e) => e);
+  assert.equal(error.code, "CLI_UNAVAILABLE");
+  assert.match(error.message, /^The Claude CLI could not start \([A-Z0-9_]+\)$/);
+  assert.equal(error.message.includes("secret-name"), false);
+});
+
+test(
+  "once the leader has exited, the deadline closes the pipes and rejects; the old ID is not killed",
+  posix,
+  async () => {
+    const marker = path.join(scratch(), "grandchild.pid");
+    // The leader starts a detached descendant that keeps the output pipes, then exits.
+    const { file } = fakeClaude(`
+    import { spawn } from "node:child_process";
+    import fs from "node:fs";
+    const g = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "inherit" });
+    fs.writeFileSync(${JSON.stringify(marker)}, String(g.pid));
+    g.unref();
+    process.exit(0);
+  `);
+    const kill = mock.method(process, "kill");
+    const started = Date.now();
+    try {
+      await assert.rejects(run(file, { timeoutMs: 1500 }), (e) => e.code === "TIMEOUT");
+      assert.ok(Date.now() - started < 6000, "rejected at the deadline, not when the pipes closed");
+      const negative = kill.mock.calls.filter(
+        (c) => typeof c.arguments[0] === "number" && c.arguments[0] < 0,
+      );
+      assert.deepEqual(negative, [], "no process group was killed by its old number");
+    } finally {
+      kill.mock.restore();
+      // The detached descendant is outside this module's reach: the test stops it.
+      try {
+        process.kill(Number(fs.readFileSync(marker, "utf8")), "SIGKILL");
+      } catch {}
+    }
+  },
+);
+
+test("killProcessTree on Unix kills the group only while the leader runs, and never by the number of an exited one", () => {
+  const kill = mock.method(process, "kill", () => true);
+  try {
+    killProcessTree({ pid: 99999, exitCode: 0, kill() {} }, { platform: "linux" });
+    killProcessTree(
+      { pid: 99999, exitCode: null, signalCode: "SIGTERM", kill() {} },
+      { platform: "linux" },
+    );
+    assert.equal(kill.mock.calls.length, 0);
+    const killed = [];
+    killProcessTree(
+      { pid: 99999, exitCode: null, signalCode: null, kill: (s) => killed.push(s) },
+      { platform: "linux" },
+    );
+    assert.deepEqual(
+      kill.mock.calls.map((c) => c.arguments),
+      [[-99999, "SIGKILL"]],
+    );
+    assert.deepEqual(killed, ["SIGKILL"]);
+  } finally {
+    kill.mock.restore();
+  }
+});
+
+test("on Windows the leader is killed only after taskkill has finished", () => {
+  const handlers = {};
+  const run = () => ({ on: (event, fn) => ((handlers[event] = fn), undefined), unref() {} });
+  const killed = [];
+  killProcessTree(
+    { pid: 4242, exitCode: null, signalCode: null, kill: (s) => killed.push(s) },
+    { platform: "win32", run },
+  );
+  assert.deepEqual(killed, [], "taskkill still needs the leader to look it up");
+  handlers.exit();
+  assert.deepEqual(killed, ["SIGKILL"]);
+  // A taskkill that cannot start falls back to the leader at once.
+  const failed = [];
+  killProcessTree(
+    { pid: 1, exitCode: null, signalCode: null, kill: (s) => failed.push(s) },
+    {
+      platform: "win32",
+      run: () => {
+        throw new Error("no taskkill");
+      },
+    },
+  );
+  assert.deepEqual(failed, ["SIGKILL"]);
+});
+
+test("closePipes closes all three pipes and ignores one that is missing or already closed", () => {
+  const closed = [];
+  const pipe = (name) => ({ destroy: () => closed.push(name) });
+  closePipes({ stdin: pipe("in"), stdout: pipe("out"), stderr: undefined });
+  closePipes({
+    stdout: {
+      destroy: () => {
+        throw new Error("closed");
+      },
+    },
+  });
+  assert.deepEqual(closed, ["in", "out"]);
+});
+
+test("one deadline covers the whole ask: the retry gets the time that is left, and none left is a timeout", async () => {
+  const { root } = await pool();
+  let clock = T0;
+  const seen = [];
+  const r = await askOnce({
+    root,
+    keychain,
+    input: input({ timeoutMs: 60_000 }),
+    now: () => clock,
+    spawnClaude: async (o) => {
+      seen.push(o.timeoutMs);
+      if (seen.length === 1) {
+        clock += 45_000; // the first account ends in a limit after 45 s
+        return LIMIT;
+      }
+      return ok("second");
+    },
+  });
+  assert.equal(r.output, "second");
+  assert.deepEqual(seen, [60_000, 15_000]);
+  // Used up: the retry is not started, and the error says why.
+  const { root: root2 } = await pool();
+  clock = T0;
+  const calls = [];
+  await rejects(
+    askOnce({
+      root: root2,
+      keychain,
+      input: input({ timeoutMs: 60_000 }),
+      now: () => clock,
+      spawnClaude: async (o) => {
+        calls.push(o.timeoutMs);
+        clock += 60_000 - MIN_ATTEMPT_MS + 1;
+        return LIMIT;
+      },
+    }),
+    "TIMEOUT",
+  );
+  assert.equal(calls.length, 1);
 });
