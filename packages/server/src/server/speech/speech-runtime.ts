@@ -1,14 +1,10 @@
-import { hasCompleteModelFiles } from "./providers/local/sherpa/model-integrity.js";
+import { isSherpaOnnxModelInstalled } from "./providers/local/sherpa/model-downloader.js";
 import { hasCompleteSileroVadModel } from "./providers/local/sherpa/silero-vad-provider.js";
 import type { Logger } from "pino";
 
 import type { PaseoOpenAIConfig, PaseoSpeechConfig } from "../bootstrap.js";
 import type { LocalSpeechModelId } from "./providers/local/config.js";
-import {
-  ensureLocalSpeechModels,
-  getLocalSpeechModelDir,
-  listLocalSpeechModels,
-} from "./providers/local/models.js";
+import { ensureLocalSpeechModels } from "./providers/local/models.js";
 import { initializeLocalSpeechServices } from "./providers/local/runtime.js";
 import {
   getOpenAiSpeechAvailability,
@@ -85,7 +81,6 @@ export async function findMissingRequiredLocalModels(params: {
     return [];
   }
 
-  const specsById = new Map(listLocalSpeechModels().map((model) => [model.id, model]));
   // VAD is a required dependency of the local speech pipeline. Associate a
   // missing dependency with its selected models so existing readiness/download
   // states engage even when all STT/TTS files themselves are present.
@@ -94,10 +89,7 @@ export async function findMissingRequiredLocalModels(params: {
 
   const checks = await Promise.all(
     requiredModelIds.map(async (modelId) => {
-      const spec = specsById.get(modelId);
-      if (!spec) return { modelId, missing: true };
-      const modelDir = getLocalSpeechModelDir(modelsDir, modelId);
-      return { modelId, missing: !(await hasCompleteModelFiles(modelDir, spec.requiredFiles)) };
+      return { modelId, missing: !(await isSherpaOnnxModelInstalled(modelsDir, modelId)) };
     }),
   );
   for (const check of checks) {
@@ -484,10 +476,12 @@ export function createSpeechService(params: {
   };
 
   const refreshMissingLocalModels = async (): Promise<void> => {
-    missingLocalModelIds = await findMissingRequiredLocalModels({
-      modelsDir: localModelConfig?.modelsDir ?? null,
-      requiredModelIds: localModelConfig?.defaultModelIds ?? [],
-    });
+    missingLocalModelIds = localModelConfig
+      ? await findMissingRequiredLocalModels({
+          modelsDir: localModelConfig.modelsDir,
+          requiredModelIds: localModelConfig.defaultModelIds,
+        })
+      : [];
   };
 
   const reconcileServices = async (): Promise<void> => {
