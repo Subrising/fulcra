@@ -158,6 +158,9 @@ describe("relay-transport control lifecycle", () => {
 
   test("releases a stalled encrypted data connection without restarting control", async () => {
     vi.useFakeTimers();
+    const home = mkdtempSync(join(tmpdir(), "fulcra-stalled-relay-"));
+    homes.push(home);
+    const deviceGate = new RelayDeviceGate(new OfferStore(home), new DeviceRegistry(home));
     let attachments = 0;
     controllers.push(
       startRelayTransport({
@@ -169,6 +172,7 @@ describe("relay-transport control lifecycle", () => {
         relayUseTls: true,
         serverId: "srv_test",
         daemonKeyPair: generateKeyPair(),
+        deviceGate,
         createWebSocket: relay.createWebSocket,
       }),
     );

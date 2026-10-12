@@ -2504,6 +2504,15 @@ class ClaudeAgentSession implements AgentSession {
     if (uuid) this.unstartedMessageUuids.delete(uuid);
   }
 
+  private refuseCanceledPreparedInput(params: {
+    queued: (() => void) | undefined;
+    finishCheck: object | undefined;
+  }): void {
+    if (params.queued || params.finishCheck) {
+      throw new Error("Prepared Claude input was canceled before handoff");
+    }
+  }
+
   async startTurn(
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
@@ -2581,6 +2590,7 @@ class ClaudeAgentSession implements AgentSession {
       if (cancelIssued) {
         // Stopped while Claude was still starting up: withdrawn by never sending it.
         this.forgetUnstartedMessage(sdkUserMessageId);
+        this.refuseCanceledPreparedInput({ queued, finishCheck });
         return { turnId };
       }
       if (!this.input) {
