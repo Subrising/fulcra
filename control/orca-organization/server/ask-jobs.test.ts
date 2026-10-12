@@ -45,3 +45,39 @@ test("a start past the running limit is refused, and old finished jobs are dropp
   quick.start({});
   assert.equal(quick.result(id).error?.code, "UNKNOWN_JOB");
 });
+
+// 0.2.17 review: the credential of the selected account must not cross the job boundary in a result or an error.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { askOnce } from "./ask.mjs";
+import { addAccount } from "./accounts.mjs";
+
+test("a child that prints the account credential leaks it into no job result and no job error", async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-ask-jobs-")));
+  const account = await addAccount(root, { provider: "claude", name: "Work" }, Date.now());
+  const token = `sk-ant-oat01-${account.id}-SECRET`;
+  const keychain = { get: async () => token };
+  const leak = {
+    good: async () => ({ is_error: false, result: `answer ${token}`, modelUsage: { [token]: {} } }),
+    bad: async () => ({ is_error: true, api_error_status: 500, result: `diagnostic ${token}` }),
+    thrown: async () => {
+      throw new Error(`spawn text ${token}`);
+    },
+  };
+  for (const [name, spawnClaude] of Object.entries(leak)) {
+    const jobs = createAskJobs<{ prompt: string; model: string }>({
+      run: (input) => askOnce({ root, keychain, input, spawnClaude }),
+    });
+    const { id } = jobs.start({ prompt: "x", model: "claude-haiku-5-5" });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const view = jobs.result(id);
+    assert.notEqual(view.state, "running", name);
+    assert.equal(
+      JSON.stringify(view).includes(token),
+      false,
+      `${name}: the job view holds the credential`,
+    );
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});

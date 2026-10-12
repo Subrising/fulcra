@@ -13,7 +13,9 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 - If the account is at its usage limit, the call marks it limited and moves once to the next usable account. If that also fails, the call stops with a clear error.
 - On Windows, `fulcra ask` never uses a shell. It refuses a `.cmd` or `.bat` Claude file with a clear error; use the native `claude.exe`. Send the prompt on standard input (`-`) and give `--output-schema` as a file path, because `cmd.exe` changes `&`, `|`, `<`, `>`, `^`, `%` and `"` in a command line. See docs/windows.md.
 - `fulcra run --mcp-config <file> --preapprove <server.tool>` (repeatable) starts an agent with MCP servers, and the named MCP tools run without a prompt. Both go in the same create request. A Claude settings file cannot allow an MCP tool for a server that the SDK supplies, so use this with the new "Allow List Only" mode.
-- When `fulcra ask` times out, it ends at once and stops the Claude process and everything it started.
+- When `fulcra ask` times out, it ends at once and stops the Claude process and its process group while the Claude process is still running. A helper that the Claude process started and detached from its group is not stopped (best effort). After the Claude process has exited, nothing is stopped by its old process number.
+- `fulcra ask --timeout` is one deadline for the whole call. A retry on the next account gets only the time that is left.
+- The account credential is removed from every text the Claude process returns (errors, answers, model names and saved limit notes).
 - `fulcra ask --account` takes the account name or its ID, like `fulcra run --account`.
 - A Claude process that exits before it reads the prompt no longer stops the Command Centre plugin. The call fails with a clear error.
 - A scratch folder that cannot be removed (for example a file still open on Windows) no longer stops the plugin.
@@ -23,7 +25,6 @@ Fulcra 0.2.17 is based on Paseo v0.11.0-beta.5.
 ### Run and leads
 
 - Claude agents can use the permission mode "Allow List Only" (`dontAsk`): tools that are allowed run, and every other tool is refused without a permission prompt.
-- `fulcra run` uses the workspace that already owns the run directory, instead of creating a new workspace for each run. `--new-workspace` still creates one.
 - `fulcra run --output-schema` prints the agent id on standard error. With an explicit `--json`, the answer is `{"agentId": ..., "output": ...}`. Without `--json`, the output is the same as before.
 - A lead that turns idle while it owns open ledger items and has idle workers gets one short message that lists them. The daemon reads the project ledgers in `~/shared-vault/projects` (or `FULCRA_LEDGER_DIR`) and sends the message when the lead's turn ends. It sends it at most once per idle period, and never after a turn that a nudge started.
 

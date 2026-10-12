@@ -2,9 +2,18 @@ export class AskError extends Error {
   code: string;
 }
 export function killProcessTree(
-  child: { pid?: number; kill(signal?: string): unknown },
+  child: {
+    pid?: number;
+    exitCode?: number | null;
+    signalCode?: string | null;
+    kill(signal?: string): unknown;
+  },
   o?: { platform?: string; run?: (...args: any[]) => any },
 ): void;
+export function closePipes(child: { stdin?: any; stdout?: any; stderr?: any }): void;
+export const REDACTED: string;
+export const MIN_ATTEMPT_MS: number;
+export function scrubCredential<T>(value: T, token: string): T;
 export function refuseShellShim(command: string): void;
 export const MAX_ASK_TIMEOUT_MS: number;
 export const DEFAULT_ASK_TIMEOUT_MS: number;

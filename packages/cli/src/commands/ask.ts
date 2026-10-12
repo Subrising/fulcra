@@ -16,7 +16,7 @@ import { loadOutputSchema } from "./agent/run.js";
 export const DEFAULT_ASK_MODEL = "claude-sonnet-5-5";
 export const DEFAULT_ASK_TIMEOUT = "120s";
 const POLL_MS = 1000;
-/** The controller's own bound is --timeout; this margin covers its start-up and the account retry. */
+/** The host's own bound is --timeout for the whole ask; this margin covers its start-up and the polling. */
 const WAIT_MARGIN_MS = 30_000;
 
 const started = z.object({ id: z.string() });
@@ -68,6 +68,9 @@ export async function runAsk(
   const sleep =
     deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = deps.now ?? Date.now;
+  // One deadline for the whole ask, measured from here: the host gives the call --timeout in total (a retry on the next
+  // account gets what is left), and this margin covers the start-up and the polling.
+  const startedAt = now();
   const catalog = await client.getPluginCatalog?.().catch(() => undefined);
   const plugin = controllerPluginIdFromTrustedReports(catalog?.trustedPlugins);
   const { id } = started.parse(
@@ -79,7 +82,7 @@ export async function runAsk(
       timeoutMs: input.timeoutMs,
     }),
   );
-  const deadline = now() + input.timeoutMs + WAIT_MARGIN_MS;
+  const deadline = startedAt + input.timeoutMs + WAIT_MARGIN_MS;
   for (;;) {
     await sleep(POLL_MS);
     const view = polled.parse(
