@@ -26,7 +26,7 @@ export const PATCHES = [
     owner: "Fulcra prime (orchestration)",
     reason:
       "Primes/leads/workers hierarchy, durable report-up and receipts, re-parent/promote, controller channel and management route. Paseo has no hierarchy or durable delivery.",
-    path: /report-registry|report-inbox|intercom|management|message-receipts|orchestration-skills|parent-adoption|native-queued|lifecycle-command|controller-(channel|frames|rpc|service|distribution)|\/hub\/|snapshot-mutation-ownership|session-ownership|import-sessions|agent-loading|cli\/src\/commands\/agent\/(send|run)|leadership|organi[sz]ation/i,
+    path: /fulcra-agent-policy\/server\/report-|report-registry|report-inbox|intercom|management|message-receipts|orchestration-skills|parent-adoption|native-queued|lifecycle-command|controller-(channel|frames|rpc|service|distribution)|\/hub\/|snapshot-mutation-ownership|session-ownership|import-sessions|agent-loading|cli\/src\/commands\/agent\/(send|run)|leadership|organi[sz]ation/i,
     words:
       /report|receipt|inbox|intercom|parent|prime|\blead\b|hierarch|management|controller|outcome|promot|\brole\b|supervis/i,
   },
@@ -59,7 +59,7 @@ export const PATCHES = [
     owner: "Fulcra prime (platform)",
     reason:
       "Bundled trusted plugin loading and the SDK adapters the bundled plugin needs (update/cancel, notifications, replayable events, panels, turn footers, and AgentQuestions in the UI kit, which reuses the core PermissionRequestCard exported from agent-stream/view.tsx).",
-    path: /packages\/plugin\/|server\/plugins\/|app\/src\/plugins\/|agent-stream\/turn-tool-calls|bundled-plugins|bundled-controller|plugin-identity|plugin-examples|docs\/plugins/i,
+    path: /fulcra-agent-policy\/index\.host|packages\/plugin\/|server\/plugins\/|app\/src\/plugins\/|agent-stream\/turn-tool-calls|bundled-plugins|bundled-controller|plugin-identity|plugin-examples|docs\/plugins/i,
     words: /plugin/i,
   },
   {

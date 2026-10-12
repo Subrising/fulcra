@@ -1,3 +1,14 @@
+import { loadAgentPolicy } from "./limit-resume/policy.js";
+import type { PolicyHooks } from "../../../../plugins/fulcra-agent-policy/index.host.mjs";
+import type { ReportTurnEnd } from "../../../../plugins/fulcra-agent-policy/server/report-observer.mjs";
+import type {
+  PermissionRequest,
+  LimitedChat,
+} from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
+export type {
+  PermissionRequest,
+  LimitedChat,
+} from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -39,52 +50,45 @@ import {
   type LineStore,
 } from "./reporting-lines.js";
 
-// FULCRA(orchestration): report-up. When a chat that has a lead (fulcra.reports-to, else its parent) ends a turn and
-// goes idle, its lead gets ONE short notice with the start of the chat's last message. Workers' reports and
-// questions then reach the lead without anyone asking.
-//
-// Rules:
-// - Once per turn. A turn that a notice started (any daemon notice: the message id prefix, or the system envelope)
-//   sends nothing, so a lead that answers a notice never notifies its own lead, and two chats cannot ping-pong.
-// - No lead, the owner as lead, a lead on another computer, or a send the reporting line refuses: nothing.
-// - A caller that already waits on this chat's finish (an armed finish notification, or a native report) gets that
-//   notice instead; report-up stays quiet for it.
-// - The notice uses the daemon source, like the finish notification, and waits in the lead's held-send queue: it
-//   never enters or cancels the lead's running turn (held-sends.ts).
-// - A lead (a chat that other chats report to) sends no "finished a turn" notice to the main assistant (FU-113): leads
-//   report up on purpose. A failed lead turn is still sent, and worker-to-lead notices are unchanged.
-// - "Finished a turn" notices for one lead are combined (FU-115): the first goes at once when the lead is idle and was
-//   not told in the last 5 minutes; others wait and go out as ONE message listing each worker with a short snippet,
-//   after the window and after the lead's running turn ends. A worker that already messaged its lead during its turn
-//   sends none. A failed turn is still sent at once. Waiting notices are in memory: a daemon restart drops them.
-// - OFF BY DEFAULT (0.2.17): native notifyOnFinish is the standard way a lead hears a worker finish. daemon.reportUpOnTurnEnd
-//   = true turns these "finished a turn" notices on, as a fallback. The permission, limit and idle-lead notices are not
-//   "finished a turn" notices: they stay on unless daemon.reportUpOnTurnEnd = false turns every report-up notice off.
-// - A lead that turns idle while it owns open ledger items and has idle workers gets ONE short message that lists them
-//   (FU-101). It is driven by the end of the lead's turn, not by a timer. It is sent at most once per idle period, and
-//   never after a turn that a nudge started, so a lead that does nothing is not nudged again and again.
-// - A new pending permission prompt in a chat sends its lead ONE notice (chat, tool, the start of the command, folder)
-//   (FU-68), so the lead can allow or deny it. It is driven by the daemon's own permission event, not by polling, and
-//   it changes no guard or ask rule.
-// - A turn that ends on a usage limit ("You've hit your session limit ...") is not "a turn finished" (FU-63). The chat
-//   is marked limited (kind and reset time), its lead hears ONCE ("<chat> is at its <kind> limit until <time>"), and
-//   a chat that is limited is not woken by worker reports: they are held and sent as one notice after the reset.
+const {
+  REPORT_UP_SNIPPET_CHARS,
+  PERMISSION_COMMAND_CHARS,
+  COALESCE_WINDOW_MS,
+  COMBINED_LIST_LIMIT,
+  COMBINED_SNIPPET_CHARS,
+  NUDGE_LIST_LIMIT,
+  UNKNOWN_RESET_MS,
+  MAX_HELD_REPORTS,
+  formatLimitNotice,
+  permissionCommandOf,
+  formatNudge,
+  formatPermissionNotice,
+  formatCombinedNotice,
+  titleOf,
+  formatReportUpNotice,
+  reportUpSwitches,
+  quietReportReason,
+} = loadAgentPolicy("report-notices");
+export {
+  REPORT_UP_SNIPPET_CHARS,
+  PERMISSION_COMMAND_CHARS,
+  COALESCE_WINDOW_MS,
+  COMBINED_LIST_LIMIT,
+  COMBINED_SNIPPET_CHARS,
+  NUDGE_LIST_LIMIT,
+  UNKNOWN_RESET_MS,
+  MAX_HELD_REPORTS,
+  formatLimitNotice,
+  permissionCommandOf,
+  formatNudge,
+  formatPermissionNotice,
+  formatCombinedNotice,
+  titleOf,
+  formatReportUpNotice,
+  reportUpSwitches,
+};
 
-export const REPORT_UP_SNIPPET_CHARS = 600;
-/** How much of a command a permission notice carries. */
-export const PERMISSION_COMMAND_CHARS = 200;
-
-interface TurnState {
-  /** A turn began (turn_started, or its first user message) and has not ended yet; one notice per turn. */
-  open: boolean;
-  /** The first user message of this turn was a daemon notice. */
-  fromNotice: boolean | null;
-  /** The first user message of this turn was an idle-lead nudge. */
-  fromNudge?: boolean;
-  /** Epoch ms when the turn began; kept after it ends, so a notice can ask "did this worker message its lead?". */
-  startedAt?: number;
-}
-
+// FULCRA(orchestration): native policy selects notices. The host keeps ownership checks and guarded delivery.
 /** One worker's "finished a turn" line waiting to go to its lead (FU-115). */
 interface PendingFinish {
   workerId: string;
@@ -92,17 +96,8 @@ interface PendingFinish {
   lastMessage: string | null;
 }
 
-/** Between two combined "finished a turn" messages to one lead. */
-export const COALESCE_WINDOW_MS = 5 * 60 * 1000;
-/** Workers one combined message lists; the rest are counted. */
-export const COMBINED_LIST_LIMIT = 20;
-/** The snippet of each worker in a combined message. */
-export const COMBINED_SNIPPET_CHARS = 300;
-
 /** The message id prefix of an idle-lead nudge; it starts with the notice prefix, so it counts as a notice too. */
 export const NUDGE_MESSAGE_PREFIX = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}idle-nudge:`;
-/** Most workers and items the nudge lists. */
-export const NUDGE_LIST_LIMIT = 8;
 
 export interface ReportUpDeps {
   agentManager: AgentManager;
@@ -130,148 +125,6 @@ interface PersistedState {
   held: Record<string, string[]>;
 }
 
-/** A chat whose last turn ended on a usage limit. */
-export interface LimitedChat {
-  kind: string;
-  /** Epoch ms of the reset; our own estimate when the text named none. */
-  until: number;
-  /** Its lead was told. */
-  notified: boolean;
-}
-
-/** Wait when the limit text names no reset. */
-export const UNKNOWN_RESET_MS = 15 * 60 * 1000;
-/** Reports held for one limited chat; the oldest are dropped past this. */
-export const MAX_HELD_REPORTS = 20;
-
-export function formatLimitNotice(title: string, limit: LimitedChat): string {
-  const when = new Date(limit.until).toLocaleString("en-AU", {
-    weekday: "short",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `${title} is at its ${limit.kind} limit until ${when}.`;
-}
-
-export interface PermissionRequest {
-  id: string;
-  name?: string;
-  title?: string;
-  input?: Record<string, unknown>;
-  detail?: { type?: string; command?: unknown; filePath?: unknown } | null;
-}
-
-/** The start of what the chat wants to run, for a lead that has to allow or deny it. */
-export function permissionCommandOf(request: PermissionRequest): string {
-  const raw =
-    (typeof request.input?.command === "string" && request.input.command) ||
-    (typeof request.detail?.command === "string" && request.detail.command) ||
-    (typeof request.detail?.filePath === "string" && request.detail.filePath) ||
-    request.title ||
-    "";
-  const text = raw.replace(/\s+/g, " ").trim();
-  return text.length > PERMISSION_COMMAND_CHARS
-    ? `${text.slice(0, PERMISSION_COMMAND_CHARS)}…`
-    : text;
-}
-
-/** The idle-lead nudge: a short list of the lead's open items and its idle workers. */
-export function formatNudge(workers: readonly LineAgent[], items: readonly LedgerRow[]): string {
-  const more = (count: number) =>
-    count > NUDGE_LIST_LIMIT ? `, and ${count - NUDGE_LIST_LIMIT} more` : "";
-  const itemList = items
-    .slice(0, NUDGE_LIST_LIMIT)
-    .map((row) => row.id)
-    .join(", ");
-  const workerList = workers
-    .slice(0, NUDGE_LIST_LIMIT)
-    .map((worker) => `${titleOf(worker)} (${worker.id})`)
-    .join(", ");
-  return [
-    `You are idle. You own ${items.length} open ledger item${items.length === 1 ? "" : "s"}: ${itemList}${more(items.length)}.`,
-    `${workers.length} of your worker${workers.length === 1 ? " is" : "s are"} idle: ${workerList}${more(workers.length)}.`,
-    "Send each idle worker its next task, or close the item it finished.",
-  ].join("\n");
-}
-
-export function formatPermissionNotice(input: {
-  worker: LineAgent;
-  request: PermissionRequest;
-  cwd: string | null;
-}): string {
-  const command = permissionCommandOf(input.request);
-  return [
-    `Worker ${titleOf(input.worker)} (${input.worker.id}) is waiting for permission.`,
-    `Tool: ${input.request.name ?? "unknown"}`,
-    `Command: ${command || "(none)"}`,
-    `Folder: ${input.cwd ?? "unknown"}`,
-    `Request: ${input.request.id}`,
-  ].join("\n");
-}
-
-function failureText(event: object): string {
-  const failed = event as { error?: unknown; code?: unknown; diagnostic?: unknown };
-  return [failed.error, failed.code, failed.diagnostic]
-    .filter((part) => part !== undefined && part !== null)
-    .map(String)
-    .join(" ");
-}
-
-function isNudgeMessage(item: { clientMessageId?: unknown }): boolean {
-  return (
-    typeof item.clientMessageId === "string" &&
-    item.clientMessageId.startsWith(NUDGE_MESSAGE_PREFIX)
-  );
-}
-
-function isNoticeMessage(item: { text?: unknown; clientMessageId?: unknown }): boolean {
-  const id = typeof item.clientMessageId === "string" ? item.clientMessageId : "";
-  const text = typeof item.text === "string" ? item.text : "";
-  return id.startsWith(FINISH_NOTIFICATION_MESSAGE_PREFIX) || isSystemInjectedEnvelope(text);
-}
-
-/** One worker's finished turn, or the list of them when several finished since the lead was last told. */
-export function formatCombinedNotice(items: readonly PendingFinish[]): string {
-  const only = items.length === 1 ? items[0] : undefined;
-  if (only)
-    return formatReportUpNotice({
-      worker: only.worker,
-      failed: false,
-      lastMessage: only.lastMessage,
-    });
-  const line = (item: PendingFinish) => {
-    const text = (item.lastMessage ?? "").trim();
-    const snippet =
-      text.length > COMBINED_SNIPPET_CHARS ? `${text.slice(0, COMBINED_SNIPPET_CHARS)}…` : text;
-    return `- Worker ${titleOf(item.worker)} (${item.worker.id}): ${snippet || "(no message)"}`;
-  };
-  const shown = items.slice(0, COMBINED_LIST_LIMIT).map(line);
-  const rest = items.length - shown.length;
-  return [
-    `${items.length} workers finished a turn since your last update:`,
-    ...shown,
-    ...(rest > 0 ? [`…and ${rest} more.`] : []),
-  ].join("\n");
-}
-
-export function titleOf(agent: LineAgent): string {
-  const config = agent.config as { title?: unknown } | null | undefined;
-  const live = typeof config?.title === "string" ? config.title.trim() : "";
-  return agent.title?.trim() || live || agent.id.slice(0, 8);
-}
-
-export function formatReportUpNotice(input: {
-  worker: LineAgent;
-  failed: boolean;
-  lastMessage: string | null;
-}): string {
-  const text = (input.lastMessage ?? "").trim();
-  const snippet =
-    text.length > REPORT_UP_SNIPPET_CHARS ? `${text.slice(0, REPORT_UP_SNIPPET_CHARS)}…` : text;
-  const verb = input.failed ? "ended a turn with an error" : "finished a turn";
-  return `Worker ${titleOf(input.worker)} (${input.worker.id}) ${verb}: ${snippet || "(no message)"}`;
-}
-
 /** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
 export async function leadChatOf(
   store: LineStore,
@@ -293,17 +146,34 @@ export async function leadChatOf(
 }
 
 export class ReportUpService {
-  private readonly turns = new Map<string, TurnState>();
+  private readonly observer: import("../../../../plugins/fulcra-agent-policy/server/report-observer.mjs").ReportUpObserver;
+  private stopped = false;
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly finishOwners = new Map<string, boolean>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
   private readonly held = new Map<string, string[]>();
-  /** Permission prompts already sent to a lead, as "<chat>:<request>"; a request is told once. */
-  private readonly askedPermission = new Set<string>();
   /** Leads already nudged in this idle period; cleared when the lead starts a turn. */
   private readonly nudged = new Set<string>();
 
   constructor(private readonly deps: ReportUpDeps) {
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
+    this.observer = new (loadAgentPolicy("report-observer").ReportUpObserver)({
+      now: () => this.now(),
+      noticePrefix: FINISH_NOTIFICATION_MESSAGE_PREFIX,
+      isSystemInjectedEnvelope,
+      onStarted: (id) => {
+        this.nudged.delete(id);
+        this.finishOwners.delete(id);
+      },
+      onClosed: (id) => this.finishOwners.delete(id),
+      onEnded: (input) => this.onTurnEnd(input),
+      onPermission: (id, request) => {
+        void this.notifyPermission(id, request).catch((err: unknown) =>
+          this.deps.logger.warn({ err, agentId: id }, "Permission notice failed"),
+        );
+      },
+    });
     this.load();
   }
 
@@ -333,10 +203,7 @@ export class ReportUpService {
       if (!reports.length) continue;
       this.held.set(lead, reports);
       const wait = Math.max(0, (this.limited.get(lead)?.until ?? now) - now) + 5000;
-      (this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms).unref()))(
-        () => this.releaseHeld(lead),
-        wait,
-      );
+      this.schedule(() => this.releaseHeld(lead), wait);
     }
   }
 
@@ -355,79 +222,68 @@ export class ReportUpService {
     }
   }
 
+  /** Raw events remain as a test adapter and a source of first-message provenance. */
   onEvent(event: AgentManagerEvent): void {
-    // A closed chat keeps no state here, so the map does not grow with old chats.
-    if (event.type === "agent_state" && event.agent.lifecycle === "closed") {
-      this.turns.delete(event.agent.id);
-      for (const key of this.askedPermission)
-        if (key.startsWith(`${event.agent.id}:`)) this.askedPermission.delete(key);
-      return;
-    }
-    if (event.type !== "agent_stream") return;
-    const { agentId } = event;
-    const kind = event.event.type;
-    const turn = this.turns.get(agentId) ?? { open: false, fromNotice: null };
-    this.turns.set(agentId, turn);
-    if (kind === "permission_requested" || kind === "permission_resolved") {
-      this.onPermissionEvent(agentId, kind, event.event);
-      return;
-    }
-    if (kind === "turn_started") {
-      turn.open = true;
-      turn.startedAt = this.now();
-      this.nudged.delete(agentId);
-      return;
-    }
-    // A canceled turn (interrupt, stop, archive) sends nothing, and its first message must not decide for the next.
-    if (kind === "turn_canceled") {
-      turn.open = false;
-      turn.fromNotice = null;
-      turn.fromNudge = false;
-      turn.startedAt = undefined;
-      return;
-    }
-    if (kind === "timeline") {
-      const item = event.event.item;
-      if (item.type !== "user_message" || turn.fromNotice !== null) return;
-      turn.open = true;
-      turn.startedAt ??= this.now();
-      turn.fromNotice = isNoticeMessage(item);
-      turn.fromNudge = isNudgeMessage(item);
-      return;
-    }
-    if (kind !== "turn_completed" && kind !== "turn_failed") return;
-    this.onTurnEnd(agentId, turn, kind, event.event);
+    if (event.type === "agent_state" && event.agent.lifecycle === "closed")
+      this.observer.close(event.agent.id);
+    if (event.type === "agent_stream") this.observer.onStream(event.agentId, event.event);
   }
 
-  private onTurnEnd(
-    agentId: string,
-    turn: TurnState,
-    kind: "turn_completed" | "turn_failed",
-    streamEvent: object,
-  ): void {
-    // A second end event for the same turn sends nothing.
-    if (!turn.open) return;
-    turn.open = false;
-    const startedAt = turn.startedAt;
-    turn.startedAt = undefined;
-    // Read synchronously at the stop: a caller's armed finish notification removes itself after it delivers.
-    const fromNotice = turn.fromNotice === true;
-    turn.fromNotice = null;
-    const fromNudge = turn.fromNudge === true;
-    turn.fromNudge = false;
-    if (kind === "turn_completed" && !fromNudge)
+  observeNative(hooks: PolicyHooks): () => void {
+    return loadAgentPolicy("hooks").registerReportHooks(hooks, this.observer);
+  }
+
+  /** Native observations cannot replace the synchronous, private stream-stop ownership check. */
+  captureFinishOwner(agentId: string): void {
+    this.finishOwners.set(agentId, this.hasFinishOwner(agentId));
+  }
+
+  private hasFinishOwner(agentId: string): boolean {
+    const leadHint = reportsTo(this.deps.agentManager.getAgent(agentId) ?? null);
+    return Boolean(
+      leadHint &&
+      (hasArmedFinishNotification(this.deps.agentManager, agentId, leadHint) ||
+        this.deps.agentManager.nativeReportOwnsFinish(agentId, leadHint)),
+    );
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.observer.stop();
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
+    this.finishOwners.clear();
+  }
+
+  private schedule(run: () => void, ms: number): void {
+    if (this.stopped) return;
+    if (this.deps.setTimer) {
+      this.deps.setTimer(() => {
+        if (!this.stopped) run();
+      }, ms);
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      if (!this.stopped) run();
+    }, ms);
+    timer.unref();
+    this.timers.add(timer);
+  }
+
+  private onTurnEnd(input: ReportTurnEnd): void {
+    if (this.stopped) return;
+    const { agentId, failed, fromNotice, fromNudge, startedAt, failure, lastAssistant } = input;
+    if (!failed && !fromNudge)
       void this.nudgeIdleLead(agentId).catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Idle-lead nudge failed"),
       );
-    const leadHint = reportsTo(this.deps.agentManager.getAgent(agentId) ?? null);
-    const armed = leadHint
-      ? hasArmedFinishNotification(this.deps.agentManager, agentId, leadHint) ||
-        this.deps.agentManager.nativeReportOwnsFinish(agentId, leadHint)
-      : false;
+    const armed = this.finishOwners.get(agentId) ?? this.hasFinishOwner(agentId);
+    this.finishOwners.delete(agentId);
     if (fromNotice || armed) {
       // A limit is recorded even when this turn sends no report, so the chat is not woken again while it is limited.
-      void this.noteLimit(agentId, kind === "turn_failed", failureText(streamEvent)).catch(
-        (err: unknown) => this.deps.logger.warn({ err, agentId }, "Limit note failed"),
+      void this.noteLimit(agentId, failed, failure, lastAssistant).catch((err: unknown) =>
+        this.deps.logger.warn({ err, agentId }, "Limit note failed"),
       );
       this.deps.logger.info(
         { agentId, reason: fromNotice ? "turn started by a notice" : "caller already notified" },
@@ -435,8 +291,8 @@ export class ReportUpService {
       );
       return;
     }
-    void this.report(agentId, kind === "turn_failed", failureText(streamEvent), startedAt).catch(
-      (err: unknown) => this.deps.logger.warn({ err, agentId }, "Report-up failed"),
+    void this.report(agentId, failed, failure, startedAt, lastAssistant).catch((err: unknown) =>
+      this.deps.logger.warn({ err, agentId }, "Report-up failed"),
     );
   }
 
@@ -453,11 +309,11 @@ export class ReportUpService {
 
   /** Why a finished-turn notice is not needed, or null. A failed turn is always sent. */
   private anyEnabled(): boolean {
-    return this.deps.isEnabled() || this.otherEnabled();
+    return !this.stopped && (this.deps.isEnabled() || this.otherEnabled());
   }
 
   private otherEnabled(): boolean {
-    return this.deps.isOtherEnabled ? this.deps.isOtherEnabled() : true;
+    return !this.stopped && (this.deps.isOtherEnabled ? this.deps.isOtherEnabled() : true);
   }
 
   private async quietReason(input: {
@@ -468,14 +324,12 @@ export class ReportUpService {
     startedAt?: number;
   }): Promise<string | null> {
     if (input.failed) return null;
-    // FU-113: a lead reports to the main assistant on purpose. Its turns ending are not news.
-    if (await this.isLeadReportingToMain(input.workerId, input.leadAgent))
-      return "a lead's finished turn is not sent to the main assistant";
-    // FU-115: a worker that already messaged its lead during this turn needs no second message about the same turn.
-    const sentAt = lastAgentMessageAt(input.workerId, input.leadId);
-    if (input.startedAt !== undefined && sentAt !== null && sentAt >= input.startedAt)
-      return "the worker already messaged its lead this turn";
-    return null;
+    return quietReportReason({
+      failed: input.failed,
+      leadToMain: await this.isLeadReportingToMain(input.workerId, input.leadAgent),
+      sentAt: lastAgentMessageAt(input.workerId, input.leadId),
+      startedAt: input.startedAt,
+    });
   }
 
   /** Whether any chat on this computer reports to this chat, which makes it a lead. */
@@ -508,7 +362,7 @@ export class ReportUpService {
   private async nudgeIdleLead(leadId: string): Promise<void> {
     if (!this.otherEnabled() || this.nudged.has(leadId)) return;
     await new Promise((resolve) => setImmediate(resolve));
-    if (this.turns.get(leadId)?.open || this.nudged.has(leadId) || this.limitOf(leadId)) return;
+    if (this.observer.isOpen(leadId) || this.nudged.has(leadId) || this.limitOf(leadId)) return;
     const lead = await this.store.get(leadId);
     const live = this.deps.agentManager.getAgent(leadId);
     if (!lead || lead.archivedAt || live?.internal) return;
@@ -523,28 +377,13 @@ export class ReportUpService {
     );
     if (!owned.length) return;
     // The lead may have started a turn while the lists were read.
-    if (this.turns.get(leadId)?.open || this.nudged.has(leadId)) return;
+    if (this.observer.isOpen(leadId) || this.nudged.has(leadId)) return;
     this.nudged.add(leadId);
     await this.toLead(
       leadId,
       leadId,
       formatSystemNotificationPrompt(formatNudge(workers, owned)),
       "idle-nudge",
-    );
-  }
-
-  /** A new prompt is told to the lead once; a resolved prompt may be asked again under a new request. */
-  private onPermissionEvent(agentId: string, kind: string, event: object): void {
-    if (kind === "permission_resolved") {
-      const requestId = (event as { requestId?: string }).requestId;
-      if (requestId) this.askedPermission.delete(`${agentId}:${requestId}`);
-      return;
-    }
-    const request = (event as { request?: PermissionRequest }).request;
-    if (!request?.id || this.askedPermission.has(`${agentId}:${request.id}`)) return;
-    this.askedPermission.add(`${agentId}:${request.id}`);
-    void this.notifyPermission(agentId, request).catch((err: unknown) =>
-      this.deps.logger.warn({ err, agentId }, "Permission notice failed"),
     );
   }
 
@@ -593,11 +432,19 @@ export class ReportUpService {
    * Reads how a turn ended. A usage limit marks the chat limited and tells its lead once; any other end clears the
    * mark. Returns true for a limit, which is never reported as a finished turn.
    */
-  private async noteLimit(workerId: string, failed: boolean, text: string): Promise<boolean> {
+  private async noteLimit(
+    workerId: string,
+    failed: boolean,
+    text: string,
+    observedLast?: string | null,
+  ): Promise<boolean> {
     const now = this.now();
-    const last = failed
-      ? null
-      : await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null);
+    let last: string | null = null;
+    if (!failed)
+      last =
+        observedLast === undefined
+          ? await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null)
+          : observedLast;
     const stop = failed ? classifyFailedTurn(text, now) : classifyEndingAssistantMessage(last, now);
     if (!stop || stop.kind === "network") {
       if (this.limited.delete(workerId)) {
@@ -638,6 +485,7 @@ export class ReportUpService {
     prompt: string,
     kind: "report-up" | "idle-nudge" = "report-up",
   ): Promise<void> {
+    if (!this.anyEnabled()) return;
     const leadLimit = this.limitOf(leadId);
     if (leadLimit) {
       const held = this.held.get(leadId) ?? [];
@@ -650,10 +498,7 @@ export class ReportUpService {
         "Report-up held: the lead is at a usage limit",
       );
       const delay = Math.max(0, leadLimit.until - this.now()) + 1000;
-      (this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms).unref()))(
-        () => this.releaseHeld(leadId),
-        delay,
-      );
+      this.schedule(() => this.releaseHeld(leadId), delay);
       return;
     }
     if (this.deps.deliver) {
@@ -686,6 +531,7 @@ export class ReportUpService {
     failed: boolean,
     failure = "",
     startedAt?: number,
+    observedLast?: string | null,
   ): Promise<void> {
     const skip = (reason: string) => {
       this.deps.logger.info({ agentId: workerId, reason }, "Report-up skipped");
@@ -693,12 +539,13 @@ export class ReportUpService {
     if (!this.anyEnabled()) return skip("turned off");
     // Idle: a follow-up turn that starts at once reports when it ends.
     await new Promise((resolve) => setImmediate(resolve));
-    if (this.turns.get(workerId)?.open) return skip("a new turn started");
+    if (this.observer.isOpen(workerId)) return skip("a new turn started");
     const live = this.deps.agentManager.getAgent(workerId);
     const worker = await this.store.get(workerId);
     if (!worker || worker.archivedAt || live?.internal) return skip("not a visible chat");
     // A usage limit is limit state, never "finished a turn" (FU-63).
-    if (await this.noteLimit(workerId, failed, failure)) return skip("ended on a usage limit");
+    if (await this.noteLimit(workerId, failed, failure, observedLast))
+      return skip("ended on a usage limit");
     // OFF BY DEFAULT: the limit notice above stays on; "finished a turn" and "ended with an error" notices need the fallback.
     if (!this.deps.isEnabled()) return skip("turned off");
     const lead = await this.leadOf(worker);
@@ -730,9 +577,10 @@ export class ReportUpService {
       );
       return;
     }
-    const lastMessage = await this.deps.agentManager
-      .getLastAssistantMessage(workerId)
-      .catch(() => null);
+    const lastMessage =
+      observedLast === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null)
+        : observedLast;
     // A failed turn is sent at once. A finished turn is combined with the lead's other finished workers (FU-115).
     if (failed) {
       const prompt = formatSystemNotificationPrompt(
@@ -781,7 +629,7 @@ export class ReportUpService {
       { lead: leadId, waitMs: wait },
       "Report-up held: the lead was told lately",
     );
-    (this.deps.setTimer ?? ((run, ms) => setTimeout(run, ms).unref()))(() => {
+    this.schedule(() => {
       void this.flushFinished(leadId).catch((err: unknown) =>
         this.deps.logger.warn({ err, leadId }, "Report-up flush failed"),
       );
@@ -796,7 +644,7 @@ export class ReportUpService {
   }
 
   private async flushFinished(leadId: string): Promise<void> {
-    if (!this.deps.isEnabled()) {
+    if (this.stopped || !this.deps.isEnabled()) {
       this.takePending(leadId);
       return;
     }
@@ -835,8 +683,7 @@ export class ReportUpService {
   private send(leadId: string, prompt: string, kind: "report-up" | "idle-nudge"): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
-      if (!this.deps.isEnabled() && !this.otherEnabled())
-        throw new Error("Report-up was turned off");
+      if (!this.anyEnabled()) throw new Error("Report-up was turned off");
     };
     return agentManager.trustedPlugins.daemon(async () => {
       const finalCheck = createFinalInputCheck(checkCurrent);
@@ -860,18 +707,8 @@ export class ReportUpService {
   }
 }
 
-/**
- * What daemon.reportUpOnTurnEnd turns on. Unset: only the notices that are not "finished a turn" (permission, limit,
- * idle lead). true: the "finished a turn" fallback too. false: every report-up notice is off.
- */
-export function reportUpSwitches(setting: boolean | undefined): {
-  finishedTurns: boolean;
-  otherNotices: boolean;
-} {
-  return { finishedTurns: setting === true, otherNotices: setting !== false };
-}
-
 export function startReportUp(input: {
+  hooks?: PolicyHooks;
   paseoHome?: string;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -890,5 +727,28 @@ export function startReportUp(input: {
     logger: input.logger,
     ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),
   });
-  return input.agentManager.subscribe((event) => service.onEvent(event), { replayState: false });
+  const offHooks = input.hooks ? service.observeNative(input.hooks) : undefined;
+  const offStream = input.agentManager.subscribe(
+    (event) => {
+      // Native hooks own lifecycle events; first-message provenance still needs the host timeline.
+      if (input.hooks && event.type === "agent_stream") {
+        const live = input.agentManager.getAgent(event.agentId);
+        if (!live || live.internal) return;
+      }
+      if (
+        input.hooks &&
+        event.type === "agent_stream" &&
+        (event.event.type === "turn_completed" || event.event.type === "turn_failed")
+      )
+        service.captureFinishOwner(event.agentId);
+      if (input.hooks && (event.type !== "agent_stream" || event.event.type !== "timeline")) return;
+      service.onEvent(event);
+    },
+    { replayState: false },
+  );
+  return () => {
+    offHooks?.();
+    offStream();
+    service.stop();
+  };
 }
