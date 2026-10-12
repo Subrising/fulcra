@@ -13,7 +13,6 @@ export interface ReportObserverDeps {
   noticePrefix: string;
   isSystemInjectedEnvelope: (text: string) => boolean;
   onStarted: (id: string) => void;
-  onWorkStarted?: (id: string) => void;
   onClosed?: (id: string) => void;
   onEnded: (input: ReportTurnEnd) => void;
   onPermission: (id: string, request: PermissionRequest) => void;
