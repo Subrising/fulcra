@@ -21,7 +21,10 @@ async function openContextMenuAtRowPoint(
     y: bounds.y + bounds.height / 2,
   };
   await page.mouse.click(anchor.x, anchor.y, { button: "right" });
-  await expect(page.getByTestId(menuTestID)).toBeVisible({ timeout: 10_000 });
+  const menu = page.getByTestId(menuTestID);
+  // The measuring surface is visible off-screen, then remounts at the pointer.
+  await expect(menu).toBeInViewport({ ratio: 1, timeout: 10_000 });
+  await menu.getByRole("menuitem").first().click({ trial: true });
   return anchor;
 }
 

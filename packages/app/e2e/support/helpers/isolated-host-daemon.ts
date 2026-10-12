@@ -159,6 +159,9 @@ export async function startIsolatedHostDaemon(
       cwd: serverDir,
       env: withDisabledE2ESpeechEnv({
         ...process.env,
+        // Agent subprocesses inherit packaged launcher flags. Test homes use the source daemon.
+        FULCRA_COMMAND_CENTRE: "0",
+        FULCRA_COMMAND_CENTRE_AUTH_HASH: undefined,
         ...options.environment,
         PASEO_HOME: paseoHome,
         PASEO_SERVER_ID: serverId,

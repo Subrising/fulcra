@@ -50,4 +50,34 @@ describe("feature-preferences", () => {
       plan_mode: false,
     });
   });
+
+  it("keeps profile values while the selected provider catalog is pending", () => {
+    expect(
+      resolveFeatureValues({
+        features: undefined,
+        persistedFeatureValues: { fast_mode: false },
+        localFeatureValues: { fast_mode: true },
+      }),
+    ).toEqual({ fast_mode: true });
+  });
+
+  it("removes unavailable values after an empty catalog arrives", () => {
+    expect(
+      resolveFeatureValues({
+        features: [],
+        persistedFeatureValues: { fast_mode: true },
+        localFeatureValues: { plan_mode: true },
+      }),
+    ).toEqual({});
+  });
+
+  it("waits for availability before restoring saved values", () => {
+    expect(
+      resolveFeatureValues({
+        features: undefined,
+        persistedFeatureValues: { unknown_feature: true },
+        localFeatureValues: {},
+      }),
+    ).toEqual({});
+  });
 });
