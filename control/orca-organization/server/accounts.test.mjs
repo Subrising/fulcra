@@ -453,7 +453,7 @@ test("a switch hands over to the takeover seam, which owns the move: nothing is 
     calls.push([id, acc, o]);
     assert.equal(accountOf(readAccounts(root), id).id, a.id);
     await switchSession(root, { sessionId: id, provider: "claude", account: acc.id }, {}, T0 + 2); // the interim direct write, as W2 would
-    return { ok: true, message: "Continued on Personal with its history." };
+    return { ok: true, message: 'Switched to account "Personal".' };
   };
   const ok = await switchSession(
     root,
@@ -464,7 +464,7 @@ test("a switch hands over to the takeover seam, which owns the move: nothing is 
   assert.deepEqual(calls, [
     [S(1), { id: b.id, name: "Personal", provider: "claude" }, { reason: "manual" }],
   ]);
-  assert.deepEqual([ok.ok, ok.message], [true, "Continued on Personal with its history."]);
+  assert.deepEqual([ok.ok, ok.message], [true, 'Switched to account "Personal".']);
   assert.equal(accountOf(readAccounts(root), S(1)).id, b.id);
   assert.equal(readAccounts(root).rotations.length, before + 1); // one record per move (W2's)
   const n = readAccounts(root).rotations.length;
@@ -488,11 +488,24 @@ test("a switch hands over to the takeover seam, which owns the move: nothing is 
   );
   assert.deepEqual(
     [boom.ok, boom.message],
-    [false, "The session could not continue on Work. It stays on Personal."],
+    [false, "The session could not switch to Work. It stays on Personal."],
   ); // no echo
   assert.equal(accountOf(readAccounts(root), S(1)).id, b.id);
   assert.equal(readAccounts(root).rotations.length, n); // no record of a move that did not happen
   assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).limitedUntil, null); // a manual switch never marks an account limited
+});
+test("a takeover without reply text reports an account switch", async () => {
+  const root = scratch();
+  await addAccount(root, { provider: "claude", name: "Work" }, T0);
+  await addAccount(root, { provider: "claude", name: "Personal" }, T0 + 1);
+  await assign(root, S(1), "claude", T0);
+  const result = await switchSession(
+    root,
+    { sessionId: S(1), provider: "claude", account: "Personal" },
+    { takeOver: async () => ({ ok: true }) },
+    T0 + 1,
+  );
+  assert.equal(result.message, 'Switched to account "Personal".');
 });
 test("a rename keeps names unique per provider (R1 W1-6): /account <name> must pick exactly one", async () => {
   const root = scratch();

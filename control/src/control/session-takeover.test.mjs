@@ -133,7 +133,7 @@ for (const provider of ["claude", "codex"])
       .prepare("SELECT result FROM deliveries WHERE session=? AND kind='account-switch'")
       .all(w.id);
     assert.equal(history.length, 1);
-    assert.match(JSON.parse(history[0].result).message, /Continued on account "B" at/);
+    assert.match(JSON.parse(history[0].result).message, /Switched to account "B" at/);
     assert.equal(
       JSON.stringify([result, history, readAccounts(w.root), w.launched()]).includes(w.secret),
       false,
@@ -186,7 +186,7 @@ test("pinned takeover never falls back to another account when B loses its crede
   const hook = sessionOpenHook({ root: () => w.root, keychain: { get: async () => null } });
   await assert.rejects(
     hook({ request: { provider: "claude", agentId: w.id, purpose: "interactive" } }),
-    /account.*credential/i,
+    /pooled account launch could not be admitted/i,
   );
   assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.b.id);
 });
@@ -198,7 +198,7 @@ test("pinned takeover still refuses when every provider account is disabled", as
   });
   await assert.rejects(
     w.hook({ request: { provider: "claude", agentId: w.id, purpose: "interactive" } }),
-    /target account/i,
+    /pooled account launch could not be admitted/i,
   );
 });
 test("an explicit same-identity reconciliation can resolve a lost reply", async (t) => {

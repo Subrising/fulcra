@@ -33,9 +33,9 @@ describe("account commands", () => {
     expect(p.calls).toEqual([{ method: "organization.accounts", input: {} }]);
   });
   it("resolves the selected session and uses the existing fenced switch", async () => {
-    const p = port({ ok: true, message: "Continued on Personal with its history." });
+    const p = port({ ok: true, message: 'Switched to account "Personal".' });
     expect(await switchAccountSession(p.client, "resolved", " Personal ")).toBe(
-      "Continued on Personal with its history.",
+      'Switched to account "Personal".',
     );
     expect(p.calls).toEqual([
       {
