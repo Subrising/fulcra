@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import pino from "pino";
@@ -237,6 +237,183 @@ async function assertAgentNotRunning(options: {
 }
 
 describe("agent MCP end-to-end (offline)", () => {
+  test("native launch connects before registration and refuses a replaced launch at tool call", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-native-startup-"));
+    const staticDir = path.join(paseoHome, "static");
+    const clients = createTestAgentClients({ supportsMcpServers: true });
+    const provider = clients.claude!;
+    const createSession = provider.createSession.bind(provider);
+    const nativeClient = new Client({ name: "native-startup-test", version: "1" });
+    let callerAgentId = "";
+    let callBatch: (() => Promise<Response>) | undefined;
+    vi.spyOn(provider, "createSession").mockImplementation(async (config, context) => {
+      callerAgentId = context!.agentId!;
+      const server = config.mcpServers!.paseo;
+      if (!("url" in server)) throw new Error("HTTP MCP launch required");
+      await nativeClient.connect(
+        new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: server.headers },
+        }),
+      );
+      expect((await nativeClient.listTools()).tools).toContainEqual(
+        expect.objectContaining({ name: "list_agents" }),
+      );
+      await expect(nativeClient.callTool({ name: "list_agents", arguments: {} })).rejects.toThrow();
+      callBatch = () =>
+        fetch(server.url, {
+          method: "POST",
+          headers: {
+            ...server.headers,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify([
+            { jsonrpc: "2.0", id: "catalog", method: "tools/list", params: {} },
+            {
+              jsonrpc: "2.0",
+              id: "call",
+              method: "tools/call",
+              params: { name: "list_agents", arguments: {} },
+            },
+          ]),
+        });
+      const initializingBatch = await callBatch();
+      expect(initializingBatch.status).toBe(500);
+      await initializingBatch.body?.cancel();
+      return createSession(config, context);
+    });
+    const daemon = await createPaseoDaemon(
+      {
+        listen: "127.0.0.1:0",
+        paseoHome,
+        staticDir,
+        corsAllowedOrigins: [],
+        hostnames: true,
+        mcpEnabled: true,
+        mcpDebug: false,
+        agentClients: clients,
+        agentStoragePath: path.join(paseoHome, "agents"),
+        relayEnabled: false,
+      },
+      pino({ level: "silent" }),
+    );
+    try {
+      await daemon.start();
+      const agent = await daemon.agentManager.createAgent(
+        { provider: "claude", cwd: paseoHome },
+        undefined,
+        {},
+      );
+      expect(agent.id).toBe(callerAgentId);
+      expect(
+        (await nativeClient.callTool({ name: "list_agents", arguments: {} })).isError,
+      ).not.toBe(true);
+      if (!callBatch) throw new Error("Native batch caller required");
+      const registeredBatch = await callBatch();
+      expect(registeredBatch.status).toBe(200);
+      expect(await registeredBatch.text()).not.toContain('"isError":true');
+      const state = await daemon.agentManager.getAgentMcpRefreshState(agent.id);
+      expect(state?.supported).toBe(true);
+      if (!state?.sessionId) throw new Error("Registered native session required");
+      expect(
+        await daemon.agentManager.refreshAgentMcp({
+          agentId: agent.id,
+          expected: {
+            provider: state.provider,
+            sessionId: state.sessionId,
+            configRevision: state.configRevision,
+          },
+          changes: {},
+          reconnect: true,
+        }),
+      ).toMatchObject({ outcome: "refreshed" });
+      await expect(nativeClient.callTool({ name: "list_agents", arguments: {} })).rejects.toThrow();
+      await expect(
+        nativeClient.callTool({
+          name: "create_agent",
+          arguments: {
+            provider: "claude/claude-test-model",
+            initialPrompt: "Reply DONE",
+            notifyOnFinish: false,
+          },
+        }),
+      ).rejects.toThrow();
+      expect(daemon.agentManager.listAgents().map((entry) => entry.id)).toEqual([agent.id]);
+    } finally {
+      await nativeClient.close();
+      await daemon.stop();
+      await rm(paseoHome, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("native launch accepts tools after the provider supplies its first native identity", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-native-lazy-"));
+    let nativeIdentityReady = false;
+    const clients = createTestAgentClients({
+      supportsMcpServers: true,
+      onStartTurn: () => {
+        nativeIdentityReady = true;
+      },
+    });
+    const provider = clients.claude!;
+    const createSession = provider.createSession.bind(provider);
+    const nativeClient = new Client({ name: "native-lazy-test", version: "1" });
+    let persistence: (() => AgentPersistenceHandle | null) | undefined;
+    const readPersistence = () => {
+      if (!nativeIdentityReady) return null;
+      if (!persistence) throw new Error("Native persistence reader required");
+      return persistence();
+    };
+    vi.spyOn(provider, "createSession").mockImplementation(async (config, context) => {
+      const server = config.mcpServers!.paseo;
+      if (!("url" in server)) throw new Error("HTTP MCP launch required");
+      await nativeClient.connect(
+        new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: server.headers },
+        }),
+      );
+      const session = await createSession(config, context);
+      const nativeId = session.id;
+      Object.defineProperty(session, "id", { get: () => (nativeIdentityReady ? nativeId : "") });
+      persistence = session.describePersistence.bind(session);
+      vi.spyOn(session, "describePersistence").mockImplementation(readPersistence);
+      return session;
+    });
+    const daemon = await createPaseoDaemon(
+      {
+        listen: "127.0.0.1:0",
+        paseoHome,
+        staticDir: path.join(paseoHome, "static"),
+        corsAllowedOrigins: [],
+        hostnames: true,
+        mcpEnabled: true,
+        mcpDebug: false,
+        agentClients: clients,
+        agentStoragePath: path.join(paseoHome, "agents"),
+        relayEnabled: false,
+      },
+      pino({ level: "silent" }),
+    );
+    try {
+      await daemon.start();
+      const agent = await daemon.agentManager.createAgent(
+        { provider: "claude", cwd: paseoHome },
+        undefined,
+        {},
+      );
+      expect(agent.persistence).toBeNull();
+      await expect(nativeClient.callTool({ name: "list_agents", arguments: {} })).rejects.toThrow();
+      await daemon.agentManager.runAgent(agent.id, "initialize native session");
+      expect(
+        (await nativeClient.callTool({ name: "list_agents", arguments: {} })).isError,
+      ).not.toBe(true);
+    } finally {
+      await nativeClient.close();
+      await daemon.stop();
+      await rm(paseoHome, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("create_agent runs initial prompt and affects filesystem", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
@@ -846,8 +1023,11 @@ describe("agent MCP end-to-end (offline)", () => {
     try {
       const { execSync } = await import("node:child_process");
       execSync("git init -b main", { cwd: repoRoot, stdio: "pipe" });
-      execSync("git config user.email 'test@test.com'", { cwd: repoRoot, stdio: "pipe" });
-      execSync("git config user.name 'Test'", { cwd: repoRoot, stdio: "pipe" });
+      execSync("git config user.email 'fulcra@users.noreply.github.com'", {
+        cwd: repoRoot,
+        stdio: "pipe",
+      });
+      execSync("git config user.name 'Fulcra'", { cwd: repoRoot, stdio: "pipe" });
       await writeFile(path.join(repoRoot, "file.txt"), "hello\n", "utf8");
       execSync("git add .", { cwd: repoRoot, stdio: "pipe" });
       execSync("git -c commit.gpgsign=false commit -m 'initial'", { cwd: repoRoot, stdio: "pipe" });
