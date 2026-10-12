@@ -2,6 +2,8 @@
 
 The daemon authorizes principals with semantic permissions. RPC names and protocol namespaces are not authority.
 
+For the proposed daemon-to-daemon worker and notice boundary, see [host links](host-links.md).
+
 ## Model
 
 ```text
