@@ -49,13 +49,15 @@ paseo run --output-schema schema.json "extract release notes"
 paseo run --output-schema '{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}' "summarize release notes"
 ```
 
-From a human shell, a bare `paseo run` creates a new local workspace for the current directory. Use `--workspace <id>` to add the agent to an existing workspace, or `--new-workspace local|worktree` to explicitly create a separate workspace for the run.
+From a human shell, `paseo run` reuses an active workspace for the current directory or the explicit `--cwd` directory. It creates a local workspace when no match exists. Use `--workspace <id>` to select a workspace when several share the directory. Use `--new-workspace local|worktree` to create a separate workspace.
 
 Worktree creation accepts `--worktree-mode branch-off|checkout-branch|checkout-pr` plus the matching `--new-branch`/`--base`, `--branch`, or `--pr-number`/`--forge` options. Use `--worktree-slug` to choose the managed directory slug.
 
 When an existing Fulcra agent runs the same command, Fulcra recognizes it through `PASEO_AGENT_ID`. Without explicit placement, the new agent becomes its subagent in the same workspace. `--workspace` can place that subagent elsewhere without changing its parent.
 
 Use `--output-schema` to return only matching JSON output. You can pass a schema file path or an inline JSON schema object. This mode cannot be used with `--background`.
+
+Add `--json` to include the agent ID: `{"agentId":"...","output":{"summary":"..."}}`. Without `--json`, stdout contains only the schema result. The agent ID also appears on stderr.
 
 By default, `paseo run` waits for completion. Use `--background` to return immediately while the agent keeps running.
 

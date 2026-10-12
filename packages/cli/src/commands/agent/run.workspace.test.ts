@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { findWorkspaceForDirectory, structuredRunSchema } from "./run.js";
+import {
+  findWorkspaceForDirectory,
+  structuredRunSchema,
+  type RunWorkspaceLookupClient,
+} from "./run.js";
 
 const entry = (id: string, workspaceDirectory: string) => ({ id, workspaceDirectory });
 const lookup = (entries: Array<{ id: string; workspaceDirectory: string }>) => ({
@@ -21,13 +25,52 @@ describe("run reuses a workspace for the same directory", () => {
     expect(await findWorkspaceForDirectory(client, "/work/songs")).toBeNull();
   });
 
-  it("returns null when the lookup fails, so the run can still make a workspace", async () => {
+  it("lists workspaces in stable project order without a text query and follows pages until the directory matches", async () => {
+    const requests: Parameters<RunWorkspaceLookupClient["fetchWorkspaces"]>[0][] = [];
+    const client: RunWorkspaceLookupClient = {
+      async fetchWorkspaces(options) {
+        requests.push(options);
+        if (requests.length === 1) {
+          return { entries: [entry("w1", "/work/other")], pageInfo: { nextCursor: "next" } };
+        }
+        return { entries: [entry("w2", "/work/songs")], pageInfo: { nextCursor: null } };
+      },
+    };
+    expect(await findWorkspaceForDirectory(client, "/work/songs/")).toEqual({
+      id: "w2",
+      cwd: "/work/songs",
+    });
+    expect(requests).toEqual([
+      { sort: [{ key: "project_id", direction: "asc" }], page: { limit: 200 } },
+      { sort: [{ key: "project_id", direction: "asc" }], page: { limit: 200, cursor: "next" } },
+    ]);
+  });
+
+  it("fails when the lookup fails, so the run cannot create a duplicate workspace", async () => {
     const client = {
       fetchWorkspaces: async () => {
         throw new Error("daemon busy");
       },
     };
+    await expect(findWorkspaceForDirectory(client, "/work/songs")).rejects.toThrow("daemon busy");
+  });
+
+  it("returns null only after all pages exclude the directory", async () => {
+    const requests: Parameters<RunWorkspaceLookupClient["fetchWorkspaces"]>[0][] = [];
+    const client: RunWorkspaceLookupClient = {
+      async fetchWorkspaces(options) {
+        requests.push(options);
+        return {
+          entries: [entry("w1", "/work/other")],
+          pageInfo: { nextCursor: requests.length === 1 ? "next" : null },
+        };
+      },
+    };
     expect(await findWorkspaceForDirectory(client, "/work/songs")).toBeNull();
+    expect(requests).toEqual([
+      { sort: [{ key: "project_id", direction: "asc" }], page: { limit: 200 } },
+      { sort: [{ key: "project_id", direction: "asc" }], page: { limit: 200, cursor: "next" } },
+    ]);
   });
 });
 

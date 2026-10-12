@@ -5,7 +5,10 @@ import {
 } from "@getpaseo/server/agent-response";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { REPORTS_TO_LABEL } from "@getpaseo/protocol/agent-labels";
-import { DaemonConnectionError } from "@getpaseo/client/internal/daemon-client";
+import {
+  DaemonConnectionError,
+  type FetchWorkspacesOptions,
+} from "@getpaseo/client/internal/daemon-client";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
   CommandOptions,
@@ -524,7 +527,7 @@ interface RunWorkspace {
 }
 
 export interface RunWorkspaceLookupClient {
-  fetchWorkspaces(options: { filter: { query: string }; page: { limit: number } }): Promise<{
+  fetchWorkspaces(options: Pick<FetchWorkspacesOptions, "filter" | "page" | "sort">): Promise<{
     entries: Array<{ id: string; workspaceDirectory: string }>;
     pageInfo: { nextCursor: string | null };
   }>;
@@ -556,18 +559,26 @@ const sameDirectory = (a: string, b: string): boolean => {
     : clean(a) === clean(b);
 };
 
-/** The existing workspace whose directory is `cwd`, or null. A failed lookup is not an error: the run makes a new one. */
+/** Find the directory before creating a workspace. Lookup failures must not create duplicates. */
 export async function findWorkspaceForDirectory(
   client: RunWorkspaceLookupClient,
   cwd: string,
 ): Promise<{ id: string; cwd: string } | null> {
-  try {
-    const result = await client.fetchWorkspaces({ filter: { query: cwd }, page: { limit: 200 } });
+  let cursor: string | undefined;
+  do {
+    // The daemon's text query searches names and IDs, not directory paths.
+    const result = await client.fetchWorkspaces({
+      // Project IDs keep pages stable when agent activity changes.
+      sort: [{ key: "project_id", direction: "asc" }],
+      page: { limit: 200, ...(cursor ? { cursor } : {}) },
+    });
     const found = result.entries.find((entry) => sameDirectory(entry.workspaceDirectory, cwd));
-    return found ? { id: found.id, cwd: found.workspaceDirectory } : null;
-  } catch {
-    return null;
-  }
+    if (found) {
+      return { id: found.id, cwd: found.workspaceDirectory };
+    }
+    cursor = result.pageInfo.nextCursor ?? undefined;
+  } while (cursor);
+  return null;
 }
 
 // Workspace policy for `paseo run`. Precedence:
