@@ -865,7 +865,14 @@ async function expectToolbarContainsTouchControls(
       for (const [x, y] of edges) {
         const hit = document.elementFromPoint(x, y);
         if (!hit || !control.contains(hit)) {
-          problems.push(`${name}: a tap at ${x},${y} lands on ${hit?.tagName ?? "nothing"}`);
+          const owner = hit?.closest("[data-testid]")?.getAttribute("data-testid") ?? "-";
+          const hitBox = hit?.getBoundingClientRect();
+          const where = hitBox
+            ? `${hitBox.left},${hitBox.top} ${hitBox.width}x${hitBox.height}`
+            : "";
+          problems.push(
+            `${name} ${box.left},${box.top}: a tap at ${x},${y} lands on ${hit?.tagName ?? "nothing"} in ${owner} (${where})`,
+          );
         }
       }
     }
@@ -909,8 +916,11 @@ test("compact Changes keeps its actions menu-only, with 48 px touch targets", as
   expect(optionsBox.height).toBeGreaterThanOrEqual(48);
   expect(glyphBox.width).toBe(18);
   expect(glyphBox.height).toBe(18);
+  await expectToolbarContainsTouchControls(
+    compactExplorer.getByTestId("changes-repository-header"),
+    ["changes-actions-menu-trigger"],
+  );
   await expectToolbarContainsTouchControls(compactExplorer.getByTestId("changes-header"), [
-    "changes-actions-menu-trigger",
     "Diff options",
   ]);
 
@@ -2235,7 +2245,7 @@ async function longPressFileHeader(page: Page, header: Locator): Promise<void> {
 
 async function headerCanvasPixel(
   canvas: Locator,
-  toolbar: Locator,
+  header: Locator,
   offsetY: number,
 ): Promise<string> {
   const [canvasBounds, headerBounds] = await Promise.all([
