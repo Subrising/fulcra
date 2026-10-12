@@ -25,6 +25,7 @@ import {
 import { EditingTextInput as TextInput } from "@/components/ui/text-input";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
+import { TOUCH_TARGET, touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { isWeb } from "@/constants/platform";
 import * as Clipboard from "expo-clipboard";
 import { ChevronDown, Eye, EyeOff, FilePlus, FolderPlus, RotateCw } from "lucide-react-native";
@@ -1175,6 +1176,14 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
   } = props;
 
   const showHiddenFiles = usePanelStore((state) => state.explorerShowHiddenFiles);
+  const touch = useTouchTargets();
+  const sortButtonStyle = useCallback(
+    (state: PressableStateCallbackType) => [
+      sortTriggerStyleProp(state),
+      touch && touchTargetStyles.icon,
+    ],
+    [sortTriggerStyleProp, touch],
+  );
 
   const handleNewFileAtRoot = useCallback(() => {
     onNewEntryAtRoot?.(".", "file");
@@ -1222,13 +1231,16 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
       <PaneContentToolbar
         style={[
           styles.paneHeader,
+          touch && styles.paneHeaderTouch,
           { paddingRight: paneContentToolbarTrailingPadding(isCompact, "glyph") },
         ]}
         testID="files-pane-header"
       >
         <Pressable
           onPress={handleSortCycle}
-          style={sortTriggerStyleProp}
+          style={sortButtonStyle}
+          accessibilityRole="button"
+          accessibilityLabel={currentSortLabel}
           testID="files-sort-trigger"
         >
           <Text style={styles.sortTriggerText} testID="files-sort-label">
@@ -1236,7 +1248,7 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
           </Text>
           <ChevronDown size={12} color={theme.colors.foregroundMuted} />
         </Pressable>
-        <ToolbarControls style={styles.headerActions}>
+        <ToolbarControls style={[styles.headerActions, touch && styles.headerActionsTouch]}>
           {onNewEntryAtRoot ? (
             <>
               <ToolbarButton
@@ -1684,6 +1696,14 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: theme.colors.surfaceSidebar,
+  },
+  paneHeaderTouch: {
+    height: "auto",
+    minHeight: TOUCH_TARGET + 1,
+    flexWrap: "wrap",
+  },
+  headerActionsTouch: {
+    marginLeft: "auto",
   },
   sortTrigger: {
     flexDirection: "row",
