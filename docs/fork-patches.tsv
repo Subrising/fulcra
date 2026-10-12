@@ -394,7 +394,7 @@ build-ci	M	7	7	.github/ISSUE_TEMPLATE/config.yml
 build-ci	M	2	2	.github/PULL_REQUEST_TEMPLATE.md
 build-ci	A	22	0	.github/upstream-watch.json
 build-ci	M	9	1	.github/workflows/android-apk-release.yml
-build-ci	M	186	21	.github/workflows/ci.yml
+build-ci	M	187	22	.github/workflows/ci.yml
 build-ci	M	58	1	.github/workflows/deploy-app.yml
 build-ci	A	47	0	.github/workflows/deploy-fulcra-website.yml
 build-ci	M	45	1	.github/workflows/deploy-website.yml
@@ -457,7 +457,7 @@ build-ci	M	50	1	packages/app/vitest.config.ts
 build-ci	M	1	0	packages/cli/package.json
 build-ci	M	10	0	packages/client/package.json
 build-ci	M	1	1	packages/expo-two-way-audio/package.json
-build-ci	M	13	5	packages/server/package.json
+build-ci	M	14	6	packages/server/package.json
 build-ci	M	12	0	packages/server/src/test-utils/vitest-setup.ts
 build-ci	M	11	1	packages/server/vitest.config.ts
 build-ci	A	14	0	patches/app-builder-lib+26.8.1.patch
@@ -475,8 +475,12 @@ build-ci	A	39	0	release/resource-run.py
 build-ci	A	8	0	release/run-control-test.sh
 build-ci	A	13	0	release/run-with-timeout.py
 build-ci	A	162	0	scripts/brace-dependency-overrides.test.mjs
+build-ci	A	33	0	scripts/build-builtin-plugins.mjs
 build-ci	A	144	0	scripts/build-command-centre.mjs
 build-ci	A	31	0	scripts/build-gate-flavour.mjs
+build-ci	A	40	0	scripts/builtin-plugin-runtime.mjs
+build-ci	A	43	0	scripts/builtin-plugin-runtime.test.mjs
+build-ci	M	23	1	scripts/builtin-plugins-dist.test.mjs
 build-ci	A	7	0	scripts/c2c-ui-fixture/adapters.tsx
 build-ci	A	120	0	scripts/c2c-ui-fixture/capture.mjs
 build-ci	A	177	0	scripts/c2c-ui-fixture/fixture.tsx
@@ -1426,7 +1430,7 @@ pairing	M	39	2	packages/server/src/server/relay-runtime.ts
 pairing	M	129	19	packages/server/src/server/relay-transport.test.ts
 pairing	M	98	25	packages/server/src/server/relay-transport.ts
 pairing	A	113	0	scripts/verify-pairing-mutations.mjs
-plugin-host	M	200	2	docs/plugins.md
+plugin-host	M	205	5	docs/plugins.md
 plugin-host	M	49	0	packages/app/src/agent-stream/turn-footer.tsx
 plugin-host	A	75	0	packages/app/src/agent-stream/turn-tool-calls.test.ts
 plugin-host	A	26	0	packages/app/src/agent-stream/turn-tool-calls.ts
