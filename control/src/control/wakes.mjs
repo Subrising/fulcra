@@ -14,8 +14,8 @@
 // Manager workers keep their existing path (events.mjs: 89 turn-ended wakes delivered live), so nothing is woken twice.
 //
 // ITEM 2, HEARTBEAT. A seat holder (or live manager) that has owned work in progress -- an owned session running or
-// waiting on input -- and has itself been idle longer than N minutes (default 10; an operator sets it, 0 turns it off)
-// gets ONE nudge per idle stretch, at most MAX_NUDGES_PER_DAY a day. No active owned work, no nudge.
+// waiting on input -- gets one nudge per idle stretch, at most MAX_NUDGES_PER_DAY a day.
+// It is off by default. An operator sets the idle minutes; 0 turns it off. No active owned work, no nudge.
 //
 // BOUNDS, for both. Idempotent: a change is one row (UNIQUE identity) and one batch has one derived message id, so a
 // retry or a restart never sends twice. At most MAX_BATCH changes per message, MAX_BATCHES_PER_HOUR messages per
@@ -28,7 +28,7 @@ import { uuid, RecipientBusy } from "./authority.mjs";
 
 export const OWNED_CACHE_MS = 5000,
   WAKE_TTL_MS = 86400000,
-  HEARTBEAT_MINUTES = 10,
+  HEARTBEAT_MINUTES = 0,
   MAX_BATCH = 8,
   MAX_BATCHES_PER_HOUR = 12,
   MAX_WAKE_ATTEMPTS = 40,
