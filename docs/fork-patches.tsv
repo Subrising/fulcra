@@ -242,6 +242,7 @@ branding	A	101	0	docs/getting-started.md
 branding	A	146	0	docs/host-links.md
 branding	A	157	0	docs/integrations-auth.md
 branding	A	5	0	docs/media/README.md
+branding	M	3	5	docs/menus.md
 branding	A	21	0	docs/pa34-security-notes.md
 branding	A	17	0	docs/paseo-plugin-qualification.md
 branding	M	45	11	docs/permissions.md
@@ -555,6 +556,7 @@ core-fixes	M	11	3	packages/app/e2e/browser/sessions-search.spec.ts
 core-fixes	M	2	0	packages/app/e2e/browser/settings-toggle-tab-regression.spec.ts
 core-fixes	M	9	14	packages/app/e2e/browser/viewed-agent-timelines.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/workspace-agent-tab-tooltip.spec.ts
+core-fixes	M	125	5	packages/app/e2e/browser/workspace-labels.spec.ts
 core-fixes	A	69	0	packages/app/e2e/mobile/native-text-reflow/ios.py
 core-fixes	A	18	0	packages/app/e2e/mobile/native-text-reflow/ios.sh
 core-fixes	A	54	0	packages/cli/src/commands/agent/archive.test.ts
@@ -948,13 +950,16 @@ features	M	40	7	packages/app/src/components/sidebar/sidebar-status-list.tsx
 features	A	27	0	packages/app/src/components/sidebar/sidebar-top-content.tsx
 features	A	17	0	packages/app/src/components/sidebar/sidebar-touch.ts
 features	M	17	1	packages/app/src/components/sidebar/sidebar-workspace-menu.tsx
-features	M	23	1	packages/app/src/components/sidebar/sidebar-workspace-row-content.tsx
+features	M	39	1	packages/app/src/components/sidebar/sidebar-workspace-row-content.tsx
 features	M	9	4	packages/app/src/components/sidebar/sidebar-workspace-row.tsx
 features	M	41	5	packages/app/src/components/sidebar/use-limited-sidebar-group.ts
 features	A	83	0	packages/app/src/components/sidebar/use-offline-hosts.ts
 features	M	9	0	packages/app/src/components/split-container.tsx
 features	M	15	2	packages/app/src/components/ui/highlighted-text.tsx
+features	M	3	1	packages/app/src/components/ui/menu/menu-geometry.ts
+features	M	10	15	packages/app/src/components/ui/menu/menu-item.tsx
 features	M	14	2	packages/app/src/components/ui/menu/menu-overlay.tsx
+features	M	4	2	packages/app/src/components/ui/menu/menu-surface.tsx
 features	M	12	3	packages/app/src/components/ui/pane-content-toolbar.tsx
 features	M	27	47	packages/app/src/components/welcome-screen.tsx
 features	M	3	2	packages/app/src/components/workspace-rename-modal.tsx

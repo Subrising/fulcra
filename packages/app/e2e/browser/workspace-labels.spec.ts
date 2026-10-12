@@ -4,6 +4,7 @@ import { getServerId } from "../support/helpers/server-id";
 import { seedWorkspace } from "../support/helpers/seed-client";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
+import { selectSidebarStatusGrouping } from "../support/helpers/sidebar";
 
 interface SessionEnvelope {
   type?: string;
@@ -96,7 +97,12 @@ async function settled(locator: import("@playwright/test").Locator) {
   let previous = "";
   await expect
     .poll(async () => {
-      const current = JSON.stringify(await box(locator));
+      const measured = await locator.boundingBox();
+      if (!measured) {
+        previous = "";
+        return false;
+      }
+      const current = JSON.stringify(measured);
       const stable = current === previous;
       previous = current;
       return stable;
@@ -120,6 +126,34 @@ async function openWorkspaceLabels(page: import("@playwright/test").Page, worksp
   await page.getByTestId(`sidebar-workspace-kebab-${serverId}:${workspaceId}`).first().click();
   await page.getByTestId(`sidebar-workspace-menu-labels-${serverId}:${workspaceId}`).click();
   await expect(page.getByTestId("workspace-label-picker-create")).toBeVisible();
+}
+
+async function expectKebabInsideRow(page: import("@playwright/test").Page, workspaceId: string) {
+  const key = `${getServerId()}:${workspaceId}`;
+  const row = page.getByTestId(`sidebar-workspace-row-${key}`).first();
+  const trigger = page.getByTestId(`sidebar-workspace-kebab-${key}`).first();
+  await settled(row);
+  await settled(trigger);
+  const rowBounds = await box(row);
+  const targetBounds = await box(trigger);
+  expect(targetBounds.width).toBeGreaterThanOrEqual(48);
+  expect(targetBounds.height).toBeGreaterThanOrEqual(48);
+  expect(targetBounds.x).toBeGreaterThanOrEqual(rowBounds.x);
+  expect(targetBounds.y).toBeGreaterThanOrEqual(rowBounds.y);
+  expect(targetBounds.x + targetBounds.width).toBeLessThanOrEqual(rowBounds.x + rowBounds.width);
+  expect(targetBounds.y + targetBounds.height).toBeLessThanOrEqual(rowBounds.y + rowBounds.height);
+  const resizeHandle = page.getByTestId("left-sidebar-resize-handle");
+  const resizeBounds = (await resizeHandle.count()) ? await resizeHandle.boundingBox() : null;
+  if (resizeBounds) {
+    const overlapWidth =
+      Math.min(targetBounds.x + targetBounds.width, resizeBounds.x + resizeBounds.width) -
+      Math.max(targetBounds.x, resizeBounds.x);
+    const overlapHeight =
+      Math.min(targetBounds.y + targetBounds.height, resizeBounds.y + resizeBounds.height) -
+      Math.max(targetBounds.y, resizeBounds.y);
+    expect(overlapWidth <= 1 || overlapHeight <= 1).toBe(true);
+  }
+  return targetBounds;
 }
 
 /**
@@ -342,9 +376,73 @@ test.describe("Workspace labels", () => {
   test.describe("compact picker", () => {
     test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
+    for (const viewport of [
+      { width: 375, height: 812 },
+      { width: 768, height: 1024 },
+      { width: 1440, height: 900 },
+      { width: 812, height: 375 },
+    ]) {
+      test(`contains the kebab and opens from its lower edge at ${viewport.width}x${viewport.height}`, async ({
+        page,
+      }, testInfo) => {
+        await page.setViewportSize(viewport);
+        const seeded = await seedWorkspace({ repoPrefix: "workspace-kebab-containment-" });
+        const key = `${getServerId()}:${seeded.workspaceId}`;
+        try {
+          await gotoAppShell(page);
+          if (viewport.width < 720)
+            await page.getByRole("button", { name: "Open menu", exact: true }).click();
+          await waitForSidebarHydration(page);
+
+          for (const rowType of ["project", "status", "pinned"] as const) {
+            if (rowType === "status") await selectSidebarStatusGrouping(page);
+            if (rowType === "pinned") {
+              await page.getByTestId(`sidebar-workspace-kebab-${key}`).tap();
+              await page.getByTestId(`sidebar-workspace-menu-pin-${key}`).tap();
+              await expect(page.getByTestId("sidebar-pinned-section")).toBeVisible();
+            }
+            for (const assigned of [false, true]) {
+              await seeded.client.setWorkspaceLabel({
+                workspaceId: seeded.workspaceId,
+                label: { name: "Containment", color: "red" },
+                assigned,
+              });
+              const row = page.getByTestId(`sidebar-workspace-row-${key}`);
+              if (assigned) await expect(row).toContainText("Containment");
+              else await expect(row).not.toContainText("Containment");
+              const target = await expectKebabInsideRow(page, seeded.workspaceId);
+              await page.getByTestId(`sidebar-workspace-kebab-${key}`).tap({
+                position: { x: target.width - 4, y: target.height - 4 },
+              });
+              const labels = page.getByTestId(`sidebar-workspace-menu-labels-${key}`);
+              await expect(labels).toBeInViewport({ ratio: 1 });
+              expect((await size(labels)).height).toBeGreaterThanOrEqual(48);
+              if (rowType === "project" && !assigned)
+                await page.screenshot({
+                  path: testInfo.outputPath(
+                    `workspace-kebab-${viewport.width}x${viewport.height}.png`,
+                  ),
+                  fullPage: true,
+                });
+              if (viewport.width < 720)
+                await page
+                  .getByRole("button", { name: "Bottom sheet backdrop" })
+                  .first()
+                  .tap({ position: { x: 12, y: 12 } });
+              else await page.keyboard.press("Escape");
+              await expect(labels).toBeHidden();
+            }
+          }
+        } finally {
+          await seeded.cleanup();
+        }
+      });
+    }
+
     test("toggles in place and pushes the create page over the list", async ({ page }) => {
       const seeded = await seedWorkspace({ repoPrefix: "workspace-labels-touch-" });
       try {
+        const mutationFailure = await installWorkspaceLabelMutationFailure(page);
         await seeded.client.setWorkspaceLabel({
           workspaceId: seeded.workspaceId,
           label: { name: "Touch", color: "red" },
@@ -355,15 +453,37 @@ test.describe("Workspace labels", () => {
         await waitForSidebarHydration(page);
 
         const serverId = getServerId();
-        await page.getByTestId(`sidebar-workspace-kebab-${serverId}:${seeded.workspaceId}`).click();
-        await page
-          .getByTestId(`sidebar-workspace-menu-labels-${serverId}:${seeded.workspaceId}`)
-          .tap();
+        const kebabBounds = await expectKebabInsideRow(page, seeded.workspaceId);
+        await page.getByTestId(`sidebar-workspace-kebab-${serverId}:${seeded.workspaceId}`).tap({
+          position: { x: kebabBounds.width - 4, y: kebabBounds.height - 4 },
+        });
+        const labelsTrigger = page.getByTestId(
+          `sidebar-workspace-menu-labels-${serverId}:${seeded.workspaceId}`,
+        );
+        await expect(labelsTrigger).toBeVisible();
+        expect((await size(labelsTrigger)).height).toBeGreaterThanOrEqual(48);
+        await labelsTrigger.tap();
+        await expectAssigned(page, "Touch", true);
+        const backTarget = await size(page.getByTestId("menu-sheet-back"));
+        expect(backTarget.width).toBeGreaterThanOrEqual(48);
+        expect(backTarget.height).toBeGreaterThanOrEqual(48);
+        expect((await size(labelRow(page, "Touch"))).height).toBeGreaterThanOrEqual(48);
+        expect(
+          (await size(page.getByTestId("workspace-label-picker-create"))).height,
+        ).toBeGreaterThanOrEqual(48);
+
+        mutationFailure.failNextAssignment();
+        await labelRow(page, "Touch").tap();
+        await expect(page.getByTestId("workspace-label-picker-error")).toContainText(
+          "Injected label mutation failure.",
+        );
         await expectAssigned(page, "Touch", true);
 
         await labelRow(page, "Touch").tap();
         await expectAssigned(page, "Touch", false);
+        await expect(page.getByTestId("workspace-label-picker-error")).toBeHidden();
         await expect(page.getByTestId("workspace-label-picker-create")).toBeVisible();
+        await expectKebabInsideRow(page, seeded.workspaceId);
 
         // The pushed page replaces the list rather than unfolding under it.
         await page.getByTestId("workspace-label-picker-create").tap();
