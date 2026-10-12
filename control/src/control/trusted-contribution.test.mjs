@@ -317,7 +317,7 @@ test("queued send checks host model rather than substituting journal expected mo
 
 async function permissionFixture(t) {
   const f = await fixture(t, false, "claude"),
-    a = f.manager.getAgent(f.id),
+    a = f.manager.agents.get(f.id),
     db = f.store.db;
   db.exec(`CREATE TABLE permission_grants(session TEXT PRIMARY KEY,generation INTEGER,epoch TEXT,rootSession TEXT,rootEpoch TEXT,revoked INTEGER,reason TEXT);
  CREATE TABLE permission_intents(id TEXT PRIMARY KEY,identity TEXT,session TEXT,pool TEXT,state TEXT,body TEXT,result TEXT,created INTEGER);
@@ -1361,6 +1361,7 @@ test("reconciled Claude bootstrap uses strict facts for its next owned send", as
 for (const scenario of ["ordinary", "mode-changed", "credential"])
   test(`U7 real host automatic permission: ${scenario}`, async (t) => {
     const f = await permissionFixture(t);
+    await f.a.session.setMode("auto");
     f.a.currentModeId = "auto";
     f.request.name =
       scenario === "credential" ? "mcp__keychain__get_item" : "mcp__workspace__list_files";
@@ -1376,7 +1377,10 @@ for (const scenario of ["ordinary", "mode-changed", "credential"])
     f.store.db
       .prepare("UPDATE permission_intents SET body=? WHERE id=?")
       .run(JSON.stringify(f.body), f.intentId);
-    if (scenario === "mode-changed") f.a.currentModeId = "default";
+    if (scenario === "mode-changed") {
+      await f.a.session.setMode("default");
+      f.a.currentModeId = "default";
+    }
     if (scenario === "ordinary") {
       await f.permission();
       assert.equal(f.responses(), 1);

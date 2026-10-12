@@ -166,7 +166,8 @@ test("preserves inspection through multiple real parser turns of queued output",
       runtime.write({ data: encodeTerminalOutput("\rprogress".repeat(1000)) });
     }
   });
-  await parsed(() => runtime.write({ data: encodeTerminalOutput("\r\nnew output".repeat(100)) }));
+  // Other queued writes can emit parser events before this write commits.
+  await write("\r\nnew output".repeat(100));
   subscription.dispose();
   expect(samples.length).toBeGreaterThan(1);
   expect(samples[0].base).toBe(inspected);

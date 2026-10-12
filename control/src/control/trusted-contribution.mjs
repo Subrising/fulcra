@@ -150,7 +150,7 @@ export function createTrustedContribution({
     // request and input was the common synchronous disk cost. Each read is its own short transaction, so it sees
     // fresh data; the connection is dropped when the file is replaced or when a call on it fails.
     let reader = null;
-    let readerInode = null;
+    let readerIdentity = null;
     const dropReader = () => {
       try {
         reader?.close();
@@ -158,18 +158,32 @@ export function createTrustedContribution({
         /* the connection is already unusable */
       }
       reader = null;
-      readerInode = null;
+      readerIdentity = null;
     };
     const sharedReader = () => {
-      const inode = timed("journal.stat", () => fs.statSync(journalFile)).ino;
-      if (reader && inode !== readerInode) dropReader();
+      const stat = timed("journal.stat", () => fs.lstatSync(journalFile, { bigint: true }));
+      if (!stat.isFile() || stat.size < 16n) throw new Error("Invalid controller journal");
+      const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+      if (reader && identity !== readerIdentity) dropReader();
       if (!reader) {
         reader = timed("journal.open", () => {
+          // Old WAL data must not hide an invalid replacement database header.
+          const header = Buffer.alloc(16);
+          const file = fs.openSync(journalFile, "r");
+          try {
+            if (
+              fs.readSync(file, header, 0, header.length, 0) !== header.length ||
+              header.toString("ascii") !== "SQLite format 3\0"
+            )
+              throw new Error("Invalid controller journal");
+          } finally {
+            fs.closeSync(file);
+          }
           const db = new DatabaseSync(journalFile, { readOnly: true });
           db.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=FULL");
           return db;
         });
-        readerInode = inode;
+        readerIdentity = identity;
       }
       return reader;
     };
