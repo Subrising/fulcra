@@ -495,6 +495,69 @@ test("closing the receiver during dispatch preparation refuses the batch before 
   });
 });
 
+test("a reporting-line move after batch selection never reaches the provider", async () => {
+  const f = await fixture();
+  await f.host.daemon(() => f.manager.setLabels(f.sender.id, { "fulcra.reports-to": "owner" }));
+  await f.host.daemon(() => f.manager.setLabels(f.target.id, { "fulcra.reports-to": f.sender.id }));
+  f.busy.add(f.target.id);
+  await f.send("old task", f.sender.id);
+  const start = f.target.session!.startTurn.bind(f.target.session!);
+  vi.spyOn(f.target.session!, "startTurn").mockImplementation(async (...args) => {
+    await f.host.daemon(() =>
+      f.manager.setLabels(f.target.id, { "fulcra.reports-to": "another-lead" }),
+    );
+    return start(...args);
+  });
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await f.queue.close();
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(f.prompts).not.toContain("old task");
+  expect(records[0].state).toBe("refused");
+  await vi.waitFor(() =>
+    expect(f.prompts.some((p) => String(p).includes("was not delivered"))).toBe(true),
+  );
+});
+
+test("a sender line move rebuilds the batch with only unchanged members", async () => {
+  const f = await fixture();
+  f.busy.add(f.target.id);
+  await f.send("changed member", f.sender.id);
+  await f.send("unchanged member", f.target.id);
+  const start = f.target.session!.startTurn.bind(f.target.session!);
+  let move = true;
+  vi.spyOn(f.target.session!, "startTurn").mockImplementation(async (...args) => {
+    if (move) {
+      move = false;
+      await f.host.daemon(() =>
+        f.manager.setLabels(f.sender.id, { "fulcra.reports-to": "another-lead" }),
+      );
+    }
+    return start(...args);
+  });
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await f.queue.close();
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(records.map((r: { state: string }) => r.state)).toEqual(["refused", "delivered"]);
+  expect(f.prompts).toContain("unchanged member");
+  expect(f.prompts.some((p) => String(p).includes("Message 1 from"))).toBe(false);
+});
+
+test("a role-holder move during provider preparation refuses the selected message", async () => {
+  const f = await fixture();
+  await f.host.daemon(() => f.manager.setLabels(f.sender.id, { "fulcra.seat": "main-assistant" }));
+  f.busy.add(f.target.id);
+  await f.send("old role task", f.sender.id);
+  const start = f.target.session!.startTurn.bind(f.target.session!);
+  vi.spyOn(f.target.session!, "startTurn").mockImplementation(async (...args) => {
+    await f.host.daemon(() => f.manager.setLabels(f.sender.id, { "fulcra.seat": "other-role" }));
+    return start(...args);
+  });
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await f.queue.close();
+  expect(f.prompts).not.toContain("old role task");
+  expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0].state).toBe("refused");
+});
+
 test("a full queue refuses the next message without removing the first fifty", async () => {
   const f = await fixture();
   f.busy.add(f.target.id);
