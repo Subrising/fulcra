@@ -12,7 +12,7 @@ import { DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { WORKSPACE_SECONDARY_HEADER_HEIGHT } from "@/constants/layout";
-import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
+import { TOUCH_TARGET, touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import {
   iconButtonChromeGlyphSize,
@@ -31,8 +31,10 @@ export function PaneContentToolbar({
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }) {
+  // On a touch screen the toolbar holds 48 px buttons (FU-96), so it grows with them.
+  const touch = useTouchTargets();
   return (
-    <View style={[styles.toolbar, style]} testID={testID}>
+    <View style={[styles.toolbar, touch && styles.toolbarTouch, style]} testID={testID}>
       {children}
     </View>
   );
@@ -209,6 +211,10 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
     flexShrink: 0,
+  },
+  // A 48 px button plus the 1 px bottom border; the desktop keeps the 36 px bar.
+  toolbarTouch: {
+    height: TOUCH_TARGET + 1,
   },
   controls: {
     flexDirection: "row",
