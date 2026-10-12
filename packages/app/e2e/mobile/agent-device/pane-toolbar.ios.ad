@@ -1,0 +1,20 @@
+context platform=ios timeout=60000 retries=1
+env APP_ID=sh.paseo.debug
+
+open "${APP_ID}"
+wait "id=\"workspace-explorer-toggle\"" 20000
+press "id=\"workspace-explorer-toggle\""
+wait "id=\"explorer-tab-files\"" 10000
+press "id=\"explorer-tab-files\""
+wait "label=\"Hide hidden files\"" 10000
+press "id=\"files-hidden-toggle\""
+wait "label=\"Show hidden files\"" 10000
+press "id=\"files-hidden-toggle\""
+wait "label=\"Hide hidden files\"" 10000
+wait "id=\"explorer-tab-changes\"" 10000
+press "id=\"explorer-tab-changes\""
+wait "id=\"changes-actions-menu-trigger\"" 10000
+press "id=\"changes-actions-menu-trigger\""
+wait "id=\"changes-menu-commit\"" 10000
+is visible "id=\"changes-menu-commit\""
+close

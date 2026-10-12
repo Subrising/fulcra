@@ -181,3 +181,22 @@ test("cleanup settings default off, preserve retention and reject invalid limits
   await assert.rejects(settings.patch({ archiveFinished: 1 }), /archiveFinished/);
   await assert.rejects(settings.patch({ path: "outside" }), /settings/);
 });
+
+test("automatic context rotation is optional, boolean and retained on load", () =>
+  temporary((home) => {
+    const env = { ORCA_HOME: home };
+    firstRun(env);
+    const file = path.join(home, "config.json");
+    const c = JSON.parse(fs.readFileSync(file));
+    assert.equal(loadConfig(env).automaticContextRotation, undefined);
+    for (const value of [false, true]) {
+      fs.writeFileSync(file, JSON.stringify({ ...c, automaticContextRotation: value }));
+      assert.equal(loadConfig(env).automaticContextRotation, value);
+    }
+    for (const value of [1, "true", null, {}]) {
+      assert.throws(
+        () => validateConfig({ ...c, automaticContextRotation: value }),
+        /automaticContextRotation/,
+      );
+    }
+  }));

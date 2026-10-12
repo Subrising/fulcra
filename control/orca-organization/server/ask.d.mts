@@ -14,7 +14,11 @@ export function closePipes(child: { stdin?: any; stdout?: any; stderr?: any }): 
 export const REDACTED: string;
 export const TOO_DEEP: string;
 export const MIN_ATTEMPT_MS: number;
-export function scrubCredential<T>(value: T, token: string): T;
+export function scrubCredential<T>(
+  value: T,
+  token: string,
+  options?: { onCutoff?: (rootKey?: string) => void },
+): T;
 export function refuseShellShim(command: string): void;
 export const MAX_ASK_TIMEOUT_MS: number;
 export const DEFAULT_ASK_TIMEOUT_MS: number;

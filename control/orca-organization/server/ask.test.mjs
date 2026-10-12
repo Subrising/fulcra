@@ -795,3 +795,29 @@ test("a revoked token on every account ends with a clear error, never a limit me
     "ALL_REVOKED",
   );
 });
+
+test("a depth cutoff fails structured output instead of returning a changed schema type", async (t) => {
+  const { root } = await pool();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const schema = {
+    $defs: { node: { type: "object", properties: { next: { $ref: "#/$defs/node" } } } },
+    $ref: "#/$defs/node",
+  };
+  let deep = {};
+  for (let i = 0; i < 40; i++) deep = { next: deep };
+  const run = (result) =>
+    askOnce({
+      root,
+      keychain,
+      input: input({ schema }),
+      now: () => T0,
+      spawnClaude: async () => result,
+    });
+  await rejects(run(ok("", { structured_output: deep })), "OUTPUT_SCHEMA_FAILED");
+  await rejects(run(ok(JSON.stringify(deep))), "OUTPUT_SCHEMA_FAILED");
+  // A literal marker is model data, not proof that the scrubber cut a subtree.
+  assert.deepEqual((await run(ok("", { structured_output: { note: TOO_DEEP } }))).output, {
+    note: TOO_DEEP,
+  });
+  assert.deepEqual((await run(ok("", { structured_output: {}, modelUsage: deep }))).output, {});
+});
