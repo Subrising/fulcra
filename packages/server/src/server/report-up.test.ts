@@ -345,6 +345,82 @@ describe("report-up limit state across a restart", () => {
 
   const home = () => mkdtempSync(join(tmpdir(), "report-up-state-"));
 
+  test("old held strings keep permission notices and suppress finished-turn notices when unset", async () => {
+    const dir = home();
+    try {
+      const statePath = join(dir, "report-up-limits.json");
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          v: 1,
+          limited: {},
+          held: {
+            [LEAD]: [
+              `<paseo-system>\nWorker Builder (${WORKER}) finished a turn: done\n</paseo-system>`,
+              `<paseo-system>\nWorker Builder (${WORKER}) ended a turn with an error: crashed\n</paseo-system>`,
+              "<paseo-system>\n2 workers finished a turn since your last update:\n- Worker Builder: done\n</paseo-system>",
+              `<paseo-system>\nWorker Builder (${WORKER}) is waiting for permission.\n</paseo-system>`,
+            ],
+          },
+        }),
+      );
+      const f = fixture([lead, worker()], { now: NOW, statePath, enabled: false });
+      for (const timer of f.timers) timer.run();
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("1 report held");
+      expect(f.delivered[0]!.prompt).toContain("waiting for permission");
+      expect(f.delivered[0]!.prompt).not.toContain("finished a turn");
+      expect(f.delivered[0]!.prompt).not.toContain("ended a turn with an error");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([undefined, false, true])(
+    "held notice kinds survive restart and follow the current setting (%s)",
+    async (setting) => {
+      const dir = home();
+      try {
+        const statePath = join(dir, "report-up-limits.json");
+        const before = fixture([{ ...lead, lastMessage: SESSION }, worker()], {
+          now: NOW,
+          statePath,
+        });
+        before.turn(LEAD);
+        await before.settle();
+        before.turn(WORKER);
+        await before.settle();
+        before.stream(WORKER, {
+          type: "permission_requested",
+          provider: "claude",
+          request: { id: "req-1", name: "Bash", input: { command: "pwd" } },
+        });
+        await before.settle();
+        expect(before.delivered).toEqual([]);
+
+        const switches = reportUpSwitches(setting);
+        const after = fixture([lead, worker()], {
+          now: NOW + 60_000,
+          statePath,
+          enabled: switches.finishedTurns,
+          otherEnabled: switches.otherNotices,
+        });
+        after.clock.now = NOW + 6 * 3600_000;
+        for (const timer of after.timers) timer.run();
+        await after.settle();
+        if (setting === false) expect(after.delivered).toEqual([]);
+        else {
+          expect(after.delivered).toHaveLength(1);
+          expect(after.delivered[0]!.prompt).toContain("waiting for permission");
+          expect(after.delivered[0]!.prompt.includes("finished a turn")).toBe(setting === true);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("a limited lead stays limited after a restart: reports are held, then sent once after the reset", async () => {
     const dir = home();
     const statePath = join(dir, "report-up-limits.json");
@@ -746,8 +822,11 @@ describe("combined reports and a limit that starts later", () => {
     f.timers.find((timer) => timer.ms === COALESCE_WINDOW_MS)!.run();
     await f.settle();
     expect(f.delivered).toHaveLength(1);
-    const kept = JSON.parse(readFileSync(statePath, "utf8")) as { held: Record<string, string[]> };
-    expect(kept.held[LEAD]?.join("\n")).toContain("Beta");
+    const kept = JSON.parse(readFileSync(statePath, "utf8")) as {
+      held: Record<string, Array<{ prompt: string; kind: string }>>;
+    };
+    expect(kept.held[LEAD]?.[0]?.prompt).toContain("Beta");
+    expect(kept.held[LEAD]?.[0]?.kind).toBe("finished-turn");
     rmSync(dir, { recursive: true, force: true });
   });
 });
