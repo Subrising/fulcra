@@ -1,4 +1,13 @@
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -26,13 +35,30 @@ export function ensurePrivateFile(filePath: string): void {
 export function writePrivateFileAtomicSync(
   filePath: string,
   data: string | NodeJS.ArrayBufferView,
+  options: { durable?: boolean } = {},
 ): void {
+  if (options.durable && process.platform === "win32")
+    throw new Error("Durable host-link operations are unavailable on Windows.");
   ensurePrivateDirectory(path.dirname(filePath));
   const parent = path.dirname(filePath);
   const temporary = path.join(parent, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}`);
   try {
-    writeFileSync(temporary, data, { mode: PRIVATE_FILE_MODE });
+    const file = openSync(temporary, "wx", PRIVATE_FILE_MODE);
+    try {
+      writeFileSync(file, data);
+      if (options.durable) fsyncSync(file);
+    } finally {
+      closeSync(file);
+    }
     renameSync(temporary, filePath);
+    if (options.durable) {
+      const directory = openSync(parent, "r");
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+    }
     ensurePrivateFile(filePath);
   } catch (error) {
     rmSync(temporary, { force: true });
