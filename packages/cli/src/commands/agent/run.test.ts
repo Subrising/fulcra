@@ -248,7 +248,7 @@ describe("explicit run cwd workspace precedence", () => {
   function expectOnlyDirectoryLookup(client: ReturnType<typeof fakeClient>) {
     expect(client.fetchWorkspaces).toHaveBeenCalledTimes(1);
     expect(client.fetchWorkspaces).toHaveBeenCalledWith({
-      filter: { query: "/fixtures/requested" },
+      sort: [{ key: "project_id", direction: "asc" }],
       page: { limit: 200 },
     });
   }
