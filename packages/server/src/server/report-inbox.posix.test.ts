@@ -973,6 +973,30 @@ test("native collector overflow is metadata-only in the same bounded membership 
   }
 });
 
+test("native origin can fork before registration but cannot execute until the launch is current", async () => {
+  const { createNativeReportOrigin, forkNativeReportOrigin, requireNativeReportOrigin } =
+    await import("./report-origin.js");
+  const identity = {
+    agentId: randomUUID(),
+    instanceId: randomUUID(),
+    sessionId: randomUUID(),
+    boot: randomUUID(),
+  };
+  let registered = false;
+  let replaced = false;
+  const launch = createNativeReportOrigin(() => {
+    if (!registered || replaced) throw new Error("launch unavailable");
+    return identity;
+  });
+  const request = forkNativeReportOrigin(launch);
+  expect(() => requireNativeReportOrigin(request)).toThrow("launch unavailable");
+  registered = true;
+  expect(requireNativeReportOrigin(request)).toEqual(identity);
+  replaced = true;
+  expect(() => requireNativeReportOrigin(request)).toThrow("launch unavailable");
+  expect(() => forkNativeReportOrigin({ nativeReportOrigin: true })).toThrow("Host-issued");
+});
+
 test("native HTTP publication checks fresh origin and scoped receipt immediately before each response write", async () => {
   const {
     createNativeReportOrigin,

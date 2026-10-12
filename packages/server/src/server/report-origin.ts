@@ -48,7 +48,7 @@ export async function enrollNativeReportCreation(
 const originPublications = new WeakMap<NativeReportOrigin, unknown>();
 /** One stateless HTTP request owns its publication fence; concurrent reads cannot replace each other's checks. */
 export function forkNativeReportOrigin(origin: NativeReportOrigin): NativeReportOrigin {
-  requireNativeReportOrigin(origin);
+  if (!origins.has(origin)) throw new Error("Host-issued native report origin required");
   return createNativeReportOrigin(() => requireNativeReportOrigin(origin));
 }
 export function rememberNativeReportPublication(origin: NativeReportOrigin, result: unknown): void {
