@@ -16,7 +16,7 @@ import {
   reportUpSwitches,
 } from "./report-up.js";
 import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
-import { parseOpenRows, readOpenLedgerRows, rowsOwnedBy } from "./ledger-items.js";
+import { parseOpenRows, readOpenLedgerRows, rowsOwnedBy, type LedgerRow } from "./ledger-items.js";
 
 interface FakeChat {
   id: string;
@@ -34,8 +34,10 @@ function fixture(
   chats: FakeChat[],
   options: {
     enabled?: boolean;
-    /** The permission, limit and idle-lead notices; default on, as the service does. */
+    /** The permission and limit notices; default on, as the service does. */
     otherEnabled?: boolean;
+    nudgeEnabled?: boolean;
+    readLedger?: () => readonly LedgerRow[];
     now?: number;
     statePath?: string;
     ledger?: Array<{ project: string; id: string; owner: string; status: string }>;
@@ -60,11 +62,12 @@ function fixture(
     agentStorage: storage,
     isEnabled: () => enabled,
     ...(options.otherEnabled === undefined ? {} : { isOtherEnabled: () => options.otherEnabled! }),
+    ...(options.nudgeEnabled === undefined ? {} : { isNudgeEnabled: () => options.nudgeEnabled! }),
     localServerId: "srv_local",
     logger: createTestLogger(),
     now: () => clock.now,
     ...(options.statePath ? { statePath: options.statePath } : {}),
-    readLedger: () => options.ledger ?? [],
+    readLedger: options.readLedger ?? (() => options.ledger ?? []),
     setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
       delivered.push({ leadId, prompt });
@@ -414,8 +417,22 @@ describe("idle-lead nudge", () => {
   ];
   const idleWorker = (): FakeChat => ({ ...worker(), lifecycle: "idle" });
 
+  test("by default a lead gets no nudge and its ledgers are not read", async () => {
+    let reads = 0;
+    const f = fixture([lead, idleWorker()], {
+      readLedger: () => {
+        reads++;
+        return owned;
+      },
+    });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    expect(reads).toBe(0);
+  });
+
   test("the lead gets one short message that lists its open items and idle workers", async () => {
-    const f = fixture([lead, idleWorker()], { ledger: owned });
+    const f = fixture([lead, idleWorker()], { ledger: owned, nudgeEnabled: true });
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
@@ -427,7 +444,7 @@ describe("idle-lead nudge", () => {
   });
 
   test("a turn that a nudge started is not nudged again; the next turn from a worker report is", async () => {
-    const f = fixture([lead, idleWorker()], { ledger: owned });
+    const f = fixture([lead, idleWorker()], { ledger: owned, nudgeEnabled: true });
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
@@ -441,14 +458,20 @@ describe("idle-lead nudge", () => {
 
   test("it sends nothing without an idle worker, without open items it owns, or when disabled", async () => {
     for (const setup of [
-      fixture([lead, { ...worker(), lifecycle: "running" }], { ledger: owned }),
-      fixture([lead, idleWorker()], { ledger: [] }),
+      fixture([lead, { ...worker(), lifecycle: "running" }], { ledger: owned, nudgeEnabled: true }),
+      fixture([lead, idleWorker()], { ledger: [], nudgeEnabled: true }),
       fixture([lead, idleWorker()], {
+        nudgeEnabled: true,
         ledger: [
           { project: "fulcra", id: "FU-1", owner: "Another lead (99999999)", status: "OPEN" },
         ],
       }),
-      fixture([lead, idleWorker()], { ledger: owned, enabled: false, otherEnabled: false }),
+      fixture([lead, idleWorker()], {
+        ledger: owned,
+        nudgeEnabled: true,
+        enabled: false,
+        otherEnabled: false,
+      }),
     ]) {
       setup.turn(LEAD);
       await setup.settle();
@@ -463,12 +486,13 @@ describe("idle-lead nudge", () => {
     };
     const f = fixture([limitedLead, idleWorker()], {
       ledger: owned,
+      nudgeEnabled: true,
       now: Date.parse("2026-10-11T00:00:00Z"),
     });
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(0);
-    const g = fixture([lead, idleWorker()], { ledger: owned });
+    const g = fixture([lead, idleWorker()], { ledger: owned, nudgeEnabled: true });
     g.turn(WORKER);
     await g.settle();
     expect(g.delivered.filter((d) => d.prompt.includes("You are idle"))).toHaveLength(0);
@@ -669,10 +693,22 @@ describe("report-up coalescing", () => {
 // Fulcra 0.2.17 (FU-115): report-up is the fallback. Native notifyOnFinish is the standard, so "finished a turn" is off
 // unless daemon.reportUpOnTurnEnd is true.
 describe("report-up default", () => {
-  test("the setting maps to two switches: unset is the other notices only, true adds finished turns, false is nothing", () => {
-    expect(reportUpSwitches(undefined)).toEqual({ finishedTurns: false, otherNotices: true });
-    expect(reportUpSwitches(true)).toEqual({ finishedTurns: true, otherNotices: true });
-    expect(reportUpSwitches(false)).toEqual({ finishedTurns: false, otherNotices: false });
+  test("the setting enables nudges and finished turns only with true", () => {
+    expect(reportUpSwitches(undefined)).toEqual({
+      finishedTurns: false,
+      otherNotices: true,
+      idleLeadNudge: false,
+    });
+    expect(reportUpSwitches(true)).toEqual({
+      finishedTurns: true,
+      otherNotices: true,
+      idleLeadNudge: true,
+    });
+    expect(reportUpSwitches(false)).toEqual({
+      finishedTurns: false,
+      otherNotices: false,
+      idleLeadNudge: false,
+    });
   });
 
   test("by default no 'finished a turn' or error notice is sent, but a usage-limit notice still is", async () => {

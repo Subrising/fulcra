@@ -360,8 +360,40 @@ test("bounded: changes are batched, a busy seat is retried then given up, and au
   assert.equal(h.sent.length, 0);
   assert.match(h.w.lastError.message, /automation budget reached/);
 });
+test("item 2: the idle-owner heartbeat is off by default and an explicit setting enables it", async (t) => {
+  const f = fixture(t);
+  await f.delegate(f.holder);
+  const r = f.started("active owned work");
+  await f.delegate(r);
+  f.snaps.set(r, { status: "running" });
+  f.snaps.set(f.holder, { status: "idle", updatedAt: "2026-09-26T01:30:00.000Z" });
+  assert.equal(
+    (await f.request({ method: "wakes-status", operator: "test-operator" })).heartbeatMinutes,
+    0,
+  );
+  await f.w.tick();
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(f.wakes(), []);
+  await f.request({
+    method: "wakes-heartbeat-set",
+    operator: "test-operator",
+    input: { minutes: 10, note: "Enable the idle-owner heartbeat" },
+  });
+  await f.w.tick();
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].text, /\[heartbeat\]/);
+  const restarted = new Wakes(f.control, { now: () => f.clock.now });
+  assert.equal(restarted.heartbeatMinutes(), 10);
+  await restarted.tick();
+  assert.equal(f.sent.length, 1);
+});
 test("item 2: the heartbeat nudges an idle seat with active owned work once per idle stretch, and never otherwise", async (t) => {
   const f = fixture(t);
+  await f.request({
+    method: "wakes-heartbeat-set",
+    operator: "test-operator",
+    input: { minutes: 10, note: "Enable heartbeat for this test" },
+  });
   await f.delegate(f.holder);
   const r = f.started("long build");
   await f.delegate(r);
@@ -412,6 +444,11 @@ test("item 2: the heartbeat nudges an idle seat with active owned work once per 
 });
 test("item 2: a manager worker is owned work too; the heartbeat is bounded per day", async (t) => {
   const f = fixture(t);
+  await f.request({
+    method: "wakes-heartbeat-set",
+    operator: "test-operator",
+    input: { minutes: 10, note: "Enable heartbeat for this test" },
+  });
   await f.delegate(f.holder);
   const w = f.enrol();
   await f.delegate(w);
@@ -451,7 +488,7 @@ test("operator surfaces: wakes-status and wakes-heartbeat-set are operator-only 
   );
   assert.equal(
     (await f.request({ method: "wakes-status", operator: "test-operator" })).heartbeatMinutes,
-    10,
+    0,
   );
   const src = fs.readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
   for (const s of [
@@ -460,7 +497,8 @@ test("operator surfaces: wakes-status and wakes-heartbeat-set are operator-only 
     "!control.wakes.interested(a.id)",
     "void control.wakes.onAgent(a);",
     "void control.wakes.tick();",
-    "control.wakes.pumping, control.wakes.ticking",
+    "control.wakes.pumping,",
+    "control.wakes.ticking,",
   ])
     assert.ok(src.includes(s), s);
 });
