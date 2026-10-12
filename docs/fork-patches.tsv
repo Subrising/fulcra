@@ -44,7 +44,7 @@ accounts	M	495	210	packages/app/src/screens/settings-screen.tsx
 accounts	A	111	0	packages/app/src/sessions/session-account-info.tsx
 accounts	A	34	0	packages/app/src/sessions/session-account.ts
 accounts	M	9	0	packages/app/src/subagents/track.tsx
-accounts	M	6	2	packages/cli/src/cli.ts
+accounts	M	8	2	packages/cli/src/cli.ts
 accounts	A	77	0	packages/cli/src/commands/account.test.ts
 accounts	A	176	0	packages/cli/src/commands/account.ts
 accounts	M	226	0	packages/client/src/index.test.ts
@@ -81,6 +81,7 @@ accounts	A	58	0	packages/server/src/server/agent/session-quota-usage.ts
 accounts	A	95	0	packages/server/src/server/agent/usage-recording.test.ts
 accounts	A	115	0	packages/server/src/server/agent/usage-recording.ts
 accounts	A	91	0	packages/server/src/server/daemon-e2e/limit-resume-restart.e2e.test.ts
+accounts	A	13	0	packages/server/src/server/host-link-credential.ts
 accounts	A	133	0	packages/server/src/server/integrations/accounts-store.ts
 accounts	A	324	0	packages/server/src/server/integrations/credential-backend.test.ts
 accounts	A	417	0	packages/server/src/server/integrations/credential-backend.ts
@@ -171,7 +172,7 @@ admission	M	4	3	packages/server/src/server/agent/permission-response.test.ts
 admission	A	961	0	packages/server/src/server/agent/providers/codex/turn-admission.test.ts
 admission	A	107	0	packages/server/src/server/agent/trusted-operation.ts
 admission	M	56	2	packages/server/src/server/auth.test.ts
-admission	M	56	21	packages/server/src/server/auth.ts
+admission	M	63	21	packages/server/src/server/auth.ts
 admission	M	15	0	packages/server/src/server/authorization/index.test.ts
 admission	M	9	0	packages/server/src/server/authorization/index.ts
 admission	M	122	3	packages/server/src/server/authorization/operation-permissions.ts
@@ -213,7 +214,7 @@ automations	A	71	0	packages/server/src/server/automations/start-host-automations
 branding	M	3	0	.github/workflows/release-notes-sync.yml
 branding	A	1578	0	BRANDING-CHANGES.md
 branding	M	1	1	CHANGELOG.md
-branding	M	13	0	CLAUDE.md
+branding	M	14	0	CLAUDE.md
 branding	A	9	0	CODE_OF_CONDUCT.md
 branding	M	16	89	CONTRIBUTING.md
 branding	M	77	0	docs/agent-lifecycle.md
@@ -254,11 +255,12 @@ branding	M	1	0	docs/data-model.md
 branding	M	4	2	docs/development.md
 branding	M	23	13	docs/expo-router.md
 branding	A	101	0	docs/getting-started.md
+branding	A	146	0	docs/host-links.md
 branding	A	157	0	docs/integrations-auth.md
 branding	A	5	0	docs/media/README.md
 branding	A	21	0	docs/pa34-security-notes.md
 branding	A	17	0	docs/paseo-plugin-qualification.md
-branding	M	43	11	docs/permissions.md
+branding	M	45	11	docs/permissions.md
 branding	A	195	0	docs/pipelines.md
 branding	A	10	0	docs/platform-installation-status.md
 branding	A	7	0	docs/plugin-trust.md
@@ -582,6 +584,8 @@ core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	22	0	packages/cli/src/commands/daemon/restart.ts
 core-fixes	M	19	3	packages/cli/src/commands/daemon/stop.ts
 core-fixes	M	1	1	packages/cli/src/commands/heartbeat/index.ts
+core-fixes	A	41	0	packages/cli/src/commands/host-link.test.ts
+core-fixes	A	158	0	packages/cli/src/commands/host-link.ts
 core-fixes	M	8	10	packages/cli/src/commands/open.ts
 core-fixes	M	2	2	packages/cli/src/commands/script/shared.ts
 core-fixes	M	3	3	packages/cli/src/commands/worktree/index.ts
@@ -638,7 +642,7 @@ core-fixes	A	64	0	packages/server/src/server/checkout/module-excerpt.ts
 core-fixes	M	24	0	packages/server/src/server/checkout/status-projection.test.ts
 core-fixes	M	2	0	packages/server/src/server/checkout/status-projection.ts
 core-fixes	M	8	0	packages/server/src/server/client-message-id.test.ts
-core-fixes	A	181	0	packages/server/src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
+core-fixes	A	423	0	packages/server/src/server/daemon-e2e/reporting-lines-role.e2e.test.ts
 core-fixes	A	189	0	packages/server/src/server/daemon-e2e/stored-timeline-read.e2e.test.ts
 core-fixes	A	75	0	packages/server/src/server/directory-access.test.ts
 core-fixes	A	121	0	packages/server/src/server/directory-access.ts
@@ -647,6 +651,11 @@ core-fixes	A	616	0	packages/server/src/server/held-sends.trust.test.ts
 core-fixes	A	178	0	packages/server/src/server/held-sends.ts
 core-fixes	A	101	0	packages/server/src/server/home-owner-guard.test.ts
 core-fixes	A	20	0	packages/server/src/server/home-owner-guard.ts
+core-fixes	A	161	0	packages/server/src/server/host-link-contracts.ts
+core-fixes	A	41	0	packages/server/src/server/host-link-routes.ts
+core-fixes	A	222	0	packages/server/src/server/host-link-runtime.ts
+core-fixes	A	507	0	packages/server/src/server/host-links.test.ts
+core-fixes	A	515	0	packages/server/src/server/host-links.ts
 core-fixes	A	50	0	packages/server/src/server/inspector-flavour.test.ts
 core-fixes	A	11	0	packages/server/src/server/inspector-flavour.ts
 core-fixes	A	79	0	packages/server/src/server/ledger-items.ts
@@ -669,8 +678,8 @@ core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
 core-fixes	A	46	0	packages/server/src/server/report-reader.ts
 core-fixes	A	274	0	packages/server/src/server/report-up-held.test.ts
-core-fixes	A	884	0	packages/server/src/server/report-up.test.ts
-core-fixes	A	970	0	packages/server/src/server/report-up.ts
+core-fixes	A	916	0	packages/server/src/server/report-up.test.ts
+core-fixes	A	992	0	packages/server/src/server/report-up.ts
 core-fixes	A	258	0	packages/server/src/server/reporting-lines.test.ts
 core-fixes	A	252	0	packages/server/src/server/reporting-lines.ts
 core-fixes	A	548	0	packages/server/src/server/revive-on-restart.test.ts
@@ -782,7 +791,7 @@ desktop-runtime	A	64	0	packages/desktop/src/window/renderer-crash-recovery.test.
 desktop-runtime	A	68	0	packages/desktop/src/window/renderer-crash-recovery.ts
 desktop-runtime	A	126	0	packages/server/src/server/bootstrap-interrupted-turn.test.ts
 desktop-runtime	M	75	5	packages/server/src/server/bootstrap.smoke.test.ts
-desktop-runtime	M	410	20	packages/server/src/server/bootstrap.ts
+desktop-runtime	M	427	20	packages/server/src/server/bootstrap.ts
 desktop-runtime	M	3	1	packages/server/src/server/config.test.ts
 desktop-runtime	M	56	20	packages/server/src/server/config.ts
 desktop-runtime	M	47	2	packages/server/src/server/daemon-worker.ts
@@ -1245,7 +1254,7 @@ orchestration	M	77	2	packages/protocol/src/provider-manifest.ts
 orchestration	A	81	0	packages/protocol/src/session-ownership.ts
 orchestration	M	11	1	packages/server/src/server/agent/agent-loading.ts
 orchestration	M	3663	157	packages/server/src/server/agent/agent-manager.test.ts
-orchestration	M	4010	586	packages/server/src/server/agent/agent-manager.ts
+orchestration	M	4013	586	packages/server/src/server/agent/agent-manager.ts
 orchestration	M	201	15	packages/server/src/server/agent/agent-mcp.e2e.test.ts
 orchestration	M	30	0	packages/server/src/server/agent/import-sessions.test.ts
 orchestration	M	24	5	packages/server/src/server/agent/import-sessions.ts
