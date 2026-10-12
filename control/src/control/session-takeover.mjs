@@ -223,7 +223,7 @@ export async function takeOverSession(
           reason,
           account: { id: accountId, name: target.name, provider: target.provider },
           at,
-          message: `Continued on account "${target.name}" at ${at}`,
+          message: `Switched to account "${target.name}" at ${at}`,
         };
         control.store.finish(eventId, "delivered", reply);
         return reply;

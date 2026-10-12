@@ -541,8 +541,9 @@ export async function rotate(
 }
 // The owner's manual switch of ONE session to another account of its provider. `account` is an id or a name (any case).
 // With a takeover seam (W2's, reached through the controller) the takeover OWNS the move: it fences the session, writes
-// the assignment and the one history record (reason "manual"), then continues the session on the new account with its
-// history. This function only validates and asks, so nothing here can move the store ahead of the running process
+// the assignment and the one history record (reason "manual"), then quietly reconnects with the retained history.
+// A manual switch sends no continuation. This function only validates and asks, so it cannot move the store ahead
+// of the running process
 // (a launch while the takeover runs still takes the old account). Without a seam the choice is written here and applies
 // at the session's next start. Messages are plain: never an error's own text, never what was typed (it could be a
 // pasted token). Owner-initiated only: reached from the app's own RPC, never from an agent tool.
@@ -601,12 +602,12 @@ export async function switchSession(
         message:
           typeof t.message === "string" && t.message
             ? t.message.slice(0, 300)
-            : `Continued on ${r.to.name} with its history.`,
+            : `Switched to account "${r.to.name}".`,
       };
     return no(
       t && typeof t.message === "string" && t.message
         ? t.message.slice(0, 300)
-        : `The session could not continue on ${r.to.name}.${r.from ? ` It stays on ${r.from.name}.` : ""}`,
+        : `The session could not switch to ${r.to.name}.${r.from ? ` It stays on ${r.from.name}.` : ""}`,
     );
   }
   const r = await update(root, (s) => {

@@ -150,7 +150,7 @@ export function createAccountCommand(): Command {
     cmd
       .command("use")
       .argument("<name>", "Account name or ID")
-      .requiredOption("--agent <id>", "Session to continue on this account"),
+      .requiredOption("--agent <id>", "Session to switch to this account"),
   ).action(
     withOutput(async (name: string, options: AccountOptions, _command: Command) => {
       const client = await connectToDaemon({ target: options.daemonTarget });
