@@ -2,7 +2,7 @@ import { expect, test, type Page } from "../support/fixtures";
 import { expectComposerVisible } from "../support/helpers/composer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 
-const MOBILE_VIEWPORT = { width: 390, height: 844 };
+const MOBILE_VIEWPORT = { width: 375, height: 844 };
 
 async function openMockAgentAtMobileBreakpoint(page: Page) {
   await page.setViewportSize(MOBILE_VIEWPORT);
@@ -24,11 +24,11 @@ async function openMockAgentAtMobileBreakpoint(page: Page) {
 }
 
 function bottomSheetBackdrop(page: Page) {
-  return page.getByRole("button", { name: "Bottom sheet backdrop" }).first();
+  return page.getByRole("button", { name: "Bottom sheet backdrop" }).last();
 }
 
 function bottomSheetHandle(page: Page) {
-  return page.getByRole("slider", { name: "Bottom sheet handle" }).first();
+  return page.getByRole("slider", { name: "Bottom sheet handle" }).last();
 }
 
 async function expectBottomSheetOpen(page: Page) {
@@ -37,39 +37,10 @@ async function expectBottomSheetOpen(page: Page) {
 
 async function closeBottomSheetWithBackdrop(page: Page) {
   const backdrop = bottomSheetBackdrop(page);
-  const handle = bottomSheetHandle(page);
-  // Tapping the backdrop is the close path under test, but on a loaded CI runner
-  // the model-selector sheet re-renders as its model list settles and Gorhom
-  // drops backdrop presses during that churn — so a tap (even retried) can fail
-  // to dismiss. Tap the backdrop first; if it survives, drag the handle down,
-  // which drives Gorhom's pan-to-close directly and is unaffected by the churn.
-  // The post-close guard below still protects the regression this test exists
-  // for: a sheet that dismisses, then re-presents.
-  await expect(async () => {
-    if (!(await backdrop.isVisible())) {
-      return;
-    }
-    const box = await backdrop.boundingBox();
-    if (box) {
-      await page.mouse.click(box.x + box.width / 2, box.y + 24);
-    }
-    await page.waitForTimeout(150);
-    if (await backdrop.isVisible()) {
-      const handleBox = await handle.boundingBox();
-      if (handleBox) {
-        const startX = handleBox.x + handleBox.width / 2;
-        const startY = handleBox.y + handleBox.height / 2;
-        await page.mouse.move(startX, startY);
-        await page.mouse.down();
-        await page.mouse.move(startX, startY + 400, { steps: 8 });
-        await page.mouse.up();
-      }
-    }
-    await expect(backdrop).not.toBeVisible({ timeout: 1_000 });
-  }).toPass({ timeout: 15_000 });
-  // Guard against the regression where the sheet starts dismissing, then re-presents.
-  await page.waitForTimeout(500);
-  await expect(backdrop).not.toBeVisible({ timeout: 1_000 });
+  // The backdrop fills the screen before the sheet finishes presenting.
+  await bottomSheetHandle(page).click({ trial: true });
+  await backdrop.click({ position: { x: MOBILE_VIEWPORT.width / 2, y: 24 } });
+  await expect(backdrop).toHaveCount(0);
 }
 
 async function openTabSwitcher(page: Page) {
@@ -90,7 +61,8 @@ async function dismissStackedModelPickerWithBackdrop(page: Page) {
     .getByRole("button", { name: /Select model/ })
     .click();
   await expect(page.getByTestId("agent-controls-model-browser-sheet")).toBeVisible();
-  await page.mouse.click(MOBILE_VIEWPORT.width / 2, 24);
+  await bottomSheetHandle(page).click({ trial: true });
+  await bottomSheetBackdrop(page).click({ position: { x: MOBILE_VIEWPORT.width / 2, y: 24 } });
   await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeVisible();
   await expect(page.getByTestId("agent-controls-model-sheet")).toBeVisible();
   await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible();
@@ -140,6 +112,7 @@ test.describe("mobile bottom sheet reopen", () => {
         await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible();
         await expect(page.getByTestId("agent-controls-model")).toContainText("Ten second stream");
         await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeVisible();
+        await page.screenshot({ path: test.info().outputPath("model-sheet-reopened.png") });
       });
     } finally {
       await session.cleanup();

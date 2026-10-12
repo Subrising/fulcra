@@ -1,7 +1,7 @@
 import { expect, test } from "../support/fixtures";
 import { openCommandCenter } from "../support/helpers/command-center";
 import {
-  delayDirectorySuggestionResponses,
+  holdDirectorySuggestionResponses,
   expectOneLineTruncatedFileResult,
   expectStableCommandCenterLayout,
   failDirectorySuggestionRequests,
@@ -46,6 +46,7 @@ test("workspace file search stays geometrically stable through delayed loading a
   page,
 }) => {
   test.setTimeout(120_000);
+  await page.setViewportSize({ width: 844, height: 390 });
   const seeded = await seedWorkspace({
     repoPrefix: "command-center-file-search-",
     title: "Paseo-shaped file search",
@@ -53,13 +54,14 @@ test("workspace file search stays geometrically stable through delayed loading a
   });
 
   try {
-    await delayDirectorySuggestionResponses(page, 800);
+    const search = await holdDirectorySuggestionResponses(page);
     await gotoWorkspace(page, seeded.workspaceId);
     await page.keyboard.press("Meta+P");
 
     const panel = page.getByTestId("command-center-panel");
     await expect(panel).toBeVisible({ timeout: 30_000 });
     await expect(panel.getByRole("button", { name: "Files" })).toBeVisible();
+    await panel.getByTestId("command-center-input").click();
     await startCommandCenterLayoutObservation(page);
 
     await panel.getByTestId("command-center-input").fill(FILE_NAME);
@@ -72,13 +74,16 @@ test("workspace file search stays geometrically stable through delayed loading a
       path: FILE_DIRECTORY,
     });
 
+    search.holdQuery("needle-layout");
     await panel.getByTestId("command-center-input").fill("needle-layout");
-    await page.waitForTimeout(150);
-    expect(await row.isVisible()).toBe(true);
+    await search.waitForResponse();
+    await expect(row).toBeVisible();
     await expect(panel.getByTestId("command-center-file-search-loading")).toBeVisible();
     await expect(panel.getByText("Searching files...", { exact: true })).toHaveCount(0);
+    search.release();
     await expect(panel.getByTestId("command-center-file-search-loading")).toBeHidden();
     await expectStableCommandCenterLayout(page);
+    await page.screenshot({ path: test.info().outputPath("file-search-stable.png") });
 
     await row.click();
     await expectFileTabOpen(page, FILE_PATH);

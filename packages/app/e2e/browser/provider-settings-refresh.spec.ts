@@ -125,11 +125,12 @@ test.describe("provider settings overlay stack", () => {
       title: "Provider relative time",
     });
     try {
-      await page.clock.install({ time: Date.now() });
       await page.setViewportSize(MOBILE_VIEWPORT);
       await openAgentRoute(page, session);
       await expectComposerVisible(page);
       await openProviderSettingsFromModelSelector(page);
+      // The worker's catalog can predate this test by several minutes.
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
       await expect(page.getByText("Updated just now", { exact: true })).toBeVisible({
         timeout: 30_000,
       });

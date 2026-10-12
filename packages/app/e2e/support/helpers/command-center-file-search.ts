@@ -48,19 +48,55 @@ function parseSessionMessage(message: WebSocketMessage): Record<string, unknown>
   }
 }
 
-export async function delayDirectorySuggestionResponses(page: Page, delayMs = 400): Promise<void> {
+export async function holdDirectorySuggestionResponses(page: Page) {
+  let heldQuery: string | null = null;
+  const requestIds = new Set<string>();
+  const releases: Array<() => void> = [];
+  let responseArrived = Promise.withResolvers<void>();
   await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
     const server = ws.connectToServer();
-    ws.onMessage((message) => server.send(message));
+    ws.onMessage((message) => {
+      const request = parseSessionMessage(message);
+      if (
+        heldQuery !== null &&
+        request?.type === "directory_suggestions_request" &&
+        request.query === heldQuery &&
+        typeof request.requestId === "string"
+      ) {
+        requestIds.add(request.requestId);
+      }
+      server.send(message);
+    });
     server.onMessage((message) => {
       const sessionMessage = parseSessionMessage(message);
-      if (sessionMessage?.type === "directory_suggestions_response") {
-        setTimeout(() => ws.send(message), delayMs);
+      const payload = sessionMessage?.payload;
+      if (
+        sessionMessage?.type === "directory_suggestions_response" &&
+        payload &&
+        typeof payload === "object" &&
+        "requestId" in payload &&
+        typeof payload.requestId === "string" &&
+        requestIds.delete(payload.requestId)
+      ) {
+        releases.push(() => ws.send(message));
+        responseArrived.resolve();
         return;
       }
       ws.send(message);
     });
   });
+  return {
+    holdQuery(query: string) {
+      heldQuery = query;
+      responseArrived = Promise.withResolvers<void>();
+    },
+    waitForResponse: () => responseArrived.promise,
+    release() {
+      heldQuery = null;
+      requestIds.clear();
+      for (const send of releases.splice(0)) send();
+    },
+  };
 }
 
 export async function failDirectorySuggestionRequests(page: Page): Promise<void> {
@@ -180,8 +216,11 @@ export async function startCommandCenterLayoutObservation(page: Page): Promise<v
 }
 
 export async function expectStableCommandCenterLayout(page: Page): Promise<void> {
-  await page.waitForTimeout(500);
-  const observation = await page.evaluate(() => {
+  const observation = await page.evaluate(async () => {
+    // Include the final committed layout without a wall-clock delay.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
     const state = (window as LayoutOracleWindow).__commandCenterLayoutObservation;
     if (!state) throw new Error("Command center layout observer was not installed");
     state.active = false;

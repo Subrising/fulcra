@@ -23,7 +23,7 @@ const MODELESS_PROVIDER = "modeless-profile-e2e";
 const MODELESS_MODEL = "pi-profile-model";
 
 async function seedPoisonedModelessPreference(page: Page): Promise<void> {
-  await page.addInitScript(
+  await page.evaluate(
     ({ preferencesKey, provider, model }) => {
       localStorage.setItem(
         preferencesKey,
@@ -35,6 +35,8 @@ async function seedPoisonedModelessPreference(page: Page): Promise<void> {
           },
         } satisfies FormPreferences),
       );
+      const nonce = localStorage.getItem("@paseo:e2e-seed-nonce");
+      localStorage.setItem("@paseo:e2e-disable-default-seed-once", nonce ?? "");
     },
     {
       preferencesKey: CREATE_AGENT_PREFERENCES_KEY,
@@ -42,6 +44,7 @@ async function seedPoisonedModelessPreference(page: Page): Promise<void> {
       model: MODELESS_MODEL,
     },
   );
+  await page.reload();
 }
 
 async function readProviderModePreference(page: Page, provider: string): Promise<unknown> {
@@ -72,6 +75,7 @@ test.describe("Agent profiles repair modeless provider preferences", () => {
   test.describe.configure({ timeout: 240_000 });
 
   test("applying a profile heals a stale mode before returning to Pi", async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 1024 });
     const workspace = await seedWorkspace({ repoPrefix: "profile-modeless-preferences-" });
     const profiles = await seedAgentProfiles([
       {
@@ -95,11 +99,12 @@ test.describe("Agent profiles repair modeless provider preferences", () => {
         },
       ],
     });
-    await seedPoisonedModelessPreference(page);
     const createAgentRecorder = await captureWorkspaceAgentRequest(page, { block: true });
 
     try {
       await gotoAppShell(page);
+      await seedPoisonedModelessPreference(page);
+      expect(await readProviderModePreference(page, MODELESS_PROVIDER)).toBe("full-access");
       await waitForSidebarHydration(page);
       await openGlobalNewWorkspaceComposer(page);
       await selectNewWorkspaceProject(page, {
@@ -120,6 +125,7 @@ test.describe("Agent profiles repair modeless provider preferences", () => {
       await openModelPicker(page);
       await drillIntoProvider(page, MODELESS_PROVIDER);
       await page.getByRole("button", { name: /Pi profile model/ }).click();
+      await page.screenshot({ path: test.info().outputPath("modeless-profile.png") });
 
       await submitNewWorkspacePrompt(page, "Create a Pi agent after repairing preferences.");
       const createAgentRequest = await createAgentRecorder.waitForRequest();
@@ -135,6 +141,7 @@ test.describe("Agent profiles repair modeless provider preferences", () => {
   });
 
   test("cross-provider profile features survive immediate workspace creation", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
     const workspace = await seedWorkspace({ repoPrefix: "profile-feature-transition-" });
     const featureProviderId = "profile-feature-e2e";
     const featureModelId = "claude-opus-5";
@@ -159,7 +166,10 @@ test.describe("Agent profiles repair modeless provider preferences", () => {
         },
       ],
     });
-    const createAgentRecorder = await captureWorkspaceAgentRequest(page, { block: true });
+    const createAgentRecorder = await captureWorkspaceAgentRequest(page, {
+      block: true,
+      holdFeatureCatalogFor: featureProviderId,
+    });
 
     try {
       await gotoAppShell(page);
@@ -172,9 +182,11 @@ test.describe("Agent profiles repair modeless provider preferences", () => {
 
       await openModelPicker(page);
       await applyProfileFromPicker(page, "Fast profile");
+      await createAgentRecorder.waitForFeatureRequest();
       await expect
         .poll(() => readProviderFeaturePreferences(page, featureProviderId), { timeout: 10_000 })
         .toEqual({ fast_mode: true });
+      await page.screenshot({ path: test.info().outputPath("profile-feature-transition.png") });
       await submitNewWorkspacePrompt(page, "Create an agent with profile features.");
 
       const createAgentRequest = await createAgentRecorder.waitForRequest();
@@ -185,6 +197,7 @@ test.describe("Agent profiles repair modeless provider preferences", () => {
         },
       });
     } finally {
+      createAgentRecorder.releaseFeatureCatalog();
       await workspace.cleanup();
       await provider.restore();
       await profiles.restore();
