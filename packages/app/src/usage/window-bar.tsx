@@ -167,6 +167,8 @@ const styles = StyleSheet.create((theme) => ({
   pin: { width: 12, alignItems: "center" },
   tooltipText: { color: theme.colors.popoverForeground, fontSize: theme.fontSize.sm },
   row: {
+    minHeight: 48,
+    justifyContent: "center",
     gap: 3,
     // The highlight bleeds into the card padding so the label and bar stay on the card's rail.
     marginHorizontal: -theme.spacing[2],

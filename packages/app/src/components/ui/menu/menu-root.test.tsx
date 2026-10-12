@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CurrentSessionAccountInfo, SessionAccountInfo } from "@/sessions/session-account-info";
 import { useSessionStore } from "@/stores/session-store";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
-import { AccountRundown } from "@/provider-usage/account-rundown";
 import { MenuRoot, MenuTrigger } from "./menu-root";
 
 const ACCOUNT_A = { providerLabel: "Codex", name: "A" };
@@ -117,28 +116,4 @@ it("the mounted header follows live projected store upserts A to B to A and miss
   );
   expect(screen.queryByRole("button", { name: /Session info/ })).toBeNull();
   expect(screen.queryByText("Personal")).toBeNull();
-});
-
-it("the mounted rundown displays qualified counts and explicit legacy unavailability", () => {
-  const base = {
-    provider: "codex" as const,
-    source: null,
-    observedAt: null,
-    status: "unavailable" as const,
-    fiveHour: null,
-    weekly: null,
-    inUse: true,
-  };
-  const { container } = render(
-    <AccountRundown
-      accounts={[
-        { ...base, accountId: "one", name: "One", sessionCount: 1 },
-        { ...base, accountId: "zero", name: "Zero", sessionCount: 0 },
-        { ...base, accountId: "legacy", name: "Legacy" },
-      ]}
-    />,
-  );
-  expect(container.textContent).toContain("1 session on this host");
-  expect(container.textContent).toContain("0 sessions on this host");
-  expect(container.textContent).toContain("Session count unavailable");
 });

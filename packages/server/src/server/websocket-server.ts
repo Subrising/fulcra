@@ -97,7 +97,7 @@ import {
   type WebSocketRuntimeCounters,
   type WebSocketRuntimeDiagnosticSnapshot,
 } from "./websocket/runtime-metrics.js";
-import { ProviderUsageService } from "../services/quota-fetcher/service.js";
+import type { ProviderUsageService } from "../services/quota-fetcher/service.js";
 import { AccountUsageRegistry } from "../services/quota-fetcher/account-usage-registry.js";
 import { ClaudeAccountUsageReader } from "../services/quota-fetcher/providers/claude-account-usage.js";
 import { CodexAccountUsageReader } from "../services/quota-fetcher/providers/codex-account-usage.js";
@@ -652,7 +652,7 @@ export class VoiceAssistantWebSocketServer {
   private eventLoopDelayMonitor: ReturnType<typeof monitorEventLoopDelay> | null = null;
   private unsubscribeSpeechReadiness: (() => void) | null = null;
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
-  private readonly providerUsageService: ProviderUsageService;
+  private readonly providerUsageService: Pick<ProviderUsageService, "listUsage" | "observeUsage">;
   private readonly accountUsage: AccountUsageRegistry;
   private unsubscribeTerminalActivity: (() => void) | null = null;
   private readonly browserToolsBroker: BrowserToolsBroker | null;
@@ -827,9 +827,14 @@ export class VoiceAssistantWebSocketServer {
       });
     });
 
-    this.providerUsageService = new ProviderUsageService({
-      logger: this.logger,
-    });
+    this.providerUsageService = {
+      listUsage: async () =>
+        this.pluginRuntime?.listLegacyUsage() ?? {
+          fetchedAt: new Date().toISOString(),
+          providers: [],
+        },
+      observeUsage: () => ({ fetchedAt: new Date().toISOString(), providers: [] }),
+    };
     // update-7c: per-account usage for the Fulcra account pool (Claude and Codex readers).
     // Match the trusted distribution home; the daemon's inherited shell environment is not the plugin home.
     this.accountUsage = new AccountUsageRegistry({

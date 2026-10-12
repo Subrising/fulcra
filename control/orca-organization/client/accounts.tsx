@@ -4,7 +4,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
-import { UsageRundown } from "./usage-rundown";
 import {
   accountsRpc,
   accountAddRpc,
@@ -157,7 +156,6 @@ export function AccountsSurface({ theme, layout, host }: Props) {
           {notice}
         </Text>
       )}
-      <UsageRundown theme={theme} hostId={host.id} />
       {v &&
         (["claude", "codex"] as const).map((provider) => {
           const list = v.accounts

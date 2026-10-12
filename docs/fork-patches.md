@@ -1,6 +1,6 @@
 # Fork patch ledger
 
-Fulcra is a deliberate fork of Paseo. Its core changes are grouped into a few named patches so each upstream merge conflicts in predictable places. The orchestration core (hierarchy, durable report-up, re-parent/promote, account pool and credentials, permission veto/admission, session launch) stays in core as named patches; it cannot be a plugin. Only separable UI views and helpers move to the bundled plugin. Nothing here is offered upstream.
+Fulcra is a deliberate fork of Paseo. Its core changes are grouped into a few named patches so each upstream merge conflicts in predictable places. The orchestration core (hierarchy, durable report-up, re-parent/promote, account pool and credentials, permission veto/admission, session launch) stays in core as named patches; it cannot be a plugin. Separable UI views, usage sources, and lifecycle observation policy move to bundled plugins. Nothing here is offered upstream.
 
 Every file that differs from the Paseo base is listed with its patch in [fork-patches.tsv](fork-patches.tsv). `node scripts/fork-ledger.mjs --check` fails when that list is stale; regenerate with `--write` and review the change. Mark owned seams in core with `// FULCRA(<patch>)`.
 
@@ -21,10 +21,10 @@ Decided 7 Oct 2026 after the Paseo v0.11 merge: a piece moves into the bundled p
 | Automations | ~150 lines, 14 files | 2 SDK seams (schedules, server-side API) + ~900-line UI rewrite | Stays: own patch `automations` |
 | Architecture map | ~167 lines, 20 files | ~8.4k-line UI rewrite + git/PR data in the plugin | Stays in `features` |
 | Insights | ~58 lines, 11 files | recorder as plugin events + UI rewrite | Stays in `features` |
-| Limit resume | ~42 lines, 12 files | part of the account pool | Stays in `accounts` |
+| Limit resume | guarded host handoff and private queue writer | native event observer in the bundled policy resource | Parsing and timers move; admission stays in `accounts` |
 | Portable memory | none (already in `control/`) | n/a | Unchanged |
 
-Organisation, report-up, hierarchy, accounts presentation and switching already live in the plugin.
+Organisation, hierarchy, account controls, and switching live in the Command Centre plugin. Native Usage owns quota presentation.
 
 ## Patches
 
@@ -32,26 +32,26 @@ Organisation, report-up, hierarchy, accounts presentation and switching already 
 | Patch | Owner | Upstream files changed | Lines in them | New files | New lines | Reason |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | `image-retention` | Fulcra prime (platform) | 4 | +483/−37 | 0 | +0 | Agent image files: confined private storage and a rolling retention window. At about 2,000 files or 1 GB the least recently written images are deleted to make room, and a deleted image reads as 'Image no longer kept'. Paseo refused every new image after 256 files or 64 MB per daemon run. |
-| `orchestration` | Fulcra prime (orchestration) | 62 | +18393/−1610 | 63 | +15309 | Primes/leads/workers hierarchy, durable report-up and receipts, re-parent/promote, controller channel and management route. Paseo has no hierarchy or durable delivery. |
-| `admission` | Fulcra prime (security) | 26 | +4172/−456 | 30 | +6575 | Permission veto and input admission (human seat vs delegated seat), per-agent grants, trusted host. Paseo has no before-hook on prompt/send/permission and its permissions are daemon-wide. |
-| `accounts` | Fulcra prime (accounts) | 19 | +1211/−303 | 128 | +23490 | Account pool, per-launch credentials, plugin secrets/credential store (including plugin-saved secrets, used by Deploy for a cluster sign-in), connectors, account usage, quota and limit resume. Paseo has no secret store or multi-account launch. |
-| `session-launch` | Fulcra prime (providers) | 87 | +8225/−1157 | 36 | +5938 | Session launch: create-agent intent, provider launch config, Claude/Codex/OpenCode/Pi provider changes, public baseline transport, model catalog. |
-| `plugin-host` | Fulcra prime (platform) | 62 | +3243/−234 | 61 | +8930 | Bundled trusted plugin loading and the SDK adapters the bundled plugin needs (update/cancel, notifications, replayable events, panels, turn footers, and AgentQuestions in the UI kit, which reuses the core PermissionRequestCard exported from agent-stream/view.tsx). |
+| `orchestration` | Fulcra prime (orchestration) | 63 | +18572/−1614 | 63 | +15309 | Primes/leads/workers hierarchy, durable report-up and receipts, re-parent/promote, controller channel and management route. Paseo has no hierarchy or durable delivery. |
+| `admission` | Fulcra prime (security) | 26 | +4172/−456 | 30 | +6614 | Permission veto and input admission (human seat vs delegated seat), per-agent grants, trusted host. Paseo has no before-hook on prompt/send/permission and its permissions are daemon-wide. |
+| `accounts` | Fulcra prime (accounts) | 24 | +1238/−317 | 108 | +17628 | Account pool, per-launch credentials, plugin secrets/credential store (including plugin-saved secrets, used by Deploy for a cluster sign-in), connectors, account usage, quota and limit resume. Paseo has no secret store or multi-account launch. |
+| `session-launch` | Fulcra prime (providers) | 85 | +8006/−1155 | 36 | +5938 | Session launch: create-agent intent, provider launch config, Claude/Codex/OpenCode/Pi provider changes, public baseline transport, model catalog. |
+| `plugin-host` | Fulcra prime (platform) | 62 | +3292/−235 | 61 | +8930 | Bundled trusted plugin loading and the SDK adapters the bundled plugin needs (update/cancel, notifications, replayable events, panels, turn footers, and AgentQuestions in the UI kit, which reuses the core PermissionRequestCard exported from agent-stream/view.tsx). |
 | `pairing` | Fulcra prime (security) | 40 | +3668/−1354 | 71 | +8627 | Relay v3, signed invitations, device proof, immutable daemon-key pin, host repair, multi-Mac pairing bundles. Security transport below the plugin layer. |
 | `durability` | Fulcra prime (platform) | 24 | +2250/−72 | 2 | +1066 | Durable timelines and state: file timeline store, atomic writes, pid lock, persisted config, workspace reconciliation fixes that prevent history loss. |
-| `desktop-runtime` | Fulcra prime (release) | 72 | +3397/−529 | 32 | +3990 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
+| `desktop-runtime` | Fulcra prime (release) | 72 | +3398/−529 | 32 | +3990 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
 | `automations` | Fulcra prime (product) | 1 | +11/−0 | 10 | +2717 | Automations ("when X, do Y") on top of Paseo schedules: service, protocol messages, client calls, screen and sidebar entry. Kept in core: moving it into the plugin needs two SDK seams and a ~900-line UI rewrite to save ~150 shared-file lines. |
 | `features` | Fulcra prime (product) | 163 | +3956/−1135 | 178 | +28111 | Fulcra product UI and helpers in the app: architecture map and plain-English PR review (the checkout.pull-request-review.explain RPC behind the pullRequestReviewExplain feature, cached in PASEO_HOME/review-explanations, capped daily by the optional daemon config field explainDailyLimit), insights, work map, attention, schedules, navigation, sidebar and other views. Kept in core because each would cost more to move into the plugin than the shared-file lines it saves. |
 | `branding` | Fulcra prime (release) | 73 | +6169/−1880 | 115 | +5178 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
 | `build-ci` | Fulcra prime (release) | 66 | +1624/−2627 | 78 | +6293 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
-| `core-fixes` | Fulcra prime (platform) | 60 | +1153/−275 | 90 | +11512 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
-| **total** | | 759 | +57955/−11669 | 894 | +127736 | |
+| `core-fixes` | Fulcra prime (platform) | 60 | +1153/−275 | 92 | +11554 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
+| **total** | | 763 | +57992/−11686 | 876 | +121955 | |
 
 Shared seams (upstream files where several patches meet; resolve these hunk by hunk on merge):
 
 | File | Lines changed | Split by patch (% of changed lines; rest unattributed) |
 | --- | ---: | --- |
-| `packages/server/src/server/agent/agent-manager.ts` | 4505 | orchestration 58%, admission 23%, session-launch 10%, durability 2%, accounts 0% |
+| `packages/server/src/server/agent/agent-manager.ts` | 4559 | orchestration 58%, admission 21%, session-launch 11%, durability 2%, accounts 1% |
 | `packages/client/src/daemon-client.ts` | 1676 | admission 38%, orchestration 38%, accounts 7%, durability 6%, pairing 3%, session-launch 0% |
 | `packages/protocol/src/messages.ts` | 1375 | orchestration 37%, session-launch 32%, accounts 12%, automations 7%, admission 4%, durability 3%, plugin-host 1%, pairing 0% |
 | `packages/app/src/screens/settings-screen.tsx` | 705 | accounts 29%, plugin-host 10% |
