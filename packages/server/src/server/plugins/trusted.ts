@@ -216,6 +216,12 @@ export class TrustedPlugins {
   private nativeIdentityReader?: (
     id: string,
   ) => { instanceId: string; nativeSessionId: string } | null;
+  private automaticInputGate?: (agentId: string) => void;
+  /** Host-owned refusal only. Source comes from authenticated input context, never a wire field. */
+  setAutomaticInputGate(gate: (agentId: string) => void): void {
+    if (this.automaticInputGate) throw new Error("Automatic input gate already bound");
+    this.automaticInputGate = gate;
+  }
   /** Native manager-owned single reader. It never supplies action grants or accepts wire identity strings. */
   setNativeIdentityReader(
     reader: (id: string) => { instanceId: string; nativeSessionId: string } | null,
@@ -640,6 +646,7 @@ export class TrustedPlugins {
       this.consumeInputToken(agent, kind, messageId, digest, context);
       this.verifyOperationBinding(agent, messageId, payload, digest, context);
       this.createOperation(agent, kind, messageId, payload, digest, context);
+      this.checkAutomaticInput(agent.id, kind, context);
       if (this.v11.size && !context.handle)
         throw new AdmissionDeniedError("Actual input payload unavailable");
       this.countHumanInput(agent, context);
@@ -675,6 +682,18 @@ export class TrustedPlugins {
       }
     });
     return operation();
+  }
+
+  private checkAutomaticInput(
+    agentId: string,
+    kind: TrustedInputKind,
+    context: InputContext,
+  ): void {
+    if (
+      ["prompt", "steer", "replace"].includes(kind) &&
+      (context.verified || context.source !== "human")
+    )
+      this.automaticInputGate?.(agentId);
   }
 
   private inputDigest(
