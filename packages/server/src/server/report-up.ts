@@ -159,6 +159,14 @@ export async function leadChatOf(
   return { id };
 }
 
+const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
+interface PendingNudge {
+  generation: number;
+  startedAt: number;
+  fingerprint: string;
+  abort: AbortController;
+}
+
 export class ReportUpService {
   private readonly observer: import("../../../../plugins/fulcra-agent-policy/server/report-observer.mjs").ReportUpObserver;
   private stopped = false;
@@ -169,7 +177,8 @@ export class ReportUpService {
   private readonly held = new Map<string, HeldReport[]>();
   /** State last delivered to each lead; notice replies do not change it. */
   private readonly nudged = new Map<string, string>();
-  private readonly nudging = new Set<string>();
+  private readonly nudging = new Map<string, PendingNudge>();
+  private nudgeGeneration = 0;
 
   constructor(private readonly deps: ReportUpDeps) {
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
@@ -180,7 +189,10 @@ export class ReportUpService {
       onStarted: (id) => {
         this.finishOwners.delete(id);
       },
-      onClosed: (id) => this.finishOwners.delete(id),
+      onClosed: (id) => {
+        this.finishOwners.delete(id);
+        this.nudging.get(id)?.abort.abort(new Error("Idle nudge receiver closed"));
+      },
       onEnded: (input) => this.onTurnEnd(input),
       onPermission: (id, request) => {
         void this.notifyPermission(id, request).catch((err: unknown) =>
@@ -283,6 +295,9 @@ export class ReportUpService {
   stop(): void {
     this.stopped = true;
     this.observer.stop();
+    for (const pending of this.nudging.values())
+      pending.abort.abort(new Error("Idle nudge service stopped"));
+    this.nudging.clear();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.finishOwners.clear();
@@ -394,9 +409,9 @@ export class ReportUpService {
    * when the lead is at a usage limit, or when the same state was already delivered.
    */
   private async nudgeIdleLead(leadId: string): Promise<void> {
-    if (!this.otherEnabled() || this.nudging.has(leadId)) return;
+    if (!this.otherEnabled()) return;
     await new Promise((resolve) => setImmediate(resolve));
-    if (this.observer.isOpen(leadId) || this.nudging.has(leadId) || this.limitOf(leadId)) return;
+    if (this.observer.isOpen(leadId) || this.limitOf(leadId)) return;
     const lead = await this.store.get(leadId);
     const live = this.deps.agentManager.getAgent(leadId);
     if (!lead || lead.archivedAt || live?.internal) return;
@@ -404,33 +419,82 @@ export class ReportUpService {
     const stop = classifyEndingAssistantMessage(last, this.now());
     if (stop && stop.kind !== "network") return;
     const workers = await this.idleWorkersOf(leadId);
-    if (!workers.length) return;
+    if (!workers.length) {
+      this.cancelNudge(leadId, "Idle nudge has no eligible workers");
+      return;
+    }
     const owned = rowsOwnedBy(
       await (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
       { id: leadId, title: titleOf(lead) },
     );
-    if (!owned.length) return;
+    if (!owned.length) {
+      this.cancelNudge(leadId, "Idle nudge has no owned open items");
+      return;
+    }
     const fingerprint = JSON.stringify([
       workers.map((worker) => worker.id).sort(),
       owned.map((item) => item.id).sort(),
     ]);
-    // Lists can finish reading after another idle event or after the lead starts work.
-    if (this.observer.isOpen(leadId) || this.nudging.has(leadId)) return;
+    if (this.observer.isOpen(leadId)) return;
+    const pending = this.nudging.get(leadId);
+    if (pending) {
+      const unchanged = pending.fingerprint === fingerprint;
+      const withinDeadline = this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS;
+      if (unchanged && withinDeadline && !pending.abort.signal.aborted) return;
+      pending.abort.abort(new Error("Idle nudge state changed or expired"));
+    }
     if (this.nudged.get(leadId) === fingerprint) return;
-    this.nudging.add(leadId);
-    const deliver = async () => {
-      if (!this.noticeEnabled("idle-nudge") || this.limitOf(leadId)) return;
-      const prompt = formatSystemNotificationPrompt(formatNudge(workers, owned));
-      if (this.deps.deliver) await this.deps.deliver(leadId, prompt);
-      else await this.send(leadId, prompt, "idle-nudge");
-      this.nudged.set(leadId, fingerprint);
+    await this.deliverNudge(
+      leadId,
+      fingerprint,
+      formatSystemNotificationPrompt(formatNudge(workers, owned)),
+    );
+  }
+
+  private cancelNudge(leadId: string, reason: string): void {
+    this.nudging.get(leadId)?.abort.abort(new Error(reason));
+  }
+
+  private async deliverNudge(leadId: string, fingerprint: string, prompt: string): Promise<void> {
+    const pending: PendingNudge = {
+      generation: ++this.nudgeGeneration,
+      startedAt: this.now(),
+      fingerprint,
+      abort: new AbortController(),
     };
+    this.nudging.set(leadId, pending);
+    const current = () =>
+      this.nudging.get(leadId)?.generation === pending.generation &&
+      !pending.abort.signal.aborted &&
+      this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS;
+    let cancel!: () => void;
+    const canceled = new Promise<void>((_resolve, reject) => {
+      cancel = () => reject(pending.abort.signal.reason);
+      pending.abort.signal.addEventListener("abort", cancel, { once: true });
+    });
+    // Bound queueing and dispatch before either can start. Expiry never creates another nudge.
+    const timer = setTimeout(() => {
+      pending.abort.abort(new Error("Idle nudge delivery timed out"));
+    }, NUDGE_DELIVERY_TIMEOUT_MS);
+    this.timers.add(timer);
+    const dispatch = async () => {
+      if (!current() || !this.noticeEnabled("idle-nudge") || this.limitOf(leadId)) return;
+      if (this.deps.deliver) await this.deps.deliver(leadId, prompt);
+      else await this.send(leadId, prompt, "idle-nudge", current);
+      if (current()) this.nudged.set(leadId, fingerprint);
+    };
+    // Cancellation also settles the held callback, so a stalled dispatch cannot block the queue.
+    const deliver = () => Promise.race([dispatch(), canceled]);
     try {
-      if (this.deps.deliver) await deliver();
-      else
-        await heldSendsFor(this.deps.agentManager, this.deps.logger).holdAndWait(leadId, deliver);
+      const delivery = this.deps.deliver
+        ? deliver()
+        : heldSendsFor(this.deps.agentManager, this.deps.logger).holdAndWait(leadId, deliver);
+      await Promise.race([delivery, canceled]);
     } finally {
-      this.nudging.delete(leadId);
+      clearTimeout(timer);
+      this.timers.delete(timer);
+      pending.abort.signal.removeEventListener("abort", cancel);
+      if (this.nudging.get(leadId)?.generation === pending.generation) this.nudging.delete(leadId);
     }
   }
 
@@ -794,10 +858,16 @@ export class ReportUpService {
     );
   }
 
-  private send(leadId: string, prompt: string, kind: NoticeKind): Promise<void> {
+  private send(
+    leadId: string,
+    prompt: string,
+    kind: NoticeKind,
+    currentNudge?: () => boolean,
+  ): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
       if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
+      if (currentNudge && !currentNudge()) throw new Error("Idle nudge generation expired");
     };
     return agentManager.trustedPlugins.daemon(async () => {
       const finalCheck = createFinalInputCheck(checkCurrent);
