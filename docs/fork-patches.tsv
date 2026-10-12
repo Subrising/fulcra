@@ -549,7 +549,6 @@ core-fixes	M	10	8	packages/app/e2e/browser/agent-message-submission.spec.ts
 core-fixes	M	3	0	packages/app/e2e/browser/agent-timeline-scroll-smoothness.spec.ts
 core-fixes	M	1	1	packages/app/e2e/browser/appearance-theme-picker.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/assistant-fork-menu.spec.ts
-core-fixes	M	15	5	packages/app/e2e/browser/changes-pane.spec.ts
 core-fixes	M	19	0	packages/app/e2e/browser/client-slash-commands.spec.ts
 core-fixes	M	2	2	packages/app/e2e/browser/codex-speed.spec.ts
 core-fixes	M	6	0	packages/app/e2e/browser/file-explorer-context-actions.spec.ts
@@ -950,7 +949,7 @@ features	A	83	0	packages/app/src/components/sidebar/use-offline-hosts.ts
 features	M	9	0	packages/app/src/components/split-container.tsx
 features	M	15	2	packages/app/src/components/ui/highlighted-text.tsx
 features	M	14	2	packages/app/src/components/ui/menu/menu-overlay.tsx
-features	M	5	2	packages/app/src/components/ui/pane-content-toolbar.tsx
+features	M	12	3	packages/app/src/components/ui/pane-content-toolbar.tsx
 features	M	27	47	packages/app/src/components/welcome-screen.tsx
 features	M	3	2	packages/app/src/components/workspace-rename-modal.tsx
 features	M	14	0	packages/app/src/components/workspace-shortcut-targets-subscriber.test.tsx
@@ -1175,6 +1174,7 @@ orchestration	A	0	0	docs/assets/features/leadership-dark.png
 orchestration	A	0	0	docs/assets/features/leadership-light.png
 orchestration	A	0	0	docs/assets/screens/leadership-dark.png
 orchestration	A	0	0	docs/assets/screens/leadership-light.png
+orchestration	M	82	5	packages/app/e2e/browser/changes-pane.spec.ts
 orchestration	M	8	276	packages/app/e2e/browser/context-window-meter.spec.ts
 orchestration	M	12	25	packages/app/e2e/browser/plugin-management.spec.ts
 orchestration	M	57	12	packages/app/src/app/h/[serverId]/index.tsx
