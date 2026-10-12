@@ -46,7 +46,8 @@ async function fixture(terminalFailure = false) {
     return createTrustedContribution({ home })(hooks);
   });
   const nativeId = randomUUID();
-  const resetSeconds = Math.floor(Date.now() / 1000) + 600;
+  let now = Date.now();
+  const resetSeconds = Math.floor(now / 1000) + 600;
   const inputs: SDKUserMessage[] = [];
   let limited = false;
   const queryFactory = ({ prompt }: { prompt: AsyncIterable<SDKUserMessage> }) => {
@@ -116,6 +117,7 @@ async function fixture(terminalFailure = false) {
       env: { FULCRA_ACCOUNT_ID: "fixture-selected-account" },
     });
   const manager = new AgentManager({
+    automaticInputNow: () => now,
     clients: { claude: client },
     registry: storage,
     trustedPlugins: host,
@@ -191,7 +193,6 @@ async function fixture(terminalFailure = false) {
       maxSeq: page.window?.maxSeq,
     };
   };
-  let now = Date.now();
   const notices: unknown[] = [];
   const makeControl = () => {
     const control = new Controller({

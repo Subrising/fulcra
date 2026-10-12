@@ -17,6 +17,9 @@ import {
 } from "./report-up.js";
 import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
 import { parseOpenRows, readOpenLedgerRows, rowsOwnedBy } from "./ledger-items.js";
+import { PluginService } from "./plugins/index.js";
+import { DaemonConfigStore } from "./daemon-config-store.js";
+import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
 
 interface FakeChat {
   id: string;
@@ -60,6 +63,8 @@ function fixture(
     list: async () => [...byId.values()],
   } as unknown as AgentStorage;
   let enabled = options.enabled ?? true;
+  let nativeOwnsFinish = false;
+  manager.nativeReportOwnsFinish = () => nativeOwnsFinish;
   const service = new ReportUpService({
     remoteNotice: options.remoteNotice,
     agentManager: manager,
@@ -98,6 +103,7 @@ function fixture(
   };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
   return {
+    service,
     delivered,
     stream,
     turn,
@@ -106,6 +112,51 @@ function fixture(
     timers,
     failedTurn,
     setEnabled: (value: boolean) => (enabled = value),
+    setNativeOwner: (value: boolean) => (nativeOwnsFinish = value),
+  };
+}
+
+function nativeFixture(chats: FakeChat[], options: Parameters<typeof fixture>[1] = {}) {
+  const f = fixture(chats, options);
+  const root = mkdtempSync(join(tmpdir(), "report-hooks-"));
+  const logger = createTestLogger();
+  const config = new DaemonConfigStore(
+    root,
+    MutableDaemonConfigSchema.parse({ mcp: { injectIntoAgents: false } }),
+    logger,
+  );
+  const hooks = new PluginService(logger, config, "0.11.0-beta.5");
+  const off = f.service.observeNative(hooks);
+  const agent = (id: string) => ({
+    id,
+    provider: "claude",
+    cwd: root,
+    title: null,
+    workspaceId: null,
+    parentAgentId: null,
+  });
+  const begin = (id: string, message: object = { text: "do the task" }) => {
+    hooks.emit("agent.turn_started", { agent: agent(id), turnId: "native-turn" });
+    f.stream(id, { type: "timeline", item: { type: "user_message", ...message } });
+  };
+  const end = (id: string, text = "native result") =>
+    hooks.emit("agent.turn_ended", {
+      agent: agent(id),
+      turnId: "native-turn",
+      outcome: { kind: "completed" },
+      timeline: [{ type: "assistant_message", text }],
+    });
+  return {
+    ...f,
+    hooks,
+    agent,
+    begin,
+    end,
+    cleanup: () => {
+      off();
+      f.service.stop();
+      rmSync(root, { recursive: true, force: true });
+    },
   };
 }
 
@@ -913,4 +964,232 @@ test("a finish notice uses the host link when the main assistant has no local ch
   expect(notices[0]).toContain(`${WORKER}:finished:`);
   expect(notices[0]).toContain("Done.");
   expect(f.delivered).toEqual([]);
+});
+
+// Native hooks select notices. Private host callbacks retain finish-owner and delivery checks.
+describe("report-up native policy", () => {
+  test("the native end snapshot supplies the notice and duplicate endings send nothing", async () => {
+    const f = nativeFixture([lead, worker()]);
+    try {
+      f.begin(WORKER);
+      f.end(WORKER, "snapshot result");
+      f.end(WORKER, "duplicate result");
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("snapshot result");
+      expect(f.delivered[0]!.prompt).not.toContain("Done: tests pass");
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("native canceled notice turns reset provenance for the next human turn", async () => {
+    const f = nativeFixture([lead, worker()]);
+    try {
+      f.begin(WORKER, { text: "notice", clientMessageId: "paseo-notify:fixture" });
+      f.hooks.emit("agent.turn_ended", {
+        agent: f.agent(WORKER),
+        turnId: "native-turn",
+        timeline: [],
+        outcome: { kind: "canceled", reason: "human stop" },
+      });
+      f.begin(WORKER);
+      f.end(WORKER);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("native permission notices deduplicate, reset on resolution, and clear on close", async () => {
+    const f = nativeFixture([lead, worker()]);
+    const request = {
+      id: "permission-one",
+      provider: "claude" as const,
+      name: "Bash",
+      input: { command: "echo hello" },
+    };
+    const ask = () =>
+      f.hooks.emit("agent.permission_requested", { agent: f.agent(WORKER), request });
+    try {
+      ask();
+      ask();
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("Command: echo hello");
+      f.hooks.emit("agent.permission_resolved", {
+        agent: f.agent(WORKER),
+        requestId: request.id,
+        resolution: { behavior: "allow" },
+      });
+      ask();
+      await f.settle();
+      expect(f.delivered).toHaveLength(2);
+      f.hooks.emit("agent.closed", { agent: f.agent(WORKER) });
+      ask();
+      await f.settle();
+      expect(f.delivered).toHaveLength(3);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("failed native outcomes produce limit notices even with finished-turn fallback off", async () => {
+    const f = nativeFixture([lead, worker()], { enabled: false });
+    try {
+      f.begin(WORKER);
+      f.hooks.emit("agent.turn_ended", {
+        agent: f.agent(WORKER),
+        turnId: "native-turn",
+        timeline: [],
+        outcome: { kind: "failed", error: { message: "usage limit reached", code: "usage_limit" } },
+      });
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("usage limit until");
+      expect(f.delivered[0]!.prompt).not.toContain("finished a turn");
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("the host retains finish ownership from stream stop until native observation", async () => {
+    const f = nativeFixture([lead, worker()]);
+    try {
+      f.setNativeOwner(true);
+      f.begin(WORKER);
+      f.service.captureFinishOwner(WORKER);
+      f.setNativeOwner(false);
+      f.end(WORKER);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("cleanup removes native observers and prevents late timer delivery", async () => {
+    const f = nativeFixture([lead, worker()]);
+    try {
+      f.begin(WORKER);
+      f.end(WORKER);
+      await f.settle();
+      f.begin(WORKER);
+      f.end(WORKER);
+      await f.settle();
+      expect(f.timers).toHaveLength(1);
+      f.cleanup();
+      f.clock.now += COALESCE_WINDOW_MS;
+      f.timers[0]!.run();
+      f.begin(WORKER);
+      f.end(WORKER);
+      f.hooks.emit("agent.permission_requested", {
+        agent: f.agent(WORKER),
+        request: { id: "late-request", provider: "claude", name: "Bash" },
+      });
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+    } finally {
+      f.cleanup();
+    }
+  });
+});
+
+// The daemon sends real notices through native lifecycle events and the guarded input route.
+test("WebSocket configuration and native report-up preserve armed finish ownership and failed notices", async () => {
+  const { createTestPaseoDaemon } = await import("./test-utils/paseo-daemon.js");
+  const { createTestAgentClient } = await import("./test-utils/fake-agent-client.js");
+  const { DaemonClient } = await import("./test-utils/daemon-client.js");
+  const { setupFinishNotification } = await import("./agent/agent-prompt.js");
+  const { vi } = await import("vitest");
+  const prompts: unknown[] = [];
+  const ledgerDir = mkdtempSync(join(tmpdir(), "report-ledger-"));
+  vi.stubEnv("FULCRA_LEDGER_DIR", ledgerDir);
+  const daemon = await createTestPaseoDaemon({
+    agentClients: {
+      codex: createTestAgentClient("codex", { onStartTurn: (prompt) => prompts.push(prompt) }),
+    },
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({ reportUpOnTurnEnd: true, autoResumeOnLimit: false });
+    const manager = daemon.daemon.agentManager;
+    const parent = await manager.createAgent(
+      {
+        provider: "codex",
+        cwd: daemon.paseoHome,
+        modeId: "full-access",
+        title: "Lead",
+      },
+      undefined,
+      {},
+    );
+    const child = await manager.createAgent(
+      { provider: "codex", cwd: daemon.paseoHome, modeId: "full-access", title: "Worker" },
+      undefined,
+      { labels: { [REPORTS_TO_LABEL]: parent.id } },
+    );
+    const settleParent = () =>
+      vi.waitFor(() => {
+        expect(manager.hasInFlightRun(parent.id)).toBe(false);
+      });
+    await manager.runAgent(child.id, "first result");
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+    expect(prompts[1]).toContain(`Worker Worker (${child.id}) finished a turn`);
+    await settleParent();
+
+    setupFinishNotification({
+      agentManager: manager,
+      agentStorage: daemon.daemon.agentStorage,
+      childAgentId: child.id,
+      callerAgentId: parent.id,
+      forNextTurn: true,
+      logger: createTestLogger(),
+    });
+    await manager.runAgent(child.id, "second result");
+    await vi.waitFor(() => expect(prompts).toHaveLength(4));
+    expect(prompts[3]).toContain(child.id);
+    expect(prompts[3]).not.toContain("Worker Worker");
+    await settleParent();
+
+    await expect(manager.runAgent(child.id, "emit a turn failure")).rejects.toThrow(
+      "Requested fake provider failure",
+    );
+    await vi.waitFor(() => expect(prompts).toHaveLength(6));
+    expect(prompts[5]).toContain(`Worker Worker (${child.id}) ended a turn with an error`);
+    await settleParent();
+    expect(prompts).toHaveLength(6);
+  } finally {
+    await client.close();
+    await daemon.close();
+    vi.unstubAllEnvs();
+    rmSync(ledgerDir, { recursive: true, force: true });
+  }
+}, 30000);
+
+test("native host-link notices use the end snapshot and respect disabled finish notices", async () => {
+  const notices: string[] = [];
+  const f = nativeFixture([worker({ [REPORTS_TO_LABEL]: "role:main-assistant" })], {
+    remoteNotice: async (_id, prompt) => {
+      notices.push(prompt);
+      return true;
+    },
+  });
+  try {
+    f.begin(WORKER);
+    f.end(WORKER, "native remote result");
+    await f.settle();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("native remote result");
+    expect(notices[0]).not.toContain("Done: tests pass");
+    f.setEnabled(false);
+    f.begin(WORKER);
+    f.end(WORKER, "disabled remote result");
+    await f.settle();
+    expect(notices).toHaveLength(1);
+  } finally {
+    f.cleanup();
+  }
 });

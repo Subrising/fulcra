@@ -36,6 +36,7 @@ import { managementRpc, taskManagementRpc } from "./shared/management";
 import { createManagement, createTaskManagement, localCall } from "./server/management";
 import { operatorInvokeRpc } from "./shared/operator-invoke";
 import { operatorInvoke } from "./server/operator-invoke.mjs";
+import { registerPoolUsage } from "./server/pool-usage";
 import { taskCatalogRpc, usageRpc } from "./shared/tasks";
 import { readTaskCatalog, taskPage, singleFlight, createUsageReader } from "./server/tasks";
 import { outcomeRpc, outcomeArtifactRpc } from "./shared/outcomes";
@@ -563,6 +564,7 @@ export default function contribute(
   // Update-7: the account pool. Every launch (create, resume, refresh, import) of a pooled provider takes its account's
   // credential for that launch only; no pool leaves the launch exactly as before.
   const poolRoot = () => (loadConfig() as { home: string }).home;
+  registerPoolUsage(server, poolRoot);
   const stopPool: unknown =
     typeof server.before === "function"
       ? server.before("agent.session_open", sessionOpenHook({ root: poolRoot }) as any)

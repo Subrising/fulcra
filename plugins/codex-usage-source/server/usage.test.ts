@@ -465,3 +465,13 @@ test("#6155: real Codex and OpenCode stores share an account but keep agent fail
   });
   expect(agent?.loginErrors).toEqual([host!.loginErrors![0]]);
 });
+
+test("pooled session discovery belongs to the pool source", async () => {
+  expect(
+    await discover({
+      kind: "session",
+      provider: "codex",
+      env: { FULCRA_ACCOUNT_ID: "11111111-1111-4111-8111-111111111111" },
+    }),
+  ).toEqual([]);
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "@/stores/session-store";
-import type { ProviderUsageListPayload, AccountUsageRow } from "@/provider-usage/types";
+import type { ProviderUsageListPayload, AccountUsageRow } from "./account-session-model";
 import {
   contextAccountReadKey,
   contextSessionAccount,

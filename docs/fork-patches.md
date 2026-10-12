@@ -1,6 +1,6 @@
 # Fork patch ledger
 
-Fulcra is a deliberate fork of Paseo. Its core changes are grouped into a few named patches so each upstream merge conflicts in predictable places. The orchestration core (hierarchy, durable report-up, re-parent/promote, account pool and credentials, permission veto/admission, session launch) stays in core as named patches; it cannot be a plugin. Only separable UI views and helpers move to the bundled plugin. Nothing here is offered upstream.
+Fulcra is a deliberate fork of Paseo. Its core changes are grouped into a few named patches so each upstream merge conflicts in predictable places. The orchestration core (hierarchy, durable report-up, re-parent/promote, account pool and credentials, permission veto/admission, session launch) stays in core as named patches; it cannot be a plugin. Separable UI views, usage sources, and lifecycle observation policy move to bundled plugins. Nothing here is offered upstream.
 
 Every file that differs from the Paseo base is listed with its patch in [fork-patches.tsv](fork-patches.tsv). `node scripts/fork-ledger.mjs --check` fails when that list is stale; regenerate with `--write` and review the change. Mark owned seams in core with `// FULCRA(<patch>)`.
 
@@ -21,10 +21,11 @@ Decided 7 Oct 2026 after the Paseo v0.11 merge: a piece moves into the bundled p
 | Automations | ~150 lines, 14 files | 2 SDK seams (schedules, server-side API) + ~900-line UI rewrite | Stays: own patch `automations` |
 | Architecture map | ~167 lines, 20 files | ~8.4k-line UI rewrite + git/PR data in the plugin | Stays in `features` |
 | Insights | ~58 lines, 11 files | recorder as plugin events + UI rewrite | Stays in `features` |
-| Limit resume | ~42 lines, 12 files | part of the account pool | Stays in `accounts` |
+| Limit resume | guarded host handoff and private queue writer | native event observer in the bundled policy resource | Parsing and timers move; admission stays in `accounts` |
+| Report-up | private finish ownership, reporting lines, and held delivery | native lifecycle observer and notice policy | Observation moves; dispatch stays in `orchestration` |
 | Portable memory | none (already in `control/`) | n/a | Unchanged |
 
-Organisation, report-up, hierarchy, accounts presentation and switching already live in the plugin.
+Organisation, hierarchy, account controls, and switching live in the Command Centre plugin. Native Usage owns quota presentation.
 
 ## Patches
 
@@ -32,20 +33,20 @@ Organisation, report-up, hierarchy, accounts presentation and switching already 
 | Patch | Owner | Upstream files changed | Lines in them | New files | New lines | Reason |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | `image-retention` | Fulcra prime (platform) | 4 | +483/−37 | 0 | +0 | Agent image files: confined private storage and a rolling retention window. At about 2,000 files or 1 GB the least recently written images are deleted to make room, and a deleted image reads as 'Image no longer kept'. Paseo refused every new image after 256 files or 64 MB per daemon run. |
-| `orchestration` | Fulcra prime (orchestration) | 63 | +22439/−1709 | 64 | +15464 | Primes/leads/workers hierarchy, durable report-up and receipts, re-parent/promote, controller channel and management route. Paseo has no hierarchy or durable delivery. |
+| `orchestration` | Fulcra prime (orchestration) | 64 | +22570/−1711 | 68 | +15770 | Primes/leads/workers hierarchy, durable report-up and receipts, re-parent/promote, controller channel and management route. Paseo has no hierarchy or durable delivery. |
 | `admission` | Fulcra prime (security) | 24 | +753/−197 | 29 | +6579 | Permission veto and input admission (human seat vs delegated seat), per-agent grants, trusted host. Paseo has no before-hook on prompt/send/permission and its permissions are daemon-wide. |
-| `accounts` | Fulcra prime (accounts) | 18 | +1195/−298 | 130 | +23679 | Account pool, per-launch credentials, plugin secrets/credential store (including plugin-saved secrets, used by Deploy for a cluster sign-in), connectors, account usage, quota and limit resume. Paseo has no secret store or multi-account launch. |
-| `session-launch` | Fulcra prime (providers) | 96 | +8565/−1274 | 36 | +5938 | Session launch: create-agent intent, provider launch config, Claude/Codex/OpenCode/Pi provider changes, public baseline transport, model catalog. |
-| `plugin-host` | Fulcra prime (platform) | 62 | +3243/−234 | 61 | +8930 | Bundled trusted plugin loading and the SDK adapters the bundled plugin needs (update/cancel, notifications, replayable events, panels, turn footers, and AgentQuestions in the UI kit, which reuses the core PermissionRequestCard exported from agent-stream/view.tsx). |
+| `accounts` | Fulcra prime (accounts) | 23 | +1222/−312 | 109 | +17680 | Account pool, per-launch credentials, plugin secrets/credential store (including plugin-saved secrets, used by Deploy for a cluster sign-in), connectors, account usage, quota and limit resume. Paseo has no secret store or multi-account launch. |
+| `session-launch` | Fulcra prime (providers) | 94 | +8346/−1272 | 36 | +5938 | Session launch: create-agent intent, provider launch config, Claude/Codex/OpenCode/Pi provider changes, public baseline transport, model catalog. |
+| `plugin-host` | Fulcra prime (platform) | 62 | +3295/−235 | 63 | +8998 | Bundled trusted plugin loading and the SDK adapters the bundled plugin needs (update/cancel, notifications, replayable events, panels, turn footers, and AgentQuestions in the UI kit, which reuses the core PermissionRequestCard exported from agent-stream/view.tsx). |
 | `pairing` | Fulcra prime (security) | 40 | +3672/−1354 | 73 | +8667 | Relay v3, signed invitations, device proof, immutable daemon-key pin, host repair, multi-Mac pairing bundles. Security transport below the plugin layer. |
 | `durability` | Fulcra prime (platform) | 25 | +2324/−72 | 2 | +1066 | Durable timelines and state: file timeline store, atomic writes, pid lock, persisted config, workspace reconciliation fixes that prevent history loss. |
-| `desktop-runtime` | Fulcra prime (release) | 74 | +3462/−505 | 32 | +3990 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
+| `desktop-runtime` | Fulcra prime (release) | 74 | +3464/−505 | 32 | +3990 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
 | `automations` | Fulcra prime (product) | 1 | +11/−0 | 10 | +2717 | Automations ("when X, do Y") on top of Paseo schedules: service, protocol messages, client calls, screen and sidebar entry. Kept in core: moving it into the plugin needs two SDK seams and a ~900-line UI rewrite to save ~150 shared-file lines. |
 | `features` | Fulcra prime (product) | 166 | +4047/−1155 | 178 | +28115 | Fulcra product UI and helpers in the app: architecture map and plain-English PR review (the checkout.pull-request-review.explain RPC behind the pullRequestReviewExplain feature, cached in PASEO_HOME/review-explanations, capped daily by the optional daemon config field explainDailyLimit), insights, work map, attention, schedules, navigation, sidebar and other views. Kept in core because each would cost more to move into the plugin than the shared-file lines it saves. |
 | `branding` | Fulcra prime (release) | 72 | +6186/−1906 | 118 | +5378 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
 | `build-ci` | Fulcra prime (release) | 65 | +1637/−2620 | 81 | +6509 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
-| `core-fixes` | Fulcra prime (platform) | 60 | +1258/−279 | 104 | +15183 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
-| **total** | | 770 | +59275/−11640 | 918 | +132215 | |
+| `core-fixes` | Fulcra prime (platform) | 60 | +1258/−279 | 104 | +15326 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
+| **total** | | 774 | +59268/−11655 | 903 | +126733 | |
 
 Shared seams (upstream files where several patches meet; resolve these hunk by hunk on merge):
 

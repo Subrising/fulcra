@@ -1,3 +1,4 @@
+import type { PluginLifecycleEvents } from "@getpaseo/plugin/server";
 import type { TrustedPlugins } from "./trusted.js";
 import type { ManagementInvocation } from "./management.js";
 import type { PluginLifecycle } from "./lifecycle/index.js";
@@ -145,7 +146,36 @@ export class PluginService {
     });
   }
 
+  private readonly hostLifecycleListeners = new Map<
+    keyof PluginLifecycleEvents,
+    Set<(event: never) => void | Promise<void>>
+  >();
+
+  /** Distribution-owned policies use the same native event names and payloads as subprocess plugins. */
+  readonly on = <Name extends keyof PluginLifecycleEvents>(
+    name: Name,
+    handler: (event: PluginLifecycleEvents[Name]) => void | Promise<void>,
+  ): (() => void) => {
+    const handlers = this.hostLifecycleListeners.get(name) ?? new Set();
+    const callback = handler as (event: never) => void | Promise<void>;
+    handlers.add(callback);
+    this.hostLifecycleListeners.set(name, handlers);
+    return () => {
+      handlers.delete(callback);
+      if (!handlers.size) this.hostLifecycleListeners.delete(name);
+    };
+  };
+
   readonly emit: PluginLifecycle["emit"] = (name, event) => {
+    for (const handler of this.hostLifecycleListeners.get(name) ?? []) {
+      try {
+        void Promise.resolve(handler(structuredClone(event) as never)).catch((error) =>
+          this.logger.warn({ err: error, name }, "Host lifecycle policy failed"),
+        );
+      } catch (error) {
+        this.logger.warn({ err: error, name }, "Host lifecycle policy failed");
+      }
+    }
     this.runtime.emit?.(name, event);
   };
 

@@ -1061,113 +1061,20 @@ test("accounts-manage: a remote switch audits as switch, and explicit account co
   assert.deepEqual(w.audit.at(-1), { action: "switch", accountLabel: "Personal" });
 });
 
-// update-7c: the rundown of every pooled account's usage, from the host (provider.usage.list with accounts). Names and
-// figures only; a host that cannot list it shows no rundown and the rest of the page is unchanged.
-const usageRow = (over = {}) => ({
-  accountId: A,
-  name: "Work",
-  provider: "claude",
-  status: "ok",
-  observedAt: new Date(Date.now() - 120000).toISOString(),
-  source: "session",
-  fiveHour: { usedPct: 40, resetsAt: new Date(Date.now() + 3 * 3600000).toISOString() },
-  weekly: { usedPct: 61, resetsAt: new Date(Date.now() + 4 * 86400000).toISOString() },
-  inUse: true,
-  ...over,
-});
-test("the rundown lists every account with 5h and weekly use, resets and status; refresh asks the host once, on demand", async () => {
+test("account controls use native Usage and do not fetch a second quota list", async () => {
   const asked = [];
   setPaseo({
     providers: {
-      listUsage: async (o) => {
-        asked.push(o);
-        return {
-          requestId: "r",
-          fetchedAt: new Date().toISOString(),
-          providers: [],
-          accounts: [
-            usageRow({ sessionCount: 2 }),
-            usageRow({
-              accountId: B,
-              name: "Personal",
-              status: "limited",
-              fiveHour: { usedPct: 100, resetsAt: new Date(Date.now() + 3600000).toISOString() },
-              weekly: { usedPct: 97, resetsAt: null },
-              inUse: false,
-            }),
-            usageRow({
-              accountId: null,
-              name: "Codex A",
-              provider: "codex",
-              status: "unavailable",
-              fiveHour: null,
-              weekly: null,
-              observedAt: null,
-              inUse: false,
-            }),
-          ],
-        };
+      listUsage: async (input) => {
+        asked.push(input);
+        throw Error("Duplicate quota read");
       },
     },
   });
-  setup();
-  const box = await screen.findByTestId("account-usage-rundown");
-  await waitFor(() => assert.match(box.textContent, /Work/));
-  assert.match(box.textContent, /5h 40%/);
-  assert.match(box.textContent, /Weekly 61%/);
-  assert.match(box.textContent, /Personal.*Limited/s);
-  assert.match(box.textContent, /Codex A.*Usage unavailable/s);
-  // The pool summary the host Settings page used to show, and each account's sessions here.
-  assert.match(box.textContent, /3 accounts · 1 ready · 1 limited · 1 without usage/);
-  assert.match(box.textContent, /Work.*2 sessions on this host/s);
-  assert.match(box.textContent, /Personal.*Claude.*Limited/s);
-  assert.deepEqual(asked, [{ accounts: true }]);
-  fireEvent.click(screen.getByLabelText("Refresh account usage"));
-  await waitFor(() => assert.deepEqual(asked.at(-1), { accounts: true, refresh: true }));
-  assert.doesNotMatch(document.body.textContent, /sk-ant|sha256/);
-  setPaseo(null);
-});
-test("a host that cannot list usage shows no rundown and does not break the page", async () => {
-  setPaseo({});
   setup();
   assert.ok(await screen.findByText("1. Work"));
   assert.equal(screen.queryByTestId("account-usage-rundown"), null);
-  setPaseo(null);
-});
-
-test("the account rundown says so plainly when there is no usage yet", async () => {
-  setPaseo({ providers: { listUsage: async () => ({ accounts: [] }) } });
-  setup();
-  const empty = await screen.findByTestId("account-usage-empty");
-  assert.equal(empty.textContent, "No usage data yet.");
-  setPaseo(null);
-});
-
-test("the account rundown keeps refresh failure visible and permits a retry", async () => {
-  let fail = true;
-  setPaseo({
-    providers: {
-      listUsage: async (options) => {
-        if (options.refresh && fail) throw new Error("synthetic transport failure");
-        return { accounts: [usageRow()] };
-      },
-    },
-  });
-  setup();
-  await screen.findByTestId("account-usage-rundown");
-  await waitFor(() =>
-    assert.match(screen.getByTestId("account-usage-rundown").textContent, /Work/),
-  );
-  fireEvent.click(screen.getByLabelText("Refresh account usage"));
-  await screen.findByText("Unable to load account usage. Try Refresh again.");
-  fail = false;
-  fireEvent.click(screen.getByLabelText("Refresh account usage"));
-  await waitFor(() =>
-    assert.equal(
-      screen.queryByText("Unable to load account usage. Try Refresh again.") === null,
-      true,
-    ),
-  );
+  assert.deepEqual(asked, []);
   setPaseo(null);
 });
 
@@ -1256,11 +1163,8 @@ test("Settings Accounts route retains registered host, saves defaults and reopen
     await screen.findByTestId("accounts-settings");
     assert.ok(await screen.findByText("1. Work"));
     assert.ok(screen.getByText(/^0 sessions using it now/));
-    await screen.findByTestId("account-usage-rundown");
-    await waitFor(() =>
-      assert.ok(client.getQueryData(["orca-organization", "account-usage", "settings-host"])),
-    );
-    assert.equal(client.getQueryData(["orca-organization", "account-usage", undefined]), undefined);
+    assert.equal(screen.queryByTestId("account-usage-rundown"), null);
+    assert.deepEqual(usageReads, []);
     fireEvent.click(screen.getByRole("button", { name: "New Claude sessions use Work" }));
     await waitFor(() =>
       assert.deepEqual(writes, [{ defaultAccount: { provider: "claude", id: A } }]),
@@ -1278,7 +1182,7 @@ test("Settings Accounts route retains registered host, saves defaults and reopen
         "true",
       ),
     );
-    assert.ok(usageReads.every((input) => input.accounts === true));
+    assert.deepEqual(usageReads, []);
     assert.ok(writes.every((input) => !Object.hasOwn(input, "token")));
     assert.equal(screen.getByLabelText("Claude account token").value, "");
   } finally {

@@ -4,7 +4,6 @@ import { StyleSheet } from "react-native-unistyles";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import { SessionAccountInfo } from "@/sessions/session-account-info";
-import { AccountRundown } from "@/provider-usage/account-rundown";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useContextObservation, type ContextObservation } from "./observation";
 import {
@@ -101,7 +100,10 @@ export function ContextAccountSummary({
       const stopConnection = client?.subscribeConnectionStatus(checkLifetime);
       const stopStore = useSessionStore.subscribe(checkLifetime);
       if (client)
-        void readContextAccounts(() => client.listProviderUsage({ accounts: true }), isCurrent)
+        void readContextAccounts(
+          () => client.listProviderUsage({ accounts: true, observationOnly: true }),
+          isCurrent,
+        )
           .then((result) => {
             if (isCurrent()) publish(result);
             return result;
@@ -140,6 +142,7 @@ function useAccountReadAdmission(client: DaemonClient | null) {
       info?.permissions ?? null,
       info?.features?.providerUsageList ?? false,
       info?.features?.pooledAccountUsageList ?? false,
+      info?.features?.pooledAccountUsageObservation ?? false,
     ]);
   }, [client]);
   const snapshot = useCallback(
@@ -172,7 +175,9 @@ function useAccountReadAdmission(client: DaemonClient | null) {
     info?.permissions?.includes("daemon.read") === true &&
     info.permissions.includes("workspace.read");
   const supported =
-    info?.features?.providerUsageList === true && info.features.pooledAccountUsageList === true;
+    info?.features?.providerUsageList === true &&
+    info.features.pooledAccountUsageList === true &&
+    info.features.pooledAccountUsageObservation === true;
   return { admission, snapshot, allowed, supported };
 }
 
@@ -217,9 +222,19 @@ function ContextAccountSummaryBody({
         Accounts on this host · counts cover local ready idle/running sessions, across workspaces.
       </Text>
       {result.data.accounts.length === 0 ? (
-        <Text style={styles.detail}>No pooled accounts on this host</Text>
+        <Text style={styles.detail}>Account information unavailable</Text>
       ) : (
-        <AccountRundown accounts={result.data.accounts} compact />
+        result.data.accounts.map((account) => (
+          <Text
+            key={`${account.provider}:${account.accountId ?? account.name}`}
+            style={styles.detail}
+          >
+            {account.name} ·{" "}
+            {account.sessionCount === undefined
+              ? "Session count unavailable"
+              : `${account.sessionCount} ${account.sessionCount === 1 ? "session" : "sessions"} on this host`}
+          </Text>
+        ))
       )}
     </View>
   );

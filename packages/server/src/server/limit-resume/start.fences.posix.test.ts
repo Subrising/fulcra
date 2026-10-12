@@ -12,6 +12,7 @@ import { createTestAgentClient } from "../test-utils/fake-agent-client.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { DaemonConfigStore } from "../daemon-config-store.js";
 import { TrustedPlugins } from "../plugins/trusted.js";
+import { PluginService } from "../plugins/index.js";
 import { startLimitResume } from "./start.js";
 import {
   INTERRUPTED_RESUME_PROMPT,
@@ -33,7 +34,7 @@ function deferred() {
   const promise = new Promise<void>((yes) => (resolve = yes));
   return { promise, resolve };
 }
-async function fixture() {
+async function fixture(nativeHooks = false) {
   const home = await realpath(await mkdtemp(path.join(tmpdir(), "limit-native-fence-")));
   const logger = createTestLogger();
   const clock = { value: Date.now() };
@@ -107,8 +108,15 @@ async function fixture() {
     await session.connect();
     return session;
   };
+  const config = new DaemonConfigStore(
+    home,
+    MutableDaemonConfigSchema.parse({ mcp: { injectIntoAgents: false }, autoResumeOnLimit: true }),
+    logger,
+  );
+  const plugins = new PluginService(logger, config, "0.11.0-beta.5");
   const manager = new AgentManager({
     registry: storage,
+    ...(nativeHooks ? { pluginLifecycle: plugins } : {}),
     automaticInputNow: () => clock.value,
     logger,
     trustedPlugins: host,
@@ -125,11 +133,7 @@ async function fixture() {
     undefined,
     {},
   );
-  const config = new DaemonConfigStore(
-    home,
-    MutableDaemonConfigSchema.parse({ mcp: { injectIntoAgents: false }, autoResumeOnLimit: true }),
-    logger,
-  );
+
   return {
     home,
     clock,
@@ -156,6 +160,7 @@ async function fixture() {
       return startLimitResume({
         paseoHome: home,
         now: () => clock.value,
+        ...(nativeHooks ? { hooks: plugins } : {}),
         agentManager: manager,
         agentStorage: storage,
         daemonConfigStore: config,
@@ -769,6 +774,41 @@ test("automatic sends cannot wake a limited native session; a human can resume i
     f.server.completeTurn({ threadId: "limit-thread", status: "completed" });
     await f.manager.waitForAgentEvent(f.agent.id);
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("native turn hooks queue one recovery and release their listeners on stop", async () => {
+  const f = await fixture(true);
+  const service = f.start();
+  try {
+    await queueActualLimit(f);
+    const state = JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8"));
+    expect(state.entries).toHaveLength(1);
+    expect(state.entries[0]).toMatchObject({
+      agentId: f.agent.id,
+      source: "backoff",
+      unscoped: true,
+    });
+    service.stop();
+    const marker = f.manager.getAgent(f.agent.id)!.labels[LIMIT_RESUME_AT_LABEL];
+    await f.host.rpc(undefined, async () => {
+      await sendPromptToAgent({
+        agentId: f.agent.id,
+        prompt: "human continuation",
+        agentManager: f.manager,
+        agentStorage: f.storage,
+        logger: f.logger,
+      });
+      await f.manager.waitForAgentRunStart(f.agent.id);
+      expect(f.turnStarts()).toHaveLength(2);
+      const completed = f.manager.waitForAgentEvent(f.agent.id);
+      f.server.completeTurn({ threadId: "limit-thread", status: "completed" });
+      await completed;
+    });
+    expect(f.manager.getAgent(f.agent.id)!.labels[LIMIT_RESUME_AT_LABEL]).toBe(marker);
+  } finally {
+    service.stop();
     await f.cleanup();
   }
 });

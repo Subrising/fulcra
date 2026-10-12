@@ -437,6 +437,8 @@ async function sessionRoutes(
   scope: Extract<UsageScope, { kind: "session" }>,
   lookup: ClaudeCredentialLookup,
 ): Promise<UsageInput[]> {
+  // Fulcra's pool source owns this launch. Never add the host's default login or a duplicate account card.
+  if (scope.env.FULCRA_ACCOUNT_ID) return [];
   if (scope.provider === "claude") {
     const env = scope.env;
     const foreign =

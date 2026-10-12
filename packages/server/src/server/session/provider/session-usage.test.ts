@@ -1,8 +1,7 @@
 import { expect, test } from "vitest";
 import pino from "pino";
-import { ProviderCatalogSession } from "./provider-catalog-session.js";
-import { ProviderUsageService } from "../../../services/quota-fetcher/service.js";
-import type { ProviderSnapshotManager } from "../../agent/provider-snapshot-manager.js";
+import { AccountUsageSession as ProviderCatalogSession } from "../usage/account-usage-session.js";
+import { ProviderUsageService } from "../../test-utils/provider-usage.js";
 import type { SessionOutboundMessage, ProviderUsage } from "../../messages.js";
 
 test("a Codex switch replaces only its usage entry and never relabels machine figures", async () => {
@@ -20,10 +19,6 @@ test("a Codex switch replaces only its usage entry and never relabels machine fi
   const emitted: SessionOutboundMessage[] = [];
   const session = new ProviderCatalogSession({
     logger,
-    providerSnapshotManager: {
-      on() {},
-      off() {},
-    } as unknown as ProviderSnapshotManager,
     providerUsageService: new ProviderUsageService({
       logger,
       fetchers: [
@@ -45,12 +40,6 @@ test("a Codex switch replaces only its usage entry and never relabels machine fi
     host: {
       emit: (m) => emitted.push(m),
       isProviderVisibleToClient: () => true,
-      supportsCustomModeIcons: () => true,
-      supportsCompactProviderSnapshots: () => true,
-      supportsProviderSnapshotReferences: () => true,
-      publishSnapshot: () => {},
-      listProviderAvailability: async () => [],
-      listDraftFeatures: async () => [],
     },
   });
   const read = async (agentId?: string) => {
@@ -114,7 +103,6 @@ test("observation-only entry bypasses all generating paths and binds only reside
   });
   const catalog = new ProviderCatalogSession({
     logger,
-    providerSnapshotManager: { on() {}, off() {} } as unknown as ProviderSnapshotManager,
     providerUsageService: service,
     accountUsage: registry,
     sessionUsage,
@@ -131,12 +119,6 @@ test("observation-only entry bypasses all generating paths and binds only reside
     host: {
       emit: (m) => emitted.push(m),
       isProviderVisibleToClient: () => visible,
-      supportsCustomModeIcons: () => true,
-      supportsCompactProviderSnapshots: () => true,
-      supportsProviderSnapshotReferences: () => true,
-      publishSnapshot: () => {},
-      listProviderAvailability: async () => [],
-      listDraftFeatures: async () => [],
     },
   });
   const request = {

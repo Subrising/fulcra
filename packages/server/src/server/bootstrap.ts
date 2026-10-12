@@ -1566,6 +1566,7 @@ export async function createPaseoDaemon(
   });
   // Resumes sessions that stopped on a usage limit once it resets (durable queue; Settings toggle).
   const limitResume = startLimitResume({
+    hooks: pluginRuntime,
     paseoHome: config.paseoHome,
     agentManager,
     agentStorage,
@@ -1582,6 +1583,7 @@ export async function createPaseoDaemon(
   });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({
+    hooks: pluginRuntime,
     paseoHome: config.paseoHome,
     agentManager,
     agentStorage,

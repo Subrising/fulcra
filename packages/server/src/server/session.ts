@@ -257,6 +257,7 @@ import {
 } from "./session/checkout/git-metadata-generator.js";
 import { ScheduleSession } from "./session/schedule/schedule-session.js";
 import { ProviderCatalogSession } from "./session/provider/provider-catalog-session.js";
+import { AccountUsageSession } from "./session/usage/account-usage-session.js";
 import { UsageSession } from "./session/usage/usage-session.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
@@ -644,7 +645,7 @@ export interface SessionOptions {
   tts: Resolvable<TextToSpeechProvider | null>;
   terminalManager: TerminalManager | null;
   providerSnapshotManager: ProviderSnapshotManager;
-  providerUsageService: ProviderUsageService;
+  providerUsageService: Pick<ProviderUsageService, "listUsage" | "observeUsage">;
   accountUsage?: AccountUsageRegistry;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
@@ -919,6 +920,7 @@ export class Session {
   private readonly scheduleSession: ScheduleSession;
   private readonly providerCatalogSession: ProviderCatalogSession;
   private readonly usageSession: UsageSession;
+  private readonly accountUsageSession: AccountUsageSession;
   private readonly workspaceFilesSession: WorkspaceFilesSession;
   private readonly agentConfigSession: AgentConfigSession;
   private readonly projectConfigSession: ProjectConfigSession;
@@ -1099,17 +1101,6 @@ export class Session {
       logger: this.sessionLogger,
     });
     this.providerCatalogSession = new ProviderCatalogSession({
-      sessionUsage: async (agentId) => {
-        const agent = this.agentManager.getAgent(agentId);
-        if (!agent || !this.isProviderVisibleToClient(agent.provider)) return null;
-        return this.agentManager.getAgentSessionUsage(agentId);
-      },
-      usageCredential: (agentId) => {
-        const credential = this.agentManager.getAgentUsageCredential(agentId);
-        return credential && this.isProviderVisibleToClient(credential.provider)
-          ? credential
-          : null;
-      },
       host: {
         emit: (msg) => this.emit(msg),
         isProviderVisibleToClient: (provider) => this.isProviderVisibleToClient(provider),
@@ -1141,6 +1132,24 @@ export class Session {
         listDraftFeatures: (config) => this.agentManager.listDraftFeatures(config),
       },
       providerSnapshotManager,
+      logger: this.sessionLogger,
+    });
+    this.accountUsageSession = new AccountUsageSession({
+      sessionUsage: async (agentId) => {
+        const agent = this.agentManager.getAgent(agentId);
+        if (!agent || !this.isProviderVisibleToClient(agent.provider)) return null;
+        return this.agentManager.getAgentSessionUsage(agentId);
+      },
+      usageCredential: (agentId) => {
+        const credential = this.agentManager.getAgentUsageCredential(agentId);
+        return credential && this.isProviderVisibleToClient(credential.provider)
+          ? credential
+          : null;
+      },
+      host: {
+        emit: (msg) => this.emit(msg),
+        isProviderVisibleToClient: (provider) => this.isProviderVisibleToClient(provider),
+      },
       providerUsageService,
       accountUsage,
       logger: this.sessionLogger,
@@ -4142,7 +4151,7 @@ export class Session {
         return this.providerCatalogSession.handleProviderDiagnosticRequest(msg);
       case "provider.usage.list.request":
         // FULCRA(accounts): the legacy list carries the account pool's rows and the session's bound account.
-        return this.providerCatalogSession.handleProviderUsageListRequest(msg);
+        return this.accountUsageSession.handleProviderUsageListRequest(msg);
       case "agent.quota.read.request":
         return this.handleAgentQuotaRead(msg);
       case "usage.list_reports.request":
