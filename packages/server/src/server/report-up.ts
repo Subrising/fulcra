@@ -803,22 +803,33 @@ export class ReportUpService {
     if (this.deps.deliver) {
       const items = this.takePending(leadId);
       if (!items.length) return;
-      this.lastFinishedAt.set(leadId, this.now());
-      await this.deps.deliver(leadId, formatSystemNotificationPrompt(formatCombinedNotice(items)));
+      await this.deliverCombined(leadId, items);
       return;
     }
     // Built when the lead's turn has ended: notices that arrive while the lead works join this one message.
     heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
       const items = this.takePending(leadId);
       if (!items.length) return;
-      this.lastFinishedAt.set(leadId, this.now());
-      await this.send(
-        leadId,
-        formatSystemNotificationPrompt(formatCombinedNotice(items)),
-        "report-up",
-      );
-      this.deps.logger.info({ lead: leadId, workers: items.length }, "Report-up delivered");
+      await this.deliverCombined(leadId, items);
     });
+  }
+
+  /**
+   * The combined message goes out now, unless the lead reached a usage limit after the reports were queued: then it
+   * takes the limit-aware path (toLead), which keeps it in the persisted held reports until the reset (FU-63).
+   */
+  private async deliverCombined(leadId: string, items: readonly PendingFinish[]): Promise<void> {
+    const prompt = formatSystemNotificationPrompt(formatCombinedNotice(items));
+    if (this.limitOf(leadId)) {
+      await this.toLead(items[0]!.workerId, leadId, prompt);
+      return;
+    }
+    this.lastFinishedAt.set(leadId, this.now());
+    if (this.deps.deliver) await this.deps.deliver(leadId, prompt);
+    else {
+      await this.send(leadId, prompt, "report-up");
+      this.deps.logger.info({ lead: leadId, workers: items.length }, "Report-up delivered");
+    }
   }
 
   private send(leadId: string, prompt: string, kind: "report-up" | "idle-nudge"): Promise<void> {

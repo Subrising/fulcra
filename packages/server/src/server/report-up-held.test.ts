@@ -74,7 +74,19 @@ function setup() {
         event: { type: "turn_completed", provider: "claude" },
       } as AgentManagerEvent);
   };
-  return { finish, leadTurnEnds };
+  const leadHitsLimit = () => {
+    for (const type of ["turn_started", "turn_failed"])
+      service.onEvent({
+        type: "agent_stream",
+        agentId: LEAD,
+        event: {
+          type,
+          provider: "codex",
+          error: "You've hit your usage limit. Try again at Oct 12, 2026 3:30 AM.",
+        },
+      } as AgentManagerEvent);
+  };
+  return { finish, leadTurnEnds, leadHitsLimit };
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -93,5 +105,17 @@ describe("report-up while the lead is busy", () => {
     expect(sent[0]!.prompt).toContain("2 workers finished a turn since your last update");
     expect(sent[0]!.prompt).toContain("alpha done");
     expect(sent[0]!.prompt).toContain("beta done");
+  });
+
+  test("the lead reaches a limit while the reports wait: nothing is sent when its turn ends", async () => {
+    const f = setup();
+    f.finish(A);
+    f.finish(B);
+    await settle();
+    f.leadHitsLimit();
+    await settle();
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toEqual([]);
   });
 });
