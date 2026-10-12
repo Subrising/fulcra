@@ -118,6 +118,7 @@ for (const version of ["0.2.5", "0.7.2", "0.8.0"]) {
       gate.release();
       await expect.poll(async () => (await client.fetchAgents()).entries.length).toBe(1);
       const first = (await client.fetchAgents()).entries[0]!.agent;
+      await waitForInitialPrompt(client, first.id, prompt);
       await client.waitForFinish(first.id, 20_000);
       await expectPromptOnce(client, first.id, prompt);
       await expect(
@@ -133,6 +134,7 @@ for (const version of ["0.2.5", "0.7.2", "0.8.0"]) {
         ({ agent }) => agent.id !== first.id,
       )!.agent;
       expect(second.workspaceId).toBe(first.workspaceId);
+      await waitForInitialPrompt(client, second.id, secondPrompt);
       await client.waitForFinish(second.id, 20_000);
       await expectPromptOnce(client, second.id, secondPrompt);
       await expect(
@@ -201,6 +203,40 @@ for (const version of ["0.2.5", "0.7.2", "0.8.0"]) {
         });
     }
   });
+}
+
+async function waitForInitialPrompt(client: DaemonClient, agentId: string, text: string) {
+  // Legacy creation publishes an idle agent before its initial prompt reaches the journal.
+  const arrived = Promise.withResolvers<void>();
+  const subscription = client.subscribeAgentTimeline(agentId, (message) => {
+    if (message.type === "agent.timeline.error") {
+      arrived.reject(new Error(message.payload.error));
+    }
+    if (
+      message.type === "agent_stream" &&
+      message.payload.event.type === "timeline" &&
+      message.payload.event.item.type === "user_message" &&
+      message.payload.event.item.text === text
+    ) {
+      arrived.resolve();
+    }
+  });
+  try {
+    await Promise.all([
+      arrived.promise,
+      subscription.ready.then(async () => {
+        const timeline = await client.fetchAgentTimeline(agentId);
+        if (
+          timeline.entries.some(({ item }) => item.type === "user_message" && item.text === text)
+        ) {
+          arrived.resolve();
+        }
+        return undefined;
+      }),
+    ]);
+  } finally {
+    await subscription.release();
+  }
 }
 
 async function holdLegacyAgentCreation(page: Page, port: number) {
