@@ -28,6 +28,7 @@ import { AnchoredSurface, MenuOverlay } from "./menu-overlay";
 import { getMenuSheetBottomPadding } from "./menu-sheet-layout";
 import type { Alignment, Placement } from "../anchor";
 import type { KeyboardFocusScope } from "@/keyboard/actions";
+import { TOUCH_TARGET } from "@/hooks/use-touch-targets";
 
 const ThemedChevronLeft = withUnistyles(ChevronLeft);
 const mutedIconMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -478,8 +479,9 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "flex-end",
   },
   sheetBackButton: {
-    width: 24,
-    height: 24,
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
+    marginHorizontal: -theme.spacing[3],
     alignItems: "center",
     justifyContent: "center",
   },

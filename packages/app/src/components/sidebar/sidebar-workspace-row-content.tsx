@@ -30,6 +30,7 @@ import { resolveSidebarWorkspacePrimaryLabel } from "@/components/sidebar/sideba
 import { TrailingActionScrim } from "@/components/ui/trailing-action-scrim";
 import { useWorkspaceLabelDefinitions } from "@/workspace-labels";
 import { BackgroundWorkBadge } from "./background-work-badge";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const needsInputColorMapping = (theme: Theme) => ({
@@ -139,9 +140,16 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   // A row from an unreachable host is its last-known state: dimmed, and marked for tests and screen
   // readers. It stays pressable so its cached view can still be opened.
   const offline = workspace.hostOffline === true;
+  const touch = useTouchTargets();
   const rowContentStyle = useMemo(
-    () => [styles.workspaceRowContent, offline && styles.workspaceRowOffline],
-    [offline],
+    // The absolute kebab starts at the title line; the content must contain its full target
+    // even when no labels or other metadata make the row taller.
+    () => [
+      styles.workspaceRowContent,
+      touch && touchTargetStyles.text,
+      offline && styles.workspaceRowOffline,
+    ],
+    [touch, offline],
   );
   return (
     <View
