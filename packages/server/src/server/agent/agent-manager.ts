@@ -977,7 +977,12 @@ export class AgentManager {
   private readonly reportRegistry?: NativeReportRegistry;
   private readonly reportLaunches = new Map<
     string,
-    { origin: NativeReportOrigin; identity: NativeReportIdentity | null; witness: string }
+    {
+      origin: NativeReportOrigin;
+      identity: NativeReportIdentity | null;
+      instanceId: string | null;
+      witness: string;
+    }
   >();
 
   private prepareNativeReportLaunch(agentId: string) {
@@ -987,19 +992,26 @@ export class AgentManager {
     const launch: {
       origin: NativeReportOrigin;
       identity: NativeReportIdentity | null;
+      instanceId: string | null;
       witness: string;
     } = {
       origin: createNativeReportOrigin(() => {
         const current = this.currentReportIdentity(agentId);
         if (
           this.reportLaunches.get(agentId) !== launch ||
-          !launch.identity ||
-          JSON.stringify(current) !== JSON.stringify(launch.identity)
+          !current ||
+          current.instanceId !== launch.instanceId
         )
+          throw new Error("Native report launch replaced or unavailable");
+        // Claude supplies its first native id during the first turn, after registration.
+        // Bind once to the registered runtime; never adopt a different launch or native id.
+        launch.identity ??= current;
+        if (JSON.stringify(current) !== JSON.stringify(launch.identity))
           throw new Error("Native report launch replaced or unavailable");
         return launch.identity;
       }),
       identity: null,
+      instanceId: null,
       witness: randomUUID(),
     };
     this.reportLaunches.set(agentId, launch);
@@ -1011,7 +1023,8 @@ export class AgentManager {
     if (!witness) return undefined;
     const launch = agentId ? this.reportLaunches.get(agentId) : undefined;
     if (!launch || launch.witness !== witness) throw new Error("Native MCP launch witness refused");
-    requireNativeReportOrigin(launch.origin);
+    // Providers discover MCP tools before registration supplies the native identity.
+    // The witness binds discovery to this launch. Tool calls validate the current native identity.
     return forkNativeReportOrigin(launch.origin);
   }
 
@@ -6280,7 +6293,10 @@ export class AgentManager {
       this.emitState(managed, { persist: false });
       this.subscribeToSession(managed);
       const launch = this.reportLaunches.get(resolvedAgentId);
-      if (launch) launch.identity = this.currentReportIdentity(resolvedAgentId);
+      if (launch) {
+        launch.instanceId = managed.instanceId ?? null;
+        launch.identity = this.currentReportIdentity(resolvedAgentId);
+      }
       return { ...managed };
     } catch (error) {
       if (!registered && !options?.deferFailureCleanup) {
