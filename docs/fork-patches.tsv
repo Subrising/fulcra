@@ -391,7 +391,7 @@ branding	A	38	0	RELEASE-NOTES-0.2.15.md
 branding	A	20	0	RELEASE-NOTES-0.2.16.1.md
 branding	A	10	0	RELEASE-NOTES-0.2.16.2.md
 branding	A	19	0	RELEASE-NOTES-0.2.16.md
-branding	A	75	0	RELEASE-NOTES-0.2.17.md
+branding	A	76	0	RELEASE-NOTES-0.2.17.md
 branding	A	61	0	RELEASE-NOTES-0.2.7.md
 branding	A	64	0	RELEASE-NOTES-0.2.8.md
 branding	A	47	0	RELEASE-NOTES-0.2.9.md
@@ -549,7 +549,7 @@ core-fixes	M	10	8	packages/app/e2e/browser/agent-message-submission.spec.ts
 core-fixes	M	3	0	packages/app/e2e/browser/agent-timeline-scroll-smoothness.spec.ts
 core-fixes	M	1	1	packages/app/e2e/browser/appearance-theme-picker.spec.ts
 core-fixes	M	2	1	packages/app/e2e/browser/assistant-fork-menu.spec.ts
-core-fixes	M	9	0	packages/app/e2e/browser/changes-pane.spec.ts
+core-fixes	M	15	5	packages/app/e2e/browser/changes-pane.spec.ts
 core-fixes	M	19	0	packages/app/e2e/browser/client-slash-commands.spec.ts
 core-fixes	M	2	2	packages/app/e2e/browser/codex-speed.spec.ts
 core-fixes	M	6	0	packages/app/e2e/browser/file-explorer-context-actions.spec.ts
@@ -574,8 +574,8 @@ core-fixes	M	25	8	packages/cli/src/commands/agent/archive.ts
 core-fixes	A	75	0	packages/cli/src/commands/agent/mcp-options.test.ts
 core-fixes	A	83	0	packages/cli/src/commands/agent/mcp-options.ts
 core-fixes	M	1	1	packages/cli/src/commands/agent/open.ts
-core-fixes	A	127	0	packages/cli/src/commands/ask.test.ts
-core-fixes	A	181	0	packages/cli/src/commands/ask.ts
+core-fixes	A	151	0	packages/cli/src/commands/ask.test.ts
+core-fixes	A	184	0	packages/cli/src/commands/ask.ts
 core-fixes	M	1	1	packages/cli/src/commands/clone.ts
 core-fixes	M	15	3	packages/cli/src/commands/daemon/lifecycle.e2e.test.ts
 core-fixes	M	22	0	packages/cli/src/commands/daemon/restart.ts
@@ -943,13 +943,14 @@ features	M	40	7	packages/app/src/components/sidebar/sidebar-status-list.tsx
 features	A	27	0	packages/app/src/components/sidebar/sidebar-top-content.tsx
 features	A	17	0	packages/app/src/components/sidebar/sidebar-touch.ts
 features	M	17	1	packages/app/src/components/sidebar/sidebar-workspace-menu.tsx
-features	M	17	1	packages/app/src/components/sidebar/sidebar-workspace-row-content.tsx
+features	M	23	1	packages/app/src/components/sidebar/sidebar-workspace-row-content.tsx
 features	M	9	4	packages/app/src/components/sidebar/sidebar-workspace-row.tsx
 features	M	41	5	packages/app/src/components/sidebar/use-limited-sidebar-group.ts
 features	A	83	0	packages/app/src/components/sidebar/use-offline-hosts.ts
 features	M	9	0	packages/app/src/components/split-container.tsx
 features	M	15	2	packages/app/src/components/ui/highlighted-text.tsx
 features	M	14	2	packages/app/src/components/ui/menu/menu-overlay.tsx
+features	M	5	2	packages/app/src/components/ui/pane-content-toolbar.tsx
 features	M	27	47	packages/app/src/components/welcome-screen.tsx
 features	M	3	2	packages/app/src/components/workspace-rename-modal.tsx
 features	M	14	0	packages/app/src/components/workspace-shortcut-targets-subscriber.test.tsx
