@@ -1,94 +1,146 @@
 # Host-link notices and worker creation
 
-Status: proposed design. Implementation has not started.
+Status: source implementation. Live Mac-to-Mac and Mac-to-PC acceptance remains open.
 
-## Problem
-
-- FU-105 — Cross-host worker notices: `role:main-assistant` resolves only against local chats. Remote holders cause `role has no chat`.
-- FU-76 — Cross-host spawn: leads need a restricted route to create workers on another computer.
+FU-105 — Cross-host worker notices: Fulcra sends `role:main-assistant` notices to its configured host when no local chat holds that role.
+FU-76 — Cross-host spawn creates a worker through a directed link and a destination-owned profile.
 
 The approved review separates reporting lines from creation ancestry (`PASEO-VS-FULCRA-2026-10-12.md:38`).
-It describes remote delivery limits at line 350 and report-up suppression at lines 369–372.
+Its delivery and suppression constraints appear at lines 350 and 369–372.
+The retired Book receiver stays retired. These endpoints do not use SSH receivers or daemon passwords.
 
-The current base has no host-link transport. The previous remote receiver is retired (`control/src/book/README.md:1`).
-Do not restore that receiver or use daemon passwords for the new route.
+## Authority
 
-## Security boundary
+The owner provisions `host-links.json` in each daemon's private home.
+Both daemons must have daemon authentication enabled.
+A directed link has one random `hlink1.` credential, a fixed destination identity, and explicit operations.
+Use HTTPS for remote transport. Literal loopback HTTP supports isolated tests.
+Redirects, URL credentials, query strings, and alternate endpoint paths are refused.
 
-The owner grants a directed link between two daemon identities.
-Each link has a separate random credential, a fixed destination, and explicit operations.
-Transport requires HTTPS; HTTP is permitted only for loopback tests.
-The destination records allowed source leads, target workspace roots, providers, models, restriction limits, and worker limits.
-Creating workers is disabled unless the owner grants it.
-Notice-only links cannot create workers.
+Each source lead has a separate `hchat1.` credential.
+The source derives the lead identity and permission mode from that credential and its saved chat.
+Caller fields cannot claim another lead, select an account, add environment variables, or grant a role.
+Role labels alone grant no link authority.
+The destination permits named leads, workload classes, workspace identifiers, and worker profiles.
 
-A lead authenticates locally with its own chat token.
-The source daemon derives the sender identity from that token.
-Caller fields and labels cannot claim another chat or grant a link.
-The daemon keeps link credentials private and never sends them to workers.
+A spawn grant permits provider work under the destination daemon's OS account.
+Workspace identifiers select working directories. They do not create filesystem sandboxes.
+Provider permission modes control the worker's tool access.
+Chat tokens do not isolate arbitrary code that runs under the daemon owner's account.
+A compromised source host can claim the identities and source modes its link permits.
+This boundary does not protect against a compromised owner or destination daemon.
 
-The destination authenticates the link before resolving a role or starting a provider.
-It applies its own policy to every request.
-It rejects unknown, revoked, expired, or wrongly scoped credentials.
-Link and chat credentials cannot authenticate to the general WebSocket or MCP control endpoint.
-An unconfigured link fails; it never falls back to a daemon password.
+The source lead receives a separate worker `hworker1.` credential.
+It permits prompts and inspection for that worker only.
+It cannot create workers, select another chat, change modes, or control the daemon.
+Link, chat, and worker credentials are refused by general HTTP, WebSocket, and MCP authentication.
+The daemon keeps link credentials out of worker configuration and prompts.
 
-This boundary restricts a compromised worker or lead to the granted link operations.
-It does not protect against a compromised owner account or destination daemon.
-A compromised source daemon can claim identities permitted by its link grant.
+Grant changes, revocation, and expiry block later admissions and old worker credentials.
+They do not prove that earlier provider work stopped.
+The provider creation fence checks the prepared model, mode, provider, directory, and current grant after plugin preparation.
+Queued worker prompts recheck the grant, reporting line, and permission mode before provider input.
 
-## Worker creation
+## Configuration
 
-The source uses an owner-defined workload rule to select the destination.
-GPU and heavy workloads select the configured PC target.
-Other workloads use their configured target.
-Missing targets and unsupported workloads fail without local substitution.
-The destination rechecks the workload against its link policy.
+Use private files with mode `0600` on POSIX systems.
+On Windows, restrict the private home and credential files to the service account with Windows ACLs.
+POSIX file modes do not set Windows ACLs.
+Generate each credential from 32 random bytes encoded with base64url, after its prefix.
+Keep credentials out of shell arguments and terminal output.
 
-Accept a bounded prompt, a permitted provider/model, and a workspace identifier mapped by destination policy.
-Reject caller-supplied executable paths, environment variables, credentials, role claims, and arbitrary target directories.
-Keep destination account selection and provider permissions under destination authority.
-Preserve restriction limits; remote creation cannot select a broader permission mode.
-Workers cannot create further remote workers without a separate owner grant.
+`version` is `1`. `machine` is `mac` or `pc`.
+The file contains `chats`, `outgoing`, `incoming`, and `routes`.
+Every grant has an `expiresAt` Unix timestamp in milliseconds and a `revoked` boolean.
+An empty operation list grants nothing.
 
-Persist the request identity before creation.
-Bind the receipt to the link, source lead, request body, destination, and created worker.
-An identical retry returns the retained receipt.
-A changed body under the same identity fails.
-Uncertain creation requires reconciliation against the retained worker identity; it must not create a second worker.
+| Section    | Owner-selected fields                                                                                                       |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `chats`    | Local `agentId`, `token`, `operations`, and permitted `links`                                                               |
+| `outgoing` | Link `id`, destination `serverId`, base `url`, `token`, destination `machine`, and automatic `reporters`                    |
+| `incoming` | Link `id`, source `serverId`, `token`, named `leads`, `operations`, `workloads`, `workspaces`, `profiles`, and `maxWorkers` |
+| `routes`   | Link IDs for `standard`, `heavy`, `gpu`, and `mainAssistant`                                                                |
 
-Issue a separate token for each created chat, scoped to its allowed follow-up operations.
-Revoking a link blocks later admissions.
-Revocation does not prove that previously admitted provider work stopped.
+`operations` permits `spawn`, `notice`, or both.
+A notice-only incoming link needs empty `workloads`, `workspaces`, and `profiles`, plus `maxWorkers: 0`.
+The outgoing and matching incoming entry use the same link credential.
+Each local chat and link identity needs a different credential.
 
-## Notices
+GPU and heavy workloads require the configured PC link at both ends.
+A missing route or offline destination fails. It never substitutes a local worker.
+The PC label is an owner-selected machine role; it is not hardware discovery.
 
-The destination resolves `role:main-assistant` at delivery time.
+An incoming `workspaces` map binds a short identifier to a canonical absolute directory.
+The receiver refuses changed paths and directory symlinks.
+A `profiles` map binds a short identifier to this shape:
+
+```json
+{
+  "provider": "codex",
+  "model": "MODEL_ID",
+  "modeId": "auto-review",
+  "parents": ["codex:auto-review"]
+}
+```
+
+Remote creation supports the known Claude and Codex permission modes.
+Unknown modes refuse creation.
+A restricted lead must use the same provider and permission mode.
+An automatic lead still needs an explicitly permitted source mode in `parents`.
+Use the provider's canonical model ID; a plugin cannot replace it during creation.
+
+`maxWorkers` counts retained creations, including pending requests.
+The journals also cap retained requests at 1,000 entries and 8 MiB.
+Keep receipts through reconciliation. Do not delete a pending receipt to retry creation.
+
+## Use from a lead
+
+Prepare a private JSON request with one retained UUID:
+
+```json
+{
+  "kind": "spawn",
+  "messageId": "11111111-1111-4111-8111-111111111111",
+  "workload": "standard",
+  "workspace": "job",
+  "profile": "worker",
+  "title": "Worker",
+  "prompt": "Complete the assigned task and report the checks."
+}
+```
+
+```sh
+fulcra host-link request request.json --endpoint https://source.example.test \
+  --credential-file chat.secret --receipt-file worker-receipt.json
+fulcra host-link inspect --receipt-file worker-receipt.json
+fulcra host-link prompt --receipt-file worker-receipt.json \
+  --message-id 22222222-2222-4222-8222-222222222222 --prompt-file follow-up.txt
+```
+
+The CLI stores the worker credential in the private receipt file. It does not print that credential.
+The receiver records the request before provider creation.
+An identical retry returns the retained receipt. A changed body or destination under that UUID fails.
+`created` means the initial prompt reached the provider. It does not mean the task finished.
+`pending` after a crash requires destination-owner reconciliation against the retained worker ID.
+It does not start another worker.
+
+An explicit upward notice uses `kind: "notice"`, `messageId`, and `text` through the same source command.
+The source requires the chat's saved reporting line to be `role:main-assistant`.
+The destination resolves that role, uses its held-send queue, and checks the holder again before input.
+A queued notice follows a role move without entering the previous holder's running turn.
 Missing or ambiguous holders refuse delivery.
-The source validates the reporter's recorded reporting line.
-The destination admits only notice text from an allowed link and reporter.
-Notice text cannot create a role grant or authorize another operation.
 
-Use the destination's existing held-send path so a notice cannot cancel a running turn.
-Keep the finish-notification ownership checks and lead-success suppression rules.
-Resolve role changes again before final input admission.
-Retain one notice identity across uncertain transport replies.
-Expose delivery failure to the sender without an acknowledgement-only wake.
+Automatic report-up keeps its existing enablement and finish-notification ownership rules.
+A turn that a notice started sends no further notice.
+Lead success notices remain suppressed; failed lead turns can cross the link.
+Retained remote children also count for success suppression.
+A notice cannot claim role authority through its text.
 
-## Verification
+## Verification boundary
 
-Use isolated daemon homes and ephemeral ports. Keep all installed daemons and live configurations unchanged.
-
-- Exercise real HTTP transport between two isolated daemons.
-- Create one remote worker through an authenticated lead; verify its parent route and one initial turn.
-- Test the configured PC workload rule without creating sessions on the installed PC daemon.
-- Deliver a remote notice to the current role holder, including a busy holder and a role change before delivery.
-- Preserve armed finish notifications, notice-loop prevention, and normal lead-success suppression.
-- Refuse wrong-link, revoked, expired, notice-only, and foreign-chat tokens before any provider starts.
-- Refuse forged sender IDs, unauthorized providers, broader permission modes, disallowed paths, and worker recursion.
-- Test duplicate requests, changed retry bodies, lost replies, crash recovery, and offline destinations.
-- Run focused tests, workspace typecheck, lint, formatting, and the normal Git hooks.
-- Obtain one fresh security review before delivery. Recheck only fixes from that review.
-
-Live Mac-to-Mac and Mac-to-PC acceptance remains separate from isolated transport proof.
-This batch permits no live installation, daemon restart, or configuration change.
+Run focused tests through the existing test scripts and queue.
+The source tests use real HTTP, private files, durable receipts, and two isolated daemons with test providers.
+They cover admission, initial input, credential refusal, permission restrictions, retries, response loss, and role moves during held delivery.
+They do not prove installed Mac-to-Mac or Mac-to-PC provider execution.
+The merge owner must obtain the required fresh security review before integration.
+Do not install or restart live daemons to run this batch's tests.

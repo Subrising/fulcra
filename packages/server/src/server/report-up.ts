@@ -29,6 +29,7 @@ import {
   type LedgerRow,
 } from "./ledger-items.js";
 import { lastAgentMessageAt } from "./agent-message-log.js";
+import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
   decideSend,
@@ -105,6 +106,7 @@ export const NUDGE_MESSAGE_PREFIX = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}idle-n
 export const NUDGE_LIST_LIMIT = 8;
 
 export interface ReportUpDeps {
+  remoteNotice?: (workerId: string, prompt: string, kind: HostLinkNoticeKind) => Promise<boolean>;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   /** "Finished a turn" notices: off unless the owner turned the fallback on. */
@@ -554,6 +556,14 @@ export class ReportUpService {
     const live = this.deps.agentManager.getAgent(workerId);
     const worker = await this.store.get(workerId);
     if (!worker || worker.archivedAt || live?.internal) return;
+    const prompt = formatSystemNotificationPrompt(
+      formatPermissionNotice({
+        worker,
+        request,
+        cwd: (live as { cwd?: string } | null)?.cwd ?? (worker as { cwd?: string }).cwd ?? null,
+      }),
+    );
+    if (await this.deps.remoteNotice?.(workerId, prompt, "permission")) return;
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return;
     const leadAgent = await this.store.get(lead.id);
@@ -565,13 +575,6 @@ export class ReportUpService {
       this.deps.localServerId,
     );
     if (!decision?.allowed) return;
-    const prompt = formatSystemNotificationPrompt(
-      formatPermissionNotice({
-        worker,
-        request,
-        cwd: (live as { cwd?: string } | null)?.cwd ?? (worker as { cwd?: string }).cwd ?? null,
-      }),
-    );
     await this.toLead(workerId, lead.id, prompt);
   }
 
@@ -621,13 +624,11 @@ export class ReportUpService {
     this.save();
     const worker = await this.store.get(workerId);
     if (!worker || worker.archivedAt) return true;
+    const prompt = formatSystemNotificationPrompt(formatLimitNotice(titleOf(worker), limit));
+    if (await this.deps.remoteNotice?.(workerId, prompt, "limit")) return true;
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return true;
-    await this.toLead(
-      workerId,
-      lead.id,
-      formatSystemNotificationPrompt(formatLimitNotice(titleOf(worker), limit)),
-    );
+    await this.toLead(workerId, lead.id, prompt);
     return true;
   }
 
@@ -701,6 +702,7 @@ export class ReportUpService {
     if (await this.noteLimit(workerId, failed, failure)) return skip("ended on a usage limit");
     // OFF BY DEFAULT: the limit notice above stays on; "finished a turn" and "ended with an error" notices need the fallback.
     if (!this.deps.isEnabled()) return skip("turned off");
+    if (await this.remoteFinished(worker, failed, startedAt)) return;
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return skip(lead.skip);
     const leadAgent = await this.store.get(lead.id);
@@ -713,23 +715,7 @@ export class ReportUpService {
       startedAt,
     });
     if (quiet) return skip(quiet);
-    const decision = await decideSend(
-      this.store,
-      { agentId: workerId },
-      lead.id,
-      this.deps.localServerId,
-    );
-    if (!decision?.allowed) {
-      this.deps.logger.info(
-        {
-          agentId: workerId,
-          lead: lead.id,
-          reason: decision?.allowed === false ? decision.reason : null,
-        },
-        "Report-up refused by the reporting line",
-      );
-      return;
-    }
+    if (!(await this.reportingLineAllows(workerId, lead.id))) return;
     const lastMessage = await this.deps.agentManager
       .getLastAssistantMessage(workerId)
       .catch(() => null);
@@ -742,6 +728,40 @@ export class ReportUpService {
       return;
     }
     await this.queueFinished(lead.id, { workerId, worker, lastMessage });
+  }
+
+  private async remoteFinished(
+    worker: LineAgent,
+    failed: boolean,
+    startedAt?: number,
+  ): Promise<boolean> {
+    const line = reportsTo(worker);
+    if (line !== "role:main-assistant" || !this.deps.remoteNotice) return false;
+    const sentAt = lastAgentMessageAt(worker.id, line);
+    if (!failed && startedAt !== undefined && sentAt !== null && sentAt >= startedAt) return true;
+    const lastMessage = await this.deps.agentManager
+      .getLastAssistantMessage(worker.id)
+      .catch(() => null);
+    const prompt = formatSystemNotificationPrompt(
+      formatReportUpNotice({ worker, failed, lastMessage }),
+    );
+    return this.deps.remoteNotice(worker.id, prompt, failed ? "failed" : "finished");
+  }
+
+  private async reportingLineAllows(workerId: string, leadId: string): Promise<boolean> {
+    const decision = await decideSend(
+      this.store,
+      { agentId: workerId },
+      leadId,
+      this.deps.localServerId,
+    );
+    if (decision?.allowed) return true;
+    const reason = decision?.allowed === false ? decision.reason : null;
+    this.deps.logger.info(
+      { agentId: workerId, lead: leadId, reason },
+      "Report-up refused by the reporting line",
+    );
+    return false;
   }
 
   /**
@@ -872,6 +892,7 @@ export function reportUpSwitches(setting: boolean | undefined): {
 }
 
 export function startReportUp(input: {
+  remoteNotice?: ReportUpDeps["remoteNotice"];
   paseoHome?: string;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -880,6 +901,7 @@ export function startReportUp(input: {
   logger: Logger;
 }): () => void {
   const service = new ReportUpService({
+    remoteNotice: input.remoteNotice,
     agentManager: input.agentManager,
     agentStorage: input.agentStorage,
     isEnabled: () =>

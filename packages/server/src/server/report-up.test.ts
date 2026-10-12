@@ -39,6 +39,11 @@ function fixture(
     now?: number;
     statePath?: string;
     ledger?: Array<{ project: string; id: string; owner: string; status: string }>;
+    remoteNotice?: (
+      workerId: string,
+      prompt: string,
+      kind: "explicit" | "finished" | "failed" | "permission" | "limit",
+    ) => Promise<boolean>;
   } = {},
 ) {
   const clock = { now: options.now ?? Date.now() };
@@ -56,6 +61,7 @@ function fixture(
   } as unknown as AgentStorage;
   let enabled = options.enabled ?? true;
   const service = new ReportUpService({
+    remoteNotice: options.remoteNotice,
     agentManager: manager,
     agentStorage: storage,
     isEnabled: () => enabled,
@@ -750,4 +756,30 @@ describe("combined reports and a limit that starts later", () => {
     expect(kept.held[LEAD]?.join("\n")).toContain("Beta");
     rmSync(dir, { recursive: true, force: true });
   });
+});
+
+test("a finish notice uses the host link when the main assistant has no local chat", async () => {
+  const notices: string[] = [];
+  const f = fixture(
+    [
+      {
+        id: WORKER,
+        title: "Remote reporter",
+        labels: { [REPORTS_TO_LABEL]: "role:main-assistant" },
+        lastMessage: "Done.",
+      },
+    ],
+    {
+      remoteNotice: async (id, prompt, kind) => {
+        notices.push(`${id}:${kind}:${prompt}`);
+        return true;
+      },
+    },
+  );
+  f.turn(WORKER);
+  await f.settle();
+  expect(notices).toHaveLength(1);
+  expect(notices[0]).toContain(`${WORKER}:finished:`);
+  expect(notices[0]).toContain("Done.");
+  expect(f.delivered).toEqual([]);
 });
