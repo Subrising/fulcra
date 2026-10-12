@@ -429,7 +429,7 @@ test("an ask with --account takes a name or an ID, in any case", async () => {
 });
 
 // 0.2.17 review: the credential never leaves, the leader's old ID is never killed, and one deadline covers the ask.
-import { scrubCredential, REDACTED, closePipes, MIN_ATTEMPT_MS } from "./ask.mjs";
+import { scrubCredential, REDACTED, TOO_DEEP, closePipes, MIN_ATTEMPT_MS } from "./ask.mjs";
 import { mock } from "node:test";
 
 test("scrubCredential removes the exact credential, its JSON and URL forms, from values and keys", () => {
@@ -569,6 +569,75 @@ test("killProcessTree on Unix kills the group only while the leader runs, and ne
   } finally {
     kill.mock.restore();
   }
+});
+
+test("a pending taskkill is not cut short by a timer that kills the leader", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const killed = [];
+    const run = () => ({ on: () => undefined, unref() {} });
+    killProcessTree(
+      { pid: 4242, exitCode: null, signalCode: null, kill: (s) => killed.push(s) },
+      { platform: "win32", run },
+    );
+    mock.timers.tick(60_000);
+    assert.deepEqual(killed, [], "the leader stays until taskkill ends");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a credential deep inside the answer, as a value or a key, is replaced and never returned unwalked", () => {
+  const token = "sk-ant-oat01-DEEPDEEPDEEPDEEP";
+  let value = { leaf: token, [token]: 1 };
+  for (let i = 0; i < 40; i++) value = { next: value, list: [value] };
+  const text = JSON.stringify(scrubCredential(value, token));
+  assert.equal(text.includes(token), false);
+  assert.ok(text.includes(TOO_DEEP) || text.includes(REDACTED));
+  // A shallow object is still walked in full.
+  assert.equal(JSON.stringify(scrubCredential({ a: { b: token } }, token)).includes(token), false);
+});
+
+test("the credential lookup is bounded by the ask's deadline, and the spawn gets the time left after it", async () => {
+  const { root } = await pool();
+  let clock = T0;
+  const slow = { get: async (id) => ((clock += 5000), `sk-ant-oat01-${id}`) };
+  const spawned = [];
+  await rejects(
+    askOnce({
+      root,
+      keychain: slow,
+      input: input({ timeoutMs: 2000 }),
+      now: () => clock,
+      spawnClaude: async (o) => (spawned.push(o.timeoutMs), ok()),
+    }),
+    "TIMEOUT",
+  );
+  assert.deepEqual(spawned, [], "no child starts with an expired allowance");
+  // Part of the time went on the lookup: the child gets the rest, not the old figure.
+  let clock2 = T0;
+  const partly = { get: async (id) => ((clock2 += 1500), `sk-ant-oat01-${id}`) };
+  await askOnce({
+    root,
+    keychain: partly,
+    input: input({ timeoutMs: 5000 }),
+    now: () => clock2,
+    spawnClaude: async (o) => (spawned.push(o.timeoutMs), ok()),
+  });
+  assert.deepEqual(spawned, [3500]);
+  // A lookup that never answers ends at the deadline.
+  const hung = { get: () => new Promise(() => {}) };
+  const started = Date.now();
+  await rejects(
+    askOnce({
+      root,
+      keychain: hung,
+      input: input({ timeoutMs: 1000 }),
+      spawnClaude: async () => ok(),
+    }),
+    "TIMEOUT",
+  );
+  assert.ok(Date.now() - started < 4000);
 });
 
 test("on Windows the leader is killed only after taskkill has finished", () => {

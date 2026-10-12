@@ -58,9 +58,21 @@ test("a child that prints the account credential leaks it into no job result and
   const account = await addAccount(root, { provider: "claude", name: "Work" }, Date.now());
   const token = `sk-ant-oat01-${account.id}-SECRET`;
   const keychain = { get: async () => token };
+  // The credential 40 levels down, as a value or as a key.
+  const deep = (secret: string, asKey: boolean) => {
+    let value: unknown = asKey ? { [secret]: 1 } : { leaf: secret };
+    for (let i = 0; i < 40; i++) value = { next: value };
+    return value;
+  };
   const leak = {
     good: async () => ({ is_error: false, result: `answer ${token}`, modelUsage: { [token]: {} } }),
     bad: async () => ({ is_error: true, api_error_status: 500, result: `diagnostic ${token}` }),
+    deepValue: async () => ({
+      is_error: false,
+      result: "ok",
+      structured_output: deep(token, false),
+    }),
+    deepKey: async () => ({ is_error: false, result: "ok", structured_output: deep(token, true) }),
     thrown: async () => {
       throw new Error(`spawn text ${token}`);
     },
