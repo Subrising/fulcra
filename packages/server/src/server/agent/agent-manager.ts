@@ -544,6 +544,8 @@ export interface WaitForAgentOptions {
 }
 
 export interface WaitForAgentResult {
+  /** Exact message-turn errors remain separate from the receiver's later state. */
+  error?: string;
   status: AgentLifecycleStatus;
   permission: AgentPermissionRequest | null;
   lastMessage: string | null;
@@ -1867,6 +1869,7 @@ export class AgentManager {
   private readonly clients = new Map<AgentProvider, AgentClient>();
   private readonly providerEnabled = new Map<AgentProvider, boolean>();
   private readonly providerDefinitions = new Map<AgentProvider, ProviderEnabledFlag>();
+  private readonly messageTurnResults = new Map<string, WaitForAgentResult>();
   private readonly agents = new Map<string, LiveManagedAgent>();
   // FIX-8 W3: permission requests a trusted plugin answered before they were surfaced, per agent.
   private readonly automaticPermissions = new Map<
@@ -6088,6 +6091,57 @@ export class AgentManager {
     return lastLiveItem ?? (await this.durableTimelineStore?.getLastItem(agentId)) ?? null;
   }
 
+  /** Wait for the submitted message's exact turn, including completion before the waiter attaches. */
+  async waitForMessageTurn(
+    agentId: string,
+    messageId: string,
+    signal: AbortSignal,
+  ): Promise<WaitForAgentResult> {
+    signal.throwIfAborted();
+    return new Promise<WaitForAgentResult>((resolveResult, reject) => {
+      let stop = () => {};
+      const finish = (error?: Error, result?: WaitForAgentResult) => {
+        stop();
+        signal.removeEventListener("abort", aborted);
+        if (error) reject(error);
+        else resolveResult(result!);
+      };
+      const aborted = () => finish(new DOMException("Message turn wait aborted", "AbortError"));
+      const check = () => {
+        if (signal.aborted) return aborted();
+        const agent = this.getAgent(agentId);
+        if (!agent || agent.lifecycle === "closed")
+          return finish(new Error("The message receiver is closed"));
+        const submitted = this.timelineStore.getSubmittedUserMessage(agentId, messageId);
+        if (!submitted?.turnId) return;
+        const result = this.messageTurnResults.get(JSON.stringify([agentId, submitted.turnId]));
+        if (result) return finish(undefined, result);
+        if (
+          agent.activeForegroundTurnId !== submitted.turnId &&
+          agent.activeTurnId !== submitted.turnId
+        )
+          return finish(
+            new Error("The message turn outcome is unavailable. Check the receiver history."),
+          );
+        const permission = this.peekPendingPermission(agent);
+        if (permission)
+          finish(undefined, {
+            status: agent.lifecycle,
+            permission,
+            lastMessage: this.getLastAssistantMessageFromTimeline(
+              this.timelineStore
+                .getRows(agentId)
+                .filter((row) => row.turnId === submitted.turnId)
+                .map((row) => row.item),
+            ),
+          });
+      };
+      stop = this.subscribe(check, { agentId, replayState: false });
+      signal.addEventListener("abort", aborted, { once: true });
+      check();
+    });
+  }
+
   async waitForAgentEvent(
     agentId: string,
     options?: WaitForAgentOptions,
@@ -7215,6 +7269,7 @@ export class AgentManager {
       );
     }
 
+    this.rememberMessageTurnResult(agent, event, eventTurnId, options?.fromHistory);
     const flags: StreamEventFlags = { shouldDispatchEvent: true, shouldNotifyWaiters: true };
 
     const dispatchPromise = this.dispatchStreamEventByType({
@@ -7246,6 +7301,31 @@ export class AgentManager {
     this.traceHandleStreamEventEnd(agent, event, eventTurnId, flags);
 
     return flags.shouldNotifyWaiters;
+  }
+
+  /** Retain the exact turn result before finalization publishes an idle state. */
+  private rememberMessageTurnResult(
+    agent: ActiveManagedAgent,
+    event: AgentStreamEvent,
+    turnId: string | undefined,
+    fromHistory: boolean | undefined,
+  ): void {
+    if (fromHistory || !turnId || !isTurnTerminalEvent(event)) return;
+    const result: WaitForAgentResult = {
+      status: event.type === "turn_completed" ? "idle" : "error",
+      permission: null,
+      lastMessage: this.getLastAssistantMessageFromTimeline(
+        this.timelineStore
+          .getRows(agent.id)
+          .filter((row) => row.turnId === turnId)
+          .map((row) => row.item),
+      ),
+    };
+    if (event.type === "turn_failed") result.error = event.error;
+    else if (event.type === "turn_canceled") result.error = event.reason;
+    this.messageTurnResults.set(JSON.stringify([agent.id, turnId]), result);
+    if (this.messageTurnResults.size > 2000)
+      this.messageTurnResults.delete(this.messageTurnResults.keys().next().value!);
   }
 
   private traceHandleStreamEventStart(
