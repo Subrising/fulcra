@@ -321,6 +321,26 @@ it("human, agent and daemon sources have distinct sequence semantics", () => {
   expect(h.sequence(agent.id).humanAt).toBe(1);
 });
 
+it("the host limit gate holds automatic prompts and preserves human input", () => {
+  let sdk!: TrustedPluginServer;
+  const h = host((s) => {
+    sdk = s;
+  });
+  const gate = vi.fn(() => {
+    throw Object.assign(new Error("limited"), { code: "RECIPIENT_LIMITED", resumeAt: 123456 });
+  });
+  h.setAutomaticInputGate(gate);
+  for (const kind of ["prompt", "steer", "replace"] as const) {
+    expect(() => h.input(agent, kind, undefined, noop)).toThrow("limited");
+    expect(() => h.agentInput(() => h.input(agent, kind, undefined, noop))).toThrow("limited");
+    expect(h.rpc(undefined, () => h.input(agent, kind, undefined, () => 42))).toBe(42);
+  }
+  const token = sdk.issueProvenance({ agentId: agent.id, kind: "prompt", messageId: "queued" });
+  expect(() => h.rpc(token, () => h.input(agent, "prompt", "queued", noop))).toThrow("limited");
+  expect(gate).toHaveBeenCalledTimes(7);
+  expect(h.input(agent, "cancel", undefined, () => 43)).toBe(43);
+});
+
 it("permission guards receive verified provenance and human answers count", () => {
   let sdk!: TrustedPluginServer;
   const guard = vi.fn<Parameters<TrustedPluginServer["guard"]>[1]>(() => "allow");

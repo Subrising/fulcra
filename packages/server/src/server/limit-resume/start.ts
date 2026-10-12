@@ -10,6 +10,7 @@ import { LIMIT_RESUME_OPT_OUT_LABEL, LimitResumeService } from "./service.js";
 /** Starts auto-resume for this host: listens to agent events, keeps the durable queue, resumes at reset. */
 export function startLimitResume(input: {
   paseoHome: string;
+  now?: () => number;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   daemonConfigStore: DaemonConfigStore;
@@ -18,6 +19,7 @@ export function startLimitResume(input: {
   const { agentManager, agentStorage, logger } = input;
   const service = new LimitResumeService({
     paseoHome: input.paseoHome,
+    now: input.now,
     isEnabled: () => input.daemonConfigStore.get().autoResumeOnLimit !== false,
     captureBinding: (agentId) => agentManager.getLimitResumeBinding(agentId),
     getAgent: async (agentId, forResume) => {

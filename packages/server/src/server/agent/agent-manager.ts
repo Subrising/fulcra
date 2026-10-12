@@ -34,7 +34,12 @@ import {
   registerOwnerEvidenceRead,
   registerOwnerManagedArtifactRead,
 } from "../owner-report-read.js";
-import { assertFinalInputCheck, failFinalInputHandoff } from "./final-input-check.js";
+import {
+  assertFinalInputCheck,
+  failFinalInputHandoff,
+  recordManagerInputHandoff,
+  requiresProviderInputHandoff,
+} from "./final-input-check.js";
 import { checkReportPublication } from "../report-publication.js";
 import {
   createNativeReportOrigin,
@@ -98,6 +103,7 @@ import type { InputSequence, TrustedInputKind } from "@getpaseo/plugin/server";
 import { projectTimelineRows } from "./timeline-projection.js";
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
+import { AutomaticInputLimits } from "../limit-resume/automatic-input.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
@@ -483,6 +489,7 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  automaticInputNow?: () => number;
   /** Host-private registration journal, derived from the existing private home. Not a shared config key. */
   reportRegistryFile?: string;
   reportGrantDirectory?: string;
@@ -1912,9 +1919,36 @@ export class AgentManager {
   private readonly beforeSteerUnavailableFallback?: AgentManagerOptions["beforeSteerUnavailableFallback"];
   private readonly mcpRefreshAdmission?: AgentManagerOptions["mcpRefreshAdmission"];
   private acceptingAgentRegistrations = true;
+  private readonly automaticInputLimits: AutomaticInputLimits;
 
   constructor(options: AgentManagerOptions) {
+    this.automaticInputLimits = new AutomaticInputLimits(options.automaticInputNow);
     this.trustedPlugins = resolveTrustedPlugins(options.trustedPlugins);
+    this.trustedPlugins.setAutomaticInputGate((id) => {
+      const agent = this.agents.get(id);
+      const account = this.automaticLimitAccount(id);
+      if (agent && !this.hasInFlightRun(id)) {
+        // Restored sessions retain their terminal error and timeline. Anchor unknown resets to that stop.
+        this.automaticInputLimits.observe(id, {
+          ...(agent.lastError
+            ? { failed: agent.lastError }
+            : {
+                assistant:
+                  this.timelineStore.getLastItem(id)?.type === "assistant_message"
+                    ? (
+                        this.timelineStore.getLastItem(id) as Extract<
+                          AgentTimelineItem,
+                          { type: "assistant_message" }
+                        >
+                      ).text
+                    : null,
+              }),
+          stoppedAt: agent.updatedAt.getTime(),
+          account,
+        });
+      }
+      this.automaticInputLimits.assertAllowed(id, account);
+    });
     this.trustedPlugins.setNativeIdentityReader((id) => {
       const identity = this.currentReportIdentity(id);
       return identity
@@ -2663,6 +2697,7 @@ export class AgentManager {
       attention?: AttentionState;
     },
     resumeOptions?: AgentResumeSessionOptions,
+    requireRecord?: (record: StoredAgentRecord | null) => void,
   ): Promise<ManagedAgent> {
     const resolvedAgentId = validateAgentId(
       agentId ?? this.idFactory(),
@@ -2676,6 +2711,7 @@ export class AgentManager {
           resolvedAgentId,
           options,
           resumeOptions,
+          requireRecord,
         ),
       ),
     );
@@ -2695,6 +2731,7 @@ export class AgentManager {
       attention?: AttentionState;
     },
     resumeOptions?: AgentResumeSessionOptions,
+    requireRecord?: (record: StoredAgentRecord | null) => void,
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(
@@ -2712,6 +2749,7 @@ export class AgentManager {
     // settled before the config is prepared, because a history load reads an archived
     // agent whose working directory may be gone.
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
+    requireRecord?.(record);
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
       : resumeOptions;
@@ -4872,7 +4910,10 @@ export class AgentManager {
         () => {
           validate();
           assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
-          if (options?.[FINAL_INPUT_CHECK] && !["codex", "claude"].includes(agent.provider))
+          if (
+            requiresProviderInputHandoff(options?.[FINAL_INPUT_CHECK]) &&
+            !["codex", "claude"].includes(agent.provider)
+          )
             throw new Error("Final-checked notification provider unavailable");
           return nativeDispatch(() => agent.session.startTurn(prompt, turnOptions));
         },
@@ -4882,6 +4923,7 @@ export class AgentManager {
       if (pendingRun.settled) {
         throw new Error(`Agent ${agentId} run was canceled before its turn started`);
       }
+      recordManagerInputHandoff(options?.[FINAL_INPUT_CHECK]);
       return result.turnId;
     } catch (caught) {
       failFinalInputHandoff(options?.[FINAL_INPUT_CHECK], caught);
@@ -5210,7 +5252,10 @@ export class AgentManager {
           });
         }
         const agent = this.requireSessionAgent(agentId);
-        if (options?.[FINAL_INPUT_CHECK] && !["codex", "claude"].includes(agent.provider))
+        if (
+          requiresProviderInputHandoff(options?.[FINAL_INPUT_CHECK]) &&
+          !["codex", "claude"].includes(agent.provider)
+        )
           throw new Error("Final-checked notification provider unavailable");
         const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
         if (!expectedTurnId || !agent.session.steerActiveTurn) {
@@ -5264,7 +5309,10 @@ export class AgentManager {
           });
         }
         const agent = this.requireSessionAgent(agentId);
-        if (options?.[FINAL_INPUT_CHECK] && !["codex", "claude"].includes(agent.provider))
+        if (
+          requiresProviderInputHandoff(options?.[FINAL_INPUT_CHECK]) &&
+          !["codex", "claude"].includes(agent.provider)
+        )
           throw new Error("Final-checked notification provider unavailable");
         const expectedTurnId = agent.activeForegroundTurnId ?? agent.activeTurnId;
         if (!expectedTurnId) {
@@ -8199,6 +8247,16 @@ export class AgentManager {
     });
   }
 
+  private automaticLimitAccount(agentId: string): string | null {
+    const agent = this.agents.get(agentId);
+    try {
+      const account = agent?.session?.limitResumeAccountBinding?.();
+      return typeof account === "string" && account ? `${agent!.provider}:${account}` : null;
+    } catch {
+      return null;
+    }
+  }
+
   private dispatchStream(
     agentId: string,
     event: AgentStreamEvent,
@@ -8215,6 +8273,17 @@ export class AgentManager {
       };
     }
     const agent = this.agents.get(agentId);
+    if (event.type === "turn_started") this.automaticInputLimits.clear(agentId);
+    else if (event.type === "turn_failed")
+      this.automaticInputLimits.observe(agentId, {
+        failed: [event.error, event.code, event.diagnostic].filter(Boolean).join(" "),
+        account: this.automaticLimitAccount(agentId),
+      });
+    else if (event.type === "turn_completed")
+      this.automaticInputLimits.observe(agentId, {
+        assistant: this.getLastAssistantMessageFromTimeline(this.timelineStore.getItems(agentId)),
+        account: this.automaticLimitAccount(agentId),
+      });
     this.logger.trace(
       {
         agentId,

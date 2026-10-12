@@ -7996,6 +7996,54 @@ test("native queue client leaves ordinary send untouched on an unadvertised host
   await expect(pending).resolves.toBeUndefined();
 });
 
+test("agent message queue gates explicit queue and stamped steer before sending", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  await expect(client.sendAgentMessage("target", "queued", { queue: true })).rejects.toThrow(
+    "Update the host",
+  );
+  await expect(
+    client.sendAgentMessage("target", "steer", {
+      sender: { agentId: "sender" },
+      activeTurnBehavior: "steer",
+    }),
+  ).rejects.toThrow("Update the host");
+  expect(nativeQueueRequests(mock)).toHaveLength(0);
+});
+
+test("agent message queue reports the daemon delivery note", async () => {
+  const { client, mock } = await nativeQueueClient(false);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "status",
+      payload: {
+        status: "server_info",
+        serverId: "queue-host",
+        hostname: "fixture",
+        version: "0.2.18",
+        features: { agentMessageQueue: true },
+      },
+    }),
+  );
+  const onDelivery = vi.fn();
+  const pending = client.sendAgentMessage("target", "queued", { queue: true, onDelivery });
+  const request = nativeQueueRequests(mock)[0];
+  expect(request.queue).toBe(true);
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "send_agent_message_response",
+      payload: {
+        requestId: request.requestId,
+        agentId: "target",
+        accepted: true,
+        error: null,
+        deliveryNote: "Message queued for combined delivery.",
+      },
+    }),
+  );
+  await pending;
+  expect(onDelivery).toHaveBeenCalledExactlyOnceWith("Message queued for combined delivery.");
+});
+
 test("native queue client does not queue across reconnect or reuse the old host feature", async () => {
   const { client, mock } = await nativeQueueClient();
   mock.triggerClose({ code: 1006 });

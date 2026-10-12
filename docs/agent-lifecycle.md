@@ -147,6 +147,14 @@ Permission requests are notification checkpoints, not the end of that subscripti
 The permission notification includes the normalized request plus the child and request IDs, so the caller can inspect it and respond without fetching agent status.
 A watched child that closes before its finish event also notifies the caller so delegated work cannot disappear silently during archive or workspace teardown.
 
+Agent messages wait while the receiver runs or has a usage limit. Eligible messages combine into one turn after that restriction ends.
+The queue keeps each message and sender across a daemon restart. It checks each reporting line again before delivery.
+Different requested session modes require separate turns. Plugin operations keep their own authority and receipt paths.
+An interrupted dispatch has an uncertain result. Check the receiver before you send it again; the queue does not replay that dispatch.
+
+Use `fulcra send --steer` when the message must enter the current turn. An unavailable steer enters the queue and returns a delivery note.
+Human app input keeps its existing behavior. A queued MCP follow-up replaces the earlier finish notice and arms one notice for the delivered turn.
+
 ## Provider-managed child agents
 
 Some providers can create their own child sessions inside one provider runtime. OMP's task tool reports these with `child_session` events; `AgentManager` imports the live provider handle, stamps `paseo.parent-agent-id`, and surfaces the result as a normal subagent in the parent's subagents track.

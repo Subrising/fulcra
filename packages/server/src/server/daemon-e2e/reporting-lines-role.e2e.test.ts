@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { MAIN_ASSISTANT_REF, REPORTS_TO_LABEL, SEAT_LABEL } from "@getpaseo/protocol/agent-labels";
 import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createTestAgentClient } from "../test-utils/fake-agent-client.js";
@@ -89,6 +89,90 @@ test("a lead's send to the main assistant role reaches the chat that holds the r
       "Send this to the main assistant, Main assistant",
     );
   } finally {
+    await client?.close();
+    await daemon?.close();
+    if (daemon) await rm(daemon.staticDir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("WebSocket sends steer the native turn and combine three queued messages into one wake", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "message-queue-"));
+  const prompts: unknown[] = [];
+  let daemon: TestPaseoDaemon | undefined;
+  let client: DaemonClient | undefined;
+  try {
+    daemon = await createTestPaseoDaemon({
+      paseoHomeRoot: root,
+      cleanup: false,
+      agentClients: {
+        codex: createTestAgentClient("codex", { onStartTurn: (prompt) => prompts.push(prompt) }),
+      },
+    });
+    const manager = daemon.daemon.agentManager;
+    const sender = await manager.createAgent(
+      {
+        provider: "codex",
+        cwd: root,
+        modeId: "full-access",
+      },
+      undefined,
+      { workspaceId: undefined },
+    );
+    const target = await manager.createAgent(
+      {
+        provider: "codex",
+        cwd: root,
+        modeId: "full-access",
+      },
+      undefined,
+      { workspaceId: undefined },
+    );
+    const start = vi
+      .spyOn(target.session!, "startTurn")
+      .mockResolvedValueOnce({ turnId: "current-turn" });
+    const iterator = manager.trustedPlugins.agentInput(() =>
+      manager.streamAgent(target.id, "current task"),
+    );
+    const first = iterator.next();
+    await vi.waitFor(() =>
+      expect(manager.getAgent(target.id)?.activeForegroundTurnId).toBe("current-turn"),
+    );
+    const steer = vi.fn(async () => ({ status: "accepted" as const }));
+    target.session!.steerActiveTurn = steer;
+    client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+    await client.connect();
+    let note = "";
+    await client.sendAgentMessage(target.id, "change direction", {
+      sender: { agentId: sender.id },
+      activeTurnBehavior: "steer",
+      onDelivery: (value) => {
+        note = value;
+      },
+    });
+    expect(steer).toHaveBeenCalledExactlyOnceWith(
+      "change direction",
+      expect.objectContaining({ expectedTurnId: "current-turn" }),
+    );
+    expect(note).toBe("Message delivered through native steering.");
+    for (const text of ["one", "two", "three"]) {
+      await client.sendAgentMessage(target.id, text, {
+        sender: { agentId: sender.id },
+        queue: true,
+      });
+    }
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(prompts).toEqual([]);
+    await manager.trustedPlugins.daemon(() => manager.cancelAgentRun(target.id));
+    await first;
+    await iterator.return(undefined);
+    await vi.waitFor(() => expect(prompts).toHaveLength(1));
+    expect(prompts).toEqual([
+      `Message 1 from ${sender.id}:\none\n\nMessage 2 from ${sender.id}:\ntwo\n\nMessage 3 from ${sender.id}:\nthree`,
+    ]);
+    expect(start).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.restoreAllMocks();
     await client?.close();
     await daemon?.close();
     if (daemon) await rm(daemon.staticDir, { recursive: true, force: true });

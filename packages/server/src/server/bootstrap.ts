@@ -7,6 +7,7 @@ import { startLimitResume } from "./limit-resume/start.js";
 import { startReportUp } from "./report-up.js";
 import { recordOpenSessions, reviveAfterRestart, sealStopRecord } from "./revive-on-restart.js";
 import { heldSendsFor } from "./held-sends.js";
+import { queuedAgentMessagesFor } from "./queued-agent-messages.js";
 import { setHostAutomations } from "./automations/automation-service.js";
 import { startHostAutomations } from "./automations/start-host-automations.js";
 import { DEFAULT_RELAY_ENDPOINT } from "@getpaseo/protocol/daemon-endpoints";
@@ -1558,6 +1559,12 @@ export async function createPaseoDaemon(
   });
   // FULCRA(orchestration): one held-send queue per target for this daemon (held-sends.ts).
   const heldSends = heldSendsFor(agentManager, logger);
+  const queuedAgentMessages = queuedAgentMessagesFor({
+    agentManager,
+    agentStorage,
+    logger,
+    deferStart: true,
+  });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({
     paseoHome: config.paseoHome,
@@ -2116,7 +2123,10 @@ export async function createPaseoDaemon(
           isEnabled: () => daemonConfigStore.get().reviveOnRestart !== false,
         },
         { records: persistedRecords, crashInterrupted: interrupted },
-      ).catch((err) => logger.warn({ err }, "Revive on restart failed"));
+      )
+        .catch((err) => logger.warn({ err }, "Revive on restart failed"))
+        .then(() => queuedAgentMessages.start())
+        .catch((err) => logger.warn({ err }, "Queued messages could not resume"));
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);
@@ -2139,6 +2149,7 @@ export async function createPaseoDaemon(
     limitResume.stop();
     stopReportUp();
     heldSends.close();
+    await queuedAgentMessages.close();
     await distribution?.stop();
     hostIntegrations.dispose();
     localCredential = null;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AutomaticInputLimits, RecipientLimitedError } from "./automatic-input.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./detect.js";
 
 const NOW = Date.parse("2026-10-03T10:00:00Z");
@@ -93,5 +94,48 @@ describe("limit kind", () => {
         ?.limitKind,
     ).toBe("weekly");
     expect(classifyFailedTurn("429 Too Many Requests", NOW)?.limitKind).toBe("usage");
+  });
+});
+
+describe("automatic input limit gate", () => {
+  it("returns the stop reset once and releases at that time", () => {
+    let now = NOW;
+    const gate = new AutomaticInputLimits(() => now);
+    const resumeAt = NOW + 60000;
+    gate.observe("lead", { assistant: `Claude AI usage limit reached|${resumeAt / 1000}` });
+    expect(() => gate.assertAllowed("lead")).toThrow(RecipientLimitedError);
+    expect(() => gate.assertAllowed("lead")).toThrowError(
+      expect.objectContaining({ code: "RECIPIENT_LIMITED", resumeAt }),
+    );
+    now = resumeAt;
+    expect(() => gate.assertAllowed("lead")).not.toThrow();
+  });
+  it("bounds unknown resets from the stopped time and clears on a newer turn", () => {
+    let now = NOW;
+    const gate = new AutomaticInputLimits(() => now);
+    gate.observe("lead", { failed: "429 Too Many Requests" });
+    now += 60000;
+    gate.observe("lead", { failed: "429 Too Many Requests", stoppedAt: now });
+    expect(() => gate.assertAllowed("lead")).toThrowError(
+      expect.objectContaining({ resumeAt: NOW + 900000 }),
+    );
+    gate.clear("lead");
+    expect(() => gate.assertAllowed("lead")).not.toThrow();
+    gate.observe("old", { failed: "usage limit reached", stoppedAt: NOW - 900000 });
+    expect(() => gate.assertAllowed("old")).not.toThrow();
+  });
+  it("permits a verified account switch while an unknown account stays held", () => {
+    const gate = new AutomaticInputLimits(() => NOW);
+    gate.observe("lead", { failed: "429 Too Many Requests", account: "account-a" });
+    expect(() => gate.assertAllowed("lead", "account-a")).toThrow(RecipientLimitedError);
+    expect(() => gate.assertAllowed("lead", null)).toThrow(RecipientLimitedError);
+    expect(() => gate.assertAllowed("lead", "account-b")).not.toThrow();
+  });
+  it("does not hold normal answers, cancellation, or transient network failures", () => {
+    const gate = new AutomaticInputLimits(() => NOW);
+    gate.observe("normal", { assistant: "The task is complete." });
+    gate.observe("network", { failed: "ECONNRESET" });
+    expect(() => gate.assertAllowed("normal")).not.toThrow();
+    expect(() => gate.assertAllowed("network")).not.toThrow();
   });
 });

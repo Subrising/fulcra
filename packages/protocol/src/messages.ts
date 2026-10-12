@@ -1475,6 +1475,7 @@ export const FetchAgentRequestMessageSchema = z.object({
 });
 
 export const SendAgentMessageRequestSchema = z.object({
+  queue: z.literal(true).optional(),
   // COMPAT(nativeQueuedMessages): added v0.2.0; require feature before requesting, remove gate after 2027-10-01.
   nativeQueue: z.literal(true).optional(),
   inputProvenance: z.string().optional(),
@@ -4196,6 +4197,7 @@ export const ServerInfoStatusPayloadSchema = z
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
         nativeQueuedMessages: z.boolean().optional(),
+        agentMessageQueue: z.boolean().optional(),
         // Absent on older hosts means the usage-limit resume setting is unsupported.
         autoResumeOnLimit: z.boolean().optional(),
         // COMPAT(notificationPolicy): added 2026-10-04; remove optional gate after 2027-10-04.
@@ -5702,6 +5704,7 @@ export const SendAgentMessageResponseMessageSchema = z.object({
     requestId: z.string(),
     agentId: z.string(),
     accepted: z.boolean(),
+    deliveryNote: z.string().optional(),
     nativeReceipt: NativeQueuedMessageReceiptSchema.optional(),
     error: z.string().nullable(),
   }),

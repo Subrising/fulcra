@@ -146,6 +146,10 @@ export class AgentStorage {
     this.logger = logger.child({ module: "agent", component: "agent-storage" });
   }
 
+  get heldMessagesPath(): string {
+    return path.join(path.dirname(this.baseDir), "held-messages.json");
+  }
+
   async initialize(): Promise<void> {
     await this.load();
   }

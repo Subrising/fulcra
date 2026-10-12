@@ -1,4 +1,5 @@
 import { type Command } from "commander";
+import type { PaseoAgentSendOptions } from "@getpaseo/client";
 import { collectMultiple } from "../../utils/command-options.js";
 import { connectToDaemon } from "../../utils/client.js";
 import type {
@@ -44,6 +45,8 @@ export const agentSendSchema: OutputSchema<AgentSendResult> = {
 };
 
 export interface AgentSendOptions extends CommandOptions {
+  steer?: boolean;
+  queue?: boolean;
   wait?: boolean;
   nativeQueue?: boolean;
   messageId?: string;
@@ -61,6 +64,8 @@ export function addSendOptions(cmd: Command): Command {
     .option("--prompt <text>", "Provide the message inline as a flag")
     .option("--prompt-file <path>", "Read the message from a UTF-8 text file")
     .option("--image <path>", "Attach image(s) to the message", collectMultiple, [])
+    .option("--steer", "Inject into the running turn; queue if native steering is unavailable")
+    .option("--queue", "Queue agent messages for one combined delivery (default for agent senders)")
     .option(
       "--native-queue",
       "Request native queue; requires an authenticated delegated operation, grants no authority",
@@ -268,6 +273,30 @@ async function runSlashCommand(
   return null;
 }
 
+function validateSendMode(options: AgentSendOptions): void {
+  const modes = [options.steer, options.queue, options.nativeQueue].filter(Boolean);
+  if (modes.length > 1)
+    throw {
+      code: "CONFLICTING_SEND_MODE",
+      message: "Choose one of --steer, --queue, or --native-queue",
+    } satisfies CommandError;
+}
+
+function sendOptions(
+  options: AgentSendOptions,
+  sender: ReturnType<typeof resolveSender>,
+  images: Awaited<ReturnType<typeof readImageFiles>> | undefined,
+  onDelivery: (note: string) => void,
+): PaseoAgentSendOptions {
+  return {
+    images,
+    ...(sender ? { sender } : {}),
+    ...(options.queue || (sender && !options.steer) ? { queue: true } : {}),
+    ...(options.steer ? { activeTurnBehavior: "steer" as const } : {}),
+    ...(sender || options.steer || options.queue ? { onDelivery } : {}),
+  };
+}
+
 export async function runSendCommand(
   agentIdArg: string,
   prompt: string | undefined,
@@ -285,6 +314,7 @@ export async function runSendCommand(
   }
 
   const nativeQueue = options.nativeQueue === true;
+  validateSendMode(options);
   const messageId = validateNativeQueueOptions(options, nativeQueue);
   const promptInput = await resolvePromptInput({
     promptArgument: prompt,
@@ -326,10 +356,14 @@ export async function runSendCommand(
     if (slashResult) return { type: "single", data: slashResult, schema: agentSendSchema };
 
     // Send the message
-    await client.sendAgentMessage(agentIdArg, promptInput, {
-      images,
-      ...(sender ? { sender } : {}),
-    });
+    let deliveryNote: string | undefined;
+    await client.sendAgentMessage(
+      agentIdArg,
+      promptInput,
+      sendOptions(options, sender, images, (note) => {
+        deliveryNote = note;
+      }),
+    );
 
     // If --no-wait, return immediately
     if (options.wait === false) {
@@ -338,7 +372,7 @@ export async function runSendCommand(
         data: {
           agentId: agentIdArg,
           status: "sent",
-          message: "Message sent, not waiting for completion",
+          message: deliveryNote ?? "Message sent, not waiting for completion",
         },
         schema: agentSendSchema,
       };
@@ -346,9 +380,10 @@ export async function runSendCommand(
 
     const state = await client.waitForFinish(agentIdArg, 600000); // 10 minute timeout
 
+    const result = buildSendResult(agentIdArg, state);
     return {
       type: "single",
-      data: buildSendResult(agentIdArg, state),
+      data: deliveryNote ? { ...result, message: `${deliveryNote} ${result.message}` } : result,
       schema: agentSendSchema,
     };
   } catch (err) {

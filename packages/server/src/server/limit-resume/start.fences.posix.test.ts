@@ -36,6 +36,7 @@ function deferred() {
 async function fixture() {
   const home = await realpath(await mkdtemp(path.join(tmpdir(), "limit-native-fence-")));
   const logger = createTestLogger();
+  const clock = { value: Date.now() };
   const storage = new AgentStorage(path.join(home, "agents"), logger);
   await storage.initialize();
   const host = new TrustedPlugins();
@@ -108,6 +109,7 @@ async function fixture() {
   };
   const manager = new AgentManager({
     registry: storage,
+    automaticInputNow: () => clock.value,
     logger,
     trustedPlugins: host,
     clients: { codex: client },
@@ -130,6 +132,7 @@ async function fixture() {
   );
   return {
     home,
+    clock,
     logger,
     storage,
     host,
@@ -148,14 +151,17 @@ async function fixture() {
     },
     accountEnv,
     config,
-    start: () =>
-      startLimitResume({
+    start: () => {
+      clock.value = Math.max(clock.value + 1, Date.now());
+      return startLimitResume({
         paseoHome: home,
+        now: () => clock.value,
         agentManager: manager,
         agentStorage: storage,
         daemonConfigStore: config,
         logger,
-      }),
+      });
+    },
     cleanup: async () => {
       await host.shutdownClosure(() => manager.closeAgent(agent.id));
       await manager.flush();
@@ -189,11 +195,11 @@ async function queueActualLimit(f: Awaited<ReturnType<typeof fixture>>) {
   await marked.promise;
   off();
 }
-async function makeDue(home: string) {
-  const file = limitResumeFilePath(home);
+async function makeDue(f: Awaited<ReturnType<typeof fixture>>) {
+  const file = limitResumeFilePath(f.home);
   const data = JSON.parse(await readFile(file, "utf8"));
   expect(data.entries).toHaveLength(1);
-  data.entries[0].resumeAt = Date.now() - 1;
+  f.clock.value = data.entries[0].resumeAt + 1;
   await writeFile(file, JSON.stringify(data));
 }
 
@@ -209,7 +215,7 @@ test.each(["disable", "opt-out", "stop"])(
     try {
       await queueActualLimit(f);
       service.stop();
-      await makeDue(f.home);
+      await makeDue(f);
       const original = Reflect.get(f.session, "buildTurnStartParams").bind(f.session);
       const spy = vi
         .spyOn(f.session as never, "buildTurnStartParams" as never)
@@ -264,7 +270,7 @@ test("native continuation checks can repeat, consumes once at actual write and s
   try {
     await queueActualLimit(f);
     service.stop();
-    await makeDue(f.home);
+    await makeDue(f);
     const accepted = deferred();
     const original = Reflect.get(f.session, "buildTurnStartParams").bind(f.session);
     const entered = deferred(),
@@ -442,7 +448,7 @@ test.each([false, true])(
       await f.manager.setAgentModel(f.agent.id, "fixture-model-B");
       expect(f.manager.getLimitResumeBinding(f.agent.id)).not.toBe(original);
       if (restart) await f.host.shutdownClosure(() => f.manager.closeAgent(f.agent.id));
-      await makeDue(f.home);
+      await makeDue(f);
       const cleared = deferred();
       const off = f.manager.subscribe(
         (event) => {
@@ -488,7 +494,7 @@ test.each(["thinking", "mode", "intent", "account", "account-unknown", "account-
         await Promise.resolve();
         expect(f.session.limitResumeAccountBinding()).toBeNull();
       }
-      await makeDue(f.home);
+      await makeDue(f);
       const cleared = deferred();
       const off = f.manager.subscribe(
         (event) => {
@@ -522,7 +528,7 @@ test("unchanged original stop binding survives provider rehydrate and consumes o
     const captured = JSON.parse(await readFile(limitResumeFilePath(f.home), "utf8")).entries[0]
       .binding;
     await f.host.shutdownClosure(() => f.manager.closeAgent(f.agent.id));
-    await makeDue(f.home);
+    await makeDue(f);
     const accepted = deferred();
     const off = f.manager.subscribe(
       (event) => {
@@ -619,7 +625,7 @@ test.each(["standalone", "delegated", "no-answer"] as const)(
       }
       expect(queued).toHaveLength(1);
       expect(queued[0].source).toBe("interrupted");
-      await makeDue(f.home);
+      await makeDue(f);
       service.stop();
       service = f.start();
       await vi.waitFor(() => expect(f.turnStarts()).toHaveLength(2), { timeout: 5_000 });
@@ -657,18 +663,22 @@ test.each(["standalone", "delegated", "no-answer", "setting off"] as const)(
     registerPlugin(bootHost);
     const booted = new AgentManager({
       registry: f.storage,
+      automaticInputNow: () => f.clock.value,
       logger: f.logger,
       trustedPlugins: bootHost,
       clients: { codex: f.client },
     });
-    const startBooted = () =>
-      startLimitResume({
+    const startBooted = () => {
+      f.clock.value = Math.max(f.clock.value + 1, Date.now());
+      return startLimitResume({
         paseoHome: f.home,
+        now: () => f.clock.value,
         agentManager: booted,
         agentStorage: f.storage,
         daemonConfigStore: f.config,
         logger: f.logger,
       });
+    };
     const skipped = vi.spyOn(f.logger, "info");
     try {
       const run = f.manager.runAgent(f.agent.id, "long task").catch(() => undefined);
@@ -698,7 +708,7 @@ test.each(["standalone", "delegated", "no-answer", "setting off"] as const)(
       expect(queued).toHaveLength(1);
       expect(queued[0].source).toBe("interrupted");
       expect(skipped.mock.calls.some((call) => call[1] === "Auto-resume skipped")).toBe(false);
-      await makeDue(f.home);
+      await makeDue(f);
       service.stop();
       service = startBooted();
       // Due time: the session loads and is checked; a refusal sends nothing and removes the entry. A cold Codex
@@ -727,3 +737,38 @@ test.each(["standalone", "delegated", "no-answer", "setting off"] as const)(
   },
   20_000,
 );
+
+test("automatic sends cannot wake a limited native session; a human can resume it", async () => {
+  const f = await fixture();
+  try {
+    const run = f.manager.runAgent(f.agent.id, "limited task");
+    const failed = expect(run).rejects.toThrow("usage limit reached");
+    await f.server.waitForTurnStart();
+    f.server.completeTurn({
+      threadId: "limit-thread",
+      status: "failed",
+      error: { message: "usage limit reached; retry-after: 60" },
+    });
+    await failed;
+    const send = () =>
+      sendPromptToAgent({
+        agentId: f.agent.id,
+        prompt: "automatic notice",
+        agentManager: f.manager,
+        agentStorage: f.storage,
+        logger: f.logger,
+      });
+    await expect(send()).rejects.toMatchObject({
+      code: "RECIPIENT_LIMITED",
+      resumeAt: expect.any(Number),
+    });
+    expect(f.turnStarts()).toHaveLength(1);
+    const human = f.host.rpc(undefined, send);
+    await expect(human).resolves.toEqual({ disposition: "turn_started" });
+    expect(f.turnStarts()).toHaveLength(2);
+    f.server.completeTurn({ threadId: "limit-thread", status: "completed" });
+    await f.manager.waitForAgentEvent(f.agent.id);
+  } finally {
+    await f.cleanup();
+  }
+});
