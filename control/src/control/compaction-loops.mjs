@@ -8,9 +8,6 @@ export const COMPACTION_WINDOW_MS = 10 * 60_000;
 export const COMPACTION_STALL_MS = 15 * 60_000;
 export const COMPACTION_COUNT = 3;
 export const MAX_CONTEXT_ROTATIONS_PER_DAY = 2;
-// Fresh start (UX round 2): a lead also starts fresh when its provider-reported context passes this share of the
-// window, but only while idle, and at most once per cool-down. Both count toward the same daily cap.
-export const CONTEXT_FRESH_START_RATIO = 0.6;
 export const FRESH_START_COOLDOWN_MS = 10 * 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,15 +20,9 @@ export function idleUsage(usage) {
     usage && usage.status === "idle" && !(usage.background > 0) && !(usage.pending > 0),
   );
 }
-export function contextTrigger(usage) {
-  if (!idleUsage(usage)) return null;
-  const used = Number(usage.used),
-    limit = Number(usage.limit);
-  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0 || used < 0) return null;
-  const ratio = used / limit;
-  return ratio >= CONTEXT_FRESH_START_RATIO
-    ? `Context reached ${Math.round(ratio * 100)}% of the window`
-    : null;
+// Context size must not cause a handoff. Provider compaction and stalled-compaction recovery keep their own rules.
+export function contextTrigger() {
+  return null;
 }
 
 /**
@@ -496,8 +487,8 @@ export class CompactionLoops {
   status() {
     return {
       // The app shows Fresh start only when this is true (control/orca-organization/client/fresh-start.ts).
-      freshStart: true,
-      contextTrigger: CONTEXT_FRESH_START_RATIO,
+      freshStart: false,
+      contextTrigger: null,
       rotations: this.db
         .prepare(
           "SELECT id,session AS sessionId,state,handoff,outcome,at,previous AS previousSessionId,current AS sessionIdAfter FROM context_rotations ORDER BY at DESC LIMIT 64",

@@ -10,7 +10,6 @@ import {
   observeCompactions,
   CompactionLoops,
   COMPACTION_STALL_MS,
-  FRESH_START_COOLDOWN_MS,
   contextTrigger,
   writeCompactionHandoff,
 } from "./compaction-loops.mjs";
@@ -265,8 +264,9 @@ const idle = (used, limit = 100, extra = {}) => ({
   ...extra,
 });
 
-test("the context trigger fires only on the provider's numbers, past 60%, and only while idle", () => {
-  assert.match(contextTrigger(idle(61)), /Context reached 61%/);
+test("context size never triggers a fresh context", () => {
+  for (const used of [59, 60, 61, 90, 100, 200, 600_000])
+    assert.equal(contextTrigger(idle(used)), null);
   assert.equal(contextTrigger(idle(59)), null);
   assert.equal(contextTrigger({ ...idle(90), status: "running" }), null);
   assert.equal(contextTrigger(idle(90, 100, { background: 1 })), null);
@@ -276,33 +276,19 @@ test("the context trigger fires only on the provider's numbers, past 60%, and on
   assert.equal(contextTrigger(null), null);
 });
 
-test("an idle lead past 60% starts fresh once per cool-down, counts toward the cap, and never pauses for it", async (t) => {
+test("an idle lead with full context keeps its session and the app offers no fresh start", async (t) => {
   const f = fixture(t);
-  f.page(null); // not running: compactionTail answers nothing, so the context check runs
-  f.usage(idle(65));
-  f.clock(FRESH_START_COOLDOWN_MS * 10);
+  f.page(null);
+  f.usage(idle(100));
   await f.loops.observe(f.id);
-  assert.equal(f.rotations.length, 1);
-  assert.equal(f.sends.length, 1);
-  assert.match(f.sends[0][0].text, /^Your context was getting full/);
-  const row = f.loops.status().rotations[0];
-  assert.equal(JSON.parse(fs.readFileSync(row.handoff)).trigger, "context");
-  await f.loops.observe(f.id); // inside the cool-down
-  assert.equal(f.rotations.length, 1);
-  f.clock(FRESH_START_COOLDOWN_MS * 12);
-  await f.loops.observe(f.id); // usage still from before the rotation: never a second rotation on it
-  assert.equal(f.rotations.length, 1);
-  f.usage({ ...idle(65), lastUserMessageAt: new Date(FRESH_START_COOLDOWN_MS * 11).toISOString() });
+  f.clock(86_400_000);
+  f.usage({ ...idle(200), lastUserMessageAt: new Date(86_400_000).toISOString() });
   await f.loops.observe(f.id);
-  assert.equal(f.rotations.length, 2);
-  f.clock(FRESH_START_COOLDOWN_MS * 14);
-  await f.loops.observe(f.id); // daily cap reached: waits, no pause request
-  assert.equal(f.rotations.length, 2);
-  assert.ok(f.rotations.every((r) => !r.pauseOnly));
-  f.usage({ status: "running" });
-  f.clock(FRESH_START_COOLDOWN_MS * 200);
-  await f.loops.observe(f.id);
-  assert.equal(f.rotations.length, 2);
+  assert.equal(f.rotations.length, 0);
+  assert.equal(f.sends.length, 0);
+  assert.equal(f.loops.status().freshStart, false);
+  assert.equal(f.loops.status().contextTrigger, null);
+  assert.deepEqual(f.loops.status().rotations, []);
 });
 
 test("Fresh start goes through the same rotation, settles parent events, and a retry never rotates twice", async (t) => {
@@ -327,7 +313,7 @@ test("Fresh start goes through the same rotation, settles parent events, and a r
   assert.deepEqual(await f.loops.freshStart({ messageId, sessionId: f.id, reason: R }), out);
   assert.equal(f.rotations.length, 1);
   assert.equal(f.sends.length, 1);
-  assert.equal(f.loops.status().freshStart, true);
+  assert.equal(f.loops.status().freshStart, false);
 });
 
 test("Fresh start refuses a human-held, busy or freshly typed-into session in plain words", async (t) => {
