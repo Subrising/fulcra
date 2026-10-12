@@ -138,7 +138,7 @@ and a column of icons there is decoration competing with the values you actually
   band across it. The inset is taken _out of_ the row, never added to it: padding gives up what
   margin takes, so labels sit at the same 13pt they always did. Insetting by growing the row is how
   the menu ends up taller than it started.
-- **A row is as tall as what is driving it** — 28pt for a pointer, 40pt below `md` for a thumb. The
+- **A row is as tall as what is driving it** — 28pt for a pointer, 48pt below `md` for a thumb. The
   split is on breakpoint, not on `presentation`: the compact popover that `compactMode` defaults to
   is worked with a thumb just as a sheet is, and sizing off the sheet would leave it at the desktop
   height. `md` is where `useIsCompactFormFactor` divides, so row height and the popover/sheet choice
