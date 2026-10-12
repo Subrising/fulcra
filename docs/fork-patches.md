@@ -41,11 +41,11 @@ Organisation, report-up, hierarchy, accounts presentation and switching already 
 | `durability` | Fulcra prime (platform) | 24 | +2250/−72 | 2 | +1066 | Durable timelines and state: file timeline store, atomic writes, pid lock, persisted config, workspace reconciliation fixes that prevent history loss. |
 | `desktop-runtime` | Fulcra prime (release) | 72 | +3397/−529 | 32 | +3990 | Standalone desktop/daemon runtime: daemon manager, bootstrap, self-updater, packaged speech models, desktop settings. |
 | `automations` | Fulcra prime (product) | 1 | +11/−0 | 10 | +2717 | Automations ("when X, do Y") on top of Paseo schedules: service, protocol messages, client calls, screen and sidebar entry. Kept in core: moving it into the plugin needs two SDK seams and a ~900-line UI rewrite to save ~150 shared-file lines. |
-| `features` | Fulcra prime (product) | 162 | +3938/−1132 | 178 | +28111 | Fulcra product UI and helpers in the app: architecture map and plain-English PR review (the checkout.pull-request-review.explain RPC behind the pullRequestReviewExplain feature, cached in PASEO_HOME/review-explanations, capped daily by the optional daemon config field explainDailyLimit), insights, work map, attention, schedules, navigation, sidebar and other views. Kept in core because each would cost more to move into the plugin than the shared-file lines it saves. |
-| `branding` | Fulcra prime (release) | 73 | +6169/−1880 | 115 | +5172 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
+| `features` | Fulcra prime (product) | 163 | +3949/−1134 | 178 | +28111 | Fulcra product UI and helpers in the app: architecture map and plain-English PR review (the checkout.pull-request-review.explain RPC behind the pullRequestReviewExplain feature, cached in PASEO_HOME/review-explanations, capped daily by the optional daemon config field explainDailyLimit), insights, work map, attention, schedules, navigation, sidebar and other views. Kept in core because each would cost more to move into the plugin than the shared-file lines it saves. |
+| `branding` | Fulcra prime (release) | 73 | +6169/−1880 | 115 | +5173 | Fulcra name, assets, strings, docs and app identity. Distribution identity is what needs the fork. |
 | `build-ci` | Fulcra prime (release) | 66 | +1624/−2627 | 78 | +6293 | CI workflows, build/packaging/test-infra scripts, dependency pins and patches. |
-| `core-fixes` | Fulcra prime (platform) | 61 | +1162/−275 | 90 | +11414 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
-| **total** | | 758 | +57864/−11661 | 894 | +127632 | |
+| `core-fixes` | Fulcra prime (platform) | 61 | +1168/−280 | 90 | +11441 | General fixes in Paseo code found while running Fulcra. Re-check against each upstream release; drop each one upstream fixes. |
+| **total** | | 759 | +57881/−11668 | 894 | +127660 | |
 
 Shared seams (upstream files where several patches meet; resolve these hunk by hunk on merge):
 
