@@ -773,6 +773,9 @@ test("Changes keeps review navigation and controls inside its workspace tab", as
   await expect(visiblePanel.getByTestId("changes-diff-status-trigger")).toHaveCount(0);
   await expect(visiblePanel.getByTestId("changes-selected-diff-stat")).toHaveCount(0);
   await expect(visiblePanel.getByTestId("changes-header")).toHaveCount(1);
+  // A desktop with a mouse keeps the compact 36 px toolbar; only touch screens grow it to 48 px.
+  const desktopHeader = await visiblePanel.getByTestId("changes-header").boundingBox();
+  expect(desktopHeader?.height).toBe(36);
   await expect(diffHeaderForPath(visiblePanel, "src/use-mounted-tab-set.ts")).toHaveAccessibleName(
     "src/use-mounted-tab-set.ts, +37, -1",
   );
@@ -827,6 +830,54 @@ test("Changes keeps review navigation and controls inside its workspace tab", as
   );
 });
 
+/**
+ * The visible Changes toolbar is at least 48 px tall and holds each control: no control leaves the bar, the
+ * content below starts under it, and a tap just inside each control edge lands on that control.
+ */
+async function expectToolbarContainsTouchControls(page: Page, controls: string[]): Promise<void> {
+  const report = await page.evaluate((names) => {
+    const header = [
+      ...document.querySelectorAll<HTMLElement>('[data-testid="changes-header"]'),
+    ].find((element) => element.offsetParent !== null);
+    if (!header) return { error: "no visible changes-header" };
+    const bar = header.getBoundingClientRect();
+    const next = header.nextElementSibling?.getBoundingClientRect() ?? null;
+    const problems: string[] = [];
+    for (const name of names) {
+      const control =
+        header.querySelector<HTMLElement>(`[data-testid="${name}"]`) ??
+        header.querySelector<HTMLElement>(`[aria-label="${name}"]`);
+      if (!control) {
+        problems.push(`${name}: not in the toolbar`);
+        continue;
+      }
+      const box = control.getBoundingClientRect();
+      if (box.top < bar.top - 0.5 || box.bottom > bar.bottom + 0.5) {
+        problems.push(`${name}: ${box.top}-${box.bottom} outside the bar ${bar.top}-${bar.bottom}`);
+      }
+      const inset = 1;
+      const edges: [number, number][] = [
+        [box.left + inset, box.top + inset],
+        [box.right - inset, box.top + inset],
+        [box.left + inset, box.bottom - inset],
+        [box.right - inset, box.bottom - inset],
+      ];
+      for (const [x, y] of edges) {
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !control.contains(hit)) {
+          problems.push(`${name}: a tap at ${x},${y} lands on ${hit?.tagName ?? "nothing"}`);
+        }
+      }
+    }
+    return { barHeight: bar.height, barBottom: bar.bottom, nextTop: next?.top ?? null, problems };
+  }, controls);
+  if ("error" in report) throw new Error(report.error);
+  expect(report.barHeight).toBeGreaterThanOrEqual(48);
+  if (report.nextTop !== null)
+    expect(report.nextTop).toBeGreaterThanOrEqual(report.barBottom - 0.5);
+  expect(report.problems).toEqual([]);
+}
+
 test("compact Changes keeps its actions menu-only, with 48 px touch targets", async ({ page }) => {
   const workspace = await createWorkspaceWithMountedTabDiff();
   await useUnwrappedDiffLines(page);
@@ -859,6 +910,7 @@ test("compact Changes keeps its actions menu-only, with 48 px touch targets", as
   expect(optionsBox.height).toBeGreaterThanOrEqual(48);
   expect(glyphBox.width).toBe(18);
   expect(glyphBox.height).toBe(18);
+  await expectToolbarContainsTouchControls(page, ["changes-actions-menu-trigger", "Diff options"]);
 
   await expect(actions).not.toContainText("Commit");
   await expect(actions.locator("svg")).toHaveCount(2);
