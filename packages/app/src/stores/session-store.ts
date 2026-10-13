@@ -40,6 +40,7 @@ import type {
   ServerCapabilities,
   WorkspaceDescriptorPayload,
   WorkspaceProjectDescriptorPayload,
+  AgentSnapshotPayload,
 } from "@getpaseo/protocol/messages";
 import {
   normalizeWorkspaceOpaqueId,
@@ -103,6 +104,7 @@ export interface Agent {
   parentAgentId: string | null;
   labels: Record<string, string>;
   projectPlacement?: ProjectPlacementPayload | null;
+  backgroundWork?: AgentSnapshotPayload["backgroundWork"];
 }
 
 export interface WorkspaceDescriptor {

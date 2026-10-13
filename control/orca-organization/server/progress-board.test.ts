@@ -75,6 +75,7 @@ test("board text removes synthetic tokens and private paths before publication",
     createdAt: "2026-10-01T00:00:00Z",
     updatedAt: "2026-10-01T01:00:00Z",
     pendingPermissions: [],
+    labels: { "fulcra.role": "orchestration", project: "fixture" },
     lastError: privateText,
   } as unknown as PaseoAgent;
   check(jobList([agent], new Set(["w"]), "Fixture host", new Map())[0]!.result);
@@ -109,6 +110,16 @@ const workspace = {
   workspaceDirectory: "/fixture/work",
   projectId: "p",
 } as PaseoWorkspace;
+const boardLead = {
+  id: "lead",
+  workspaceId: "w",
+  title: "Lead",
+  labels: { "fulcra.role": "orchestration", project: "fixture" },
+  status: "running",
+  createdAt: "2026-10-01T00:00:00Z",
+  updatedAt: "2026-10-01T01:00:00Z",
+  pendingPermissions: [],
+} as unknown as PaseoAgent;
 test("branch checks compare the PR head and preserve merged state", async () => {
   const commands: string[] = [];
   const read = async (command: string) => {
@@ -182,7 +193,9 @@ test("snapshot reads the ledger, updates on a file event, and cleans up", async 
     },
   );
   const api = {
-    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    agents: {
+      list: async () => ({ entries: [{ agent: boardLead }], pageInfo: { hasMore: false } }),
+    },
     workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
   try {
@@ -194,6 +207,68 @@ test("snapshot reads the ledger, updates on a file event, and cleans up", async 
     fs.rmSync(root, { recursive: true, force: true });
   }
   assert.equal(removed, 1);
+});
+test("board uses lead labels and groups worker jobs across folders", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-groups-"));
+  fs.mkdirSync(path.join(root, "fixture"));
+  fs.writeFileSync(path.join(root, "fixture", "OPEN-ITEMS.md"), `${header}\n${row}`);
+  fs.mkdirSync(path.join(root, "unrelated"));
+  const worker = {
+    ...boardLead,
+    id: "worker",
+    workspaceId: "other-workspace",
+    labels: { project: "fixture", "fulcra.role": "implementation" },
+  };
+  const unrelated = {
+    ...boardLead,
+    id: "other-lead",
+    workspaceId: "unrelated-workspace",
+    labels: { "fulcra.role": "orchestration" },
+  };
+  const board = createProgressBoard(
+    { on: () => () => {} },
+    {
+      root,
+      machine: "Fixture host",
+      run: async () => {
+        throw Error("offline");
+      },
+    },
+  );
+  const api = {
+    agents: {
+      list: async () => ({
+        entries: [boardLead, worker, unrelated].map((agent) => ({ agent })),
+        pageInfo: { hasMore: false },
+      }),
+    },
+    workspaces: {
+      list: async () => ({
+        entries: [
+          workspace,
+          { ...workspace, id: "other-workspace", projectDisplayName: "uuid-folder" },
+          {
+            ...workspace,
+            id: "unrelated-workspace",
+            projectDisplayName: "unrelated",
+            projectRootPath: "/unrelated",
+          },
+        ],
+        pageInfo: { hasMore: false },
+      }),
+    },
+  } as unknown as PaseoApi;
+  try {
+    const snapshot = await board.read(api);
+    assert.deepEqual(
+      snapshot.projects.map((project) => project.name),
+      ["fixture"],
+    );
+    assert.deepEqual(snapshot.projects[0]!.jobs.map((job) => job.id).sort(), ["lead", "worker"]);
+  } finally {
+    board.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 test("missing ledger root and SDK errors remain visible", async () => {
   const board = createProgressBoard(

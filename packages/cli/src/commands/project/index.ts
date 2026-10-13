@@ -16,9 +16,12 @@ export function createProjectCommand(): Command {
       .argument("[path]", "Project directory (default: current directory)"),
   ).action(withOutput(runCreateCommand));
 
-  addJsonAndDaemonHostOptions(project.command("ls").description("List projects")).action(
-    withOutput(runLsCommand),
-  );
+  addJsonAndDaemonHostOptions(
+    project
+      .command("ls")
+      .description("List session projects by label")
+      .option("--folders", "List registered folders instead of session projects"),
+  ).action(withOutput(runLsCommand));
 
   addJsonAndDaemonHostOptions(
     project
