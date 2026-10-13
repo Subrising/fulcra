@@ -1,3 +1,6 @@
+import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
+import { createTestLogger } from "../../test-utils/test-logger.js";
+import { DaemonClient } from "../test-utils/daemon-client.js";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -95,7 +98,15 @@ async function callToolStructured(
   name: string,
   args?: StructuredContent,
 ): Promise<StructuredContent> {
-  const result = await client.callTool({ name, args: args ?? {} });
+  const compact = [
+    "list_agents",
+    "get_agent_status",
+    "get_agent_activity",
+    "schedule_logs",
+    "inspect_provider",
+  ].includes(name);
+  const input = compact ? { ...args, fullResult: true } : (args ?? {});
+  const result = await client.callTool({ name, args: input });
   if (result.isError) throw new Error(`${name} failed: ${JSON.stringify(result.content)}`);
   const payload = getStructuredContent(result);
   if (!payload) {
@@ -935,4 +946,53 @@ describe("Suite E: Workspace Tools", () => {
       await archiveWorkspaceIfPresent(workspaceId);
     }
   });
+});
+
+test("archive safety reads actual daemon queues without changing the session", async () => {
+  const cwd = await makeCwd("archive-safety");
+  const agent = await daemonHandle.daemon.agentManager.createAgent(
+    { provider: "claude", cwd, title: "Archive fixture", modeId: "bypassPermissions" },
+    undefined,
+    {},
+  );
+  const client = new DaemonClient({
+    url: `ws://127.0.0.1:${daemonHandle.port}/ws`,
+    appVersion: "99.0.0",
+  });
+  await client.connect();
+  const queue = queuedAgentMessagesFor({
+    agentManager: daemonHandle.daemon.agentManager,
+    agentStorage: daemonHandle.daemon.agentStorage,
+    logger: createTestLogger(),
+  });
+  try {
+    await queue.start();
+    const before = await client.fetchAgent({ agentId: agent.id });
+    expect(before?.agent.archiveSafety).toEqual({
+      inFlight: false,
+      heldMessages: 0,
+      heldReports: 0,
+    });
+    await queue.enqueue(
+      agent.id,
+      {
+        text: "Synthetic held message",
+        messageId: "fixture-archive-message",
+        sender: { agentId: agent.id },
+      },
+      daemonHandle.daemon.getServerId(),
+      Date.now() + 3600000,
+    );
+    const after = await client.fetchAgent({ agentId: agent.id });
+    expect(after?.agent.archiveSafety).toEqual({
+      inFlight: false,
+      heldMessages: 1,
+      heldReports: 0,
+    });
+    expect(after?.agent.status).toBe("idle");
+    expect(after?.agent.archivedAt).toBeNull();
+  } finally {
+    await client.close();
+    await archiveAgentIfPresent(agent.id);
+  }
 });

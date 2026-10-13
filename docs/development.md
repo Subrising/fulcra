@@ -576,6 +576,23 @@ sending a message. Use `paseo://h/<server-id>/agent/<agent-id>`, or run
 `paseo agent open <agent-id>`. The CLI reads the local daemon's server ID by
 default; pass `--server <server-id>` when targeting another server.
 
+### Read-only lifecycle checks
+
+Use `fulcra check` before integration or cleanup. A failed check returns exit code 1.
+These commands never stop sessions, delete files, fetch branches, or push commits.
+
+```sh
+fulcra check identity --range base..HEAD
+fulcra check branch
+fulcra check worktree --cwd ./job --base origin/main
+fulcra check session --id SESSION_ID
+```
+
+Use `--remote NAME` when the Git remote is not `origin`.
+The worktree check rejects changed, untracked, and ignored files. It also checks the remote merge target.
+The session check requires a current host observation. Unknown queues fail the check.
+A pass is a point-in-time observation. Repeat the check before cleanup if the session or checkout changes.
+
 ## Agent state
 
 Agent data lives at:
