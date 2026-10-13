@@ -623,6 +623,8 @@ export function resolveConfigFromPersisted(
     notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
     reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
+    idleLeadNudge: persistedSettings.idleLeadNudge,
+    idleLeadNudgeSkipOwners: persistedSettings.idleLeadNudgeSkipOwners,
     reviveOnRestart: persistedSettings.reviveOnRestart,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
@@ -679,6 +681,8 @@ function orchestrationSettings(persisted: PersistedConfig) {
   const daemon = persisted.daemon;
   return {
     reportUpOnTurnEnd: daemon?.reportUpOnTurnEnd,
+    idleLeadNudge: daemon?.idleLeadNudge,
+    idleLeadNudgeSkipOwners: daemon?.idleLeadNudgeSkipOwners ?? [],
     reviveOnRestart: daemon?.reviveOnRestart ?? true,
   };
 }

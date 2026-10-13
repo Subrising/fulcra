@@ -27,6 +27,31 @@ describe("server config", () => {
     expect(standaloneConfig.desktopManaged).toBe(false);
   });
 
+  test("loads the independent idle-lead nudge setting", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-nudge-config-"));
+    roots.push(paseoHome);
+    expect(loadConfig(paseoHome, { env: {} }).idleLeadNudge).toBeUndefined();
+    expect(loadConfig(paseoHome, { env: {} }).idleLeadNudgeSkipOwners).toEqual([]);
+    await writeFile(
+      path.join(paseoHome, "config.json"),
+      JSON.stringify({
+        daemon: {
+          idleLeadNudge: false,
+          reportUpOnTurnEnd: true,
+          idleLeadNudgeSkipOwners: ["Owner A"],
+        },
+      }),
+    );
+    const config = loadConfig(paseoHome, { env: {} });
+    expect(config.idleLeadNudge).toBe(false);
+    expect(config.idleLeadNudgeSkipOwners).toEqual(["Owner A"]);
+    expect(config.reportUpOnTurnEnd).toBe(true);
+    expect(
+      resolveConfigFromPersisted(paseoHome, loadPersistedConfig(paseoHome), { env: {} })
+        .idleLeadNudge,
+    ).toBe(false);
+  });
+
   test("loads the provider catalog refresh timeout", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-config-provider-timeout-"));
     roots.push(paseoHome);

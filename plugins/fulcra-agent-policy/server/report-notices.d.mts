@@ -55,9 +55,13 @@ export declare function formatReportUpNotice(input: {
   failed: boolean;
   lastMessage: string | null;
 }): string;
-export declare function reportUpSwitches(setting: boolean | undefined): {
+export declare function reportUpSwitches(
+  setting: boolean | undefined,
+  idleLeadNudge?: boolean,
+): {
   finishedTurns: boolean;
   otherNotices: boolean;
+  idleNudges: boolean;
 };
 export declare function quietReportReason(input: {
   failed: boolean;

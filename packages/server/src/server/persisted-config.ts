@@ -268,6 +268,8 @@ export const PersistedConfigSchema = z
         enableTerminalAgentHooks: z.boolean().optional(),
         reportUpOnTurnEnd: z.boolean().optional(),
         eventDispatcherEnabled: z.boolean().optional(),
+        idleLeadNudge: z.boolean().optional(),
+        idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
         reviveOnRestart: z.boolean().optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
