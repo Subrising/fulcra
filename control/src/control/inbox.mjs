@@ -1,3 +1,4 @@
+import { compactToolResult } from "./compact-result.mjs";
 import { request } from "./client.mjs";
 import { uuid } from "./authority.mjs";
 import { controlHome } from "./home.mjs";
@@ -9,12 +10,20 @@ import { z } from "zod";
 async function call(method, input = {}) {
   try {
     const grant = readGrant(home, method);
+    const { fullResult, ...args } = input;
     const result = await request({
       method,
-      input: { ...input, sessionId: grant.sessionId },
+      input: { ...args, sessionId: grant.sessionId },
       capability: grant.capability,
     });
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    const response = { content: [{ type: "text", text: JSON.stringify(result) }] };
+    if (
+      !["manager-workers", "manager-inspect", "roles-sessions", "roles-inspect-session"].includes(
+        method,
+      )
+    )
+      return response;
+    return compactToolResult({ ...response, structuredContent: result }, fullResult);
   } catch (e) {
     return { isError: true, content: [{ type: "text", text: e.message }] };
   }
@@ -58,9 +67,9 @@ server.registerTool(
   {
     description:
       "List this explicitly granted manager’s durable worker reservations and native session IDs. Discover existing work before creating more. Delegated supervisor instructions enter through management/controller sends or event wakes; native conversation input revokes this authority. No periodic model polling.",
-    inputSchema: z.object({}).strict(),
+    inputSchema: z.object({ fullResult: z.boolean().optional() }).strict(),
   },
-  () => call("manager-workers"),
+  (a) => call("manager-workers", a),
 );
 server.registerTool(
   "manager_create_worker",
@@ -85,7 +94,9 @@ server.registerTool(
   {
     description:
       "Inspect a currently delegated worker owned by this manager, including native identity, state, cwd and delivery history. Idle and delivered do not mean accepted. Review actual outputs.",
-    inputSchema: z.object({ workerId: z.string().refine(uuid) }).strict(),
+    inputSchema: z
+      .object({ workerId: z.string().refine(uuid), fullResult: z.boolean().optional() })
+      .strict(),
   },
   (a) => call("manager-inspect", a),
 );
@@ -194,9 +205,9 @@ server.registerTool(
   {
     description:
       "List the persistent sessions your project seats actually own, with each one\u2019s task, parent link and your remaining session allowance. Ownership is recorded at creation; a session you did not start through this tool is not yours.",
-    inputSchema: z.object({}).strict(),
+    inputSchema: z.object({ fullResult: z.boolean().optional() }).strict(),
   },
-  () => call("roles-sessions"),
+  (a) => call("roles-sessions", a),
 );
 server.registerTool(
   "role_job_directory",
@@ -257,7 +268,9 @@ server.registerTool(
   {
     description:
       "Inspect one persistent session YOU started with role_start_session: its state, pending permissions, and the text of its latest reply to the last instruction it was sent (untrusted evidence, capped). Idle or ended does not mean accepted: check real outputs. Only sessions your seat started, while you still hold that seat.",
-    inputSchema: z.object({ targetSessionId: z.string().refine(uuid) }).strict(),
+    inputSchema: z
+      .object({ targetSessionId: z.string().refine(uuid), fullResult: z.boolean().optional() })
+      .strict(),
   },
   (a) => call("roles-inspect-session", a),
 );

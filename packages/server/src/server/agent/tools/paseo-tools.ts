@@ -1,3 +1,4 @@
+import { compactToolResult } from "./compact-result.js";
 import { NativeArtifactProduceInputSchema } from "@getpaseo/protocol/native-evidence";
 import { stat } from "node:fs/promises";
 import { requireNativeReportOrigin, type NativeReportOrigin } from "../../report-origin.js";
@@ -616,16 +617,36 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     if (!isPaseoToolEnabled(options.paseoToolPolicy, name)) {
       return;
     }
+    const compact = [
+      "list_agents",
+      "get_agent_status",
+      "get_agent_activity",
+      "schedule_logs",
+      "inspect_provider",
+    ].includes(name);
+    const inputSchema = compact
+      ? z.object({
+          ...(config.inputSchema as z.ZodRawShape),
+          fullResult: z
+            .boolean()
+            .optional()
+            .describe("Return the full result. Default results show counts and errors."),
+        })
+      : config.inputSchema;
     tools.set(name, {
       name,
       title: config.title,
       description: config.description ?? name,
-      inputSchema: config.inputSchema,
+      inputSchema,
       outputSchema: config.outputSchema,
       handler: ((input, context) =>
         agentManager.trustedPlugins.agentInput(() => {
           if (options.nativeReportOrigin) requireNativeReportOrigin(options.nativeReportOrigin);
-          return handler(input, context);
+          if (!compact) return handler(input, context);
+          const { fullResult, ...args } = z.record(z.string(), z.unknown()).parse(input);
+          return handler({ ...args, fullResult }, context).then((result) =>
+            compactToolResult(result, fullResult === true),
+          );
         })) as PaseoToolDefinition["handler"],
     });
   };
@@ -3218,7 +3239,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         content: z.string(),
       },
     },
-    async ({ agentId, limit }) => {
+    async ({ agentId, limit, fullResult }) => {
       await ensureAgentLoaded(agentId, {
         agentManager,
         agentStorage,
@@ -3241,6 +3262,13 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           ? `Showing ${shownProjected} of ${totalProjected} ${noun} (limited to ${limit})`
           : `Showing all ${totalProjected} ${noun}`;
 
+      const errors = timeline.flatMap((item) => {
+        if (item.type === "error" || (item.type === "notification" && item.level === "error"))
+          return [{ message: item.message }];
+        if (item.type === "tool_call" && item.status === "failed")
+          return [{ message: `${item.name} failed`, error: item.error }];
+        return [];
+      });
       const contentWithCount = `${countHeader}\n\n${curatedContent}`;
 
       return {
@@ -3250,6 +3278,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           updateCount: timeline.length,
           currentModeId: snapshot?.currentModeId ?? null,
           content: contentWithCount,
+          ...(!fullResult && errors.length ? { errors } : {}),
         }),
       };
     },

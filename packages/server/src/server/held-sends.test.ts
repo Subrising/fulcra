@@ -157,3 +157,18 @@ describe("held sends", () => {
     expect(f.held.pending(TARGET)).toBe(MAX_HELD_PER_TARGET);
   });
 });
+
+test("archive checks count callbacks until their asynchronous delivery ends", async () => {
+  const f = fixture();
+  let finish!: () => void;
+  const completed = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  f.held.hold(TARGET, () => completed);
+  expect(f.held.pending(TARGET)).toBe(0);
+  expect(f.held.archivePending(TARGET)).toBe(1);
+  finish();
+  await f.settle();
+  expect(f.held.archivePending(TARGET)).toBe(0);
+  f.held.close();
+});

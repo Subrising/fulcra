@@ -1,3 +1,4 @@
+import { archiveReportCount } from "./archive-observation.js";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { GitAiDraftResponseSchema } from "@getpaseo/protocol/git-ai-draft";
 import { createGitAiDraftHelp } from "./session/checkout/git-ai-draft-help.js";
@@ -6665,6 +6666,11 @@ export class Session {
     const live = this.agentManager.getAgent(agentId);
     if (live) {
       const payload = await this.buildAgentPayload(live);
+      const current = this.agentManager.getAgent(agentId);
+      if (!current || current.instanceId !== live.instanceId)
+        throw new Error("Session changed during the archive check");
+      payload.status = current.lifecycle;
+      payload.archiveSafety = this.readArchiveSafety(agentId);
       return this.isProviderVisibleToClient(payload.provider) ? payload : null;
     }
 
@@ -6673,7 +6679,28 @@ export class Session {
       return null;
     }
     const payload = this.buildStoredAgentPayload(record);
+    if (this.agentManager.getAgent(agentId))
+      throw new Error("Session loaded during the archive check");
+    payload.archiveSafety = this.readArchiveSafety(agentId);
     return this.isProviderVisibleToClient(payload.provider) ? payload : null;
+  }
+
+  private readArchiveSafety(agentId: string): NonNullable<AgentSnapshotPayload["archiveSafety"]> {
+    const current = this.agentManager.getAgent(agentId);
+    const held = heldSendsFor(this.agentManager, this.sessionLogger).archivePending(agentId);
+    const queued = queuedAgentMessagesFor({
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      logger: this.sessionLogger,
+    }).archivePending(agentId);
+    return {
+      inFlight:
+        this.agentManager.hasInFlightRun(agentId) ||
+        Boolean(current?.pendingReplacement) ||
+        (current?.pendingPermissions.size ?? 0) > 0,
+      heldMessages: queued === null ? null : queued + held,
+      heldReports: archiveReportCount(this.agentManager, agentId),
+    };
   }
 
   private async resolveDelegationRootWorkspaceId(agentId: string): Promise<string | null> {
