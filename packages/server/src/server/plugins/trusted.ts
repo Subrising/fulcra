@@ -545,6 +545,12 @@ export class TrustedPlugins {
     );
   }
 
+  /** Read-only attribution. This value grants no input authority. */
+  currentInputSource(): string | undefined {
+    const context = this.context.getStore();
+    return context?.verified ? "plugin" : context?.source;
+  }
+
   daemon<T>(operation: () => T): T {
     return this.context.run({ source: "daemon", counted: new Set() }, operation);
   }

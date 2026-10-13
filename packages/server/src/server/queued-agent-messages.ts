@@ -1,3 +1,4 @@
+import { leadEventsFor, withLeadEvent } from "./lead-events.js";
 import { randomUUID } from "node:crypto";
 import { DIRECT_LINK_LABEL, MAIN_ASSISTANT_ROLE } from "@getpaseo/protocol/agent-labels";
 import { readFile } from "node:fs/promises";
@@ -452,19 +453,29 @@ export class QueuedAgentMessages {
               forNextTurn: true,
             });
         }
-        await sendPromptToAgentAndWaitForStart({
-          ...this.deps,
-          agentId,
-          prompt,
-          messageId: batchId,
-          queuedOnly: true,
-          runOptions: { [FINAL_INPUT_CHECK]: check },
-          unarchive: false,
-          sessionMode: eligible[0]!.request.sessionMode,
-          logger,
-        });
+        await withLeadEvent("queued_delivery", () =>
+          sendPromptToAgentAndWaitForStart({
+            ...this.deps,
+            agentId,
+            prompt,
+            messageId: batchId,
+            queuedOnly: true,
+            runOptions: { [FINAL_INPUT_CHECK]: check },
+            unarchive: false,
+            sessionMode: eligible[0]!.request.sessionMode,
+            logger,
+          }),
+        );
       });
-      for (const record of eligible) record.state = "delivered";
+      for (const record of eligible) {
+        record.state = "delivered";
+        leadEventsFor(agentManager)?.noteReport(agentId, record.request.sender.agentId);
+        leadEventsFor(agentManager)?.suppress(record.request.sender.agentId, {
+          eventId: record.id,
+          sourceId: agentId,
+          kind: "delivery_receipt",
+        });
+      }
     } catch (error) {
       if (error instanceof QueuedLinesChangedError) {
         for (const { record, reason } of error.refused) {

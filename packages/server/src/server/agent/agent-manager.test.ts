@@ -1,3 +1,4 @@
+import { LeadEventDispatcher, readLeadEvents, registerLeadEvents } from "../lead-events.js";
 import { expect, test, vi } from "vitest";
 
 // Manager cases use fake providers. The real-file baseline suite owns public instruction loading.
@@ -1570,6 +1571,15 @@ test("steers a tracked autonomous turn without creating a replacement run", asyn
     }
   })();
   const manager = new AgentManager({ clients: { claude: client }, logger });
+  registerLeadEvents(
+    manager,
+    new LeadEventDispatcher({
+      home: workdir,
+      onError: (error) => {
+        throw error;
+      },
+    }),
+  );
   let agentId: string | null = null;
 
   try {
@@ -1586,6 +1596,8 @@ test("steers a tracked autonomous turn without creating a replacement run", asyn
     });
 
     expect(result).toEqual({ disposition: "steered" });
+    expect(readLeadEvents(workdir).sessions[agent.id]?.turns.other).toBe(1);
+    expect(readLeadEvents(workdir).sessions[agent.id]?.turns.worker_report).toBe(0);
     expect(session.steerCount).toBe(1);
     expect(session.interruptCount).toBe(0);
     expect(manager.getAgent(agent.id)?.activeTurnId).toBe("active-turn-0");

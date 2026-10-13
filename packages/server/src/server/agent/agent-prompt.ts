@@ -1,3 +1,4 @@
+import { leadEventsFor, withLeadEvent } from "../lead-events.js";
 import {
   assertFinalInputCheck,
   createFinalInputCheck,
@@ -648,6 +649,8 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     requireParentOwnership = false,
     logger,
   } = params;
+  const finishEventId = `${childAgentId}:${randomUUID()}`;
+  let startedAt = Date.now();
   let hasSeenRunning = false;
   let waitingForTurn = params.forNextTurn === true;
   let stopped = false;
@@ -715,26 +718,46 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     // FULCRA(orchestration): only the owner steers. The notice comes from the daemon, so like a chat's message it
     // waits until the caller's turn ends (held-sends.ts) and is then sent with the daemon source.
     const deliver = () =>
-      agentManager.trustedPlugins.daemon(async () => {
-        checkCurrent();
-        const finalCheck = createFinalInputCheck(checkCurrent);
-        const dispatch: SendPromptToAgentParams = {
-          agentManager,
-          agentStorage,
-          agentId: callerAgentId,
-          prompt,
-          messageId,
-          runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
-          activeTurnBehavior: "steer",
-          steerOnly: true,
-          unarchive: false,
-          logger,
-        };
-        finishDispatchChecks.set(dispatch, checkCurrent);
-        checkCurrent();
-        await sendPromptToAgent(dispatch);
-        await waitForFinalInputHandoff(finalCheck);
-      });
+      withLeadEvent(permissionRequest ? "permission" : "finished_turn", () =>
+        agentManager.trustedPlugins.daemon(async () => {
+          checkCurrent();
+          const dispatcher = leadEventsFor(agentManager);
+          if (
+            reason === "finished" &&
+            dispatcher?.suppress(callerAgentId, {
+              eventId: finishEventId,
+              sourceId: childAgentId,
+              kind: "finished_turn",
+              startedAt,
+              reportedAt: dispatcher.reportAt(callerAgentId, childAgentId),
+            })
+          )
+            return;
+          const finalCheck = createFinalInputCheck(checkCurrent);
+          const dispatch: SendPromptToAgentParams = {
+            agentManager,
+            agentStorage,
+            agentId: callerAgentId,
+            prompt,
+            messageId,
+            runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
+            activeTurnBehavior: "steer",
+            steerOnly: true,
+            unarchive: false,
+            logger,
+          };
+          finishDispatchChecks.set(dispatch, checkCurrent);
+          checkCurrent();
+          await sendPromptToAgent(dispatch);
+          await waitForFinalInputHandoff(finalCheck);
+          if (reason === "finished")
+            dispatcher?.noteDelivered(callerAgentId, {
+              eventId: finishEventId,
+              sourceId: childAgentId,
+              kind: "finished_turn",
+            });
+        }),
+      );
     // Wait for the delivery: the notice stays armed until it is sent, so a newer arm still supersedes it.
     await heldSendsFor(agentManager, logger).holdAndWait(callerAgentId, deliver);
   }
@@ -773,6 +796,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         if (event.agent.lifecycle === "running") {
           waitingForTurn = false;
           if (event.agent.pendingPermissions.size === 0) {
+            if (!hasSeenRunning) startedAt = Date.now();
             hasSeenRunning = true;
           }
           return;

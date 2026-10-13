@@ -1,3 +1,4 @@
+import { withLeadEvent } from "./lead-events.js";
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { AgentManager } from "./agent/agent-manager.js";
@@ -36,19 +37,21 @@ export function tellSenderUndelivered(input: UndeliveredNoticeInput): void {
   );
   try {
     heldSendsFor(agentManager, logger).hold(sender.agentId, () =>
-      agentManager.trustedPlugins.daemon(async () => {
-        await sendPromptToAgent({
-          agentManager,
-          agentStorage,
-          agentId: sender.agentId,
-          prompt,
-          messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}undelivered:${randomUUID()}`,
-          activeTurnBehavior: "steer",
-          steerOnly: true,
-          unarchive: false,
-          logger,
-        });
-      }),
+      withLeadEvent("failed_delivery", () =>
+        agentManager.trustedPlugins.daemon(async () => {
+          await sendPromptToAgent({
+            agentManager,
+            agentStorage,
+            agentId: sender.agentId,
+            prompt,
+            messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}undelivered:${randomUUID()}`,
+            activeTurnBehavior: "steer",
+            steerOnly: true,
+            unarchive: false,
+            logger,
+          });
+        }),
+      ),
     );
   } catch (error) {
     // The sender's own queue is full: the warning above is the only record.
