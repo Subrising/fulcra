@@ -11,6 +11,7 @@ export interface LedgerRow {
   id: string;
   owner: string;
   status: string;
+  kind?: string;
 }
 
 /** Where the ledgers are: FULCRA_LEDGER_DIR, else ~/shared-vault/projects. */
@@ -30,10 +31,10 @@ export function parseOpenRows(project: string, text: string): LedgerRow[] {
       .split("|")
       .map((cell) => cell.trim());
     if (cells.length < 7) continue;
-    const [id, , , owner, status] = cells;
+    const [id, , kind, owner, status] = cells;
     if (!id || !/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(id)) continue;
     if (/^(DONE|MOVED)\b/.test(status ?? "")) continue;
-    rows.push({ project, id, owner: owner ?? "", status: status ?? "" });
+    rows.push({ project, id, owner: owner ?? "", status: status ?? "", kind: kind ?? "" });
   }
   return rows;
 }
@@ -76,4 +77,31 @@ export function rowsOwnedBy(
     const owner = row.owner.toLowerCase();
     return owner.includes(short) || (title.length >= 4 && owner === title);
   });
+}
+
+interface NudgeRowSelection {
+  rows: readonly LedgerRow[];
+  chat: { id: string; title: string };
+  skipOwners?: readonly string[];
+}
+
+export function rowsEligibleForNudge({
+  rows,
+  chat,
+  skipOwners = [],
+}: NudgeRowSelection): LedgerRow[] {
+  return rowsOwnedBy(rows, chat).filter((row) => {
+    const status = row.status.trim();
+    const kind = row.kind?.trim() ?? "";
+    return (
+      !isNudgeOwnerSkipped(row.owner, skipOwners) &&
+      !/^(DONE|MOVED|BLOCKED|STANDING)\b/i.test(status) &&
+      !/^(RULE|STANDING)\b/i.test(kind)
+    );
+  });
+}
+
+export function isNudgeOwnerSkipped(owner: string, skipOwners: readonly string[]): boolean {
+  const normalizedOwner = owner.trim().toLowerCase();
+  return skipOwners.some((entry) => entry.trim().toLowerCase() === normalizedOwner);
 }
