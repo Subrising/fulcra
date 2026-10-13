@@ -37,7 +37,11 @@ import { open, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { isNativeQueuedRefusal } from "../agent/native-queued-dispatch.js";
-import { writeJsonFileAtomic, writeJsonFileDurable } from "../atomic-file.js";
+import {
+  AtomicWritePreCommitGuardError,
+  writeJsonFileAtomic,
+  writeJsonFileDurable,
+} from "../atomic-file.js";
 import { SENT_NOTHING_CODES } from "../held-sends.js";
 
 const LegacyReceiptSchema = z.object({
@@ -340,6 +344,7 @@ export class MessageReceipts {
     key: string,
     receipt: QueuedReceipt,
     requireEffect?: () => void,
+    allowPreCommitRefusal = false,
   ): Promise<void> {
     try {
       if (receipt.report && Buffer.byteLength(JSON.stringify(receipt)) > receipt.bytes)
@@ -347,7 +352,8 @@ export class MessageReceipts {
       await writeJsonFileDurable(path.join(this.directory, `${key}.json`), receipt, requireEffect);
       requireEffect?.(); // After every durability await, immediately before memory publication.
     } catch (error) {
-      this.unhealthy = true;
+      if (!allowPreCommitRefusal || !(error instanceof AtomicWritePreCommitGuardError))
+        this.unhealthy = true;
       throw error;
     }
     this.records.set(key, receipt);
@@ -505,6 +511,7 @@ export class MessageReceipts {
     batch: NativeReportBatch,
     makeInput: (batch: NativeReportBatch, messageId: string) => NativeQueuedMessage,
     onReady: (agentId: string) => void,
+    wakeMessageId?: string,
   ): Promise<NativeReportMetadataReceipt> {
     const incoming = requireNativeReportBatch(batch);
     if (incoming.data.members.length !== 1) throw new Error("One host report event required");
@@ -559,21 +566,30 @@ export class MessageReceipts {
           await this.commit(oldKey, { ...oldReceipt, state: "cancelled" });
         }
       }
-      const entry = [...this.records].find(
-        ([, receipt]) =>
-          receipt.state === "queued" &&
-          (receipt.collectingUntil ?? 0) > now &&
-          receipt.report &&
-          reportMembers(receipt.report).length < 24 &&
-          receipt.report.parentEpoch === incoming.data.parentEpoch &&
-          digest(receipt.report.parent) === digest(incoming.data.parent),
-      );
+      const entry = wakeMessageId
+        ? undefined
+        : [...this.records].find(
+            ([, receipt]) =>
+              receipt.state === "queued" &&
+              (receipt.collectingUntil ?? 0) > now &&
+              receipt.report &&
+              reportMembers(receipt.report).length < 24 &&
+              receipt.report.parentEpoch === incoming.data.parentEpoch &&
+              digest(receipt.report.parent) === digest(incoming.data.parent),
+          );
       if (entry) {
         const [key, receipt] = entry;
         const oldInput = this.admissions.get(key);
         if (!oldInput?.reportBatch) throw new Error("Native report collection authority absent");
         const merged = mergeNativeReportBatches(oldInput.reportBatch, batch);
         const input = this.reportCollectionInput(merged, receipt.messageId, makeInput);
+        const observe = input.observe;
+        input.observe = oldInput.observe
+          ? (current) => {
+              oldInput.observe?.(current);
+              observe?.(current);
+            }
+          : observe;
         if (input.agentId !== receipt.agentId || input.boot !== receipt.boot)
           throw new Error("Native report collection identity changed");
         const report = reportDataFor(input)!;
@@ -610,13 +626,60 @@ export class MessageReceipts {
         this.armCollection(key, onReady);
         return this.reportMetadataReceipt(next, member.id, false);
       }
-      const input = this.reportCollectionInput(batch, `paseo-notify:${randomUUID()}`, makeInput);
+      const input = this.reportCollectionInput(
+        batch,
+        wakeMessageId ?? `paseo-notify:${randomUUID()}`,
+        makeInput,
+      );
       input.collectingUntil = now + 2000;
       await this.admit(input);
       const key = digest(["send", input.agentId, input.messageId]);
       input.authorize();
       this.armCollection(key, onReady);
       return this.reportMetadataReceipt(this.records.get(key)!, member.id, false);
+    });
+  }
+
+  /** A failed collection must cancel any queued wake before its caller uses another route. */
+  async settleFailedReportCollection(
+    eventId: string,
+  ): Promise<"delivered" | "refused" | "uncertain"> {
+    const current = () =>
+      [...this.records.entries()].find(([, receipt]) =>
+        receipt.report
+          ? reportMembers(receipt.report).some((entry) => entry.id === eventId)
+          : false,
+      );
+    try {
+      return await this.serial(async () => {
+        const entry = current();
+        if (!entry) return "refused";
+        const [key, receipt] = entry;
+        if (receipt.state === "queued") {
+          await this.commit(key, { ...receipt, state: "cancelled" });
+          return "refused";
+        }
+        if (receipt.state === "delivered") return "delivered";
+        if (receipt.state === "refused" || receipt.state === "cancelled") return "refused";
+        return "uncertain";
+      });
+    } catch {
+      // An unhealthy ledger cannot start a queued wake. An attempted wake stays uncertain.
+      const state = current()?.[1].state;
+      if (state === "delivered") return "delivered";
+      if (state === "dispatching" || state === "uncertain") return "uncertain";
+      return "refused";
+    }
+  }
+
+  /** Host-only receipt read for a persisted finish notice owner. */
+  reportWakeStatus(messageId: string): Promise<"missing" | QueuedReceipt["state"]> {
+    return this.serial(async () => {
+      await this.initialize();
+      const receipt = [...this.records.values()].find(
+        (item) => item.report && item.messageId === messageId,
+      );
+      return receipt?.state ?? "missing";
     });
   }
 
@@ -682,7 +745,14 @@ export class MessageReceipts {
         }
         const sealed = { ...current };
         delete sealed.collectingUntil;
-        await this.commit(key, sealed, input.authorize);
+        try {
+          // A revoked guard before rename leaves the collecting receipt unchanged.
+          await this.commit(key, sealed, input.authorize, true);
+        } catch (error) {
+          if (!(error instanceof AtomicWritePreCommitGuardError)) throw error;
+          await this.commit(key, { ...current, state: "refused" });
+          return;
+        }
         input.authorize();
         onReady(sealed.agentId);
       }).catch(() => {

@@ -1009,7 +1009,7 @@ test("human prompts dismiss question cards without changing the trusted payload"
   expect(promptPayload("answer", { clearPendingQuestions: true })).toEqual(promptPayload("answer"));
 });
 
-test("native finish records an already delivered report without waking the caller", async () => {
+test("an earlier worker report does not replace a finish notice", async () => {
   const home = mkdtempSync(join(tmpdir(), "native-finish-digest-"));
   try {
     const scenario = createFinishNotificationScenario({ eventHome: home });
@@ -1017,10 +1017,8 @@ test("native finish records an already delivered report without waking the calle
     scenario.reportDelivered();
     scenario.finishChild();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(scenario.parentPrompts()).toEqual([]);
-    expect(readLeadEvents(home).sessions["caller-agent"]?.digest[0]?.reason).toBe(
-      "already_reported",
-    );
+    expect(scenario.parentPrompts()).toHaveLength(1);
+    expect(readLeadEvents(home).sessions["caller-agent"]?.digest).toEqual([]);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

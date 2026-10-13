@@ -283,6 +283,7 @@ export const MutableDaemonConfigSchema = z
     enableTerminalAgentHooks: z.boolean().default(false),
     // FULCRA(orchestration): true adds finished-turn notices; false disables permission and limit notices. Nudges have their own switch.
     reportUpOnTurnEnd: z.boolean().optional(),
+    nativeFinishNotices: z.boolean().optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
     // FULCRA(orchestration): after a restart, open sessions show as open and cut-off turns continue. Unset means on.
@@ -312,6 +313,7 @@ export const MutableDaemonConfigPatchSchema = z
     notificationMode: z.enum(["all", "primes", "off"]).optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
     reportUpOnTurnEnd: z.boolean().optional(),
+    nativeFinishNotices: z.boolean().optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
     reviveOnRestart: z.boolean().optional(),

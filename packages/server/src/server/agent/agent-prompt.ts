@@ -650,8 +650,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     logger,
   } = params;
   const finishEventId = `${childAgentId}:${randomUUID()}`;
-  let startedAt = Date.now();
-  let hasSeenRunning = false;
+  let hasSeenRunning = agentManager.getAgent(childAgentId)?.lifecycle === "running";
   let waitingForTurn = params.forNextTurn === true;
   let stopped = false;
   let superseded = false;
@@ -722,17 +721,6 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         agentManager.trustedPlugins.daemon(async () => {
           checkCurrent();
           const dispatcher = leadEventsFor(agentManager);
-          if (
-            reason === "finished" &&
-            dispatcher?.suppress(callerAgentId, {
-              eventId: finishEventId,
-              sourceId: childAgentId,
-              kind: "finished_turn",
-              startedAt,
-              reportedAt: dispatcher.reportAt(callerAgentId, childAgentId),
-            })
-          )
-            return;
           const finalCheck = createFinalInputCheck(checkCurrent);
           const dispatch: SendPromptToAgentParams = {
             agentManager,
@@ -796,7 +784,6 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         if (event.agent.lifecycle === "running") {
           waitingForTurn = false;
           if (event.agent.pendingPermissions.size === 0) {
-            if (!hasSeenRunning) startedAt = Date.now();
             hasSeenRunning = true;
           }
           return;

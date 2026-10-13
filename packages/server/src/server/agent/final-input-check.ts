@@ -3,6 +3,7 @@ interface State {
   check: () => void;
   beforeHandoff?: () => void;
   committed: boolean;
+  failure?: unknown;
   managerOnly: boolean;
   promise: Promise<void>;
   handoffConfirmed: () => boolean;
@@ -92,7 +93,14 @@ export function recordFinalInputHandoff(handle: object | undefined): void {
   if (handle) checks.get(handle)?.resolve();
 }
 export function failFinalInputHandoff(handle: object | undefined, error: unknown): void {
-  if (handle) checks.get(handle)?.reject(error);
+  if (!handle) return;
+  const state = checks.get(handle);
+  if (!state) return;
+  state.failure = error;
+  state.reject(error);
+}
+export function finalInputFailure(handle: object | undefined): unknown {
+  return handle ? checks.get(handle)?.failure : undefined;
 }
 /** Read the native receipt without waiting for the dispatch reply or changing its timeout. */
 export function hasFinalInputHandoff(handle: object | undefined): boolean {

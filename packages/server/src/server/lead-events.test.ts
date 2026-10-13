@@ -47,22 +47,22 @@ describe("deterministic lead events", () => {
     );
     expect(readFileSync(leadEventsPath(f.home), "utf8")).not.toContain("message");
   });
-  test("suppresses a duplicate only after successful delivery", () => {
+  test("finish events stay visible after a saved delivery", () => {
     const f = fixture();
     expect(f.dispatcher.suppress("lead-1", finish)).toBe(false);
     expect(f.dispatcher.suppress("lead-1", finish)).toBe(false);
     f.dispatcher.noteDelivered("lead-1", finish);
-    expect(f.dispatcher.suppress("lead-1", finish)).toBe(true);
+    expect(f.dispatcher.suppress("lead-1", finish)).toBe(false);
     expect(f.dispatcher.suppress("lead-2", finish)).toBe(false);
     expect(f.dispatcher.suppress("lead-1", { ...finish, sourceId: "worker-2" })).toBe(false);
-    expect(readLeadEvents(f.home).sessions["lead-1"]?.digest[0]?.reason).toBe("duplicate");
+    expect(readLeadEvents(f.home).sessions["lead-1"]?.digest).toEqual([]);
   });
   test.each(["delivery_receipt", "archive_done"])("records %s without a wake", (kind) => {
     const f = fixture();
     expect(f.dispatcher.suppress("lead-1", { ...finish, kind })).toBe(true);
     expect(readLeadEvents(f.home).sessions["lead-1"]?.digest[0]?.reason).toBe(kind);
   });
-  test("a worker report must have a confirmed delivery during this turn", () => {
+  test("a confirmed worker report does not suppress a finish notice", () => {
     const f = fixture();
     expect(f.dispatcher.suppress("lead-1", { ...finish, reportedAt: 9 })).toBe(false);
     f.dispatcher.noteReport("lead-1", finish.sourceId);
@@ -71,8 +71,8 @@ describe("deterministic lead events", () => {
         ...finish,
         reportedAt: f.dispatcher.reportAt("lead-1", finish.sourceId),
       }),
-    ).toBe(true);
-    expect(readLeadEvents(f.home).sessions["lead-1"]?.digest[0]?.reason).toBe("already_reported");
+    ).toBe(false);
+    expect(readLeadEvents(f.home).sessions["lead-1"]?.digest).toEqual([]);
   });
   test.each([
     "unknown_future_event",
@@ -101,10 +101,9 @@ describe("deterministic lead events", () => {
       home: f.home,
       onError: (error) => f.errors.push(error),
     });
-    expect(restored.suppress("lead-1", finish)).toBe(true);
+    expect(restored.suppress("lead-1", finish)).toBe(false);
     expect(readLeadEvents(f.home).sessions["lead-1"]?.digest.map((event) => event.reason)).toEqual([
       "archive_done",
-      "duplicate",
     ]);
     expect(readLeadEvents(f.home).sessions["lead-1"]?.turns.user).toBe(1);
   });

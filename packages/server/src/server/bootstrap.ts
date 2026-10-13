@@ -450,6 +450,7 @@ export interface PaseoDaemonConfig {
   notificationMode?: "all" | "primes" | "off";
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
+  nativeFinishNotices?: boolean;
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   reviveOnRestart?: boolean;
@@ -682,6 +683,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     notificationMode: initialNotificationMode(config),
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
     reportUpOnTurnEnd: config.reportUpOnTurnEnd,
+    nativeFinishNotices: Boolean(config.nativeFinishNotices),
     ...initialNudgeConfig(config),
     reviveOnRestart: config.reviveOnRestart !== false,
     autoResumeOnLimit: config.autoResumeOnLimit ?? true,
@@ -2156,6 +2158,7 @@ export async function createPaseoDaemon(
       )
         .catch((err) => logger.warn({ err }, "Revive on restart failed"))
         .then(() => queuedAgentMessages.start())
+        .then(() => stopReportUp.recover())
         .catch((err) => logger.warn({ err }, "Queued messages could not resume"));
     } catch (error) {
       localCredential = null;

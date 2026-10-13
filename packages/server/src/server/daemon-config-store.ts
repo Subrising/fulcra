@@ -31,6 +31,7 @@ interface SupportedMutableConfigPatch {
   notificationMode?: MutableDaemonConfig["notificationMode"];
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
+  nativeFinishNotices?: boolean;
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   reviveOnRestart?: boolean;
@@ -193,6 +194,7 @@ const RELOADABLE_PATHS = [
   "daemon.notificationMode",
   "daemon.enableTerminalAgentHooks",
   "daemon.reportUpOnTurnEnd",
+  "daemon.nativeFinishNotices",
   "daemon.idleLeadNudge",
   "daemon.idleLeadNudgeSkipOwners",
   "daemon.reviveOnRestart",
@@ -223,6 +225,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.notificationMode", "notificationMode"],
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.reportUpOnTurnEnd", "reportUpOnTurnEnd"],
+  ["daemon.nativeFinishNotices", "nativeFinishNotices"],
   ["daemon.idleLeadNudge", "idleLeadNudge"],
   ["daemon.idleLeadNudgeSkipOwners", "idleLeadNudgeSkipOwners"],
   ["daemon.reviveOnRestart", "reviveOnRestart"],
@@ -276,6 +279,7 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 // Kept apart so the patch picker stays under the complexity limit; present only when the patch sets it.
 function reportUpField(patch: MutableDaemonConfigPatch): {
   reportUpOnTurnEnd?: boolean;
+  nativeFinishNotices?: boolean;
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   reviveOnRestart?: boolean;
@@ -283,6 +287,9 @@ function reportUpField(patch: MutableDaemonConfigPatch): {
   return {
     ...(patch.reportUpOnTurnEnd !== undefined
       ? { reportUpOnTurnEnd: patch.reportUpOnTurnEnd }
+      : {}),
+    ...(patch.nativeFinishNotices !== undefined
+      ? { nativeFinishNotices: patch.nativeFinishNotices }
       : {}),
     ...(patch.idleLeadNudgeSkipOwners !== undefined
       ? { idleLeadNudgeSkipOwners: patch.idleLeadNudgeSkipOwners }
