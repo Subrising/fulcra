@@ -15,6 +15,23 @@ const project = {
 };
 const addProject = vi.fn(async () => ({ project, error: null }));
 const listProjects = vi.fn(async () => ({ projects: [project] }));
+const fetchWorkspaces = vi.fn(async () => ({
+  entries: [{ id: "workspace-1", projectId: "project-1" }],
+  pageInfo: { nextCursor: null },
+}));
+const fetchAgents = vi.fn(async () => ({
+  entries: [
+    {
+      agent: {
+        id: "agent-1",
+        cwd: "/tmp/paseo",
+        workspaceId: "workspace-1",
+        labels: { project: "fulcra" },
+      },
+    },
+  ],
+  pageInfo: { nextCursor: null },
+}));
 const renameProject = vi.fn(async (_projectId: string, name: string | null) => ({
   customName: name,
 }));
@@ -26,6 +43,8 @@ vi.mock("../../utils/client.js", () => ({
   connectToDaemon: vi.fn(async () => ({
     addProject,
     listProjects,
+    fetchWorkspaces,
+    fetchAgents,
     renameProject,
     removeProject,
     close,
@@ -88,7 +107,16 @@ describe("project commands", () => {
 
     expect(listProjects).toHaveBeenCalled();
     expect(result.data).toHaveLength(1);
-    expect(result.data[0]?.projectId).toBe("project-1");
+    expect(result.data[0]).toMatchObject({
+      projectId: "label:fulcra",
+      name: "fulcra",
+      sessions: 1,
+    });
+    const folders = await runLsCommand(
+      { daemonTarget: { kind: "instance", home: "/tmp/project-test" }, folders: true },
+      {} as never,
+    );
+    expect(folders.data[0]?.projectId).toBe("project-1");
   });
 
   it("renames and resets a project", async () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Agent } from "@/stores/session-store";
-import { reportingLeadLine, selectSidebarSessionRows } from "./sidebar-session-model";
+import {
+  reportingLeadLine,
+  selectSidebarSessionRows,
+  sessionCounts,
+} from "./sidebar-session-model";
 
 const agent = (id: string, title: string, labels: Record<string, string> = {}) =>
   ({
@@ -101,5 +105,25 @@ describe("selectSidebarSessionRows", () => {
     expect(rows.find((row) => row.agentId === "worker-1")?.lead).toBe("Reports to Fulcra lead");
     // lead-1 has no line and no parent, and worker-1 reports to it: flagged.
     expect(rows.find((row) => row.agentId === "lead-1")?.lead).toBe("No reporting line recorded");
+  });
+  it("keeps sessions on other hosts and counts background work separately", () => {
+    const lead = { ...agent("lead", "Lead"), status: "running" } as Agent;
+    const worker = { ...agent("worker", "Worker"), backgroundWork: { count: 2 } } as Agent;
+    const idle = agent("idle", "Idle");
+    const rows = selectSidebarSessionRows(
+      {
+        mini: {
+          agents: new Map([
+            [lead.id, lead],
+            [worker.id, worker],
+          ]),
+        },
+        book: { agents: new Map([[idle.id, idle]]) },
+      },
+      ["mini", "book"],
+    );
+    expect(rows).toHaveLength(3);
+    expect(sessionCounts(rows)).toEqual({ running: 1, waiting: 1, idle: 1 });
+    expect(rows.find((row) => row.agentId === "worker")?.backgroundWorkCount).toBe(2);
   });
 });
