@@ -107,7 +107,7 @@ it("renders host counts, waiting jobs and visible overflow at each viewport", as
         />,
       ),
     );
-    expect(container.textContent).toContain("Sessions (12)");
+    expect(container.textContent).toContain("All sessions (12)");
     expect(container.textContent).toContain("2 running · 1 waiting on background jobs · 9 idle");
     expect(container.textContent).toContain("Mini (10)");
     expect(container.textContent).toContain("Book (2)");
