@@ -119,6 +119,22 @@ the bundled integration; an entry with `extends` shadows it with a custom provid
 [provider contributions](#contribute-a-provider) for the contract and
 [Muse Code](../public-docs/muse-code.md) for setup, per-agent options, and version limitations.
 
+### Fulcra progress board
+
+The bundled Fulcra plugin adds **Progress board** to the sidebar on desktop and mobile.
+Choose a host with the app's host selector. The board reads that host's jobs and ledgers.
+Use the host that owns the shared vault for the project ledger.
+
+The ledger root uses `FULCRA_LEDGER_DIR`, or `~/shared-vault/projects` when unset.
+Each project directory contains `OPEN-ITEMS.md`. File events invalidate the cached ledger.
+The board uses one owned agent-directory observation per plugin process. It starts no model turns.
+Git and CI share a 60-second cache across viewers. Local merge state uses existing remote refs;
+it does not fetch. PR checks apply only when the PR head matches the local head.
+
+Completed turns supply each job's last result. The plugin saves a bounded result cache under
+`PASEO_HOME`. Earlier turns without a cached result show an explicit empty state.
+Unreadable ledgers, invalid rows, missing CI, and bounded directory coverage remain visible.
+
 ## Install from a registry
 
 `paseo plugin add owner/slug` installs the registry's reviewed artifact by default.

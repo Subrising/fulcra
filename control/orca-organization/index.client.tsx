@@ -1,3 +1,4 @@
+import { ProgressBoardSurface } from "./client/progress-board/board";
 import { WorkspacesSurface } from "./client/organization/workspaces";
 import { IntakeSurface } from "./client/organization/intake";
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
@@ -27,6 +28,13 @@ function CleanupSettingsScreen(props: Pick<PluginSurfaceProps, "theme" | "layout
   return <CleanupSurface {...props} header={<CleanupNowSection theme={props.theme} />} />;
 }
 export default function contribute(client: PluginClientContext) {
+  const progressBoard = client.addSurface("progress-board", ProgressBoardSurface);
+  const progressBoardSidebar = client.addSidebarItem({
+    id: "progress-board",
+    title: "Progress board",
+    icon: "ListChecks",
+    surface: "progress-board",
+  });
   const surface = client.addSurface("organization", OrganizationSurface);
   const workspaces = client.addSurface("workspaces", WorkspacesSurface);
   const intake = client.addSurface("intake", IntakeSurface);
@@ -117,6 +125,8 @@ export default function contribute(client: PluginClientContext) {
   // Fulcra 0.2.8: "Make main assistant" and "Make lead of project…" from any chat.
   const teamRole = registerTeamRole(client);
   return () => {
+    progressBoardSidebar();
+    progressBoard();
     accountSwitch();
     teamRole();
     whatItDidCommand();

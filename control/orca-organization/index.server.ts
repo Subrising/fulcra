@@ -1,3 +1,4 @@
+import { contributeProgressBoard } from "./server/progress-board/registration";
 import { contributeWorkspaceOrganization } from "./server/organization/index";
 import { radiusScratchSimulateRpc, radiusScratchPruneSimulateRpc } from "./shared/radius-scratch";
 import {
@@ -939,6 +940,7 @@ export default function contribute(
     }
     return readers.get(key)!();
   });
+  const stopProgressBoard = contributeProgressBoard(server, register);
   const stopWorkspaceOrganization = contributeWorkspaceOrganization(handle);
   // Non-UI startup signal. A caller using a method this plugin does not register never reaches
   // any handler here, so that mismatch is invisible from inside this tree - printing the exact
@@ -947,6 +949,7 @@ export default function contribute(
     `[orca-organization] registered ${registered.length} RPC methods: ${registered.join(", ")}`,
   );
   return () => {
+    const savedBoard = stopProgressBoard();
     stopWorkspaceOrganization();
     stopPush();
     recovery();
@@ -959,5 +962,6 @@ export default function contribute(
     usage = undefined;
     fleet = undefined;
     projects = undefined;
+    return savedBoard;
   };
 }
