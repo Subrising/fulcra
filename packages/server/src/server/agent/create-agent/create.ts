@@ -17,7 +17,11 @@ import type { AgentPromptInput, AgentRunOptions, AgentSessionConfig } from "../a
 import type { AgentStorage } from "../agent-storage.js";
 import type { AgentOwner } from "../agent-owner.js";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
-import { setupFinishNotification, startCreatedAgentInitialPrompt } from "../agent-prompt.js";
+import {
+  disarmFinishNotification,
+  setupFinishNotification,
+  startCreatedAgentInitialPrompt,
+} from "../agent-prompt.js";
 import { resolveCreateAgentTitles } from "../create-agent-title.js";
 import { buildAgentPrompt } from "../prompt-attachments.js";
 import { normalizeClientMessageId, resolveClientMessageId } from "../../client-message-id.js";
@@ -209,28 +213,33 @@ export async function createAgentCommand(
   if (input.kind === "mcp") {
     input.onCreated?.({ agentId: snapshot.id, createdWorktree: resolved.createdWorktree ?? null });
   }
+  const notifyCaller =
+    input.kind === "mcp" &&
+    input.notifyOnFinish &&
+    input.callerAgentId &&
+    resolved.prompt !== undefined;
+  if (notifyCaller) {
+    setupFinishNotification({
+      agentManager: dependencies.agentManager,
+      agentStorage: dependencies.agentStorage,
+      childAgentId: snapshot.id,
+      callerAgentId: input.callerAgentId!,
+      requireParentOwnership: true,
+      forNextTurn: true,
+      nativeFallback: Boolean(input.reportCreation),
+      logger: dependencies.logger,
+    });
+  }
   if (resolved.prompt !== undefined) {
     const sendResult = await sendInitialPrompt(dependencies, resolved, snapshot);
     initialPromptStarted = sendResult.started;
     liveSnapshot = sendResult.liveSnapshot;
     initialPromptError = sendResult.error ?? null;
   }
-
-  if (
-    input.kind === "mcp" &&
-    !input.reportCreation &&
-    input.notifyOnFinish &&
-    input.callerAgentId &&
-    initialPromptStarted
-  ) {
-    setupFinishNotification({
-      agentManager: dependencies.agentManager,
-      agentStorage: dependencies.agentStorage,
-      childAgentId: snapshot.id,
-      callerAgentId: input.callerAgentId,
-      requireParentOwnership: true,
-      logger: dependencies.logger,
-    });
+  if (notifyCaller && !initialPromptStarted) {
+    disarmFinishNotification(dependencies.agentManager, snapshot.id, input.callerAgentId!);
+    if (input.reportCreation)
+      dependencies.agentManager.cancelNativeFinishOutcome(snapshot.id, input.callerAgentId!);
   }
 
   return {

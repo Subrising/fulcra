@@ -574,6 +574,13 @@ export class MessageReceipts {
         if (!oldInput?.reportBatch) throw new Error("Native report collection authority absent");
         const merged = mergeNativeReportBatches(oldInput.reportBatch, batch);
         const input = this.reportCollectionInput(merged, receipt.messageId, makeInput);
+        const observe = input.observe;
+        input.observe = oldInput.observe
+          ? (current) => {
+              oldInput.observe?.(current);
+              observe?.(current);
+            }
+          : observe;
         if (input.agentId !== receipt.agentId || input.boot !== receipt.boot)
           throw new Error("Native report collection identity changed");
         const report = reportDataFor(input)!;
@@ -618,6 +625,38 @@ export class MessageReceipts {
       this.armCollection(key, onReady);
       return this.reportMetadataReceipt(this.records.get(key)!, member.id, false);
     });
+  }
+
+  /** A failed collection must cancel any queued wake before its caller uses another route. */
+  async settleFailedReportCollection(
+    eventId: string,
+  ): Promise<"delivered" | "refused" | "uncertain"> {
+    const current = () =>
+      [...this.records.entries()].find(([, receipt]) =>
+        receipt.report
+          ? reportMembers(receipt.report).some((entry) => entry.id === eventId)
+          : false,
+      );
+    try {
+      return await this.serial(async () => {
+        const entry = current();
+        if (!entry) return "refused";
+        const [key, receipt] = entry;
+        if (receipt.state === "queued") {
+          await this.commit(key, { ...receipt, state: "cancelled" });
+          return "refused";
+        }
+        if (receipt.state === "delivered") return "delivered";
+        if (receipt.state === "refused" || receipt.state === "cancelled") return "refused";
+        return "uncertain";
+      });
+    } catch {
+      // An unhealthy ledger cannot start a queued wake. An attempted wake stays uncertain.
+      const state = current()?.[1].state;
+      if (state === "delivered") return "delivered";
+      if (state === "dispatching" || state === "uncertain") return "uncertain";
+      return "refused";
+    }
   }
 
   private reportCollectionInput(
