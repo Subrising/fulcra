@@ -33,6 +33,7 @@ describe("resolveCreateAgentIntent", () => {
         labels: {
           task: "task-1",
           "fulcra.project": "proj-1",
+          project: "fulcra",
           owner: "orca-control",
           "fulcra.role": "orchestration",
         },
@@ -44,6 +45,7 @@ describe("resolveCreateAgentIntent", () => {
     expect(child.labels).toEqual({
       task: "task-1",
       "fulcra.project": "proj-1",
+      project: "fulcra",
       "fulcra.role": "implementation",
       [PARENT_AGENT_ID_LABEL]: "lead",
     });

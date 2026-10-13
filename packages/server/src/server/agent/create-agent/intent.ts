@@ -11,7 +11,7 @@ export interface CreateAgentCaller {
 // Update-7 (ownership on every create path): a session created from inside a session (`paseo run`, an MCP create)
 // belongs to the caller's task and project, and is an implementation worker unless the request names a role. The
 // request's own labels always win; the parent label is always the caller.
-export const INHERITED_LABELS = ["task", "fulcra.project"] as const;
+export const INHERITED_LABELS = ["task", "project", "fulcra.project"] as const;
 export const ROLE_LABEL = "fulcra.role";
 export function inheritedLabels(caller: CreateAgentCaller | null): Record<string, string> {
   if (!caller?.labels) return {};

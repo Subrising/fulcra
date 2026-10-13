@@ -8,6 +8,7 @@ import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import {
   selectSidebarSessionRows,
   equalSidebarSessionRows,
+  sessionCounts,
   type SidebarSessionRow,
 } from "@/hooks/sidebar-session-model";
 import { SessionAccountInfo } from "@/sessions/session-account-info";
@@ -51,7 +52,13 @@ export function SidebarSessions({
   );
   const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
   const toggleAll = useCallback(() => setShowAll((value) => !value), []);
-  const displayed = showAll ? rows : rows.slice(0, PREVIEW_LIMIT);
+  const counts = sessionCounts(rows);
+  const hostRows = selectedHosts
+    .map((serverId) => ({
+      serverId,
+      rows: rows.filter((row) => row.serverId === serverId),
+    }))
+    .filter((host) => host.rows.length > 0);
   if (!rows.length) return null;
   return (
     <View testID="sidebar-all-sessions" style={styles.section}>
@@ -59,33 +66,53 @@ export function SidebarSessions({
         onPress={toggleExpanded}
         accessibilityRole="button"
         accessibilityState={accessibilityState}
-        accessibilityLabel={`All sessions (${rows.length})`}
+        accessibilityLabel={`All sessions (${rows.length}). ${counts.running} running, ${counts.waiting} waiting on background jobs, ${counts.idle} idle`}
         testID="sidebar-all-sessions-toggle"
         style={headingStyle}
       >
         <Text style={styles.headingText}>All sessions ({rows.length})</Text>
       </Pressable>
-      {expanded &&
-        displayed.map((row) => (
-          <SessionItem
-            key={row.key}
-            row={row}
-            hostName={hostNames?.get(row.serverId)}
-            onSelect={onSelect}
-          />
-        ))}
-      {expanded && rows.length > PREVIEW_LIMIT && (
-        <Pressable
-          accessibilityRole="button"
-          onPress={toggleAll}
-          testID="sidebar-all-sessions-more"
-          style={headingStyle}
-        >
-          <Text style={styles.metadata}>
-            {showAll ? "Show fewer sessions" : `Show all ${rows.length} sessions`}
-          </Text>
-        </Pressable>
+      {expanded && (
+        <Text style={styles.counts}>
+          {counts.running} running · {counts.waiting} waiting on background jobs · {counts.idle}{" "}
+          idle
+        </Text>
       )}
+      {expanded &&
+        hostRows.map((host) => {
+          const hostCounts = sessionCounts(host.rows);
+          const visible = showAll ? host.rows : host.rows.slice(0, PREVIEW_LIMIT);
+          return (
+            <View key={host.serverId} style={styles.hostGroup}>
+              <Text style={styles.hostHeading}>
+                {hostNames?.get(host.serverId) ?? host.serverId} ({host.rows.length})
+              </Text>
+              <Text style={styles.counts}>
+                {hostCounts.running} running · {hostCounts.waiting} waiting · {hostCounts.idle} idle
+              </Text>
+              {visible.map((row) => (
+                <SessionItem key={row.key} row={row} onSelect={onSelect} />
+              ))}
+              {host.rows.length > PREVIEW_LIMIT && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showAll
+                      ? "Show fewer sessions"
+                      : `Show ${host.rows.length - PREVIEW_LIMIT} more sessions on ${hostNames?.get(host.serverId) ?? host.serverId}`
+                  }
+                  onPress={toggleAll}
+                  testID="sidebar-all-sessions-more"
+                  style={headingStyle}
+                >
+                  <Text style={styles.metadata}>
+                    {showAll ? "Show fewer sessions" : `${host.rows.length - PREVIEW_LIMIT} more`}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
     </View>
   );
 }
@@ -95,18 +122,12 @@ function statusLabel(row: SidebarSessionRow): string {
   if (row.status === "running") return "Working";
   if (row.status === "error") return "Failed";
   if (row.status === "initializing") return "Starting";
+  if (row.backgroundWorkCount > 0)
+    return `Waiting on ${row.backgroundWorkCount} background job${row.backgroundWorkCount === 1 ? "" : "s"}`;
   return "Idle";
 }
 
-function SessionItem({
-  row,
-  onSelect,
-  hostName,
-}: {
-  row: SidebarSessionRow;
-  onSelect?: () => void;
-  hostName?: string;
-}) {
+function SessionItem({ row, onSelect }: { row: SidebarSessionRow; onSelect?: () => void }) {
   const openSession = useCallback(() => {
     onSelect?.();
     navigateToAgent({ serverId: row.serverId, agentId: row.agentId, workspaceId: row.workspaceId });
@@ -130,7 +151,6 @@ function SessionItem({
         </Text>
         <Text numberOfLines={1} style={styles.metadata}>
           {statusLabel(row)}
-          {hostName ? ` · ${hostName}` : ""}
         </Text>
         {row.lead ? (
           <Text
@@ -157,6 +177,18 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
+  },
+  hostGroup: { paddingTop: theme.spacing[2] },
+  hostHeading: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+    paddingHorizontal: theme.spacing[2],
+  },
+  counts: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    paddingHorizontal: theme.spacing[2],
   },
   row: {
     flexDirection: "row",

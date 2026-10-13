@@ -4,8 +4,9 @@ import type { OutputSchema } from "../../output/index.js";
 export interface ProjectRow {
   projectId: string;
   name: string;
-  kind: "git" | "non_git" | "directory";
+  kind: "git" | "non_git" | "directory" | "label";
   path: string;
+  sessions?: number;
 }
 
 export const projectSchema: OutputSchema<ProjectRow> = {
@@ -15,6 +16,7 @@ export const projectSchema: OutputSchema<ProjectRow> = {
     { header: "NAME", field: "name", width: 24 },
     { header: "KIND", field: "kind", width: 10 },
     { header: "PATH", field: "path", width: 42 },
+    { header: "SESSIONS", field: (project: ProjectRow) => project.sessions ?? "-", width: 9 },
   ],
 };
 

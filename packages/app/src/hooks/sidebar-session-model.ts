@@ -21,9 +21,22 @@ export interface SidebarSessionRow {
   title: string;
   status: Agent["status"];
   pendingPermissionCount: number;
+  backgroundWorkCount: number;
   account: SessionAccount | null;
   /** Fulcra 0.2.8: the chat's lead in plain words ("Reports to …"), or null when it has no reporting line. A chat with no line but with chats under it says so. */
   lead: string | null;
+}
+
+export function sessionCounts(rows: readonly SidebarSessionRow[]) {
+  return rows.reduce(
+    (counts, row) => {
+      if (row.status === "running" || row.status === "initializing") counts.running++;
+      else if (row.backgroundWorkCount > 0) counts.waiting++;
+      else counts.idle++;
+      return counts;
+    },
+    { running: 0, waiting: 0, idle: 0 },
+  );
 }
 
 const CONTROLLER_PARENT_LABEL = "fulcra.parent-session";
@@ -102,6 +115,7 @@ export function selectSidebarSessionRows(
         title: agent.title?.trim() || "Untitled session",
         status: agent.status,
         pendingPermissionCount: agent.pendingPermissions.length,
+        backgroundWorkCount: agent.backgroundWork?.count ?? 0,
         account: sessionAccount({
           provider: agent.provider,
           labels: { [SESSION_ACCOUNT_LABEL]: agent.labels?.[SESSION_ACCOUNT_LABEL] ?? "" },
@@ -135,6 +149,7 @@ export function equalSidebarSessionRows(
         row.title === other.title &&
         row.status === other.status &&
         row.pendingPermissionCount === other.pendingPermissionCount &&
+        row.backgroundWorkCount === other.backgroundWorkCount &&
         row.lead === other.lead &&
         row.account?.name === other.account?.name &&
         row.account?.providerLabel === other.account?.providerLabel
