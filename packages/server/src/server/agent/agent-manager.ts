@@ -1365,6 +1365,14 @@ export class AgentManager {
     this.nativeReceipts = receipts;
   }
 
+  async prepareNativeArchiveObservation(): Promise<void> {
+    await this.nativeReceipts?.prepareArchiveObservation();
+  }
+
+  nativeArchivePending(agentId: string): number | null {
+    return this.nativeReceipts ? this.nativeReceipts.archivePending(agentId) : 0;
+  }
+
   /** Native catalog read/consume domain only. The launch witness is not an action credential. */
   async nativeReportInbox(origin: NativeReportOrigin, eventId?: string) {
     if (!this.reportRegistry || !this.nativeReceipts)
