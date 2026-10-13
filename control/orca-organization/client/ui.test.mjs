@@ -333,9 +333,14 @@ test("machine acceptance markers and identifiers never substitute for the readab
 
 test("client entry registers its actual surface and return commands and cleans up all contributions", () => {
   const registrations = [],
+    screens = [],
     removed = [],
     commands = [];
   const cleanup = contribute({
+    addScreen: (screen) => {
+      screens.push(screen);
+      return () => removed.push(`screen:${screen.id}`);
+    },
     addSurface: (id, component) => {
       registrations.push([id, component]);
       return () => removed.push(id);
@@ -351,6 +356,7 @@ test("client entry registers its actual surface and return commands and cleans u
     openSurface() {},
   });
   assert.equal(registrations[0][1], HomeSurface);
+  assert.equal(screens[0].id, "progress-board");
   assert.deepEqual(
     registrations.filter(Array.isArray).map(([id]) => id),
     ["organization", "workspaces", "intake", "leadership", "team"],
@@ -362,6 +368,7 @@ test("client entry registers its actual surface and return commands and cleans u
     [
       ["workspaces", "workspaces"],
       ["organization", "organization"],
+      ["progress-board", "progress-board"],
     ],
   );
   assert.equal(commands.length, 2);
@@ -376,6 +383,8 @@ test("client entry registers its actual surface and return commands and cleans u
       "team",
       "sidebar:workspaces",
       "sidebar:organization",
+      "sidebar:progress-board",
+      "screen:progress-board",
       ...commands.map((command) => command.id),
     ].sort(),
   );

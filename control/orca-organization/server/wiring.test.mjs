@@ -16,7 +16,11 @@ const managed = (extra = {}) => ({
 function setup() {
   reset();
   const handlers = new Map();
-  const cleanup = contribute({ handle: (rpc, handler) => handlers.set(rpc.name, handler) });
+  const cleanup = contribute({
+    on: () => () => {},
+    registerUsageSource() {},
+    handle: (rpc, handler) => handlers.set(rpc.name, handler),
+  });
   return { handlers, cleanup };
 }
 test("project RPC coalesces observers without provider or control calls and resets on cleanup", async () => {
@@ -50,7 +54,11 @@ test("actual fleet RPC coalesces concurrent viewers and resets its cache on clea
 test("registered routes preserve authentication barriers while keeping the legacy observation contract", async () => {
   reset();
   const handlers = new Map();
-  const cleanup = contribute({ handle: (rpc, handler) => handlers.set(rpc.name, handler) });
+  const cleanup = contribute({
+    on: () => () => {},
+    registerUsageSource() {},
+    handle: (rpc, handler) => handlers.set(rpc.name, handler),
+  });
   const refused = [undefined, {}, { paseo: {} }, { management: {} }];
   // Synchronous handlers throw and async ones (Recovery) reject; either way the call is refused before its handler runs.
   for (const name of ["organization.manage", "organization.task-manage"])
@@ -267,7 +275,11 @@ test("reads answer with a named deadline error before the host timeout; a mutati
   state.hang = true;
   const handlers = new Map();
   const cleanup = contribute(
-    { handle: (rpc, handler) => handlers.set(rpc.name, handler) },
+    {
+      on: () => () => {},
+      registerUsageSource() {},
+      handle: (rpc, handler) => handlers.set(rpc.name, handler),
+    },
     { readDeadlineMs: 40 },
   );
   // Each call races its own 1 s timer, so a missing deadline fails here by name instead of hanging the suite.

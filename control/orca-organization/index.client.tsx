@@ -1,4 +1,5 @@
 import { WorkspacesSurface } from "./client/organization/workspaces";
+import { ProgressBoardSurface } from "./client/progress-board";
 import { IntakeSurface } from "./client/organization/intake";
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { OrganizationSurface } from "./client/organization";
@@ -27,6 +28,11 @@ function CleanupSettingsScreen(props: Pick<PluginSurfaceProps, "theme" | "layout
   return <CleanupSurface {...props} header={<CleanupNowSection theme={props.theme} />} />;
 }
 export default function contribute(client: PluginClientContext) {
+  const progressBoard = client.addScreen({
+    id: "progress-board",
+    title: "Progress board",
+    Component: ProgressBoardSurface,
+  });
   const surface = client.addSurface("organization", OrganizationSurface);
   const workspaces = client.addSurface("workspaces", WorkspacesSurface);
   const intake = client.addSurface("intake", IntakeSurface);
@@ -43,6 +49,12 @@ export default function contribute(client: PluginClientContext) {
     title: SIDEBAR_TITLE,
     icon: "Network",
     surface: "organization",
+  });
+  const progressSidebar = client.addSidebarItem({
+    id: "progress-board",
+    title: "Progress board",
+    icon: "ListChecks",
+    surface: "progress-board",
   });
   const commands = registerReturnCommands(client);
   // Fulcra's settings pages live in the app's one Settings screen. Hosts that predate settings screens keep the
@@ -117,6 +129,8 @@ export default function contribute(client: PluginClientContext) {
   // Fulcra 0.2.8: "Make main assistant" and "Make lead of project…" from any chat.
   const teamRole = registerTeamRole(client);
   return () => {
+    progressSidebar();
+    progressBoard();
     accountSwitch();
     teamRole();
     whatItDidCommand();
