@@ -155,6 +155,22 @@ An interrupted dispatch has an uncertain result. Check the receiver before you s
 Use `fulcra send --steer` when the message must enter the current turn. An unavailable steer enters the queue and returns a delivery note.
 Human app input keeps its existing behavior. A queued MCP follow-up replaces the earlier finish notice and arms one notice for the delivered turn.
 
+### Lead event counts and routine digest
+
+Read `fulcra usage events --json --home <daemon-home>` on the daemon host.
+Use `--agent <session-id>` to select a lead. The command also works while the daemon is stopped.
+It counts accepted turns for each visible session. Steers, delivery attempts, and provider API calls are separate events.
+No message text enters the counters or digest. Unknown causes appear as `other`.
+
+The deterministic dispatcher keeps routine events in a durable digest instead of sending another notice.
+Unknown events, failed turns, permission requests, and usage limits keep their guarded delivery path.
+A report request alone cannot suppress a finish notice. The host must confirm delivery during that worker turn.
+Read the digest on the lead's next real turn with the same command. Each suppressed event has one line in human output.
+
+Set `daemon.eventDispatcherEnabled` to `false` in `config.json` to restore normal delivery.
+The host reads this switch at each dispatch. Event counts continue while the switch is off.
+This setting does not change reporting rights or authorize permission responses.
+
 ## Provider-managed child agents
 
 Some providers can create their own child sessions inside one provider runtime. OMP's task tool reports these with `child_session` events; `AgentManager` imports the live provider handle, stamps `paseo.parent-agent-id`, and surfaces the result as a normal subagent in the parent's subagents track.

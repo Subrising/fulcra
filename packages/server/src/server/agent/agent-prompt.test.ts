@@ -1,3 +1,4 @@
+import { LeadEventDispatcher, readLeadEvents, registerLeadEvents } from "../lead-events.js";
 import { assertFinalInputCheck, recordFinalInputHandoff } from "./final-input-check.js";
 import { StaleProviderSessionError } from "./stale-provider-session-error.js";
 import { TRUSTED_OPERATION, FINAL_INPUT_CHECK } from "./agent-sdk-types.js";
@@ -54,6 +55,8 @@ function createCapturedLogger(): CapturedLogger {
 }
 
 interface FinishNotificationScenarioOptions {
+  eventHome?: string;
+  dispatcherEnabled?: boolean;
   /** The caller has a turn in flight; a held notice waits for it to end. */
   parentBusy?: () => boolean;
   childLastAssistantMessage?: string | null;
@@ -68,6 +71,7 @@ interface FinishNotificationScenarioOptions {
 }
 
 interface FinishNotificationScenario {
+  reportDelivered(): void;
   startWatchingChild(): void;
   /** The caller's running turn ends. */
   endCallerTurn(): void;
@@ -110,6 +114,18 @@ function createFinishNotificationScenario(
   Reflect.set(callerAgent, "config", { title: "Caller Agent" });
 
   const agentManager = new AgentManager({ clients: {}, logger: createTestLogger() });
+  const dispatcher = options?.eventHome
+    ? new LeadEventDispatcher({
+        home: options.eventHome,
+        enabled: () => options?.dispatcherEnabled !== false,
+        now: () => Date.now() + 1000,
+        onError: (error) => {
+          throw error;
+        },
+      })
+    : undefined;
+  if (dispatcher) registerLeadEvents(agentManager, dispatcher);
+
   const inputMessageIds: Array<[string, string | undefined]> = [];
   const realWithInput = agentManager.withInput.bind(agentManager);
   Reflect.set(
@@ -191,6 +207,9 @@ function createFinishNotificationScenario(
   });
 
   return {
+    reportDelivered() {
+      dispatcher?.noteReport("caller-agent", "child-agent");
+    },
     startWatchingChild() {
       setupFinishNotification({
         agentManager,
@@ -988,4 +1007,39 @@ test("human prompts dismiss question cards without changing the trusted payload"
   await vi.waitFor(() => expect(seen).toHaveLength(1));
   expect(seen[0]?.clearPendingQuestions).toBe(true);
   expect(promptPayload("answer", { clearPendingQuestions: true })).toEqual(promptPayload("answer"));
+});
+
+test("native finish records an already delivered report without waking the caller", async () => {
+  const home = mkdtempSync(join(tmpdir(), "native-finish-digest-"));
+  try {
+    const scenario = createFinishNotificationScenario({ eventHome: home });
+    scenario.startWatchingChild();
+    scenario.reportDelivered();
+    scenario.finishChild();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(scenario.parentPrompts()).toEqual([]);
+    expect(readLeadEvents(home).sessions["caller-agent"]?.digest[0]?.reason).toBe(
+      "already_reported",
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the dispatcher switch restores native finish delivery after a worker report", async () => {
+  const home = mkdtempSync(join(tmpdir(), "native-finish-enabled-"));
+  try {
+    const scenario = createFinishNotificationScenario({
+      eventHome: home,
+      dispatcherEnabled: false,
+    });
+    scenario.startWatchingChild();
+    scenario.reportDelivered();
+    const prompt = await scenario.finishChildAndReadParentPrompt();
+    expect(prompt).toContain("finished");
+    expect(scenario.parentPrompts()).toHaveLength(1);
+    expect(readLeadEvents(home).sessions["caller-agent"]?.digest).toEqual([]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

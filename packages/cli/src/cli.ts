@@ -1,3 +1,4 @@
+import { createUsageCommand } from "./commands/usage.js";
 import { pairCommand } from "./commands/daemon/pair.js";
 import { Command, Option } from "commander";
 import { createAgentCommand } from "./commands/agent/index.js";
@@ -154,6 +155,7 @@ export function createCli(): Command {
   program.addCommand(createProviderCommand());
   program.addCommand(createPluginCommand());
   program.addCommand(createAccountCommand());
+  program.addCommand(createUsageCommand());
   program.addCommand(createAskCommand());
 
   // Speech model commands

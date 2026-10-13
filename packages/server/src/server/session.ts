@@ -1,3 +1,4 @@
+import { noteDeliveredReport } from "./lead-events.js";
 // FULCRA(trusted-bundle): configured routing preserves verified bundle/principal/lifetime admission.
 import { GitAiDraftResponseSchema } from "@getpaseo/protocol/git-ai-draft";
 import { createGitAiDraftHelp } from "./session/checkout/git-ai-draft-help.js";
@@ -9749,6 +9750,7 @@ export class Session {
     const tryAgentSteer = async (): Promise<{ delivered: boolean; resumeAt?: number }> => {
       try {
         await trusted.agentInput(() => dispatch("steer", this.delivery.requestSignal));
+        noteDeliveredReport(this.agentManager, agentId, msg.sender?.agentId);
         deliveryNote("Message delivered through native steering.");
         return { delivered: true };
       } catch (error) {

@@ -1,3 +1,9 @@
+import {
+  LeadEventDispatcher,
+  leadEventsFor,
+  registerLeadEvents,
+  withLeadEvent,
+} from "./lead-events.js";
 import { loadAgentPolicy } from "./limit-resume/policy.js";
 import type { PolicyHooks } from "../../../../plugins/fulcra-agent-policy/index.host.mjs";
 import type { ReportTurnEnd } from "../../../../plugins/fulcra-agent-policy/server/report-observer.mjs";
@@ -97,6 +103,7 @@ export {
 /** One worker's "finished a turn" line waiting to go to its lead (FU-115). */
 interface PendingFinish {
   workerId: string;
+  eventId?: string;
   worker: LineAgent;
   lastMessage: string | null;
 }
@@ -125,7 +132,7 @@ export interface ReportUpDeps {
   readLedger?: () => readonly LedgerRow[] | Promise<readonly LedgerRow[]>;
 }
 
-type NoticeKind = "report-up" | "idle-nudge" | "finished-turn";
+type NoticeKind = "report-up" | "idle-nudge" | "finished-turn" | "permission" | "limit";
 interface HeldReport {
   prompt: string;
   kind: NoticeKind;
@@ -243,7 +250,9 @@ export class ReportUpService {
               if (
                 report &&
                 typeof report.prompt === "string" &&
-                ["report-up", "idle-nudge", "finished-turn"].includes(report.kind)
+                ["report-up", "idle-nudge", "finished-turn", "permission", "limit"].includes(
+                  report.kind,
+                )
               )
                 return [report];
               return [];
@@ -543,7 +552,7 @@ export class ReportUpService {
       this.deps.localServerId,
     );
     if (!decision?.allowed) return;
-    await this.toLead(workerId, lead.id, prompt);
+    await this.toLead(workerId, lead.id, prompt, "permission");
   }
 
   private now(): number {
@@ -604,7 +613,7 @@ export class ReportUpService {
     if (await this.deps.remoteNotice?.(workerId, prompt, "limit")) return true;
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return true;
-    await this.toLead(workerId, lead.id, prompt);
+    await this.toLead(workerId, lead.id, prompt, "limit");
     return true;
   }
 
@@ -677,9 +686,9 @@ export class ReportUpService {
     const notice = `${enabled.length} report${enabled.length === 1 ? "" : "s"} held while you were at your usage limit:\n\n${body}`;
     if (this.deps.deliver) await this.deps.deliver(leadId, notice);
     else {
-      const kind = enabled.some((report) => report.kind === "finished-turn")
-        ? "finished-turn"
-        : "report-up";
+      let kind: NoticeKind = "report-up";
+      if (enabled.some((report) => report.kind === "finished-turn")) kind = "finished-turn";
+      else if (enabled.every((report) => report.kind === enabled[0]!.kind)) kind = enabled[0]!.kind;
       try {
         await this.send(leadId, notice, kind);
       } catch (err) {
@@ -722,6 +731,9 @@ export class ReportUpService {
     if ("skip" in lead) return skip(lead.skip);
     const leadAgent = await this.store.get(lead.id);
     if (!leadAgent || leadAgent.archivedAt) return skip("lead not here or archived");
+    if (!(await this.reportingLineAllows(workerId, lead.id))) return;
+    if (this.suppressFinished(lead.id, workerId, failed, startedAt))
+      return skip("routine event recorded in the lead digest");
     const quiet = await this.quietReason({
       workerId,
       leadId: lead.id,
@@ -730,7 +742,6 @@ export class ReportUpService {
       startedAt,
     });
     if (quiet) return skip(quiet);
-    if (!(await this.reportingLineAllows(workerId, lead.id))) return;
     const lastMessage =
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(workerId).catch(() => null)
@@ -743,7 +754,31 @@ export class ReportUpService {
       await this.toLead(workerId, lead.id, prompt, "finished-turn");
       return;
     }
-    await this.queueFinished(lead.id, { workerId, worker, lastMessage });
+    await this.queueFinished(lead.id, {
+      workerId,
+      worker,
+      lastMessage,
+      eventId: startedAt === undefined ? undefined : `${workerId}:${startedAt}`,
+    });
+  }
+
+  private suppressFinished(
+    leadId: string,
+    workerId: string,
+    failed: boolean,
+    startedAt?: number,
+  ): boolean {
+    if (failed || startedAt === undefined) return false;
+    const dispatcher = leadEventsFor(this.deps.agentManager);
+    return (
+      dispatcher?.suppress(leadId, {
+        eventId: `${workerId}:${startedAt}`,
+        sourceId: workerId,
+        kind: "finished_turn",
+        startedAt,
+        reportedAt: dispatcher.reportAt(leadId, workerId),
+      }) ?? false
+    );
   }
 
   private async remoteFinished(
@@ -870,6 +905,13 @@ export class ReportUpService {
       await this.send(leadId, prompt, "finished-turn");
       this.deps.logger.info({ lead: leadId, workers: items.length }, "Report-up delivered");
     }
+    for (const item of items)
+      if (item.eventId)
+        leadEventsFor(this.deps.agentManager)?.noteDelivered(leadId, {
+          eventId: item.eventId,
+          sourceId: item.workerId,
+          kind: "finished_turn",
+        });
   }
 
   private noticeEnabled(kind: NoticeKind): boolean {
@@ -890,26 +932,36 @@ export class ReportUpService {
       if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
       if (currentNudge && !currentNudge()) throw new Error("Idle nudge generation expired");
     };
-    return agentManager.trustedPlugins.daemon(async () => {
-      const finalCheck = createFinalInputCheck(checkCurrent);
-      captureHandoff?.(finalCheck);
-      await sendPromptToAgent({
-        agentManager,
-        agentStorage,
-        agentId: leadId,
-        prompt,
-        messageId:
-          kind === "idle-nudge"
-            ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
-            : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`,
-        runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
-        activeTurnBehavior: "steer",
-        steerOnly: true,
-        unarchive: false,
-        logger,
-      });
-      await waitForFinalInputHandoff(finalCheck);
-    });
+    const causes = {
+      "idle-nudge": "nudge",
+      permission: "permission",
+      limit: "limit",
+      "finished-turn": "finished_turn",
+      "report-up": "queued_delivery",
+    } as const;
+    const cause = causes[kind];
+    return withLeadEvent(cause, () =>
+      agentManager.trustedPlugins.daemon(async () => {
+        const finalCheck = createFinalInputCheck(checkCurrent);
+        captureHandoff?.(finalCheck);
+        await sendPromptToAgent({
+          agentManager,
+          agentStorage,
+          agentId: leadId,
+          prompt,
+          messageId:
+            kind === "idle-nudge"
+              ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
+              : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`,
+          runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
+          activeTurnBehavior: "steer",
+          steerOnly: true,
+          unarchive: false,
+          logger,
+        });
+        await waitForFinalInputHandoff(finalCheck);
+      }),
+    );
   }
 }
 
@@ -923,6 +975,20 @@ export function startReportUp(input: {
   localServerId: string | null;
   logger: Logger;
 }): () => void {
+  let offEvents: (() => void) | undefined;
+  if (input.paseoHome) {
+    try {
+      offEvents = registerLeadEvents(
+        input.agentManager,
+        new LeadEventDispatcher({
+          home: input.paseoHome,
+          onError: (err) => input.logger.warn({ err }, "Lead event state not saved"),
+        }),
+      );
+    } catch (err) {
+      input.logger.warn({ err }, "Lead event state not loaded; dispatcher disabled");
+    }
+  }
   const service = new ReportUpService({
     remoteNotice: input.remoteNotice,
     agentManager: input.agentManager,
@@ -938,6 +1004,21 @@ export function startReportUp(input: {
   const offHooks = input.hooks ? service.observeNative(input.hooks) : undefined;
   const offStream = input.agentManager.subscribe(
     (event) => {
+      if (event.type === "agent_state" && event.agent.archivedAt) {
+        const dispatcher = leadEventsFor(input.agentManager);
+        if (dispatcher)
+          void leadChatOf(lineStoreOf(input), event.agent, input.localServerId)
+            .then((lead) => {
+              if ("id" in lead)
+                dispatcher.suppress(lead.id, {
+                  eventId: `${event.agent.id}:${event.agent.archivedAt}`,
+                  sourceId: event.agent.id,
+                  kind: "archive_done",
+                });
+              return undefined;
+            })
+            .catch((err) => input.logger.warn({ err }, "Archive digest failed"));
+      }
       // Native hooks own lifecycle events; first-message provenance still needs the host timeline.
       if (input.hooks && event.type === "agent_stream") {
         const live = input.agentManager.getAgent(event.agentId);
@@ -956,6 +1037,7 @@ export function startReportUp(input: {
   );
   return () => {
     offHooks?.();
+    offEvents?.();
     offStream();
     service.stop();
   };
