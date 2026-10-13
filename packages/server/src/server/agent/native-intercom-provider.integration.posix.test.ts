@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createTestLogger } from "../../test-utils/test-logger.js";
+import { createTestAgentClient } from "../test-utils/fake-agent-client.js";
 import { AgentManager } from "./agent-manager.js";
 import { CodexAppServerAgentClient } from "./providers/codex-app-server-agent.js";
 import { createFakeCodexAppServer } from "./providers/codex/test-utils/fake-app-server.js";
@@ -69,11 +70,13 @@ async function fixture(
   relaunch = false,
   journalHooks = false,
   installedQueue = false,
+  parentProvider: "codex" | "claude" = "codex",
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), "native-provider-integration-"));
   let turn = 0;
   let thread = 0;
   let usageAllowed = true;
+  const parentPrompts: unknown[] = [];
   let onChildStart: (() => void) | undefined;
   const servers: ReturnType<typeof createFakeCodexAppServer>[] = [];
   const threads = new Map<string, ReturnType<typeof createFakeCodexAppServer>>();
@@ -170,7 +173,14 @@ async function fixture(
     }
   });
   const manager = new AgentManager({
-    clients: { codex: provider },
+    clients: {
+      codex: provider,
+      claude: createTestAgentClient("claude", {
+        supportsMcpServers: true,
+        onStartTurn: (prompt) => parentPrompts.push(prompt),
+      }),
+    },
+    registry: new AgentStorage(path.join(directory, "agents"), createTestLogger()),
     trustedPlugins: authority,
     logger: createTestLogger(),
     ...(relaunch ? { mcpRefreshAdmission: (agent) => authority.mcpRefresh(agent) } : {}),
@@ -183,16 +193,19 @@ async function fixture(
         }
       : {}),
   });
-  manager.setNativeMessageReceipts(new MessageReceipts(path.join(directory, "receipts")));
+  const receipts = new MessageReceipts(path.join(directory, "receipts"));
+  manager.setNativeMessageReceipts(receipts);
   const createSession = vi.spyOn(provider, "createSession");
   const agent = await manager.createAgent(
-    { provider: "codex", cwd: directory, model: "gpt-5.4" },
+    { provider: parentProvider, cwd: directory, model: "gpt-5.4" },
     undefined,
     { workspaceId: reports ? randomUUID() : undefined },
   );
   const messageId = randomUUID();
   return {
     manager,
+    receipts,
+    parentPrompts,
     controlStore,
     controlIssue: (binding: Parameters<IssueProvenanceV11>[0]) => controlIssue(binding),
     directory,
@@ -677,6 +690,238 @@ test("native create_agent from an ordinary parent validates placement and sends 
     await f.cleanup();
   }
 });
+
+test("agent-scoped MCP create_agent wakes a CLI-style parent once without native rate settings", async () => {
+  const f = await fixture("valid", true);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: new AgentStorage(path.join(f.directory, "agents"), createTestLogger()),
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  try {
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    const child = f.manager.getAgent(childId)!;
+    expect(f.manager.nativeReportOwnsFinish(childId, f.agent.id)).toBe(false);
+    f.server.completeTurn({ threadId: child.persistence!.sessionId });
+    await vi.waitFor(() => expect(f.turnCount()).toBe(2));
+    const parentTurns = f.server
+      .requests()
+      .filter(
+        (request) =>
+          request.method === "turn/start" &&
+          (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId,
+      );
+    expect(parentTurns).toHaveLength(1);
+    expect(JSON.stringify(parentTurns[0])).toContain(childId);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("agent-scoped MCP create_agent wakes a Claude parent once when native queue is unavailable", async () => {
+  const f = await fixture("valid", true, false, false, false, "claude");
+  await registerPrime(f, false);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: new AgentStorage(path.join(f.directory, "agents"), createTestLogger()),
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  try {
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    f.server.completeTurn({ threadId: f.manager.getAgent(childId)!.persistence!.sessionId });
+    await vi.waitFor(() => expect(f.parentPrompts).toHaveLength(1));
+    expect(JSON.stringify(f.parentPrompts[0])).toContain(childId);
+    expect(f.manager.nativeReportOwnsFinish(childId, f.agent.id)).toBe(false);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("native finish refusal uses the ordinary notice once", async () => {
+  const f = await fixture("valid", true);
+  await registerPrime(f, false);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: new AgentStorage(path.join(f.directory, "agents"), createTestLogger()),
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  const owner = nativeOwner(f);
+  try {
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    expect(f.manager.nativeReportOwnsFinish(childId, f.agent.id)).toBe(true);
+    await owner.invoke(randomUUID(), {
+      method: "intercom-rate-settings-set",
+      input: {
+        messageId: randomUUID(),
+        settings: { report: 0, followup: 32, channel: 8, seat: 8 },
+      },
+    });
+    f.server.completeTurn({ threadId: f.manager.getAgent(childId)!.persistence!.sessionId });
+    await vi.waitFor(() => expect(f.turnCount()).toBe(2), { timeout: 5000 });
+    const parentTurns = f.server
+      .requests()
+      .filter(
+        (request) =>
+          request.method === "turn/start" &&
+          (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId,
+      );
+    expect(parentTurns).toHaveLength(1);
+    expect(JSON.stringify(parentTurns[0])).toContain(childId);
+    expect(await f.manager.nativeReportInbox(f.nativeOrigin())).toMatchObject({
+      events: [{ providerAccepted: false }],
+    });
+  } finally {
+    owner.close();
+    await f.cleanup();
+  }
+});
+
+test("native report admission failure uses the ordinary notice once", async () => {
+  const f = await fixture("valid", true);
+  await registerPrime(f, false);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: new AgentStorage(path.join(f.directory, "agents"), createTestLogger()),
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  try {
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    vi.spyOn(f.receipts, "collectReport").mockRejectedValueOnce(
+      new Error("fixture admission refused"),
+    );
+    f.server.completeTurn({ threadId: f.manager.getAgent(childId)!.persistence!.sessionId });
+    await vi.waitFor(() => expect(f.turnCount()).toBe(2));
+    const parentTurns = f.server
+      .requests()
+      .filter(
+        (request) =>
+          request.method === "turn/start" &&
+          (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId,
+      );
+    expect(parentTurns).toHaveLength(1);
+    expect(JSON.stringify(parentTurns[0])).toContain(childId);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("an unavailable permission report cannot settle the finish wake", async () => {
+  const f = await fixture("valid", true);
+  await registerPrime(f, false);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: new AgentStorage(path.join(f.directory, "agents"), createTestLogger()),
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  const owner = nativeOwner(f);
+  const setRate = (report: number) =>
+    owner.invoke(randomUUID(), {
+      method: "intercom-rate-settings-set",
+      input: {
+        messageId: randomUUID(),
+        settings: { report, followup: 32, channel: 8, seat: 8 },
+      },
+    });
+  try {
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    await setRate(0);
+    Reflect.get(f.manager, "reportObservedLifecycle").call(
+      f.manager,
+      f.manager.getAgent(childId),
+      "needs-you",
+      "fixture-permission",
+      true,
+    );
+    await setRate(12);
+    f.server.completeTurn({ threadId: f.manager.getAgent(childId)!.persistence!.sessionId });
+    await vi.waitFor(
+      async () =>
+        expect(await f.manager.nativeReportInbox(f.nativeOrigin())).toMatchObject({
+          events: [{ kind: "ended", providerAccepted: true }],
+        }),
+      { timeout: 5000 },
+    );
+    expect(f.turnCount()).toBe(2);
+  } finally {
+    owner.close();
+    await f.cleanup();
+  }
+}, 12000);
 
 test("native report relaunch: authenticated refresh A-B-A rotates credential domain once, while external native replacement refuses old origin", async () => {
   const f = await fixture("valid", true, true);

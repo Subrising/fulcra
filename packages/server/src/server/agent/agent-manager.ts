@@ -996,6 +996,37 @@ export class AgentManager {
       witness: string;
     }
   >();
+  private readonly nativeFinishWaiters = new Map<
+    string,
+    { remaining: number | null; resolve: (outcome: "delivered" | "refused" | "uncertain") => void }
+  >();
+
+  waitForNativeFinishOutcome(
+    childId: string,
+    parentId: string,
+  ): Promise<"delivered" | "refused" | "uncertain"> {
+    const key = JSON.stringify([childId, parentId]);
+    return new Promise((complete) => {
+      this.nativeFinishWaiters.set(key, { remaining: null, resolve: complete });
+    });
+  }
+
+  cancelNativeFinishOutcome(childId: string, parentId: string): void {
+    this.finishNativeWake(childId, parentId, "uncertain");
+  }
+
+  private finishNativeWake(
+    childId: string,
+    parentId: string,
+    outcome: "delivered" | "refused" | "uncertain",
+  ): void {
+    const key = JSON.stringify([childId, parentId]);
+    const waiter = this.nativeFinishWaiters.get(key);
+    if (!waiter) return;
+    if (outcome === "refused" && waiter.remaining !== null && --waiter.remaining > 0) return;
+    this.nativeFinishWaiters.delete(key);
+    waiter.resolve(outcome);
+  }
 
   private prepareNativeReportLaunch(agentId: string) {
     if (!this.reportRegistry) return undefined;
@@ -1147,6 +1178,25 @@ export class AgentManager {
       if (JSON.stringify(requireNativeReportOrigin(origin)) !== JSON.stringify(parent))
         throw new Error("Native report creator changed");
     });
+  }
+
+  /** A native finish link is useful only when its parent can accept the queued wake. */
+  async captureNativeReportCreationForFinish(
+    origin: NativeReportOrigin,
+  ): Promise<NativeReportCreation | undefined> {
+    const parent = requireNativeReportOrigin(origin);
+    const agent = this.agents.get(parent.agentId);
+    if (!agent?.session || !supportsNativeQueuedProvider(agent.session)) return undefined;
+    const rates = this.intercomRates;
+    if (!rates) return undefined;
+    const current = () => {
+      if (JSON.stringify(requireNativeReportOrigin(origin)) !== JSON.stringify(parent))
+        throw new Error("Native report creator changed");
+    };
+    const settings = await rates.snapshot(current);
+    current();
+    if (!settings.initialized || !settings.settings?.report) return undefined;
+    return this.captureNativeReportCreation(origin);
   }
 
   private intercomRates?: IntercomRates;
@@ -1397,7 +1447,10 @@ export class AgentManager {
   }
 
   /** Registry-branded host events only. Action provenance cannot mint this report purpose. */
-  private collectNativeReport(batch: NativeReportBatch) {
+  private collectNativeReport(
+    batch: NativeReportBatch,
+    onWake?: (outcome: "delivered" | "refused" | "cancelled" | "uncertain") => void,
+  ) {
     const receipts = this.nativeReceipts;
     const rates = this.intercomRates;
     if (!receipts || !rates) throw new Error("Native report delivery unavailable");
@@ -1436,6 +1489,19 @@ export class AgentManager {
           boot: snapshot.parent.boot,
           attachmentBytes: 0,
           reportBatch: currentBatch,
+          ...(onWake
+            ? {
+                observe: (receipt: NativeMessageReceipt) => {
+                  if (
+                    receipt.state === "delivered" ||
+                    receipt.state === "refused" ||
+                    receipt.state === "cancelled" ||
+                    receipt.state === "uncertain"
+                  )
+                    onWake(receipt.state);
+                },
+              }
+            : {}),
           authorize,
           canDispatch: () => {
             authorize();
@@ -1606,22 +1672,70 @@ export class AgentManager {
     }
   }
 
+  private failNativeFinishForChild(childId: string): void {
+    for (const key of this.nativeFinishWaiters.keys()) {
+      const [waitingChild, parentId] = JSON.parse(key) as [string, string];
+      if (waitingChild === childId) this.finishNativeWake(childId, parentId, "refused");
+    }
+  }
+
+  private prepareNativeFinishForBatches(childId: string, batches: NativeReportBatch[]): void {
+    const counts = new Map<string, number>();
+    for (const batch of batches) {
+      const parentId = requireNativeReportBatch(batch).data.parent.agentId;
+      counts.set(parentId, (counts.get(parentId) ?? 0) + 1);
+    }
+    for (const [key, waiter] of this.nativeFinishWaiters) {
+      const [waitingChild, parentId] = JSON.parse(key) as [string, string];
+      if (waitingChild !== childId) continue;
+      const count = counts.get(parentId) ?? 0;
+      if (count) waiter.remaining = count;
+      else this.finishNativeWake(childId, parentId, "refused");
+    }
+  }
+
+  private collectObservedNativeReport(
+    childId: string,
+    kind: "ended" | "needs-you" | "blocked" | "usage-limit",
+    batch: NativeReportBatch,
+    finish: boolean,
+  ): void {
+    const report = requireNativeReportBatch(batch).data;
+    const parentId = report.parent.agentId;
+    const eventId = report.members[0]?.id;
+    void this.collectNativeReport(
+      batch,
+      finish
+        ? (outcome) =>
+            this.finishNativeWake(childId, parentId, outcome === "cancelled" ? "refused" : outcome)
+        : undefined,
+    ).catch(async () => {
+      this.logger.warn({ kind }, "Native report metadata admission refused");
+      if (!finish) return;
+      const outcome = eventId
+        ? await this.nativeReceipts!.settleFailedReportCollection(eventId)
+        : "refused";
+      this.finishNativeWake(childId, parentId, outcome);
+    });
+  }
+
   private reportObservedLifecycle(
     agent: ActiveManagedAgent,
     kind: "ended" | "needs-you" | "blocked" | "usage-limit",
     lifecycleId: string | undefined,
     isForegroundEvent: boolean,
   ): void {
-    if (
-      !this.reportRegistry ||
-      !this.nativeReceipts ||
-      !lifecycleId ||
-      !isForegroundEvent ||
-      this.nativeReportTurns.has(agent.id)
-    )
+    const finish = kind === "ended" || kind === "blocked";
+    if (!isForegroundEvent || this.nativeReportTurns.has(agent.id)) return;
+    if (!this.reportRegistry || !this.nativeReceipts || !lifecycleId) {
+      if (finish) this.failNativeFinishForChild(agent.id);
       return;
+    }
     const source = this.currentReportIdentity(agent.id);
-    if (!source || this.agents.get(agent.id) !== agent) return;
+    if (!source || this.agents.get(agent.id) !== agent) {
+      if (finish) this.failNativeFinishForChild(agent.id);
+      return;
+    }
     try {
       const batches = this.reportRegistry.captureLifecycleReports(
         source,
@@ -1629,13 +1743,11 @@ export class AgentManager {
         lifecycleId,
         Date.now(),
       );
-      for (const batch of batches)
-        void this.collectNativeReport(batch).catch(() => {
-          // Refusal never promotes a wake to delivery or exposes provider/body/account details.
-          this.logger.warn({ kind }, "Native report metadata admission refused");
-        });
+      if (finish) this.prepareNativeFinishForBatches(agent.id, batches);
+      for (const batch of batches) this.collectObservedNativeReport(agent.id, kind, batch, finish);
     } catch {
       // Unknown/legacy/root sessions do not infer report rights from labels or ownership.
+      if (finish) this.failNativeFinishForChild(agent.id);
     }
   }
 

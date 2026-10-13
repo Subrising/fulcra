@@ -1676,7 +1676,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
   function captureReportCreation() {
     return options.nativeReportOrigin
-      ? agentManager.captureNativeReportCreation(options.nativeReportOrigin)
+      ? agentManager.captureNativeReportCreationForFinish(options.nativeReportOrigin)
       : undefined;
   }
 
