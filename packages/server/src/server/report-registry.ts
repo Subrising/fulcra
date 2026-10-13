@@ -75,6 +75,7 @@ const stateSchema = z
       )
       .optional(),
     links: z.array(link).max(128),
+    revokedAgentIds: z.array(z.string().uuid()).max(10000).optional(),
     contentGrants: z.array(NativeArtifactContentGrantSchema).max(64).optional(),
     artifactTools: z
       .array(
@@ -602,6 +603,57 @@ export class NativeReportRegistry {
     return { grant, check };
   }
 
+  /** A host-authenticated launch gets its own report tree, without claiming a project or an owner role. */
+  async captureHostCreation(parentIdentity: NativeReportIdentity, requireCreator: () => void) {
+    const guard = () => {
+      requireCreator();
+      this.live(parentIdentity);
+    };
+    const ready = this.tail.catch(() => undefined).then(() => this.initialize(guard));
+    this.tail = ready;
+    await ready;
+    guard();
+    if (!this.state || this.unhealthy) throw new Error("Native report registration unavailable");
+    if (this.state.revokedAgentIds?.includes(parentIdentity.agentId))
+      throw new Error("Native report creator registration revoked; owner enrollment required");
+    if (!this.find(this.state, parentIdentity.agentId)) {
+      await this.mutate(
+        randomUUID(),
+        { method: "host-created-root", identity: parentIdentity },
+        { creator: parentIdentity.agentId, requireAuthority: guard },
+        (state) => {
+          if (state.revokedAgentIds?.includes(parentIdentity.agentId))
+            throw new Error(
+              "Native report creator registration revoked; owner enrollment required",
+            );
+          const existing = this.find(state, parentIdentity.agentId);
+          if (existing && !same(existing.identity, parentIdentity))
+            throw new Error("Native report creator registration changed");
+        },
+        (state, epoch) => {
+          // A concurrent creation can register this same launch first. Never replace its epoch or scopes.
+          if (this.find(state, parentIdentity.agentId)) return;
+          state.primes ??= [];
+          state.primes.push({
+            identity: structuredClone(parentIdentity),
+            scopes: [{ projectId: parentIdentity.agentId, taskId: parentIdentity.agentId }],
+            epoch,
+            creator: parentIdentity.agentId,
+            reportCredential: `report1.${randomBytes(32).toString("base64url")}`,
+          });
+        },
+      );
+    }
+    const capture = this.tail
+      .catch(() => undefined)
+      .then(() => {
+        guard();
+        return this.captureCreation(parentIdentity, requireCreator);
+      });
+    this.tail = capture;
+    return capture;
+  }
+
   /** Captured before create preparation. Labels, query caller IDs and report tokens cannot mint this. */
   captureCreation(parentIdentity: NativeReportIdentity, requireCreator: () => void) {
     if (!this.state || this.unhealthy || this.updating)
@@ -678,6 +730,7 @@ export class NativeReportRegistry {
           creator: owner.ownerId,
           reportCredential: `report1.${randomBytes(32).toString("base64url")}`,
         });
+        state.revokedAgentIds = state.revokedAgentIds?.filter((id) => id !== a.identity.agentId);
         this.rotateChildren(state, a.identity, epoch);
         for (const project of state.projectOwners ?? [])
           if (project.prime.agentId === a.identity.agentId) {
@@ -987,6 +1040,7 @@ export class NativeReportRegistry {
           creator: owner.ownerId,
           reportCredential: `report1.${randomBytes(32).toString("base64url")}`,
         });
+        state.revokedAgentIds = state.revokedAgentIds?.filter((id) => id !== a.child.agentId);
         this.rotateSubtree(state, a.child.agentId, epoch);
       },
     );
@@ -1005,6 +1059,7 @@ export class NativeReportRegistry {
           throw new Error("Exact registered report identity and epoch required");
       },
       (state) => {
+        const before = [...this.roots(state), ...state.links].map((item) => item.identity.agentId);
         if (this.roots(state).some((root) => root.identity.agentId === a.identity.agentId)) {
           if (
             state.links.some((item) => item.parent.agentId === a.identity.agentId) ||
@@ -1015,6 +1070,14 @@ export class NativeReportRegistry {
             throw new Error("Demote or transfer before revoking a prime with children/projects");
           this.removeRoot(state, a.identity.agentId);
         } else state.links = this.withoutDescendants(state, a.identity.agentId);
+        const remaining = new Set(
+          [...this.roots(state), ...state.links].map((item) => item.identity.agentId),
+        );
+        const denied = new Set(state.revokedAgentIds ?? []);
+        for (const id of before) if (!remaining.has(id)) denied.add(id);
+        if (denied.size > 10000) throw new Error("Report revocation resource limit");
+        // Owner revocation survives a live launch's next creation request and daemon restart.
+        state.revokedAgentIds = [...denied];
       },
     );
   }

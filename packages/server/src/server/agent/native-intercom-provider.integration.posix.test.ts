@@ -473,7 +473,7 @@ test("native provider integration: missing native acknowledgement remains uncert
   }
 });
 
-async function registerPrime(f: Awaited<ReturnType<typeof fixture>>) {
+async function registerPrime(f: Awaited<ReturnType<typeof fixture>>, register = true) {
   f.authority.management.register(
     "orca-organization-next",
     vi.fn(async (command, principal) => {
@@ -509,6 +509,7 @@ async function registerPrime(f: Awaited<ReturnType<typeof fixture>>) {
         settings: { report: 12, followup: 32, channel: 8, seat: 8 },
       },
     });
+    if (!register) return { scope, receipt: null };
     const receipt = await owner.invoke(randomUUID(), {
       method: "report-prime-register",
       input: {
@@ -555,9 +556,9 @@ test("native report end-to-end: actual MCP launch witness creates a scoped child
         Reflect.get(f.manager, "reportLaunches").get(f.agent.id).witness,
       ),
     ).toThrow("refused");
-    expect(() => f.manager.captureNativeReportCreation({ nativeReportOrigin: true })).toThrow(
-      "Host-issued",
-    );
+    await expect(
+      f.manager.captureNativeReportCreation({ nativeReportOrigin: true }),
+    ).rejects.toThrow("Host-issued");
     const created = await catalog.executeTool("create_agent", {
       provider: "codex",
       title: "Fixture child",
@@ -618,6 +619,61 @@ test("native report end-to-end: actual MCP launch witness creates a scoped child
       await f.manager.closeAgent(childId);
     }
 
+    await f.cleanup();
+  }
+});
+
+test("native create_agent from an ordinary parent validates placement and sends one finish notice", async () => {
+  const f = await fixture("valid", true);
+  // The owner enables report rates, but does not enroll this ordinary caller as a prime.
+  await registerPrime(f, false);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: new AgentStorage(path.join(f.directory, "agents"), createTestLogger()),
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  try {
+    await expect(
+      catalog.executeTool("create_agent", {
+        provider: "codex",
+        title: "Fixture worker",
+        initialPrompt: "fixture child work",
+        workspaceId: "/fixture/workspace",
+        notifyOnFinish: true,
+      }),
+    ).rejects.toThrow("workspaceId must be an existing workspace ID, not a folder path");
+    expect(f.manager.listAgents().map((agent) => agent.id)).toEqual([f.agent.id]);
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    const child = f.manager.getAgent(childId)!;
+    expect(child.workspaceId).toBe(f.agent.workspaceId);
+    expect(child.cwd).toBe(f.agent.cwd);
+    expect(child.pendingPermissions.size).toBe(0);
+    f.server.completeTurn({ threadId: child.persistence!.sessionId });
+    await vi.waitFor(
+      async () =>
+        expect(await f.manager.nativeReportInbox(f.nativeOrigin())).toMatchObject({
+          events: [{ kind: "ended", providerAccepted: true }],
+        }),
+      { timeout: 4000 },
+    );
+    expect(f.turnCount()).toBe(2);
+    expect(await f.manager.nativeReportInbox(f.nativeOrigin())).toMatchObject({ metadataCount: 1 });
+  } finally {
     await f.cleanup();
   }
 });
@@ -799,7 +855,7 @@ async function nativeScopedChild(f: Awaited<ReturnType<typeof fixture>>) {
     undefined,
     {
       workspaceId: randomUUID(),
-      reportCreation: f.manager.captureNativeReportCreation(f.nativeOrigin()),
+      reportCreation: await f.manager.captureNativeReportCreation(f.nativeOrigin()),
     },
   );
 }
