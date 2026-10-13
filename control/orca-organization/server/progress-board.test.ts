@@ -270,6 +270,55 @@ test("board uses lead labels and groups worker jobs across folders", async () =>
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+test("an unlabelled session in a shared workspace has one owner at most", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-shared-"));
+  const alpha = {
+    ...boardLead,
+    id: "alpha",
+    labels: { "fulcra.role": "orchestration", project: "alpha" },
+  };
+  const beta = {
+    ...boardLead,
+    id: "beta",
+    labels: { "fulcra.role": "orchestration", project: "beta" },
+  };
+  const unlabelled = { ...boardLead, id: "unlabelled", labels: {} };
+  const board = createProgressBoard(
+    { on: () => () => {} },
+    {
+      root,
+      run: async () => {
+        throw Error("offline");
+      },
+    },
+  );
+  const api = (list: PaseoAgent[]) =>
+    ({
+      agents: {
+        list: async () => ({
+          entries: list.map((agent) => ({ agent })),
+          pageInfo: { hasMore: false },
+        }),
+      },
+      workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
+    }) as unknown as PaseoApi;
+  try {
+    const shared = await board.read(api([alpha, beta, unlabelled]));
+    assert.deepEqual(
+      shared.projects.map((project) => project.name),
+      ["alpha", "beta"],
+    );
+    assert.deepEqual(
+      shared.projects.flatMap((project) => project.jobs.map((job) => job.id)).sort(),
+      ["alpha", "beta"],
+    );
+    const unique = await board.read(api([alpha, unlabelled]));
+    assert.deepEqual(unique.projects[0]!.jobs.map((job) => job.id).sort(), ["alpha", "unlabelled"]);
+  } finally {
+    board.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 test("missing ledger root and SDK errors remain visible", async () => {
   const board = createProgressBoard(
     { on: () => () => {} },

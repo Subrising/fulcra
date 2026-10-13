@@ -67,7 +67,7 @@ test("dry-run leaves data intact and apply archives the selected project and its
   const fs = await import("node:fs/promises");
   const os = await import("node:os");
   const path = await import("node:path");
-  const { execFileSync } = await import("node:child_process");
+  const { execFileSync, spawnSync } = await import("node:child_process");
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "project-cleanup-"));
   const ledger = path.join(home, "ledger");
   const projectFile = path.join(home, "projects", "projects.json");
@@ -81,13 +81,83 @@ test("dry-run leaves data intact and apply archives the selected project and its
     JSON.stringify([{ workspaceId: "w", projectId: "one", archivedAt: null }]),
   );
   const command = ["scripts/project-cleanup.mjs", "--home", home, "--ledger-dir", ledger];
+  const savedFile = path.join(home, "dry-run.json");
   try {
     const dry = execFileSync(process.execPath, [...command, "--dry-run"], { encoding: "utf8" });
-    assert.match(dry, /1 cleanup candidate/);
+    assert.equal(JSON.parse(dry).count, 1);
+    await fs.writeFile(savedFile, dry);
     assert.equal(JSON.parse(await fs.readFile(projectFile, "utf8"))[0].archivedAt, null);
-    execFileSync(process.execPath, [...command, "--apply"]);
+    const withoutList = spawnSync(process.execPath, [...command, "--apply"], { encoding: "utf8" });
+    assert.notEqual(withoutList.status, 0);
+    assert.match(withoutList.stderr, /requires --from/);
+    execFileSync(process.execPath, [...command, "--apply", "--from", savedFile]);
     assert.ok(JSON.parse(await fs.readFile(projectFile, "utf8"))[0].archivedAt);
     assert.ok(JSON.parse(await fs.readFile(workspaceFile, "utf8"))[0].archivedAt);
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("apply uses only saved entries and skips a project that gained a live session", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "project-cleanup-changed-"));
+  const ledger = path.join(home, "ledger");
+  const projectFile = path.join(home, "projects", "projects.json");
+  const workspaceFile = path.join(home, "projects", "workspaces.json");
+  const savedFile = path.join(home, "dry-run.json");
+  const second = project("two", "22222222-2222-4222-8222-222222222222");
+  const added = project("added", "33333333-3333-4333-8333-333333333333");
+  await fs.mkdir(path.join(home, "projects"));
+  await fs.mkdir(path.join(home, "agents"));
+  await fs.mkdir(ledger);
+  await fs.writeFile(projectFile, JSON.stringify([base, second]));
+  await fs.writeFile(
+    workspaceFile,
+    JSON.stringify([
+      { workspaceId: "w", projectId: "one", archivedAt: null },
+      { workspaceId: "w2", projectId: "two", archivedAt: null },
+    ]),
+  );
+  const command = ["scripts/project-cleanup.mjs", "--home", home, "--ledger-dir", ledger];
+  try {
+    const dry = execFileSync(process.execPath, [...command, "--dry-run"], { encoding: "utf8" });
+    assert.equal(JSON.parse(dry).count, 2);
+    await fs.writeFile(savedFile, dry);
+    await fs.writeFile(projectFile, JSON.stringify([base, second, added]));
+    await fs.writeFile(
+      workspaceFile,
+      JSON.stringify([
+        { workspaceId: "w", projectId: "one", archivedAt: null },
+        { workspaceId: "w2", projectId: "two", archivedAt: null },
+        { workspaceId: "w3", projectId: "added", archivedAt: null },
+      ]),
+    );
+    await fs.writeFile(
+      path.join(home, "agents", "live.json"),
+      JSON.stringify({
+        id: "live",
+        workspaceId: "w",
+        cwd: "/tasks/live",
+        lastStatus: "running",
+        labels: {},
+      }),
+    );
+    const output = execFileSync(process.execPath, [...command, "--apply", "--from", savedFile], {
+      encoding: "utf8",
+    });
+    assert.match(output, /Skipped one: guard failed/);
+    assert.match(output, /Archived 1 projects\. Skipped 1\./);
+    const projects = JSON.parse(await fs.readFile(projectFile, "utf8"));
+    assert.equal(projects.find((item) => item.projectId === "one").archivedAt, null);
+    assert.ok(projects.find((item) => item.projectId === "two").archivedAt);
+    assert.equal(projects.find((item) => item.projectId === "added").archivedAt, null);
+    const workspaces = JSON.parse(await fs.readFile(workspaceFile, "utf8"));
+    assert.equal(workspaces.find((item) => item.workspaceId === "w").archivedAt, null);
+    assert.ok(workspaces.find((item) => item.workspaceId === "w2").archivedAt);
+    assert.equal(workspaces.find((item) => item.workspaceId === "w3").archivedAt, null);
   } finally {
     await fs.rm(home, { recursive: true, force: true });
   }
