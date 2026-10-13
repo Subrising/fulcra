@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import type { PaseoApi, PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import type { BoardItem, ProgressBoard } from "../shared/progress-board";
+import { scrubFreeText } from "../shared/privacy-scrub";
 
 const COLUMNS = ["id", "item", "kind", "owner", "status", "evidence", "source"] as const;
 export function parseLedger(text: string): { items: BoardItem[]; malformed: number } {
@@ -30,21 +31,23 @@ export function parseLedger(text: string): { items: BoardItem[]; malformed: numb
       continue;
     }
     ids.add(cells[0]!);
-    items.push(Object.fromEntries(COLUMNS.map((key, i) => [key, cells[i]!])) as BoardItem);
+    items.push(
+      Object.fromEntries(
+        COLUMNS.map((key, i) => [key, scrubFreeText(cells[i]!, null)]),
+      ) as BoardItem,
+    );
   }
   if (text.trim() && !header) malformed++;
   return { items, malformed };
 }
 
 export function oneLine(text: string): string | null {
-  return (
-    text
-      .trim()
-      .split(/\r?\n/)
-      .find((line) => line.trim())
-      ?.replace(/\s+/g, " ")
-      .slice(0, 320) ?? null
-  );
+  const first = text
+    .trim()
+    .split(/\r?\n/)
+    .find((line) => line.trim())
+    ?.replace(/\s+/g, " ");
+  return first ? scrubFreeText(first, null).slice(0, 320) : null;
 }
 
 export function jobList(
@@ -57,13 +60,13 @@ export function jobList(
     .filter((a) => !a.archivedAt && !!a.workspaceId && workspaceIds.has(a.workspaceId))
     .map((a) => ({
       id: a.id,
-      title: a.title ?? "Untitled job",
+      title: scrubFreeText(a.title ?? "Untitled job", null),
       status: a.status,
-      machine,
+      machine: scrubFreeText(machine, null),
       createdAt: a.createdAt,
       updatedAt: a.updatedAt,
       permissions: a.pendingPermissions.length,
-      result: results.get(a.id) ?? (a.lastError ? oneLine(a.lastError) : null),
+      result: oneLine(results.get(a.id) ?? a.lastError ?? ""),
     }));
 }
 
@@ -380,7 +383,29 @@ export function createProgressBoard(
         branches: branchRows,
       });
     }
-    return { observedAt: new Date().toISOString(), machine, projects, warnings };
+    const scrub = (value: string) => scrubFreeText(value, null);
+    return {
+      observedAt: new Date().toISOString(),
+      machine: scrub(machine),
+      projects: projects.map((project) => ({
+        ...project,
+        id: scrub(project.id),
+        name: scrub(project.name),
+        jobs: project.jobs.map((job) => ({
+          ...job,
+          id: scrub(job.id),
+          title: scrub(job.title),
+          machine: scrub(job.machine),
+          result: job.result === null ? null : scrub(job.result),
+        })),
+        branches: project.branches.map((branch) => ({
+          ...branch,
+          workspace: scrub(branch.workspace),
+          branch: branch.branch === null ? null : scrub(branch.branch),
+        })),
+      })),
+      warnings: warnings.map(scrub),
+    };
   }
   return {
     read(paseo: PaseoApi) {

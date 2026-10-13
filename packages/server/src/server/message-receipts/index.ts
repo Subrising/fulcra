@@ -169,6 +169,7 @@ export class MessageReceipts {
   private readonly pending = new Map<string, Promise<void>>();
   private tail: Promise<unknown> = Promise.resolve();
   private initialized = false;
+  private recovered = false;
   private pendingOperations = 0;
   private unhealthy = false;
   private expiryTimer?: ReturnType<typeof setTimeout>;
@@ -246,8 +247,11 @@ export class MessageReceipts {
     this.watermark = Math.max(this.watermark, receipt.entry.at);
   }
 
-  private async initialize(requireEffect?: () => void): Promise<void> {
-    if (this.initialized) return;
+  private async initialize(requireEffect?: () => void, observeOnly = false): Promise<void> {
+    if (this.initialized) {
+      if (!observeOnly) await this.recoverQueued(requireEffect);
+      return;
+    }
     let files: string[];
     try {
       files = await readdir(this.directory);
@@ -266,15 +270,31 @@ export class MessageReceipts {
       this.recoverEvidence(file, receipt);
       if (isQueued(receipt)) {
         this.watermark = Math.max(this.watermark, receipt.admittedAt);
-        // A new native manager never reconstructs authority or replays a prior boot's prompt.
-        if (receipt.state === "queued" || receipt.state === "dispatching") {
-          receipt.state = receipt.state === "queued" ? "cancelled" : "uncertain";
-          await writeJsonFileDurable(path.join(this.directory, file), receipt, requireEffect);
-        }
         this.records.set(file.slice(0, -5), receipt);
       }
     }
     this.initialized = true;
+    if (!observeOnly) await this.recoverQueued(requireEffect);
+  }
+
+  private async recoverQueued(requireEffect?: () => void): Promise<void> {
+    if (this.recovered) return;
+    // A new native manager never reconstructs authority or replays a prior boot's prompt.
+    for (const [key, receipt] of this.records) {
+      if (receipt.state !== "queued" && receipt.state !== "dispatching") continue;
+      const state: QueuedReceipt["state"] = receipt.state === "queued" ? "cancelled" : "uncertain";
+      const recovered: QueuedReceipt = {
+        ...receipt,
+        state,
+      };
+      await writeJsonFileDurable(
+        path.join(this.directory, `${key}.json`),
+        recovered,
+        requireEffect,
+      );
+      this.records.set(key, recovered);
+    }
+    this.recovered = true;
   }
 
   private clock(): number {
@@ -371,16 +391,21 @@ export class MessageReceipts {
 
   /** Host observation only. Recovery does not reconstruct or replay native input authority. */
   async prepareArchiveObservation(): Promise<void> {
-    await this.serial(() => this.initialize()).catch(() => undefined);
+    await this.serial(() => this.initialize(undefined, true)).catch(() => undefined);
   }
 
   archivePending(agentId: string): number | null {
     if (!this.initialized || this.unhealthy || this.pendingOperations > 0) return null;
-    return [...this.records.values()].filter(
-      (receipt) =>
-        receipt.agentId === agentId &&
-        ["queued", "dispatching", "uncertain"].includes(receipt.state),
-    ).length;
+    return [...this.records.values()].reduce((count, receipt) => {
+      if (receipt.agentId !== agentId) return count;
+      const wake = ["queued", "dispatching", "uncertain"].includes(receipt.state) ? 1 : 0;
+      const unread = receipt.report
+        ? reportMembers(receipt.report).filter(
+            (member) => !receipt.report!.consumed.includes(member.id),
+          ).length
+        : 0;
+      return count + wake + unread;
+    }, 0);
   }
 
   hasPendingForAgent(agentId: string): boolean {
