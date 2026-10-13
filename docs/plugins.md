@@ -8,6 +8,17 @@ Fulcra executes `index.server.ts` in a subprocess and `index.client.tsx` in ever
 
 Distribution authors adding synchronous security policy use [trusted bundled host plugins](../packages/plugin/TRUSTED-HOST.md). These load through an immutable host startup path and cannot be installed through ordinary plugin management.
 
+## Progress board
+
+The bundled Command Centre plugin has a **Progress board** sidebar screen. It works on desktop and mobile.
+Select a host to see its jobs, ledger, workspace heads, pull requests, and CI checks.
+Ledger files come from `~/shared-vault/projects/<project>/OPEN-ITEMS.md` on that host.
+Project names or repository names must match ledger folder names. Unmatched projects show an unavailable ledger.
+Job events refresh the screen. A 60-second refresh covers ledger changes and cached GitHub checks.
+GitHub checks use the host's `gh` command. Missing access shows unavailable data.
+Each snapshot starts at most 16 branch reads. Other branch reads stay pending until a later snapshot.
+The board reads data without a model. It does not create jobs or approve permission requests.
+
 ## Install a directory source
 
 Create a typecheckable plugin project, install its development dependencies, then install it into
