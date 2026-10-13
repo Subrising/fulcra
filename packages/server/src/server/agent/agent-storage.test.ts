@@ -148,6 +148,37 @@ describe("AgentStorage", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test("finish owner and delivery state survive snapshot writes and restart", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const childId = "22222222-2222-4222-8222-222222222222";
+    const child = createManagedAgent({ id: childId });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    await expect(storage.armFinishNotice(child, childId, "native")).rejects.toThrow(
+      "Finish notice ownership changed",
+    );
+    const armed = await storage.armFinishNotice(child, parentId, "native");
+    await storage.applySnapshot(child);
+    expect(await storage.recordFinishNotice(childId, "turn-1", "finished")).toMatchObject({
+      owner: "native",
+      parentId,
+      messageId: armed.messageId,
+      status: "pending",
+      turnId: "turn-1",
+    });
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.getFinishNotice(childId)).toMatchObject({
+      owner: "native",
+      status: "pending",
+      messageId: armed.messageId,
+    });
+    await recovered.settleFinishNotice(childId, armed.messageId, "delivered", "report-up");
+    expect(await new AgentStorage(storagePath, logger).getFinishNotice(childId)).toMatchObject({
+      status: "delivered",
+      deliveredBy: "report-up",
+    });
+  });
+
   test("actual snapshot persistence omits live recorded usage across restart", async () => {
     await storage.applySnapshot(
       createManagedAgent({

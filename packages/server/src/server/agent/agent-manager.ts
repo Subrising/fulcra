@@ -176,7 +176,7 @@ import {
   normalizeAgentModelDefinition,
 } from "./agent-sdk-types.js";
 import { buildArchivedAgentRecord, type ArchivedStoredAgentRecord } from "./agent-archive.js";
-import type { StoredAgentRecord, AgentStorage } from "./agent-storage.js";
+import type { StoredAgentRecord, AgentStorage, FinishNotice } from "./agent-storage.js";
 import type { AgentOwner } from "./agent-owner.js";
 import {
   InMemoryAgentTimelineStore,
@@ -984,6 +984,28 @@ function withoutSeatLabel(options: CreateAgentOptions): CreateAgentOptions {
   return { ...options, labels };
 }
 
+function chooseObservedWake(
+  nativeOwner: FinishNotice | null,
+  ownedPermission: FinishNotice | null,
+  parentId: string,
+  index: number,
+  directWakeUsed: boolean,
+): { direct: boolean; suppressWake: boolean; wakeMessageId?: string } {
+  if (ownedPermission?.parentId === parentId)
+    return {
+      direct: false,
+      suppressWake: true,
+      wakeMessageId: `${ownedPermission.messageId}:permission:${index}`,
+    };
+  const direct = nativeOwner?.parentId === parentId;
+  if (!direct || !nativeOwner) return { direct: false, suppressWake: false };
+  return {
+    direct: true,
+    suppressWake: directWakeUsed,
+    wakeMessageId: directWakeUsed ? `${nativeOwner.messageId}:${index}` : nativeOwner.messageId,
+  };
+}
+
 export class AgentManager {
   readonly trustedPlugins: TrustedPlugins;
   private readonly reportRegistry?: NativeReportRegistry;
@@ -1000,19 +1022,18 @@ export class AgentManager {
     string,
     { remaining: number | null; resolve: (outcome: "delivered" | "refused" | "uncertain") => void }
   >();
+  private readonly nativeFinishOutcomes = new Map<string, "delivered" | "refused" | "uncertain">();
 
   waitForNativeFinishOutcome(
     childId: string,
     parentId: string,
   ): Promise<"delivered" | "refused" | "uncertain"> {
     const key = JSON.stringify([childId, parentId]);
+    const outcome = this.nativeFinishOutcomes.get(key);
+    if (outcome) return Promise.resolve(outcome);
     return new Promise((complete) => {
       this.nativeFinishWaiters.set(key, { remaining: null, resolve: complete });
     });
-  }
-
-  cancelNativeFinishOutcome(childId: string, parentId: string): void {
-    this.finishNativeWake(childId, parentId, "uncertain");
   }
 
   private finishNativeWake(
@@ -1022,8 +1043,15 @@ export class AgentManager {
   ): void {
     const key = JSON.stringify([childId, parentId]);
     const waiter = this.nativeFinishWaiters.get(key);
+    if (outcome === "refused" && waiter?.remaining !== null && waiter?.remaining !== undefined) {
+      if (--waiter.remaining > 0) return;
+    }
+    if (!this.nativeFinishOutcomes.has(key)) {
+      if (this.nativeFinishOutcomes.size >= 256)
+        this.nativeFinishOutcomes.delete(this.nativeFinishOutcomes.keys().next().value!);
+      this.nativeFinishOutcomes.set(key, outcome);
+    }
     if (!waiter) return;
-    if (outcome === "refused" && waiter.remaining !== null && --waiter.remaining > 0) return;
     this.nativeFinishWaiters.delete(key);
     waiter.resolve(outcome);
   }
@@ -1423,6 +1451,15 @@ export class AgentManager {
     return this.nativeReceipts ? this.nativeReceipts.archivePending(agentId) : 0;
   }
 
+  async nativeFinishReceiptStatus(messageId: string) {
+    return this.nativeReceipts?.reportWakeStatus(messageId) ?? "missing";
+  }
+
+  hasSubmittedFinishMessageNow(parentId: string, messageId: string): boolean {
+    if (!this.agents.has(parentId)) return false;
+    return this.timelineStore.getSubmittedUserMessage(parentId, messageId) !== null;
+  }
+
   /** Native catalog read/consume domain only. The launch witness is not an action credential. */
   async nativeReportInbox(origin: NativeReportOrigin, eventId?: string) {
     if (!this.reportRegistry || !this.nativeReceipts)
@@ -1450,6 +1487,8 @@ export class AgentManager {
   private collectNativeReport(
     batch: NativeReportBatch,
     onWake?: (outcome: "delivered" | "refused" | "cancelled" | "uncertain") => void,
+    wakeMessageId?: string,
+    suppressWake = false,
   ) {
     const receipts = this.nativeReceipts;
     const rates = this.intercomRates;
@@ -1464,6 +1503,12 @@ export class AgentManager {
         let rateCheck: (() => void) | undefined;
         const authorize = () => {
           requireNativeReportBatch(currentBatch);
+          if (wakeMessageId) {
+            const sourceId = snapshot.members[0]?.source.agentId;
+            const owned = sourceId ? this.registry?.getCached(sourceId)?.finishNotice : undefined;
+            if (owned?.messageId === wakeMessageId && owned.deliveredBy === "report-up")
+              throw new Error("Ordinary finish notice already delivered");
+          }
           const identity = this.currentReportIdentity(snapshot.parent.agentId);
           if (
             !identity ||
@@ -1505,7 +1550,7 @@ export class AgentManager {
           authorize,
           canDispatch: () => {
             authorize();
-            return supportsNativeQueuedProvider(provider);
+            return !suppressWake && supportsNativeQueuedProvider(provider);
           },
           prepareDispatch: async () => {
             rateCheck = await rates.reserve(
@@ -1539,7 +1584,9 @@ export class AgentManager {
                 finalCheck();
               });
               const iterator = this.streamAgent(snapshot.parent.agentId, notice, {
-                clientMessageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${messageId}`,
+                clientMessageId: messageId.startsWith(FINISH_NOTIFICATION_MESSAGE_PREFIX)
+                  ? messageId
+                  : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}${messageId}`,
                 [NATIVE_QUEUED_FINAL]: capability,
               });
               this.nativeReportTurns.add(snapshot.parent.agentId);
@@ -1565,6 +1612,7 @@ export class AgentManager {
         };
       },
       (agentId) => this.scheduleNativeMessages(agentId),
+      wakeMessageId,
     );
   }
 
@@ -1673,6 +1721,9 @@ export class AgentManager {
   }
 
   private failNativeFinishForChild(childId: string): void {
+    const owned = this.registry?.getCached(childId)?.finishNotice;
+    if (owned?.owner === "native" && owned.status === "pending")
+      this.finishNativeWake(childId, owned.parentId, "refused");
     for (const key of this.nativeFinishWaiters.keys()) {
       const [waitingChild, parentId] = JSON.parse(key) as [string, string];
       if (waitingChild === childId) this.finishNativeWake(childId, parentId, "refused");
@@ -1680,6 +1731,7 @@ export class AgentManager {
   }
 
   private prepareNativeFinishForBatches(childId: string, batches: NativeReportBatch[]): void {
+    const owned = this.registry?.getCached(childId)?.finishNotice;
     const counts = new Map<string, number>();
     for (const batch of batches) {
       const parentId = requireNativeReportBatch(batch).data.parent.agentId;
@@ -1688,7 +1740,10 @@ export class AgentManager {
     for (const [key, waiter] of this.nativeFinishWaiters) {
       const [waitingChild, parentId] = JSON.parse(key) as [string, string];
       if (waitingChild !== childId) continue;
-      const count = counts.get(parentId) ?? 0;
+      const count =
+        owned?.owner === "native" && owned.status === "pending" && owned.parentId === parentId
+          ? Math.min(counts.get(parentId) ?? 0, 1)
+          : (counts.get(parentId) ?? 0);
       if (count) waiter.remaining = count;
       else this.finishNativeWake(childId, parentId, "refused");
     }
@@ -1699,6 +1754,8 @@ export class AgentManager {
     kind: "ended" | "needs-you" | "blocked" | "usage-limit",
     batch: NativeReportBatch,
     finish: boolean,
+    wakeMessageId?: string,
+    suppressWake = false,
   ): void {
     const report = requireNativeReportBatch(batch).data;
     const parentId = report.parent.agentId;
@@ -1709,6 +1766,8 @@ export class AgentManager {
         ? (outcome) =>
             this.finishNativeWake(childId, parentId, outcome === "cancelled" ? "refused" : outcome)
         : undefined,
+      wakeMessageId,
+      suppressWake,
     ).catch(async () => {
       this.logger.warn({ kind }, "Native report metadata admission refused");
       if (!finish) return;
@@ -1717,6 +1776,47 @@ export class AgentManager {
         : "refused";
       this.finishNativeWake(childId, parentId, outcome);
     });
+  }
+
+  private dispatchObservedReportBatches(
+    agentId: string,
+    kind: "ended" | "needs-you" | "blocked" | "usage-limit",
+    lifecycleId: string,
+    finish: boolean,
+    batches: NativeReportBatch[],
+  ): void {
+    if (finish) this.prepareNativeFinishForBatches(agentId, batches);
+    const owned = this.registry?.getCached(agentId)?.finishNotice;
+    const nativeOwner =
+      finish &&
+      owned?.owner === "native" &&
+      owned.status === "pending" &&
+      owned.turnId === lifecycleId
+        ? owned
+        : null;
+    const ownedPermission = kind === "needs-you" ? (owned ?? null) : null;
+    let directWakeUsed = false;
+    for (const [index, batch] of batches.entries()) {
+      const parentId = requireNativeReportBatch(batch).data.parent.agentId;
+      const { direct, suppressWake, wakeMessageId } = chooseObservedWake(
+        nativeOwner,
+        ownedPermission,
+        parentId,
+        index,
+        directWakeUsed,
+      );
+      if (direct) directWakeUsed = true;
+      this.collectObservedNativeReport(
+        agentId,
+        kind,
+        batch,
+        finish && !suppressWake,
+        wakeMessageId,
+        suppressWake,
+      );
+    }
+    if (nativeOwner && !directWakeUsed)
+      this.finishNativeWake(agentId, nativeOwner.parentId, "refused");
   }
 
   private reportObservedLifecycle(
@@ -1743,8 +1843,7 @@ export class AgentManager {
         lifecycleId,
         Date.now(),
       );
-      if (finish) this.prepareNativeFinishForBatches(agent.id, batches);
-      for (const batch of batches) this.collectObservedNativeReport(agent.id, kind, batch, finish);
+      this.dispatchObservedReportBatches(agent.id, kind, lifecycleId, finish, batches);
     } catch {
       // Unknown/legacy/root sessions do not infer report rights from labels or ownership.
       if (finish) this.failNativeFinishForChild(agent.id);
@@ -3827,6 +3926,9 @@ export class AgentManager {
             commandPayload("close"),
             operationHandle,
           );
+          const owned = await this.registry?.getFinishNotice(agentId);
+          if (owned?.status === "armed")
+            await this.registry?.recordFinishNotice(agentId, `closed:${agentId}`, "closed");
           await this.nativeReceipts?.closeAgent(agentId);
           if (this.agents.has(agentId))
             await this.closeAgentRuntime(
@@ -3852,7 +3954,16 @@ export class AgentManager {
                 if (!this.acceptingAgentRegistrations || this.agents.has(agentId))
                   throw new Error("Retired native identity replaced or unavailable");
               });
-              for (const batch of batches) await this.collectNativeReport(batch);
+              for (const [index, batch] of batches.entries()) {
+                const parentId = requireNativeReportBatch(batch).data.parent.agentId;
+                const ownedClose = owned?.parentId === parentId;
+                await this.collectNativeReport(
+                  batch,
+                  undefined,
+                  ownedClose ? `${owned.messageId}:closed:${index}` : undefined,
+                  ownedClose,
+                );
+              }
             } catch {
               this.logger.warn("Native final report unavailable after close");
             }
@@ -7520,6 +7631,16 @@ export class AgentManager {
     );
   }
 
+  private async recordOwnedFinish(
+    agent: ActiveManagedAgent,
+    turnId: string | undefined,
+    reason: "finished" | "errored",
+    foreground: boolean,
+  ): Promise<void> {
+    if (!foreground || !turnId || !this.registry) return;
+    await this.registry.recordFinishNotice(agent.id, turnId, reason);
+  }
+
   private dispatchStreamEventByType(params: {
     agent: ActiveManagedAgent;
     event: AgentStreamEvent;
@@ -7576,24 +7697,30 @@ export class AgentManager {
       case "timeline":
         return this.onStreamTimelineEvent({ agent, event, options, flags });
       case "turn_completed":
-        this.reportObservedLifecycle(agent, "ended", eventTurnId, isForegroundEvent);
-        this.onStreamTurnCompleted({
-          agent,
-          event,
-          eventTurnId,
-          isForegroundEvent,
-          terminalDisposition,
-        });
-        return undefined;
+        return this.recordOwnedFinish(agent, eventTurnId, "finished", isForegroundEvent).then(
+          () => {
+            this.reportObservedLifecycle(agent, "ended", eventTurnId, isForegroundEvent);
+            this.onStreamTurnCompleted({
+              agent,
+              event,
+              eventTurnId,
+              isForegroundEvent,
+              terminalDisposition,
+            });
+            return undefined;
+          },
+        );
       case "turn_failed":
-        this.reportObservedLifecycle(agent, "blocked", eventTurnId, isForegroundEvent);
-        return this.onStreamTurnFailed({
-          agent,
-          event,
-          eventTurnId,
-          isForegroundEvent,
-          terminalDisposition,
-          options,
+        return this.recordOwnedFinish(agent, eventTurnId, "errored", isForegroundEvent).then(() => {
+          this.reportObservedLifecycle(agent, "blocked", eventTurnId, isForegroundEvent);
+          return this.onStreamTurnFailed({
+            agent,
+            event,
+            eventTurnId,
+            isForegroundEvent,
+            terminalDisposition,
+            options,
+          });
         });
       case "turn_canceled":
         this.onStreamTurnCanceled({

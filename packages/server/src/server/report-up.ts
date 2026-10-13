@@ -26,10 +26,11 @@ import {
   REPORTS_TO_OWNER,
   ROLE_REF_PREFIX,
   SEAT_LABEL,
+  getParentAgentIdFromLabels,
 } from "@getpaseo/protocol/agent-labels";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
-import type { AgentStorage } from "./agent/agent-storage.js";
+import type { AgentStorage, FinishNotice } from "./agent/agent-storage.js";
 import {
   FINISH_NOTIFICATION_MESSAGE_PREFIX,
   formatSystemNotificationPrompt,
@@ -51,7 +52,6 @@ import {
   isNudgeOwnerSkipped,
   type LedgerRow,
 } from "./ledger-items.js";
-import { lastAgentMessageAt } from "./agent-message-log.js";
 import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
@@ -80,7 +80,6 @@ const {
   titleOf,
   formatReportUpNotice,
   reportUpSwitches,
-  quietReportReason,
 } = loadAgentPolicy("report-notices");
 export {
   REPORT_UP_SNIPPET_CHARS,
@@ -137,7 +136,14 @@ export interface ReportUpDeps {
   readLedger?: () => readonly LedgerRow[] | Promise<readonly LedgerRow[]>;
 }
 
-type NoticeKind = "report-up" | "idle-nudge" | "finished-turn" | "permission" | "limit";
+type NoticeKind =
+  | "report-up"
+  | "idle-nudge"
+  | "finished-turn"
+  | "owned-finish"
+  | "permission"
+  | "owned-permission"
+  | "limit";
 interface HeldReport {
   prompt: string;
   kind: NoticeKind;
@@ -148,6 +154,8 @@ class ReportUpDisabledError extends Error {
     super("Report-up was turned off");
   }
 }
+
+class OwnedFinishAlreadyDelivered extends Error {}
 
 interface PersistedState {
   v: 1;
@@ -197,6 +205,7 @@ export class ReportUpService {
   private stopped = false;
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly finishOwners = new Map<string, boolean>();
+  private readonly processingOwned = new Set<string>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
   private archiveStateKnown = true;
@@ -360,11 +369,23 @@ export class ReportUpService {
 
   private onTurnEnd(input: ReportTurnEnd): void {
     if (this.stopped) return;
-    const { agentId, failed, fromNotice, startedAt, failure, lastAssistant } = input;
+    const { agentId, failed } = input;
     if (!failed)
       void this.nudgeIdleLead(agentId).catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Idle-lead nudge failed"),
       );
+    void this.handleOwnedFinish(input)
+      .then((handled) => {
+        if (!handled) this.onUnownedTurnEnd(input);
+        return undefined;
+      })
+      .catch((err: unknown) =>
+        this.deps.logger.warn({ err, agentId }, "Owned finish notice failed"),
+      );
+  }
+
+  private onUnownedTurnEnd(input: ReportTurnEnd): void {
+    const { agentId, failed, fromNotice, startedAt, failure, lastAssistant } = input;
     const armed = this.finishOwners.get(agentId) ?? this.hasFinishOwner(agentId);
     this.finishOwners.delete(agentId);
     if (fromNotice || armed) {
@@ -383,15 +404,134 @@ export class ReportUpService {
     );
   }
 
+  private async handleOwnedFinish(input: ReportTurnEnd): Promise<boolean> {
+    const storage = this.deps.agentStorage;
+    if (typeof storage.getFinishNotice !== "function") return false;
+    let notice = await storage.getFinishNotice(input.agentId);
+    if (!notice) return false;
+    this.finishOwners.delete(input.agentId);
+    if (notice.status === "armed" && input.startedAt !== undefined && !input.fromNotice)
+      notice = await storage.recordFinishNotice(
+        input.agentId,
+        `${input.agentId}:${input.startedAt}`,
+        input.failed ? "errored" : "finished",
+      );
+    if (notice?.status === "pending")
+      await this.deliverOwnedFinish(input.agentId, notice, false, input.lastAssistant);
+    return true;
+  }
+
+  /** Reconcile a saved finish after native queue recovery has settled its old boot. */
+  async recoverOwnedFinishes(): Promise<void> {
+    await Promise.all(
+      (await this.deps.agentStorage.list()).map(async (record) => {
+        const notice = record.finishNotice;
+        if (notice?.status === "pending") await this.deliverOwnedFinish(record.id, notice, true);
+      }),
+    );
+  }
+
+  async onAgentClosed(childId: string): Promise<void> {
+    let notice = await this.deps.agentStorage.getFinishNotice(childId);
+    if (notice?.status === "armed")
+      notice = await this.deps.agentStorage.recordFinishNotice(
+        childId,
+        `closed:${childId}`,
+        "closed",
+      );
+    if (notice?.status === "pending" && notice.reason === "closed")
+      await this.deliverOwnedFinish(childId, notice, false);
+  }
+
+  private async deliverOwnedFinish(
+    childId: string,
+    notice: FinishNotice,
+    recovery: boolean,
+    observedLast?: string | null,
+  ): Promise<void> {
+    if (this.stopped || this.processingOwned.has(childId)) return;
+    this.processingOwned.add(childId);
+    try {
+      if (notice.owner === "native" && notice.reason !== "closed") {
+        const outcome = recovery
+          ? await this.deps.agentManager
+              .nativeFinishReceiptStatus(notice.messageId)
+              .catch((err) => {
+                this.deps.logger.warn({ err, childId }, "Native finish receipt could not be read");
+                return "missing" as const;
+              })
+          : await this.deps.agentManager.waitForNativeFinishOutcome(childId, notice.parentId);
+        if (outcome === "delivered") {
+          await this.deps.agentStorage.settleFinishNotice(
+            childId,
+            notice.messageId,
+            "delivered",
+            "native",
+          );
+          return;
+        }
+      }
+      if (this.stopped) return;
+      const worker = await this.deps.agentStorage.get(childId);
+      const parent = await this.deps.agentStorage.get(notice.parentId);
+      if (
+        !worker ||
+        !parent ||
+        worker.archivedAt ||
+        parent.archivedAt ||
+        getParentAgentIdFromLabels(worker.labels) !== notice.parentId ||
+        !(await this.reportingLineAllows(childId, notice.parentId))
+      )
+        return;
+      const lastMessage =
+        observedLast === undefined
+          ? await this.deps.agentManager.getLastAssistantMessage(childId).catch(() => null)
+          : observedLast;
+      const body =
+        notice.reason === "closed"
+          ? `Agent ${childId} (${titleOf(worker)}) was closed.`
+          : formatReportUpNotice({
+              worker,
+              failed: notice.reason === "errored",
+              lastMessage,
+            });
+      const prompt = formatSystemNotificationPrompt(body);
+      const send = async () => {
+        if (this.deps.deliver) await this.deps.deliver(notice.parentId, prompt);
+        else
+          await this.send(
+            notice.parentId,
+            prompt,
+            "owned-finish",
+            undefined,
+            undefined,
+            notice.messageId,
+          );
+      };
+      try {
+        if (this.deps.deliver) await send();
+        else
+          await heldSendsFor(this.deps.agentManager, this.deps.logger).holdAndWait(
+            notice.parentId,
+            send,
+          );
+      } catch (error) {
+        if (!(error instanceof OwnedFinishAlreadyDelivered)) throw error;
+      }
+      await this.deps.agentStorage.settleFinishNotice(
+        childId,
+        notice.messageId,
+        "delivered",
+        "report-up",
+      );
+    } finally {
+      this.processingOwned.delete(childId);
+    }
+  }
+
   /** The lead chat on this computer, or null with the reason. */
   private leadOf(worker: LineAgent): Promise<{ id: string } | { skip: string }> {
     return leadChatOf(this.store, worker, this.deps.localServerId);
-  }
-
-  private async isLeadReportingToMain(reporterId: string, target: LineAgent): Promise<boolean> {
-    return (
-      target.labels?.[SEAT_LABEL] === MAIN_ASSISTANT_ROLE && (await this.hasWorkers(reporterId))
-    );
   }
 
   /** Why a finished-turn notice is not needed, or null. A failed turn is always sent. */
@@ -411,23 +551,6 @@ export class ReportUpService {
     return !this.stopped && (this.deps.isOtherEnabled ? this.deps.isOtherEnabled() : true);
   }
 
-  private async quietReason(input: {
-    workerId: string;
-    leadId: string;
-    leadAgent: LineAgent;
-    failed: boolean;
-    startedAt?: number;
-  }): Promise<string | null> {
-    if (input.failed) return null;
-    return quietReportReason({
-      failed: input.failed,
-      leadToMain: await this.isLeadReportingToMain(input.workerId, input.leadAgent),
-      sentAt: lastAgentMessageAt(input.workerId, input.leadId),
-      startedAt: input.startedAt,
-    });
-  }
-
-  /** Whether any chat on this computer reports to this chat, which makes it a lead. */
   private async hasWorkers(leadId: string): Promise<boolean> {
     for (const chat of await this.store.list()) {
       if (chat.id === leadId || chat.archivedAt || !reportsTo(chat)) continue;
@@ -435,6 +558,17 @@ export class ReportUpService {
       if ("id" in owner && owner.id === leadId) return true;
     }
     return false;
+  }
+
+  private async leadToMainQuietReason(
+    workerId: string,
+    lead: LineAgent,
+    failed: boolean,
+  ): Promise<string | null> {
+    if (failed || lead.labels?.[SEAT_LABEL] !== MAIN_ASSISTANT_ROLE) return null;
+    return (await this.hasWorkers(workerId))
+      ? "a lead's finished turn is not sent to the main assistant"
+      : null;
   }
 
   /** The chats on this computer that report to the lead and are idle now. */
@@ -604,7 +738,8 @@ export class ReportUpService {
 
   /** Tells the lead once that a chat is waiting for permission. Nothing is allowed or denied here. */
   private async notifyPermission(workerId: string, request: PermissionRequest): Promise<void> {
-    if (!this.otherEnabled()) return;
+    const owned = await this.deps.agentStorage.getFinishNotice?.(workerId);
+    if (!owned && !this.otherEnabled()) return;
     const live = this.deps.agentManager.getAgent(workerId);
     const worker = await this.store.get(workerId);
     if (!worker || worker.archivedAt || live?.internal) return;
@@ -627,7 +762,7 @@ export class ReportUpService {
       this.deps.localServerId,
     );
     if (!decision?.allowed) return;
-    await this.toLead(workerId, lead.id, prompt, "permission");
+    await this.toLead(workerId, lead.id, prompt, owned ? "owned-permission" : "permission");
   }
 
   private now(): number {
@@ -801,21 +936,13 @@ export class ReportUpService {
       return skip("ended on a usage limit");
     // OFF BY DEFAULT: the limit notice above stays on; "finished a turn" and "ended with an error" notices need the fallback.
     if (!this.deps.isEnabled()) return skip("turned off");
-    if (await this.remoteFinished(worker, failed, startedAt, observedLast)) return;
+    if (await this.remoteFinished(worker, failed, observedLast)) return;
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return skip(lead.skip);
     const leadAgent = await this.store.get(lead.id);
     if (!leadAgent || leadAgent.archivedAt) return skip("lead not here or archived");
     if (!(await this.reportingLineAllows(workerId, lead.id))) return;
-    if (this.suppressFinished(lead.id, workerId, failed, startedAt))
-      return skip("routine event recorded in the lead digest");
-    const quiet = await this.quietReason({
-      workerId,
-      leadId: lead.id,
-      leadAgent,
-      failed,
-      startedAt,
-    });
+    const quiet = await this.leadToMainQuietReason(workerId, leadAgent, failed);
     if (quiet) return skip(quiet);
     const lastMessage =
       observedLast === undefined
@@ -837,35 +964,13 @@ export class ReportUpService {
     });
   }
 
-  private suppressFinished(
-    leadId: string,
-    workerId: string,
-    failed: boolean,
-    startedAt?: number,
-  ): boolean {
-    if (failed || startedAt === undefined) return false;
-    const dispatcher = leadEventsFor(this.deps.agentManager);
-    return (
-      dispatcher?.suppress(leadId, {
-        eventId: `${workerId}:${startedAt}`,
-        sourceId: workerId,
-        kind: "finished_turn",
-        startedAt,
-        reportedAt: dispatcher.reportAt(leadId, workerId),
-      }) ?? false
-    );
-  }
-
   private async remoteFinished(
     worker: LineAgent,
     failed: boolean,
-    startedAt?: number,
     observedLast?: string | null,
   ): Promise<boolean> {
     const line = reportsTo(worker);
     if (line !== "role:main-assistant" || !this.deps.remoteNotice) return false;
-    const sentAt = lastAgentMessageAt(worker.id, line);
-    if (!failed && startedAt !== undefined && sentAt !== null && sentAt >= startedAt) return true;
     const lastMessage =
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
@@ -991,6 +1096,7 @@ export class ReportUpService {
 
   private noticeEnabled(kind: NoticeKind): boolean {
     if (this.stopped) return false;
+    if (kind === "owned-finish" || kind === "owned-permission") return true;
     if (kind === "idle-nudge") return this.nudgeEnabled();
     if (kind === "finished-turn") return this.deps.isEnabled();
     return this.otherEnabled();
@@ -1002,17 +1108,22 @@ export class ReportUpService {
     kind: NoticeKind,
     currentNudge?: () => boolean,
     captureHandoff?: (handle: object) => void,
+    ownedMessageId?: string,
   ): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
       if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
+      if (ownedMessageId && agentManager.hasSubmittedFinishMessageNow(leadId, ownedMessageId))
+        throw new OwnedFinishAlreadyDelivered();
       if (currentNudge && !currentNudge()) throw new Error("Idle nudge generation expired");
     };
     const causes = {
       "idle-nudge": "nudge",
       permission: "permission",
+      "owned-permission": "permission",
       limit: "limit",
       "finished-turn": "finished_turn",
+      "owned-finish": "finished_turn",
       "report-up": "queued_delivery",
     } as const;
     const cause = causes[kind];
@@ -1026,9 +1137,10 @@ export class ReportUpService {
           agentId: leadId,
           prompt,
           messageId:
-            kind === "idle-nudge"
+            ownedMessageId ??
+            (kind === "idle-nudge"
               ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
-              : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`,
+              : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`),
           runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
           activeTurnBehavior: "steer",
           steerOnly: true,
@@ -1050,7 +1162,7 @@ export function startReportUp(input: {
   daemonConfigStore: DaemonConfigStore;
   localServerId: string | null;
   logger: Logger;
-}): () => void {
+}): (() => void) & { recover: () => Promise<void> } {
   let offEvents: (() => void) | undefined;
   if (input.paseoHome) {
     try {
@@ -1086,6 +1198,12 @@ export function startReportUp(input: {
   const offHooks = input.hooks ? service.observeNative(input.hooks) : undefined;
   const offStream = input.agentManager.subscribe(
     (event) => {
+      if (event.type === "agent_state" && event.agent.lifecycle === "closed")
+        void service
+          .onAgentClosed(event.agent.id)
+          .catch((err: unknown) =>
+            input.logger.warn({ err, agentId: event.agent.id }, "Close notice failed"),
+          );
       if (event.type === "agent_state" && event.agent.archivedAt) {
         const dispatcher = leadEventsFor(input.agentManager);
         if (dispatcher)
@@ -1117,11 +1235,12 @@ export function startReportUp(input: {
     },
     { replayState: false },
   );
-  return () => {
+  const stop = () => {
     offArchive();
     offHooks?.();
     offEvents?.();
     offStream();
     service.stop();
   };
+  return Object.assign(stop, { recover: () => service.recoverOwnedFinishes() });
 }

@@ -15,13 +15,10 @@ import type { AgentAttachment, FirstAgentContext, GitSetupOptions } from "../../
 import type { AgentManager, CreateAgentOptions, ManagedAgent } from "../agent-manager.js";
 import type { AgentPromptInput, AgentRunOptions, AgentSessionConfig } from "../agent-sdk-types.js";
 import type { AgentStorage } from "../agent-storage.js";
+import type { FinishNotice } from "../agent-storage.js";
 import type { AgentOwner } from "../agent-owner.js";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
-import {
-  disarmFinishNotification,
-  setupFinishNotification,
-  startCreatedAgentInitialPrompt,
-} from "../agent-prompt.js";
+import { startCreatedAgentInitialPrompt } from "../agent-prompt.js";
 import { resolveCreateAgentTitles } from "../create-agent-title.js";
 import { buildAgentPrompt } from "../prompt-attachments.js";
 import { normalizeClientMessageId, resolveClientMessageId } from "../../client-message-id.js";
@@ -213,33 +210,21 @@ export async function createAgentCommand(
   if (input.kind === "mcp") {
     input.onCreated?.({ agentId: snapshot.id, createdWorktree: resolved.createdWorktree ?? null });
   }
-  const notifyCaller =
-    input.kind === "mcp" &&
-    input.notifyOnFinish &&
-    input.callerAgentId &&
-    resolved.prompt !== undefined;
-  if (notifyCaller) {
-    setupFinishNotification({
-      agentManager: dependencies.agentManager,
-      agentStorage: dependencies.agentStorage,
-      childAgentId: snapshot.id,
-      callerAgentId: input.callerAgentId!,
-      requireParentOwnership: true,
-      forNextTurn: true,
-      nativeFallback: Boolean(input.reportCreation),
-      logger: dependencies.logger,
-    });
-  }
+  const notice = await armCreatedFinishNotice(dependencies, input, resolved, snapshot);
   if (resolved.prompt !== undefined) {
     const sendResult = await sendInitialPrompt(dependencies, resolved, snapshot);
     initialPromptStarted = sendResult.started;
     liveSnapshot = sendResult.liveSnapshot;
     initialPromptError = sendResult.error ?? null;
   }
-  if (notifyCaller && !initialPromptStarted) {
-    disarmFinishNotification(dependencies.agentManager, snapshot.id, input.callerAgentId!);
-    if (input.reportCreation)
-      dependencies.agentManager.cancelNativeFinishOutcome(snapshot.id, input.callerAgentId!);
+  if (notice && !initialPromptStarted) {
+    const current = await dependencies.agentStorage.getFinishNotice(snapshot.id);
+    if (current?.status === "armed")
+      await dependencies.agentStorage.settleFinishNotice(
+        snapshot.id,
+        notice.messageId,
+        "cancelled",
+      );
   }
 
   return {
@@ -250,6 +235,27 @@ export async function createAgentCommand(
     initialPromptError,
     ...(resolved.createdWorktree ? { createdWorktree: resolved.createdWorktree } : {}),
   };
+}
+
+async function armCreatedFinishNotice(
+  dependencies: CreateAgentCommandDependencies,
+  input: CreateAgentCommandInput,
+  resolved: ResolvedCreateAgent,
+  snapshot: ManagedAgent,
+): Promise<FinishNotice | null> {
+  if (
+    input.kind !== "mcp" ||
+    !input.notifyOnFinish ||
+    !input.callerAgentId ||
+    input.detached ||
+    !resolved.prompt
+  )
+    return null;
+  return dependencies.agentStorage.armFinishNotice(
+    snapshot,
+    input.callerAgentId,
+    input.reportCreation ? "native" : "report-up",
+  );
 }
 
 async function resolveSessionCreateAgent(

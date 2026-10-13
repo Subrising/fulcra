@@ -1555,7 +1555,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         requestedBackground = resolvedArgs.parsedArgs.background;
         notifyOnFinish = resolvedArgs.parsedArgs.notifyOnFinish ?? false;
       }
-      const reportCreation = notifyOnFinish ? await captureReportCreation() : undefined;
+      const reportCreation = await captureReportCreationForTool(
+        notifyOnFinish,
+        resolvedArgs.detached,
+      );
       const selectedProvider = parsedArgs.provider.includes("/")
         ? resolveRequiredProviderModel(parsedArgs.provider).provider
         : parsedArgs.provider.trim();
@@ -1678,6 +1681,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     return options.nativeReportOrigin
       ? agentManager.captureNativeReportCreationForFinish(options.nativeReportOrigin)
       : undefined;
+  }
+
+  function captureReportCreationForTool(notifyOnFinish: boolean, detached: boolean) {
+    if (!notifyOnFinish || detached) return undefined;
+    return captureReportCreation();
   }
 
   async function resolveCreateAgentToolArgs(args: unknown): Promise<ResolvedCreateAgentToolArgs> {

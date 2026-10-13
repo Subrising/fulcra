@@ -555,8 +555,6 @@ export interface SetupFinishNotificationParams {
   requireParentOwnership?: boolean;
   /** Arm before dispatch without reporting the previous turn's current outcome. */
   forNextTurn?: boolean;
-  /** Wait for a known native wake result before using the ordinary notice route. */
-  nativeFallback?: boolean;
   logger: Logger;
 }
 
@@ -652,20 +650,13 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     logger,
   } = params;
   const finishEventId = `${childAgentId}:${randomUUID()}`;
-  const nativeOutcome = params.nativeFallback
-    ? agentManager.waitForNativeFinishOutcome(childAgentId, callerAgentId)
-    : undefined;
-  let startedAt = Date.now();
   let hasSeenRunning = agentManager.getAgent(childAgentId)?.lifecycle === "running";
   let waitingForTurn = params.forNextTurn === true;
   let stopped = false;
   let superseded = false;
   const checkIdentity = agentManager.captureFinishNotificationCheck(childAgentId, callerAgentId);
   const checkCurrent = () => {
-    if (
-      superseded ||
-      (!nativeOutcome && agentManager.nativeReportOwnsFinish(childAgentId, callerAgentId))
-    )
+    if (superseded || agentManager.nativeReportOwnsFinish(childAgentId, callerAgentId))
       throw new Error("Finish notification superseded by current wake ownership");
     checkIdentity();
   };
@@ -682,7 +673,7 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     stop();
   };
   armedByManager.set(armedKey, cancel);
-  if (!nativeOutcome && agentManager.nativeReportOwnsFinish(childAgentId, callerAgentId)) {
+  if (agentManager.nativeReportOwnsFinish(childAgentId, callerAgentId)) {
     cancel();
     armedByManager.delete(armedKey);
     return;
@@ -698,12 +689,6 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
     reason: FinishNotificationReason,
     permissionRequest?: AgentPermissionRequest,
   ): Promise<void> {
-    if (nativeOutcome) {
-      if (reason !== "finished" && reason !== "errored") return;
-      const outcome = await nativeOutcome;
-      if (outcome === "delivered") return;
-      if (outcome === "uncertain") throw new Error("Native finish wake outcome unknown");
-    }
     checkCurrent();
     const callerRecord = await agentStorage.get(callerAgentId);
     checkCurrent();
@@ -736,17 +721,6 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         agentManager.trustedPlugins.daemon(async () => {
           checkCurrent();
           const dispatcher = leadEventsFor(agentManager);
-          if (
-            reason === "finished" &&
-            dispatcher?.suppress(callerAgentId, {
-              eventId: finishEventId,
-              sourceId: childAgentId,
-              kind: "finished_turn",
-              startedAt,
-              reportedAt: dispatcher.reportAt(callerAgentId, childAgentId),
-            })
-          )
-            return;
           const finalCheck = createFinalInputCheck(checkCurrent);
           const dispatch: SendPromptToAgentParams = {
             agentManager,
@@ -810,7 +784,6 @@ export function setupFinishNotification(params: SetupFinishNotificationParams): 
         if (event.agent.lifecycle === "running") {
           waitingForTurn = false;
           if (event.agent.pendingPermissions.size === 0) {
-            if (!hasSeenRunning) startedAt = Date.now();
             hasSeenRunning = true;
           }
           return;

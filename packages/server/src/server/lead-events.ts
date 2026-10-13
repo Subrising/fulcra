@@ -175,9 +175,10 @@ export class LeadEventDispatcher {
   /** False means keep normal guarded delivery. Unknown and critical events always reach it. */
   suppress(leadId: string, event: DispatchEvent): boolean {
     if (!(this.deps.enabled?.() ?? eventDispatcherEnabled(this.deps.home))) return false;
+    if (event.kind === "finished_turn") return false;
     if (event.failed || ["permission", "limit", "failed_delivery"].includes(event.kind))
       return false;
-    if (!["finished_turn", "delivery_receipt", "archive_done"].includes(event.kind)) return false;
+    if (!["delivery_receipt", "archive_done"].includes(event.kind)) return false;
     const previous = structuredClone(this.state);
     try {
       const session = this.session(leadId);
@@ -188,12 +189,6 @@ export class LeadEventDispatcher {
       let reason: z.infer<typeof digestSchema>["reason"] | undefined;
       if (event.kind === "delivery_receipt") reason = "delivery_receipt";
       else if (event.kind === "archive_done") reason = "archive_done";
-      else if (
-        event.startedAt !== undefined &&
-        event.reportedAt !== undefined &&
-        event.reportedAt >= event.startedAt
-      )
-        reason = "already_reported";
       else if (session.seen.includes(key)) reason = "duplicate";
       if (reason)
         session.digest.push(
