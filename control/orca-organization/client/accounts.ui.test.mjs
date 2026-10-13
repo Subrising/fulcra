@@ -602,7 +602,7 @@ test("integration: switch -> the controller takeover is called with the session,
   );
   assert.deepEqual(gone, {
     ok: false,
-    message: "The session could not continue on Personal. It stays on Work.",
+    message: "The session could not switch to Personal. It stays on Work.",
   });
   const ipcError = await asOwner(() =>
     createAccountHandlers({
@@ -615,7 +615,7 @@ test("integration: switch -> the controller takeover is called with the session,
   );
   assert.deepEqual(ipcError, {
     ok: false,
-    message: "The session could not continue on Personal. It stays on Work.",
+    message: "The session could not switch to Personal. It stays on Work.",
   });
   assert.equal(pool.accountOf(pool.readAccounts(root), "agent-1").id, a.id);
 });
@@ -1099,6 +1099,7 @@ test("Settings Accounts route retains registered host, saves defaults and reopen
   const writes = [],
     usageReads = [];
   const dispose = contribute({
+    addScreen: () => () => {},
     addSurface: (_id, component) => {
       registered = component;
       return () => {};
