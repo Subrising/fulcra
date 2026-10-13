@@ -1131,7 +1131,11 @@ function probeWebSocketConnection(
 
 test("agent MCP creates an ordinary caller's worker and returns a clear workspace path error", async () => {
   const launches: AgentSessionConfig[] = [];
-  const base = createTestAgentClient("codex", { supportsMcpServers: true });
+  const prompts: unknown[] = [];
+  const base = createTestAgentClient("codex", {
+    supportsMcpServers: true,
+    onStartTurn: (prompt) => prompts.push(prompt),
+  });
   const provider = Object.create(base) as AgentClient;
   provider.createSession = async (...args) => {
     launches.push(args[0]);
@@ -1191,7 +1195,10 @@ test("agent MCP creates an ordinary caller's worker and returns a clear workspac
     expect(child.workspaceId).toBe(parent.workspaceId);
     expect(child.cwd).toBe(parent.cwd);
     expect(child.pendingPermissions.size).toBe(0);
-    expect(daemon.daemon.agentManager.nativeReportOwnsFinish(childId, parent.id)).toBe(true);
+    expect(daemon.daemon.agentManager.nativeReportOwnsFinish(childId, parent.id)).toBe(false);
+    await vi.waitFor(() =>
+      expect(prompts.filter((prompt) => JSON.stringify(prompt).includes(childId))).toHaveLength(1),
+    );
   } finally {
     await mcp.close();
     await client.close();

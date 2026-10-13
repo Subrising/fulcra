@@ -267,6 +267,7 @@ export const PersistedConfigSchema = z
         notificationMode: z.enum(["all", "primes", "off"]).optional(),
         enableTerminalAgentHooks: z.boolean().optional(),
         reportUpOnTurnEnd: z.boolean().optional(),
+        nativeFinishNotices: z.boolean().optional(),
         eventDispatcherEnabled: z.boolean().optional(),
         idleLeadNudge: z.boolean().optional(),
         idleLeadNudgeSkipOwners: z.array(z.string()).optional(),

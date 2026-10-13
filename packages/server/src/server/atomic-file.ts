@@ -45,12 +45,25 @@ export async function writeJsonQueueFile(filePath: string, value: unknown): Prom
 }
 
 /** Commit an admission/attempt before acknowledging it or invoking a provider. */
+export class AtomicWritePreCommitGuardError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
 export async function writeJsonFileDurable(
   filePath: string,
   value: unknown,
   requireEffect?: () => void,
 ): Promise<void> {
-  requireEffect?.();
+  const checkBeforeCommit = () => {
+    try {
+      requireEffect?.();
+    } catch (error) {
+      throw new AtomicWritePreCommitGuardError(error);
+    }
+  };
+  checkBeforeCommit();
   // Node cannot flush directory entries on Windows; never acknowledge native authority as durable there.
   if (process.platform === "win32") {
     throw Object.assign(new Error("Native durable writes unavailable on Windows"), {
@@ -61,17 +74,17 @@ export async function writeJsonFileDurable(
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   const temporary = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
   try {
-    requireEffect?.();
+    checkBeforeCommit();
     const file = await fs.open(temporary, "wx", 0o600);
     try {
-      requireEffect?.();
+      checkBeforeCommit();
       await file.writeFile(JSON.stringify(value));
-      requireEffect?.();
+      checkBeforeCommit();
       await file.sync();
     } finally {
       await file.close();
     }
-    requireEffect?.();
+    checkBeforeCommit();
     await fs.rename(temporary, filePath);
     const parent = await fs.open(directory, "r");
     try {

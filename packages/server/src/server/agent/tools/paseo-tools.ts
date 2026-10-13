@@ -1555,7 +1555,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         requestedBackground = resolvedArgs.parsedArgs.background;
         notifyOnFinish = resolvedArgs.parsedArgs.notifyOnFinish ?? false;
       }
-      const reportCreation = notifyOnFinish ? await captureReportCreation() : undefined;
+      const reportCreation = await captureReportCreationForTool(
+        notifyOnFinish,
+        resolvedArgs.detached,
+      );
       const selectedProvider = parsedArgs.provider.includes("/")
         ? resolveRequiredProviderModel(parsedArgs.provider).provider
         : parsedArgs.provider.trim();
@@ -1676,8 +1679,14 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
   function captureReportCreation() {
     return options.nativeReportOrigin
-      ? agentManager.captureNativeReportCreation(options.nativeReportOrigin)
+      ? agentManager.captureNativeReportCreationForFinish(options.nativeReportOrigin)
       : undefined;
+  }
+
+  function captureReportCreationForTool(notifyOnFinish: boolean, detached: boolean) {
+    if (!notifyOnFinish || detached || daemonConfigStore?.get().nativeFinishNotices !== true)
+      return undefined;
+    return captureReportCreation();
   }
 
   async function resolveCreateAgentToolArgs(args: unknown): Promise<ResolvedCreateAgentToolArgs> {
@@ -2035,9 +2044,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         callerAgentId,
         requestedAgentId,
       );
-      function armFinishNotification(forNextTurn = false): boolean {
+      let rearmedFinishMessageId: string | null = null;
+      async function armFinishNotification(forNextTurn = false): Promise<boolean> {
         if (!callerAgentId || !notifyOnFinish) {
           return false;
+        }
+        const rearmed = await agentStorage.rearmFinishNotice(agentId, callerAgentId);
+        if (rearmed) {
+          rearmedFinishMessageId = rearmed.messageId;
+          return true;
         }
         setupFinishNotification({
           agentManager,
@@ -2064,7 +2079,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         const check = callerAgentId
           ? queuedReceiverCheck(agentManager, agentId, receiver?.persistence?.sessionId ?? null)
           : undefined;
-        if (background && callerAgentId) backgroundNotify = armFinishNotification(true);
+        if (background && callerAgentId) backgroundNotify = await armFinishNotification(true);
         try {
           const send = callerAgentId ? sendPromptToAgentAndWaitForStart : sendPromptToAgent;
           const result = await send({
@@ -2079,17 +2094,20 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           });
           if (!callerAgentId && background && result.disposition === "turn_started")
             await waitForAgentRunStartWithTimeout(agentManager, agentId);
-          if (result.disposition !== "turn_started") clearBackgroundNotification();
+          if (result.disposition !== "turn_started") await clearBackgroundNotification();
           noteDeliveredReport(agentManager, agentId, callerAgentId);
           return result;
         } catch (error) {
-          clearBackgroundNotification();
+          await clearBackgroundNotification();
           throw error;
         }
       };
-      function clearBackgroundNotification(): void {
+      async function clearBackgroundNotification(): Promise<void> {
         if (backgroundNotify && callerAgentId)
           disarmFinishNotification(agentManager, agentId, callerAgentId);
+        if (rearmedFinishMessageId)
+          await agentStorage.settleFinishNotice(agentId, rearmedFinishMessageId, "cancelled");
+        rearmedFinishMessageId = null;
         backgroundNotify = false;
       }
       const queueForTurnEnd = async (senderId: string, resumeAt?: number) => {
@@ -2132,7 +2150,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         const notifying =
           result.timedOut &&
           agentManager.getAgent(agentId)?.lifecycle === "running" &&
-          armFinishNotification();
+          (await armFinishNotification());
 
         const responseData = {
           success: true,

@@ -297,6 +297,41 @@ test("native report collector: unsupported wake retains metadata without a nativ
   }
 });
 
+test("failed report collection cancels a queued wake before fallback", async () => {
+  const f = await fixture();
+  vi.useFakeTimers();
+  const ready = vi.fn();
+  const observe = vi.fn();
+  try {
+    await f.receipts.collectReport(
+      f.batch,
+      (batch, messageId) => ({
+        agentId: f.prime.agentId,
+        messageId,
+        boot: f.prime.boot,
+        attachmentBytes: 0,
+        principal: f.prime,
+        request: "Metadata available",
+        reportBatch: batch,
+        authorize: () => requireNativeReportBatch(batch),
+        canDispatch: () => true,
+        observe,
+      }),
+      ready,
+    );
+    expect(await f.receipts.settleFailedReportCollection(f.events[0]!.id)).toBe("refused");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ready).not.toHaveBeenCalled();
+    expect(await f.request()).toMatchObject({
+      events: [{ wakeState: "cancelled", providerAccepted: false }],
+    });
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({ state: "cancelled" }));
+  } finally {
+    vi.useRealTimers();
+    await f.cleanup();
+  }
+});
+
 test("archive check fails for delivered unread native reports until consumption", async () => {
   const f = await fixture("needs-you");
   try {

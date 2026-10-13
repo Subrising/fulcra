@@ -52,6 +52,17 @@ describe("server config", () => {
     ).toBe(false);
   });
 
+  test("native finish notice setting defaults off and reads an explicit true", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-native-finish-config-"));
+    roots.push(paseoHome);
+    expect(loadConfig(paseoHome, { env: {} }).nativeFinishNotices).toBe(false);
+    await writeFile(
+      path.join(paseoHome, "config.json"),
+      JSON.stringify({ daemon: { nativeFinishNotices: true } }),
+    );
+    expect(loadConfig(paseoHome, { env: {} }).nativeFinishNotices).toBe(true);
+  });
+
   test("loads the provider catalog refresh timeout", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-config-provider-timeout-"));
     roots.push(paseoHome);

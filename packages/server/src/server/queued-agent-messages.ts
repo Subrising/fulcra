@@ -477,7 +477,6 @@ export class QueuedAgentMessages {
       });
       for (const record of eligible) {
         record.state = "delivered";
-        leadEventsFor(agentManager)?.noteReport(agentId, record.request.sender.agentId);
         leadEventsFor(agentManager)?.suppress(record.request.sender.agentId, {
           eventId: record.id,
           sourceId: agentId,
