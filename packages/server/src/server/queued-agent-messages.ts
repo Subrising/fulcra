@@ -233,6 +233,14 @@ export class QueuedAgentMessages {
     });
   }
 
+  archivePending(agentId: string): number | null {
+    if (!this.initialized || this.unhealthy || this.stopped) return null;
+    return this.records.filter(
+      (record) =>
+        record.agentId === agentId && ["queued", "dispatching", "uncertain"].includes(record.state),
+    ).length;
+  }
+
   pending(agentId: string): number {
     return this.records.filter((r) => r.agentId === agentId && r.state === "queued").length;
   }

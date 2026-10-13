@@ -4,6 +4,7 @@ import {
   registerLeadEvents,
   withLeadEvent,
 } from "./lead-events.js";
+import { registerArchiveReportCount, archiveReportStateKnown } from "./archive-observation.js";
 import { loadAgentPolicy } from "./limit-resume/policy.js";
 import type { PolicyHooks } from "../../../../plugins/fulcra-agent-policy/index.host.mjs";
 import type { ReportTurnEnd } from "../../../../plugins/fulcra-agent-policy/server/report-observer.mjs";
@@ -186,6 +187,7 @@ export class ReportUpService {
   private readonly finishOwners = new Map<string, boolean>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
+  private archiveStateKnown = true;
   private readonly held = new Map<string, HeldReport[]>();
   /** State last delivered to each lead; notice replies do not change it. */
   private readonly nudged = new Map<string, string>();
@@ -222,9 +224,12 @@ export class ReportUpService {
     let state: Partial<PersistedState> = {};
     try {
       state = JSON.parse(readFileSync(file, "utf8")) as Partial<PersistedState>;
-    } catch {
+    } catch (error) {
+      this.archiveStateKnown = (error as NodeJS.ErrnoException).code === "ENOENT";
       return;
     }
+    this.archiveStateKnown = archiveReportStateKnown(state, MAX_HELD_REPORTS);
+    if (!this.archiveStateKnown) return;
     const now = this.now();
     for (const [id, limit] of Object.entries(state.limited ?? {})) {
       if (typeof limit?.kind === "string" && Number.isFinite(limit.until) && limit.until > now)
@@ -264,6 +269,15 @@ export class ReportUpService {
       const wait = Math.max(0, (this.limited.get(lead)?.until ?? now) - now) + 5000;
       this.schedule(() => this.releaseHeld(lead), wait);
     }
+  }
+
+  pendingForArchive(agentId: string): number | null {
+    if (!this.archiveStateKnown) return null;
+    return (
+      (this.held.get(agentId)?.length ?? 0) +
+      (this.pendingFinished.get(agentId)?.length ?? 0) +
+      Number(this.nudging.has(agentId))
+    );
   }
 
   private save(): void {
@@ -1001,6 +1015,9 @@ export function startReportUp(input: {
     logger: input.logger,
     ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),
   });
+  const offArchive = registerArchiveReportCount(input.agentManager, (id) =>
+    service.pendingForArchive(id),
+  );
   const offHooks = input.hooks ? service.observeNative(input.hooks) : undefined;
   const offStream = input.agentManager.subscribe(
     (event) => {
@@ -1036,6 +1053,7 @@ export function startReportUp(input: {
     { replayState: false },
   );
   return () => {
+    offArchive();
     offHooks?.();
     offEvents?.();
     offStream();

@@ -1414,3 +1414,35 @@ test("native host-link notices use the end snapshot and respect disabled finish 
     f.cleanup();
   }
 });
+
+describe("archive report observations", () => {
+  test("counts held reports and refuses unreadable state", () => {
+    const root = mkdtempSync(join(tmpdir(), "archive-reports-"));
+    const statePath = join(root, "reports.json");
+    try {
+      const empty = fixture([], { statePath });
+      expect(empty.service.pendingForArchive(LEAD)).toBe(0);
+      empty.service.stop();
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          v: 1,
+          held: { [LEAD]: [{ prompt: "Fixture report", kind: "report-up" }] },
+        }),
+      );
+      const held = fixture([], { statePath });
+      expect(held.service.pendingForArchive(LEAD)).toBe(1);
+      held.service.stop();
+      writeFileSync(statePath, "invalid JSON");
+      const unreadable = fixture([], { statePath });
+      expect(unreadable.service.pendingForArchive(LEAD)).toBeNull();
+      unreadable.service.stop();
+      writeFileSync(statePath, JSON.stringify({ held: { [LEAD]: [{ prompt: 12 }] } }));
+      const invalid = fixture([], { statePath });
+      expect(invalid.service.pendingForArchive(LEAD)).toBeNull();
+      invalid.service.stop();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

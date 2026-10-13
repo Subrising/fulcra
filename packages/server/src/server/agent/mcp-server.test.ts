@@ -142,7 +142,20 @@ function registeredTool(
   if (!handler) {
     throw new Error(`MCP tool has no callable handler: ${name}`);
   }
-  return { ...tool, handler };
+  return {
+    ...tool,
+    handler: (input) => {
+      const compact = [
+        "list_agents",
+        "get_agent_status",
+        "get_agent_activity",
+        "schedule_logs",
+        "inspect_provider",
+      ].includes(name);
+      if (!compact) return handler(input);
+      return handler({ fullResult: true, ...z.record(z.string(), z.unknown()).parse(input) });
+    },
+  };
 }
 
 async function invokeToolWithParsedInput(
@@ -877,7 +890,7 @@ describe("browser MCP tools", () => {
       });
       const listAgentsResult = await client.callTool({
         name: "list_agents",
-        arguments: {},
+        arguments: { fullResult: true },
       });
 
       expect(broker.calls).toEqual([
@@ -6559,5 +6572,56 @@ describe("agent snapshot MCP serialization", () => {
     expect(content).not.toContain("[User] u2");
     expect(content).not.toContain("second answer");
     expect(content).not.toContain("first answer");
+  });
+});
+
+describe("compact MCP output", () => {
+  it("returns a short default and the full list on request", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createProviderSnapshotManagerStub().manager,
+      logger: createTestLogger(),
+    });
+    const client = await connectInMemoryMcpClient(server);
+    try {
+      const compact = await client.callTool({ name: "list_agents", arguments: {} });
+      expect(compact.structuredContent).toMatchObject({
+        errors: [],
+        omitted: 0,
+        summary: { agents: { count: 0, shown: [], omitted: 0 } },
+      });
+      const full = await client.callTool({ name: "list_agents", arguments: { fullResult: true } });
+      expect(full.structuredContent).toEqual({ agents: [] });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+describe("compact activity failures", () => {
+  it("shows complete errors from activity outside the requested log limit", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue(createManagedAgent({ id: "fixture-log" }));
+    spies.agentManager.getTimeline.mockReturnValue([
+      { type: "error", message: "Fixture failure " + "x".repeat(1000) },
+      { type: "assistant_message", text: "Fixture completed" },
+    ]);
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createClaudeOnlyManager(),
+      logger: createTestLogger(),
+    });
+    const response = await registeredTool(server, "get_agent_activity").handler({
+      agentId: "fixture-log",
+      limit: 1,
+      fullResult: false,
+    });
+    expect(response.structuredContent.errors).toEqual([
+      { path: "result.errors", value: [{ message: "Fixture failure " + "x".repeat(1000) }] },
+    ]);
   });
 });
