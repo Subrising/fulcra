@@ -66,11 +66,11 @@ export function SidebarSessions({
         onPress={toggleExpanded}
         accessibilityRole="button"
         accessibilityState={accessibilityState}
-        accessibilityLabel={`Sessions (${rows.length}). ${counts.running} running, ${counts.waiting} waiting on background jobs, ${counts.idle} idle`}
+        accessibilityLabel={`All sessions (${rows.length}). ${counts.running} running, ${counts.waiting} waiting on background jobs, ${counts.idle} idle`}
         testID="sidebar-all-sessions-toggle"
         style={headingStyle}
       >
-        <Text style={styles.headingText}>Sessions ({rows.length})</Text>
+        <Text style={styles.headingText}>All sessions ({rows.length})</Text>
       </Pressable>
       {expanded && (
         <Text style={styles.counts}>
