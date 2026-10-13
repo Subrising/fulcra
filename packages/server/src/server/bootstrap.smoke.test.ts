@@ -1,3 +1,6 @@
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { AgentClient, AgentSessionConfig } from "./agent/agent-sdk-types.js";
 import { resolveDaemonVersion } from "./daemon-version.js";
 import os from "node:os";
 import http from "node:http";
@@ -17,7 +20,7 @@ import { generateLocalPairingOffer } from "./pairing-offer.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
 import { createPersistedProjectRecord } from "./workspace-registry.js";
 import { execFileSync } from "node:child_process";
-import { createTestAgentClients } from "./test-utils/fake-agent-client.js";
+import { createTestAgentClient, createTestAgentClients } from "./test-utils/fake-agent-client.js";
 import { DaemonClient } from "./test-utils/daemon-client.js";
 import { isPlatform } from "../test-utils/platform.js";
 import { findFreePort } from "./service-proxy.js";
@@ -1125,3 +1128,73 @@ function probeWebSocketConnection(
     });
   });
 }
+
+test("agent MCP creates an ordinary caller's worker and returns a clear workspace path error", async () => {
+  const launches: AgentSessionConfig[] = [];
+  const base = createTestAgentClient("codex", { supportsMcpServers: true });
+  const provider = Object.create(base) as AgentClient;
+  provider.createSession = async (...args) => {
+    launches.push(args[0]);
+    return base.createSession(...args);
+  };
+  const daemon = await createTestPaseoDaemon({ agentClients: { codex: provider } });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  const mcp = new McpClient({ name: "native-create-fixture", version: "1.0.0" });
+  try {
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    // CLI and app creation use this same WebSocket request.
+    const parent = await client.createAgent({
+      provider: "codex",
+      cwd: daemon.paseoHome,
+      modeId: "full-access",
+    });
+    const injected = launches[0]!.mcpServers!.paseo;
+    if (injected.type !== "http") throw new Error("Fixture requires injected HTTP MCP");
+    await mcp.connect(
+      new StreamableHTTPClientTransport(new URL(injected.url), {
+        requestInit: { headers: injected.headers },
+      }),
+    );
+    const invalid = await mcp.callTool({
+      name: "create_agent",
+      arguments: {
+        provider: "codex",
+        title: "Fixture worker",
+        initialPrompt: "fixture work",
+        workspaceId: "/fixture/folder",
+        notifyOnFinish: true,
+      },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(invalid.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining(
+          "workspaceId must be an existing workspace ID, not a folder path",
+        ),
+      }),
+    ]);
+    expect(daemon.daemon.agentManager.listAgents()).toHaveLength(1);
+    const created = await mcp.callTool({
+      name: "create_agent",
+      arguments: {
+        provider: "codex",
+        title: "Fixture worker",
+        initialPrompt: "fixture work",
+        notifyOnFinish: true,
+      },
+    });
+    expect(created.isError).not.toBe(true);
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    const child = daemon.daemon.agentManager.getAgent(childId)!;
+    expect(child.workspaceId).toBe(parent.workspaceId);
+    expect(child.cwd).toBe(parent.cwd);
+    expect(child.pendingPermissions.size).toBe(0);
+    expect(daemon.daemon.agentManager.nativeReportOwnsFinish(childId, parent.id)).toBe(true);
+  } finally {
+    await mcp.close();
+    await client.close();
+    await daemon.close();
+  }
+}, 30_000);
