@@ -7631,14 +7631,69 @@ export class AgentManager {
     );
   }
 
-  private async recordOwnedFinish(
+  private recordOwnedFinish(
     agent: ActiveManagedAgent,
     turnId: string | undefined,
     reason: "finished" | "errored",
     foreground: boolean,
-  ): Promise<void> {
-    if (!foreground || !turnId || !this.registry) return;
-    await this.registry.recordFinishNotice(agent.id, turnId, reason);
+  ): Promise<void> | null {
+    if (!foreground || !turnId || !this.registry) return null;
+    let notice;
+    try {
+      notice = this.registry.getCached(agent.id)?.finishNotice;
+    } catch {
+      return null;
+    }
+    if (!notice || notice.status !== "armed") return null;
+    return this.registry.recordFinishNotice(agent.id, turnId, reason).then(() => undefined);
+  }
+
+  private onCompletedWithOwnedFinish(params: {
+    agent: ActiveManagedAgent;
+    event: Extract<AgentStreamEvent, { type: "turn_completed" }>;
+    eventTurnId: string | undefined;
+    isForegroundEvent: boolean;
+    terminalDisposition: ActiveTurnTerminalDisposition;
+  }): Promise<void> | undefined {
+    const { agent, event, eventTurnId, isForegroundEvent, terminalDisposition } = params;
+    const finish = () => {
+      this.reportObservedLifecycle(agent, "ended", eventTurnId, isForegroundEvent);
+      this.onStreamTurnCompleted({
+        agent,
+        event,
+        eventTurnId,
+        isForegroundEvent,
+        terminalDisposition,
+      });
+    };
+    const persist = this.recordOwnedFinish(agent, eventTurnId, "finished", isForegroundEvent);
+    if (persist) return persist.then(finish);
+    finish();
+    return undefined;
+  }
+
+  private onFailedWithOwnedFinish(params: {
+    agent: ActiveManagedAgent;
+    event: Extract<AgentStreamEvent, { type: "turn_failed" }>;
+    eventTurnId: string | undefined;
+    isForegroundEvent: boolean;
+    terminalDisposition: ActiveTurnTerminalDisposition;
+    options: HandleStreamEventOptions | undefined;
+  }): Promise<void> {
+    const { agent, event, eventTurnId, isForegroundEvent, terminalDisposition, options } = params;
+    const finish = () => {
+      this.reportObservedLifecycle(agent, "blocked", eventTurnId, isForegroundEvent);
+      return this.onStreamTurnFailed({
+        agent,
+        event,
+        eventTurnId,
+        isForegroundEvent,
+        terminalDisposition,
+        options,
+      });
+    };
+    const persist = this.recordOwnedFinish(agent, eventTurnId, "errored", isForegroundEvent);
+    return persist ? persist.then(finish) : finish();
   }
 
   private dispatchStreamEventByType(params: {
@@ -7697,30 +7752,21 @@ export class AgentManager {
       case "timeline":
         return this.onStreamTimelineEvent({ agent, event, options, flags });
       case "turn_completed":
-        return this.recordOwnedFinish(agent, eventTurnId, "finished", isForegroundEvent).then(
-          () => {
-            this.reportObservedLifecycle(agent, "ended", eventTurnId, isForegroundEvent);
-            this.onStreamTurnCompleted({
-              agent,
-              event,
-              eventTurnId,
-              isForegroundEvent,
-              terminalDisposition,
-            });
-            return undefined;
-          },
-        );
+        return this.onCompletedWithOwnedFinish({
+          agent,
+          event,
+          eventTurnId,
+          isForegroundEvent,
+          terminalDisposition,
+        });
       case "turn_failed":
-        return this.recordOwnedFinish(agent, eventTurnId, "errored", isForegroundEvent).then(() => {
-          this.reportObservedLifecycle(agent, "blocked", eventTurnId, isForegroundEvent);
-          return this.onStreamTurnFailed({
-            agent,
-            event,
-            eventTurnId,
-            isForegroundEvent,
-            terminalDisposition,
-            options,
-          });
+        return this.onFailedWithOwnedFinish({
+          agent,
+          event,
+          eventTurnId,
+          isForegroundEvent,
+          terminalDisposition,
+          options,
         });
       case "turn_canceled":
         this.onStreamTurnCanceled({
