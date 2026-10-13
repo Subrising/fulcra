@@ -549,7 +549,7 @@ Use `npm run cli` to run the in-repo CLI from source (`npx tsx packages/cli/src/
 
 Canonical automation uses `paseo project create/ls/rename/delete`, `paseo workspace create/ls/rename/archive`, `paseo heartbeat create/update/delete`, and the full `paseo schedule` group. `paseo project ls` groups active sessions by their project label. Use `paseo project ls --folders` to get registry IDs for rename or delete. MCP heartbeat automation is intentionally smaller: create and delete only. Detach remains an explicit user lifecycle action rather than an agent tool. `paseo run --new-workspace local|worktree` composes workspace creation with agent creation. The old `paseo worktree` and `paseo run --worktree` forms are hidden compatibility aliases.
 
-Run `node scripts/project-cleanup.mjs --dry-run --home <host-home>` to review unused UUID and worktree projects. `--apply` archives the selected projects and workspaces only while that daemon is stopped. It writes registry backups beside the data files.
+Save `node scripts/project-cleanup.mjs --dry-run --home <host-home>` output before cleanup. Use `--apply --from <saved-list>` while the daemon is stopped. The script checks each saved project again and writes registry backups.
 
 ```bash
 npm run cli -- ls -a -g              # List all agents globally

@@ -56,13 +56,19 @@ export function jobList(
   machine: string,
   results: ReadonlyMap<string, string>,
   projectName?: string,
+  workspaceOwners?: ReadonlyMap<string, string | null>,
 ) {
   return agents
     .filter(
       (a) =>
         !a.archivedAt &&
-        (projectName && (a.labels?.["project"]?.trim() || a.labels?.["fulcra.project"]?.trim())
-          ? (a.labels?.["project"]?.trim() || a.labels?.["fulcra.project"]?.trim()) === projectName
+        (projectName
+          ? a.labels?.["project"]?.trim() || a.labels?.["fulcra.project"]?.trim()
+            ? (a.labels?.["project"]?.trim() || a.labels?.["fulcra.project"]?.trim()) ===
+              projectName
+            : !!a.workspaceId &&
+              workspaceIds.has(a.workspaceId) &&
+              workspaceOwners?.get(a.workspaceId) === projectName
           : !!a.workspaceId && workspaceIds.has(a.workspaceId)),
     )
     .map((a) => ({
@@ -283,6 +289,16 @@ export function createProgressBoard(
         .filter((name): name is string => !!name),
     );
     const groups = new Map<string, PaseoWorkspace[]>();
+    const workspaceLabels = new Map<string, Set<string>>();
+    for (const { agent } of agents.entries) {
+      if (agent.archivedAt || !agent.workspaceId) continue;
+      const label = agent.labels?.["project"]?.trim() || agent.labels?.["fulcra.project"]?.trim();
+      if (!label) continue;
+      const labels = workspaceLabels.get(agent.workspaceId) ?? new Set<string>();
+      labels.add(label);
+      workspaceLabels.set(agent.workspaceId, labels);
+    }
+    const workspaceOwners = new Map<string, string | null>();
     for (const w of workspaces.entries) {
       const name = w.projectDisplayName;
       const key =
@@ -291,14 +307,9 @@ export function createProgressBoard(
             n.toLowerCase() === name.toLowerCase() ||
             n.toLowerCase() === path.basename(w.projectRootPath).toLowerCase(),
         ) ?? name;
-      const labels = agents.entries
-        .map((entry) => entry.agent)
-        .filter((agent) => agent.workspaceId === w.id)
-        .map(
-          (agent) => agent.labels?.["project"]?.trim() || agent.labels?.["fulcra.project"]?.trim(),
-        )
-        .filter((label): label is string => !!label);
-      for (const group of labels.length ? new Set(labels) : [key])
+      const labels = workspaceLabels.get(w.id);
+      workspaceOwners.set(w.id, labels?.size === 1 ? [...labels][0]! : null);
+      for (const group of labels?.size ? labels : [key])
         groups.set(group, [...(groups.get(group) ?? []), w]);
     }
     const projects: ProgressBoard["projects"] = [];
@@ -329,6 +340,7 @@ export function createProgressBoard(
         machine,
         results,
         name,
+        workspaceOwners,
       );
       if (!names.includes(name) && !jobRows.length) continue;
       let signature: string | undefined;

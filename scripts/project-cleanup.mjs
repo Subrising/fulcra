@@ -6,6 +6,7 @@ import os from "node:os";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OPEN = /^(DONE|MOVED)\b/i;
 const OWNER_ROLE = /^(lead|owner|prime|orchestration|project-lead|main-assistant)$/i;
+const FORMAT = "project-cleanup/v1";
 const inside = (file, root) => file === root || file.startsWith(root + path.sep);
 const readJson = async (file) => JSON.parse(await readFile(file, "utf8"));
 
@@ -110,8 +111,35 @@ export async function inspectProjectCleanup(home, ledgerDir) {
   return {
     projects,
     workspaces,
+    agents,
+    ledgerRows,
     candidates: selectProjectCleanup({ projects, workspaces, agents, ledgerRows }),
   };
+}
+
+function savedSelection(value, home, ledgerDir) {
+  if (
+    value?.format !== FORMAT ||
+    value.home !== home ||
+    value.ledgerDir !== ledgerDir ||
+    !Array.isArray(value.projects) ||
+    value.count !== value.projects.length
+  )
+    throw Error("Invalid dry-run list or wrong home or ledger directory.");
+  const seen = new Set();
+  for (const project of value.projects) {
+    if (
+      !project ||
+      typeof project.projectId !== "string" ||
+      !project.projectId ||
+      typeof project.displayName !== "string" ||
+      typeof project.rootPath !== "string" ||
+      seen.has(project.projectId)
+    )
+      throw Error("Invalid dry-run project entry.");
+    seen.add(project.projectId);
+  }
+  return value.projects;
 }
 
 async function main() {
@@ -122,17 +150,45 @@ async function main() {
     const at = args.indexOf(flag);
     return at < 0 ? fallback : args[at + 1];
   };
-  const home = value("--home", process.env.PASEO_HOME || path.join(os.homedir(), ".paseo"));
-  const ledgerDir = value(
-    "--ledger-dir",
-    process.env.FULCRA_LEDGER_DIR || path.join(os.homedir(), "shared-vault", "projects"),
+  const from = value("--from", null);
+  if (apply && !from) throw Error("--apply requires --from with a saved dry-run list.");
+  if (!apply && from) throw Error("--from requires --apply.");
+  const home = path.resolve(
+    value("--home", process.env.PASEO_HOME || path.join(os.homedir(), ".paseo")),
   );
-  if (!home || !ledgerDir) throw Error("Home and ledger directory are required.");
-  const first = await inspectProjectCleanup(home, ledgerDir);
-  console.log(`${first.candidates.length} cleanup candidates`);
-  for (const project of first.candidates)
-    console.log(`${project.projectId}\t${project.displayName}\t${project.rootPath}`);
-  if (!apply) return;
+  const ledgerDir = path.resolve(
+    value(
+      "--ledger-dir",
+      process.env.FULCRA_LEDGER_DIR || path.join(os.homedir(), "shared-vault", "projects"),
+    ),
+  );
+  if (!apply) {
+    const snapshot = await inspectProjectCleanup(home, ledgerDir);
+    console.log(
+      JSON.stringify(
+        {
+          format: FORMAT,
+          home,
+          ledgerDir,
+          generatedAt: new Date().toISOString(),
+          count: snapshot.candidates.length,
+          projects: snapshot.candidates.map(({ projectId, displayName, rootPath }) => ({
+            projectId,
+            displayName,
+            rootPath,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  await applySavedSelection(home, ledgerDir, from);
+}
+
+async function applySavedSelection(home, ledgerDir, from) {
+  const saved = savedSelection(await readJson(from), home, ledgerDir);
   const pidFile = path.join(home, "paseo.pid");
   const pid = await readJson(pidFile).catch((error) => {
     if (error.code === "ENOENT") return null;
@@ -150,24 +206,39 @@ async function main() {
     })()
   )
     throw Error("Stop this daemon before --apply. The project registry is cached in memory.");
-  const second = await inspectProjectCleanup(home, ledgerDir);
-  const ids = first.candidates.map((project) => project.projectId).sort();
-  if (
-    JSON.stringify(ids) !==
-    JSON.stringify(second.candidates.map((project) => project.projectId).sort())
-  )
-    throw Error("Candidate list changed. Run --dry-run again.");
-  if (!ids.length) return;
+  const current = await inspectProjectCleanup(home, ledgerDir);
+  const byId = new Map(current.projects.map((project) => [project.projectId, project]));
+  const ids = [];
+  const skipped = [];
+  for (const listed of saved) {
+    const project = byId.get(listed.projectId);
+    if (
+      !project ||
+      project.displayName !== listed.displayName ||
+      project.rootPath !== listed.rootPath
+    ) {
+      skipped.push(`${listed.projectId}: missing or identity changed`);
+    } else if (!selectProjectCleanup({ ...current, projects: [project] }).length) {
+      skipped.push(`${listed.projectId}: guard failed`);
+    } else {
+      ids.push(project.projectId);
+    }
+  }
+  for (const entry of skipped) console.log(`Skipped ${entry}`);
+  if (!ids.length) {
+    console.log(`Archived 0 projects. Skipped ${skipped.length}.`);
+    return;
+  }
   const file = path.join(home, "projects", "projects.json");
   const workspaceFile = path.join(home, "projects", "workspaces.json");
   const [before, workspaceBefore] = await Promise.all([stat(file), stat(workspaceFile)]);
   const timestamp = new Date().toISOString();
-  const updated = second.projects.map((project) =>
+  const updated = current.projects.map((project) =>
     ids.includes(project.projectId)
       ? { ...project, archivedAt: timestamp, updatedAt: timestamp }
       : project,
   );
-  const workspaceUpdated = second.workspaces;
+  const workspaceUpdated = current.workspaces;
   for (const workspace of workspaceUpdated) {
     if (ids.includes(workspace.projectId) && !workspace.archivedAt) {
       workspace.archivedAt = timestamp;
@@ -197,7 +268,7 @@ async function main() {
     await copyFile(workspaceBackup, workspaceFile);
     throw error;
   }
-  console.log(`Archived ${ids.length} projects.`);
+  console.log(`Archived ${ids.length} projects. Skipped ${skipped.length}.`);
 }
 
 if (
