@@ -67,6 +67,11 @@
       "types": "./dist/server/server/agent/agent-response-loop.d.ts",
       "source": "./src/server/agent/agent-response-loop.ts",
       "default": "./dist/server/server/agent/agent-response-loop.js"
+    },
+    "./lead-events": {
+      "types": "./dist/server/server/lead-events.d.ts",
+      "source": "./src/server/lead-events.ts",
+      "default": "./dist/server/server/lead-events.js"
     }
   },
   "publishConfig": {

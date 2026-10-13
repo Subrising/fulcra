@@ -1,3 +1,4 @@
+import { noteDeliveredReport } from "../../lead-events.js";
 import { NativeArtifactProduceInputSchema } from "@getpaseo/protocol/native-evidence";
 import { stat } from "node:fs/promises";
 import { requireNativeReportOrigin, type NativeReportOrigin } from "../../report-origin.js";
@@ -2049,6 +2050,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           if (!callerAgentId && background && result.disposition === "turn_started")
             await waitForAgentRunStartWithTimeout(agentManager, agentId);
           if (result.disposition !== "turn_started") clearBackgroundNotification();
+          noteDeliveredReport(agentManager, agentId, callerAgentId);
           return result;
         } catch (error) {
           clearBackgroundNotification();

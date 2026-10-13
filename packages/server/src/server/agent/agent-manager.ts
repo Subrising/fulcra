@@ -1,3 +1,4 @@
+import { currentLeadEvent, recordAcceptedLeadTurn } from "../lead-events.js";
 import {
   readHostPublicCodexBaseline,
   cloneHostPublicBaseline,
@@ -4980,6 +4981,10 @@ export class AgentManager {
           });
         }
         const existingAgent = this.requireSessionAgent(agentId);
+        const eventCause = currentLeadEvent(
+          this.trustedPlugins.currentInputSource(),
+          options?.[NATIVE_QUEUED_FINAL],
+        );
         this.logger.trace(
           {
             agentId,
@@ -5032,6 +5037,7 @@ export class AgentManager {
           const turnStartedAt = new Date();
           agent.activeForegroundTurnId = turnId;
           this.openActiveTurn(agent, turnId, turnStartedAt);
+          recordAcceptedLeadTurn(this, agent.id, eventCause, agent.internal);
           agent.lifecycle = "running";
           this.touchUpdatedAt(agent);
           // AgentManager owns the accepted-turn boundary. Publish liveness before the canonical
@@ -7717,6 +7723,7 @@ export class AgentManager {
       return;
     }
     this.runs.trackAutonomousRun(agent.id, eventTurnId ?? null);
+    recordAcceptedLeadTurn(this, agent.id, "other", agent.internal);
     if (eventTurnId) {
       this.openActiveTurn(agent, eventTurnId, new Date());
     }
