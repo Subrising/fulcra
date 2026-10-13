@@ -79,6 +79,8 @@ async function fixture(
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), "native-provider-integration-"));
   let turn = 0;
+  let parentRefusals = 0;
+  let onParentTurnStart: ((params: unknown) => void) | undefined;
   let thread = 0;
   let usageAllowed = true;
   const parentPrompts: unknown[] = [];
@@ -105,8 +107,13 @@ async function fixture(
         ordinaryUsageAllowed: usageAllowed,
         rateLimits: {},
       }),
-      "turn/start": () => {
+      "turn/start": (params) => {
         turn++;
+        if ((params as { threadId?: string }).threadId === "thread-1") onParentTurnStart?.(params);
+        if ((params as { threadId?: string }).threadId === "thread-1" && parentRefusals > 0) {
+          parentRefusals--;
+          return { __jsonRpcError: { message: "Fixture parent refused turn" } };
+        }
         return reply === "valid"
           ? { turn: { id: `native-${turn}`, status: "inProgress", error: null } }
           : {};
@@ -125,6 +132,12 @@ async function fixture(
       (threads.get(params.threadId) ?? first).requestCommandApproval(params);
     },
     requests: () => servers.flatMap((process) => process.requests()),
+    refuseParentTurns(count: number) {
+      parentRefusals = count;
+    },
+    onParentTurnStart(callback: (params: unknown) => void) {
+      onParentTurnStart = callback;
+    },
   });
   // This fixture owns the fake app-server transport; an installed Codex CLI is not a dependency.
   class FixtureCodexClient extends CodexAppServerAgentClient {
@@ -785,6 +798,157 @@ test("native finish switch off gives one report-up notice and no late native tur
     await f.cleanup();
   }
 }, 8000);
+
+async function defaultOwnedNoticeFixture(observe = true) {
+  const f = await fixture("valid", true);
+  await registerPrime(f, false);
+  f.finishConfig.patch({ nativeFinishNotices: false });
+  const offReportUp = observe ? observeFixtureReportUp(f) : () => {};
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  const created = await catalog.executeTool("create_agent", {
+    provider: "codex",
+    title: "Fixture worker",
+    initialPrompt: "fixture child work",
+    notifyOnFinish: true,
+  });
+  const childId = (created.structuredContent as { agentId: string }).agentId;
+  return {
+    f,
+    catalog,
+    childId,
+    childThread: f.manager.getAgent(childId)!.persistence!.sessionId,
+    offReportUp,
+  };
+}
+
+test("a refused finish notice retries once on the parent's next idle event", async () => {
+  const { f, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture();
+  const parentThread = f.agent.persistence!.sessionId;
+  const noticeStates: string[] = [];
+  f.server.onParentTurnStart((params) => {
+    if (JSON.stringify(params).includes(childId))
+      noticeStates.push(f.agentStorage.getCached(childId)?.finishNotice?.status ?? "missing");
+  });
+  try {
+    f.server.refuseParentTurns(1);
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(
+      async () =>
+        expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+          status: "pending",
+          retryAfterRefusal: true,
+        }),
+      { timeout: 5000 },
+    );
+    expect(noticeStates).toEqual(["sending"]);
+    const human = (async () => {
+      for await (const event of f.manager.streamAgent(f.agent.id, "later human turn")) void event;
+    })();
+    await f.manager.waitForAgentRunStart(f.agent.id);
+    f.server.completeTurn({ threadId: parentThread });
+    await human;
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "delivered" }),
+    );
+    expect(noticeStates).toEqual(["sending", "sending"]);
+    f.server.completeTurn({ threadId: parentThread });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(noticeStates).toHaveLength(2);
+  } finally {
+    offReportUp();
+    await f.cleanup();
+  }
+}, 10000);
+
+test("a later send_agent_prompt replaces a refused pending finish notice", async () => {
+  const { f, catalog, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture();
+  try {
+    f.server.refuseParentTurns(1);
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(
+      async () =>
+        expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+          status: "pending",
+          retryAfterRefusal: true,
+        }),
+      { timeout: 5000 },
+    );
+    const firstId = (await f.agentStorage.getFinishNotice(childId))!.messageId;
+    await catalog.executeTool("send_agent_prompt", {
+      agentId: childId,
+      prompt: "later child work",
+      background: true,
+      notifyOnFinish: true,
+    });
+    const rearmed = (await f.agentStorage.getFinishNotice(childId))!;
+    expect(rearmed).toMatchObject({ status: "armed", owner: "report-up" });
+    expect(rearmed.messageId).not.toBe(firstId);
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "delivered" }),
+    );
+    const noticeTurns = f.server
+      .requests()
+      .filter(
+        (request) =>
+          request.method === "turn/start" &&
+          JSON.stringify(request).includes(childId) &&
+          (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId,
+      );
+    expect(noticeTurns).toHaveLength(2);
+  } finally {
+    offReportUp();
+    await f.cleanup();
+  }
+}, 10000);
+
+test("startup marks an interrupted sending finish unknown and never resends it", async () => {
+  const { f, childId, offReportUp } = await defaultOwnedNoticeFixture(false);
+  const recoveredStorage = new AgentStorage(path.join(f.directory, "agents"), createTestLogger());
+  const service = new ReportUpService({
+    agentManager: f.manager,
+    agentStorage: recoveredStorage,
+    isEnabled: () => false,
+    isOtherEnabled: () => true,
+    isNudgeEnabled: () => false,
+    localServerId: null,
+    logger: createTestLogger(),
+    readLedger: () => [],
+  });
+  try {
+    const pending = await f.agentStorage.recordFinishNotice(
+      childId,
+      "interrupted-turn",
+      "finished",
+    );
+    await f.agentStorage.markFinishNoticeSending(childId, pending!.messageId);
+    const before = f.server.requests().filter((request) => request.method === "turn/start").length;
+    await service.recoverOwnedFinishes();
+    await service.recoverOwnedFinishes();
+    expect(await recoveredStorage.getFinishNotice(childId)).toMatchObject({ status: "unknown" });
+    expect(f.server.requests().filter((request) => request.method === "turn/start")).toHaveLength(
+      before,
+    );
+  } finally {
+    service.stop();
+    offReportUp();
+    await f.cleanup();
+  }
+});
 
 test("a later send_agent_prompt arms a new report-up finish notice", async () => {
   const f = await fixture("valid", true);
