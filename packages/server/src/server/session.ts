@@ -202,7 +202,11 @@ import {
   setAgentModeCommand,
   updateAgentCommand,
 } from "./agent/lifecycle-command.js";
-import { buildStoredAgentPayload, toAgentPayload } from "./agent/agent-projections.js";
+import {
+  buildStoredAgentPayload,
+  toAgentPayload,
+  refreshAgentRuntimeObservation,
+} from "./agent/agent-projections.js";
 import {
   appendTimelineItemIfAgentKnown,
   emitLiveTimelineItemIfAgentKnown,
@@ -6671,10 +6675,7 @@ export class Session {
       const current = this.agentManager.getAgent(agentId);
       if (!current || current.instanceId !== live.instanceId)
         throw new Error("Session changed during the archive check");
-      payload.status = current.lifecycle;
-      payload.backgroundWork = current.backgroundWork
-        ? structuredClone(current.backgroundWork)
-        : null;
+      refreshAgentRuntimeObservation(payload, current);
       return this.isProviderVisibleToClient(payload.provider) ? payload : null;
     }
 

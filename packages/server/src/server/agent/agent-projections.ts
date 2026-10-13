@@ -104,6 +104,16 @@ export function toStoredAgentRecord(
   } satisfies StoredAgentRecord;
 }
 
+/** Refresh display observations after an awaited host read, without changing action authority. */
+export function refreshAgentRuntimeObservation(
+  payload: AgentSnapshotPayload,
+  agent: ManagedAgent,
+): void {
+  payload.status = agent.lifecycle;
+  if (agent.backgroundWork) payload.backgroundWork = structuredClone(agent.backgroundWork);
+  else delete payload.backgroundWork;
+}
+
 export function toAgentPayload(
   agent: ManagedAgent,
   options?: ProjectionOptions,

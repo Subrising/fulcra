@@ -6,7 +6,7 @@ import { describe, expect, test, vi } from "vitest";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
 import { createTestAgentClient } from "../../test-utils/fake-agent-client.js";
 import { AgentManager } from "../agent-manager.js";
-import { toAgentPayload } from "../agent-projections.js";
+import { toAgentPayload, refreshAgentRuntimeObservation } from "../agent-projections.js";
 import type { AgentClient, AgentSession, AgentStreamEvent } from "../agent-sdk-types.js";
 
 // MULTIHOST-DESIGN §6.3: background work is display only. It may reach the agent snapshot, the
@@ -105,6 +105,7 @@ describe("background work keeps lifecycle and authority separate", () => {
       workspaceId: undefined,
     });
     expect(manager.getAgent(created.id)?.lifecycle).toBe("idle");
+    const stalePayload = toAgentPayload(manager.getAgent(created.id)!);
     expect(emitters.length).toBeGreaterThan(0);
 
     const emit = (count: number) => {
@@ -132,6 +133,9 @@ describe("background work keeps lifecycle and authority separate", () => {
     let agent = manager.getAgent(created.id)!;
     let payload = toAgentPayload(agent);
     expect(payload.backgroundWork?.count).toBe(2);
+    refreshAgentRuntimeObservation(stalePayload, agent);
+    expect(stalePayload.backgroundWork?.count).toBe(2);
+    expect(stalePayload.status).toBe("idle");
     expect(agent.lifecycle).toBe("idle");
     expect(payload.status).toBe("idle");
     expect(payload.activeTurn).toBeNull();
@@ -144,6 +148,9 @@ describe("background work keeps lifecycle and authority separate", () => {
     agent = manager.getAgent(created.id)!;
     payload = toAgentPayload(agent);
     expect(payload.backgroundWork).toBeUndefined();
+    refreshAgentRuntimeObservation(stalePayload, agent);
+    expect(stalePayload.backgroundWork).toBeUndefined();
+    expect(stalePayload.status).toBe("idle");
     expect(payload.status).toBe("idle");
     await manager.closeAgent(created.id);
   });
