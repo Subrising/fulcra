@@ -767,6 +767,143 @@ test("native report publication: final owned-pipe write rechecks recipient and s
   }
 });
 
+test("host creation initializes a private tree for an unregistered current launch", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "host-report-create-"));
+  const parent = {
+    agentId: randomUUID(),
+    instanceId: randomUUID(),
+    sessionId: randomUUID(),
+    boot: randomUUID(),
+  };
+  const child = {
+    ...parent,
+    agentId: randomUUID(),
+    instanceId: randomUUID(),
+    sessionId: randomUUID(),
+  };
+  const identities = new Map([
+    [parent.agentId, parent],
+    [child.agentId, child],
+  ]);
+  const file = path.join(directory, "authority.json");
+  const registry = new NativeReportRegistry(file, (id) => identities.get(id) ?? null);
+  const { enrollNativeReportCreation } = await import("./report-origin.js");
+  const scope = { projectId: parent.agentId, taskId: parent.agentId };
+  try {
+    expect(() => registry.captureCreation(parent, () => {})).toThrow(
+      "creation registration unavailable",
+    );
+    const [creation] = await Promise.all([
+      registry.captureHostCreation(parent, () => {}),
+      registry.captureHostCreation(parent, () => {}),
+    ]);
+    await enrollNativeReportCreation(creation, child);
+    expect(registry.requireParent(child, scope).parent).toEqual(parent);
+    expect(registry.ownsFinish(child, parent.agentId)).toBe(true);
+    const saved = JSON.parse(await readFile(file, "utf8"));
+    expect(saved.primes).toHaveLength(1);
+    expect(saved.projectOwners ?? []).toEqual([]);
+    const second = await registry.captureHostCreation(parent, () => {});
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual(saved);
+    const replacement = { ...parent, sessionId: randomUUID() };
+    identities.set(parent.agentId, replacement);
+    await expect(enrollNativeReportCreation(second, child)).rejects.toThrow("replaced");
+    await expect(registry.captureHostCreation(replacement, () => {})).rejects.toThrow("replaced");
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual(saved);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("host creation refuses unsafe storage and a revoked launch before registering it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "host-report-refusal-"));
+  const parent = {
+    agentId: randomUUID(),
+    instanceId: randomUUID(),
+    sessionId: randomUUID(),
+    boot: randomUUID(),
+  };
+  const file = path.join(directory, "authority.json");
+  const registry = new NativeReportRegistry(file, () => parent);
+  try {
+    await expect(
+      registry.captureHostCreation(parent, () => {
+        throw new Error("launch revoked");
+      }),
+    ).rejects.toThrow("launch revoked");
+    await writeFile(file, "{}", { mode: 0o644 });
+    await expect(registry.captureHostCreation(parent, () => {})).rejects.toThrow(
+      "Unsafe native report registration store",
+    );
+    expect(await readFile(file, "utf8")).toBe("{}");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("host creation respects durable owner revocation of a parent and its descendants", async () => {
+  const f = await fixture();
+  const grandchild = {
+    ...f.child,
+    agentId: randomUUID(),
+    instanceId: randomUUID(),
+    sessionId: randomUUID(),
+  };
+  f.identities.set(grandchild.agentId, grandchild);
+  const { enrollNativeReportCreation } = await import("./report-origin.js");
+  try {
+    await enrollNativeReportCreation(
+      await f.registry.captureHostCreation(f.child, () => {}),
+      grandchild,
+    );
+    await f.ownerCall("report-registration-revoke", {
+      messageId: randomUUID(),
+      identity: f.child,
+      expectedEpoch: f.childReceipt.epoch,
+    });
+    await expect(f.registry.captureHostCreation(f.child, () => {})).rejects.toThrow(
+      "registration revoked",
+    );
+    await expect(f.registry.captureHostCreation(grandchild, () => {})).rejects.toThrow(
+      "registration revoked",
+    );
+    const restored = new NativeReportRegistry(
+      path.join(f.directory, "authority.json"),
+      (id) => f.identities.get(id) ?? null,
+    );
+    await expect(restored.captureHostCreation(grandchild, () => {})).rejects.toThrow(
+      "registration revoked",
+    );
+    // Only an explicit owner adoption can restore the revoked caller.
+    await f.adopt();
+    await expect(f.registry.captureHostCreation(f.child, () => {})).resolves.toEqual({
+      nativeReportCreation: true,
+    });
+    await expect(f.registry.captureHostCreation(grandchild, () => {})).rejects.toThrow(
+      "registration revoked",
+    );
+    await f.ownerCall("report-registration-revoke", {
+      messageId: randomUUID(),
+      identity: f.child,
+      expectedEpoch: f.registry.requireParent(f.child, f.scope).sourceEpoch,
+    });
+    await f.ownerCall("report-registration-revoke", {
+      messageId: randomUUID(),
+      identity: f.prime,
+      expectedEpoch: f.primeReceipt.epoch,
+    });
+    await expect(f.registry.captureHostCreation(f.prime, () => {})).rejects.toThrow(
+      "registration revoked",
+    );
+    await f.register();
+    await expect(f.registry.captureHostCreation(f.prime, () => {})).resolves.toEqual({
+      nativeReportCreation: true,
+    });
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("host creation inherits only an authenticated parent's scopes and cannot adopt existing identities", async () => {
   const f = await fixture();
   try {

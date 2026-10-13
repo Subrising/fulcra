@@ -1522,9 +1522,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async (args: unknown) => {
-      const reportCreation = options.nativeReportOrigin
-        ? agentManager.captureNativeReportCreation(options.nativeReportOrigin)
-        : undefined;
       const resolvedArgs = await resolveCreateAgentToolArgs(args);
       const { parsedArgs, worktree } = resolvedArgs;
       let requestedBackground: boolean;
@@ -1536,6 +1533,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         requestedBackground = resolvedArgs.parsedArgs.background;
         notifyOnFinish = resolvedArgs.parsedArgs.notifyOnFinish ?? false;
       }
+      const reportCreation = notifyOnFinish ? await captureReportCreation() : undefined;
       const selectedProvider = parsedArgs.provider.includes("/")
         ? resolveRequiredProviderModel(parsedArgs.provider).provider
         : parsedArgs.provider.trim();
@@ -1654,6 +1652,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree: CreateAgentFromMcpInput["worktree"];
       };
 
+  function captureReportCreation() {
+    return options.nativeReportOrigin
+      ? agentManager.captureNativeReportCreation(options.nativeReportOrigin)
+      : undefined;
+  }
+
   async function resolveCreateAgentToolArgs(args: unknown): Promise<ResolvedCreateAgentToolArgs> {
     if (callerAgentId) {
       if (hasLegacyCreateAgentPlacement(args)) {
@@ -1749,6 +1753,11 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     workspaceId: string;
   }> {
     if (workspaceId) {
+      if (workspaceId.includes("/") || workspaceId.includes("\\")) {
+        throw new Error(
+          "workspaceId must be an existing workspace ID, not a folder path. Omit it to use your workspace.",
+        );
+      }
       const resolved = await resolveCreateAgentWorkspace(
         { kind: "existing", workspaceId },
         undefined,

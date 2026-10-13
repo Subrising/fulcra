@@ -1139,10 +1139,10 @@ export class AgentManager {
     return result;
   }
 
-  captureNativeReportCreation(origin: NativeReportOrigin): NativeReportCreation {
+  async captureNativeReportCreation(origin: NativeReportOrigin): Promise<NativeReportCreation> {
     if (!this.reportRegistry) throw new Error("Native report registration unavailable");
     const parent = requireNativeReportOrigin(origin);
-    return this.reportRegistry.captureCreation(parent, () => {
+    return this.reportRegistry.captureHostCreation(parent, () => {
       if (JSON.stringify(requireNativeReportOrigin(origin)) !== JSON.stringify(parent))
         throw new Error("Native report creator changed");
     });
@@ -2633,7 +2633,7 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
-    const createOptions = this.buildCreateSessionOptions(options);
+    const createOptions = this.buildCreateSessionOptions(options, storedConfig.provider);
     const session = await nativeDispatch(() => {
       options.creationAdmission?.(providerLaunchConfig);
       return client.createSession(providerLaunchConfig, launchContext, createOptions);
@@ -2679,12 +2679,18 @@ export class AgentManager {
     return agent;
   }
 
-  private buildCreateSessionOptions(options?: {
-    persistSession?: boolean;
-  }): AgentCreateSessionOptions | undefined {
-    return options?.persistSession === undefined
-      ? undefined
-      : { persistSession: options.persistSession };
+  private buildCreateSessionOptions(
+    options?: { persistSession?: boolean },
+    provider?: AgentProvider,
+  ): AgentCreateSessionOptions | undefined {
+    const persistence =
+      options?.persistSession === undefined
+        ? undefined
+        : { persistSession: options.persistSession };
+    // Claude can start a named fresh session. Bind the host launch before its first MCP call or child enrollment.
+    return this.reportRegistry && provider === "claude"
+      ? { ...persistence, freshSessionId: randomUUID() }
+      : persistence;
   }
 
   // Reconstruct an agent from provider persistence. Callers should explicitly

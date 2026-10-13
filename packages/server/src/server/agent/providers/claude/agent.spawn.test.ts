@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { AgentManager } from "../../agent-manager.js";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import type {
@@ -102,4 +106,60 @@ describe("Claude spawn override", () => {
     const spawnOptions = claudeSpawnCall?.[2];
     expect(spawnOptions?.shell).toBe(false);
   });
+});
+
+test("managed Claude launches bind a fresh native ID before their first MCP call", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "claude-native-launch-"));
+  let requestedSessionId: string | undefined;
+  const provider = new ClaudeAgentClient({
+    logger: createTestLogger(),
+    resolveBinary: async () => "/fixture/claude",
+    resolveVersion: async () => "2.1.105",
+    queryFactory: ({ options }) => {
+      requestedSessionId = options?.sessionId;
+      return createQueryMock([
+        {
+          type: "system",
+          subtype: "init",
+          session_id: requestedSessionId,
+          permissionMode: "bypassPermissions",
+          model: "haiku",
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: requestedSessionId,
+          usage: { input_tokens: 1, output_tokens: 1 },
+          total_cost_usd: 0,
+        },
+      ]);
+    },
+  });
+  const manager = new AgentManager({
+    clients: { claude: provider },
+    logger: createTestLogger(),
+    reportRegistryFile: path.join(directory, "authority.json"),
+  });
+  try {
+    const parent = await manager.createAgent(
+      {
+        provider: "claude",
+        cwd: directory,
+        model: "haiku",
+        modeId: "bypassPermissions",
+      },
+      undefined,
+      {},
+    );
+    const nativeId = parent.session!.id;
+    expect(nativeId).toEqual(expect.any(String));
+    expect(parent.persistence?.sessionId).toBe(nativeId);
+    expect(parent.runtimeInfo?.sessionId).toBe(nativeId);
+    for await (const event of manager.streamAgent(parent.id, "fixture work")) void event;
+    expect(requestedSessionId).toBe(nativeId);
+    expect(manager.getAgent(parent.id)?.session?.id).toBe(nativeId);
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await rm(directory, { recursive: true, force: true });
+  }
 });
