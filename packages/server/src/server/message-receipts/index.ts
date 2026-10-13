@@ -505,6 +505,7 @@ export class MessageReceipts {
     batch: NativeReportBatch,
     makeInput: (batch: NativeReportBatch, messageId: string) => NativeQueuedMessage,
     onReady: (agentId: string) => void,
+    wakeMessageId?: string,
   ): Promise<NativeReportMetadataReceipt> {
     const incoming = requireNativeReportBatch(batch);
     if (incoming.data.members.length !== 1) throw new Error("One host report event required");
@@ -559,15 +560,17 @@ export class MessageReceipts {
           await this.commit(oldKey, { ...oldReceipt, state: "cancelled" });
         }
       }
-      const entry = [...this.records].find(
-        ([, receipt]) =>
-          receipt.state === "queued" &&
-          (receipt.collectingUntil ?? 0) > now &&
-          receipt.report &&
-          reportMembers(receipt.report).length < 24 &&
-          receipt.report.parentEpoch === incoming.data.parentEpoch &&
-          digest(receipt.report.parent) === digest(incoming.data.parent),
-      );
+      const entry = wakeMessageId
+        ? undefined
+        : [...this.records].find(
+            ([, receipt]) =>
+              receipt.state === "queued" &&
+              (receipt.collectingUntil ?? 0) > now &&
+              receipt.report &&
+              reportMembers(receipt.report).length < 24 &&
+              receipt.report.parentEpoch === incoming.data.parentEpoch &&
+              digest(receipt.report.parent) === digest(incoming.data.parent),
+          );
       if (entry) {
         const [key, receipt] = entry;
         const oldInput = this.admissions.get(key);
@@ -617,7 +620,11 @@ export class MessageReceipts {
         this.armCollection(key, onReady);
         return this.reportMetadataReceipt(next, member.id, false);
       }
-      const input = this.reportCollectionInput(batch, `paseo-notify:${randomUUID()}`, makeInput);
+      const input = this.reportCollectionInput(
+        batch,
+        wakeMessageId ?? `paseo-notify:${randomUUID()}`,
+        makeInput,
+      );
       input.collectingUntil = now + 2000;
       await this.admit(input);
       const key = digest(["send", input.agentId, input.messageId]);
@@ -657,6 +664,17 @@ export class MessageReceipts {
       if (state === "dispatching" || state === "uncertain") return "uncertain";
       return "refused";
     }
+  }
+
+  /** Host-only receipt read for a persisted finish notice owner. */
+  reportWakeStatus(messageId: string): Promise<"missing" | QueuedReceipt["state"]> {
+    return this.serial(async () => {
+      await this.initialize();
+      const receipt = [...this.records.values()].find(
+        (item) => item.report && item.messageId === messageId,
+      );
+      return receipt?.state ?? "missing";
+    });
   }
 
   private reportCollectionInput(

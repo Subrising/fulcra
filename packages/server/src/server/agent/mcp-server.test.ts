@@ -278,6 +278,13 @@ function buildAgentManagerSpies() {
 function buildAgentStorageSpies() {
   return {
     get: vi.fn().mockResolvedValue(null),
+    armFinishNotice: vi.fn().mockResolvedValue({
+      parentId: "voice-agent",
+      owner: "report-up",
+      status: "armed",
+      messageId: "paseo-notify:fixture",
+    }),
+    settleFinishNotice: vi.fn().mockResolvedValue(undefined),
     setTitle: vi.fn().mockResolvedValue(undefined),
     upsert: vi.fn().mockResolvedValue(undefined),
     applySnapshot: vi.fn(),

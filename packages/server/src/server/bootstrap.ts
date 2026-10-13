@@ -2156,6 +2156,7 @@ export async function createPaseoDaemon(
       )
         .catch((err) => logger.warn({ err }, "Revive on restart failed"))
         .then(() => queuedAgentMessages.start())
+        .then(() => stopReportUp.recover())
         .catch((err) => logger.warn({ err }, "Queued messages could not resume"));
     } catch (error) {
       localCredential = null;

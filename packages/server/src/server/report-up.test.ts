@@ -1180,22 +1180,16 @@ describe("report-up coalescing", () => {
     expect(f.delivered[1]!.prompt).toContain("ended a turn with an error");
   });
 
-  test("a worker that messaged its lead during the turn sends no notice; one that did not still does", async () => {
+  test("a worker message during the turn does not replace its finish notice", async () => {
     resetAgentMessageLogForTests();
-    const f = fixture([lead, named(WORKER, "Alpha", "a"), named(WORKER_B, "Beta", "b")]);
+    const f = fixture([lead, named(WORKER, "Alpha", "a")]);
     f.stream(WORKER, { type: "turn_started", provider: "claude" });
     noteAgentMessage(WORKER, LEAD, f.clock.now + 1000);
     f.clock.now += 2000;
     f.stream(WORKER, { type: "turn_completed", provider: "claude" });
-    f.turn(WORKER_B);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
-    expect(f.delivered[0]!.prompt).toContain("Worker Beta");
-    // A message from an earlier turn does not silence the next one.
-    f.clock.now += COALESCE_WINDOW_MS + 1;
-    f.turn(WORKER);
-    await f.settle();
-    expect(f.delivered.map((d) => d.prompt.includes("Worker Alpha"))).toEqual([false, true]);
+    expect(f.delivered[0]!.prompt).toContain("Worker Alpha");
     resetAgentMessageLogForTests();
   });
 
