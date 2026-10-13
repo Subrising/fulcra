@@ -912,6 +912,13 @@ const AgentActiveTurnPayloadSchema = z.object({
 });
 
 export const AgentSnapshotPayloadSchema = z.object({
+  archiveSafety: z
+    .object({
+      inFlight: z.boolean(),
+      heldMessages: z.number().int().nonnegative().nullable(),
+      heldReports: z.number().int().nonnegative().nullable(),
+    })
+    .optional(),
   // Live host instance identity; observation only, never an input capability.
   runtimeInstanceId: z.string().min(1).optional(),
   inputSequence: z.object({ boot: z.string(), humanAt: z.number().int().nonnegative() }).optional(),

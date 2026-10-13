@@ -13,6 +13,7 @@ import { FENCE_PROTOCOL } from "./native-fence.mjs";
 import { ControlStore } from "./store.mjs";
 import { Controller } from "./controller.mjs";
 import { Bindings } from "./bindings.mjs";
+import { RoleSessions } from "./role-sessions.mjs";
 import { RoleChannels } from "./role-channels.mjs";
 import { COMPANY, PROGRAMME } from "./authority.mjs";
 import { closeSeatingDefaults } from "./role-defaults-fixture.mjs";
@@ -91,6 +92,7 @@ async function fixture(t) {
     path.join(controller, "grants", "role"),
   );
   control.channels = new RoleChannels(control, () => NOW);
+  control.roleSessions = new RoleSessions(control, () => NOW);
   const dispatch = rpc(control, OPERATOR);
 
   // The real controller RPC over a real Unix socket, exactly as client.mjs reaches it.
@@ -203,6 +205,20 @@ test("role tools work over the real MCP stdio transport and preserve capability,
     names.filter((n) => n.startsWith("role_")),
     [...ROLE_TOOLS].sort(),
   );
+  const compactSessions = await projectClient.callTool({
+    name: "role_project_sessions",
+    arguments: {},
+  });
+  assert.equal(compactSessions.isError, undefined, compactSessions.content[0].text);
+  assert.equal(typeof read(compactSessions).omitted, "number");
+  assert.deepEqual(read(compactSessions).errors, []);
+  const fullSessions = await projectClient.callTool({
+    name: "role_project_sessions",
+    arguments: { fullResult: true },
+  });
+  assert.equal(fullSessions.isError, undefined);
+  assert.equal(Object.hasOwn(read(fullSessions), "summary"), false);
+
   // Every role tool must also resolve to the role grant lane, or it reads the wrong credential file.
   for (const method of [
     "bindings-self",

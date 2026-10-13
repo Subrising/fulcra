@@ -19,6 +19,13 @@ category: Orchestration
 
 Depending on the provider, Paseo delivers tools through its native tool interface or MCP. The capabilities are the same. Start a new agent or reload an existing one after changing injection settings.
 
+## Compact results
+
+Session lists, agent status, agent activity, provider inspection, and schedule logs return compact results by default.
+The result includes errors, counts, and the number of omitted rows, fields, and characters.
+Set `fullResult: true` in the tool arguments to read the full result.
+The Fulcra controller session list and inspection tools use the same argument.
+
 ## Limit Paseo tools by provider
 
 Use provider policies when different agent profiles should receive different Paseo tools. Enable

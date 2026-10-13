@@ -1,3 +1,4 @@
+import { compactToolResult } from "./compact-result.mjs";
 // H6 item 5 (G5): a seat's Orca tool surface is brought up to this release's -- on an operator's request, on a
 // reaffirmation and on a handback -- through the daemon's fenced MCP refresh. Nothing is granted by it.
 import fs from "node:fs";
@@ -626,4 +627,43 @@ test("REVIEW-H6 F3 (AT6): a refreshed seat born without the role environment rep
   assert.equal(after.toolEnvironmentAtCreation, "absent", "the history is kept");
   assert.equal(after.needs.includes("tool-environment-adoption"), false);
   assert.equal(after.needs.includes("tool-surface-refresh"), false);
+});
+
+test("session lists show counts, omissions, and errors from omitted rows", () => {
+  const sessions = Array.from({ length: 9 }, (_, id) => ({
+    id: `fixture-${id}`,
+    status: "idle",
+    error: id === 8 ? "Fixture failure" : null,
+  }));
+  const out = compactToolResult({ content: [], structuredContent: { sessions } });
+  assert.equal(out.structuredContent.summary.sessions.count, 9);
+  assert.equal(out.structuredContent.summary.sessions.omitted, 4);
+  assert.deepEqual(out.structuredContent.errors, [
+    { path: "result.sessions.8.error", value: "Fixture failure" },
+  ]);
+  assert.deepEqual(JSON.parse(out.content[0].text), out.structuredContent);
+});
+test("inspect and fleet results keep errors and bound reply text", () => {
+  const out = compactToolResult({
+    content: [],
+    structuredContent: {
+      partial: true,
+      latestReply: "x".repeat(800),
+      error: { code: "Fixture", reason: "Fixture failure" },
+    },
+  });
+  assert.equal(out.structuredContent.summary.partial, true);
+  assert.equal(out.structuredContent.omitted, 500);
+  assert.deepEqual(out.structuredContent.errors, [
+    { path: "result.error", value: { code: "Fixture", reason: "Fixture failure" } },
+  ]);
+});
+test("fullResult retains the full shape; empty lists still show omissions", () => {
+  const input = { content: [], structuredContent: { workers: [] } };
+  assert.equal(compactToolResult(input, true), input);
+  assert.equal(compactToolResult(input).structuredContent.omitted, 0);
+});
+test("text-only failures stay visible", () => {
+  const input = { isError: true, content: [{ type: "text", text: "Fixture refusal" }] };
+  assert.equal(compactToolResult(input), input);
 });

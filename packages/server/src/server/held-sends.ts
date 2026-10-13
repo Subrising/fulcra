@@ -120,6 +120,10 @@ export class HeldSends {
     });
   }
 
+  archivePending(targetId: string): number {
+    return (this.queues.get(targetId)?.length ?? 0) + Number(this.draining.has(targetId));
+  }
+
   pending(targetId: string): number {
     return this.queues.get(targetId)?.length ?? 0;
   }

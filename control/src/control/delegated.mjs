@@ -1,3 +1,4 @@
+import { compactToolResult } from "./compact-result.mjs";
 import { controlHome } from "./home.mjs";
 import fs from "node:fs";
 import { request } from "./client.mjs";
@@ -36,7 +37,9 @@ async function run(method, input) {
       input: method === "inspect" ? current.sessionId : { ...input, sessionId: current.sessionId },
       capability: current.capability,
     });
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    const response = { content: [{ type: "text", text: JSON.stringify(result) }] };
+    if (method !== "inspect") return response;
+    return compactToolResult({ ...response, structuredContent: result }, input?.fullResult);
   } catch (e) {
     return {
       content: [{ type: "text", text: JSON.stringify({ error: e.message }) }],
@@ -49,9 +52,9 @@ server.registerTool(
   {
     description:
       "Inspect the single explicitly delegated session and its actual native state. Idle does not establish accepted work.",
-    inputSchema: z.object({}).strict(),
+    inputSchema: z.object({ fullResult: z.boolean().optional() }).strict(),
   },
-  () => run("inspect"),
+  (a) => run("inspect", a),
 );
 server.registerTool(
   "session_assign",
