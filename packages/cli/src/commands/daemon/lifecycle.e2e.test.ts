@@ -144,7 +144,8 @@ test("managed two-home restart retains its supervisor and never routes ordinary 
     await mkdir(repoB);
     await f.ok(["project", "create", repoB, "--home", b], poisoned);
     expect(await f.ok(["project", "ls", "--home", a])).toEqual([]);
-    expect((await f.ok(["project", "ls", "--home", b], poisoned)).length).toBe(1);
+    expect(await f.ok(["project", "ls", "--home", b], poisoned)).toEqual([]);
+    expect((await f.ok(["project", "ls", "--folders", "--home", b], poisoned)).length).toBe(1);
     const stream = await f.run(["logs", "missing-agent", "--follow", "--home", b], poisoned);
     expect(stream.stderr).toContain("No agent found matching: missing-agent");
     const restart = await f.ok(["restart", "--home", b, "--timeout", "30"], poisoned);
