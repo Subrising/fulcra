@@ -115,6 +115,24 @@ posixTest("archive observation counts pending and uncertain native receipts", as
   expect(restored.archivePending("other")).toBe(0);
 });
 
+posixTest(
+  "archive observation leaves queued receipt bytes unchanged and preserves lifecycle recovery",
+  async () => {
+    const { requests, directory } = await fixture();
+    await requests.enqueue(queued());
+    const file = path.join(directory, (await readdir(directory))[0]!);
+    const before = await readFile(file, "utf8");
+    const restored = new MessageReceipts(directory);
+    await restored.prepareArchiveObservation();
+    expect(await readFile(file, "utf8")).toBe(before);
+    expect(restored.archivePending("target")).toBe(1);
+    await restored.prepareArchiveObservation();
+    expect(await readFile(file, "utf8")).toBe(before);
+    expect(await restored.enqueue(queued())).toMatchObject({ state: "cancelled" });
+    expect(JSON.parse(await readFile(file, "utf8")).state).toBe("cancelled");
+  },
+);
+
 test("archive observation keeps unreadable native receipt state unknown", async () => {
   const { requests, directory } = await fixture();
   await writeFile(path.join(directory, `${"a".repeat(64)}.json`), "invalid JSON");

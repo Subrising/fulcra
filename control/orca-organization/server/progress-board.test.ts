@@ -53,6 +53,54 @@ test("result is a bounded first line", () => {
   assert.equal(oneLine(""), null);
   assert.equal(oneLine("a".repeat(500))!.length, 320);
 });
+test("board text removes synthetic tokens and private paths before publication", async () => {
+  const privatePath = path.posix.join("/", "Users", "fixture", "private", "config.json");
+  const privateText = `Failed: sk-reviewfixture123456 at ${privatePath}`;
+  const check = (text: string | null) => {
+    assert.ok(text);
+    assert.ok(!text.includes("sk-reviewfixture123456"));
+    assert.ok(!text.includes(privatePath));
+    assert.ok(!text.includes("config.json"));
+  };
+  check(oneLine(privateText));
+  check(
+    parseLedger(`${header}\n| FU-1 | Task | BUILD | Owner | OPEN | ${privateText} | brief |`)
+      .items[0]!.evidence,
+  );
+  const agent = {
+    id: "job",
+    workspaceId: "w",
+    title: "Job",
+    status: "running",
+    createdAt: "2026-10-01T00:00:00Z",
+    updatedAt: "2026-10-01T01:00:00Z",
+    pendingPermissions: [],
+    lastError: privateText,
+  } as unknown as PaseoAgent;
+  check(jobList([agent], new Set(["w"]), "Fixture host", new Map())[0]!.result);
+  check(
+    jobList([agent], new Set(["w"]), "Fixture host", new Map([["job", privateText]]))[0]!.result,
+  );
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-private-test-"));
+  fs.mkdirSync(path.join(root, "fixture"));
+  fs.writeFileSync(
+    path.join(root, "fixture", "OPEN-ITEMS.md"),
+    `${header}\n| FU-1 | Task | BUILD | Owner | OPEN | ${privateText} | brief |`,
+  );
+  const board = createProgressBoard({ on: () => () => {} }, { root, machine: "Fixture host" });
+  const api = {
+    agents: { list: async () => ({ entries: [{ agent }], pageInfo: { hasMore: false } }) },
+    workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  try {
+    const project = (await board.read(api)).projects[0]!;
+    check(project.items[0]!.evidence);
+    check(project.jobs[0]!.result);
+  } finally {
+    board.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 const workspace = {
   id: "w",
   name: "Board",

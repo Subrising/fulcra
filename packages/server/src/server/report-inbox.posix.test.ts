@@ -1,4 +1,5 @@
 import { test, expect, vi } from "vitest";
+import { checkSessionArchive } from "../../../cli/src/commands/check/checks.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, realpath, readdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -21,7 +22,7 @@ import {
 import { IntercomRates } from "./intercom-rates.js";
 import type { JsonValue } from "@getpaseo/protocol/trusted-input";
 
-async function fixture() {
+async function fixture(kind: "ended" | "needs-you" = "ended") {
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "native-report-test-")));
   const nativeIdentity = () => ({
     agentId: randomUUID(),
@@ -95,9 +96,7 @@ async function fixture() {
   ) as { capability: string };
   const receipts = new MessageReceipts(path.join(directory, "receipts"));
   const inbox = new NativeReportInbox(registry, receipts);
-  const events = [
-    { id: randomUUID(), source: child, scope, kind: "ended" as const, at: Date.now() },
-  ];
+  const events = [{ id: randomUUID(), source: child, scope, kind, at: Date.now() }];
   const batch = registry.captureReportBatch(events);
   const messageId = randomUUID();
   const admit = () =>
@@ -223,7 +222,7 @@ test("native report collector: durable metadata precedes one sealed wake and pre
       duplicate: false,
     });
     await f.receipts.prepareArchiveObservation();
-    expect(f.receipts.archivePending(f.prime.agentId)).toBe(1);
+    expect(f.receipts.archivePending(f.prime.agentId)).toBe(2);
     expect(await f.receipts.dispatchNext(f.prime.agentId, () => true, vi.fn())).toBeNull();
     await f.request("events-ack", {
       sessionId: f.prime.agentId,
@@ -294,6 +293,57 @@ test("native report collector: unsupported wake retains metadata without a nativ
     expect(await f.receipts.dispatchNext(f.prime.agentId, () => true, vi.fn())).toBeNull();
   } finally {
     vi.useRealTimers();
+    await f.cleanup();
+  }
+});
+
+test("archive check fails for delivered unread native reports until consumption", async () => {
+  const f = await fixture("needs-you");
+  try {
+    await f.admit();
+    expect(f.receipts.archivePending(f.prime.agentId)).toBe(2);
+    await f.receipts.dispatchNext(
+      f.prime.agentId,
+      () => true,
+      async (_input, check) => {
+        check();
+        return "accepted-turn";
+      },
+    );
+    const pending = f.receipts.archivePending(f.prime.agentId);
+    expect(pending).toBe(1);
+    const checks = checkSessionArchive({
+      status: "idle",
+      pendingPermissions: [],
+      archiveSafety: { inFlight: false, heldMessages: pending, heldReports: 0 },
+    });
+    expect(checks.find((check) => check.check === "session-messages")?.pass).toBe(false);
+    const restored = new MessageReceipts(path.join(f.directory, "receipts"));
+    await restored.prepareArchiveObservation();
+    expect(restored.archivePending(f.prime.agentId)).toBe(1);
+    expect(
+      await f.request("events-ack", {
+        sessionId: f.prime.agentId,
+        eventId: f.events[0]!.id,
+        note: "Read report metadata",
+      }),
+    ).toMatchObject({ consumed: true });
+    expect(f.receipts.archivePending(f.prime.agentId)).toBe(0);
+    expect(
+      checkSessionArchive({
+        status: "idle",
+        pendingPermissions: [],
+        archiveSafety: {
+          inFlight: false,
+          heldMessages: f.receipts.archivePending(f.prime.agentId),
+          heldReports: 0,
+        },
+      }).every((check) => check.pass),
+    ).toBe(true);
+    const afterConsumption = new MessageReceipts(path.join(f.directory, "receipts"));
+    await afterConsumption.prepareArchiveObservation();
+    expect(afterConsumption.archivePending(f.prime.agentId)).toBe(0);
+  } finally {
     await f.cleanup();
   }
 });
