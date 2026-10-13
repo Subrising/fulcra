@@ -56,6 +56,7 @@ import type { HostLinkNoticeKind } from "./host-link-contracts.js";
 import { classifyEndingAssistantMessage, classifyFailedTurn } from "./limit-resume/detect.js";
 import {
   decideSend,
+  findRoleHolder,
   lineStoreOf,
   reportsTo,
   resolveRoleTarget,
@@ -156,6 +157,15 @@ class ReportUpDisabledError extends Error {
 }
 
 class OwnedFinishAlreadyDelivered extends Error {}
+
+class OwnedFinishLineChanged extends Error {
+  constructor(
+    readonly parentId: string | null,
+    reason: string,
+  ) {
+    super(reason);
+  }
+}
 
 interface PersistedState {
   v: 1;
@@ -443,46 +453,124 @@ export class ReportUpService {
       await this.deliverOwnedFinish(childId, notice, false);
   }
 
+  private captureOwnedFinalCheck(
+    childId: string,
+    notice: FinishNotice,
+    expectedLine: string | null,
+  ): () => void {
+    return () => {
+      const { agentManager, agentStorage } = this.deps;
+      const child = agentManager.getAgent(childId) ?? agentStorage.getCached(childId);
+      const parent =
+        agentManager.getAgent(notice.parentId) ?? agentStorage.getCached(notice.parentId);
+      const currentParentId = getParentAgentIdFromLabels(child?.labels);
+      if (!child || child.archivedAt) throw new OwnedFinishLineChanged(null, "child unavailable");
+      if (currentParentId !== notice.parentId)
+        throw new OwnedFinishLineChanged(currentParentId, "parent changed");
+      if (!parent || parent.archivedAt || reportsTo(child) !== expectedLine)
+        throw new OwnedFinishLineChanged(currentParentId, "reporting line changed");
+      if (expectedLine === `${ROLE_REF_PREFIX}${MAIN_ASSISTANT_ROLE}`) {
+        const agents = new Map<string, LineAgent>(
+          agentStorage.listCached().map((record) => [record.id, record]),
+        );
+        for (const live of agentManager.listAgents()) agents.set(live.id, live);
+        const holder = findRoleHolder([...agents.values()], MAIN_ASSISTANT_ROLE);
+        if (!holder || !("id" in holder) || holder.id !== notice.parentId)
+          throw new OwnedFinishLineChanged(currentParentId, "reporting role changed");
+      }
+    };
+  }
+
+  private async recoverOwnedLineChange(
+    childId: string,
+    notice: FinishNotice,
+    error: OwnedFinishLineChanged,
+    reroutes: number,
+  ): Promise<FinishNotice | null> {
+    let retry: FinishNotice | null = null;
+    if (error.parentId && error.parentId !== notice.parentId && reroutes < 2) {
+      try {
+        retry = await this.deps.agentStorage.retargetFinishNotice(
+          childId,
+          notice.messageId,
+          error.parentId,
+        );
+      } catch {
+        retry = null;
+      }
+    }
+    if (!retry) await this.deps.agentStorage.dropFinishNotice(childId, notice.messageId);
+    this.deps.logger.info(
+      { childId, oldParent: notice.parentId, newParent: error.parentId, reason: error.message },
+      retry ? "Finish notice moved to current parent" : "Finish notice dropped",
+    );
+    return retry;
+  }
+
+  private scheduleRetargetedFinish(
+    childId: string,
+    retry: FinishNotice | null,
+    observedLast: string | null | undefined,
+    reroutes: number,
+  ): void {
+    if (!retry || this.stopped) return;
+    queueMicrotask(() => {
+      void this.deliverOwnedFinish(childId, retry, false, observedLast, reroutes + 1).catch(
+        (err: unknown) =>
+          this.deps.logger.warn({ err, childId }, "Retargeted finish notice failed"),
+      );
+    });
+  }
+
+  private async nativeOwnedFinishDelivered(
+    childId: string,
+    notice: FinishNotice,
+    recovery: boolean,
+  ): Promise<boolean> {
+    if (notice.owner !== "native" || notice.reason === "closed") return false;
+    const outcome = recovery
+      ? await this.deps.agentManager.nativeFinishReceiptStatus(notice.messageId).catch((err) => {
+          this.deps.logger.warn({ err, childId }, "Native finish receipt could not be read");
+          return "missing" as const;
+        })
+      : await this.deps.agentManager.waitForNativeFinishOutcome(childId, notice.parentId);
+    if (outcome !== "delivered") return false;
+    await this.deps.agentStorage.settleFinishNotice(
+      childId,
+      notice.messageId,
+      "delivered",
+      "native",
+    );
+    return true;
+  }
+
   private async deliverOwnedFinish(
     childId: string,
     notice: FinishNotice,
     recovery: boolean,
     observedLast?: string | null,
+    reroutes = 0,
   ): Promise<void> {
     if (this.stopped || this.processingOwned.has(childId)) return;
     this.processingOwned.add(childId);
+    let retry: FinishNotice | null = null;
     try {
-      if (notice.owner === "native" && notice.reason !== "closed") {
-        const outcome = recovery
-          ? await this.deps.agentManager
-              .nativeFinishReceiptStatus(notice.messageId)
-              .catch((err) => {
-                this.deps.logger.warn({ err, childId }, "Native finish receipt could not be read");
-                return "missing" as const;
-              })
-          : await this.deps.agentManager.waitForNativeFinishOutcome(childId, notice.parentId);
-        if (outcome === "delivered") {
-          await this.deps.agentStorage.settleFinishNotice(
-            childId,
-            notice.messageId,
-            "delivered",
-            "native",
-          );
-          return;
-        }
-      }
+      if (await this.nativeOwnedFinishDelivered(childId, notice, recovery)) return;
       if (this.stopped) return;
       const worker = await this.deps.agentStorage.get(childId);
       const parent = await this.deps.agentStorage.get(notice.parentId);
+      const currentParentId = getParentAgentIdFromLabels(worker?.labels);
+      if (currentParentId !== notice.parentId)
+        throw new OwnedFinishLineChanged(currentParentId, "parent changed before delivery");
       if (
         !worker ||
         !parent ||
         worker.archivedAt ||
         parent.archivedAt ||
-        getParentAgentIdFromLabels(worker.labels) !== notice.parentId ||
         !(await this.reportingLineAllows(childId, notice.parentId))
       )
-        return;
+        throw new OwnedFinishLineChanged(currentParentId, "reporting line unavailable");
+      const finalCheck = this.captureOwnedFinalCheck(childId, notice, reportsTo(worker));
       const lastMessage =
         observedLast === undefined
           ? await this.deps.agentManager.getLastAssistantMessage(childId).catch(() => null)
@@ -497,8 +585,10 @@ export class ReportUpService {
             });
       const prompt = formatSystemNotificationPrompt(body);
       const send = async () => {
-        if (this.deps.deliver) await this.deps.deliver(notice.parentId, prompt);
-        else
+        if (this.deps.deliver) {
+          finalCheck();
+          await this.deps.deliver(notice.parentId, prompt);
+        } else
           await this.send(
             notice.parentId,
             prompt,
@@ -506,6 +596,7 @@ export class ReportUpService {
             undefined,
             undefined,
             notice.messageId,
+            finalCheck,
           );
       };
       try {
@@ -524,8 +615,12 @@ export class ReportUpService {
         "delivered",
         "report-up",
       );
+    } catch (error) {
+      if (!(error instanceof OwnedFinishLineChanged)) throw error;
+      retry = await this.recoverOwnedLineChange(childId, notice, error, reroutes);
     } finally {
       this.processingOwned.delete(childId);
+      this.scheduleRetargetedFinish(childId, retry, observedLast, reroutes);
     }
   }
 
@@ -1109,10 +1204,12 @@ export class ReportUpService {
     currentNudge?: () => boolean,
     captureHandoff?: (handle: object) => void,
     ownedMessageId?: string,
+    ownedFinalCheck?: () => void,
   ): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
       if (!this.noticeEnabled(kind)) throw new ReportUpDisabledError();
+      ownedFinalCheck?.();
       if (ownedMessageId && agentManager.hasSubmittedFinishMessageNow(leadId, ownedMessageId))
         throw new OwnedFinishAlreadyDelivered();
       if (currentNudge && !currentNudge()) throw new Error("Idle nudge generation expired");

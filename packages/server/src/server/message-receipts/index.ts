@@ -37,7 +37,11 @@ import { open, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { isNativeQueuedRefusal } from "../agent/native-queued-dispatch.js";
-import { writeJsonFileAtomic, writeJsonFileDurable } from "../atomic-file.js";
+import {
+  AtomicWritePreCommitGuardError,
+  writeJsonFileAtomic,
+  writeJsonFileDurable,
+} from "../atomic-file.js";
 import { SENT_NOTHING_CODES } from "../held-sends.js";
 
 const LegacyReceiptSchema = z.object({
@@ -347,7 +351,7 @@ export class MessageReceipts {
       await writeJsonFileDurable(path.join(this.directory, `${key}.json`), receipt, requireEffect);
       requireEffect?.(); // After every durability await, immediately before memory publication.
     } catch (error) {
-      this.unhealthy = true;
+      if (!(error instanceof AtomicWritePreCommitGuardError)) this.unhealthy = true;
       throw error;
     }
     this.records.set(key, receipt);
@@ -739,7 +743,13 @@ export class MessageReceipts {
         }
         const sealed = { ...current };
         delete sealed.collectingUntil;
-        await this.commit(key, sealed, input.authorize);
+        try {
+          await this.commit(key, sealed, input.authorize);
+        } catch (error) {
+          if (!(error instanceof AtomicWritePreCommitGuardError)) throw error;
+          await this.commit(key, { ...current, state: "refused" });
+          return;
+        }
         input.authorize();
         onReady(sealed.agentId);
       }).catch(() => {

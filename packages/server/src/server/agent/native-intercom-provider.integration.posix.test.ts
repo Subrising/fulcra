@@ -30,6 +30,8 @@ import { CodexAppServerAgentClient } from "./providers/codex-app-server-agent.js
 import { createFakeCodexAppServer } from "./providers/codex/test-utils/fake-app-server.js";
 import { TrustedPlugins } from "../plugins/trusted.js";
 import { MessageReceipts } from "../message-receipts/index.js";
+import { DaemonConfigStore } from "../daemon-config-store.js";
+import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
 import { ReportUpService } from "../report-up.js";
 import { LeadEventDispatcher, registerLeadEvents } from "../lead-events.js";
 import { noteAgentMessage, resetAgentMessageLogForTests } from "../agent-message-log.js";
@@ -201,6 +203,14 @@ async function fixture(
       : {}),
   });
   const receipts = new MessageReceipts(path.join(directory, "receipts"));
+  const finishConfig = new DaemonConfigStore(
+    directory,
+    MutableDaemonConfigSchema.parse({
+      mcp: { injectIntoAgents: false },
+      nativeFinishNotices: true,
+    }),
+    createTestLogger(),
+  );
   manager.setNativeMessageReceipts(receipts);
   const createSession = vi.spyOn(provider, "createSession");
   const agent = await manager.createAgent(
@@ -212,6 +222,7 @@ async function fixture(
   return {
     manager,
     agentStorage,
+    finishConfig,
     receipts,
     parentPrompts,
     controlStore,
@@ -587,6 +598,7 @@ test("native report end-to-end: actual MCP launch witness creates a scoped child
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -687,6 +699,7 @@ test("native create_agent from an ordinary parent validates placement and sends 
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -731,6 +744,190 @@ test("native create_agent from an ordinary parent validates placement and sends 
   }
 });
 
+test("native finish switch off gives one report-up notice and no late native turn", async () => {
+  const f = await fixture("valid", true);
+  await registerPrime(f, false);
+  f.finishConfig.patch({ nativeFinishNotices: false });
+  const offReportUp = observeFixtureReportUp(f);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  try {
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    expect(f.manager.nativeReportOwnsFinish(childId, f.agent.id)).toBe(false);
+    expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ owner: "report-up" });
+    f.server.completeTurn({ threadId: f.manager.getAgent(childId)!.persistence!.sessionId });
+    await vi.waitFor(() => expect(f.turnCount()).toBe(2));
+    const notice = (await f.agentStorage.getFinishNotice(childId))!;
+    expect(await f.receipts.reportWakeStatus(notice.messageId)).toBe("missing");
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+    expect(f.turnCount()).toBe(2);
+  } finally {
+    offReportUp();
+    await f.cleanup();
+  }
+}, 8000);
+
+test("a later send_agent_prompt arms a new report-up finish notice", async () => {
+  const f = await fixture("valid", true);
+  await registerPrime(f, false);
+  f.finishConfig.patch({ nativeFinishNotices: false });
+  const offReportUp = observeFixtureReportUp(f);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  try {
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    const childThread = f.manager.getAgent(childId)!.persistence!.sessionId;
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "delivered" }),
+    );
+    const firstId = (await f.agentStorage.getFinishNotice(childId))!.messageId;
+    f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
+    await catalog.executeTool("send_agent_prompt", {
+      agentId: childId,
+      prompt: "later child work",
+      background: true,
+      notifyOnFinish: true,
+    });
+    const armed = (await f.agentStorage.getFinishNotice(childId))!;
+    expect(armed).toMatchObject({ owner: "report-up", status: "armed" });
+    expect(armed.messageId).not.toBe(firstId);
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "delivered" }),
+    );
+    const parentTurns = f.server
+      .requests()
+      .filter(
+        (request) =>
+          request.method === "turn/start" &&
+          (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId,
+      );
+    expect(parentTurns).toHaveLength(2);
+    expect(parentTurns.every((request) => JSON.stringify(request).includes(childId))).toBe(true);
+  } finally {
+    offReportUp();
+    await f.cleanup();
+  }
+});
+
+test("a busy parent sends a finish notice to the child's new parent", async () => {
+  const f = await fixture("valid", true);
+  await registerPrime(f, false);
+  f.finishConfig.patch({ nativeFinishNotices: false });
+  const offReportUp = observeFixtureReportUp(f);
+  const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
+  vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
+    modeId: undefined,
+    featureValues: undefined,
+  });
+  const catalog = createPaseoToolCatalog({
+    agentManager: f.manager,
+    agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
+    providerSnapshotManager: snapshots,
+    logger: createTestLogger(),
+    callerAgentId: f.agent.id,
+    nativeReportOrigin: f.nativeOrigin(),
+    ensureWorkspaceForCreate: async () => f.agent.workspaceId!,
+  });
+  try {
+    const newParent = await f.manager.createAgent(
+      { provider: "codex", cwd: f.directory, model: "gpt-5.4" },
+      undefined,
+      { workspaceId: f.agent.workspaceId },
+    );
+    const created = await catalog.executeTool("create_agent", {
+      provider: "codex",
+      title: "Fixture worker",
+      initialPrompt: "fixture child work",
+      notifyOnFinish: true,
+    });
+    const childId = (created.structuredContent as { agentId: string }).agentId;
+    const human = (async () => {
+      for await (const event of f.manager.streamAgent(f.agent.id, "busy parent")) void event;
+    })();
+    await f.manager.waitForAgentRunStart(f.agent.id);
+    f.server.completeTurn({ threadId: f.manager.getAgent(childId)!.persistence!.sessionId });
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "pending" }),
+    );
+    await f.manager.adoptAgentParent(
+      {
+        agentId: childId,
+        parentAgentId: newParent.id,
+        expectedParentAgentId: f.agent.id,
+        childNativeSessionId: f.manager.getAgent(childId)!.persistence!.sessionId,
+        parentNativeSessionId: newParent.persistence!.sessionId,
+      },
+      () => true,
+    );
+    f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
+    await human;
+    await vi.waitFor(() => expect(f.turnCount()).toBe(3));
+    const turns = f.server.requests().filter((request) => request.method === "turn/start");
+    expect(
+      turns.filter(
+        (request) =>
+          (request.params as { threadId?: string }).threadId === newParent.persistence!.sessionId &&
+          JSON.stringify(request).includes(childId),
+      ),
+    ).toHaveLength(1);
+    expect(
+      turns.filter(
+        (request) =>
+          (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId &&
+          JSON.stringify(request).includes(childId),
+      ),
+    ).toHaveLength(0);
+    expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+      parentId: newParent.id,
+      status: "delivered",
+    });
+  } finally {
+    offReportUp();
+    await f.cleanup();
+  }
+}, 10000);
+
 test("agent-scoped MCP create_agent wakes a CLI-style parent once without native rate settings", async () => {
   const f = await fixture("valid", true);
   const offReportUp = observeFixtureReportUp(f);
@@ -742,6 +939,7 @@ test("agent-scoped MCP create_agent wakes a CLI-style parent once without native
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -787,6 +985,7 @@ test("agent-scoped MCP create_agent wakes a Claude parent once when native queue
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -831,6 +1030,7 @@ test("queued child message before native refusal still gives one finish notice",
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -891,6 +1091,7 @@ test("native report admission failure uses the ordinary notice once", async () =
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -936,6 +1137,7 @@ test("restart between child finish and native wake restores one notice", async (
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -999,6 +1201,7 @@ test("durably accepted native wake makes restart report-up skip", async () => {
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -1057,6 +1260,7 @@ test("uncertain native wake uses the same notice id and gives one parent notice"
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -1128,6 +1332,7 @@ test("an uncertain native wake with an accepted notice starts no second parent t
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -1191,6 +1396,7 @@ test("a refused native permission wake leaves the request visible to the parent"
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -1260,6 +1466,7 @@ test("a child closed before finishing gives its parent one close notice", async 
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -1308,6 +1515,7 @@ test("an unavailable permission report cannot settle the finish wake", async () 
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -1432,6 +1640,7 @@ test("native report wake preserves delegated journal generation through actual W
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -1482,6 +1691,7 @@ test("native authenticated creation refuses replaced parent during child launch 
   const catalog = createPaseoToolCatalog({
     agentManager: f.manager,
     agentStorage: f.agentStorage,
+    daemonConfigStore: f.finishConfig,
     providerSnapshotManager: snapshots,
     logger: createTestLogger(),
     callerAgentId: f.agent.id,
@@ -2627,6 +2837,7 @@ test("managed artifact actual owner opt-in, native tool origin and protected Ses
     const catalog = createPaseoToolCatalog({
       agentManager: f.manager,
       agentStorage: f.agentStorage,
+      daemonConfigStore: f.finishConfig,
       providerSnapshotManager: snapshots,
       logger: createTestLogger(),
       callerAgentId: child.id,

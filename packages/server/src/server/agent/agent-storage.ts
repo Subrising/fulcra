@@ -208,6 +208,25 @@ export class AgentStorage {
     return notice;
   }
 
+  async rearmFinishNotice(agentId: string, parentId: string): Promise<FinishNotice | null> {
+    await this.load();
+    let next: FinishNotice | null = null;
+    await this.queueRecordMutation(agentId, (record) => {
+      const prior = record?.finishNotice;
+      if (!record || !prior || getParentAgentIdFromLabels(record.labels) !== parentId) return null;
+      if (prior.status !== "delivered" && prior.status !== "cancelled")
+        throw new Error("Previous finish notice is still active");
+      next = {
+        parentId: z.string().uuid().parse(parentId),
+        owner: "report-up",
+        status: "armed",
+        messageId: `paseo-notify:${randomUUID()}`,
+      };
+      return { ...record, finishNotice: next };
+    });
+    return next;
+  }
+
   async recordFinishNotice(
     agentId: string,
     turnId: string,
@@ -251,6 +270,40 @@ export class AgentStorage {
           status,
           ...(status === "delivered" && deliveredBy ? { deliveredBy } : {}),
         },
+      };
+    });
+  }
+
+  async retargetFinishNotice(
+    agentId: string,
+    messageId: string,
+    parentId: string,
+  ): Promise<FinishNotice> {
+    await this.load();
+    let next: FinishNotice | null = null;
+    await this.queueRecordMutation(agentId, (record) => {
+      if (
+        !record?.finishNotice ||
+        record.finishNotice.status !== "pending" ||
+        record.finishNotice.messageId !== messageId ||
+        getParentAgentIdFromLabels(record.labels) !== parentId
+      )
+        throw new Error("Finish notice reparent changed");
+      next = { ...record.finishNotice, parentId: z.string().uuid().parse(parentId) };
+      return { ...record, finishNotice: next };
+    });
+    return next!;
+  }
+
+  async dropFinishNotice(agentId: string, messageId: string): Promise<void> {
+    await this.load();
+    await this.queueRecordMutation(agentId, (record) => {
+      if (!record?.finishNotice || record.finishNotice.messageId !== messageId)
+        throw new Error("Finish notice owner changed");
+      if (record.finishNotice.status !== "pending") return null;
+      return {
+        ...record,
+        finishNotice: { ...record.finishNotice, status: "cancelled" },
       };
     });
   }

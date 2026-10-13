@@ -45,6 +45,7 @@ function reloadableConfig(
     enableTerminalAgentHooks: daemon.enableTerminalAgentHooks ?? false,
     ...autoResumeOf(daemon),
     reportUpOnTurnEnd: daemon.reportUpOnTurnEnd,
+    nativeFinishNotices: Boolean(daemon.nativeFinishNotices),
     ...nudgeSettingsOf(daemon),
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
     terminalProfiles: daemon.terminalProfiles,
@@ -1400,6 +1401,28 @@ test("idleLeadNudge persists and reloads without changing other notice switches"
     );
     expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudge"]);
     expect(store.get().idleLeadNudge).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("native finish notices stay off by default and follow the saved switch", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "native-finish-config-"));
+  const store = new DaemonConfigStore(root, reloadableConfig({ daemon: {} }), undefined, {
+    reloadSource: {
+      resolve: (persisted) => ({
+        mutable: reloadableConfig(persisted),
+        overrideControlledPaths: [],
+      }),
+    },
+  });
+  try {
+    expect(store.get().nativeFinishNotices).toBe(false);
+    expect(store.patch({ nativeFinishNotices: true }).nativeFinishNotices).toBe(true);
+    expect(loadPersistedConfig(root).daemon?.nativeFinishNotices).toBe(true);
+    writeFileSync(path.join(root, "config.json"), JSON.stringify({ daemon: {} }));
+    expect(store.reload().appliedPaths).toEqual(["daemon.nativeFinishNotices"]);
+    expect(store.get().nativeFinishNotices).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
