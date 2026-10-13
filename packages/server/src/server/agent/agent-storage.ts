@@ -16,7 +16,8 @@ const FinishNoticeSchema = z
   .object({
     parentId: z.string().uuid(),
     owner: z.enum(["native", "report-up"]),
-    status: z.enum(["armed", "pending", "delivered", "cancelled"]),
+    status: z.enum(["armed", "pending", "sending", "unknown", "delivered", "cancelled"]),
+    retryAfterRefusal: z.boolean().optional(),
     deliveredBy: z.enum(["native", "report-up"]).optional(),
     messageId: z.string().min(1),
     turnId: z.string().min(1).optional(),
@@ -214,7 +215,12 @@ export class AgentStorage {
     await this.queueRecordMutation(agentId, (record) => {
       const prior = record?.finishNotice;
       if (!record || !prior || getParentAgentIdFromLabels(record.labels) !== parentId) return null;
-      if (prior.status !== "delivered" && prior.status !== "cancelled")
+      if (
+        prior.status !== "delivered" &&
+        prior.status !== "cancelled" &&
+        prior.status !== "unknown" &&
+        !(prior.status === "pending" && prior.retryAfterRefusal)
+      )
         throw new Error("Previous finish notice is still active");
       next = {
         parentId: z.string().uuid().parse(parentId),
@@ -236,7 +242,14 @@ export class AgentStorage {
     let result: FinishNotice | null = null;
     await this.queueRecordMutation(agentId, (record) => {
       const notice = record?.finishNotice;
-      if (!record || !notice || notice.status === "cancelled" || notice.status === "delivered")
+      if (
+        !record ||
+        !notice ||
+        notice.status === "cancelled" ||
+        notice.status === "delivered" ||
+        notice.status === "sending" ||
+        notice.status === "unknown"
+      )
         return null;
       if (notice.status === "pending") {
         if (notice.turnId !== turnId) return null;
@@ -261,7 +274,11 @@ export class AgentStorage {
         throw new Error("Finish notice ownership changed");
       if (record.finishNotice.status === status) return null;
       if (status === "cancelled" && record.finishNotice.status === "pending") return null;
-      if (record.finishNotice.status !== "armed" && record.finishNotice.status !== "pending")
+      if (
+        record.finishNotice.status !== "armed" &&
+        record.finishNotice.status !== "pending" &&
+        !(status === "delivered" && record.finishNotice.status === "sending")
+      )
         throw new Error("Finish notice already settled");
       return {
         ...record,
@@ -271,6 +288,39 @@ export class AgentStorage {
           ...(status === "delivered" && deliveredBy ? { deliveredBy } : {}),
         },
       };
+    });
+  }
+
+  async markFinishNoticeSending(agentId: string, messageId: string): Promise<void> {
+    await this.load();
+    await this.queueRecordMutation(agentId, (record) => {
+      if (record?.finishNotice?.messageId !== messageId || record.finishNotice.status !== "pending")
+        throw new Error("Finish notice changed before provider call");
+      return {
+        ...record,
+        finishNotice: { ...record.finishNotice, status: "sending", retryAfterRefusal: false },
+      };
+    });
+  }
+
+  async markFinishNoticeRefused(agentId: string, messageId: string): Promise<void> {
+    await this.load();
+    await this.queueRecordMutation(agentId, (record) => {
+      if (record?.finishNotice?.messageId !== messageId || record.finishNotice.status !== "sending")
+        return null;
+      return {
+        ...record,
+        finishNotice: { ...record.finishNotice, status: "pending", retryAfterRefusal: true },
+      };
+    });
+  }
+
+  async markFinishNoticeUnknown(agentId: string, messageId: string): Promise<void> {
+    await this.load();
+    await this.queueRecordMutation(agentId, (record) => {
+      if (record?.finishNotice?.messageId !== messageId || record.finishNotice.status !== "sending")
+        return null;
+      return { ...record, finishNotice: { ...record.finishNotice, status: "unknown" } };
     });
   }
 

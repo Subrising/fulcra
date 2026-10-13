@@ -37,12 +37,15 @@ import {
   hasArmedFinishNotification,
   isSystemInjectedEnvelope,
   sendPromptToAgent,
+  SteerUnavailableError,
 } from "./agent/agent-prompt.js";
 import {
   createFinalInputCheck,
+  finalInputFailure,
   hasFinalInputHandoff,
   waitForFinalInputHandoff,
 } from "./agent/final-input-check.js";
+import { CodexAppServerRpcError } from "./agent/providers/codex/app-server-transport.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import { heldSendsFor } from "./held-sends.js";
 import {
@@ -216,6 +219,7 @@ export class ReportUpService {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly finishOwners = new Map<string, boolean>();
   private readonly processingOwned = new Set<string>();
+  private readonly finishRetriesOnIdle = new Map<string, Set<string>>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
   private archiveStateKnown = true;
@@ -329,7 +333,32 @@ export class ReportUpService {
   onEvent(event: AgentManagerEvent): void {
     if (event.type === "agent_state" && event.agent.lifecycle === "closed")
       this.observer.close(event.agent.id);
+    if (event.type === "agent_state" && event.agent.lifecycle === "idle")
+      this.retryRefusedFinishesOnIdle(event.agent.id);
     if (event.type === "agent_stream") this.observer.onStream(event.agentId, event.event);
+  }
+
+  private retryRefusedFinishesOnIdle(parentId: string): void {
+    const children = this.finishRetriesOnIdle.get(parentId);
+    if (!children || this.stopped) return;
+    this.finishRetriesOnIdle.delete(parentId);
+    for (const childId of children)
+      void this.deps.agentStorage
+        .getFinishNotice(childId)
+        .then((notice) => {
+          if (notice?.status === "pending" && notice.retryAfterRefusal)
+            return this.deliverOwnedFinish(childId, notice, false);
+          return undefined;
+        })
+        .catch((err: unknown) =>
+          this.deps.logger.warn({ err, childId }, "Refused finish retry failed"),
+        );
+  }
+
+  private retryFinishOnNextIdle(parentId: string, childId: string): void {
+    const children = this.finishRetriesOnIdle.get(parentId) ?? new Set<string>();
+    children.add(childId);
+    this.finishRetriesOnIdle.set(parentId, children);
   }
 
   observeNative(hooks: PolicyHooks): () => void {
@@ -356,6 +385,7 @@ export class ReportUpService {
     for (const pending of this.nudging.values())
       pending.abort.abort(new Error("Idle nudge service stopped"));
     this.nudging.clear();
+    this.finishRetriesOnIdle.clear();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
     this.finishOwners.clear();
@@ -436,6 +466,13 @@ export class ReportUpService {
     await Promise.all(
       (await this.deps.agentStorage.list()).map(async (record) => {
         const notice = record.finishNotice;
+        if (notice?.status === "sending") {
+          await this.deps.agentStorage.markFinishNoticeUnknown(record.id, notice.messageId);
+          this.deps.logger.warn(
+            { childId: record.id, messageId: notice.messageId },
+            "Finish notice outcome unknown after restart",
+          );
+        }
         if (notice?.status === "pending") await this.deliverOwnedFinish(record.id, notice, true);
       }),
     );
@@ -544,6 +581,32 @@ export class ReportUpService {
     return true;
   }
 
+  private async resolveOwnedFinishFailure(input: {
+    childId: string;
+    notice: FinishNotice;
+    error: unknown;
+    sending: boolean;
+    handoff?: object;
+    reroutes: number;
+  }): Promise<FinishNotice | null> {
+    const { childId, notice, error, sending, handoff, reroutes } = input;
+    if (error instanceof OwnedFinishLineChanged) {
+      if (sending) await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
+      return this.recoverOwnedLineChange(childId, notice, error, reroutes);
+    }
+    if (!sending) throw error;
+    const refusal = finalInputFailure(handoff) ?? error;
+    if (!hasFinalInputHandoff(handoff) || refusal instanceof CodexAppServerRpcError) {
+      await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
+      this.retryFinishOnNextIdle(notice.parentId, childId);
+      this.deps.logger.warn({ err: error, childId }, "Finish notice refused; next idle will retry");
+    } else {
+      await this.deps.agentStorage.markFinishNoticeUnknown(childId, notice.messageId);
+      this.deps.logger.warn({ err: error, childId }, "Finish notice outcome unknown");
+    }
+    return null;
+  }
+
   private async deliverOwnedFinish(
     childId: string,
     notice: FinishNotice,
@@ -554,6 +617,8 @@ export class ReportUpService {
     if (this.stopped || this.processingOwned.has(childId)) return;
     this.processingOwned.add(childId);
     let retry: FinishNotice | null = null;
+    let sending = false;
+    let handoff: object | undefined;
     try {
       if (await this.nativeOwnedFinishDelivered(childId, notice, recovery)) return;
       if (this.stopped) return;
@@ -584,20 +649,37 @@ export class ReportUpService {
               lastMessage,
             });
       const prompt = formatSystemNotificationPrompt(body);
+      const durableDefault = notice.owner === "report-up";
       const send = async () => {
+        finalCheck();
+        if (durableDefault) {
+          await this.deps.agentStorage.markFinishNoticeSending(childId, notice.messageId);
+          sending = true;
+        }
         if (this.deps.deliver) {
-          finalCheck();
           await this.deps.deliver(notice.parentId, prompt);
-        } else
-          await this.send(
-            notice.parentId,
-            prompt,
-            "owned-finish",
-            undefined,
-            undefined,
-            notice.messageId,
-            finalCheck,
-          );
+        } else {
+          try {
+            await this.send(
+              notice.parentId,
+              prompt,
+              "owned-finish",
+              undefined,
+              (handle) => {
+                handoff = handle;
+              },
+              notice.messageId,
+              finalCheck,
+              durableDefault,
+            );
+          } catch (error) {
+            if (error instanceof SteerUnavailableError && !hasFinalInputHandoff(handoff)) {
+              await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
+              sending = false;
+            }
+            throw error;
+          }
+        }
       };
       try {
         if (this.deps.deliver) await send();
@@ -616,8 +698,14 @@ export class ReportUpService {
         "report-up",
       );
     } catch (error) {
-      if (!(error instanceof OwnedFinishLineChanged)) throw error;
-      retry = await this.recoverOwnedLineChange(childId, notice, error, reroutes);
+      retry = await this.resolveOwnedFinishFailure({
+        childId,
+        notice,
+        error,
+        sending,
+        handoff,
+        reroutes,
+      });
     } finally {
       this.processingOwned.delete(childId);
       this.scheduleRetargetedFinish(childId, retry, observedLast, reroutes);
@@ -1197,6 +1285,23 @@ export class ReportUpService {
     return this.otherEnabled();
   }
 
+  private watchOwnedProviderStart(parentId: string): { promise: Promise<void>; stop: () => void } {
+    let stop = () => {};
+    const promise = new Promise<void>((resolve, reject) => {
+      stop = this.deps.agentManager.subscribe(
+        (event) => {
+          if (event.type !== "agent_stream" || event.agentId !== parentId) return;
+          if (event.event.type === "turn_started") resolve();
+          if (event.event.type === "turn_failed" || event.event.type === "turn_canceled")
+            reject(new Error("Finish notice provider refused the turn"));
+        },
+        { agentId: parentId, replayState: false },
+      );
+    });
+    void promise.catch(() => {});
+    return { promise, stop: () => stop() };
+  }
+
   private send(
     leadId: string,
     prompt: string,
@@ -1205,6 +1310,7 @@ export class ReportUpService {
     captureHandoff?: (handle: object) => void,
     ownedMessageId?: string,
     ownedFinalCheck?: () => void,
+    waitForProviderStart = false,
   ): Promise<void> {
     const { agentManager, agentStorage, logger } = this.deps;
     const checkCurrent = () => {
@@ -1224,29 +1330,43 @@ export class ReportUpService {
       "report-up": "queued_delivery",
     } as const;
     const cause = causes[kind];
-    return withLeadEvent(cause, () =>
-      agentManager.trustedPlugins.daemon(async () => {
-        const finalCheck = createFinalInputCheck(checkCurrent);
-        captureHandoff?.(finalCheck);
-        await sendPromptToAgent({
-          agentManager,
-          agentStorage,
-          agentId: leadId,
-          prompt,
-          messageId:
-            ownedMessageId ??
-            (kind === "idle-nudge"
-              ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
-              : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`),
-          runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
-          activeTurnBehavior: "steer",
-          steerOnly: true,
-          unarchive: false,
-          logger,
-        });
-        await waitForFinalInputHandoff(finalCheck);
-      }),
-    );
+    const dispatch = async () => {
+      const finalCheck = createFinalInputCheck(checkCurrent);
+      captureHandoff?.(finalCheck);
+      const result = await sendPromptToAgent({
+        agentManager,
+        agentStorage,
+        agentId: leadId,
+        prompt,
+        messageId:
+          ownedMessageId ??
+          (kind === "idle-nudge"
+            ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
+            : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`),
+        runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
+        activeTurnBehavior: "steer",
+        steerOnly: true,
+        unarchive: false,
+        logger,
+      });
+      await waitForFinalInputHandoff(finalCheck);
+      return result.disposition;
+    };
+    if (!waitForProviderStart)
+      return withLeadEvent(cause, () =>
+        agentManager.trustedPlugins.daemon(async () => {
+          await dispatch();
+        }),
+      );
+    return withLeadEvent(cause, async () => {
+      const start = this.watchOwnedProviderStart(leadId);
+      try {
+        const disposition = await agentManager.trustedPlugins.daemon(dispatch);
+        if (disposition === "turn_started") await start.promise;
+      } finally {
+        start.stop();
+      }
+    });
   }
 }
 
@@ -1327,6 +1447,10 @@ export function startReportUp(input: {
         (event.event.type === "turn_completed" || event.event.type === "turn_failed")
       )
         service.captureFinishOwner(event.agentId);
+      if (input.hooks && event.type === "agent_state" && event.agent.lifecycle === "idle") {
+        service.onEvent(event);
+        return;
+      }
       if (input.hooks && (event.type !== "agent_stream" || event.event.type !== "timeline")) return;
       service.onEvent(event);
     },
