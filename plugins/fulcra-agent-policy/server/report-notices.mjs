@@ -87,8 +87,12 @@ export function formatReportUpNotice(input) {
   const verb = input.failed ? "ended a turn with an error" : "finished a turn";
   return `Worker ${titleOf(input.worker)} (${input.worker.id}) ${verb}: ${snippet || "(no message)"}`;
 }
-export function reportUpSwitches(setting) {
-  return { finishedTurns: setting === true, otherNotices: setting !== false };
+export function reportUpSwitches(setting, idleLeadNudge) {
+  return {
+    finishedTurns: setting === true,
+    otherNotices: setting !== false,
+    idleNudges: idleLeadNudge !== false,
+  };
 }
 
 export function quietReportReason(input) {

@@ -17,6 +17,13 @@ function notificationModeOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
   return { notificationMode: daemon.notificationMode ?? ("primes" as const) };
 }
 
+function nudgeSettingsOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
+  return {
+    idleLeadNudge: daemon.idleLeadNudge,
+    idleLeadNudgeSkipOwners: daemon.idleLeadNudgeSkipOwners ?? [],
+  };
+}
+
 function reloadableConfig(
   persisted: PersistedConfig,
   options: { relayEnabledFallback?: boolean } = {},
@@ -38,6 +45,7 @@ function reloadableConfig(
     enableTerminalAgentHooks: daemon.enableTerminalAgentHooks ?? false,
     ...autoResumeOf(daemon),
     reportUpOnTurnEnd: daemon.reportUpOnTurnEnd,
+    ...nudgeSettingsOf(daemon),
     appendSystemPrompt: daemon.appendSystemPrompt ?? "",
     terminalProfiles: daemon.terminalProfiles,
     agentProfiles: daemon.agentProfiles,
@@ -1361,4 +1369,78 @@ describe("DaemonConfigStore reload", () => {
       overrideControlledPaths: [],
     });
   });
+});
+
+test("idleLeadNudge persists and reloads without changing other notice switches", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "nudge-config-"));
+  const mutable = reloadableConfig({ daemon: { reportUpOnTurnEnd: true } });
+  const store = new DaemonConfigStore(root, mutable, undefined, {
+    reloadSource: {
+      resolve: (persisted) => ({
+        mutable: reloadableConfig(persisted),
+        overrideControlledPaths: [],
+      }),
+    },
+  });
+  try {
+    const disabled = store.patch({ idleLeadNudge: false });
+    expect(disabled.idleLeadNudge).toBe(false);
+    expect(store.get().reportUpOnTurnEnd).toBe(true);
+    expect(loadPersistedConfig(root).daemon?.idleLeadNudge).toBe(false);
+    writeFileSync(
+      path.join(root, "config.json"),
+      JSON.stringify({ daemon: { reportUpOnTurnEnd: true, idleLeadNudge: true } }),
+    );
+    expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudge"]);
+    expect(store.get().idleLeadNudge).toBe(true);
+    expect(store.get().reportUpOnTurnEnd).toBe(true);
+    writeFileSync(
+      path.join(root, "config.json"),
+      JSON.stringify({ daemon: { reportUpOnTurnEnd: true } }),
+    );
+    expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudge"]);
+    expect(store.get().idleLeadNudge).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("nudge owner exclusions persist, reload, and clear without changing the nudge switch", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "nudge-owner-config-"));
+  const store = new DaemonConfigStore(
+    root,
+    reloadableConfig({ daemon: { idleLeadNudge: true } }),
+    undefined,
+    {
+      reloadSource: {
+        resolve: (persisted) => ({
+          mutable: reloadableConfig(persisted),
+          overrideControlledPaths: [],
+        }),
+      },
+    },
+  );
+  try {
+    expect(store.get().idleLeadNudgeSkipOwners).toEqual([]);
+    store.patch({ idleLeadNudgeSkipOwners: ["Owner A"] });
+    expect(loadPersistedConfig(root).daemon?.idleLeadNudgeSkipOwners).toEqual(["Owner A"]);
+    expect(store.get().idleLeadNudge).toBe(true);
+    writeFileSync(
+      path.join(root, "config.json"),
+      JSON.stringify({ daemon: { idleLeadNudge: true, idleLeadNudgeSkipOwners: ["Owner B"] } }),
+    );
+    expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudgeSkipOwners"]);
+    expect(store.get().idleLeadNudgeSkipOwners).toEqual(["Owner B"]);
+    writeFileSync(
+      path.join(root, "config.json"),
+      JSON.stringify({ daemon: { idleLeadNudge: true } }),
+    );
+    expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudgeSkipOwners"]);
+    expect(store.get().idleLeadNudgeSkipOwners).toEqual([]);
+    store.patch({ idleLeadNudgeSkipOwners: ["Owner A"] });
+    store.patch({ idleLeadNudgeSkipOwners: [] });
+    expect(loadPersistedConfig(root).daemon?.idleLeadNudgeSkipOwners).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

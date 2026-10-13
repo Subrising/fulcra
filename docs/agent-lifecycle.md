@@ -155,6 +155,41 @@ An interrupted dispatch has an uncertain result. Check the receiver before you s
 Use `fulcra send --steer` when the message must enter the current turn. An unavailable steer enters the queue and returns a delivery note.
 Human app input keeps its existing behavior. A queued MCP follow-up replaces the earlier finish notice and arms one notice for the delivered turn.
 
+## Idle-lead nudges
+
+An idle lead receives a nudge when its eligible idle-worker set gains a member or a new owned open item appears.
+A change that only removes workers or closes items sends no nudge.
+Paused or blocked workers, background jobs, blocked items, and standing rules are excluded.
+Ledger ownership still matches session titles or short IDs.
+
+Use the durable worker hold label:
+
+```sh
+fulcra agent update SESSION_ID --label fulcra.hold=paused
+fulcra agent update SESSION_ID --label fulcra.hold=blocked
+fulcra agent update SESSION_ID --label fulcra.hold=
+```
+
+The empty value clears the hold. The label controls nudge eligibility; use Stop to interrupt a running turn.
+
+Nudges default to on. Set their own switch:
+
+```sh
+fulcra daemon config set daemon.idleLeadNudge false
+fulcra daemon config unset daemon.idleLeadNudge
+```
+
+The configuration command applies the change to a running daemon when available.
+Exclude selected ledger owners with `daemon.idleLeadNudgeSkipOwners`. The string list defaults to empty.
+Entries match the full owner text without regard to case.
+
+```sh
+fulcra daemon config set daemon.idleLeadNudgeSkipOwners '["Owner A"]'
+fulcra daemon config unset daemon.idleLeadNudgeSkipOwners
+```
+
+Permission, limit, and finished-turn notices retain their separate `reportUpOnTurnEnd` setting.
+
 ## Provider-managed child agents
 
 Some providers can create their own child sessions inside one provider runtime. OMP's task tool reports these with `child_session` events; `AgentManager` imports the live provider handle, stamps `paseo.parent-agent-id`, and surfaces the result as a normal subagent in the parent's subagents track.

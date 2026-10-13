@@ -16,7 +16,12 @@ import {
   reportUpSwitches,
 } from "./report-up.js";
 import { noteAgentMessage, resetAgentMessageLogForTests } from "./agent-message-log.js";
-import { parseOpenRows, readOpenLedgerRows, rowsOwnedBy } from "./ledger-items.js";
+import {
+  parseOpenRows,
+  readOpenLedgerRows,
+  rowsOwnedBy,
+  rowsEligibleForNudge,
+} from "./ledger-items.js";
 import { PluginService } from "./plugins/index.js";
 import { DaemonConfigStore } from "./daemon-config-store.js";
 import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
@@ -41,9 +46,11 @@ function fixture(
     deliver?: (leadId: string, prompt: string) => Promise<void>;
     /** The permission, limit and idle-lead notices; default on, as the service does. */
     otherEnabled?: boolean;
+    nudgeEnabled?: boolean;
+    skipOwners?: string[];
     now?: number;
     statePath?: string;
-    ledger?: Array<{ project: string; id: string; owner: string; status: string }>;
+    ledger?: Array<{ project: string; id: string; owner: string; status: string; kind?: string }>;
     remoteNotice?: (
       workerId: string,
       prompt: string,
@@ -65,6 +72,7 @@ function fixture(
     list: async () => [...byId.values()],
   } as unknown as AgentStorage;
   let enabled = options.enabled ?? true;
+  let nudgeEnabled = options.nudgeEnabled ?? true;
   let nativeOwnsFinish = false;
   manager.nativeReportOwnsFinish = () => nativeOwnsFinish;
   const service = new ReportUpService({
@@ -73,6 +81,8 @@ function fixture(
     agentStorage: storage,
     isEnabled: () => enabled,
     ...(options.otherEnabled === undefined ? {} : { isOtherEnabled: () => options.otherEnabled! }),
+    isNudgeEnabled: () => nudgeEnabled,
+    getNudgeSkipOwners: () => options.skipOwners ?? [],
     localServerId: "srv_local",
     logger: createTestLogger(),
     now: () => clock.now,
@@ -115,6 +125,7 @@ function fixture(
     timers,
     failedTurn,
     setEnabled: (value: boolean) => (enabled = value),
+    setNudgeEnabled: (value: boolean) => (nudgeEnabled = value),
     setNativeOwner: (value: boolean) => (nativeOwnsFinish = value),
   };
 }
@@ -563,6 +574,163 @@ describe("idle-lead nudge", () => {
     expect(prompt).not.toContain("Done: tests pass");
   });
 
+  test.each(["paused", "blocked"])(
+    "a %s worker is excluded until its durable hold is cleared",
+    async (hold) => {
+      const heldWorker = idleWorker();
+      heldWorker.labels["fulcra.hold"] = hold;
+      const f = fixture([lead, heldWorker], { ledger: owned });
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      heldWorker.labels["fulcra.hold"] = "";
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+    },
+  );
+
+  test("a hold removes a worker without a nudge, and clearing it adds one nudge", async () => {
+    const heldWorker = idleWorker();
+    const other = { ...idleWorker(), id: "other-worker", title: "Other" };
+    const f = fixture([lead, heldWorker, other], { ledger: owned });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    heldWorker.labels["fulcra.hold"] = "paused";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    heldWorker.labels["fulcra.hold"] = "";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+  });
+
+  test("excluded ledger items do not enter the list or fingerprint", async () => {
+    const ledger = [
+      ...owned,
+      { ...owned[0]!, id: "FU-13", status: "BLOCKED" },
+      { ...owned[0]!, id: "FU-14", kind: "RULE" },
+      { ...owned[0]!, id: "FU-15", status: "STANDING" },
+      { ...owned[0]!, id: "FU-16", owner: "Owner A" },
+    ];
+    const f = fixture([lead, idleWorker()], { ledger });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("1 open ledger item: FU-12.");
+    expect(f.delivered[0]!.prompt).not.toMatch(/FU-1[3-6]/);
+    ledger[1]!.id = "FU-17";
+    ledger[1]!.status = "BLOCKED: dependency";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("configured owner exclusions are case-insensitive and clearing them preserves title ownership", async () => {
+    const skipOwners = ["owner a"];
+    const titledLead = { ...lead, title: "Owner A" };
+    const ledger = [{ ...owned[0]!, owner: "Owner A" }];
+    const f = fixture([titledLead, idleWorker()], { ledger, skipOwners });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    skipOwners.splice(0);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    expect(f.delivered[0]!.prompt).toContain("FU-12");
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("the default empty owner exclusion list accepts title-only ledger owners", async () => {
+    const titledLead = { ...lead, title: "Owner A" };
+    const f = fixture([titledLead, idleWorker()], { ledger: [{ ...owned[0]!, owner: "Owner A" }] });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+  });
+
+  test("worker departures and item closures do not send shrink-only nudges", async () => {
+    const departing = { ...idleWorker(), id: "departing-worker", lifecycle: "idle" };
+    const ledger = [...owned, { ...owned[0]!, id: "FU-13" }];
+    const f = fixture([lead, idleWorker(), departing], { ledger });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    departing.lifecycle = "running";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    ledger[1]!.status = "DONE";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    departing.lifecycle = "idle";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[1]!.prompt).toContain("departing-worker");
+    expect(f.delivered[1]!.prompt).not.toContain("FU-13");
+  });
+
+  test("shrinking to empty then gaining work sends one new nudge", async () => {
+    const idle = idleWorker();
+    const f = fixture([lead, idle], { ledger: owned });
+    f.turn(LEAD);
+    await f.settle();
+    idle.lifecycle = "running";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    idle.lifecycle = "idle";
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+  });
+
+  test("turning nudges off keeps permission and limit notices on", async () => {
+    const f = fixture([lead, idleWorker()], { ledger: owned, enabled: false, nudgeEnabled: false });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.stream(WORKER, {
+      type: "permission_requested",
+      provider: "claude",
+      request: { id: "nudge-off-permission", name: "Bash", input: { command: "echo fixture" } },
+    });
+    await f.settle();
+    f.failedTurn(WORKER, "Claude AI usage limit reached|0000000000");
+    await f.settle();
+    expect(f.delivered).toHaveLength(2);
+    expect(f.delivered[0]!.prompt).toContain("waiting for permission");
+    expect(f.delivered[1]!.prompt).toContain("usage limit until");
+    expect(f.delivered.some((entry) => entry.prompt.includes("You are idle"))).toBe(false);
+  });
+
+  test("the nudge switch is independent of other notice switches", async () => {
+    const f = fixture([lead, idleWorker()], { ledger: owned, enabled: false, otherEnabled: false });
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+    f.setNudgeEnabled(false);
+    f.turn(LEAD);
+    await f.settle();
+    expect(f.delivered).toHaveLength(1);
+  });
+
   test("notice replies and lead turns without worker activity do not re-arm the nudge", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned });
     f.turn(LEAD);
@@ -802,7 +970,12 @@ describe("idle-lead nudge", () => {
           { project: "fulcra", id: "FU-1", owner: "Another lead (99999999)", status: "OPEN" },
         ],
       }),
-      fixture([lead, idleWorker()], { ledger: owned, enabled: false, otherEnabled: false }),
+      fixture([lead, idleWorker()], {
+        ledger: owned,
+        enabled: false,
+        otherEnabled: false,
+        nudgeEnabled: false,
+      }),
     ]) {
       setup.turn(LEAD);
       await setup.settle();
@@ -848,6 +1021,22 @@ describe("ledger items", () => {
       rowsOwnedBy(rows, { id: "22222222-x", title: "Someone else" }).map((row) => row.id),
     ).toEqual(["FU-4"]);
     expect(rowsOwnedBy(rows, { id: "33333333-x", title: "Le" })).toEqual([]);
+  });
+
+  test("reads rule kinds and excludes standing, blocked, and human-owned rows from nudges", () => {
+    const rows = parseOpenRows(
+      "fixture",
+      table +
+        "\n| FU-5 | Standing rule | RULE | Lead (11111111) | OPEN | — | fixture |\n| FU-6 | Waiting | FIX | Lead (11111111) | blocked | — | fixture |\n| FU-7 | Human | DECIDE | Owner A | OPEN | — | fixture |",
+    );
+    expect(rows.find((row) => row.id === "FU-5")?.kind).toBe("RULE");
+    expect(
+      rowsEligibleForNudge({
+        rows,
+        chat: { id: LEAD, title: "Lead" },
+        skipOwners: ["Owner A"],
+      }).map((row) => row.id),
+    ).toEqual(["FU-1"]);
   });
 
   test("reads every project ledger in a folder, and a missing folder gives no rows", async () => {
@@ -1030,10 +1219,40 @@ describe("report-up coalescing", () => {
 // Fulcra 0.2.17 (FU-115): report-up is the fallback. Native notifyOnFinish is the standard, so "finished a turn" is off
 // unless daemon.reportUpOnTurnEnd is true.
 describe("report-up default", () => {
-  test("the setting maps to two switches: unset is the other notices only, true adds finished turns, false is nothing", () => {
-    expect(reportUpSwitches(undefined)).toEqual({ finishedTurns: false, otherNotices: true });
-    expect(reportUpSwitches(true)).toEqual({ finishedTurns: true, otherNotices: true });
-    expect(reportUpSwitches(false)).toEqual({ finishedTurns: false, otherNotices: false });
+  test("the finished-turn switch leaves the independent nudge switch on by default", () => {
+    expect(reportUpSwitches(undefined)).toEqual({
+      finishedTurns: false,
+      otherNotices: true,
+      idleNudges: true,
+    });
+    expect(reportUpSwitches(true)).toEqual({
+      finishedTurns: true,
+      otherNotices: true,
+      idleNudges: true,
+    });
+    expect(reportUpSwitches(false)).toEqual({
+      finishedTurns: false,
+      otherNotices: false,
+      idleNudges: true,
+    });
+  });
+
+  test("the nudge switch does not change finished-turn, permission, or limit switches", () => {
+    expect(reportUpSwitches(undefined, false)).toEqual({
+      finishedTurns: false,
+      otherNotices: true,
+      idleNudges: false,
+    });
+    expect(reportUpSwitches(true, false)).toEqual({
+      finishedTurns: true,
+      otherNotices: true,
+      idleNudges: false,
+    });
+    expect(reportUpSwitches(false, true)).toEqual({
+      finishedTurns: false,
+      otherNotices: false,
+      idleNudges: true,
+    });
   });
 
   test("by default no 'finished a turn' or error notice is sent, but a usage-limit notice still is", async () => {
@@ -1382,6 +1601,59 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
     expect(prompts[5]).toContain(`Worker Worker (${child.id}) ended a turn with an error`);
     await settleParent();
     expect(prompts).toHaveLength(6);
+
+    const disabled = await client.patchDaemonConfig({
+      idleLeadNudge: false,
+      idleLeadNudgeSkipOwners: ["Owner A"],
+    });
+    expect(disabled.config.idleLeadNudge).toBe(false);
+    expect(disabled.config.idleLeadNudgeSkipOwners).toEqual(["Owner A"]);
+    expect(disabled.config.reportUpOnTurnEnd).toBe(true);
+    const idleChild = await manager.createAgent(
+      { provider: "codex", cwd: daemon.paseoHome, modeId: "full-access", title: "Idle fixture" },
+      undefined,
+      { labels: { [REPORTS_TO_LABEL]: parent.id } },
+    );
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { resolve } = await import("node:path");
+    const execute = promisify(execFile);
+    const updateHold = (hold: string) =>
+      execute(
+        process.execPath,
+        [
+          resolve("packages/cli/dist/index.js"),
+          "agent",
+          "update",
+          idleChild.id,
+          "--host",
+          `127.0.0.1:${daemon.port}`,
+          "--label",
+          `fulcra.hold=${hold}`,
+          "--json",
+        ],
+        { timeout: 15000 },
+      );
+    await updateHold("paused");
+    expect((await daemon.daemon.agentStorage.get(idleChild.id))?.labels?.["fulcra.hold"]).toBe(
+      "paused",
+    );
+    await updateHold("");
+    expect((await daemon.daemon.agentStorage.get(idleChild.id))?.labels?.["fulcra.hold"]).toBe("");
+    mkdirSync(join(ledgerDir, "fixture"));
+    writeFileSync(
+      join(ledgerDir, "fixture", "OPEN-ITEMS.md"),
+      `| FX-1 | Fixture work | FIX | Lead (${parent.id.slice(0, 8)}) | OPEN | — | fixture |\n`,
+    );
+    const enabledNudges = await client.patchDaemonConfig({
+      idleLeadNudge: true,
+      idleLeadNudgeSkipOwners: [],
+    });
+    expect(enabledNudges.config.idleLeadNudgeSkipOwners).toEqual([]);
+    await manager.runAgent(parent.id, "check fixture work");
+    await vi.waitFor(() => expect(prompts).toHaveLength(8));
+    expect(prompts[7]).toContain("You are idle. You own 1 open ledger item: FX-1");
+    await settleParent();
   } finally {
     await client.close();
     await daemon.close();

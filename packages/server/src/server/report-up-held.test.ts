@@ -79,6 +79,9 @@ function setup(
     isEnabled: () => (store ? reportUpSwitches(store.get().reportUpOnTurnEnd).finishedTurns : true),
     isOtherEnabled: () =>
       store ? reportUpSwitches(store.get().reportUpOnTurnEnd).otherNotices : true,
+    isNudgeEnabled: () =>
+      store ? reportUpSwitches(undefined, store.get().idleLeadNudge).idleNudges : true,
+    getNudgeSkipOwners: () => store?.get().idleLeadNudgeSkipOwners ?? [],
     localServerId: "srv_local",
     logger: createTestLogger(),
     ...options,
@@ -508,5 +511,91 @@ test("confirmed nudge handoff prevents retry when the dispatch reply never settl
     beforeSend = undefined;
     afterHandoff = undefined;
     vi.useRealTimers();
+  }
+});
+
+test("a shrinking idle set cancels a queued nudge until the set gains a worker", async () => {
+  const f = setup(undefined, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  f.chats.get(B)!.lifecycle = "idle";
+  try {
+    f.finish(LEAD);
+    await settle();
+    expect(sent).toEqual([]);
+    f.chats.get(B)!.lifecycle = "running";
+    f.finish(LEAD);
+    await settle();
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toEqual([]);
+    f.chats.get(B)!.lifecycle = "idle";
+    f.finish(LEAD);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.prompt).toContain("2 of your workers are idle");
+  } finally {
+    f.service.stop();
+  }
+});
+
+test("a worker paused while a nudge waits cannot receive that nudge", async () => {
+  const f = setup(undefined, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  try {
+    f.finish(LEAD);
+    await settle();
+    f.chats.get(A)!.labels = { [REPORTS_TO_LABEL]: LEAD, "fulcra.hold": "paused" };
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toEqual([]);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test("the nudge switch cancels queued nudges without disabling other notices", async () => {
+  const root = mkdtempSync(join(tmpdir(), "nudge-switch-"));
+  const { store } = reloadableStore(root);
+  const f = setup(store, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  try {
+    f.finish(LEAD);
+    await settle();
+    store.patch({ idleLeadNudge: false });
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toEqual([]);
+    expect(store.get().reportUpOnTurnEnd).toBe(true);
+    f.stream(A, {
+      type: "permission_requested",
+      request: { id: "nudge-off", name: "Bash", input: { command: "echo fixture" } },
+    });
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.prompt).toContain("waiting for permission");
+  } finally {
+    f.service.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("owner exclusions cancel a nudge that already waits for delivery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "nudge-skip-owner-"));
+  const { store } = reloadableStore(root);
+  const f = setup(store, {
+    readLedger: () => [{ project: "fixture", id: "FX-1", owner: "Lead", status: "OPEN" }],
+  });
+  f.chats.get(A)!.lifecycle = "idle";
+  try {
+    f.finish(LEAD);
+    await settle();
+    expect(sent).toEqual([]);
+    store.patch({ idleLeadNudgeSkipOwners: ["LEAD"] });
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toEqual([]);
+  } finally {
+    f.service.stop();
+    rmSync(root, { recursive: true, force: true });
   }
 });

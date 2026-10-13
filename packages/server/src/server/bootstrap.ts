@@ -450,6 +450,8 @@ export interface PaseoDaemonConfig {
   notificationMode?: "all" | "primes" | "off";
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
+  idleLeadNudge?: boolean;
+  idleLeadNudgeSkipOwners?: string[];
   reviveOnRestart?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
@@ -644,6 +646,15 @@ function initialNotificationMode(
   return config.notificationMode ?? "primes";
 }
 
+function initialNudgeConfig(
+  config: PaseoDaemonConfig,
+): Pick<MutableDaemonConfig, "idleLeadNudge" | "idleLeadNudgeSkipOwners"> {
+  return {
+    idleLeadNudge: config.idleLeadNudge,
+    idleLeadNudgeSkipOwners: config.idleLeadNudgeSkipOwners ?? [],
+  };
+}
+
 function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDaemonConfig {
   const providers = config.providerOverrides ?? {};
 
@@ -671,6 +682,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     notificationMode: initialNotificationMode(config),
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
     reportUpOnTurnEnd: config.reportUpOnTurnEnd,
+    ...initialNudgeConfig(config),
     reviveOnRestart: config.reviveOnRestart !== false,
     autoResumeOnLimit: config.autoResumeOnLimit ?? true,
     appendSystemPrompt: config.appendSystemPrompt ?? "",
