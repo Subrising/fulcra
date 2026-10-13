@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, test } from "vitest";
 import { REPORTS_TO_LABEL, REPORTS_TO_OWNER } from "@getpaseo/protocol/agent-labels";
 import type { AgentManager, AgentManagerEvent } from "./agent/agent-manager.js";
@@ -1537,7 +1538,11 @@ describe("report-up native policy", () => {
 });
 
 // The daemon sends real notices through native lifecycle events and the guarded input route.
-test("WebSocket configuration and native report-up preserve armed finish ownership and failed notices", async () => {
+test("WebSocket configuration and native report-up preserve armed finish ownership and failed notices", async (context) => {
+  const cliEntry = fileURLToPath(new URL("../../../cli/dist/index.js", import.meta.url));
+  if (!existsSync(cliEntry)) {
+    context.skip("Compiled CLI is unavailable. Run npm run build:server before this test.");
+  }
   const { createTestPaseoDaemon } = await import("./test-utils/paseo-daemon.js");
   const { createTestAgentClient } = await import("./test-utils/fake-agent-client.js");
   const { DaemonClient } = await import("./test-utils/daemon-client.js");
@@ -1616,13 +1621,12 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
     );
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
-    const { resolve } = await import("node:path");
     const execute = promisify(execFile);
     const updateHold = (hold: string) =>
       execute(
         process.execPath,
         [
-          resolve("packages/cli/dist/index.js"),
+          cliEntry,
           "agent",
           "update",
           idleChild.id,
