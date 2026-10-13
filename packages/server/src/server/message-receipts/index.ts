@@ -344,6 +344,7 @@ export class MessageReceipts {
     key: string,
     receipt: QueuedReceipt,
     requireEffect?: () => void,
+    allowPreCommitRefusal = false,
   ): Promise<void> {
     try {
       if (receipt.report && Buffer.byteLength(JSON.stringify(receipt)) > receipt.bytes)
@@ -351,7 +352,8 @@ export class MessageReceipts {
       await writeJsonFileDurable(path.join(this.directory, `${key}.json`), receipt, requireEffect);
       requireEffect?.(); // After every durability await, immediately before memory publication.
     } catch (error) {
-      if (!(error instanceof AtomicWritePreCommitGuardError)) this.unhealthy = true;
+      if (!allowPreCommitRefusal || !(error instanceof AtomicWritePreCommitGuardError))
+        this.unhealthy = true;
       throw error;
     }
     this.records.set(key, receipt);
@@ -744,7 +746,8 @@ export class MessageReceipts {
         const sealed = { ...current };
         delete sealed.collectingUntil;
         try {
-          await this.commit(key, sealed, input.authorize);
+          // A revoked guard before rename leaves the collecting receipt unchanged.
+          await this.commit(key, sealed, input.authorize, true);
         } catch (error) {
           if (!(error instanceof AtomicWritePreCommitGuardError)) throw error;
           await this.commit(key, { ...current, state: "refused" });
