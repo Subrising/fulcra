@@ -47,7 +47,8 @@ import { heldSendsFor } from "./held-sends.js";
 import {
   defaultLedgerDir,
   readOpenLedgerRows,
-  rowsOwnedBy,
+  rowsEligibleForNudge,
+  isNudgeOwnerSkipped,
   type LedgerRow,
 } from "./ledger-items.js";
 import { lastAgentMessageAt } from "./agent-message-log.js";
@@ -118,8 +119,11 @@ export interface ReportUpDeps {
   agentStorage: AgentStorage;
   /** "Finished a turn" notices: off unless the owner turned the fallback on. */
   isEnabled: () => boolean;
-  /** The permission, limit and idle-lead notices: on unless every report-up notice is turned off. Default: on. */
+  /** The permission and limit notices: on unless every report-up notice is turned off. Default: on. */
   isOtherEnabled?: () => boolean;
+  /** Idle-lead nudges have their own switch. Unset means on. */
+  isNudgeEnabled?: () => boolean;
+  getNudgeSkipOwners?: () => readonly string[];
   localServerId: string | null;
   logger: Logger;
   /** The delivery step; tests replace it. */
@@ -180,6 +184,14 @@ interface PendingNudge {
   abort: AbortController;
 }
 
+interface NudgeState {
+  fingerprint: string;
+  workerIds: string[];
+  itemIds: string[];
+  itemOwners: string[];
+  needsDelivery: boolean;
+}
+
 export class ReportUpService {
   private readonly observer: import("../../../../plugins/fulcra-agent-policy/server/report-observer.mjs").ReportUpObserver;
   private stopped = false;
@@ -189,8 +201,7 @@ export class ReportUpService {
   private readonly limited = new Map<string, LimitedChat>();
   private archiveStateKnown = true;
   private readonly held = new Map<string, HeldReport[]>();
-  /** State last delivered to each lead; notice replies do not change it. */
-  private readonly nudged = new Map<string, string>();
+  private readonly nudgeStates = new Map<string, NudgeState>();
   private readonly nudging = new Map<string, PendingNudge>();
   private nudgeGeneration = 0;
 
@@ -388,6 +399,14 @@ export class ReportUpService {
     return !this.stopped && (this.deps.isEnabled() || this.otherEnabled());
   }
 
+  private nudgeSkipOwners(): readonly string[] {
+    return this.deps.getNudgeSkipOwners?.() ?? [];
+  }
+
+  private nudgeEnabled(): boolean {
+    return !this.stopped && (this.deps.isNudgeEnabled ? this.deps.isNudgeEnabled() : true);
+  }
+
   private otherEnabled(): boolean {
     return !this.stopped && (this.deps.isOtherEnabled ? this.deps.isOtherEnabled() : true);
   }
@@ -423,21 +442,36 @@ export class ReportUpService {
     const workers: LineAgent[] = [];
     for (const chat of await this.store.list()) {
       if (chat.id === leadId || chat.archivedAt || !reportsTo(chat)) continue;
-      const live = this.deps.agentManager.getAgent(chat.id);
-      if (live?.lifecycle !== "idle" || (live.backgroundWork?.count ?? 0) > 0) continue;
+      if (!this.nudgeWorkerReady(chat)) continue;
       const owner = await this.leadOf(chat);
       if ("id" in owner && owner.id === leadId) workers.push(chat);
     }
     return workers;
   }
 
+  private nudgeWorkerReady(chat: Pick<LineAgent, "id" | "labels">): boolean {
+    const live = this.deps.agentManager.getAgent(chat.id);
+    if (
+      !live ||
+      live.lifecycle !== "idle" ||
+      live.archivedAt ||
+      (live.backgroundWork?.count ?? 0) > 0
+    )
+      return false;
+    const hold = live.labels?.["fulcra.hold"] ?? chat.labels?.["fulcra.hold"];
+    return hold !== "paused" && hold !== "blocked";
+  }
+
   /**
    * A lead that is idle while it owns open ledger items and has idle workers gets one message that lists them.
    * Event-driven: it runs when the lead's turn ends. Nothing is sent when there are no idle workers, no open items,
-   * when the lead is at a usage limit, or when the same state was already delivered.
+   * when the lead is at a usage limit, or when eligible work has not grown since its last observation.
    */
   private async nudgeIdleLead(leadId: string): Promise<void> {
-    if (!this.otherEnabled()) return;
+    if (!this.nudgeEnabled()) {
+      this.cancelNudge(leadId, "Idle nudge was turned off");
+      return;
+    }
     await new Promise((resolve) => setImmediate(resolve));
     if (this.observer.isOpen(leadId) || this.limitOf(leadId)) return;
     const lead = await this.store.get(leadId);
@@ -447,22 +481,18 @@ export class ReportUpService {
     const stop = classifyEndingAssistantMessage(last, this.now());
     if (stop && stop.kind !== "network") return;
     const workers = await this.idleWorkersOf(leadId);
-    if (!workers.length) {
-      this.cancelNudge(leadId, "Idle nudge has no eligible workers");
+    const owned = rowsEligibleForNudge({
+      rows: await (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
+      chat: { id: leadId, title: titleOf(lead) },
+      skipOwners: this.nudgeSkipOwners(),
+    });
+    const state = this.observeNudge(leadId, workers, owned);
+    const fingerprint = state.fingerprint;
+    if (!workers.length || !owned.length) {
+      state.needsDelivery = false;
+      this.cancelNudge(leadId, "Idle nudge has no eligible workers or owned open items");
       return;
     }
-    const owned = rowsOwnedBy(
-      await (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
-      { id: leadId, title: titleOf(lead) },
-    );
-    if (!owned.length) {
-      this.cancelNudge(leadId, "Idle nudge has no owned open items");
-      return;
-    }
-    const fingerprint = JSON.stringify([
-      workers.map((worker) => worker.id).sort(),
-      owned.map((item) => item.id).sort(),
-    ]);
     if (this.observer.isOpen(leadId)) return;
     const pending = this.nudging.get(leadId);
     if (pending) {
@@ -472,12 +502,38 @@ export class ReportUpService {
       if (!withinDeadline) this.expireNudge(leadId, pending);
       else pending.abort.abort(new Error("Idle nudge state changed or expired"));
     }
-    if (this.nudged.get(leadId) === fingerprint) return;
+    if (!state.needsDelivery) return;
     await this.deliverNudge(
       leadId,
       fingerprint,
       formatSystemNotificationPrompt(formatNudge(workers, owned)),
     );
+  }
+
+  private observeNudge(
+    leadId: string,
+    workers: readonly LineAgent[],
+    items: readonly LedgerRow[],
+  ): NudgeState {
+    const workerIds = workers.map((worker) => worker.id).sort();
+    const itemIds = items.map((item) => `${item.project}:${item.id}`).sort();
+    const itemOwners = items.map((item) => item.owner);
+    const fingerprint = JSON.stringify([workerIds, itemIds]);
+    const previous = this.nudgeStates.get(leadId);
+    const previousWorkers = new Set(previous?.workerIds ?? []);
+    const previousItems = new Set(previous?.itemIds ?? []);
+    const gained =
+      workerIds.some((id) => !previousWorkers.has(id)) ||
+      itemIds.some((id) => !previousItems.has(id));
+    const retry = previous?.fingerprint === fingerprint && previous.needsDelivery;
+    const state = { workerIds, itemIds, itemOwners, fingerprint, needsDelivery: gained || retry };
+    this.nudgeStates.set(leadId, state);
+    return state;
+  }
+
+  private recordNudgeDelivery(leadId: string, fingerprint: string): void {
+    const state = this.nudgeStates.get(leadId);
+    if (state?.fingerprint === fingerprint) state.needsDelivery = false;
   }
 
   private cancelNudge(leadId: string, reason: string): void {
@@ -490,7 +546,7 @@ export class ReportUpService {
       !pending.abort.signal.aborted &&
       hasFinalInputHandoff(pending.handoff)
     ) {
-      this.nudged.set(leadId, pending.fingerprint);
+      this.recordNudgeDelivery(leadId, pending.fingerprint);
     }
     pending.abort.abort(new Error("Idle nudge delivery timed out"));
   }
@@ -503,10 +559,15 @@ export class ReportUpService {
       abort: new AbortController(),
     };
     this.nudging.set(leadId, pending);
+    const state = this.nudgeStates.get(leadId);
     const current = () =>
       this.nudging.get(leadId)?.generation === pending.generation &&
+      this.nudgeStates.get(leadId)?.fingerprint === fingerprint &&
       !pending.abort.signal.aborted &&
-      this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS;
+      this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS &&
+      (state?.workerIds.every((id) => this.nudgeWorkerReady({ id })) ?? false) &&
+      (state?.itemOwners.every((owner) => !isNudgeOwnerSkipped(owner, this.nudgeSkipOwners())) ??
+        false);
     let cancel!: () => void;
     const canceled = new Promise<void>((_resolve, reject) => {
       cancel = () => reject(pending.abort.signal.reason);
@@ -524,7 +585,7 @@ export class ReportUpService {
         await this.send(leadId, prompt, "idle-nudge", current, (handle) => {
           pending.handoff = handle;
         });
-      if (current()) this.nudged.set(leadId, fingerprint);
+      if (current()) this.recordNudgeDelivery(leadId, fingerprint);
     };
     // Cancellation also settles the held callback, so a stalled dispatch cannot block the queue.
     const deliver = () => Promise.race([dispatch(), canceled]);
@@ -929,9 +990,10 @@ export class ReportUpService {
   }
 
   private noticeEnabled(kind: NoticeKind): boolean {
-    return (
-      !this.stopped && (kind === "finished-turn" ? this.deps.isEnabled() : this.otherEnabled())
-    );
+    if (this.stopped) return false;
+    if (kind === "idle-nudge") return this.nudgeEnabled();
+    if (kind === "finished-turn") return this.deps.isEnabled();
+    return this.otherEnabled();
   }
 
   private send(
@@ -1011,6 +1073,9 @@ export function startReportUp(input: {
       reportUpSwitches(input.daemonConfigStore.get().reportUpOnTurnEnd).finishedTurns,
     isOtherEnabled: () =>
       reportUpSwitches(input.daemonConfigStore.get().reportUpOnTurnEnd).otherNotices,
+    isNudgeEnabled: () =>
+      reportUpSwitches(undefined, input.daemonConfigStore.get().idleLeadNudge).idleNudges,
+    getNudgeSkipOwners: () => input.daemonConfigStore.get().idleLeadNudgeSkipOwners ?? [],
     localServerId: input.localServerId,
     logger: input.logger,
     ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),

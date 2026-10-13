@@ -31,6 +31,8 @@ interface SupportedMutableConfigPatch {
   notificationMode?: MutableDaemonConfig["notificationMode"];
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
+  idleLeadNudge?: boolean;
+  idleLeadNudgeSkipOwners?: string[];
   reviveOnRestart?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
@@ -191,6 +193,8 @@ const RELOADABLE_PATHS = [
   "daemon.notificationMode",
   "daemon.enableTerminalAgentHooks",
   "daemon.reportUpOnTurnEnd",
+  "daemon.idleLeadNudge",
+  "daemon.idleLeadNudgeSkipOwners",
   "daemon.reviveOnRestart",
   "daemon.autoResumeOnLimit",
   "daemon.appendSystemPrompt",
@@ -219,6 +223,8 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.notificationMode", "notificationMode"],
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.reportUpOnTurnEnd", "reportUpOnTurnEnd"],
+  ["daemon.idleLeadNudge", "idleLeadNudge"],
+  ["daemon.idleLeadNudgeSkipOwners", "idleLeadNudgeSkipOwners"],
   ["daemon.reviveOnRestart", "reviveOnRestart"],
   ["daemon.autoResumeOnLimit", "autoResumeOnLimit"],
   ["daemon.appendSystemPrompt", "appendSystemPrompt"],
@@ -270,12 +276,18 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 // Kept apart so the patch picker stays under the complexity limit; present only when the patch sets it.
 function reportUpField(patch: MutableDaemonConfigPatch): {
   reportUpOnTurnEnd?: boolean;
+  idleLeadNudge?: boolean;
+  idleLeadNudgeSkipOwners?: string[];
   reviveOnRestart?: boolean;
 } {
   return {
     ...(patch.reportUpOnTurnEnd !== undefined
       ? { reportUpOnTurnEnd: patch.reportUpOnTurnEnd }
       : {}),
+    ...(patch.idleLeadNudgeSkipOwners !== undefined
+      ? { idleLeadNudgeSkipOwners: patch.idleLeadNudgeSkipOwners }
+      : {}),
+    ...(patch.idleLeadNudge !== undefined ? { idleLeadNudge: patch.idleLeadNudge } : {}),
     ...(patch.reviveOnRestart !== undefined ? { reviveOnRestart: patch.reviveOnRestart } : {}),
   };
 }
@@ -801,10 +813,7 @@ function mergeMutableDaemonPatch(
   if (patch.enableTerminalAgentHooks !== undefined) {
     next.enableTerminalAgentHooks = patch.enableTerminalAgentHooks;
   }
-  if (patch.reportUpOnTurnEnd !== undefined) {
-    next.reportUpOnTurnEnd = patch.reportUpOnTurnEnd;
-  }
-  if (patch.reviveOnRestart !== undefined) next.reviveOnRestart = patch.reviveOnRestart;
+  Object.assign(next, reportUpField(patch));
   if (patch.appendSystemPrompt !== undefined) next.appendSystemPrompt = patch.appendSystemPrompt;
   if (patch.terminalProfiles !== undefined) next.terminalProfiles = patch.terminalProfiles;
   if (patch.agentProfiles !== undefined) next.agentProfiles = patch.agentProfiles;
