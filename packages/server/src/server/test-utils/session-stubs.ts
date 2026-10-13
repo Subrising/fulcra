@@ -37,6 +37,10 @@ export function asAgentManager(stub: {
   return createStub<SessionOptions["agentManager"]>(
     withTrustedSurface({
       listProviderSubagentActivity: () => [],
+      // The default fake has no native receipt ledger.
+      prepareNativeArchiveObservation: async () => {},
+      nativeArchivePending: () => 0,
+      hasInFlightRun: () => false,
       // V4 (#32): archive paths preflight descendants before admission.
       preflightArchiveDescendants: async () => {},
       ...stub,
