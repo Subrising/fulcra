@@ -623,6 +623,7 @@ export function resolveConfigFromPersisted(
     notificationMode: persistedSettings.notificationMode,
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
     reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
+    nativeFinishNotices: persistedSettings.nativeFinishNotices,
     idleLeadNudge: persistedSettings.idleLeadNudge,
     idleLeadNudgeSkipOwners: persistedSettings.idleLeadNudgeSkipOwners,
     reviveOnRestart: persistedSettings.reviveOnRestart,
@@ -675,12 +676,13 @@ export function resolveConfigFromPersisted(
 
 /** Settings read straight from the persisted file, with their defaults. */
 // FULCRA(orchestration): kept apart so the pass-through settings stay under the complexity limit. Unset means on,
-// except reportUpOnTurnEnd: unset leaves it unset, which means OFF for "finished a turn" notices (native notifyOnFinish
-// is the standard) and on for the other report-up notices; only an explicit true turns the fallback on.
+// except reportUpOnTurnEnd: unset leaves it unset, which means OFF for routine finished-turn notices.
+// Agent-scoped create_agent finish notices have their own durable owner. Native ownership is off by default.
 function orchestrationSettings(persisted: PersistedConfig) {
   const daemon = persisted.daemon;
   return {
     reportUpOnTurnEnd: daemon?.reportUpOnTurnEnd,
+    nativeFinishNotices: daemon?.nativeFinishNotices ?? false,
     idleLeadNudge: daemon?.idleLeadNudge,
     idleLeadNudgeSkipOwners: daemon?.idleLeadNudgeSkipOwners ?? [],
     reviveOnRestart: daemon?.reviveOnRestart ?? true,
