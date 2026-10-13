@@ -1,6 +1,8 @@
 import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { DaemonClient } from "../test-utils/daemon-client.js";
+import { MessageReceipts } from "../message-receipts/index.js";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -996,3 +998,49 @@ test("archive safety reads actual daemon queues without changing the session", a
     await archiveAgentIfPresent(agent.id);
   }
 });
+
+test.runIf(process.platform !== "win32")(
+  "archive safety includes retained uncertain native receipts after restart",
+  async () => {
+    const root = await makeCwd("native-archive-safety");
+    const agentId = randomUUID();
+    const receipts = new MessageReceipts(path.join(root, ".paseo", "agent-requests"));
+    await receipts.enqueue({
+      agentId,
+      messageId: "synthetic-native-receipt",
+      request: { text: "Synthetic native report" },
+      principal: { source: "synthetic-parent" },
+      boot: "synthetic-prior-boot",
+      attachmentBytes: 0,
+      authorize: () => {},
+    });
+    await receipts.dispatchNext(
+      agentId,
+      () => true,
+      async () => {
+        throw new Error("Synthetic ambiguous delivery");
+      },
+    );
+    const isolated = await createTestPaseoDaemon({ paseoHomeRoot: root });
+    const client = new DaemonClient({ url: `ws://127.0.0.1:${isolated.port}/ws` });
+    try {
+      await isolated.daemon.agentManager.createAgent(
+        { provider: "claude", cwd: root, modeId: "bypassPermissions" },
+        agentId,
+        {},
+      );
+      await client.connect();
+      const snapshot = await client.fetchAgent({ agentId });
+      expect(snapshot?.agent.archiveSafety).toEqual({
+        inFlight: false,
+        heldMessages: 1,
+        heldReports: 0,
+      });
+      expect(snapshot?.agent.status).toBe("idle");
+      expect(snapshot?.agent.archivedAt).toBeNull();
+    } finally {
+      await client.close();
+      await isolated.close();
+    }
+  },
+);

@@ -169,6 +169,7 @@ export class MessageReceipts {
   private readonly pending = new Map<string, Promise<void>>();
   private tail: Promise<unknown> = Promise.resolve();
   private initialized = false;
+  private pendingOperations = 0;
   private unhealthy = false;
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private watermark = 0;
@@ -192,6 +193,7 @@ export class MessageReceipts {
   }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
+    this.pendingOperations++;
     const result = this.tail
       .catch(() => undefined)
       .then(() => {
@@ -199,7 +201,9 @@ export class MessageReceipts {
         return operation();
       });
     this.tail = result;
-    return result;
+    return result.finally(() => {
+      this.pendingOperations--;
+    });
   }
 
   private recoverEvidence(file: string, receipt: z.infer<typeof ReceiptSchema>): void {
@@ -363,6 +367,20 @@ export class MessageReceipts {
       if (receipt.state === "queued" && (!agentId || receipt.agentId === agentId))
         await this.commit(key, { ...receipt, state: "cancelled" });
     }
+  }
+
+  /** Host observation only. Recovery does not reconstruct or replay native input authority. */
+  async prepareArchiveObservation(): Promise<void> {
+    await this.serial(() => this.initialize()).catch(() => undefined);
+  }
+
+  archivePending(agentId: string): number | null {
+    if (!this.initialized || this.unhealthy || this.pendingOperations > 0) return null;
+    return [...this.records.values()].filter(
+      (receipt) =>
+        receipt.agentId === agentId &&
+        ["queued", "dispatching", "uncertain"].includes(receipt.state),
+    ).length;
   }
 
   hasPendingForAgent(agentId: string): boolean {

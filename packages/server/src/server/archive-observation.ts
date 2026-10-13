@@ -18,7 +18,10 @@ export function archiveReportCount(manager: AgentManager, id: string): number | 
 export function archiveReportStateKnown(value: unknown, maxHeld: number): boolean {
   const report = z.union([
     z.string(),
-    z.object({ prompt: z.string(), kind: z.enum(["report-up", "idle-nudge", "finished-turn"]) }),
+    z.object({
+      prompt: z.string(),
+      kind: z.enum(["report-up", "idle-nudge", "finished-turn", "permission", "limit"]),
+    }),
   ]);
   return z
     .object({ held: z.record(z.string(), z.array(report).max(maxHeld)).optional() })

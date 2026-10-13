@@ -6667,11 +6667,14 @@ export class Session {
     const live = this.agentManager.getAgent(agentId);
     if (live) {
       const payload = await this.buildAgentPayload(live);
+      payload.archiveSafety = await this.readArchiveSafety(agentId);
       const current = this.agentManager.getAgent(agentId);
       if (!current || current.instanceId !== live.instanceId)
         throw new Error("Session changed during the archive check");
       payload.status = current.lifecycle;
-      payload.archiveSafety = this.readArchiveSafety(agentId);
+      payload.backgroundWork = current.backgroundWork
+        ? structuredClone(current.backgroundWork)
+        : null;
       return this.isProviderVisibleToClient(payload.provider) ? payload : null;
     }
 
@@ -6680,13 +6683,17 @@ export class Session {
       return null;
     }
     const payload = this.buildStoredAgentPayload(record);
+    payload.archiveSafety = await this.readArchiveSafety(agentId);
     if (this.agentManager.getAgent(agentId))
       throw new Error("Session loaded during the archive check");
-    payload.archiveSafety = this.readArchiveSafety(agentId);
     return this.isProviderVisibleToClient(payload.provider) ? payload : null;
   }
 
-  private readArchiveSafety(agentId: string): NonNullable<AgentSnapshotPayload["archiveSafety"]> {
+  private async readArchiveSafety(
+    agentId: string,
+  ): Promise<NonNullable<AgentSnapshotPayload["archiveSafety"]>> {
+    await this.agentManager.prepareNativeArchiveObservation();
+    const native = this.agentManager.nativeArchivePending(agentId);
     const current = this.agentManager.getAgent(agentId);
     const held = heldSendsFor(this.agentManager, this.sessionLogger).archivePending(agentId);
     const queued = queuedAgentMessagesFor({
@@ -6699,7 +6706,7 @@ export class Session {
         this.agentManager.hasInFlightRun(agentId) ||
         Boolean(current?.pendingReplacement) ||
         (current?.pendingPermissions.size ?? 0) > 0,
-      heldMessages: queued === null ? null : queued + held,
+      heldMessages: queued === null || native === null ? null : queued + held + native,
       heldReports: archiveReportCount(this.agentManager, agentId),
     };
   }

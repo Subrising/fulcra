@@ -222,6 +222,8 @@ test("native report collector: durable metadata precedes one sealed wake and pre
       wakeState: "collecting",
       duplicate: false,
     });
+    await f.receipts.prepareArchiveObservation();
+    expect(f.receipts.archivePending(f.prime.agentId)).toBe(1);
     expect(await f.receipts.dispatchNext(f.prime.agentId, () => true, vi.fn())).toBeNull();
     await f.request("events-ack", {
       sessionId: f.prime.agentId,
@@ -832,6 +834,7 @@ test("host creation refuses unsafe storage and a revoked launch before registeri
       }),
     ).rejects.toThrow("launch revoked");
     await writeFile(file, "{}", { mode: 0o644 });
+    await fsPromises.chmod(file, 0o644);
     await expect(registry.captureHostCreation(parent, () => {})).rejects.toThrow(
       "Unsafe native report registration store",
     );

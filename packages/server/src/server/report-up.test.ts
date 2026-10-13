@@ -1416,6 +1416,33 @@ test("native host-link notices use the end snapshot and respect disabled finish 
 });
 
 describe("archive report observations", () => {
+  test.each(["permission", "limit"])(
+    "restores typed %s notices with known archive state after restart",
+    async (kind) => {
+      const root = mkdtempSync(join(tmpdir(), "typed-held-reports-"));
+      const statePath = join(root, "reports.json");
+      try {
+        writeFileSync(
+          statePath,
+          JSON.stringify({
+            v: 1,
+            limited: {},
+            held: { [LEAD]: [{ prompt: `Synthetic ${kind} notice`, kind }] },
+          }),
+        );
+        const restored = fixture([lead, worker()], { statePath });
+        expect(restored.service.pendingForArchive(LEAD)).toBe(1);
+        for (const timer of restored.timers) timer.run();
+        await restored.settle();
+        expect(restored.delivered).toHaveLength(1);
+        expect(restored.delivered[0]!.prompt).toContain(`Synthetic ${kind} notice`);
+        expect(restored.service.pendingForArchive(LEAD)).toBe(0);
+        restored.service.stop();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
   test("counts held reports and refuses unreadable state", () => {
     const root = mkdtempSync(join(tmpdir(), "archive-reports-"));
     const statePath = join(root, "reports.json");

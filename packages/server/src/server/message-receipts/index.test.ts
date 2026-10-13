@@ -90,6 +90,38 @@ function queued(authorize = () => {}) {
   };
 }
 
+posixTest("archive observation counts pending and uncertain native receipts", async () => {
+  const { requests, directory } = await fixture();
+  expect(requests.archivePending("target")).toBeNull();
+  await requests.prepareArchiveObservation();
+  expect(requests.archivePending("target")).toBe(0);
+  const admission = requests.enqueue(queued());
+  expect(requests.archivePending("target")).toBeNull();
+  await admission;
+  expect(requests.archivePending("target")).toBe(1);
+  await expect(
+    requests.dispatchNext(
+      "target",
+      () => true,
+      async () => {
+        throw new Error("Synthetic ambiguous delivery");
+      },
+    ),
+  ).resolves.toMatchObject({ state: "uncertain" });
+  expect(requests.archivePending("target")).toBe(1);
+  const restored = new MessageReceipts(directory);
+  await restored.prepareArchiveObservation();
+  expect(restored.archivePending("target")).toBe(1);
+  expect(restored.archivePending("other")).toBe(0);
+});
+
+test("archive observation keeps unreadable native receipt state unknown", async () => {
+  const { requests, directory } = await fixture();
+  await writeFile(path.join(directory, `${"a".repeat(64)}.json`), "invalid JSON");
+  await requests.prepareArchiveObservation();
+  expect(requests.archivePending("target")).toBeNull();
+});
+
 posixTest(
   "native busy admission is durable and same-id retries have one boundary effect",
   async () => {
