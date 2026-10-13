@@ -1,0 +1,174 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { PaseoAgent, PaseoApi, PaseoWorkspace } from "@getpaseo/client";
+import { parseLedger, oneLine, jobList, readBranch, createProgressBoard } from "./progress-board";
+const header =
+  "| id | item | kind | owner | status | evidence | source |\n|---|---|---|---|---|---|---|";
+const row = "| FU-1 | Build board | BUILD | Worker | IN PROGRESS | test | brief |";
+test("ledger parser accepts repeated headers and escaped pipes", () => {
+  const parsed = parseLedger(
+    `${header}\n${row}\n${header}\n| FU-2 | A \\| B | DECIDE | Owner | OPEN | — | brief |`,
+  );
+  assert.equal(parsed.items.length, 2);
+  assert.equal(parsed.items[1]!.item, "A | B");
+  assert.equal(parsed.malformed, 0);
+});
+test("empty ledger is empty; invalid and duplicate rows are counted", () => {
+  assert.deepEqual(parseLedger(""), { items: [], malformed: 0 });
+  assert.equal(parseLedger("wrong file").malformed, 1);
+  const parsed = parseLedger(`${header}\n${row}\n${row}\n| broken | data |`);
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.malformed, 2);
+});
+test("job list uses workspace identity, excludes archives, and carries permission waits", () => {
+  const base = {
+    id: "a",
+    workspaceId: "w",
+    title: "Board",
+    status: "idle",
+    createdAt: "2026-10-01T00:00:00Z",
+    updatedAt: "2026-10-01T01:00:00Z",
+    pendingPermissions: [{}],
+  } as PaseoAgent;
+  const rows = jobList(
+    [
+      base,
+      { ...base, id: "b", workspaceId: "other" },
+      { ...base, id: "c", archivedAt: "2026-10-01" },
+    ],
+    new Set(["w"]),
+    "Fixture host",
+    new Map([["a", "Tests passed."]]),
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.permissions, 1);
+  assert.equal(rows[0]!.result, "Tests passed.");
+  assert.deepEqual(jobList([], new Set(), "Fixture host", new Map()), []);
+});
+test("result is a bounded first line", () => {
+  assert.equal(oneLine("\n Tests   passed.\nDetails"), "Tests passed.");
+  assert.equal(oneLine(""), null);
+  assert.equal(oneLine("a".repeat(500))!.length, 320);
+});
+const workspace = {
+  id: "w",
+  name: "Board",
+  projectDisplayName: "fixture",
+  projectRootPath: "/fixture",
+  workspaceDirectory: "/fixture/work",
+  projectId: "p",
+} as PaseoWorkspace;
+test("branch checks compare the PR head and preserve merged state", async () => {
+  const commands: string[] = [];
+  const read = async (command: string) => {
+    commands.push(command);
+    return command === "gh"
+      ? JSON.stringify([
+          {
+            state: "MERGED",
+            headRefOid: "abc",
+            statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+          },
+        ])
+      : commands.length === 1
+        ? "abc\nHEAD -> feature"
+        : "feature";
+  };
+  const result = await readBranch(workspace, read);
+  assert.equal(result.state, "Merged");
+  assert.equal(result.ci, "Passed");
+  assert.equal(result.head, "abc");
+  const changed = await readBranch(workspace, async (command, args) =>
+    command === "gh"
+      ? '[{"state":"OPEN","headRefOid":"old"}]'
+      : args[0] === "log"
+        ? "new"
+        : "feature",
+  );
+  assert.equal(changed.ci, "PR head differs");
+});
+test("branch failures and pending checks cannot show passed", async () => {
+  assert.equal(
+    (
+      await readBranch(workspace, async () => {
+        throw Error("offline");
+      })
+    ).state,
+    "Git unavailable",
+  );
+  for (const [check, expected] of [
+    [{ conclusion: "FAILURE", status: "COMPLETED" }, "Failed"],
+    [{ status: "IN_PROGRESS" }, "Pending"],
+  ] as const) {
+    const result = await readBranch(workspace, async (command, args) =>
+      command === "gh"
+        ? JSON.stringify([{ state: "OPEN", headRefOid: "abc", statusCheckRollup: [check] }])
+        : args[0] === "log"
+          ? "abc"
+          : "feature",
+    );
+    assert.equal(result.ci, expected);
+  }
+});
+test("snapshot reads the ledger, updates on a file event, and cleans up", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-test-"));
+  fs.mkdirSync(path.join(root, "fixture"));
+  const file = path.join(root, "fixture", "OPEN-ITEMS.md");
+  fs.writeFileSync(file, `${header}\n${row}`);
+  let removed = 0;
+  const board = createProgressBoard(
+    {
+      on: () => () => {
+        removed++;
+      },
+    },
+    {
+      root,
+      machine: "Fixture host",
+      run: async () => {
+        throw Error("offline");
+      },
+    },
+  );
+  const api = {
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  try {
+    assert.equal((await board.read(api)).projects[0]!.items.length, 1);
+    fs.writeFileSync(file, header);
+    assert.equal((await board.read(api)).projects[0]!.ledgerState, "Empty ledger");
+  } finally {
+    board.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  assert.equal(removed, 1);
+});
+test("missing ledger root and SDK errors remain visible", async () => {
+  const board = createProgressBoard(
+    { on: () => () => {} },
+    { root: path.join(os.tmpdir(), "no-board-root"), machine: "Fixture host" },
+  );
+  const api = {
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  try {
+    assert.equal((await board.read(api)).warnings.length, 1);
+    await assert.rejects(
+      board.read({
+        ...api,
+        agents: {
+          list: async () => {
+            throw Error("offline");
+          },
+        },
+      } as unknown as PaseoApi),
+    );
+  } finally {
+    board.close();
+  }
+});
