@@ -55,9 +55,16 @@ export function jobList(
   workspaceIds: ReadonlySet<string>,
   machine: string,
   results: ReadonlyMap<string, string>,
+  projectName?: string,
 ) {
   return agents
-    .filter((a) => !a.archivedAt && !!a.workspaceId && workspaceIds.has(a.workspaceId))
+    .filter(
+      (a) =>
+        !a.archivedAt &&
+        (projectName && (a.labels?.["project"]?.trim() || a.labels?.["fulcra.project"]?.trim())
+          ? (a.labels?.["project"]?.trim() || a.labels?.["fulcra.project"]?.trim()) === projectName
+          : !!a.workspaceId && workspaceIds.has(a.workspaceId)),
+    )
     .map((a) => ({
       id: a.id,
       title: scrubFreeText(a.title ?? "Untitled job", null),
@@ -244,8 +251,37 @@ export function createProgressBoard(
         sort: [{ key: "updated_at", direction: "desc" }],
       }),
     ]);
+    while (workspaces.pageInfo.hasMore && workspaces.pageInfo.nextCursor) {
+      const next = await paseo.workspaces.list({
+        page: { limit: 100, cursor: workspaces.pageInfo.nextCursor },
+      });
+      workspaces.entries.push(...next.entries);
+      workspaces.pageInfo = next.pageInfo;
+    }
+    while (agents.pageInfo.hasMore && agents.pageInfo.nextCursor) {
+      const next = await paseo.agents.list({
+        filter: { includeArchived: false },
+        page: { limit: 100, cursor: agents.pageInfo.nextCursor },
+        sort: [{ key: "updated_at", direction: "desc" }],
+      });
+      agents.entries.push(...next.entries);
+      agents.pageInfo = next.pageInfo;
+    }
     if (workspaces.pageInfo.hasMore || agents.pageInfo.hasMore)
-      warnings.push("Showing the first 100 workspaces and jobs on this host.");
+      warnings.push("More workspaces or jobs could not be read on this host.");
+    const leadProjects = new Set(
+      agents.entries
+        .map((entry) => entry.agent)
+        .filter(
+          (agent) =>
+            !agent.archivedAt &&
+            ["lead", "orchestration", "project-lead"].includes(agent.labels?.["fulcra.role"] ?? ""),
+        )
+        .map(
+          (agent) => agent.labels?.["project"]?.trim() || agent.labels?.["fulcra.project"]?.trim(),
+        )
+        .filter((name): name is string => !!name),
+    );
     const groups = new Map<string, PaseoWorkspace[]>();
     for (const w of workspaces.entries) {
       const name = w.projectDisplayName;
@@ -255,7 +291,15 @@ export function createProgressBoard(
             n.toLowerCase() === name.toLowerCase() ||
             n.toLowerCase() === path.basename(w.projectRootPath).toLowerCase(),
         ) ?? name;
-      groups.set(key, [...(groups.get(key) ?? []), w]);
+      const labels = agents.entries
+        .map((entry) => entry.agent)
+        .filter((agent) => agent.workspaceId === w.id)
+        .map(
+          (agent) => agent.labels?.["project"]?.trim() || agent.labels?.["fulcra.project"]?.trim(),
+        )
+        .filter((label): label is string => !!label);
+      for (const group of labels.length ? new Set(labels) : [key])
+        groups.set(group, [...(groups.get(group) ?? []), w]);
     }
     const projects: ProgressBoard["projects"] = [];
     const agentWorkspaceIds = new Set(agents.entries.map((e) => e.agent.workspaceId));
@@ -277,13 +321,14 @@ export function createProgressBoard(
         .sort((a, b) => (branches.get(a)?.at ?? 0) - (branches.get(b)?.at ?? 0))
         .slice(0, 16),
     );
-    for (const name of [...new Set([...names, ...groups.keys()])].sort()) {
+    for (const name of [...leadProjects].sort()) {
       const work = groups.get(name) ?? [];
       const jobRows = jobList(
         agents.entries.map((e) => e.agent),
         new Set(work.map((w) => w.id)),
         machine,
         results,
+        name,
       );
       if (!names.includes(name) && !jobRows.length) continue;
       let signature: string | undefined;
