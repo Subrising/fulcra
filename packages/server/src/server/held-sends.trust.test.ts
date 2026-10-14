@@ -25,7 +25,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function fixture(provider: "claude" | "opencode" = "claude") {
+async function fixture(
+  provider: "claude" | "opencode" | "codex" = "claude",
+  closeSession?: () => Promise<void>,
+) {
   const home = await mkdtemp(join(tmpdir(), "held-trust-")),
     logger = createTestLogger();
   const storage = new AgentStorage(join(home, "agents"), logger);
@@ -50,11 +53,13 @@ async function fixture(provider: "claude" | "opencode" = "claude") {
   const manager = new AgentManager({
     registry: storage,
     logger,
+    archiveLedgerDirectory: join(home, "ledgers"),
     trustedPlugins: host,
     automaticInputNow: () => Date.now(),
     clients: {
       [provider]: createTestAgentClient(provider, {
         onStartTurn: (prompt) => prompts.push(prompt),
+        closeSession,
       }),
     },
   });
@@ -98,13 +103,20 @@ async function fixture(provider: "claude" | "opencode" = "claude") {
     host.close();
     await rm(home, { recursive: true, force: true });
   });
-  const send = async (text: string, from?: string, steer = false, messageId?: string) => {
+  const send = async (
+    text: string,
+    from?: string,
+    steer = false,
+    messageId?: string,
+    queueOwner = false,
+  ) => {
     await session.handleMessage({
       type: "send_agent_message_request",
       requestId: randomUUID(),
       agentId: target.id,
       text,
       ...(messageId ? { messageId } : {}),
+      ...(queueOwner ? { queue: true } : {}),
       ...(from ? { sender: { agentId: from } } : {}),
       ...(steer ? { activeTurnBehavior: "steer" as const } : {}),
     });
@@ -731,3 +743,68 @@ test("an owner's message without provenance is still held while the chat is busy
   await f.send("from the owner");
   expect(f.pending()).toBe(1);
 });
+
+test.each([false, true])(
+  "archive returns held Codex messages and keeps the session archived (owner queue: %s)",
+  async (queueOwner) => {
+    let holdClose = false;
+    let closing!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      closing = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const f = await fixture("codex", async () => {
+      if (holdClose) {
+        closing();
+        await gate;
+      }
+    });
+    f.busy.add(f.target.id);
+    await f.send("queued agent message", f.sender.id);
+    await f.send("held owner message", undefined, false, undefined, queueOwner);
+    holdClose = true;
+    const archived = f.host.daemon(() => f.manager.archiveAgent(f.target.id));
+    try {
+      await entered;
+      const mark = (await f.storage.get(f.target.id))!.archivedAt;
+      expect(mark).toEqual(expect.any(String));
+      expect(f.manager.getAgent(f.target.id)?.archivedAt).toBe(mark);
+      await f.endTurnIn((run) => f.host.daemon(run));
+    } finally {
+      release();
+      await archived;
+    }
+    await vi.waitFor(() =>
+      expect(f.messages).toContainEqual(
+        expect.objectContaining({
+          type: "activity_log",
+          payload: expect.objectContaining({
+            type: "error",
+            content: expect.stringContaining("The receiver is closed or archived"),
+          }),
+        }),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(
+        f.prompts.some((prompt) =>
+          String(prompt).includes("was not delivered: The receiver is closed or archived"),
+        ),
+      ).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(heldSendsFor(f.manager, f.logger).archivePending(f.target.id)).toBe(0),
+    );
+    expect(f.prompts).not.toContain("queued agent message");
+    expect(f.prompts).not.toContain("held owner message");
+    expect(f.manager.getAgent(f.target.id)).toBeNull();
+    expect((await f.storage.get(f.target.id))!.archivedAt).toEqual(expect.any(String));
+    expect(JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"))[0]).toMatchObject({
+      state: "refused",
+      reason: "The receiver is closed or archived",
+    });
+  },
+);

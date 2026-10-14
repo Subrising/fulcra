@@ -152,6 +152,8 @@ A watched child that closes before its finish event also notifies the caller so 
 Agent messages wait while the receiver runs or has a usage limit. Eligible messages combine into one turn after that restriction ends.
 The queue keeps each message and sender across a daemon restart. It checks each reporting line again before delivery.
 Different requested session modes require separate turns. Plugin operations keep their own authority and receipt paths.
+Archiving a receiver refuses waiting messages and tells the sender why. Held owner messages report the refusal through the requesting connection.
+Waiting messages cannot restore an archived receiver, including while its provider is closing or checking account usage.
 An interrupted dispatch has an uncertain result. Check the receiver before you send it again; the queue does not replay that dispatch.
 
 Use `fulcra send --steer` when the message must enter the current turn. An unavailable steer enters the queue and returns a delivery note.

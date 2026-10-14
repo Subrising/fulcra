@@ -30,6 +30,7 @@ import {
   deferredCommandPayload as commandPayload,
 } from "./agent/trusted-operation.js";
 import { AdmissionDeniedError } from "./plugins/trusted.js";
+import { assertFinalInputCheck } from "./agent/final-input-check.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import { handleFileAtCommitRequest } from "./checkout/file-at-commit-request.js";
 import {
@@ -156,6 +157,7 @@ import {
   queuedAgentMessagesFor,
   recipientLimit,
   loadQueuedReceiver,
+  queuedReceiverCheck,
 } from "./queued-agent-messages.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
@@ -217,6 +219,7 @@ import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import type { StructuredGenerationDaemonConfig } from "./agent/structured-generation-providers.js";
 import {
   getAgentStreamEventTurnId,
+  FINAL_INPUT_CHECK,
   type AgentPersistenceHandle,
   type AgentPermissionResponse,
   type AgentRunOptions,
@@ -9754,7 +9757,11 @@ export class Session {
     // - A send from the owner to a busy target steers into the running turn, and is held, not replaced, when the
     //   turn cannot take it. An explicit "interrupt" (an operator's choice, the controller's sends) still interrupts.
     const requested = msg.activeTurnBehavior ?? "interrupt";
-    const dispatch = async (behavior: "interrupt" | "steer", signal?: AbortSignal) => {
+    const dispatch = async (
+      behavior: "interrupt" | "steer",
+      signal?: AbortSignal,
+      finalCheck?: object,
+    ) => {
       const result = await sendPromptToAgent({
         agentManager: this.agentManager,
         agentStorage: this.agentStorage,
@@ -9764,6 +9771,8 @@ export class Session {
         activeTurnBehavior: behavior,
         steerOnly: behavior === "steer",
         clearPendingPermissions: true,
+        unarchive: !finalCheck,
+        ...(finalCheck ? { runOptions: { [FINAL_INPUT_CHECK]: finalCheck } } : {}),
         logger: this.sessionLogger,
       });
       if (result.disposition === "turn_started") {
@@ -9775,11 +9784,34 @@ export class Session {
     // A held delivery runs later, from a turn-end event. It runs in its sender's own trust context (a chat's
     // message as agent input, the owner's as an owner RPC), never in whatever context that event had. Steer-only:
     // a turn that starts between the check and the send keeps the message waiting instead of being replaced.
+    const heldSessionId = this.agentManager.getAgent(agentId)?.persistence?.sessionId ?? null;
     const whenIdle = (asSender: (run: () => Promise<void>) => Promise<void>) => () =>
       asSender(async () => {
+        const check = queuedReceiverCheck(this.agentManager, agentId, heldSessionId);
+        assertFinalInputCheck(check);
+        await loadQueuedReceiver(
+          {
+            agentManager: this.agentManager,
+            agentStorage: this.agentStorage,
+            logger: this.sessionLogger,
+          },
+          agentId,
+          heldSessionId,
+        );
         if (this.agentManager.hasInFlightRun(agentId)) throw new SteerUnavailableError(agentId);
-        await dispatch("steer");
+        await dispatch("steer", undefined, check);
       });
+    const holdOwnerMessage = () => {
+      const deliver = whenIdle((run) => trusted.rpc(undefined, run));
+      held.hold(agentId, async () => {
+        try {
+          await deliver();
+        } catch (error) {
+          if (error instanceof SteerUnavailableError) throw error;
+          this.handleAgentRunError(agentId, error, "Failed to deliver held message");
+        }
+      });
+    };
     const tryAgentSteer = async (): Promise<{ delivered: boolean; resumeAt?: number }> => {
       try {
         await trusted.agentInput(() => dispatch("steer", this.delivery.requestSignal));
@@ -9834,10 +9866,7 @@ export class Session {
       const busy = this.agentManager.hasInFlightRun(agentId);
       if (msg.queue) {
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
-        held.hold(
-          agentId,
-          whenIdle((run) => trusted.rpc(undefined, run)),
-        );
+        holdOwnerMessage();
         deliveryNote("Message queued for the end of the turn.");
         return;
       }
@@ -9853,16 +9882,7 @@ export class Session {
         // later delivery would run as plain owner input, a different source than the plugin sent it as
         // (0.2.13 review). It is refused instead, with the reason, and the sender sends it again when the chat is idle.
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError({ cause: error });
-        const deliver = whenIdle((run) => trusted.rpc(undefined, run));
-        held.hold(agentId, async () => {
-          try {
-            await deliver();
-          } catch (heldError) {
-            if (heldError instanceof SteerUnavailableError) throw heldError;
-            // The request already answered "accepted": tell the owner the held message failed.
-            this.handleAgentRunError(agentId, heldError, "Failed to deliver held message");
-          }
-        });
+        holdOwnerMessage();
       }
     };
   }

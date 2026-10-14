@@ -4323,6 +4323,9 @@ export class AgentManager {
   ): Promise<ArchivedStoredAgentRecord> {
     const archivedRecord = buildArchivedAgentRecord(record, options);
     await this.requireRegistry().upsert(archivedRecord);
+    // Queue callbacks can run while native close awaits. Publish the durable archive fence first.
+    const live = this.agents.get(record.id);
+    if (live) live.archivedAt = archivedRecord.archivedAt;
     if (!record.archivedAt && !record.internal) {
       this.pluginLifecycle?.emit("agent.archived", {
         agent: describeHookAgent(archivedRecord),
