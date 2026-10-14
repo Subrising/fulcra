@@ -172,6 +172,15 @@ instruction. Use `"provider":"claude"` for Claude. In `config.json`,
 `providers.claude` and `providers.codex` may specify a supported `family/model`;
 bare family names use the provider's default model.
 
+### Progress board owners
+
+Set `board.humanOwners` in each host's private `command-centre/config.json` to list the ledger owners who need your action.
+The list defaults to empty. Owner matching ignores case. Keep real owner labels in private configuration.
+
+```json
+{ "board": { "humanOwners": ["Owner A"] } }
+```
+
 ### Automatic approval mode and reasoning effort
 
 Every session this controller creates starts in its provider's automatic approval mode and

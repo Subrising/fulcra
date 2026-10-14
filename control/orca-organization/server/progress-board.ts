@@ -8,6 +8,16 @@ import type { BoardItem, ProgressBoard } from "../shared/progress-board";
 import { scrubFreeText } from "../shared/privacy-scrub";
 
 const COLUMNS = ["id", "item", "kind", "owner", "status", "evidence", "source"] as const;
+// Only explicit ISO dates carry age. File modification times cannot date individual ledger rows.
+export function ledgerDate(text: string): string | undefined {
+  const date = text.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0];
+  if (!date) return undefined;
+  const at = Date.parse(`${date}T00:00:00Z`);
+  return Number.isFinite(at) && new Date(at).toISOString().slice(0, 10) === date
+    ? new Date(at).toISOString()
+    : undefined;
+}
+
 export function parseLedger(text: string): { items: BoardItem[]; malformed: number } {
   const items: BoardItem[] = [];
   let header = false,
@@ -31,11 +41,12 @@ export function parseLedger(text: string): { items: BoardItem[]; malformed: numb
       continue;
     }
     ids.add(cells[0]!);
-    items.push(
-      Object.fromEntries(
-        COLUMNS.map((key, i) => [key, scrubFreeText(cells[i]!, null)]),
-      ) as BoardItem,
-    );
+    const row = Object.fromEntries(
+      COLUMNS.map((key, i) => [key, scrubFreeText(cells[i]!, null)]),
+    ) as BoardItem;
+    // Source dates describe the request; evidence prose does not reliably date completion.
+    row.createdAt = ledgerDate(row.source);
+    items.push(row);
   }
   if (text.trim() && !header) malformed++;
   return { items, malformed };
@@ -183,7 +194,12 @@ export async function readBranch(
 
 export function createProgressBoard(
   server: Pick<PluginServerContext, "on">,
-  options: { root?: string; machine?: string; run?: RunRead } = {},
+  options: {
+    root?: string;
+    machine?: string;
+    run?: RunRead;
+    humanOwners?: () => readonly string[];
+  } = {},
 ) {
   const root = options.root ?? path.join(os.homedir(), "shared-vault", "projects");
   const machine = options.machine ?? os.hostname();
@@ -444,6 +460,7 @@ export function createProgressBoard(
     return {
       observedAt: new Date().toISOString(),
       machine: scrub(machine),
+      humanOwners: (options.humanOwners?.() ?? []).map(scrub),
       projects: projects.map((project) => ({
         ...project,
         id: scrub(project.id),

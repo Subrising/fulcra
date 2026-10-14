@@ -200,3 +200,28 @@ test("automatic context rotation is optional, boolean and retained on load", () 
       );
     }
   }));
+
+test("board human owners default empty and validate a bounded string list", () =>
+  temporary((home) => {
+    const env = { ORCA_HOME: home };
+    firstRun(env);
+    const file = path.join(home, "config.json");
+    const config = JSON.parse(fs.readFileSync(file));
+    assert.deepEqual(loadConfig(env).board.humanOwners, []);
+    for (const board of [{}, { humanOwners: [] }, { humanOwners: ["Owner A", "Owner B"] }]) {
+      fs.writeFileSync(file, JSON.stringify({ ...config, board }));
+      assert.deepEqual(loadConfig(env).board.humanOwners, board.humanOwners ?? []);
+    }
+    for (const board of [
+      null,
+      [],
+      { humanOwners: "Owner A" },
+      { humanOwners: [1] },
+      { humanOwners: [""] },
+      { humanOwners: [" "] },
+      { humanOwners: Array(65).fill("Owner A") },
+      { humanOwners: [], extra: true },
+    ]) {
+      assert.throws(() => validateConfig({ ...config, board }), /setting board/);
+    }
+  }));
