@@ -29,6 +29,7 @@ export const KNOWN_SETTINGS = Object.freeze([
   "outcomesRoot",
   "memoryRoot",
   "automaticContextRotation",
+  "board",
 ]);
 export const KNOWN_DEFAULTS = Object.freeze([
   "modes",
@@ -137,6 +138,14 @@ export function validateConfig(c) {
   ]);
   if (c.automaticContextRotation !== undefined && typeof c.automaticContextRotation !== "boolean")
     throw Error("Invalid setting automaticContextRotation");
+  if (c.board !== undefined) {
+    object(c.board, ["humanOwners"], "board");
+    if (c.board.humanOwners !== undefined) {
+      if (!Array.isArray(c.board.humanOwners) || c.board.humanOwners.length > 64)
+        throw Error("Invalid setting board.humanOwners");
+      c.board.humanOwners.forEach((owner) => text(owner, "board.humanOwners"));
+    }
+  }
   if (c.version !== 2) throw Error("Invalid setting version (expected 2)");
   object(c.daemon, ["url"], "daemon", ["url"]);
   object(c.authority, ["companyId", "programmeId", "issueApi"], "authority", [
@@ -315,6 +324,7 @@ export function loadConfig(env = process.env) {
   const c = validateConfig(privateJson(path.join(home, "config.json"), 32768));
   return Object.freeze({
     ...c,
+    board: { humanOwners: c.board?.humanOwners ?? [] },
     home,
     controller: home,
     daemonHome: home,

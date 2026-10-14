@@ -37,8 +37,10 @@ export interface Config {
   outcomesRoot?: string;
   memoryRoot?: string;
   automaticContextRotation?: boolean;
+  board?: { humanOwners?: string[] };
 }
 export type LoadedConfig = Config & {
+  board: { humanOwners: string[] };
   home: string;
   controller: string;
   daemonHome: string;

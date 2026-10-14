@@ -942,7 +942,9 @@ export default function contribute(
     return readers.get(key)!();
   });
   const stopWorkspaceOrganization = contributeWorkspaceOrganization(handle);
-  const progressBoard = createProgressBoard(server);
+  const progressBoard = createProgressBoard(server, {
+    humanOwners: () => loadConfig().board.humanOwners,
+  });
   handleRead(progressBoardRpc, (_input, { paseo }) => progressBoard.read(paseo));
   // Non-UI startup signal. A caller using a method this plugin does not register never reaches
   // any handler here, so that mismatch is invisible from inside this tree - printing the exact
