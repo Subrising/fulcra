@@ -140,6 +140,10 @@ export class QueuedAgentMessages {
     for (const record of attempted) this.tell(record, record.reason!);
   }
 
+  async prepareArchiveObservation(): Promise<void> {
+    await this.serial(() => this.load());
+  }
+
   async start(): Promise<void> {
     await this.serial(() => this.load());
     this.active = true;

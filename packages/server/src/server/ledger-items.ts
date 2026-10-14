@@ -43,20 +43,30 @@ export function parseOpenRows(project: string, text: string): LedgerRow[] {
  * Every open row of every project ledger in `dir`. A missing or unreadable ledger gives no rows. The reads are
  * async: the ledger directory can sit on a slow disk, and the daemon main thread must not wait for it (FU-77).
  */
-export async function readOpenLedgerRows(dir: string): Promise<LedgerRow[]> {
+export async function readOpenLedgerRows(dir: string, strict = false): Promise<LedgerRow[]> {
   const rows: LedgerRow[] = [];
   let projects: string[] = [];
   try {
     projects = await readdir(dir);
-  } catch {
+  } catch (error) {
+    if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return rows;
   }
   for (const project of projects) {
     try {
       const file = path.join(dir, project, "OPEN-ITEMS.md");
-      if ((await stat(file)).size > MAX_FILE_BYTES) continue;
+      if ((await stat(file)).size > MAX_FILE_BYTES) {
+        if (strict) throw new Error("Ledger exceeds its size limit");
+        continue;
+      }
       rows.push(...parseOpenRows(project, await readFile(file, "utf8")));
-    } catch {
+    } catch (error) {
+      if (
+        strict &&
+        (error as NodeJS.ErrnoException).code !== "ENOENT" &&
+        (error as NodeJS.ErrnoException).code !== "ENOTDIR"
+      )
+        throw error;
       /* no ledger here */
     }
   }

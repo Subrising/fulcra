@@ -122,9 +122,10 @@ export class ConnectionSubscriptions extends OwnedSubscriptions {
   }
 }
 
-// Protocol support belongs to the installed client. Only browser hosting needs
-// a resource supplied by the caller. Keep this exhaustive as the protocol evolves.
+// Protocol support belongs to the installed client. Browser hosting and archive confirmation need
+// resources supplied by the app. Keep this exhaustive as the protocol evolves.
 export const DEFAULT_CLIENT_CAPABILITIES = {
+  [CLIENT_CAPS.archiveConfirmation]: false,
   [CLIENT_CAPS.helloRejection]: true,
   [CLIENT_CAPS.ownedSubscriptions]: true,
   [CLIENT_CAPS.allProviders]: true,
@@ -143,7 +144,13 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   [CLIENT_CAPS.pluginTimelineItems]: true,
   [CLIENT_CAPS.workspaceSetupBlocked]: true,
   [CLIENT_CAPS.explicitEventSubscriptions]: true,
-} satisfies Record<Exclude<ClientCapability, typeof CLIENT_CAPS.browserHost>, true>;
+} satisfies Record<
+  Exclude<
+    ClientCapability,
+    typeof CLIENT_CAPS.browserHost | typeof CLIENT_CAPS.archiveConfirmation
+  >,
+  true
+> & { [CLIENT_CAPS.archiveConfirmation]: false };
 
 /** Calling releases demand; ready waits for membership, or local attachment on broadcast hosts. */
 export type TimelineSubscription = (() => void) & {

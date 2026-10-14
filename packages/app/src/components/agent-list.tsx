@@ -8,6 +8,7 @@ import {
   RefreshControl,
   FlatList,
   type ListRenderItem,
+  type LayoutChangeEvent,
   type PressableStateCallbackType,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -409,6 +410,13 @@ export function AgentList({
   const insets = useSafeAreaInsets();
   const [actionAgent, setActionAgent] = useState<AggregatedAgent | null>(null);
   const isMobile = useIsCompactFormFactor();
+  const [listWidth, setListWidth] = useState(0);
+  const handleListLayout = useCallback(
+    (event: LayoutChangeEvent) => setListWidth(event.nativeEvent.layout.width),
+    [],
+  );
+  // The sidebar reduces usable width before the window reaches the phone breakpoint.
+  const compactRows = isMobile || listWidth < 960;
   const { archiveAgent } = useArchiveAgent();
 
   const actionClient = useSessionStore((state) =>
@@ -505,7 +513,7 @@ export function AgentList({
         <SessionRow
           agent={item.agent}
           search={search}
-          isMobile={isMobile}
+          isMobile={compactRows}
           selectedAgentId={selectedAgentId}
           showAttentionIndicator={showAttentionIndicator}
           showHostColumn={showHostColumn}
@@ -517,7 +525,7 @@ export function AgentList({
     [
       handleAgentLongPress,
       handleAgentPress,
-      isMobile,
+      compactRows,
       search,
       selectedAgentId,
       showAttentionIndicator,
@@ -557,6 +565,7 @@ export function AgentList({
   return (
     <>
       <FlatList
+        onLayout={handleListLayout}
         data={flatItems}
         style={styles.list}
         contentContainerStyle={styles.listContent}
@@ -635,6 +644,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
   },
   row: {
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: theme.spacing[2],

@@ -2631,20 +2631,18 @@ function WorkspaceScreenContent({
           }
         }
 
+        if (closePolicy.kind !== "layout-only") {
+          try {
+            await archiveAgent({ serverId: normalizedServerId, agentId });
+          } catch (error) {
+            console.error("[WorkspaceScreen] Failed to archive agent", { error, agentId });
+            return;
+          }
+        }
         setHoveredCloseTabKey((current) => (current === tabId ? null : current));
         if (persistenceKey) {
-          closeWorkspaceTabWithCleanup({
-            tabId,
-            target: { kind: "agent", agentId },
-          });
+          closeWorkspaceTabWithCleanup({ tabId, target: { kind: "agent", agentId } });
         }
-
-        if (closePolicy.kind === "layout-only") {
-          return;
-        }
-
-        // Errors (e.g. timeout) are handled by the mutation's onSettled callback
-        void archiveAgent({ serverId: normalizedServerId, agentId }).catch(() => {});
       });
     },
     [
@@ -2909,6 +2907,7 @@ function WorkspaceScreenContent({
       }
 
       await closeBulkWorkspaceTabs({
+        archiveAgent: (agentId) => archiveAgent({ serverId: normalizedServerId, agentId }),
         client,
         groups,
         closeTab,

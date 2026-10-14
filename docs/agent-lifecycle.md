@@ -217,8 +217,19 @@ The provider still owns the underlying runtime. Paseo keeps an agent record so t
 
 Archive is a **soft delete**: the agent record stays on disk with `archivedAt` set, the runtime is closed, and the agent disappears from active lists. Archive is **global** — it lives on the server and propagates to every connected client.
 
-Archive sets `archivedAt`, invokes the provider's native archive hook, and cascades to managed
-children.
+The app asks you to confirm a lead, owner, or session with open ledger items before archive.
+CLI, MCP, and automatic archive refuse these sessions. Open reporting workers, unread reports,
+and pending messages block archive even after confirmation. Unknown report state also blocks it.
+Archive checks the full target set before cancellation or archive effects.
+
+Fulcra cascades use `fulcra.reports-to` and session roles. A stored parent label alone cannot
+archive a Fulcra session. Cascades never archive lead or owner roles. Ordinary Paseo subagents
+keep the parent lifecycle described in [Relationships](#relationships).
+
+Use `fulcra agent restore <id>` to restore the original agent record. Native restore must succeed
+before the daemon clears the archive mark and publishes the restored state. Handle-based resume
+reuses that record. Multiple records for one provider session require explicit recovery by ID;
+archive a duplicate record before restoring the original. No record is deleted during recovery.
 
 `create_agent_request` can opt an agent into `autoArchive`. In that mode the daemon archives the agent after the first terminal turn event (`turn_completed`, `turn_failed`, or `turn_canceled`). When the agent owns an isolated workspace, auto-archive archives that workspace too; the managed worktree is removed when its final workspace reference is gone.
 

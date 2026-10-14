@@ -94,7 +94,7 @@ describe("workspace bulk close helpers", () => {
     );
   });
 
-  it("closes all tabs immediately and fires one mixed closeItems RPC in the background", async () => {
+  it("closes only archived agents and confirmed terminal closures", async () => {
     const groups = classifyBulkClosableTabs([
       makeAgentTab("a1"),
       makeTerminalTab("t1"),
@@ -114,6 +114,7 @@ describe("workspace bulk close helpers", () => {
 
     await closeBulkWorkspaceTabs({
       groups,
+      archiveAgent: async () => {},
       client: { closeItems },
       closeTab: async (tabId, action) => {
         closedTabIds.push(tabId);
@@ -128,24 +129,18 @@ describe("workspace bulk close helpers", () => {
 
     expect(closeItems).toHaveBeenCalledTimes(1);
     expect(closeItems).toHaveBeenCalledWith({
-      agentIds: ["a1"],
+      agentIds: [],
       terminalIds: ["t1", "t2"],
     });
-    expect(closedTabIds).toEqual([
-      "agent_a1",
-      "terminal_t1",
-      "terminal_t2",
-      "file_/repo/README.md",
-    ]);
+    expect(closedTabIds).toEqual(["agent_a1", "terminal_t1", "file_/repo/README.md"]);
     expect(cleanupCalls).toEqual([
       { tabId: "agent_a1", target: { kind: "agent", agentId: "a1" } },
       { tabId: "terminal_t1", target: { kind: "terminal", terminalId: "t1" } },
-      { tabId: "terminal_t2", target: { kind: "terminal", terminalId: "t2" } },
       { tabId: "file_/repo/README.md", target: { kind: "file", path: "/repo/README.md" } },
     ]);
   });
 
-  it("still closes all tabs when the mixed closeItems RPC fails", async () => {
+  it("keeps refused agent and terminal tabs open", async () => {
     const groups = classifyBulkClosableTabs([
       makeAgentTab("a1"),
       makeTerminalTab("t1"),
@@ -157,6 +152,9 @@ describe("workspace bulk close helpers", () => {
 
     await closeBulkWorkspaceTabs({
       groups,
+      archiveAgent: async () => {
+        throw new Error("Archive refused");
+      },
       client: {
         closeItems: async () => {
           throw new Error("rpc failed");
@@ -176,11 +174,9 @@ describe("workspace bulk close helpers", () => {
 
     await Promise.resolve();
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(closedTabIds).toEqual(["agent_a1", "terminal_t1", "file_/repo/README.md"]);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(closedTabIds).toEqual(["file_/repo/README.md"]);
     expect(cleanupCalls).toEqual([
-      { tabId: "agent_a1", target: { kind: "agent", agentId: "a1" } },
-      { tabId: "terminal_t1", target: { kind: "terminal", terminalId: "t1" } },
       { tabId: "file_/repo/README.md", target: { kind: "file", path: "/repo/README.md" } },
     ]);
   });
@@ -196,6 +192,7 @@ describe("workspace bulk close helpers", () => {
 
     await closeBulkWorkspaceTabs({
       groups,
+      archiveAgent: async () => {},
       client: { closeItems },
       closeTab: async (_tabId, action) => action(),
       closeLayoutOnlyAgent: async (agentId) => {
@@ -207,7 +204,7 @@ describe("workspace bulk close helpers", () => {
       logLabel: "others",
     });
 
-    expect(closeItems).toHaveBeenCalledWith({ agentIds: ["root"], terminalIds: [] });
+    expect(closeItems).not.toHaveBeenCalled();
     expect(preparedSubagents).toEqual(["child"]);
     expect(cleanedTabs).toEqual(["agent_child", "agent_root"]);
   });

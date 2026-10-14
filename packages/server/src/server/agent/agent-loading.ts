@@ -30,6 +30,7 @@ export type AgentLoaderManager = Pick<
   Partial<Pick<AgentManager, "waitForAgentClose">>;
 
 export interface EnsureAgentLoadedDeps {
+  configOverrides?: Partial<import("./agent-sdk-types.js").AgentSessionConfig>;
   agentManager: AgentLoaderManager;
   agentStorage: AgentStorage;
   validProviders?: Iterable<AgentProvider>;
@@ -115,7 +116,7 @@ export async function ensureAgentLoaded(
     if (handle) {
       snapshot = await deps.agentManager.resumeAgentFromPersistence(
         handle,
-        buildConfigOverrides(record),
+        { ...buildConfigOverrides(record), ...deps.configOverrides },
         agentId,
         { ...extractTimestamps(record), attention: extractAttention(record) },
         record.archivedAt ? { purpose: "history" } : undefined,

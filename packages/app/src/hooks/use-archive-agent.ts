@@ -1,4 +1,5 @@
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
+import { confirmProtectedArchive } from "@/utils/confirm-protected-archive";
 import { useCallback, useMemo } from "react";
 import {
   useMutation,
@@ -17,6 +18,7 @@ const EMPTY_PENDING_ARCHIVE_AGENT_IDS = new Set<string>();
 export interface ArchiveAgentInput {
   serverId: string;
   agentId: string;
+  confirmed?: boolean;
 }
 
 export type ArchiveAgentPendingState = Record<string, true>;
@@ -387,7 +389,7 @@ export function useArchiveAgent() {
       if (!client) {
         throw new Error(t("common.errors.daemonClientUnavailable"));
       }
-      return await client.archiveAgent(input.agentId);
+      return await client.archiveAgent(input.agentId, { confirmed: input.confirmed });
     },
     onMutate: (input) => {
       const context: ArchiveAgentMutationContext = {
@@ -453,9 +455,18 @@ export function useArchiveAgent() {
 
   const archiveAgent = useCallback(
     async (input: ArchiveAgentInput): Promise<void> => {
-      await archiveMutateAsync(input);
+      const session = useSessionStore.getState().sessions[input.serverId];
+      if (!session?.client) throw new Error(t("common.errors.daemonClientUnavailable"));
+      const supported = session.serverInfo?.features?.agentArchiveSafety === true;
+      if (!supported) throw new Error("Update the host to use safe agent archive.");
+      const confirmed = await confirmProtectedArchive({
+        client: session.client,
+        agentId: input.agentId,
+        supported,
+      });
+      await archiveMutateAsync({ ...input, confirmed });
     },
-    [archiveMutateAsync],
+    [archiveMutateAsync, t],
   );
 
   const isArchivingAgent = useCallback(

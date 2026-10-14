@@ -121,7 +121,6 @@ import type { TurnDetectionProvider } from "./speech/turn-detection-provider.js"
 import {
   buildConfigOverrides,
   isStoredAgentProviderAvailable,
-  resolveStoredAgentUpdatedAt,
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
@@ -3621,7 +3620,7 @@ export class Session {
           purgeHistory: msg.purgeHistory === true,
         });
       case "archive_agent_request":
-        return this.handleArchiveAgentRequest(msg.agentId, msg.requestId);
+        return this.handleArchiveAgentRequest(msg.agentId, msg.requestId, msg.confirmed);
       case "close_items_request":
         return this.handleCloseItemsRequest(msg);
       case "update_agent_request":
@@ -4396,10 +4395,20 @@ export class Session {
     }
   }
 
-  private async handleArchiveAgentRequest(agentId: string, requestId: string): Promise<void> {
+  private async handleArchiveAgentRequest(
+    agentId: string,
+    requestId: string,
+    confirmed?: boolean,
+  ): Promise<void> {
     this.sessionLogger.info({ agentId }, `Archiving agent ${agentId}`);
 
-    const { archivedAt } = await this.archiveAgentForClose(agentId);
+    if (confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
+      throw new Error("Protected archive requires confirmation from the app.");
+    const { archivedAt } = confirmed
+      ? await this.agentManager.withArchiveConfirmation(agentId, () =>
+          this.archiveAgentForClose(agentId),
+        )
+      : await this.archiveAgentForClose(agentId);
 
     this.emit({
       type: "agent_archived",
@@ -4563,6 +4572,7 @@ export class Session {
   private async handleCloseItemsRequest(msg: CloseItemsRequest): Promise<void> {
     const operations = new Map<string, TrustedOperationHandle | undefined>();
     for (const agentId of msg.agentIds) {
+      await this.agentManager.preflightArchiveDescendants(agentId);
       this.agentManager.withInput(
         agentId,
         "archive",
@@ -4614,39 +4624,24 @@ export class Session {
     });
   }
 
-  private async unarchiveAgentByHandle(handle: AgentPersistenceHandle): Promise<{
-    record: StoredAgentRecord;
-    didUnarchive: boolean;
-    originalArchivedAt: string | null;
-  } | null> {
+  private async unarchiveAgentByHandle(
+    handle: AgentPersistenceHandle,
+  ): Promise<{ record: StoredAgentRecord } | null> {
     const records = await this.agentStorage.listByProviderSession(
       handle.provider,
       handle.sessionId,
     );
-    const matched = records.reduce<StoredAgentRecord | null>((latest, candidate) => {
-      if (!latest) {
-        return candidate;
-      }
-      const updatedDelta =
-        Date.parse(resolveStoredAgentUpdatedAt(candidate)) -
-        Date.parse(resolveStoredAgentUpdatedAt(latest));
-      if (updatedDelta !== 0) {
-        return updatedDelta > 0 ? candidate : latest;
-      }
-      return Date.parse(candidate.createdAt) > Date.parse(latest.createdAt) ? candidate : latest;
-    }, null);
+    if (records.length > 1)
+      throw new Error(
+        "Multiple records share this provider session. Restore by the original agent ID after archiving the duplicate record.",
+      );
+    const matched = records[0];
     if (!matched) {
       return null;
     }
-    const didUnarchive = await unarchiveAgentState(
-      this.agentStorage,
-      this.agentManager,
-      matched.id,
-    );
+    await unarchiveAgentState(this.agentStorage, this.agentManager, matched.id);
     return {
       record: matched,
-      didUnarchive,
-      originalArchivedAt: matched.archivedAt ?? null,
     };
   }
 
@@ -5708,22 +5703,24 @@ export class Session {
       `Resuming agent ${handle.sessionId} (${handle.provider})`,
     );
     try {
-      const matched = await this.unarchiveAgentByHandle(handle);
-      const effectiveOverrides = matched
-        ? { ...buildConfigOverrides(matched.record), ...overrides }
-        : overrides;
-      let snapshot: ManagedAgent;
-      try {
-        snapshot = await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
-      } catch (error) {
-        if (matched?.didUnarchive && matched.originalArchivedAt) {
-          await this.agentManager.archiveSnapshot(matched.record.id, matched.originalArchivedAt);
-        }
-        throw error;
-      }
-      await unarchiveAgentState(this.agentStorage, this.agentManager, snapshot.id);
-      await this.agentManager.hydrateTimelineFromProvider(snapshot.id);
-      await this.agentUpdates.forwardLiveAgent(snapshot);
+      const snapshot = await this.agentManager.withPersistenceRestore(handle, async () => {
+        const matched = await this.unarchiveAgentByHandle(handle);
+        const effectiveOverrides = matched
+          ? { ...buildConfigOverrides(matched.record), ...overrides }
+          : overrides;
+        const restoredSnapshot = matched
+          ? await ensureAgentLoaded(matched.record.id, {
+              agentManager: this.agentManager,
+              agentStorage: this.agentStorage,
+              logger: this.sessionLogger,
+              configOverrides: effectiveOverrides,
+            })
+          : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
+        await unarchiveAgentState(this.agentStorage, this.agentManager, restoredSnapshot.id);
+        await this.agentManager.hydrateTimelineFromProvider(restoredSnapshot.id);
+        await this.agentUpdates.forwardLiveAgent(restoredSnapshot);
+        return restoredSnapshot;
+      });
       const timelineSize = this.agentManager.getTimeline(snapshot.id).length;
       if (requestId) {
         const agentPayload = await this.buildAgentPayload(snapshot);
@@ -6703,6 +6700,7 @@ export class Session {
       logger: this.sessionLogger,
     }).archivePending(agentId);
     return {
+      ...(await this.agentManager.getArchiveProtection(agentId)),
       inFlight:
         this.agentManager.hasInFlightRun(agentId) ||
         Boolean(current?.pendingReplacement) ||

@@ -920,6 +920,8 @@ const AgentActiveTurnPayloadSchema = z.object({
 export const AgentSnapshotPayloadSchema = z.object({
   archiveSafety: z
     .object({
+      confirmationRequired: z.boolean().optional(),
+      reasons: z.array(z.string()).optional(),
       inFlight: z.boolean(),
       heldMessages: z.number().int().nonnegative().nullable(),
       heldReports: z.number().int().nonnegative().nullable(),
@@ -1054,6 +1056,7 @@ export const DeleteAgentRequestMessageSchema = z.object({
 export const ArchiveAgentRequestMessageSchema = z.object({
   inputProvenance: z.string().optional(),
   type: z.literal("archive_agent_request"),
+  confirmed: z.boolean().optional(),
   agentId: z.string(),
   requestId: z.string(),
 });
@@ -4238,6 +4241,7 @@ export const ServerInfoStatusPayloadSchema = z
         deviceReadOnlyTier: z.boolean().optional(),
         // COMPAT(deviceAccountsManage): added 2026-09-30 (U7); a daemon without it has no accounts.manage grant.
         deviceAccountsManage: z.boolean().optional(),
+        agentArchiveSafety: z.boolean().optional(),
         agentMcpRefresh: z.boolean().optional(),
         agentContextRotation: z.boolean().optional(),
         agentMcpReconnect: z.boolean().optional(),

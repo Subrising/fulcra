@@ -3224,10 +3224,14 @@ export class DaemonClient {
     if (!payload.accepted) throw new Error(payload.error ?? "Idle cleanup refused");
   }
 
-  async archiveAgent(agentId: string): Promise<{ archivedAt: string }> {
+  async archiveAgent(
+    agentId: string,
+    options?: { confirmed?: boolean },
+  ): Promise<{ archivedAt: string }> {
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
       type: "archive_agent_request",
+      ...(options?.confirmed ? { confirmed: true } : {}),
       agentId,
       requestId,
     });
