@@ -10,6 +10,7 @@ import {
   archiveAgentFromSessions,
   clickSessionRow,
   createIdleAgent,
+  createMockIdleAgent,
   expectArchivedAgentFocused,
   expectSessionRowArchived,
   expectSessionRowVisible,
@@ -153,5 +154,82 @@ test.describe("Archive tab reconciliation", () => {
     await expect(page).toHaveURL(buildHostWorkspaceRoute(getServerId(), archived.workspaceId), {
       timeout: 30_000,
     });
+  });
+  test("FU-153 protected archive cancel and restore keep the original session", async ({
+    page,
+  }, testInfo) => {
+    const lead = await createMockIdleAgent(client, {
+      cwd: tempRepo.path,
+      workspaceId,
+      title: `Fixture lead ${randomUUID().slice(0, 8)}`,
+    });
+    await client.updateAgent(lead.id, { labels: { "fulcra.role": "orchestration" } });
+    const initialHistory = await client.fetchAgentHistory();
+    expect(initialHistory.entries.map((entry) => entry.agent.id)).toContain(lead.id);
+    const control = await createMockIdleAgent(client, {
+      cwd: tempRepo.path,
+      workspaceId,
+      title: "Fixture archive control",
+    });
+    await resetSeededPageState(page);
+    await openWorkspaceWithAgents(page, [lead, control]);
+    await openSessions(page);
+    for (const [width, height] of [
+      [375, 812],
+      [768, 1024],
+      [1440, 900],
+      [812, 375],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await page.evaluate(async () => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+      });
+      const row = page
+        .getByTestId(`agent-row-${getServerId()}-${lead.id}`)
+        .filter({ visible: true })
+        .first();
+      await expect(row).toBeVisible({ timeout: 30000 });
+      const box = await row.boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(48);
+      expect(box!.height).toBeGreaterThanOrEqual(48);
+      const title = page
+        .getByTestId(`agent-row-title-${getServerId()}-${lead.id}`)
+        .filter({ visible: true })
+        .first();
+      const titleBox = (await title.boundingBox())!;
+      expect(titleBox.width).toBeGreaterThan(0);
+      expect(titleBox.x).toBeGreaterThanOrEqual(box!.x);
+      expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`archive-${width}-${height}.png`) });
+      const dialog = page.waitForEvent("dialog");
+      await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      await page.mouse.down();
+      await page.waitForTimeout(900);
+      await page.mouse.up();
+      const confirmation = await dialog;
+      expect(confirmation.message()).toContain("lead or owner");
+      await confirmation.dismiss();
+      expect(await fetchAgentArchivedAt(client, lead.id)).toBeNull();
+      await expectSessionRowVisible(page, lead.title);
+    }
+    const row = page
+      .getByTestId(`agent-row-${getServerId()}-${lead.id}`)
+      .filter({ visible: true })
+      .first();
+    const box = (await row.boundingBox())!;
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(900);
+    await page.mouse.up();
+    await expectSessionRowArchived(page, lead.title);
+    await client.refreshAgent(lead.id);
+    await clickSessionRow(page, lead.title);
+    await expect(page.getByText("This agent is archived", { exact: false })).toHaveCount(0);
+    expect(await fetchAgentArchivedAt(client, lead.id)).toBeNull();
   });
 });

@@ -1,3 +1,6 @@
+import { registerArchiveReportCount } from "../archive-observation.js";
+import { archiveAgentCommand as archiveSafetyCommand } from "./lifecycle-command.js";
+import { mkdirSync } from "node:fs";
 import { LeadEventDispatcher, readLeadEvents, registerLeadEvents } from "../lead-events.js";
 import { expect, test, vi } from "vitest";
 
@@ -15060,3 +15063,233 @@ test.each([false, true])(
     }
   },
 );
+
+// FU-153 uses real storage. A refusal must precede cancellation and all archive effects.
+test.each([
+  "lead",
+  "owner",
+  "ledger",
+  "worker",
+  "qualified-worker",
+  "report",
+  "unknown",
+  "attention",
+  "automation",
+  "stored",
+  "ledger-unreadable",
+  "queue-unreadable",
+])("FU-153 refuses unsafe %s archive without changing records", async (kind) => {
+  const workdir = mkdtempSync(join(tmpdir(), "archive-safety-"));
+  const ledger = join(workdir, "ledgers");
+  mkdirSync(join(ledger, "fixture"), { recursive: true });
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: ledger,
+    archiveServerId: "fixture-host",
+  });
+  registerArchiveReportCount(manager, () => {
+    if (kind === "unknown") return null;
+    return kind === "report" ? 1 : 0;
+  });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title: "Fixture lead" },
+      undefined,
+      {
+        workspaceId: undefined,
+        labels:
+          kind === "ledger"
+            ? {}
+            : { "fulcra.role": kind === "owner" ? "planning" : "orchestration" },
+      },
+    );
+    if (kind === "ledger")
+      writeFileSync(
+        join(ledger, "fixture", "OPEN-ITEMS.md"),
+        "| FX-1 | Work | FIX | Fixture lead | OPEN | | |\n",
+      );
+    if (kind === "worker" || kind === "qualified-worker")
+      await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+        workspaceId: undefined,
+        labels: { "fulcra.role": "implementation", "fulcra.reports-to": agent.id },
+      });
+    if (kind === "attention") {
+      const record = (await storage.get(agent.id))!;
+      await storage.upsert({ ...record, requiresAttention: true, attentionReason: "finished" });
+    }
+    if (kind === "stored") await manager.closeAgent(agent.id);
+    if (kind === "ledger-unreadable") mkdirSync(join(ledger, "fixture", "OPEN-ITEMS.md"));
+    if (kind === "queue-unreadable") writeFileSync(storage.heldMessagesPath, "invalid queue");
+    const before = await storage.get(agent.id);
+    const cancel = vi.spyOn(manager, "cancelAgentRun");
+    const run = () =>
+      archiveSafetyCommand({ agentManager: manager, agentStorage: storage, logger }, agent.id);
+    if (["worker", "qualified-worker", "report", "unknown", "attention"].includes(kind)) {
+      await expect(
+        manager.trustedPlugins.rpc(undefined, () => manager.withArchiveConfirmation(agent.id, run)),
+      ).rejects.toThrow("Archive refused");
+    } else if (kind === "ledger-unreadable" || kind === "queue-unreadable") {
+      await expect(run()).rejects.toThrow();
+    } else if (kind === "automation") {
+      await expect(
+        manager.trustedPlugins.agentInput(async () =>
+          manager.withArchiveConfirmation(agent.id, run),
+        ),
+      ).rejects.toThrow("confirmation");
+    } else await expect(run()).rejects.toThrow("Confirm in the app");
+    expect(await storage.get(agent.id)).toEqual(before);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(client.archivedHandles).toHaveLength(0);
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-153 confirmed archive preserves unrelated leads and owners with old parent labels", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "archive-cascade-safety-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new TestAgentClient() },
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: join(workdir, "ledgers"),
+  });
+  registerArchiveReportCount(manager, () => 0);
+  try {
+    const lead = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+      labels: { "fulcra.role": "orchestration" },
+    });
+    for (const role of ["planning", "orchestration", "implementation"]) {
+      await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+        workspaceId: undefined,
+        labels: {
+          "fulcra.role": role,
+          [PARENT_AGENT_ID_LABEL]: lead.id,
+          "fulcra.reports-to": "another-lead",
+        },
+      });
+    }
+    await manager.trustedPlugins.rpc(undefined, () =>
+      manager.withArchiveConfirmation(lead.id, () => manager.archiveAgent(lead.id)),
+    );
+    const records = await storage.list();
+    expect(records.filter((record) => record.archivedAt).map((record) => record.id)).toEqual([
+      lead.id,
+    ]);
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-153 restore publishes the original record and native failure keeps its archive mark", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "archive-restore-state-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: join(workdir, "ledgers"),
+  });
+  const updates: AgentManagerEvent[] = [];
+  manager.subscribe((event) => updates.push(event));
+  try {
+    const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+      labels: { retained: "yes" },
+    });
+    await manager.archiveAgent(agent.id);
+    const archived = (await storage.get(agent.id))!;
+    client.unarchiveFailure = new Error("Native restore failed");
+    await expect(manager.unarchiveSnapshot(agent.id)).rejects.toThrow("Native restore failed");
+    expect(await storage.get(agent.id)).toEqual(archived);
+    client.unarchiveFailure = null;
+    updates.length = 0;
+    await manager.unarchiveSnapshot(agent.id);
+    expect(updates).toContainEqual(
+      expect.objectContaining({
+        type: "agent_state",
+        agent: expect.objectContaining({ id: agent.id, archivedAt: null }),
+      }),
+    );
+    const [first, second] = await Promise.all([
+      ensureAgentLoaded(agent.id, { agentManager: manager, agentStorage: storage, logger }),
+      ensureAgentLoaded(agent.id, { agentManager: manager, agentStorage: storage, logger }),
+    ]);
+    expect(first.id).toBe(agent.id);
+    expect(second.id).toBe(agent.id);
+    expect(await storage.list()).toHaveLength(1);
+    expect((await storage.get(agent.id))?.labels).toEqual({ retained: "yes" });
+  } finally {
+    for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-153 restore refuses an archived original when a duplicate record remains active", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "archive-duplicate-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: join(workdir, "ledgers"),
+  });
+  try {
+    const original = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    await manager.archiveAgent(original.id);
+    const before = (await storage.get(original.id))!;
+    await storage.upsert({ ...before, id: randomUUID(), archivedAt: null });
+    await expect(manager.unarchiveSnapshot(original.id)).rejects.toThrow("another live record");
+    expect(await storage.get(original.id)).toEqual(before);
+    expect(client.unarchivedHandles).toHaveLength(0);
+    expect(await storage.list()).toHaveLength(2);
+  } finally {
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("FU-153 concurrent explicit restores cannot activate archived duplicate records", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "archive-duplicate-race-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+    archiveLedgerDirectory: join(workdir, "ledgers"),
+  });
+  try {
+    const original = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+    await manager.archiveAgent(original.id);
+    const duplicate = randomUUID();
+    await storage.upsert({ ...(await storage.get(original.id))!, id: duplicate });
+    const outcomes = await Promise.allSettled([
+      manager.unarchiveSnapshot(original.id),
+      manager.unarchiveSnapshot(duplicate),
+    ]);
+    expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await storage.list()).filter((record) => !record.archivedAt)).toHaveLength(1);
+    expect(client.unarchivedHandles).toHaveLength(1);
+  } finally {
+    await manager.flush();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

@@ -145,7 +145,12 @@ test("a plain client advertises every protocol capability and no browser host", 
     // Every new capability needs a deliberate default or a host-owned exception.
     expect(h.sent).toHaveLength(1);
     expect(h.sent[0].capabilities).toEqual(
-      Object.fromEntries(Object.values(protocolCapabilities).map((key) => [key, true])),
+      Object.fromEntries(
+        Object.values(protocolCapabilities).map((key) => [
+          key,
+          key !== CLIENT_CAPS.archiveConfirmation,
+        ]),
+      ),
     );
   } finally {
     await h.client.close();

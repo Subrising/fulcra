@@ -78,6 +78,8 @@ export async function runArchiveCommand(
   const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
+    if (client.getLastServerInfoMessage()?.features?.agentArchiveSafety !== true)
+      throw new Error("Update the host to use safe agent archive.");
     const agent = await findAgentToArchive(client, agentIdArg);
     if (!agent) {
       const error: CommandError = {

@@ -1,4 +1,9 @@
+import { queuedAgentMessagesFor } from "../queued-agent-messages.js";
+import { heldSendsFor } from "../held-sends.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isArchiveLead, isArchiveChild, reportsToArchiveParent } from "./archive-policy.js";
+import { defaultLedgerDir, readOpenLedgerRows, rowsOwnedBy } from "../ledger-items.js";
+import { archiveReportCount } from "../archive-observation.js";
 import { currentLeadEvent, recordAcceptedLeadTurn } from "../lead-events.js";
 import {
   readHostPublicCodexBaseline,
@@ -498,6 +503,8 @@ export interface CreateAgentOptions {
 }
 
 export interface AgentManagerOptions {
+  archiveServerId?: string;
+  archiveLedgerDirectory?: string;
   automaticInputNow?: () => number;
   /** Host-private registration journal, derived from the existing private home. Not a shared config key. */
   reportRegistryFile?: string;
@@ -2165,10 +2172,17 @@ export class AgentManager {
   private readonly rescueTimeouts: Required<AgentManagerRescueTimeouts>;
   private readonly beforeSteerUnavailableFallback?: AgentManagerOptions["beforeSteerUnavailableFallback"];
   private readonly mcpRefreshAdmission?: AgentManagerOptions["mcpRefreshAdmission"];
+  private readonly persistenceRestoreContext = new AsyncLocalStorage<string>();
+  private readonly persistenceRestores = new Map<string, Promise<unknown>>();
+  private readonly archiveConfirmations = new AsyncLocalStorage<string>();
+  private readonly archiveServerId?: string;
+  private readonly archiveLedgerDirectory?: string;
   private acceptingAgentRegistrations = true;
   private readonly automaticInputLimits: AutomaticInputLimits;
 
   constructor(options: AgentManagerOptions) {
+    this.archiveServerId = options.archiveServerId;
+    this.archiveLedgerDirectory = options.archiveLedgerDirectory;
     this.automaticInputLimits = new AutomaticInputLimits(options.automaticInputNow);
     this.trustedPlugins = resolveTrustedPlugins(options.trustedPlugins);
     this.trustedPlugins.setAutomaticInputGate((id) => {
@@ -4144,6 +4158,86 @@ export class AgentManager {
     }
   }
 
+  // Serialize handle-based recovery across app connections before selecting the durable ID.
+  withPersistenceRestore<T>(
+    handle: AgentPersistenceHandle,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = `${handle.provider}:${handle.sessionId}`;
+    if (this.persistenceRestoreContext.getStore() === key) return operation();
+    const previous = this.persistenceRestores.get(key) ?? Promise.resolve();
+    const result = previous
+      .catch(() => undefined)
+      .then(() => this.persistenceRestoreContext.run(key, operation));
+    this.persistenceRestores.set(key, result);
+    const clear = () => {
+      if (this.persistenceRestores.get(key) === result) this.persistenceRestores.delete(key);
+    };
+    void result.then(clear, clear);
+    return result;
+  }
+
+  async getArchiveProtection(
+    agentId: string,
+  ): Promise<{ confirmationRequired: boolean; reasons: string[] }> {
+    const record = await this.requireRegistry().get(agentId);
+    if (!record) throw new Error(`Agent not found: ${agentId}`);
+    const reasons: string[] = [];
+    if (isArchiveLead(record)) reasons.push("This session is a lead or owner.");
+    const rows = await readOpenLedgerRows(this.archiveLedgerDirectory ?? defaultLedgerDir(), true);
+    if (rowsOwnedBy(rows, { id: record.id, title: record.title ?? "" }).length)
+      reasons.push("This session owns open ledger items.");
+    return { confirmationRequired: reasons.length > 0, reasons };
+  }
+
+  withArchiveConfirmation<T>(agentId: string, operation: () => T): T {
+    if (this.trustedPlugins.currentInputSource() !== "human")
+      throw new Error("Protected archive requires confirmation from the app.");
+    return this.archiveConfirmations.run(agentId, operation);
+  }
+
+  private async assertArchiveSafe(agentId: string, records: StoredAgentRecord[]): Promise<void> {
+    const protection = await this.getArchiveProtection(agentId);
+    records = await this.requireRegistry().list();
+    const record = records.find((candidate) => candidate.id === agentId);
+    if (!record || record.archivedAt) return;
+    const workers = records.filter(
+      (child) => !child.archivedAt && reportsToArchiveParent(record, child, this.archiveServerId),
+    );
+    if (workers.length)
+      throw new Error("Archive refused: this session has live workers. Archive the workers first.");
+    if (protection.confirmationRequired) {
+      await this.prepareNativeArchiveObservation();
+      const reports = archiveReportCount(this, agentId);
+      const queue = queuedAgentMessagesFor({
+        agentManager: this,
+        agentStorage: this.requireRegistry(),
+        logger: this.logger,
+      });
+      await queue.prepareArchiveObservation();
+      const native = this.nativeArchivePending(agentId);
+      const queued = queue.archivePending(agentId);
+      const held = heldSendsFor(this, this.logger).archivePending(agentId);
+      const messages = native === null || queued === null ? null : native + queued + held;
+      if (reports === null || messages === null)
+        throw new Error("Archive refused: report or message state is unavailable.");
+      if (
+        reports > 0 ||
+        messages > 0 ||
+        record.requiresAttention ||
+        this.listProviderSubagentActivity().some(
+          (child) => child.parentAgentId === agentId && child.status === "running",
+        )
+      )
+        throw new Error("Archive refused: this session has unread reports or pending messages.");
+      if (
+        this.archiveConfirmations.getStore() !== agentId ||
+        this.trustedPlugins.currentInputSource() !== "human"
+      )
+        throw new Error(`Archive refused: ${protection.reasons.join(" ")} Confirm in the app.`);
+    }
+  }
+
   async archiveAgent(
     agentId: string,
     handle?: TrustedOperationHandle,
@@ -4210,6 +4304,7 @@ export class AgentManager {
   private async admitArchiveDescendants(parentAgentId: string): Promise<CascadeArchivePlan> {
     const registry = this.requireRegistry();
     const records = await registry.list();
+    await this.assertArchiveSafe(parentAgentId, records);
     const plan: CascadeArchivePlan = new Map();
     const visited = new Set([parentAgentId]);
     const visit = async (parentId: string): Promise<void> => {
@@ -4218,15 +4313,16 @@ export class AgentManager {
       for (const child of records) {
         if (
           child.archivedAt ||
-          child.labels?.[PARENT_AGENT_ID_LABEL] !== parentId ||
+          !isArchiveChild(parent, child, this.archiveServerId) ||
           visited.has(child.id)
         )
           continue;
         visited.add(child.id);
         const admitted = await this.runLifecycleMutation(child.id, async () => {
           const fresh = await this.requireRegistry().get(child.id);
-          if (!fresh || fresh.archivedAt || fresh.labels?.[PARENT_AGENT_ID_LABEL] !== parentId)
+          if (!fresh || fresh.archivedAt || !isArchiveChild(parent, fresh, this.archiveServerId))
             return null;
+          await this.assertArchiveSafe(fresh.id, records);
           const detach = shouldDetachFromArchivedParent(parent, fresh);
           const handle = await this.trustedPlugins.followup(() =>
             this.withStoredInput(
@@ -4259,7 +4355,7 @@ export class AgentManager {
     // V1 has no payload-bound plan: preserve its dynamic child/open-tab reconciliation.
     if (!this.trustedPlugins.hasV11Authority()) {
       for (const child of await registry.list()) {
-        if (!child.archivedAt && child.labels?.[PARENT_AGENT_ID_LABEL] === parentAgentId)
+        if (!child.archivedAt && isArchiveChild(parent, child, this.archiveServerId))
           plan.set(child.id, {
             parentId: parentAgentId,
             detach: shouldDetachFromArchivedParent(parent, child),
@@ -4270,7 +4366,7 @@ export class AgentManager {
       if (admitted.parentId !== parentAgentId) continue;
       await this.runLifecycleMutation(childId, async () => {
         const child = await registry.get(childId);
-        if (!child || child.archivedAt || child.labels?.[PARENT_AGENT_ID_LABEL] !== parentAgentId)
+        if (!child || child.archivedAt || !isArchiveChild(parent, child, this.archiveServerId))
           return;
         const detach = shouldDetachFromArchivedParent(parent, child);
         if (detach !== admitted.detach && this.trustedPlugins.hasV11Authority())
@@ -4327,6 +4423,9 @@ export class AgentManager {
   ): Promise<ArchivedStoredAgentRecord> {
     const archivedRecord = buildArchivedAgentRecord(record, options);
     await this.requireRegistry().upsert(archivedRecord);
+    // Queue callbacks can run while native close awaits. Publish the durable archive fence first.
+    const live = this.agents.get(record.id);
+    if (live) live.archivedAt = archivedRecord.archivedAt;
     if (!record.archivedAt && !record.internal) {
       this.pluginLifecycle?.emit("agent.archived", {
         agent: describeHookAgent(archivedRecord),
@@ -4855,16 +4954,27 @@ export class AgentManager {
     operationHandle?: TrustedOperationHandle,
   ): Promise<boolean> {
     this.assertInjectionLabelWrite(updates?.labels);
-    return this.runLifecycleMutation(agentId, () =>
-      this.withStoredInput(
-        agentId,
-        "unarchive",
-        undefined,
-        () => this.unarchiveSnapshotUnlocked(agentId, updates),
-        commandPayload("unarchive", updates),
-        operationHandle,
-      ),
-    );
+    const captured = await this.requireRegistry().get(agentId);
+    const execute = () =>
+      this.runLifecycleMutation(agentId, async () => {
+        const current = await this.requireRegistry().get(agentId);
+        if (
+          current?.persistence?.provider !== captured?.persistence?.provider ||
+          current?.persistence?.sessionId !== captured?.persistence?.sessionId
+        )
+          throw new Error("Restore refused: provider session changed.");
+        return this.withStoredInput(
+          agentId,
+          "unarchive",
+          undefined,
+          () => this.unarchiveSnapshotUnlocked(agentId, updates),
+          commandPayload("unarchive", updates),
+          operationHandle,
+        );
+      });
+    return captured?.persistence
+      ? this.withPersistenceRestore(captured.persistence, execute)
+      : execute();
   }
 
   private async unarchiveSnapshotUnlocked(
@@ -4877,6 +4987,17 @@ export class AgentManager {
       return false;
     }
 
+    if (record.persistence) {
+      const matches = await registry.listByProviderSession(
+        record.persistence.provider,
+        record.persistence.sessionId,
+      );
+      if (matches.some((other) => other.id !== agentId && !other.archivedAt))
+        throw new Error(
+          "Restore refused: another live record owns this provider session. Archive the duplicate record first.",
+        );
+    }
+
     // Close and native restore share the lifecycle lane with persisted resume.
     // No new history or interactive runtime can acquire the writer between them.
     if (this.agents.has(agentId)) await this.closeAgentRuntime(agentId);
@@ -4885,17 +5006,15 @@ export class AgentManager {
     );
 
     this.assertInjectionLabelWrite(updates?.labels);
-    await registry.upsert({
+    const restored: StoredAgentRecord = {
       ...record,
       ...(updates?.workspaceId ? { workspaceId: updates.workspaceId } : {}),
       ...(updates?.labels ? { labels: applyLabelPatch(record.labels, updates.labels) } : {}),
       archivedAt: null,
-      updatedAt: new Date().toISOString(),
-    });
-
-    if (this.getAgent(agentId)) {
-      this.notifyAgentState(agentId);
-    }
+      updatedAt: this.nextStoredUpdatedAt(record),
+    };
+    await registry.upsert(restored);
+    if (!restored.internal) this.dispatchStoredAgentState(restored);
     return true;
   }
 

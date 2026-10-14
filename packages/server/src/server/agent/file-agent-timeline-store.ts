@@ -723,8 +723,9 @@ export class FileAgentTimelineStore implements AgentTimelineStore {
   fetchExistingCommitted(id: string, options?: AgentTimelineFetchOptions) {
     return this.serialize(id, async () => {
       await this.reconcileRetention(id);
-      if (await this.pendingDelete(id)) throw new Error(PENDING_DELETE_MESSAGE);
-      if (!(await this.hasJournal(id))) return null;
+      // A failed delete keeps the registry record while its history is retained.
+      // Read that copy without creating a new live journal or releasing the write fence.
+      if (!(await this.pendingDelete(id)) && !(await this.hasJournal(id))) return null;
       return (await this.readable(id)).memory.fetch(id, options);
     });
   }

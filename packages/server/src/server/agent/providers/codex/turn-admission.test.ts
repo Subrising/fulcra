@@ -4,10 +4,12 @@ import {
   isNativeQueuedRefusal,
   validateNativeQueuedDispatch,
 } from "../../native-queued-dispatch.js";
+import { createFinalInputCheck } from "../../final-input-check.js";
 import { CodexQuotaError } from "./quota.js";
 import { expect, test, vi } from "vitest";
 import {
   CODEX_TURN_ADMISSION,
+  FINAL_INPUT_CHECK,
   NATIVE_QUEUED_FINAL,
   type AgentRunOptions,
 } from "../../agent-sdk-types.js";
@@ -956,6 +958,46 @@ test("local reprepare: a genuine validation refusal using session_changed is nev
     expect(check).not.toHaveBeenCalled();
     expect(f.submissions()).toEqual([]);
   } finally {
+    await f.session.close();
+  }
+});
+
+test("an archived queued receiver keeps its refusal when the Codex quota reply goes stale", async () => {
+  let archived = false;
+  let reading!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    reading = resolve;
+  });
+  let reply!: (value: unknown) => void;
+  const quota = new Promise<unknown>((resolve) => {
+    reply = resolve;
+  });
+  const f = fixture(() => {
+    reading();
+    return quota;
+  });
+  const check = createFinalInputCheck(() => {
+    if (archived)
+      throw Object.assign(new Error("The receiver is closed or archived"), {
+        code: "QUEUED_RECEIVER_CLOSED",
+      });
+  });
+  try {
+    const start = f.session.startTurn("Held message", {
+      [CODEX_TURN_ADMISSION]: () => true,
+      [FINAL_INPUT_CHECK]: check,
+    });
+    await entered;
+    archived = true;
+    await f.session.setModel("gpt-5.6-sol");
+    reply({ accountId: "owned-account", ordinaryUsageAllowed: true, rateLimits: {} });
+    await expect(start).rejects.toMatchObject({
+      code: "QUEUED_RECEIVER_CLOSED",
+      message: "The receiver is closed or archived",
+    });
+    expect(f.submissions()).toEqual([]);
+  } finally {
+    reply({});
     await f.session.close();
   }
 });

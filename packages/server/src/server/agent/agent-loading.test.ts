@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -199,3 +200,79 @@ test("loads an archived agent's history after its working directory is removed",
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("FU-153 websocket archive requires confirmation and resume restores one original record", async () => {
+  const { createTestPaseoDaemon } = await import("../test-utils/paseo-daemon.js");
+  const { DaemonClient } = await import("../test-utils/daemon-client.js");
+  const context = await createTestPaseoDaemon();
+  const client = new DaemonClient({
+    capabilities: { app_archive_confirmation: true },
+    url: `ws://127.0.0.1:${context.port}/ws`,
+    appVersion: "0.11.2",
+  });
+  try {
+    await client.connect();
+    await client.fetchAgents({ subscribe: {} });
+    const agent = await client.createAgent({
+      config: { provider: "codex", cwd: context.paseoHome, title: "Fixture protected lead" },
+      labels: { "fulcra.role": "orchestration" },
+    });
+    await expect(client.archiveAgent(agent.id)).rejects.toThrow("Confirm in the app");
+    expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBeFalsy();
+    const automation = new DaemonClient({
+      url: `ws://127.0.0.1:${context.port}/ws`,
+      appVersion: "0.11.2",
+    });
+    try {
+      await automation.connect();
+      await automation.fetchAgents();
+      await expect(automation.archiveAgent(agent.id, { confirmed: true })).rejects.toThrow(
+        "confirmation from the app",
+      );
+    } finally {
+      await automation.close();
+    }
+    await client.archiveAgent(agent.id, { confirmed: true });
+    const archived = (await context.daemon.agentStorage.get(agent.id))!;
+    expect(archived.archivedAt).toBeTruthy();
+    expect(archived.persistence).toBeTruthy();
+    const [resumed, second] = await Promise.all([
+      client.resumeAgent(archived.persistence!),
+      client.resumeAgent(archived.persistence!),
+    ]);
+    expect(resumed.id).toBe(agent.id);
+    expect(second.id).toBe(agent.id);
+    expect(
+      await context.daemon.agentStorage.listByProviderSession(
+        archived.persistence!.provider,
+        archived.persistence!.sessionId,
+      ),
+    ).toHaveLength(1);
+    const fetched = await client.fetchAgent({ agentId: agent.id });
+    expect(fetched?.agent.archivedAt).toBeNull();
+    expect(fetched?.agent.labels["fulcra.role"]).toBe("orchestration");
+    await client.archiveAgent(agent.id, { confirmed: true });
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const result = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("../../../../cli/src/index.ts", import.meta.url)),
+        "agent",
+        "restore",
+        agent.id,
+        "--host",
+        `127.0.0.1:${context.port}`,
+        "--json",
+      ],
+      { env: { ...process.env, PASEO_HOME: context.paseoHome, FULCRA_COMMAND_CENTRE: "0" } },
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({ agentId: agent.id, status: "restored" });
+    expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBeNull();
+  } finally {
+    await client.close();
+    await context.close();
+  }
+}, 30000);

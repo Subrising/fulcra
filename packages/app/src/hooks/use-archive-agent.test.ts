@@ -1,3 +1,4 @@
+import { confirmProtectedArchive } from "@/utils/confirm-protected-archive";
 import { seedSessionHosts } from "@/test/seed-session";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { QueryClient } from "@tanstack/react-query";
@@ -269,3 +270,29 @@ describe("useArchiveAgent", () => {
     });
   });
 });
+
+for (const accept of [true, false]) {
+  it(`requires protected archive confirmation and handles acceptance ${accept}`, async () => {
+    const client = {
+      fetchAgent: async () => ({
+        agent: {
+          archiveSafety: {
+            confirmationRequired: true,
+            reasons: ["This session owns open ledger items."],
+          },
+        },
+      }),
+    };
+    const prompts: unknown[] = [];
+    const operation = confirmProtectedArchive(
+      { client: client as never, agentId: "fixture", supported: true },
+      async (input) => {
+        prompts.push(input);
+        return accept;
+      },
+    );
+    if (accept) await expect(operation).resolves.toBe(true);
+    else await expect(operation).rejects.toThrow("Archive cancelled");
+    expect(prompts).toHaveLength(1);
+  });
+}

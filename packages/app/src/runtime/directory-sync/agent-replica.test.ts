@@ -391,3 +391,24 @@ describe("AgentDirectoryReplica", () => {
     store.clearSession(serverId);
   });
 });
+
+it("FU-153 clears cached archive state when the daemon restores the original record", () => {
+  const serverId = "restore-fixture";
+  useSessionStore.getState().initializeSession(serverId, null);
+  const replica = new AgentDirectoryReplica(
+    serverId,
+    () => {},
+    () => {},
+  );
+  const archived = {
+    ...payload("Archived"),
+    archivedAt: "2026-10-10T00:00:00.000Z",
+    updatedAt: "2026-10-10T00:00:00.000Z",
+  };
+  replica.submitTimelineAgent(replica.captureTimeline("agent"), archived);
+  replica.applyDelta({
+    kind: "upsert",
+    agent: { ...archived, archivedAt: null, updatedAt: "2026-10-11T00:00:00.000Z" },
+  });
+  expect(replica.snapshot().get("agent")?.archivedAt).toBeNull();
+});

@@ -67,19 +67,24 @@ export function protocolBuildReason() {
   return newestInput > oldestOutput ? "protocol sources are newer than its dist" : null;
 }
 
+/** npm's Windows shim needs cmd.exe; the workspace and arguments are host constants. */
+export function buildWorkspace(workspace, { platform = process.platform, run = spawnSync } = {}) {
+  const windows = platform === "win32";
+  const result = run(windows ? "npm.cmd" : "npm", ["run", "build", `--workspace=${workspace}`], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    shell: windows,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0)
+    throw new Error(`Building ${workspace} failed (${result.status ?? result.signal}).`);
+}
+
 export default function ensureProtocolBuild() {
   const reason = protocolBuildReason();
   if (!reason) return false;
   console.log(`[protocol] ${reason}; building once before continuing.`);
-  const result = spawnSync("npm", ["run", "build", "--workspace=@getpaseo/protocol"], {
-    cwd: repoRoot,
-    stdio: "inherit",
-    shell: false,
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`Building @getpaseo/protocol failed (${result.status ?? result.signal}).`);
-  }
+  buildWorkspace("@getpaseo/protocol");
   return true;
 }
 
@@ -101,15 +106,7 @@ function ensureClientBuild() {
   const reason = clientBuildReason();
   if (!reason) return false;
   console.log(`[client] ${reason}; building once before continuing.`);
-  const result = spawnSync("npm", ["run", "build", "--workspace=@getpaseo/client"], {
-    cwd: repoRoot,
-    stdio: "inherit",
-    shell: false,
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`Building @getpaseo/client failed (${result.status ?? result.signal}).`);
-  }
+  buildWorkspace("@getpaseo/client");
   return true;
 }
 

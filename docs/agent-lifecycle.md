@@ -152,6 +152,8 @@ A watched child that closes before its finish event also notifies the caller so 
 Agent messages wait while the receiver runs or has a usage limit. Eligible messages combine into one turn after that restriction ends.
 The queue keeps each message and sender across a daemon restart. It checks each reporting line again before delivery.
 Different requested session modes require separate turns. Plugin operations keep their own authority and receipt paths.
+Archiving a receiver refuses waiting messages and tells the sender why. Held owner messages report the refusal through the requesting connection.
+Waiting messages cannot restore an archived receiver, including while its provider is closing or checking account usage.
 An interrupted dispatch has an uncertain result. Check the receiver before you send it again; the queue does not replay that dispatch.
 
 Use `fulcra send --steer` when the message must enter the current turn. An unavailable steer enters the queue and returns a delivery note.
@@ -235,8 +237,19 @@ The provider still owns the underlying runtime. Paseo keeps an agent record so t
 
 Archive is a **soft delete**: the agent record stays on disk with `archivedAt` set, the runtime is closed, and the agent disappears from active lists. Archive is **global** — it lives on the server and propagates to every connected client.
 
-Archive sets `archivedAt`, invokes the provider's native archive hook, and cascades to managed
-children.
+The app asks you to confirm a lead, owner, or session with open ledger items before archive.
+CLI, MCP, and automatic archive refuse these sessions. Open reporting workers, unread reports,
+and pending messages block archive even after confirmation. Unknown report state also blocks it.
+Archive checks the full target set before cancellation or archive effects.
+
+Fulcra cascades use `fulcra.reports-to` and session roles. A stored parent label alone cannot
+archive a Fulcra session. Cascades never archive lead or owner roles. Ordinary Paseo subagents
+keep the parent lifecycle described in [Relationships](#relationships).
+
+Use `fulcra agent restore <id>` to restore the original agent record. Native restore must succeed
+before the daemon clears the archive mark and publishes the restored state. Handle-based resume
+reuses that record. Multiple records for one provider session require explicit recovery by ID;
+archive a duplicate record before restoring the original. No record is deleted during recovery.
 
 Unread native reports block archive until consumption or their six-hour expiry.
 Expiry records `resolved-expired` without marking the report consumed. The receipt and scoped inbox evidence remain available.

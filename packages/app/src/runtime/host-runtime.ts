@@ -555,6 +555,7 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
       }
     : undefined;
   const appCapabilities = {
+    [CLIENT_CAPS.archiveConfirmation]: true,
     ...browserAutomationCapabilities,
   };
 

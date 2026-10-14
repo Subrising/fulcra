@@ -1,4 +1,6 @@
 export const CLIENT_CAPS = {
+  // App confirmation presentation. This does not grant daemon permissions.
+  archiveConfirmation: "app_archive_confirmation",
   // Closed permission enums shipped before this capability. Gate new permission output.
   commandCentrePermission: "command_centre_permission",
   helloRejection: "hello_rejection",

@@ -43,6 +43,8 @@ export function asAgentManager(stub: {
       // The default fake has no native receipt ledger.
       prepareNativeArchiveObservation: async () => {},
       nativeArchivePending: () => 0,
+      withPersistenceRestore: (_handle: unknown, operation: () => Promise<unknown>) => operation(),
+      getArchiveProtection: async () => ({ confirmationRequired: false, reasons: [] }),
       hasInFlightRun: () => false,
       // V4 (#32): archive paths preflight descendants before admission.
       preflightArchiveDescendants: async () => {},

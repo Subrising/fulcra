@@ -1,3 +1,10 @@
+import { Command } from "commander";
+import { runRestoreCommand } from "./restore";
+import { connectToDaemon } from "../../utils/client";
+vi.mock("../../utils/client", async (load) => ({
+  ...(await load<typeof import("../../utils/client")>()),
+  connectToDaemon: vi.fn(),
+}));
 import { describe, expect, it, vi } from "vitest";
 import { findAgentToArchive } from "./archive";
 
@@ -36,6 +43,7 @@ describe("findAgentToArchive", () => {
       "Connection lost",
     ]) {
       const client = {
+        getLastServerInfoMessage: () => ({ features: { agentArchiveSafety: true } }),
         fetchAgent: vi.fn(async () => Promise.reject(new Error(message))),
         fetchAgents: vi.fn(async () => page),
       };
@@ -51,4 +59,48 @@ describe("findAgentToArchive", () => {
     };
     await expect(findAgentToArchive(client as never, "nope")).resolves.toBeNull();
   });
+});
+
+describe("restore command", () => {
+  it.each(["archived", "active", "missing", "failure", "unsupported"])(
+    "restores the same ID and closes the client for %s",
+    async (kind) => {
+      const client = {
+        getLastServerInfoMessage: () => ({
+          features: { agentArchiveSafety: kind !== "unsupported" },
+        }),
+        fetchAgent: vi.fn(async () =>
+          kind === "missing"
+            ? null
+            : {
+                agent: {
+                  id: "fixture-original",
+                  archivedAt: kind === "active" ? null : "2026-10-01T00:00:00Z",
+                },
+              },
+        ),
+        fetchAgents: vi.fn(async () => ({ entries: [] })),
+        refreshAgent: vi.fn(async () => {
+          if (kind === "failure") throw new Error("Native restore failed");
+          return { agentId: "fixture-original" };
+        }),
+        close: vi.fn(async () => {}),
+      };
+      vi.mocked(connectToDaemon).mockResolvedValue(client as never);
+      const operation = runRestoreCommand("fixture", {}, new Command());
+      if (kind === "unsupported") await expect(operation).rejects.toThrow("Update the host");
+      else if (kind === "missing" || kind === "failure")
+        await expect(operation).rejects.toThrow(
+          kind === "missing" ? "not found" : "Native restore failed",
+        );
+      else
+        await expect(operation).resolves.toMatchObject({
+          data: { agentId: "fixture-original", status: "restored" },
+        });
+      expect(client.close).toHaveBeenCalledOnce();
+      if (kind === "active" || kind === "missing" || kind === "unsupported")
+        expect(client.refreshAgent).not.toHaveBeenCalled();
+      else expect(client.refreshAgent).toHaveBeenCalledWith("fixture-original");
+    },
+  );
 });

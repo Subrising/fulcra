@@ -1,3 +1,4 @@
+import { addRestoreOptions, runRestoreCommand } from "./restore.js";
 import { Command } from "commander";
 import { runModeCommand } from "./mode.js";
 import { addArchiveOptions, runArchiveCommand } from "./archive.js";
@@ -81,6 +82,10 @@ export function createAgentCommand(): Command {
 
   addJsonAndDaemonHostOptions(addArchiveOptions(agent.command("archive"))).action(
     withOutput(runArchiveCommand),
+  );
+
+  addJsonAndDaemonHostOptions(addRestoreOptions(agent.command("restore"))).action(
+    withOutput(runRestoreCommand),
   );
 
   addJsonAndDaemonHostOptions(addReloadOptions(agent.command("reload"))).action(

@@ -4719,6 +4719,7 @@ export class CodexAppServerAgentSession implements AgentSession {
           throw new CodexQuotaError("session_changed");
         // Permanent changes: the turn would be bound to a different session or intent.
         const validateCurrent = () => {
+          assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
           validateQueuedPreparation();
           if (
             this.closed ||
@@ -4817,6 +4818,8 @@ export class CodexAppServerAgentSession implements AgentSession {
                 throw new CodexQuotaError("account_changed");
               return { quota, turn };
             } catch (error) {
+              // A retired receiver has a specific refusal; account churn must not hide it.
+              assertFinalInputCheck(options?.[FINAL_INPUT_CHECK]);
               if (
                 !staleQuotaRead ||
                 !(error instanceof CodexQuotaError) ||

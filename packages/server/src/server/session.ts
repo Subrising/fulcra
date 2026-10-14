@@ -30,6 +30,7 @@ import {
   deferredCommandPayload as commandPayload,
 } from "./agent/trusted-operation.js";
 import { AdmissionDeniedError } from "./plugins/trusted.js";
+import { assertFinalInputCheck } from "./agent/final-input-check.js";
 import { searchTimeline } from "./agent/chat-search/index.js";
 import { handleFileAtCommitRequest } from "./checkout/file-at-commit-request.js";
 import {
@@ -121,7 +122,6 @@ import type { TurnDetectionProvider } from "./speech/turn-detection-provider.js"
 import {
   buildConfigOverrides,
   isStoredAgentProviderAvailable,
-  resolveStoredAgentUpdatedAt,
   toAgentPersistenceHandle,
 } from "./persistence-hooks.js";
 import { ensureAgentLoaded, ensureUnarchivedAgentLoaded } from "./agent/agent-loading.js";
@@ -157,6 +157,7 @@ import {
   queuedAgentMessagesFor,
   recipientLimit,
   loadQueuedReceiver,
+  queuedReceiverCheck,
 } from "./queued-agent-messages.js";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
@@ -218,6 +219,7 @@ import { buildAgentPrompt } from "./agent/prompt-attachments.js";
 import type { StructuredGenerationDaemonConfig } from "./agent/structured-generation-providers.js";
 import {
   getAgentStreamEventTurnId,
+  FINAL_INPUT_CHECK,
   type AgentPersistenceHandle,
   type AgentPermissionResponse,
   type AgentRunOptions,
@@ -3643,7 +3645,7 @@ export class Session {
           purgeHistory: msg.purgeHistory === true,
         });
       case "archive_agent_request":
-        return this.handleArchiveAgentRequest(msg.agentId, msg.requestId);
+        return this.handleArchiveAgentRequest(msg.agentId, msg.requestId, msg.confirmed);
       case "close_items_request":
         return this.handleCloseItemsRequest(msg);
       case "update_agent_request":
@@ -4418,10 +4420,20 @@ export class Session {
     }
   }
 
-  private async handleArchiveAgentRequest(agentId: string, requestId: string): Promise<void> {
+  private async handleArchiveAgentRequest(
+    agentId: string,
+    requestId: string,
+    confirmed?: boolean,
+  ): Promise<void> {
     this.sessionLogger.info({ agentId }, `Archiving agent ${agentId}`);
 
-    const { archivedAt } = await this.archiveAgentForClose(agentId);
+    if (confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
+      throw new Error("Protected archive requires confirmation from the app.");
+    const { archivedAt } = confirmed
+      ? await this.agentManager.withArchiveConfirmation(agentId, () =>
+          this.archiveAgentForClose(agentId),
+        )
+      : await this.archiveAgentForClose(agentId);
 
     this.emit({
       type: "agent_archived",
@@ -4585,6 +4597,7 @@ export class Session {
   private async handleCloseItemsRequest(msg: CloseItemsRequest): Promise<void> {
     const operations = new Map<string, TrustedOperationHandle | undefined>();
     for (const agentId of msg.agentIds) {
+      await this.agentManager.preflightArchiveDescendants(agentId);
       this.agentManager.withInput(
         agentId,
         "archive",
@@ -4636,39 +4649,24 @@ export class Session {
     });
   }
 
-  private async unarchiveAgentByHandle(handle: AgentPersistenceHandle): Promise<{
-    record: StoredAgentRecord;
-    didUnarchive: boolean;
-    originalArchivedAt: string | null;
-  } | null> {
+  private async unarchiveAgentByHandle(
+    handle: AgentPersistenceHandle,
+  ): Promise<{ record: StoredAgentRecord } | null> {
     const records = await this.agentStorage.listByProviderSession(
       handle.provider,
       handle.sessionId,
     );
-    const matched = records.reduce<StoredAgentRecord | null>((latest, candidate) => {
-      if (!latest) {
-        return candidate;
-      }
-      const updatedDelta =
-        Date.parse(resolveStoredAgentUpdatedAt(candidate)) -
-        Date.parse(resolveStoredAgentUpdatedAt(latest));
-      if (updatedDelta !== 0) {
-        return updatedDelta > 0 ? candidate : latest;
-      }
-      return Date.parse(candidate.createdAt) > Date.parse(latest.createdAt) ? candidate : latest;
-    }, null);
+    if (records.length > 1)
+      throw new Error(
+        "Multiple records share this provider session. Restore by the original agent ID after archiving the duplicate record.",
+      );
+    const matched = records[0];
     if (!matched) {
       return null;
     }
-    const didUnarchive = await unarchiveAgentState(
-      this.agentStorage,
-      this.agentManager,
-      matched.id,
-    );
+    await unarchiveAgentState(this.agentStorage, this.agentManager, matched.id);
     return {
       record: matched,
-      didUnarchive,
-      originalArchivedAt: matched.archivedAt ?? null,
     };
   }
 
@@ -5731,22 +5729,24 @@ export class Session {
       `Resuming agent ${handle.sessionId} (${handle.provider})`,
     );
     try {
-      const matched = await this.unarchiveAgentByHandle(handle);
-      const effectiveOverrides = matched
-        ? { ...buildConfigOverrides(matched.record), ...overrides }
-        : overrides;
-      let snapshot: ManagedAgent;
-      try {
-        snapshot = await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
-      } catch (error) {
-        if (matched?.didUnarchive && matched.originalArchivedAt) {
-          await this.agentManager.archiveSnapshot(matched.record.id, matched.originalArchivedAt);
-        }
-        throw error;
-      }
-      await unarchiveAgentState(this.agentStorage, this.agentManager, snapshot.id);
-      await this.agentManager.hydrateTimelineFromProvider(snapshot.id);
-      await this.agentUpdates.forwardLiveAgent(snapshot);
+      const snapshot = await this.agentManager.withPersistenceRestore(handle, async () => {
+        const matched = await this.unarchiveAgentByHandle(handle);
+        const effectiveOverrides = matched
+          ? { ...buildConfigOverrides(matched.record), ...overrides }
+          : overrides;
+        const restoredSnapshot = matched
+          ? await ensureAgentLoaded(matched.record.id, {
+              agentManager: this.agentManager,
+              agentStorage: this.agentStorage,
+              logger: this.sessionLogger,
+              configOverrides: effectiveOverrides,
+            })
+          : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
+        await unarchiveAgentState(this.agentStorage, this.agentManager, restoredSnapshot.id);
+        await this.agentManager.hydrateTimelineFromProvider(restoredSnapshot.id);
+        await this.agentUpdates.forwardLiveAgent(restoredSnapshot);
+        return restoredSnapshot;
+      });
       const timelineSize = this.agentManager.getTimeline(snapshot.id).length;
       if (requestId) {
         const agentPayload = await this.buildAgentPayload(snapshot);
@@ -6727,6 +6727,7 @@ export class Session {
       logger: this.sessionLogger,
     }).archivePending(agentId);
     return {
+      ...(await this.agentManager.getArchiveProtection(agentId)),
       inFlight:
         this.agentManager.hasInFlightRun(agentId) ||
         Boolean(current?.pendingReplacement) ||
@@ -9780,7 +9781,11 @@ export class Session {
     // - A send from the owner to a busy target steers into the running turn, and is held, not replaced, when the
     //   turn cannot take it. An explicit "interrupt" (an operator's choice, the controller's sends) still interrupts.
     const requested = msg.activeTurnBehavior ?? "interrupt";
-    const dispatch = async (behavior: "interrupt" | "steer", signal?: AbortSignal) => {
+    const dispatch = async (
+      behavior: "interrupt" | "steer",
+      signal?: AbortSignal,
+      finalCheck?: object,
+    ) => {
       const result = await sendPromptToAgent({
         agentManager: this.agentManager,
         agentStorage: this.agentStorage,
@@ -9790,6 +9795,8 @@ export class Session {
         activeTurnBehavior: behavior,
         steerOnly: behavior === "steer",
         clearPendingPermissions: true,
+        unarchive: !finalCheck,
+        ...(finalCheck ? { runOptions: { [FINAL_INPUT_CHECK]: finalCheck } } : {}),
         logger: this.sessionLogger,
       });
       if (result.disposition === "turn_started") {
@@ -9801,11 +9808,34 @@ export class Session {
     // A held delivery runs later, from a turn-end event. It runs in its sender's own trust context (a chat's
     // message as agent input, the owner's as an owner RPC), never in whatever context that event had. Steer-only:
     // a turn that starts between the check and the send keeps the message waiting instead of being replaced.
+    const heldSessionId = this.agentManager.getAgent(agentId)?.persistence?.sessionId ?? null;
     const whenIdle = (asSender: (run: () => Promise<void>) => Promise<void>) => () =>
       asSender(async () => {
+        const check = queuedReceiverCheck(this.agentManager, agentId, heldSessionId);
+        assertFinalInputCheck(check);
+        await loadQueuedReceiver(
+          {
+            agentManager: this.agentManager,
+            agentStorage: this.agentStorage,
+            logger: this.sessionLogger,
+          },
+          agentId,
+          heldSessionId,
+        );
         if (this.agentManager.hasInFlightRun(agentId)) throw new SteerUnavailableError(agentId);
-        await dispatch("steer");
+        await dispatch("steer", undefined, check);
       });
+    const holdOwnerMessage = () => {
+      const deliver = whenIdle((run) => trusted.rpc(undefined, run));
+      held.hold(agentId, async () => {
+        try {
+          await deliver();
+        } catch (error) {
+          if (error instanceof SteerUnavailableError) throw error;
+          this.handleAgentRunError(agentId, error, "Failed to deliver held message");
+        }
+      });
+    };
     const tryAgentSteer = async (): Promise<{ delivered: boolean; resumeAt?: number }> => {
       try {
         await trusted.agentInput(() => dispatch("steer", this.delivery.requestSignal));
@@ -9860,10 +9890,7 @@ export class Session {
       const busy = this.agentManager.hasInFlightRun(agentId);
       if (msg.queue) {
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError();
-        held.hold(
-          agentId,
-          whenIdle((run) => trusted.rpc(undefined, run)),
-        );
+        holdOwnerMessage();
         deliveryNote("Message queued for the end of the turn.");
         return;
       }
@@ -9879,16 +9906,7 @@ export class Session {
         // later delivery would run as plain owner input, a different source than the plugin sent it as
         // (0.2.13 review). It is refused instead, with the reason, and the sender sends it again when the chat is idle.
         if (msg.inputProvenance !== undefined) throw new ProvenanceRefusedError({ cause: error });
-        const deliver = whenIdle((run) => trusted.rpc(undefined, run));
-        held.hold(agentId, async () => {
-          try {
-            await deliver();
-          } catch (heldError) {
-            if (heldError instanceof SteerUnavailableError) throw heldError;
-            // The request already answered "accepted": tell the owner the held message failed.
-            this.handleAgentRunError(agentId, heldError, "Failed to deliver held message");
-          }
-        });
+        holdOwnerMessage();
       }
     };
   }
