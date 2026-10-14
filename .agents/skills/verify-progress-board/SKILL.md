@@ -10,7 +10,7 @@ Run from the repository root. Use the existing dependencies. Do not change a liv
 1. Run the focused adapter tests:
 
    ```sh
-   TMPDIR=/tmp slot-run --pool fulcra --slots 1 --timeout 60 -- node --import tsx --test control/orca-organization/server/progress-board.test.ts control/orca-organization/shared/progress-board.test.ts
+   TMPDIR=/tmp slot-run --pool fulcra --slots 1 --timeout 60 -- node --import tsx --test control/orca-organization/server/progress-board.test.ts control/orca-organization/shared/progress-board.test.ts control/src/config.test.mjs
    ```
 
 2. Run the browser checks:
@@ -22,6 +22,7 @@ Run from the repository root. Use the existing dependencies. Do not change a liv
 The browser checks render the real plugin surface with synthetic data and the SDK context providers.
 They cover 375, 768, 1440, and 812×375 pixels in dark and light themes.
 They use 43 synthetic items with the Mini ledger columns.
+The adapter tests check owner matching before redaction and cache refresh after owner settings change.
 They check project selection, status columns, recent Done items, full text and evidence, job navigation, event refresh, errors, recovery, empty data, and subscription cleanup.
 Card titles have at most two lines. Card metadata and result lines can use an ellipsis.
 Full details must show all text. Only board lanes and status tabs can scroll horizontally.

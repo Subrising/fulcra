@@ -364,29 +364,60 @@ test("ledger ages use valid source dates and never infer completion from evidenc
   assert.equal(parsed.items[0]!.completedAt, undefined);
 });
 
-test("snapshot reads current human owners from private config and propagates invalid settings", async (t) => {
+test("snapshot matches current configured owners before redaction and invalidates cached matches", async (t) => {
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "board-owner-config-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ORCA_HOME: path.join(root, "home") };
   firstRun(env);
   const file = path.join(env.ORCA_HOME, "config.json");
   const config = JSON.parse(fs.readFileSync(file, "utf8"));
+  fs.mkdirSync(path.join(root, "fixture"));
+  fs.writeFileSync(
+    path.join(root, "fixture", "OPEN-ITEMS.md"),
+    `${header}\n| FU-1 | Task A | BUILD | owner-a@fixture.example | OPEN | — | Brief |\n| FU-2 | Task B | FIX | owner-b@fixture.example | OPEN | — | Brief |`,
+  );
   const board = createProgressBoard(
     { on: () => () => {} },
     {
       root,
       machine: "Fixture host",
       humanOwners: () => loadConfig(env).board.humanOwners,
+      run: async () => {
+        throw Error("Offline fixture");
+      },
     },
   );
   t.after(() => board.close());
   const api = {
-    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
-    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    agents: {
+      list: async () => ({ entries: [{ agent: boardLead }], pageInfo: { hasMore: false } }),
+    },
+    workspaces: { list: async () => ({ entries: [workspace], pageInfo: { hasMore: false } }) },
   } as unknown as PaseoApi;
-  assert.deepEqual((await board.read(api)).humanOwners, []);
-  fs.writeFileSync(file, JSON.stringify({ ...config, board: { humanOwners: ["Owner A"] } }));
-  assert.deepEqual((await board.read(api)).humanOwners, ["Owner A"]);
+  const read = async () => (await board.read(api)).projects[0]!.items;
+  assert.deepEqual(
+    (await read()).map((item) => item.needsHuman),
+    [false, false],
+  );
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ ...config, board: { humanOwners: ["OWNER-A@FIXTURE.EXAMPLE"] } }),
+  );
+  const items = await read();
+  assert.equal(items[0]!.owner, items[1]!.owner);
+  assert.deepEqual(
+    items.map((item) => item.needsHuman),
+    [true, false],
+  );
+  assert.equal(JSON.stringify(await board.read(api)).includes("OWNER-A@FIXTURE.EXAMPLE"), false);
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ ...config, board: { humanOwners: ["owner-b@fixture.example"] } }),
+  );
+  assert.deepEqual(
+    (await read()).map((item) => item.needsHuman),
+    [false, true],
+  );
   fs.writeFileSync(file, JSON.stringify({ ...config, board: { humanOwners: "Owner A" } }));
   await assert.rejects(board.read(api), /board.humanOwners/);
 });

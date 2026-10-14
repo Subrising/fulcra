@@ -11,6 +11,7 @@ const item = z.object({
   source: z.string(),
   createdAt: z.string().optional(),
   completedAt: z.string().optional(),
+  needsHuman: z.boolean().optional(),
 });
 const job = z.object({
   id: z.string(),
@@ -37,7 +38,6 @@ export const progressBoardRpc = defineContract({
     observedAt: z.string(),
     machine: z.string(),
     warnings: z.array(z.string()),
-    humanOwners: z.array(z.string()).optional(),
     projects: z.array(
       z.object({
         id: z.string(),
@@ -58,32 +58,28 @@ export const BOARD_GROUPS = ["Next / Open", "In progress", "Needs you", "Blocked
 export type BoardGroup = (typeof BOARD_GROUPS)[number];
 export type BoardCard = { type: "item"; item: BoardItem } | { type: "job"; job: BoardJob };
 
-export function itemGroup(row: BoardItem, humanOwners: readonly string[] = []): BoardGroup {
+export function matchesHumanOwner(owner: string, humanOwners: readonly string[] = []): boolean {
+  const name = owner.trim().toLowerCase();
+  return (
+    name.length > 0 && humanOwners.some((candidate) => candidate.trim().toLowerCase() === name)
+  );
+}
+
+export function itemGroup(row: BoardItem): BoardGroup {
   const status = row.status.trim().toUpperCase();
   if (status === "DONE" || status.startsWith("MOVED")) return "Done";
   if (status.startsWith("BLOCKED")) return "Blocked";
-  if (
-    row.kind.trim().toUpperCase() === "DECIDE" ||
-    humanOwners.some(
-      (owner) =>
-        owner.trim().length > 0 && owner.trim().toLowerCase() === row.owner.trim().toLowerCase(),
-    )
-  )
-    return "Needs you";
+  if (row.kind.trim().toUpperCase() === "DECIDE" || row.needsHuman) return "Needs you";
   if (status.startsWith("IN PROGRESS")) return "In progress";
   return "Next / Open";
 }
 
 // Ledgers do not require dates. Undated completions use ledger order, bounded to the last ten rows.
-export function boardColumns(
-  project: ProgressBoard["projects"][number],
-  now: number,
-  humanOwners: readonly string[] = [],
-) {
+export function boardColumns(project: ProgressBoard["projects"][number], now: number) {
   const recent = new Set(
     project.items
       .filter((row) => {
-        if (itemGroup(row, humanOwners) !== "Done") return false;
+        if (itemGroup(row) !== "Done") return false;
         if (!row.completedAt) return true;
         const at = Date.parse(row.completedAt);
         return Number.isFinite(at) && at <= now && now - at <= 14 * 86400000;
@@ -97,9 +93,7 @@ export function boardColumns(
         ? project.jobs.map((job): BoardCard => ({ type: "job", job }))
         : []),
       ...project.items
-        .filter(
-          (row) => itemGroup(row, humanOwners) === group && (group !== "Done" || recent.has(row)),
-        )
+        .filter((row) => itemGroup(row) === group && (group !== "Done" || recent.has(row)))
         .map((item): BoardCard => ({ type: "item", item })),
     ],
   }));
