@@ -22,7 +22,7 @@ import {
 import { IntercomRates } from "./intercom-rates.js";
 import type { JsonValue } from "@getpaseo/protocol/trusted-input";
 
-async function fixture(kind: "ended" | "needs-you" = "ended") {
+async function fixture(kind: "ended" | "needs-you" = "ended", now = Date.now) {
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "native-report-test-")));
   const nativeIdentity = () => ({
     agentId: randomUUID(),
@@ -94,9 +94,9 @@ async function fixture(kind: "ended" | "needs-you" = "ended") {
   const grant = JSON.parse(
     await readFile(path.join(directory, "grants", "report", `${prime.agentId}.json`), "utf8"),
   ) as { capability: string };
-  const receipts = new MessageReceipts(path.join(directory, "receipts"));
+  const receipts = new MessageReceipts(path.join(directory, "receipts"), now);
   const inbox = new NativeReportInbox(registry, receipts);
-  const events = [{ id: randomUUID(), source: child, scope, kind, at: Date.now() }];
+  const events = [{ id: randomUUID(), source: child, scope, kind, at: now() }];
   const batch = registry.captureReportBatch(events);
   const messageId = randomUUID();
   const admit = () =>
@@ -1752,6 +1752,140 @@ test("native context rotation retains explicit scope/parent on a changed native 
       }),
     ).rejects.toThrow("human takeover");
   } finally {
+    await f.cleanup();
+  }
+});
+
+test.each(["queued", "delivered", "uncertain"])(
+  "expired unread reports retain evidence without an unread archive block (%s)",
+  async (state) => {
+    const clock = { now: Date.now() };
+    const f = await fixture("needs-you", () => clock.now);
+    try {
+      await f.admit();
+      if (state !== "queued")
+        await f.receipts.dispatchNext(
+          f.prime.agentId,
+          () => true,
+          async (_input, check) => {
+            check();
+            if (state === "uncertain") throw new Error("Unknown delivery");
+            return "accepted-turn";
+          },
+        );
+      clock.now += 6 * 60 * 60_000 - 1;
+      await f.receipts.prepareArchiveObservation();
+      expect(f.receipts.archivePending(f.prime.agentId)).toBe(state === "delivered" ? 1 : 2);
+      clock.now++;
+      const inbox = await f.request();
+      expect(inbox).toMatchObject({
+        events: [],
+        resolvedExpired: [
+          {
+            eventId: f.events[0]!.id,
+            resolution: "resolved-expired",
+            consumed: false,
+            providerAccepted: state === "delivered",
+          },
+        ],
+      });
+      await f.receipts.prepareArchiveObservation();
+      expect(f.receipts.archivePending(f.prime.agentId)).toBe(state === "uncertain" ? 1 : 0);
+      await expect(
+        f.request("events-ack", {
+          sessionId: f.prime.agentId,
+          eventId: f.events[0]!.id,
+          note: "Expired metadata",
+        }),
+      ).rejects.toThrow("Scoped native report unavailable");
+      const files = await readdir(path.join(f.directory, "receipts"));
+      const saved = JSON.parse(
+        await readFile(path.join(f.directory, "receipts", files[0]!), "utf8"),
+      );
+      expect(saved).toMatchObject({
+        reportResolution: "resolved-expired",
+        report: { consumed: [] },
+      });
+      const restored = new MessageReceipts(path.join(f.directory, "receipts"), () => clock.now);
+      await restored.prepareArchiveObservation();
+      expect(restored.archivePending(f.prime.agentId)).toBe(state === "uncertain" ? 1 : 0);
+      expect(await restored.reportInbox(f.registry.readerForNativeIdentity(f.prime))).toMatchObject(
+        {
+          resolvedExpired: [{ eventId: f.events[0]!.id, resolution: "resolved-expired" }],
+        },
+      );
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test("archive observation resolves expired unread metadata before any inbox read", async () => {
+  const clock = { now: Date.now() };
+  const f = await fixture("needs-you", () => clock.now);
+  try {
+    await f.admit();
+    await f.receipts.dispatchNext(
+      f.prime.agentId,
+      () => true,
+      async (_input, check) => {
+        check();
+        return "accepted-turn";
+      },
+    );
+    clock.now += 6 * 60 * 60_000;
+    const restored = new MessageReceipts(path.join(f.directory, "receipts"), () => clock.now);
+    await restored.prepareArchiveObservation();
+    expect(restored.archivePending(f.prime.agentId)).toBe(0);
+    expect(await restored.reportInbox(f.registry.readerForNativeIdentity(f.prime))).toMatchObject({
+      events: [],
+      resolvedExpired: [
+        { eventId: f.events[0]!.id, consumed: false, resolution: "resolved-expired" },
+      ],
+    });
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a late provider reply preserves the report expiry resolution", async () => {
+  const clock = { now: Date.now() };
+  const f = await fixture("needs-you", () => clock.now);
+  let accept!: (turnId: string) => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const accepted = new Promise<string>((resolve) => {
+    accept = resolve;
+  });
+  try {
+    await f.admit();
+    const pending = f.receipts.dispatchNext(
+      f.prime.agentId,
+      () => true,
+      async (_input, check) => {
+        check();
+        entered();
+        return accepted;
+      },
+    );
+    await started;
+    clock.now += 6 * 60 * 60_000;
+    expect(await f.request()).toMatchObject({
+      resolvedExpired: [{ eventId: f.events[0]!.id, providerAccepted: false }],
+    });
+    accept("late-accepted-turn");
+    await pending;
+    await f.receipts.prepareArchiveObservation();
+    expect(f.receipts.archivePending(f.prime.agentId)).toBe(0);
+    expect(await f.request()).toMatchObject({
+      resolvedExpired: [
+        { eventId: f.events[0]!.id, resolution: "resolved-expired", providerAccepted: true },
+      ],
+    });
+  } finally {
+    accept("cleanup");
     await f.cleanup();
   }
 });

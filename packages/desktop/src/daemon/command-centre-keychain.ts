@@ -63,38 +63,52 @@ export function createCommandCentreKeychain(
         ["-i"],
         `add-generic-password -U -s ${service} -a daemon -w ${password}\nquit\n`,
       );
-      const cause = failure(result);
-      if (cause) throw Error(`Command Centre Keychain: ${cause}`);
+      // The interactive shell can store the item, then fail on quit. The read is the success check.
+      const verification = await run([
+        "find-generic-password",
+        "-s",
+        service,
+        "-a",
+        "daemon",
+        "-w",
+      ]);
+      const readFailure = failure(verification);
+      if (!readFailure && verification.stdout.replace(/\r?\n$/, "") === password) return;
+      throw Error(
+        `Command Centre Keychain: ${failure(result) ?? readFailure ?? "operation-failed"}`,
+      );
     },
   };
 }
 
-const command: KeychainCommand = async (args, input) => {
-  if (input === undefined) {
-    try {
-      const result = await execute("/usr/bin/security", args, { timeout: 15000, maxBuffer: 4096 });
-      return { code: 0, stdout: result.stdout, stderr: result.stderr };
-    } catch (error) {
-      const result = error as { code?: number | string; stderr?: string };
-      return { code: result.code ?? null, stdout: "", stderr: result.stderr ?? "" };
+export function createSecurityCommand(binary = "/usr/bin/security"): KeychainCommand {
+  return async (args, input) => {
+    if (input === undefined) {
+      try {
+        const result = await execute(binary, args, { timeout: 15000, maxBuffer: 4096 });
+        return { code: 0, stdout: result.stdout, stderr: result.stderr };
+      } catch (error) {
+        const result = error as { code?: number | string; stderr?: string };
+        return { code: result.code ?? null, stdout: "", stderr: result.stderr ?? "" };
+      }
     }
-  }
-  return new Promise<KeychainCommandResult>((resolve) => {
-    const child = spawn("/usr/bin/security", args, {
-      stdio: ["pipe", "ignore", "pipe"],
-      timeout: 15000,
-      killSignal: "SIGKILL",
+    return new Promise<KeychainCommandResult>((resolve) => {
+      const child = spawn(binary, args, {
+        stdio: ["pipe", "ignore", "pipe"],
+        timeout: 15000,
+        killSignal: "SIGKILL",
+      });
+      let stderr = "";
+      child.stderr.on("data", (data: Buffer) => {
+        stderr = (stderr + data.toString()).slice(0, 4096);
+      });
+      child.stdin.once("error", () => resolve({ code: null, stdout: "", stderr: "" }));
+      child.once("error", () => resolve({ code: null, stdout: "", stderr: "" }));
+      child.once("close", (code) => resolve({ code, stdout: "", stderr }));
+      child.stdin.end(input);
     });
-    let stderr = "";
-    child.stderr.on("data", (data: Buffer) => {
-      stderr = (stderr + data.toString()).slice(0, 4096);
-    });
-    child.stdin.once("error", () => resolve({ code: null, stdout: "", stderr: "" }));
-    child.once("error", () => resolve({ code: null, stdout: "", stderr: "" }));
-    child.once("close", (code) => resolve({ code, stdout: "", stderr }));
-    child.stdin.end(input);
-  });
-};
+  };
+}
 /** Windows has no macOS Keychain: the secret is wrapped with safeStorage (DPAPI) instead. */
 function createWindowsStore(): CommandCentreKeychain {
   let inner: CommandCentreKeychain | null = null;
@@ -116,4 +130,6 @@ function createWindowsStore(): CommandCentreKeychain {
 
 /** Tests inject a command adapter and never access an OS Keychain. */
 export const commandCentreKeychain: CommandCentreKeychain =
-  process.platform === "win32" ? createWindowsStore() : createCommandCentreKeychain(command);
+  process.platform === "win32"
+    ? createWindowsStore()
+    : createCommandCentreKeychain(createSecurityCommand());

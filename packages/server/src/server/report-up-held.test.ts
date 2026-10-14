@@ -82,6 +82,7 @@ function setup(
     isNudgeEnabled: () =>
       store ? reportUpSwitches(undefined, store.get().idleLeadNudge).idleNudges : true,
     getNudgeSkipOwners: () => store?.get().idleLeadNudgeSkipOwners ?? [],
+    getNudgeMinIntervalMinutes: () => store?.get().idleLeadNudgeMinIntervalMinutes ?? 60,
     localServerId: "srv_local",
     logger: createTestLogger(),
     ...options,
@@ -597,5 +598,20 @@ test("owner exclusions cancel a nudge that already waits for delivery", async ()
   } finally {
     f.service.stop();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a lead off label cancels a nudge at the final queued delivery check", async () => {
+  const f = setup(undefined, { readLedger: nudgeLedger });
+  f.chats.get(A)!.lifecycle = "idle";
+  try {
+    f.finish(LEAD);
+    await settle();
+    f.chats.get(LEAD)!.labels = { "fulcra.nudge": "off" };
+    f.leadTurnEnds();
+    await settle();
+    expect(sent).toEqual([]);
+  } finally {
+    f.service.stop();
   }
 });

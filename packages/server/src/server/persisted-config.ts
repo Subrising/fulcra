@@ -271,6 +271,7 @@ export const PersistedConfigSchema = z
         eventDispatcherEnabled: z.boolean().optional(),
         idleLeadNudge: z.boolean().optional(),
         idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
+        idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),
         reviveOnRestart: z.boolean().optional(),
         // Transitional input only: migrate this introduced key to a sidecar before saving.
         autoResumeOnLimit: z.boolean().optional(),
