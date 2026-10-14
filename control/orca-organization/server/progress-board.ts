@@ -4,7 +4,7 @@ import os from "node:os";
 import { execFile } from "node:child_process";
 import type { PaseoApi, PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import type { BoardItem, ProgressBoard } from "../shared/progress-board";
+import { matchesHumanOwner, type BoardItem, type ProgressBoard } from "../shared/progress-board";
 import { scrubFreeText } from "../shared/privacy-scrub";
 
 const COLUMNS = ["id", "item", "kind", "owner", "status", "evidence", "source"] as const;
@@ -18,7 +18,10 @@ export function ledgerDate(text: string): string | undefined {
     : undefined;
 }
 
-export function parseLedger(text: string): { items: BoardItem[]; malformed: number } {
+export function parseLedger(
+  text: string,
+  humanOwners: readonly string[] = [],
+): { items: BoardItem[]; malformed: number } {
   const items: BoardItem[] = [];
   let header = false,
     malformed = 0;
@@ -41,11 +44,20 @@ export function parseLedger(text: string): { items: BoardItem[]; malformed: numb
       continue;
     }
     ids.add(cells[0]!);
-    const row = Object.fromEntries(
-      COLUMNS.map((key, i) => [key, scrubFreeText(cells[i]!, null)]),
-    ) as BoardItem;
+    const cell = (index: number) => scrubFreeText(cells[index]!, null);
+    const row: BoardItem = {
+      id: cell(0),
+      item: cell(1),
+      kind: cell(2),
+      owner: cell(3),
+      status: cell(4),
+      evidence: cell(5),
+      source: cell(6),
+    };
     // Source dates describe the request; evidence prose does not reliably date completion.
     row.createdAt = ledgerDate(row.source);
+    // Match original labels. Redaction can map different owners to the same display text.
+    row.needsHuman = matchesHumanOwner(cells[3]!, humanOwners);
     items.push(row);
   }
   if (text.trim() && !header) malformed++;
@@ -253,7 +265,14 @@ export function createProgressBoard(
   watch(root);
   const watched = new Set<string>();
   let flight: Promise<ProgressBoard> | undefined;
+  let ownerSignature: string | undefined;
   async function read(paseo: PaseoApi): Promise<ProgressBoard> {
+    const humanOwners = options.humanOwners?.() ?? [];
+    const signature = JSON.stringify(humanOwners.map((owner) => owner.trim().toLowerCase()).sort());
+    if (signature !== ownerSignature) {
+      ledgers.clear();
+      ownerSignature = signature;
+    }
     const warnings: string[] = [];
     let names: string[] = [];
     try {
@@ -376,7 +395,7 @@ export function createProgressBoard(
           const stat = fs.lstatSync(file);
           if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2097152)
             throw Error("Invalid ledger");
-          const parsed = parseLedger(fs.readFileSync(file, "utf8"));
+          const parsed = parseLedger(fs.readFileSync(file, "utf8"), humanOwners);
           ledgers.set(name, {
             items: parsed.items,
             signature,
@@ -460,7 +479,6 @@ export function createProgressBoard(
     return {
       observedAt: new Date().toISOString(),
       machine: scrub(machine),
-      humanOwners: (options.humanOwners?.() ?? []).map(scrub),
       projects: projects.map((project) => ({
         ...project,
         id: scrub(project.id),
