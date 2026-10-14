@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { buildWorkspace } from "./ensure-protocol-build.mjs";
 
 const repoRoot = join(import.meta.dirname, "..");
 
@@ -79,4 +80,42 @@ test("every executable daemon entrypoint enters the supervisor", async () => {
   assert.doesNotMatch(nixPackage, /--set(-default)?\s+NODE_ENV\b/);
   assert.doesNotMatch(nixModule, /\bNODE_ENV\b\s*=/);
   assert.doesNotMatch(nixModule, /\bPASEO_NODE_ENV\b/);
+});
+
+for (const platform of ["darwin", "linux", "win32"]) {
+  test(`workspace build selects the npm launcher for ${platform}`, () => {
+    const calls = [];
+    for (const workspace of ["@getpaseo/protocol", "@getpaseo/client"])
+      buildWorkspace(workspace, {
+        platform,
+        run: (...args) => {
+          calls.push(args);
+          return { status: 0 };
+        },
+      });
+    assert.deepEqual(
+      calls,
+      ["@getpaseo/protocol", "@getpaseo/client"].map((workspace) => [
+        platform === "win32" ? "npm.cmd" : "npm",
+        ["run", "build", `--workspace=${workspace}`],
+        { cwd: repoRoot, stdio: "inherit", shell: platform === "win32" },
+      ]),
+    );
+  });
+}
+
+test("workspace build preserves launch and build failures", () => {
+  const error = new Error("Synthetic launch failure");
+  assert.throws(
+    () => buildWorkspace("@getpaseo/protocol", { run: () => ({ error }) }),
+    (actual) => actual === error,
+  );
+  assert.throws(
+    () => buildWorkspace("@getpaseo/client", { run: () => ({ status: 2 }) }),
+    /Building @getpaseo\/client failed \(2\)/,
+  );
+  assert.throws(
+    () => buildWorkspace("@getpaseo/client", { run: () => ({ status: null, signal: "SIGTERM" }) }),
+    /SIGTERM/,
+  );
 });
