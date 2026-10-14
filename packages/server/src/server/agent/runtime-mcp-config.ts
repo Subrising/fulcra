@@ -87,7 +87,7 @@ export function matchesPaseoInjectLabels(
   );
 }
 
-/** Host label write policy. Injection uses the same complete label match. */
+/** Token filter label rules keep the Paseo tool list out of worker sessions. */
 export function assertPaseoInjectionLabelWrite(input: {
   labels: Record<string, unknown> | undefined;
   required: Record<string, string>;
@@ -103,6 +103,6 @@ export function assertPaseoInjectionLabelWrite(input: {
   if (!input.callerAgentId && !input.agentInput) return;
   if (input.callerAgentId && matchesPaseoInjectLabels(input.callerLabels, input.required)) return;
   throw new Error(
-    "MCP injection labels are reserved. Only the user or a lead with all matching injection labels can change them.",
+    "MCP token filter labels are reserved. Only the user or a lead with all matching injection labels can change them.",
   );
 }

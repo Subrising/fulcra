@@ -713,7 +713,7 @@ describe("agent MCP end-to-end (offline)", () => {
     const mcp = new Client({ name: "reserved-label-worker", version: "1" });
     const leadMcp = new Client({ name: "reserved-label-lead", version: "1" });
     const required = { "fulcra.mcp": "on", team: "lead" };
-    const denied = "MCP injection labels are reserved";
+    const denied = "MCP token filter labels are reserved";
     try {
       await daemon.start();
       const target = daemon.getListenTarget();
