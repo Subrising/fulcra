@@ -626,6 +626,7 @@ export function resolveConfigFromPersisted(
     nativeFinishNotices: persistedSettings.nativeFinishNotices,
     idleLeadNudge: persistedSettings.idleLeadNudge,
     idleLeadNudgeSkipOwners: persistedSettings.idleLeadNudgeSkipOwners,
+    idleLeadNudgeMinIntervalMinutes: persistedSettings.idleLeadNudgeMinIntervalMinutes,
     reviveOnRestart: persistedSettings.reviveOnRestart,
     autoResumeOnLimit: persistedSettings.autoResumeOnLimit,
     appendSystemPrompt,
@@ -685,6 +686,7 @@ function orchestrationSettings(persisted: PersistedConfig) {
     nativeFinishNotices: daemon?.nativeFinishNotices ?? false,
     idleLeadNudge: daemon?.idleLeadNudge,
     idleLeadNudgeSkipOwners: daemon?.idleLeadNudgeSkipOwners ?? [],
+    idleLeadNudgeMinIntervalMinutes: daemon?.idleLeadNudgeMinIntervalMinutes ?? 60,
     reviveOnRestart: daemon?.reviveOnRestart ?? true,
   };
 }

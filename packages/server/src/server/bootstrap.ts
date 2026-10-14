@@ -453,6 +453,7 @@ export interface PaseoDaemonConfig {
   nativeFinishNotices?: boolean;
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
+  idleLeadNudgeMinIntervalMinutes?: number;
   reviveOnRestart?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
@@ -649,10 +650,14 @@ function initialNotificationMode(
 
 function initialNudgeConfig(
   config: PaseoDaemonConfig,
-): Pick<MutableDaemonConfig, "idleLeadNudge" | "idleLeadNudgeSkipOwners"> {
+): Pick<
+  MutableDaemonConfig,
+  "idleLeadNudge" | "idleLeadNudgeSkipOwners" | "idleLeadNudgeMinIntervalMinutes"
+> {
   return {
     idleLeadNudge: config.idleLeadNudge,
     idleLeadNudgeSkipOwners: config.idleLeadNudgeSkipOwners ?? [],
+    idleLeadNudgeMinIntervalMinutes: config.idleLeadNudgeMinIntervalMinutes ?? 60,
   };
 }
 

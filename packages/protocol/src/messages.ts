@@ -286,6 +286,7 @@ export const MutableDaemonConfigSchema = z
     nativeFinishNotices: z.boolean().optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
+    idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),
     // FULCRA(orchestration): after a restart, open sessions show as open and cut-off turns continue. Unset means on.
     reviveOnRestart: z.boolean().optional(),
     autoResumeOnLimit: z.boolean().default(true),
@@ -316,6 +317,7 @@ export const MutableDaemonConfigPatchSchema = z
     nativeFinishNotices: z.boolean().optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
+    idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),
     reviveOnRestart: z.boolean().optional(),
     autoResumeOnLimit: z.boolean().optional(),
     appendSystemPrompt: z.string().optional(),
