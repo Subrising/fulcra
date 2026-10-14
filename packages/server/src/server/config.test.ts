@@ -32,6 +32,7 @@ describe("server config", () => {
     roots.push(paseoHome);
     expect(loadConfig(paseoHome, { env: {} }).idleLeadNudge).toBeUndefined();
     expect(loadConfig(paseoHome, { env: {} }).idleLeadNudgeSkipOwners).toEqual([]);
+    expect(loadConfig(paseoHome, { env: {} }).idleLeadNudgeMinIntervalMinutes).toBe(60);
     await writeFile(
       path.join(paseoHome, "config.json"),
       JSON.stringify({
@@ -39,12 +40,14 @@ describe("server config", () => {
           idleLeadNudge: false,
           reportUpOnTurnEnd: true,
           idleLeadNudgeSkipOwners: ["Owner A"],
+          idleLeadNudgeMinIntervalMinutes: 15,
         },
       }),
     );
     const config = loadConfig(paseoHome, { env: {} });
     expect(config.idleLeadNudge).toBe(false);
     expect(config.idleLeadNudgeSkipOwners).toEqual(["Owner A"]);
+    expect(config.idleLeadNudgeMinIntervalMinutes).toBe(15);
     expect(config.reportUpOnTurnEnd).toBe(true);
     expect(
       resolveConfigFromPersisted(paseoHome, loadPersistedConfig(paseoHome), { env: {} })

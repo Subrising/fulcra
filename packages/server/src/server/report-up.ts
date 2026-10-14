@@ -127,6 +127,7 @@ export interface ReportUpDeps {
   /** Idle-lead nudges have their own switch. Unset means on. */
   isNudgeEnabled?: () => boolean;
   getNudgeSkipOwners?: () => readonly string[];
+  getNudgeMinIntervalMinutes?: () => number;
   localServerId: string | null;
   logger: Logger;
   /** The delivery step; tests replace it. */
@@ -174,6 +175,7 @@ interface PersistedState {
   v: 1;
   limited: Record<string, LimitedChat>;
   held: Record<string, Array<string | HeldReport>>;
+  nudgeDeliveredAt?: Record<string, number>;
 }
 
 /** A chat's lead chat on this computer (fulcra.reports-to, else its parent), or the reason there is none. */
@@ -199,6 +201,7 @@ export async function leadChatOf(
 const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
 interface PendingNudge {
   handoff?: object;
+  deliveryRecorded?: boolean;
   generation: number;
   startedAt: number;
   fingerprint: string;
@@ -211,6 +214,7 @@ interface NudgeState {
   itemIds: string[];
   itemOwners: string[];
   needsDelivery: boolean;
+  deferred?: boolean;
 }
 
 export class ReportUpService {
@@ -227,6 +231,7 @@ export class ReportUpService {
   private readonly nudgeStates = new Map<string, NudgeState>();
   private readonly nudging = new Map<string, PendingNudge>();
   private nudgeGeneration = 0;
+  private readonly nudgeDeliveredAt = new Map<string, number>();
 
   constructor(private readonly deps: ReportUpDeps) {
     this.store = lineStoreOf({ agentManager: deps.agentManager, agentStorage: deps.agentStorage });
@@ -265,6 +270,9 @@ export class ReportUpService {
     this.archiveStateKnown = archiveReportStateKnown(state, MAX_HELD_REPORTS);
     if (!this.archiveStateKnown) return;
     const now = this.now();
+    for (const [id, at] of Object.entries(state.nudgeDeliveredAt ?? {})) {
+      if (Number.isSafeInteger(at) && at >= 0) this.nudgeDeliveredAt.set(id, at);
+    }
     for (const [id, limit] of Object.entries(state.limited ?? {})) {
       if (typeof limit?.kind === "string" && Number.isFinite(limit.until) && limit.until > now)
         this.limited.set(id, {
@@ -321,6 +329,7 @@ export class ReportUpService {
       v: 1,
       limited: Object.fromEntries(this.limited),
       held: Object.fromEntries(this.held),
+      nudgeDeliveredAt: Object.fromEntries(this.nudgeDeliveredAt),
     };
     try {
       writePrivateFileAtomicSync(file, JSON.stringify(state));
@@ -730,6 +739,15 @@ export class ReportUpService {
     return !this.stopped && (this.deps.isNudgeEnabled ? this.deps.isNudgeEnabled() : true);
   }
 
+  private nudgeAllowed(leadId: string): boolean {
+    if (this.deps.agentManager.getAgent(leadId)?.labels?.["fulcra.nudge"] === "off") return false;
+    const last = this.nudgeDeliveredAt.get(leadId);
+    return (
+      last === undefined ||
+      this.now() - last >= (this.deps.getNudgeMinIntervalMinutes?.() ?? 60) * 60_000
+    );
+  }
+
   private otherEnabled(): boolean {
     return !this.stopped && (this.deps.isOtherEnabled ? this.deps.isOtherEnabled() : true);
   }
@@ -794,6 +812,10 @@ export class ReportUpService {
     const lead = await this.store.get(leadId);
     const live = this.deps.agentManager.getAgent(leadId);
     if (!lead || lead.archivedAt || live?.internal) return;
+    if (lead.labels?.["fulcra.nudge"] === "off") {
+      this.cancelNudge(leadId, "Idle nudge receiver opted out");
+      return;
+    }
     const last = await this.deps.agentManager.getLastAssistantMessage(leadId).catch(() => null);
     const stop = classifyEndingAssistantMessage(last, this.now());
     if (stop && stop.kind !== "network") return;
@@ -807,24 +829,40 @@ export class ReportUpService {
     const fingerprint = state.fingerprint;
     if (!workers.length || !owned.length) {
       state.needsDelivery = false;
+      state.deferred = false;
       this.cancelNudge(leadId, "Idle nudge has no eligible workers or owned open items");
       return;
     }
     if (this.observer.isOpen(leadId)) return;
-    const pending = this.nudging.get(leadId);
-    if (pending) {
-      const unchanged = pending.fingerprint === fingerprint;
-      const withinDeadline = this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS;
-      if (unchanged && withinDeadline && !pending.abort.signal.aborted) return;
-      if (!withinDeadline) this.expireNudge(leadId, pending);
-      else pending.abort.abort(new Error("Idle nudge state changed or expired"));
-    }
+    if (!this.prepareNudgeGeneration(leadId, fingerprint)) return;
     if (!state.needsDelivery) return;
+    if (!this.nudgeAllowed(leadId)) {
+      state.deferred = true;
+      return;
+    }
     await this.deliverNudge(
       leadId,
       fingerprint,
       formatSystemNotificationPrompt(formatNudge(workers, owned)),
     );
+  }
+
+  private prepareNudgeGeneration(leadId: string, fingerprint: string): boolean {
+    const pending = this.nudging.get(leadId);
+    if (!pending) return true;
+    if (hasFinalInputHandoff(pending.handoff)) this.recordPendingNudge(leadId, pending);
+    const withinDeadline = this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS;
+    if (pending.fingerprint === fingerprint && withinDeadline && !pending.abort.signal.aborted)
+      return false;
+    if (!withinDeadline) this.expireNudge(leadId, pending);
+    else pending.abort.abort(new Error("Idle nudge state changed or expired"));
+    return true;
+  }
+
+  private recordPendingNudge(leadId: string, pending: PendingNudge): void {
+    if (pending.deliveryRecorded) return;
+    pending.deliveryRecorded = true;
+    this.recordNudgeDelivery(leadId, pending.fingerprint);
   }
 
   private observeNudge(
@@ -843,14 +881,26 @@ export class ReportUpService {
       workerIds.some((id) => !previousWorkers.has(id)) ||
       itemIds.some((id) => !previousItems.has(id));
     const retry = previous?.fingerprint === fingerprint && previous.needsDelivery;
-    const state = { workerIds, itemIds, itemOwners, fingerprint, needsDelivery: gained || retry };
+    const state = {
+      workerIds,
+      itemIds,
+      itemOwners,
+      fingerprint,
+      needsDelivery: gained || retry || Boolean(previous?.deferred),
+      deferred: previous?.deferred,
+    };
     this.nudgeStates.set(leadId, state);
     return state;
   }
 
   private recordNudgeDelivery(leadId: string, fingerprint: string): void {
     const state = this.nudgeStates.get(leadId);
-    if (state?.fingerprint === fingerprint) state.needsDelivery = false;
+    if (state?.fingerprint === fingerprint) {
+      state.needsDelivery = false;
+      state.deferred = false;
+    }
+    this.nudgeDeliveredAt.set(leadId, this.now());
+    this.save();
   }
 
   private cancelNudge(leadId: string, reason: string): void {
@@ -863,7 +913,7 @@ export class ReportUpService {
       !pending.abort.signal.aborted &&
       hasFinalInputHandoff(pending.handoff)
     ) {
-      this.recordNudgeDelivery(leadId, pending.fingerprint);
+      this.recordPendingNudge(leadId, pending);
     }
     pending.abort.abort(new Error("Idle nudge delivery timed out"));
   }
@@ -881,6 +931,7 @@ export class ReportUpService {
       this.nudging.get(leadId)?.generation === pending.generation &&
       this.nudgeStates.get(leadId)?.fingerprint === fingerprint &&
       !pending.abort.signal.aborted &&
+      this.nudgeAllowed(leadId) &&
       this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS &&
       (state?.workerIds.every((id) => this.nudgeWorkerReady({ id })) ?? false) &&
       (state?.itemOwners.every((owner) => !isNudgeOwnerSkipped(owner, this.nudgeSkipOwners())) ??
@@ -902,7 +953,7 @@ export class ReportUpService {
         await this.send(leadId, prompt, "idle-nudge", current, (handle) => {
           pending.handoff = handle;
         });
-      if (current()) this.recordNudgeDelivery(leadId, fingerprint);
+      if (current()) this.recordPendingNudge(leadId, pending);
     };
     // Cancellation also settles the held callback, so a stalled dispatch cannot block the queue.
     const deliver = () => Promise.race([dispatch(), canceled]);
@@ -912,6 +963,7 @@ export class ReportUpService {
         : heldSendsFor(this.deps.agentManager, this.deps.logger).holdAndWait(leadId, deliver);
       await Promise.race([delivery, canceled]);
     } finally {
+      if (hasFinalInputHandoff(pending.handoff)) this.recordPendingNudge(leadId, pending);
       clearTimeout(timer);
       this.timers.delete(timer);
       pending.abort.signal.removeEventListener("abort", cancel);
@@ -1405,6 +1457,8 @@ export function startReportUp(input: {
     isNudgeEnabled: () =>
       reportUpSwitches(undefined, input.daemonConfigStore.get().idleLeadNudge).idleNudges,
     getNudgeSkipOwners: () => input.daemonConfigStore.get().idleLeadNudgeSkipOwners ?? [],
+    getNudgeMinIntervalMinutes: () =>
+      input.daemonConfigStore.get().idleLeadNudgeMinIntervalMinutes ?? 60,
     localServerId: input.localServerId,
     logger: input.logger,
     ...(input.paseoHome ? { statePath: path.join(input.paseoHome, "report-up-limits.json") } : {}),

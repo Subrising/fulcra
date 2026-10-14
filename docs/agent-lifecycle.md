@@ -175,6 +175,8 @@ This setting does not change reporting rights or authorize permission responses.
 ## Idle-lead nudges
 
 An idle lead receives a nudge when its eligible idle-worker set gains a member or a new owned open item appears.
+Each lead receives at most one nudge per `daemon.idleLeadNudgeMinIntervalMinutes`. The default is 60 minutes.
+The delivery time persists across daemon restarts. Work added during the interval waits for the lead's next idle event after it ends.
 A change that only removes workers or closes items sends no nudge.
 Paused or blocked workers, background jobs, blocked items, and standing rules are excluded.
 Ledger ownership still matches session titles or short IDs.
@@ -189,7 +191,23 @@ fulcra agent update SESSION_ID --label fulcra.hold=
 
 The empty value clears the hold. The label controls nudge eligibility; use Stop to interrupt a running turn.
 
-Nudges default to on. Set their own switch:
+Set a positive whole number of minutes to change the interval:
+
+```sh
+fulcra daemon config set daemon.idleLeadNudgeMinIntervalMinutes 30
+fulcra daemon config unset daemon.idleLeadNudgeMinIntervalMinutes
+```
+
+Disable nudges for one lead with its session label:
+
+```sh
+fulcra agent update SESSION_ID --label fulcra.nudge=off
+fulcra agent update SESSION_ID --label fulcra.nudge=
+```
+
+The empty value clears the per-lead switch. Permission and limit notices keep their separate settings.
+
+Nudges default to on. Set their own global switch:
 
 ```sh
 fulcra daemon config set daemon.idleLeadNudge false
@@ -219,6 +237,10 @@ Archive is a **soft delete**: the agent record stays on disk with `archivedAt` s
 
 Archive sets `archivedAt`, invokes the provider's native archive hook, and cascades to managed
 children.
+
+Unread native reports block archive until consumption or their six-hour expiry.
+Expiry records `resolved-expired` without marking the report consumed. The receipt and scoped inbox evidence remain available.
+An uncertain provider delivery still blocks archive after report expiry.
 
 `create_agent_request` can opt an agent into `autoArchive`. In that mode the daemon archives the agent after the first terminal turn event (`turn_completed`, `turn_failed`, or `turn_canceled`). When the agent owns an isolated workspace, auto-archive archives that workspace too; the managed worktree is removed when its final workspace reference is gone.
 

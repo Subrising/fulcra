@@ -34,6 +34,7 @@ interface SupportedMutableConfigPatch {
   nativeFinishNotices?: boolean;
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
+  idleLeadNudgeMinIntervalMinutes?: number;
   reviveOnRestart?: boolean;
   autoResumeOnLimit?: boolean;
   appendSystemPrompt?: string;
@@ -197,6 +198,7 @@ const RELOADABLE_PATHS = [
   "daemon.nativeFinishNotices",
   "daemon.idleLeadNudge",
   "daemon.idleLeadNudgeSkipOwners",
+  "daemon.idleLeadNudgeMinIntervalMinutes",
   "daemon.reviveOnRestart",
   "daemon.autoResumeOnLimit",
   "daemon.appendSystemPrompt",
@@ -228,6 +230,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.nativeFinishNotices", "nativeFinishNotices"],
   ["daemon.idleLeadNudge", "idleLeadNudge"],
   ["daemon.idleLeadNudgeSkipOwners", "idleLeadNudgeSkipOwners"],
+  ["daemon.idleLeadNudgeMinIntervalMinutes", "idleLeadNudgeMinIntervalMinutes"],
   ["daemon.reviveOnRestart", "reviveOnRestart"],
   ["daemon.autoResumeOnLimit", "autoResumeOnLimit"],
   ["daemon.appendSystemPrompt", "appendSystemPrompt"],
@@ -282,6 +285,7 @@ function reportUpField(patch: MutableDaemonConfigPatch): {
   nativeFinishNotices?: boolean;
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
+  idleLeadNudgeMinIntervalMinutes?: number;
   reviveOnRestart?: boolean;
 } {
   return {
@@ -293,6 +297,9 @@ function reportUpField(patch: MutableDaemonConfigPatch): {
       : {}),
     ...(patch.idleLeadNudgeSkipOwners !== undefined
       ? { idleLeadNudgeSkipOwners: patch.idleLeadNudgeSkipOwners }
+      : {}),
+    ...(patch.idleLeadNudgeMinIntervalMinutes !== undefined
+      ? { idleLeadNudgeMinIntervalMinutes: patch.idleLeadNudgeMinIntervalMinutes }
       : {}),
     ...(patch.idleLeadNudge !== undefined ? { idleLeadNudge: patch.idleLeadNudge } : {}),
     ...(patch.reviveOnRestart !== undefined ? { reviveOnRestart: patch.reviveOnRestart } : {}),
