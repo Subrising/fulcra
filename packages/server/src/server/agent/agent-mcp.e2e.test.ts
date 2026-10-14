@@ -229,13 +229,14 @@ async function assertAgentNotRunning(options: {
 }): Promise<void> {
   const statusResult = await options.client.callTool({
     name: "get_agent_status",
-    args: { agentId: options.agentId },
+    args: { agentId: options.agentId, fullResult: true },
   });
   const payload = getStructuredContent(statusResult);
   if (!payload) {
     throw new Error("get_agent_status returned no structured payload");
   }
   const status = payload.status;
+  expect(["idle", "error"]).toContain(status);
   if (status === "running" || status === "initializing") {
     throw new Error(`Agent still running after blocking create_agent (status=${status})`);
   }
@@ -910,10 +911,11 @@ describe("agent MCP end-to-end (offline)", () => {
 
       const statusResult = await client.callTool({
         name: "get_agent_status",
-        args: { agentId },
+        args: { agentId, fullResult: true },
       });
       const statusPayload = getStructuredContent(statusResult);
       expect(statusPayload?.status).toBe("running");
+      expect(statusPayload?.snapshot).toMatchObject({ id: agentId, status: "running" });
     } finally {
       if (agentId) {
         await client.callTool({ name: "kill_agent", args: { agentId } });
@@ -1091,7 +1093,7 @@ describe("agent MCP end-to-end (offline)", () => {
       await assertAgentNotRunning({ client, agentId: agentId! });
       const statusResult = await client.callTool({
         name: "get_agent_status",
-        args: { agentId },
+        args: { agentId, fullResult: true },
       });
       const statusPayload = getStructuredContent(statusResult);
       expect(statusPayload?.status).toBe("error");
