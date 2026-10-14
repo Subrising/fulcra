@@ -21,7 +21,7 @@ type ProviderOverride = import("./agent/provider-launch-config.js").ProviderOver
 
 interface SupportedMutableConfigPatch {
   relay?: { enabled?: boolean };
-  mcp?: { injectIntoAgents?: boolean };
+  mcp?: { injectIntoAgents?: boolean; injectLabels?: Record<string, string> };
   browserTools?: { enabled?: boolean };
   providers?: MutableDaemonConfig["providers"];
   removeProviders?: string[];
@@ -184,6 +184,7 @@ const RELOADABLE_PATHS = [
   "daemon.relay.enabled",
   "daemon.mcp.enabled",
   "daemon.mcp.injectIntoAgents",
+  "daemon.mcp.injectLabels",
   "daemon.browserTools.enabled",
   "daemon.hostnames",
   "daemon.cors.allowedOrigins",
@@ -216,6 +217,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.relay.enabled", "relay.enabled"],
   ["daemon.mcp.enabled", "mcp.enabled"],
   ["daemon.mcp.injectIntoAgents", "mcp.injectIntoAgents"],
+  ["daemon.mcp.injectLabels", "mcp.injectLabels"],
   ["daemon.browserTools.enabled", "browserTools.enabled"],
   ["daemon.hostnames", "hostnames"],
   ["daemon.cors.allowedOrigins", "cors.allowedOrigins"],
@@ -312,12 +314,23 @@ function explainBudgetField(patch: MutableDaemonConfigPatch): { explainDailyLimi
     : {};
 }
 
+function mcpField(patch: MutableDaemonConfigPatch): Pick<SupportedMutableConfigPatch, "mcp"> {
+  return patch.mcp
+    ? {
+        mcp: {
+          ...(patch.mcp.injectIntoAgents !== undefined
+            ? { injectIntoAgents: patch.mcp.injectIntoAgents }
+            : {}),
+          ...(patch.mcp.injectLabels !== undefined ? { injectLabels: patch.mcp.injectLabels } : {}),
+        },
+      }
+    : {};
+}
+
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
-    ...(patch.mcp?.injectIntoAgents !== undefined
-      ? { mcp: { injectIntoAgents: patch.mcp.injectIntoAgents } }
-      : {}),
+    ...mcpField(patch),
     ...(patch.browserTools?.enabled !== undefined
       ? { browserTools: { enabled: patch.browserTools.enabled } }
       : {}),
@@ -466,6 +479,9 @@ export class DaemonConfigStore {
     const { removeProviders = [], ...configPatch } = parsedPatch;
     const removedProviders = Array.from(new Set(removeProviders));
     const merged = deepMerge(this.current, configPatch);
+    // Label filters replace the whole map. An empty map restores unrestricted injection.
+    if (parsedPatch.mcp?.injectLabels !== undefined)
+      merged.mcp.injectLabels = parsedPatch.mcp.injectLabels;
     if (parsedPatch.skills?.selection !== undefined) {
       merged.skills = { selection: parsedPatch.skills.selection };
     }
@@ -808,6 +824,9 @@ function mergeMutableDaemonPatch(
   }
   if (patch.mcp?.injectIntoAgents !== undefined) {
     next.mcp = { ...next.mcp, injectIntoAgents: patch.mcp.injectIntoAgents };
+  }
+  if (patch.mcp?.injectLabels !== undefined) {
+    next.mcp = { ...next.mcp, injectLabels: patch.mcp.injectLabels };
   }
   if (patch.browserTools?.enabled !== undefined) {
     next.browserTools = { ...next.browserTools, enabled: patch.browserTools.enabled };

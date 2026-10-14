@@ -25,6 +25,14 @@ function nudgeSettingsOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
   };
 }
 
+function mcpSettingsOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
+  return {
+    enabled: true,
+    injectIntoAgents: false,
+    ...(daemon.mcp?.injectLabels !== undefined ? { injectLabels: daemon.mcp.injectLabels } : {}),
+  };
+}
+
 function reloadableConfig(
   persisted: PersistedConfig,
   options: { relayEnabledFallback?: boolean } = {},
@@ -37,7 +45,7 @@ function reloadableConfig(
     relay: {
       enabled: relay.enabled ?? options.relayEnabledFallback ?? true,
     },
-    mcp: { enabled: true, injectIntoAgents: false },
+    mcp: mcpSettingsOf(daemon),
     browserTools: { enabled: daemon.browserTools?.enabled ?? false },
     providers: (agents.providers ?? {}) as MutableDaemonConfig["providers"],
     metadataGeneration: { providers: agents.metadataGeneration?.providers ?? [] },
@@ -1496,6 +1504,56 @@ test("the nudge interval validates, persists, reloads, and returns to the defaul
     writeFileSync(path.join(root, "config.json"), JSON.stringify({}));
     expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudgeMinIntervalMinutes"]);
     expect(store.get().idleLeadNudgeMinIntervalMinutes).toBe(60);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MCP injection label maps replace, persist, clear, and reload independently", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "mcp-inject-labels-"));
+  try {
+    const store = new DaemonConfigStore(root, reloadableConfig({}), undefined, {
+      reloadSource: {
+        resolve: (persisted) => ({
+          mutable: reloadableConfig(persisted),
+          overrideControlledPaths: [],
+        }),
+      },
+    });
+    const changes: unknown[] = [];
+    store.onFieldChange("mcp.injectLabels", (value) => {
+      changes.push(value);
+    });
+    store.patch({ mcp: { injectLabels: { "fulcra.mcp": "on", role: "lead" } } });
+    expect(loadPersistedConfig(root).daemon?.mcp?.injectLabels).toEqual({
+      "fulcra.mcp": "on",
+      role: "lead",
+    });
+    store.patch({ mcp: { injectLabels: { "fulcra.mcp": "on" } } });
+    expect(store.get().mcp.injectLabels).toEqual({ "fulcra.mcp": "on" });
+    store.patch({ mcp: { injectLabels: {} } });
+    expect(store.get().mcp.injectLabels).toEqual({});
+    expect(loadPersistedConfig(root).daemon?.mcp?.injectLabels).toEqual({});
+    writeFileSync(
+      path.join(root, "config.json"),
+      JSON.stringify({ daemon: { mcp: { injectLabels: { role: "lead" } } } }),
+    );
+    expect(store.reload().appliedPaths).toEqual(["daemon.mcp.injectLabels"]);
+    expect(store.get().mcp.injectLabels).toEqual({ role: "lead" });
+    writeFileSync(path.join(root, "config.json"), JSON.stringify({}));
+    expect(store.reload().appliedPaths).toEqual(["daemon.mcp.injectLabels"]);
+    expect(store.get().mcp.injectLabels).toBeUndefined();
+    expect(store.get().mcp.injectIntoAgents).toBe(false);
+    expect(changes).toEqual([
+      { "fulcra.mcp": "on", role: "lead" },
+      { "fulcra.mcp": "on" },
+      {},
+      { role: "lead" },
+      undefined,
+    ]);
+    expect(() =>
+      store.patch({ mcp: { injectLabels: { role: 1 } as unknown as Record<string, string> } }),
+    ).toThrow();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
