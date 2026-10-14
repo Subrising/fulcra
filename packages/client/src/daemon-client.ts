@@ -474,6 +474,8 @@ export interface DaemonClientConfig {
   url: string;
   clientId: string;
   clientType?: "mobile" | "browser" | "cli" | "mcp" | "hub";
+  callerAgentId?: string;
+  callerAgentWitness?: string;
   appVersion?: string;
   runtimeGeneration?: number | null;
   password?: string;
@@ -7742,6 +7744,10 @@ export class DaemonClient {
         type: "hello",
         clientId: this.config.clientId,
         clientType: this.config.clientType ?? "cli",
+        ...(this.config.callerAgentId ? { callerAgentId: this.config.callerAgentId } : {}),
+        ...(this.config.callerAgentWitness
+          ? { callerAgentWitness: this.config.callerAgentWitness }
+          : {}),
         protocolVersion: 1,
         ...(auth ? { auth } : {}),
         capabilities: {

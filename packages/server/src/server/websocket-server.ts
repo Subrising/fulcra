@@ -1787,6 +1787,15 @@ export class VoiceAssistantWebSocketServer {
     return pending;
   }
 
+  private agentCallerValidator(hello: WSHelloMessage): (() => void) | undefined {
+    if (!hello.callerAgentId) return undefined;
+    return this.agentManager.injectionLabelCallerValidator(
+      hello.callerAgentId,
+      undefined,
+      hello.callerAgentWitness,
+    );
+  }
+
   private async handleHello(params: {
     ws: WebSocketLike;
     message: WSHelloMessage;
@@ -1859,6 +1868,11 @@ export class VoiceAssistantWebSocketServer {
       lifecycle: pluginId ? { kind: "ephemeral-plugin", pluginId } : { kind: "reconnectable" },
       admission: admitted,
     });
+    connection.session.admitAgentCallerSource(
+      ws,
+      message.callerAgentId,
+      this.agentCallerValidator(message),
+    );
     this.sessions.set(ws, connection);
     if (connection.lifecycle === "reconnectable") {
       this.externalSessionsByKey.set(sessionKey, connection);
@@ -2011,6 +2025,11 @@ export class VoiceAssistantWebSocketServer {
       ws,
       admission.authentication?.id === admission.principalId ? admission.authentication : undefined,
       admission.permissions,
+    );
+    existing.session.admitAgentCallerSource(
+      ws,
+      message.callerAgentId,
+      this.agentCallerValidator(message),
     );
     existing.sockets.add(ws);
     this.sessions.set(ws, existing);

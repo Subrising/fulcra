@@ -693,6 +693,280 @@ describe("agent MCP end-to-end (offline)", () => {
     }
   }, 30_000);
 
+  test("reserved injection labels reject workers across CLI, MCP, app, and host routes", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-label-reservations-"));
+    const recorder: LaunchRecorder = { recordedLaunches: new Map() };
+    const daemon = await createPaseoDaemon(
+      {
+        ...loadConfig(paseoHome, { env: {} }),
+        listen: "127.0.0.1:0",
+        staticDir: paseoHome,
+        mcpEnabled: true,
+        mcpInjectIntoAgents: true,
+        relayEnabled: false,
+        agentClients: createMcpRecordingAgentClients(recorder),
+      },
+      pino({ level: "silent" }),
+      { credentialBackend: createMemoryCredentialBackend() },
+    );
+    const clients: DaemonClient[] = [];
+    const mcp = new Client({ name: "reserved-label-worker", version: "1" });
+    const leadMcp = new Client({ name: "reserved-label-lead", version: "1" });
+    const required = { "fulcra.mcp": "on", team: "lead" };
+    const denied = "MCP injection labels are reserved";
+    try {
+      await daemon.start();
+      const target = daemon.getListenTarget();
+      if (target?.type !== "tcp") throw new Error("TCP test daemon required");
+      const url = `ws://127.0.0.1:${target.port}/ws`;
+      const connect = async (callerAgentId?: string) => {
+        const server = callerAgentId
+          ? recorder.recordedLaunches.get(callerAgentId)?.mcpServers?.paseo
+          : undefined;
+        const callerAgentWitness =
+          server?.type === "http" ? server.headers?.["X-Paseo-Report-Origin"] : undefined;
+        const client = new DaemonClient({
+          url,
+          clientId: "clid_label_shared",
+          callerAgentId,
+          callerAgentWitness,
+        });
+        clients.push(client);
+        await client.connect();
+        return client;
+      };
+      const user = await connect();
+      const worker = await user.createAgent({ config: { provider: "claude", cwd: paseoHome } });
+      const workerServer = recorder.recordedLaunches.get(worker.id)!.mcpServers!.paseo;
+      if (workerServer.type !== "http") throw new Error("Worker test MCP required");
+      await mcp.connect(
+        new StreamableHTTPClientTransport(new URL(workerServer.url), {
+          requestInit: { headers: workerServer.headers },
+        }),
+      );
+      await user.patchDaemonConfig({ mcp: { injectLabels: required } });
+      const workerClient = await connect(worker.id);
+      await expect(
+        workerClient.updateAgent(worker.id, { labels: { "fulcra.mcp": "on" } }),
+      ).rejects.toThrow(denied);
+      await expect(
+        workerClient.createAgent({
+          config: { provider: "claude", cwd: paseoHome },
+          workspaceId: worker.workspaceId!,
+          labels: required,
+        }),
+      ).rejects.toThrow(denied);
+      await expect(
+        workerClient.importAgent({
+          provider: "claude",
+          sessionId: "fixture-import",
+          cwd: paseoHome,
+          labels: required,
+        }),
+      ).rejects.toThrow(denied);
+      const self = await mcp.callTool({
+        name: "update_agent",
+        arguments: { agentId: worker.id, labels: required },
+      });
+      expect(self.isError).toBe(true);
+      expect(JSON.stringify(self.content)).toContain(denied);
+      const child = await mcp.callTool({
+        name: "create_agent",
+        arguments: {
+          title: "Refused child",
+          provider: "claude",
+          initialPrompt: "fixture work",
+          labels: required,
+        },
+      });
+      expect(child.isError).toBe(true);
+      expect(JSON.stringify(child.content), JSON.stringify(child)).toContain(denied);
+      const manager = daemon.agentManager;
+      await expect(
+        manager.withAgentCaller(worker.id, () => manager.setLabels(worker.id, required)),
+      ).rejects.toThrow(denied);
+      await expect(
+        manager.withAgentCaller(worker.id, () =>
+          manager.updateAgentMetadata(worker.id, { title: "Refused title", labels: required }),
+        ),
+      ).rejects.toThrow(denied);
+      await expect(
+        manager.withAgentCaller(worker.id, () =>
+          manager.createAgent({ provider: "claude", cwd: paseoHome }, undefined, {
+            labels: required,
+          }),
+        ),
+      ).rejects.toThrow(denied);
+      await expect(
+        manager.withAgentCaller(worker.id, () =>
+          manager.importProviderSession({
+            provider: "claude",
+            providerHandleId: "fixture-import",
+            cwd: paseoHome,
+            workspaceId: worker.workspaceId!,
+            labels: required,
+          }),
+        ),
+      ).rejects.toThrow(denied);
+      await expect(
+        manager.trustedPlugins.agentInput(() => manager.setLabels(worker.id, required)),
+      ).rejects.toThrow(denied);
+      expect(manager.getAgent(worker.id)!.labels).not.toHaveProperty("fulcra.mcp");
+      const cli = fileURLToPath(new URL("../../../../cli/dist/index.js", import.meta.url));
+      const cliOptions = {
+        timeout: 15_000,
+        env: {
+          ...process.env,
+          PASEO_HOME: paseoHome,
+          PASEO_AGENT_ID: worker.id,
+          PASEO_AGENT_CALLER_WITNESS: workerServer.headers?.["X-Paseo-Report-Origin"] ?? "",
+          PASEO_PASSWORD: "",
+          PASEO_WORKSPACE_ID: worker.workspaceId!,
+        },
+      };
+      await expect(
+        promisify(execFile)(
+          process.execPath,
+          [
+            cli,
+            "agent",
+            "update",
+            worker.id,
+            "--label",
+            "fulcra.mcp=on",
+            "--host",
+            `127.0.0.1:${target.port}`,
+            "--json",
+          ],
+          cliOptions,
+        ),
+      ).rejects.toMatchObject({ code: 1 });
+      await expect(
+        promisify(execFile)(
+          process.execPath,
+          [
+            cli,
+            "run",
+            "fixture child",
+            "--provider",
+            "claude/claude-test-model",
+            "--label",
+            "fulcra.mcp=on",
+            "--host",
+            `127.0.0.1:${target.port}`,
+            "--json",
+          ],
+          cliOptions,
+        ),
+      ).rejects.toMatchObject({ code: 1 });
+      await expect(
+        promisify(execFile)(
+          process.execPath,
+          [
+            cli,
+            "import",
+            "fixture-import",
+            "--provider",
+            "claude",
+            "--cwd",
+            paseoHome,
+            "--label",
+            "fulcra.mcp=on",
+            "--host",
+            `127.0.0.1:${target.port}`,
+            "--json",
+          ],
+          cliOptions,
+        ),
+      ).rejects.toMatchObject({ code: 1 });
+      const lead = await user.createAgent({
+        config: { provider: "claude", cwd: paseoHome },
+        labels: required,
+      });
+      const leadServer = recorder.recordedLaunches.get(lead.id)!.mcpServers!.paseo;
+      if (leadServer.type !== "http") throw new Error("Lead MCP required");
+      await leadMcp.connect(
+        new StreamableHTTPClientTransport(new URL(leadServer.url), {
+          requestInit: { headers: leadServer.headers },
+        }),
+      );
+      const allowed = await leadMcp.callTool({
+        name: "create_agent",
+        arguments: {
+          title: "Authorized child",
+          provider: "claude",
+          initialPrompt: "fixture work",
+          labels: required,
+          notifyOnFinish: false,
+        },
+      });
+      expect(allowed.isError, JSON.stringify(allowed)).not.toBe(true);
+      const allowedId = (allowed.structuredContent as { agentId: string }).agentId;
+      expect(manager.getAgent(allowedId)!.labels).toMatchObject(required);
+      const forged = new DaemonClient({ url, callerAgentId: lead.id });
+      clients.push(forged);
+      await forged.connect();
+      await expect(forged.updateAgent(worker.id, { labels: required })).rejects.toThrow(
+        "current agent caller identity",
+      );
+      const leadClient = await connect(lead.id);
+      await manager.withAgentCaller(
+        lead.id,
+        () => manager.setLabels(lead.id, required),
+        manager.injectionLabelCallerValidator(
+          lead.id,
+          undefined,
+          leadServer.headers?.["X-Paseo-Report-Origin"],
+        ),
+      );
+      await leadClient.updateAgent(lead.id, { labels: required });
+      const selfAllowed = await leadMcp.callTool({
+        name: "update_agent",
+        arguments: { agentId: lead.id, labels: required },
+      });
+      expect(selfAllowed.isError, JSON.stringify(selfAllowed)).not.toBe(true);
+      const permitted = await leadClient.createAgent({
+        config: { provider: "claude", cwd: paseoHome },
+        labels: required,
+        callerAgentId: lead.id,
+      });
+      expect(manager.getAgent(permitted.id)!.labels).toMatchObject(required);
+      await leadClient.updateAgent(permitted.id, { labels: { team: "worker" } });
+      await expect(workerClient.updateAgent(worker.id, { labels: required })).rejects.toThrow(
+        denied,
+      );
+      await user.updateAgent(permitted.id, { labels: required });
+      expect(manager.getAgent(permitted.id)!.labels).toMatchObject(required);
+      await workerClient.updateAgent(worker.id, { labels: { phase: "test" } });
+      expect(manager.getAgent(worker.id)!.labels.phase).toBe("test");
+      const savedLead = await daemon.agentStorage.get(lead.id);
+      if (!savedLead?.persistence) throw new Error("Stored lead persistence required");
+      await manager.closeAgent(lead.id);
+      await expect(
+        manager.withAgentCaller(worker.id, () =>
+          manager.resumeAgentFromPersistence(savedLead.persistence!, undefined, lead.id, {
+            labels: { phase: "test" },
+          }),
+        ),
+      ).rejects.toThrow(denied);
+      const resumed = await manager.resumeAgentFromPersistence(
+        savedLead.persistence,
+        undefined,
+        lead.id,
+      );
+      expect(resumed.labels).toMatchObject(required);
+      await user.patchDaemonConfig({ mcp: { injectLabels: {} } });
+      await workerClient.updateAgent(worker.id, { labels: required });
+      expect(manager.getAgent(worker.id)!.labels).toMatchObject(required);
+    } finally {
+      await mcp.close();
+      await leadMcp.close();
+      for (const client of clients) await client.close();
+      await daemon.stop();
+      await rm(paseoHome, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   test("MCP injection label filtering updates new agents through patch and config reload", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-mcp-label-filter-"));
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-mcp-label-static-"));

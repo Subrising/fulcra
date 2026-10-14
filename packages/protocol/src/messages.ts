@@ -8883,6 +8883,8 @@ export const WSPongMessageSchema = z.object({
 export const WSHelloMessageSchema = z.object({
   type: z.literal("hello"),
   clientId: z.string().min(1),
+  callerAgentId: z.string().min(1).optional(),
+  callerAgentWitness: z.string().min(1).max(128).optional(),
   clientType: z.enum(["mobile", "browser", "cli", "mcp", "hub"]),
   protocolVersion: z.number().int(),
   auth: z

@@ -86,3 +86,23 @@ export function matchesPaseoInjectLabels(
     ([key, value]) => labels !== undefined && Object.hasOwn(labels, key) && labels[key] === value,
   );
 }
+
+/** Host label write policy. Injection uses the same complete label match. */
+export function assertPaseoInjectionLabelWrite(input: {
+  labels: Record<string, unknown> | undefined;
+  required: Record<string, string>;
+  callerAgentId?: string;
+  callerLabels?: Record<string, string>;
+  agentInput: boolean;
+}): void {
+  if (
+    !input.labels ||
+    !Object.keys(input.required).some((key) => Object.hasOwn(input.labels!, key))
+  )
+    return;
+  if (!input.callerAgentId && !input.agentInput) return;
+  if (input.callerAgentId && matchesPaseoInjectLabels(input.callerLabels, input.required)) return;
+  throw new Error(
+    "MCP injection labels are reserved. Only the user or a lead with all matching injection labels can change them.",
+  );
+}

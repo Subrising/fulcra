@@ -37,6 +37,9 @@ export function asAgentManager(stub: {
   return createStub<SessionOptions["agentManager"]>(
     withTrustedSurface({
       listProviderSubagentActivity: () => [],
+      // The default test manager has no injection-label filter.
+      assertInjectionLabelWrite: () => {},
+      withAgentCaller: (_id: string | undefined, operation: () => unknown) => operation(),
       // The default fake has no native receipt ledger.
       prepareNativeArchiveObservation: async () => {},
       nativeArchivePending: () => 0,

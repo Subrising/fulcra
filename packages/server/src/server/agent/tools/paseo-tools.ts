@@ -641,14 +641,21 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       inputSchema,
       outputSchema: config.outputSchema,
       handler: ((input, context) =>
-        agentManager.trustedPlugins.agentInput(() => {
-          if (options.nativeReportOrigin) requireNativeReportOrigin(options.nativeReportOrigin);
-          if (!compact) return handler(input, context);
-          const { fullResult, ...args } = z.record(z.string(), z.unknown()).parse(input);
-          return handler({ ...args, fullResult }, context).then((result) =>
-            compactToolResult(result, fullResult === true),
-          );
-        })) as PaseoToolDefinition["handler"],
+        agentManager.withAgentCaller(
+          callerAgentId,
+          () =>
+            agentManager.trustedPlugins.agentInput(() => {
+              if (options.nativeReportOrigin) requireNativeReportOrigin(options.nativeReportOrigin);
+              if (!compact) return handler(input, context);
+              const { fullResult, ...args } = z.record(z.string(), z.unknown()).parse(input);
+              return handler({ ...args, fullResult }, context).then((result) =>
+                compactToolResult(result, fullResult === true),
+              );
+            }),
+          callerAgentId
+            ? agentManager.injectionLabelCallerValidator(callerAgentId, options.nativeReportOrigin)
+            : undefined,
+        )) as PaseoToolDefinition["handler"],
     });
   };
   if (options.nativeReportOrigin)
@@ -1546,6 +1553,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     async (args: unknown) => {
       const resolvedArgs = await resolveCreateAgentToolArgs(args);
       const { parsedArgs, worktree } = resolvedArgs;
+      agentManager.assertInjectionLabelWrite(parsedArgs.labels);
       let requestedBackground: boolean;
       let notifyOnFinish: boolean;
       if (resolvedArgs.kind === "agent-scoped") {
@@ -2390,6 +2398,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({ agentId, name, labels, settings }) => {
+      agentManager.assertInjectionLabelWrite(labels);
       if (settings?.modeId !== undefined) {
         await agentManager.setAgentMode(agentId, settings.modeId);
       }
@@ -2405,7 +2414,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         }
       }
 
-      await updateAgentCommand({ agentManager }, { agentId, name, labels });
+      const result = await updateAgentCommand({ agentManager }, { agentId, name, labels });
+      if (!result.accepted) throw new Error(result.error ?? "Agent update rejected");
 
       return {
         content: [],

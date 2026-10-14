@@ -626,6 +626,8 @@ class ProviderImportHarness {
     this.storage = input.storage;
     this.snapshot = input.snapshot;
     this.manager = {
+      // This fixture has no configured injection-label reservation.
+      assertInjectionLabelWrite: () => {},
       importProviderSession: async (request: unknown) => {
         this.freshImports.push(request);
         this.activeAgent = this.snapshot;
