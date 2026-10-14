@@ -183,15 +183,21 @@ try {
           .count(),
         0,
       );
-      await lane("Done").getByRole("button", { name: "Done (10)", exact: true }).click();
+      await lane("Done").getByRole("button", { name: "Done (11)", exact: true }).click();
       assert.equal(
         await lane("Done")
           .getByRole("button", { name: /^Open FU-/ })
           .count(),
         10,
       );
+      await lane("Done")
+        .getByRole("button", { name: "Open job: Finished worker", exact: true })
+        .waitFor();
+      await lane("Done")
+        .getByText(/done · Fixture host/)
+        .waitFor();
       await capture("done");
-      await lane("Done").getByRole("button", { name: "Done (10)", exact: true }).click();
+      await lane("Done").getByRole("button", { name: "Done (11)", exact: true }).click();
       await select("In progress");
       await lane("In progress")
         .getByRole("button", {

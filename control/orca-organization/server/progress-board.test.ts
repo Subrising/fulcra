@@ -421,3 +421,15 @@ test("snapshot matches current configured owners before redaction and invalidate
   fs.writeFileSync(file, JSON.stringify({ ...config, board: { humanOwners: "Owner A" } }));
   await assert.rejects(board.read(api), /board.humanOwners/);
 });
+
+for (const hold of ["done", "paused", "blocked"]) {
+  test(`job status preserves the ${hold} hold`, () => {
+    const rows = jobList(
+      [{ ...boardLead, labels: { ...boardLead.labels, "fulcra.hold": hold } }],
+      new Set(["w"]),
+      "Fixture host",
+      new Map(),
+    );
+    assert.equal(rows[0]!.status, hold === "done" ? "done" : "running");
+  });
+}

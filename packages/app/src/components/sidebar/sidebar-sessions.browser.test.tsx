@@ -23,7 +23,7 @@ vi.mock("@/stores/session-store", async () => {
     title: `Session ${id}`,
     status,
     provider: "claude",
-    workspaceId: `workspace-${id}`,
+    workspaceId: "shared-workspace",
     pendingPermissions: [],
     labels: {},
     backgroundWork: background ? { count: background } : undefined,
@@ -60,16 +60,20 @@ vi.mock("@/stores/sidebar-collapsed-sections-store", () => ({
     }),
 }));
 vi.mock("./sidebar-touch", () => ({
-  useSidebarTouchRows: () => true,
+  useSidebarTouchRows: () => false,
   sidebarTouchStyles: { stack: { minHeight: 48, justifyContent: "center" } },
 }));
 vi.mock("@/sessions/session-account-info", () => ({ SessionAccountInfo: () => null }));
-vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: () => {} }));
+vi.mock("@/utils/navigate-to-agent", () => ({ navigateToAgent: vi.fn() }));
+
+import { navigateToAgent } from "@/utils/navigate-to-agent";
 
 import { SidebarSessions } from "./sidebar-sessions";
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 beforeEach(() => {
+  vi.clearAllMocks();
+  document.body.style.margin = "0";
   vi.stubGlobal("React", React);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 });
@@ -78,6 +82,7 @@ afterEach(() => {
   container?.remove();
   root = null;
   container = null;
+  document.body.style.removeProperty("margin");
   vi.unstubAllGlobals();
 });
 
@@ -91,6 +96,8 @@ it("renders host counts, waiting jobs and visible overflow at each viewport", as
     await page.viewport(width, height);
     container = document.createElement("div");
     container.style.width = `${sidebarWidth}px`;
+    container.style.height = `${height}px`;
+    container.style.overflowY = "auto";
     container.style.background = "#151718";
     document.body.append(container);
     root = createRoot(container);
@@ -125,11 +132,26 @@ it("renders host counts, waiting jobs and visible overflow at each viewport", as
       element: container,
       path: `../../.vitest-screenshots/sidebar/sessions-${name}.png`,
     });
-    const more = container.querySelector<HTMLElement>("[data-testid='sidebar-all-sessions-more']");
-    expect(more).not.toBeNull();
-    act(() => more?.click());
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);
+    await page.getByTestId("sidebar-session-open-mini-mini-0").click();
+    expect(navigateToAgent).toHaveBeenLastCalledWith({
+      serverId: "mini",
+      agentId: "mini-0",
+      workspaceId: "shared-workspace",
+    });
+    await page.getByTestId("sidebar-all-sessions-more").click();
     expect(container.querySelectorAll("[data-testid^='sidebar-session-open-']")).toHaveLength(12);
     expect(container.textContent).toContain("Show fewer sessions");
+    await page.getByTestId("sidebar-session-open-book-book-1").click();
+    expect(navigateToAgent).toHaveBeenLastCalledWith({
+      serverId: "book",
+      agentId: "book-1",
+      workspaceId: "shared-workspace",
+    });
+    await page.screenshot({
+      element: container,
+      path: `../../.vitest-screenshots/sidebar/sessions-${name}-expanded.png`,
+    });
     act(() => root?.unmount());
     container.remove();
     root = null;

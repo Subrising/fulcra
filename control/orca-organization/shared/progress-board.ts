@@ -89,9 +89,9 @@ export function boardColumns(project: ProgressBoard["projects"][number], now: nu
   return BOARD_GROUPS.map((group) => ({
     group,
     cards: [
-      ...(group === "In progress"
-        ? project.jobs.map((job): BoardCard => ({ type: "job", job }))
-        : []),
+      ...project.jobs
+        .filter((job) => (job.status === "done" ? group === "Done" : group === "In progress"))
+        .map((job): BoardCard => ({ type: "job", job })),
       ...project.items
         .filter((row) => itemGroup(row) === group && (group !== "Done" || recent.has(row)))
         .map((item): BoardCard => ({ type: "item", item })),

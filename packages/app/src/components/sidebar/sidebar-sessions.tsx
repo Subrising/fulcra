@@ -172,7 +172,12 @@ function SessionItem({ row, onSelect }: { row: SidebarSessionRow; onSelect?: () 
 
 const styles = StyleSheet.create((theme) => ({
   section: { paddingHorizontal: theme.spacing[2], paddingVertical: theme.spacing[2] },
-  heading: { paddingHorizontal: theme.spacing[2], paddingVertical: theme.spacing[2] },
+  heading: {
+    minHeight: 48,
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+  },
   headingText: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
@@ -197,7 +202,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[2],
   },
-  open: { flex: 1, minWidth: 0 },
+  open: { flex: 1, minWidth: 48, minHeight: 48, justifyContent: "center" },
   title: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
   metadata: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
 }));

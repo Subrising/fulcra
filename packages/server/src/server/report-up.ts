@@ -794,7 +794,7 @@ export class ReportUpService {
     )
       return false;
     const hold = live.labels?.["fulcra.hold"] ?? chat.labels?.["fulcra.hold"];
-    return hold !== "paused" && hold !== "blocked";
+    return hold !== "paused" && hold !== "blocked" && hold !== "done";
   }
 
   /**

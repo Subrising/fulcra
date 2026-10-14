@@ -54,6 +54,7 @@ import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
 import { isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
+import { TOUCH_TARGET } from "@/hooks/use-touch-targets";
 import { RenderProfile } from "@/utils/render-profiler";
 import { useComposerHeight } from "./height";
 import { resolveComposerInputMode, type ComposerInputMode } from "@/composer/input-mode";
@@ -617,9 +618,13 @@ function FocusHint({
   label: string;
 }) {
   const { isActiveComposer } = useComposerKeyboardScope();
-  if (!isActiveComposer || !visible || !focusInputKeys || !label.trim()) return null;
+  const hintStyle = useMemo(
+    () => [styles.focusHintText, !visible && styles.focusHintHidden],
+    [visible],
+  );
+  if (!isActiveComposer || !focusInputKeys || !label.trim()) return null;
   return (
-    <Text style={styles.focusHintText} pointerEvents="none">
+    <Text testID="composer-focus-hint" style={hintStyle} pointerEvents="none" accessible={visible}>
       {label}
     </Text>
   );
@@ -1951,14 +1956,15 @@ const styles = StyleSheet.create((theme: Theme) => ({
     flexShrink: 1,
     position: "relative",
   },
+  // Keep this space during focus changes so anchored menus do not move with the composer.
   focusHintText: {
-    position: "absolute",
-    top: 0,
-    right: 0,
+    alignSelf: "flex-end",
+    flexShrink: 1,
     fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
     opacity: 0.5,
   },
+  focusHintHidden: { opacity: 0 },
   textInput: {
     // Preserve the controls when an ancestor constrains an overlong draft.
     flexShrink: 1,
@@ -2008,21 +2014,21 @@ const styles = StyleSheet.create((theme: Theme) => ({
     gap: theme.spacing[1],
   },
   attachButton: {
-    width: 28,
-    height: 28,
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
   },
   attachButtonAnchor: {
-    width: 28,
-    height: 28,
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
     alignItems: "center",
     justifyContent: "center",
   },
   voiceButton: {
-    width: 28,
-    height: 28,
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
@@ -2031,8 +2037,8 @@ const styles = StyleSheet.create((theme: Theme) => ({
     backgroundColor: theme.colors.destructive,
   },
   sendButton: {
-    width: 28,
-    height: 28,
+    width: TOUCH_TARGET,
+    height: TOUCH_TARGET,
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.accent,
     alignItems: "center",

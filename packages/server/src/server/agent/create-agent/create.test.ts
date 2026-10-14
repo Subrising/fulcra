@@ -315,7 +315,7 @@ test("mcp create stamps the new worktree's workspaceId, not the parent's", async
         kind: "session",
         config: { provider: "codex", cwd: workdir },
         workspaceId: "ws-parent",
-        labels: {},
+        labels: { project: "fixture-project", "fulcra.project": "fixture-project" },
         provisionalTitle: null,
         firstAgentContext: { attachments: [] },
         buildSessionConfig: async (config) => ({ sessionConfig: config }),
@@ -347,6 +347,11 @@ test("mcp create stamps the new worktree's workspaceId, not the parent's", async
 
     const storedChild = await storage.get(child.id);
     expect(storedChild?.workspaceId).toBe("ws-new-worktree");
+    expect(storedChild?.labels).toMatchObject({
+      project: "fixture-project",
+      "fulcra.project": "fixture-project",
+      "paseo.parent-agent-id": parent.id,
+    });
     expect(child.cwd).toBe(join(workdir, "worktree", "packages", "app"));
   } finally {
     await removeRealAgentManagerWorkdir({ agentManager, storage, workdir });

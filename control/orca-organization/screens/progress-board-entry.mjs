@@ -84,6 +84,16 @@ const data = {
           permissions: 1,
           result: "Added the board screen. Eight checks passed. The branch is ready for review.",
         },
+        {
+          id: "finished-job",
+          title: "Finished worker",
+          status: "done",
+          machine: "Fixture host",
+          createdAt: at,
+          updatedAt: at,
+          permissions: 0,
+          result: "Done. All checks passed.",
+        },
       ],
       branches: [
         {

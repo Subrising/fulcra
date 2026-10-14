@@ -79,6 +79,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   inner: {},
   row: {
+    minHeight: 48,
     position: "relative",
     height: {
       xs: HEADER_INNER_HEIGHT_MOBILE,

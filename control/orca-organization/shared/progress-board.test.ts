@@ -76,7 +76,7 @@ test("columns map each active item and live job once and bound recent completion
     name: "Fixture",
     ledgerState: "Current",
     branches: [],
-    jobs: [job],
+    jobs: [job, { ...job, id: "finished", status: "done" }],
     items: [
       item("next", "NEXT"),
       item("open", "OPEN"),
@@ -93,13 +93,14 @@ test("columns map each active item and live job once and bound recent completion
   const columns = boardColumns(project, now);
   assert.deepEqual(
     columns.map((column) => column.cards.length),
-    [2, 2, 2, 1, 10],
+    [2, 2, 2, 1, 11],
   );
   assert.equal(columns[1]!.cards[0]!.type, "job");
+  assert.deepEqual(columns[4]!.cards[0], { type: "job", job: project.jobs[1] });
   assert.deepEqual(columns[1]!.cards[0], { type: "job", job });
   assert.deepEqual(columns[0]!.cards[0], { type: "item", item: project.items[0] });
   assert.deepEqual(
-    columns[4]!.cards.map((card) => card.type === "item" && card.item.id),
+    columns[4]!.cards.filter((card) => card.type === "item").map((card) => card.item.id),
     Array.from({ length: 10 }, (_, n) => `done-${n + 2}`),
   );
   assert.equal(
