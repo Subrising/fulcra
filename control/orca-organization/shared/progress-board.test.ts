@@ -4,6 +4,7 @@ import {
   ageLabel,
   boardColumns,
   itemGroup,
+  matchesHumanOwner,
   progressBoardRpc,
   type BoardItem,
 } from "./progress-board";
@@ -32,19 +33,18 @@ test("RPC refuses a caller-supplied file path", () => {
 });
 
 test("blocked and completed states take priority over owner and decisions", () => {
-  const row = { kind: "DECIDE", owner: "Owner A", status: "BLOCKED: dependency" } as BoardItem;
-  assert.equal(itemGroup(row, ["Owner A"]), "Blocked");
-  assert.equal(itemGroup({ ...row, status: "DONE" }, ["Owner A"]), "Done");
+  const row = {
+    kind: "DECIDE",
+    owner: "Owner A",
+    status: "BLOCKED: dependency",
+    needsHuman: true,
+  } as BoardItem;
+  assert.equal(itemGroup(row), "Blocked");
+  assert.equal(itemGroup({ ...row, status: "DONE" }), "Done");
+  assert.equal(itemGroup({ ...row, kind: "BUILD", status: "IN PROGRESS" }), "Needs you");
+  assert.equal(itemGroup({ ...row, kind: "FIX", owner: " owner a ", status: "OPEN" }), "Needs you");
   assert.equal(
-    itemGroup({ ...row, kind: "BUILD", status: "IN PROGRESS" }, ["Owner A"]),
-    "Needs you",
-  );
-  assert.equal(
-    itemGroup({ ...row, kind: "FIX", owner: " owner a ", status: "OPEN" }, ["Owner A"]),
-    "Needs you",
-  );
-  assert.equal(
-    itemGroup({ ...row, kind: "FIX", owner: "Owner A worker", status: "OPEN" }, ["Owner A"]),
+    itemGroup({ ...row, kind: "FIX", owner: "Owner A worker", status: "OPEN", needsHuman: false }),
     "Next / Open",
   );
 });
@@ -82,7 +82,7 @@ test("columns map each active item and live job once and bound recent completion
       item("open", "OPEN"),
       item("active", "IN PROGRESS"),
       item("decide", "OPEN", { kind: "DECIDE" }),
-      item("owner", "OPEN", { owner: "Owner A" }),
+      item("owner", "OPEN", { owner: "Owner A", needsHuman: true }),
       item("blocked", "BLOCKED"),
       item("old", "DONE", { completedAt: "2026-09-01" }),
       item("future", "DONE", { completedAt: "2026-10-15" }),
@@ -90,7 +90,7 @@ test("columns map each active item and live job once and bound recent completion
       ...Array.from({ length: 12 }, (_, n) => item(`done-${n}`, "DONE")),
     ],
   };
-  const columns = boardColumns(project, now, ["Owner A"]);
+  const columns = boardColumns(project, now);
   assert.deepEqual(
     columns.map((column) => column.cards.length),
     [2, 2, 2, 1, 10],
@@ -109,13 +109,12 @@ test("columns map each active item and live job once and bound recent completion
 });
 
 test("human owners default empty and match only complete owner names", () => {
-  const row = { kind: "BUILD", status: "OPEN", owner: "Owner A" } as BoardItem;
-  assert.equal(itemGroup(row), "Next / Open");
-  assert.equal(itemGroup(row, []), "Next / Open");
-  assert.equal(itemGroup(row, ["Owner B", "owner a"]), "Needs you");
-  assert.equal(itemGroup(row, ["Owner"]), "Next / Open");
-  assert.equal(itemGroup({ ...row, owner: "" }, [""]), "Next / Open");
-  assert.equal(itemGroup({ ...row, kind: "DECIDE" }), "Needs you");
+  assert.equal(matchesHumanOwner("Owner A"), false);
+  assert.equal(matchesHumanOwner("Owner A", []), false);
+  assert.equal(matchesHumanOwner(" owner a ", ["Owner B", "Owner A"]), true);
+  assert.equal(matchesHumanOwner("Owner A worker", ["Owner A"]), false);
+  assert.equal(matchesHumanOwner("Owner A", ["Owner"]), false);
+  assert.equal(matchesHumanOwner("", [""]), false);
 });
 
 test("age uses singular and plural units", () => {

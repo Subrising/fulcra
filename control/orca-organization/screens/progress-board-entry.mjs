@@ -42,7 +42,6 @@ const data = {
   observedAt: at,
   machine: "Fixture host",
   warnings: [],
-  humanOwners: ["owner a"],
   projects: [
     {
       id: "fixture",
@@ -55,7 +54,11 @@ const data = {
         item("FU-4", "BUILD", "OPEN", "Check the screen on a phone."),
         item("FU-5", "FIX", "DONE", "Keep long branch names readable."),
         item("FU-6", "FIX", "BLOCKED: dependency", "Wait for the dependent branch checks."),
-        { ...item("FU-7", "BUILD", "OPEN", "Confirm the project schedule."), owner: "Owner A" },
+        {
+          ...item("FU-7", "BUILD", "OPEN", "Confirm the project schedule."),
+          owner: "Owner A",
+          needsHuman: true,
+        },
         ...Array.from({ length: 36 }, (_, n) =>
           item(
             `FU-${n + 8}`,
