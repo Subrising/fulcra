@@ -219,7 +219,7 @@ export class ReportUpService {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly finishOwners = new Map<string, boolean>();
   private readonly processingOwned = new Set<string>();
-  private readonly finishRetriesOnIdle = new Map<string, Set<string>>();
+  private readonly finishRetriesOnIdle = new Set<string>();
   private readonly store: LineStore;
   private readonly limited = new Map<string, LimitedChat>();
   private archiveStateKnown = true;
@@ -339,10 +339,18 @@ export class ReportUpService {
   }
 
   private retryRefusedFinishesOnIdle(parentId: string): void {
-    const children = this.finishRetriesOnIdle.get(parentId);
-    if (!children || this.stopped) return;
-    this.finishRetriesOnIdle.delete(parentId);
-    for (const childId of children)
+    if (this.stopped) return;
+    for (const childId of this.finishRetriesOnIdle) {
+      // Adoption can change the parent while a refused notice waits for an idle event.
+      const child =
+        this.deps.agentManager.getAgent(childId) ?? this.deps.agentStorage.getCached(childId);
+      const currentParentId = getParentAgentIdFromLabels(child?.labels);
+      if (!currentParentId || child?.archivedAt) {
+        this.finishRetriesOnIdle.delete(childId);
+        continue;
+      }
+      if (currentParentId !== parentId) continue;
+      this.finishRetriesOnIdle.delete(childId);
       void this.deps.agentStorage
         .getFinishNotice(childId)
         .then((notice) => {
@@ -353,12 +361,7 @@ export class ReportUpService {
         .catch((err: unknown) =>
           this.deps.logger.warn({ err, childId }, "Refused finish retry failed"),
         );
-  }
-
-  private retryFinishOnNextIdle(parentId: string, childId: string): void {
-    const children = this.finishRetriesOnIdle.get(parentId) ?? new Set<string>();
-    children.add(childId);
-    this.finishRetriesOnIdle.set(parentId, children);
+    }
   }
 
   observeNative(hooks: PolicyHooks): () => void {
@@ -598,7 +601,7 @@ export class ReportUpService {
     const refusal = finalInputFailure(handoff) ?? error;
     if (!hasFinalInputHandoff(handoff) || refusal instanceof CodexAppServerRpcError) {
       await this.deps.agentStorage.markFinishNoticeRefused(childId, notice.messageId);
-      this.retryFinishOnNextIdle(notice.parentId, childId);
+      this.finishRetriesOnIdle.add(childId);
       this.deps.logger.warn({ err: error, childId }, "Finish notice refused; next idle will retry");
     } else {
       await this.deps.agentStorage.markFinishNoticeUnknown(childId, notice.messageId);
