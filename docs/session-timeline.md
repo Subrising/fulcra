@@ -84,6 +84,8 @@ daemon stops part way, the next start (or the next read of that agent) finishes 
 history is ever split between the live and retained areas. The agent record is removed only after
 the history is safely retained; if retention fails, the delete fails with "The agent was not
 deleted because its history could not be saved" and the agent stays in place to try again.
+Until the delete finishes, reads of that agent use the retained copy without loading its provider.
+Appending stays blocked, so a new empty journal cannot replace the acknowledged history.
 
 Reloading an agent from provider history and rewinding still replace the journal outright. The
 provider history is the source of truth in those cases.

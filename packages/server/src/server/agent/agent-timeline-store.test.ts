@@ -847,6 +847,12 @@ describe("durable timeline pending delete", () => {
       const reopened = open();
       const live = await reopened.fetchCommitted("agent", { limit: 0 });
       expect(live.rows.map((row) => row.seqStart)).toEqual(acknowledged);
+      // An unloaded, still-registered agent uses this read path after a failed delete.
+      expect(
+        (await reopened.fetchExistingCommitted("agent", { limit: 0 }))?.rows.map(
+          (row) => row.seqStart,
+        ),
+      ).toEqual(acknowledged);
       expect(
         (
           await reopened.fetchCommitted("agent", {
