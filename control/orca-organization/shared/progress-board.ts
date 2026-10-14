@@ -9,6 +9,8 @@ const item = z.object({
   status: z.string(),
   evidence: z.string(),
   source: z.string(),
+  createdAt: z.string().optional(),
+  completedAt: z.string().optional(),
 });
 const job = z.object({
   id: z.string(),
@@ -35,6 +37,7 @@ export const progressBoardRpc = defineContract({
     observedAt: z.string(),
     machine: z.string(),
     warnings: z.array(z.string()),
+    humanOwners: z.array(z.string()).optional(),
     projects: z.array(
       z.object({
         id: z.string(),
@@ -50,19 +53,65 @@ export const progressBoardRpc = defineContract({
 export type ProgressBoard = ContractReceive<typeof progressBoardRpc>;
 export type BoardItem = ProgressBoard["projects"][number]["items"][number];
 
-export function itemGroup(row: BoardItem): "Done" | "Decide" | "In progress" | "Next" | "Open" {
-  if (row.status === "DONE" || row.status.startsWith("MOVED")) return "Done";
-  if (row.kind === "DECIDE") return "Decide";
-  if (row.status.startsWith("IN PROGRESS")) return "In progress";
-  if (row.status.startsWith("NEXT")) return "Next";
-  return "Open";
+export type BoardJob = ProgressBoard["projects"][number]["jobs"][number];
+export const BOARD_GROUPS = ["Next / Open", "In progress", "Needs you", "Blocked", "Done"] as const;
+export type BoardGroup = (typeof BOARD_GROUPS)[number];
+export type BoardCard = { type: "item"; item: BoardItem } | { type: "job"; job: BoardJob };
+
+export function itemGroup(row: BoardItem, humanOwners: readonly string[] = []): BoardGroup {
+  const status = row.status.trim().toUpperCase();
+  if (status === "DONE" || status.startsWith("MOVED")) return "Done";
+  if (status.startsWith("BLOCKED")) return "Blocked";
+  if (
+    row.kind.trim().toUpperCase() === "DECIDE" ||
+    humanOwners.some(
+      (owner) =>
+        owner.trim().length > 0 && owner.trim().toLowerCase() === row.owner.trim().toLowerCase(),
+    )
+  )
+    return "Needs you";
+  if (status.startsWith("IN PROGRESS")) return "In progress";
+  return "Next / Open";
+}
+
+// Ledgers do not require dates. Undated completions use ledger order, bounded to the last ten rows.
+export function boardColumns(
+  project: ProgressBoard["projects"][number],
+  now: number,
+  humanOwners: readonly string[] = [],
+) {
+  const recent = new Set(
+    project.items
+      .filter((row) => {
+        if (itemGroup(row, humanOwners) !== "Done") return false;
+        if (!row.completedAt) return true;
+        const at = Date.parse(row.completedAt);
+        return Number.isFinite(at) && at <= now && now - at <= 14 * 86400000;
+      })
+      .slice(-10),
+  );
+  return BOARD_GROUPS.map((group) => ({
+    group,
+    cards: [
+      ...(group === "In progress"
+        ? project.jobs.map((job): BoardCard => ({ type: "job", job }))
+        : []),
+      ...project.items
+        .filter(
+          (row) => itemGroup(row, humanOwners) === group && (group !== "Done" || recent.has(row)),
+        )
+        .map((item): BoardCard => ({ type: "item", item })),
+    ],
+  }));
 }
 
 export function ageLabel(createdAt: string, now: number): string {
   const age = now - Date.parse(createdAt);
   if (!Number.isFinite(age) || age < 0) return "Age unavailable";
   const minutes = Math.floor(age / 60000);
-  if (minutes < 60) return `${minutes} min`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)} h`;
-  return `${Math.floor(minutes / 1440)} days`;
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  const hours = Math.floor(minutes / 60);
+  if (minutes < 1440) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  const days = Math.floor(minutes / 1440);
+  return `${days} ${days === 1 ? "day" : "days"}`;
 }

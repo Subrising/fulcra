@@ -3,8 +3,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { firstRun, loadConfig } from "./config.mjs";
 import type { PaseoAgent, PaseoApi, PaseoWorkspace } from "@getpaseo/client";
-import { parseLedger, oneLine, jobList, readBranch, createProgressBoard } from "./progress-board";
+import {
+  parseLedger,
+  ledgerDate,
+  oneLine,
+  jobList,
+  readBranch,
+  createProgressBoard,
+} from "./progress-board";
 const header =
   "| id | item | kind | owner | status | evidence | source |\n|---|---|---|---|---|---|---|";
 const row = "| FU-1 | Build board | BUILD | Worker | IN PROGRESS | test | brief |";
@@ -343,4 +351,42 @@ test("missing ledger root and SDK errors remain visible", async () => {
   } finally {
     board.close();
   }
+});
+
+test("ledger ages use valid source dates and never infer completion from evidence", () => {
+  assert.equal(ledgerDate("Request 2026-10-14."), "2026-10-14T00:00:00.000Z");
+  assert.equal(ledgerDate("Request 2026-02-30."), undefined);
+  assert.equal(ledgerDate("Owner A 14 Oct"), undefined);
+  const parsed = parseLedger(
+    `${header}\n| FU-10 | Task | FIX | Worker | DONE | Passed 2026-10-14 | Request 2026-10-12 |`,
+  );
+  assert.equal(parsed.items[0]!.createdAt, "2026-10-12T00:00:00.000Z");
+  assert.equal(parsed.items[0]!.completedAt, undefined);
+});
+
+test("snapshot reads current human owners from private config and propagates invalid settings", async (t) => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "board-owner-config-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const env = { ORCA_HOME: path.join(root, "home") };
+  firstRun(env);
+  const file = path.join(env.ORCA_HOME, "config.json");
+  const config = JSON.parse(fs.readFileSync(file, "utf8"));
+  const board = createProgressBoard(
+    { on: () => () => {} },
+    {
+      root,
+      machine: "Fixture host",
+      humanOwners: () => loadConfig(env).board.humanOwners,
+    },
+  );
+  t.after(() => board.close());
+  const api = {
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  assert.deepEqual((await board.read(api)).humanOwners, []);
+  fs.writeFileSync(file, JSON.stringify({ ...config, board: { humanOwners: ["Owner A"] } }));
+  assert.deepEqual((await board.read(api)).humanOwners, ["Owner A"]);
+  fs.writeFileSync(file, JSON.stringify({ ...config, board: { humanOwners: "Owner A" } }));
+  await assert.rejects(board.read(api), /board.humanOwners/);
 });
