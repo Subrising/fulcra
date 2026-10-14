@@ -64,6 +64,7 @@ const sessionMock = vi.hoisted(() => {
     cleanup = vi.fn(async () => {
       await this.delivery.close();
     });
+    admitAgentCallerSource = vi.fn();
     admitManagementSource = vi.fn();
     revokeManagementSource = vi.fn();
     handleMessage = vi.fn(async () => {});

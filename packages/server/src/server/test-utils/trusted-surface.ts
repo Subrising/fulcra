@@ -12,7 +12,17 @@ type WithInput = AgentManager["withInput"];
  * the real checks (provenance tokens, operation binding, human-input counting) rather than an allow-all stub.
  */
 export function withTrustedSurface<T extends object>(stub: T): T {
-  const target = stub as T & { trustedPlugins?: TrustedPlugins; withInput?: WithInput };
+  const target = stub as T & {
+    trustedPlugins?: TrustedPlugins;
+    withInput?: WithInput;
+    withAgentCaller?: AgentManager["withAgentCaller"];
+    assertInjectionLabelWrite?: AgentManager["assertInjectionLabelWrite"];
+    injectionLabelCallerValidator?: AgentManager["injectionLabelCallerValidator"];
+  };
+  // These doubles have no configured injection label filter.
+  target.withAgentCaller ??= (_id, operation) => operation();
+  target.assertInjectionLabelWrite ??= () => {};
+  target.injectionLabelCallerValidator ??= () => () => {};
   const trustedPlugins = target.trustedPlugins ?? new TrustedPlugins();
   if (!target.trustedPlugins) target.trustedPlugins = trustedPlugins;
   if (!target.withInput) {

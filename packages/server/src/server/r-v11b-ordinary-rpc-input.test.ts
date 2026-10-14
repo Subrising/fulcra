@@ -14,6 +14,7 @@ test("M2: ordinary plugin RPC input with a `context` field reaches the plugin as
   const messages: Array<{ type: string }> = [];
   const session = Object.create(Session.prototype) as Session;
   Object.assign(session, {
+    agentCallerSources: new WeakMap(),
     managementSources: new Map(),
     managementInvocations: new Map(),
     authorization: new SessionAuthorization(OWNER_PERMISSIONS),

@@ -113,6 +113,7 @@ function fixture(method = "list", commandInput: JsonValue = null) {
   const messages: unknown[] = [];
   const session = Object.create(Session.prototype) as Session;
   Object.assign(session, {
+    agentCallerSources: new WeakMap(),
     managementSources: new Map(),
     managementInvocations: new Map(),
     authorization: new SessionAuthorization(OWNER_PERMISSIONS),
