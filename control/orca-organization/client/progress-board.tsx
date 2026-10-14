@@ -38,7 +38,7 @@ export function ProgressBoardView({
   const c = theme.colors;
   const project = data?.projects.find((p) => p.id === selected) ?? data?.projects[0];
   const now = Date.parse(data?.observedAt ?? "");
-  const columns = project ? boardColumns(project, now, data?.humanOwners ?? []) : [];
+  const columns = project ? boardColumns(project, now) : [];
   const body = { color: c.foreground, fontSize: 14, lineHeight: 22, flexShrink: 1 };
   const muted = { ...body, color: c.foregroundMuted };
   const heading = { ...body, fontWeight: "600" as const };
