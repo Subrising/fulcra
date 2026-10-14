@@ -2414,8 +2414,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         }
       }
 
-      const result = await updateAgentCommand({ agentManager }, { agentId, name, labels });
-      if (!result.accepted) throw new Error(result.error ?? "Agent update rejected");
+      if (name !== undefined || labels !== undefined) {
+        const result = await updateAgentCommand({ agentManager }, { agentId, name, labels });
+        if (!result.accepted) throw new Error(result.error ?? "Agent update rejected");
+      }
 
       return {
         content: [],

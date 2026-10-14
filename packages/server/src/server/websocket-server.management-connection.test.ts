@@ -81,6 +81,7 @@ async function fixture() {
     pino({ level: "silent" }),
     "fixture",
     createStub({
+      withAgentCaller: <T>(_id: string | undefined, operation: () => T) => operation(),
       trustedPlugins: host,
       setNativeMessageReceipts: () => {},
       subscribe: () => () => {},
