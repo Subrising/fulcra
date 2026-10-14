@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, writeFile, rm, rename, link } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile, rm, rename, link, utimes } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -668,5 +668,26 @@ test.runIf(process.platform === "win32")(
       "Native artifact confinement unavailable",
     );
     expect(await readdir(directory)).toEqual([]);
+  },
+);
+
+posixTest(
+  "automatic pruning preserves expired evidence journals and unfinished attempts",
+  async () => {
+    const { directory, ledger } = await fixture();
+    const completed = claim();
+    const pending = claim();
+    await ledger.prepareEvidence(completed, () => {});
+    await ledger.appendEvidence(outcome(completed), () => {});
+    await ledger.prepareEvidence(pending, () => {});
+    ledger.stop();
+    const at = Date.now() - 2 * 86400000;
+    for (const file of await readdir(directory))
+      await utimes(path.join(directory, file), new Date(at), new Date(at));
+    const restored = new MessageReceipts(directory, () => Date.now() + 2 * 86400000);
+    expect(await restored.maintenance(() => {})).toMatchObject({ recordedIds: 2, prunedCount: 0 });
+    expect(await restored.prepareEvidence(completed, () => {})).toBe(false);
+    expect(await restored.prepareEvidence(pending, () => {})).toBe(false);
+    restored.stop();
   },
 );

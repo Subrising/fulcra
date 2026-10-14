@@ -275,3 +275,17 @@ test("loads private plugin registry settings through the configuration boundary"
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("loads optional receipt retention from daemon config", async () => {
+  const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-receipt-config-"));
+  try {
+    expect(loadConfig(paseoHome, { env: {} }).receiptRetentionMs).toBeUndefined();
+    await writeFile(
+      path.join(paseoHome, "config.json"),
+      JSON.stringify({ daemon: { receiptRetentionMs: 172800000 } }),
+    );
+    expect(loadConfig(paseoHome, { env: {} }).receiptRetentionMs).toBe(172800000);
+  } finally {
+    await rm(paseoHome, { recursive: true, force: true });
+  }
+});

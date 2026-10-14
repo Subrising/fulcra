@@ -637,6 +637,7 @@ export function resolveConfigFromPersisted(
     enableTerminalAgentHooks: persistedSettings.enableTerminalAgentHooks,
     reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
     nativeFinishNotices: persistedSettings.nativeFinishNotices,
+    receiptRetentionMs: persisted.daemon?.receiptRetentionMs,
     idleLeadNudge: persistedSettings.idleLeadNudge,
     idleLeadNudgeSkipOwners: persistedSettings.idleLeadNudgeSkipOwners,
     idleLeadNudgeMinIntervalMinutes: persistedSettings.idleLeadNudgeMinIntervalMinutes,

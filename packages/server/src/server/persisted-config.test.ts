@@ -843,3 +843,13 @@ describe.skipIf(process.platform === "win32")("persisted config file permissions
     }
   });
 });
+
+test("receipt retention is optional and must exceed the six-hour retry lifetime", () => {
+  expect(PersistedConfigSchema.parse({}).daemon?.receiptRetentionMs).toBeUndefined();
+  expect(
+    PersistedConfigSchema.parse({ daemon: { receiptRetentionMs: 86400000 } }).daemon
+      ?.receiptRetentionMs,
+  ).toBe(86400000);
+  for (const receiptRetentionMs of [0, -1, 21600000, 21600000.5, Infinity])
+    expect(PersistedConfigSchema.safeParse({ daemon: { receiptRetentionMs } }).success).toBe(false);
+});
