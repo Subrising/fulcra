@@ -14985,3 +14985,78 @@ test("idle cleanup failure retains the runtime and releases its reservation", as
     await f.close();
   }
 });
+
+test.each([false, true])(
+  "MCP label filtering applies to new sessions, including native tools (%s)",
+  async (native) => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-mcp-labels-"));
+    const launches: Array<{ config: AgentSessionConfig; context?: AgentLaunchContext }> = [];
+    const catalog: PaseoToolCatalog = {
+      tools: new Map(),
+      getTool: () => undefined,
+      executeTool: async () => {
+        throw new Error("No fixture tool");
+      },
+    };
+    class CaptureClient extends TestAgentClient {
+      override readonly capabilities = {
+        ...TEST_CAPABILITIES,
+        supportsMcpServers: true,
+        supportsNativePaseoTools: native,
+      };
+      override async createSession(
+        config: AgentSessionConfig,
+        context?: AgentLaunchContext,
+      ): Promise<AgentSession> {
+        launches.push({ config, context });
+        return new McpCapableTestAgentSession(config);
+      }
+    }
+    const manager = new AgentManager({
+      clients: { codex: new CaptureClient() },
+      logger,
+      registry: new AgentStorage(join(directory, "agents"), logger),
+      mcpBaseUrl: "http://127.0.0.1:1/mcp/agents",
+      paseoToolCatalogFactory: () => catalog,
+    });
+    const create = (labels?: Record<string, string>) =>
+      manager.createAgent(
+        {
+          provider: "codex",
+          cwd: directory,
+          mcpServers: { external: { type: "stdio", command: "fixture-mcp" } },
+        },
+        undefined,
+        { labels },
+      );
+    const injected = (index: number) =>
+      native
+        ? launches[index]!.context?.paseoTools !== undefined
+        : launches[index]!.config.mcpServers?.paseo !== undefined;
+    try {
+      await create();
+      expect(injected(0)).toBe(true);
+      manager.setMcpInjectLabels({ "fulcra.mcp": "on" });
+      await create({ "fulcra.mcp": "on" });
+      await create();
+      await create({ "fulcra.mcp": "off" });
+      expect(injected(1)).toBe(true);
+      expect(injected(2)).toBe(false);
+      expect(injected(3)).toBe(false);
+      expect(launches[2]!.config.mcpServers).toEqual({
+        external: { type: "stdio", command: "fixture-mcp" },
+      });
+      expect(injected(0)).toBe(true);
+      manager.setMcpInjectLabels({});
+      await create();
+      expect(injected(4)).toBe(true);
+      manager.setPaseoToolsEnabled(false);
+      await create({ "fulcra.mcp": "on" });
+      expect(injected(5)).toBe(false);
+    } finally {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await manager.flushForShutdown();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

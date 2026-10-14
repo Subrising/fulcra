@@ -14,6 +14,8 @@ import pino from "pino";
 import { createMemoryCredentialBackend } from "../integrations/credential-backend.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
 import { hashDaemonPassword } from "../auth.js";
+import { loadConfig } from "../config.js";
+import { DaemonClient } from "../test-utils/daemon-client.js";
 import { createPaseoDaemon, type PaseoDaemonConfig } from "../bootstrap.js";
 import { createTestAgentClient, createTestAgentClients } from "../test-utils/fake-agent-client.js";
 import type {
@@ -684,6 +686,83 @@ describe("agent MCP end-to-end (offline)", () => {
       expect(prompts.filter((prompt) => JSON.stringify(prompt).includes(childId))).toHaveLength(1);
     } finally {
       await client.close();
+      await daemon.stop();
+      await rm(paseoHome, { recursive: true, force: true });
+      await rm(staticDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("MCP injection label filtering updates new agents through patch and config reload", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-mcp-label-filter-"));
+    const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-mcp-label-static-"));
+    const configPath = path.join(paseoHome, "config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        daemon: { mcp: { enabled: true, injectIntoAgents: true }, relay: { enabled: false } },
+      }),
+    );
+    const recorder: LaunchRecorder = { recordedLaunches: new Map() };
+    const daemon = await createPaseoDaemon(
+      {
+        ...loadConfig(paseoHome, { env: {} }),
+        listen: "127.0.0.1:0",
+        staticDir,
+        agentClients: createMcpRecordingAgentClients(recorder),
+      },
+      pino({ level: "silent" }),
+      { credentialBackend: createMemoryCredentialBackend() },
+    );
+    let client: DaemonClient | undefined;
+    const rawMcp = new Client({ name: "label-fixture", version: "1" });
+    const create = async (labels?: Record<string, string>) => {
+      const agent = await daemon.agentManager.createAgent(
+        { provider: "claude", cwd: paseoHome },
+        undefined,
+        { labels },
+      );
+      return { agent, server: recorder.recordedLaunches.get(agent.id)!.mcpServers?.paseo };
+    };
+    try {
+      await daemon.start();
+      const target = daemon.getListenTarget();
+      if (target?.type !== "tcp") throw new Error("Isolated TCP daemon required");
+      client = new DaemonClient({ url: `ws://127.0.0.1:${target.port}/ws` });
+      await client.connect();
+      const initial = await create();
+      expect(initial.server?.type).toBe("http");
+      expect((await client.getDaemonConfig()).config.mcp.injectLabels).toEqual({});
+      await client.patchDaemonConfig({ mcp: { injectLabels: { "fulcra.mcp": "on" } } });
+      const lead = await create({ "fulcra.mcp": "on" });
+      expect(lead.server?.type).toBe("http");
+      expect((await create()).server).toBeUndefined();
+      expect((await create({ "fulcra.mcp": "off" })).server).toBeUndefined();
+      if (lead.server?.type !== "http") throw new Error("Injected HTTP MCP required");
+      await rawMcp.connect(
+        new StreamableHTTPClientTransport(new URL(lead.server.url), {
+          requestInit: { headers: lead.server.headers },
+        }),
+      );
+      expect((await rawMcp.listTools()).tools.map((tool) => tool.name)).toContain("create_agent");
+      const persisted = JSON.parse(await readFile(configPath, "utf8"));
+      persisted.daemon.mcp.injectLabels = { role: "lead" };
+      await writeFile(configPath, JSON.stringify(persisted));
+      expect((await client.reloadDaemonConfig()).appliedPaths).toContain("daemon.mcp.injectLabels");
+      expect((await create({ "fulcra.mcp": "on" })).server).toBeUndefined();
+      expect((await create({ role: "lead" })).server?.type).toBe("http");
+      expect(recorder.recordedLaunches.get(initial.agent.id)!.mcpServers?.paseo).toEqual(
+        initial.server,
+      );
+      expect(recorder.recordedLaunches.get(lead.agent.id)!.mcpServers?.paseo).toEqual(lead.server);
+      delete persisted.daemon.mcp.injectLabels;
+      await writeFile(configPath, JSON.stringify(persisted));
+      expect((await client.reloadDaemonConfig()).appliedPaths).toContain("daemon.mcp.injectLabels");
+      expect((await create()).server?.type).toBe("http");
+      await client.patchDaemonConfig({ mcp: { injectIntoAgents: false } });
+      expect((await create({ role: "lead" })).server).toBeUndefined();
+    } finally {
+      await rawMcp.close();
+      await client?.close();
       await daemon.stop();
       await rm(paseoHome, { recursive: true, force: true });
       await rm(staticDir, { recursive: true, force: true });
