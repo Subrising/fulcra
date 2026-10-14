@@ -204,7 +204,11 @@ import {
 import { invokeRewindCapability, type RewindMode } from "./rewind/rewind.js";
 import { FINISH_NOTIFICATION_MESSAGE_PREFIX, isSystemInjectedEnvelope } from "./agent-prompt.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
-import { stripInternalPaseoMcpServer, withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
+import {
+  stripInternalPaseoMcpServer,
+  withRuntimePaseoMcpServer,
+  matchesPaseoInjectLabels,
+} from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
 import type { PaseoToolCatalogFactory } from "./tools/types.js";
 import { isPaseoToolPolicyEnabled } from "./paseo-tool-policy.js";
@@ -515,6 +519,7 @@ export interface AgentManagerOptions {
   timelineRetention?: "keep" | "purge";
   terminalManager?: TerminalManager | null;
   mcpBaseUrl?: string;
+  mcpInjectLabels?: Record<string, string>;
   mcpAuthToken?: string;
   paseoToolsEnabled?: boolean;
   paseoToolCatalogFactory?: PaseoToolCatalogFactory;
@@ -2130,6 +2135,7 @@ export class AgentManager {
   private mcpBaseUrl: string | null;
   private readonly mcpAuthToken: string | null;
   private paseoToolsEnabled = true;
+  private mcpInjectLabels: Record<string, string> = {};
   private paseoToolCatalogFactory: PaseoToolCatalogFactory | null = null;
   private readonly paseoToolPolicies = new Map<string, ProviderPaseoToolsPolicy | undefined>();
   private readonly resolvePaseoToolPolicy: (
@@ -2234,6 +2240,7 @@ export class AgentManager {
   }
 
   private configurePaseoTools(options: AgentManagerOptions): void {
+    this.mcpInjectLabels = { ...options.mcpInjectLabels };
     this.paseoToolsEnabled = options.paseoToolsEnabled ?? true;
     this.paseoToolCatalogFactory = options.paseoToolCatalogFactory ?? null;
   }
@@ -2296,6 +2303,10 @@ export class AgentManager {
 
   prepareForShutdown(): void {
     this.acceptingAgentRegistrations = false;
+  }
+
+  setMcpInjectLabels(labels: Record<string, string>): void {
+    this.mcpInjectLabels = { ...labels };
   }
 
   setPaseoToolsEnabled(enabled: boolean): void {
@@ -2832,6 +2843,7 @@ export class AgentManager {
         resolveDefaultMode: !options.fromStoredRecord,
         resolveDefaultThinking: !options.fromStoredRecord,
         workerDefault: isCreatedByChat(options.labels),
+        labels: options.labels,
       },
     );
     this.requireEnabledProvider(storedConfig.provider);
@@ -2990,7 +3002,7 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
-      { purpose },
+      { purpose, labels: record?.labels ?? options?.labels },
     );
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
@@ -3058,6 +3070,7 @@ export class AgentManager {
         cwd: input.cwd,
       },
       resolvedAgentId,
+      { labels: input.labels },
     );
     this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
     const launchContext = await this.buildLaunchContext(
@@ -8921,6 +8934,7 @@ export class AgentManager {
       resolveDefaultMode?: boolean;
       resolveDefaultThinking?: boolean;
       workerDefault?: boolean;
+      labels?: Record<string, string>;
     } = {},
   ): Promise<PreparedSessionConfig> {
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
@@ -8930,9 +8944,14 @@ export class AgentManager {
       resolveDefaultMode: options.resolveDefaultMode,
       resolveDefaultThinking: options.resolveDefaultThinking,
     });
-    const paseoToolPolicy = this.paseoToolsEnabled
-      ? this.resolvePaseoToolPolicy(storedConfig.provider)
-      : { enabled: false };
+    const paseoToolPolicy =
+      this.paseoToolsEnabled &&
+      matchesPaseoInjectLabels(
+        options.labels ?? this.agents.get(agentId)?.labels,
+        this.mcpInjectLabels,
+      )
+        ? this.resolvePaseoToolPolicy(storedConfig.provider)
+        : { enabled: false };
     const reportLaunch = this.prepareNativeReportLaunch(agentId);
     const launchConfig = this.applyDaemonAppendSystemPrompt(
       withRuntimePaseoMcpServer({
