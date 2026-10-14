@@ -637,7 +637,13 @@ describe("agent MCP end-to-end (offline)", () => {
         ],
         {
           timeout: 15_000,
-          env: { ...process.env, PASEO_AGENT_ID: "", PASEO_WORKSPACE_ID: "", PASEO_PASSWORD: "" },
+          env: {
+            ...process.env,
+            PASEO_HOME: paseoHome,
+            PASEO_AGENT_ID: "",
+            PASEO_WORKSPACE_ID: "",
+            PASEO_PASSWORD: "",
+          },
         },
       );
       const parentId = (JSON.parse(result.stdout) as { agentId: string }).agentId;
