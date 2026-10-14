@@ -33,7 +33,12 @@ import {
 } from "../report-batch.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { open, readdir, rm } from "node:fs/promises";
+import { open, readdir, rm, unlink } from "node:fs/promises";
+import {
+  DEFAULT_RECEIPT_RETENTION_MS,
+  MAX_RECEIPT_LIFETIME_MS,
+  ReceiptRetentionMsSchema,
+} from "./retention.js";
 import path from "node:path";
 import { z } from "zod";
 import { isNativeQueuedRefusal } from "../agent/native-queued-dispatch.js";
@@ -143,7 +148,8 @@ const MAX_GLOBAL_COUNT = 256;
 const MAX_GLOBAL_BYTES = 8 * 1024 * 1024;
 const MAX_TERMINAL_IDS = 10000;
 const MAX_TEXT_BYTES = 16 * 1024;
-const MAX_LIFETIME = 6 * 60 * 60 * 1000;
+const MAX_LIFETIME = MAX_RECEIPT_LIFETIME_MS;
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 export class NativeReceiptMaintenanceError extends Error {
   readonly code = "agent_receipt_maintenance_required";
   constructor() {
@@ -184,11 +190,21 @@ export class MessageReceipts {
   private readonly records = new Map<string, QueuedReceipt>();
   private readonly admissions = new Map<string, NativeQueuedMessage>();
   private diskCount = 0;
+  private prunedCount = 0;
+  private lastPruneAt: number | null = null;
+  private pruneTimer?: ReturnType<typeof setTimeout>;
+  private stopped = false;
+  private capacityWarningLogged = false;
+  private readonly retentionMs: number;
   private readonly collectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   constructor(
     private readonly directory: string,
     private readonly now = Date.now,
     private readonly terminalIdLimit = MAX_TERMINAL_IDS,
+    private readonly options: {
+      retentionMs?: number;
+      warn?: (message: string) => void;
+    } = {},
   ) {
     if (
       !Number.isSafeInteger(terminalIdLimit) ||
@@ -196,6 +212,9 @@ export class MessageReceipts {
       terminalIdLimit > MAX_TERMINAL_IDS
     )
       throw new Error("Invalid finite native receipt limit");
+    this.retentionMs = ReceiptRetentionMsSchema.parse(
+      options.retentionMs ?? DEFAULT_RECEIPT_RETENTION_MS,
+    );
   }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
@@ -266,21 +285,103 @@ export class MessageReceipts {
     }
     files = files.filter((file) => /^[a-f0-9]{64}\.json$/.test(file));
     this.diskCount = files.length;
-    if (files.length > this.terminalIdLimit) throw new NativeReceiptMaintenanceError();
     for (const file of files) {
       const receipt = await readReceipt(path.join(this.directory, file));
       if (!receipt) throw new Error("agent_receipt_disappeared");
       this.diskCount += isQueued(receipt) ? this.weight(receipt) - 1 : 0;
-      if (this.diskCount > this.terminalIdLimit) throw new NativeReceiptMaintenanceError();
       this.recoverEvidence(file, receipt);
       if (isQueued(receipt)) {
         this.watermark = Math.max(this.watermark, receipt.admittedAt);
         this.records.set(file.slice(0, -5), receipt);
       }
     }
+    await this.prune();
     this.initialized = true;
+    this.armPruning();
+    this.warnCapacity();
     if (!observeOnly) await this.recoverQueued(requireEffect);
     this.armExpiry();
+  }
+
+  private warn(message: string): void {
+    (this.options.warn ?? console.warn)(message);
+  }
+
+  private warnCapacity(): void {
+    if (!this.capacityWarningLogged && this.diskCount >= this.terminalIdLimit * 0.8) {
+      this.capacityWarningLogged = true;
+      this.warn("Native receipt ledger is at or above 80% capacity");
+    }
+  }
+
+  private async prune(): Promise<void> {
+    const now = this.clock();
+    let files: string[];
+    try {
+      files = await readdir(this.directory);
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+      files = [];
+    }
+    for (const file of files) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
+      const stored = await readReceiptFile(path.join(this.directory, file));
+      if (!stored) continue;
+      const { receipt, modifiedAt } = stored;
+      // Evidence journals and debit records have permanent replay/storage budgets.
+      // They are not delivery receipts and have no terminal delivery state.
+      if ("recordType" in receipt) continue;
+      if (
+        receipt.state === "pending" ||
+        receipt.state === "queued" ||
+        receipt.state === "dispatching"
+      )
+        continue;
+      // File time also fences legacy receipts, which have no admission timestamp.
+      // A final transition starts retention again, including recovery after a crash.
+      if (modifiedAt > now - this.retentionMs) continue;
+      if (
+        isQueued(receipt) &&
+        (receipt.admittedAt > now - this.retentionMs || receipt.expiresAt >= now)
+      )
+        continue;
+      try {
+        await unlink(path.join(this.directory, file));
+      } catch {
+        this.warn(
+          "Native receipt pruning could not remove a terminal file; retained its capacity reservation",
+        );
+        continue;
+      }
+      this.diskCount -= isQueued(receipt) ? this.weight(receipt) : 1;
+      this.records.delete(file.slice(0, -5));
+      this.prunedCount++;
+    }
+    this.lastPruneAt = now;
+  }
+
+  private armPruning(): void {
+    if (this.stopped) return;
+    this.pruneTimer = setTimeout(() => {
+      this.pruneTimer = undefined;
+      void this.serial(() => this.prune())
+        .catch(() => this.warn("Native receipt pruning failed; retained receipt reservations"))
+        .finally(() => this.armPruning());
+    }, PRUNE_INTERVAL_MS);
+    this.pruneTimer.unref();
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.pruneTimer) clearTimeout(this.pruneTimer);
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    for (const timer of this.collectionTimers.values()) clearTimeout(timer);
+  }
+
+  private async requireCapacity(weight = 1): Promise<void> {
+    if (this.diskCount + weight > this.terminalIdLimit) await this.prune();
+    this.warnCapacity();
+    if (this.diskCount + weight > this.terminalIdLimit) throw new NativeReceiptMaintenanceError();
   }
 
   private async recoverQueued(requireEffect?: () => void): Promise<void> {
@@ -366,6 +467,7 @@ export class MessageReceipts {
 
   private armExpiry(): void {
     if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    if (this.stopped) return;
     const pending = [...this.records.values()].filter(
       (r) =>
         r.state === "queued" ||
@@ -443,15 +545,13 @@ export class MessageReceipts {
     maxIds: number;
     maintenanceRequired: boolean;
     newIdsRefused: boolean;
-    automaticPruning: false;
+    automaticPruning: true;
+    prunedCount: number;
+    lastPruneAt: number | null;
   }> {
     return this.serial(async () => {
       requireOwner();
-      try {
-        await this.initialize(requireOwner);
-      } catch (error) {
-        if (!(error instanceof NativeReceiptMaintenanceError)) throw error;
-      }
+      await this.initialize(requireOwner);
       requireOwner();
       const exhausted = this.diskCount >= this.terminalIdLimit;
       return {
@@ -459,7 +559,9 @@ export class MessageReceipts {
         maxIds: this.terminalIdLimit,
         maintenanceRequired: exhausted,
         newIdsRefused: exhausted,
-        automaticPruning: false,
+        automaticPruning: true,
+        prunedCount: this.prunedCount,
+        lastPruneAt: this.lastPruneAt,
       };
     });
   }
@@ -476,16 +578,14 @@ export class MessageReceipts {
     }
   }
 
-  private assertReservation(
+  private async assertReservation(
     agentId: string,
     bytes: number,
     weight: number,
     members: number,
     replacing?: QueuedReceipt,
-  ): void {
-    this.assertEvidenceCapacity(agentId, bytes, weight, replacing);
-    if (this.diskCount + weight - (replacing ? this.weight(replacing) : 0) > this.terminalIdLimit)
-      throw new NativeReceiptMaintenanceError();
+  ): Promise<void> {
+    await this.assertEvidenceCapacity(agentId, bytes, weight, replacing);
     const active = this.reserved().filter((receipt) => receipt !== replacing),
       target = active.filter((receipt) => receipt.agentId === agentId);
     if (
@@ -626,7 +726,7 @@ export class MessageReceipts {
           next.bytes
         )
           throw new Error("Native report collection reservation exceeded");
-        this.assertReservation(
+        await this.assertReservation(
           input.agentId,
           next.bytes,
           this.weight(next),
@@ -635,6 +735,7 @@ export class MessageReceipts {
         );
         await this.commit(key, next, input.authorize);
         this.diskCount++;
+        this.warnCapacity();
         input.authorize();
         this.admissions.set(key, { ...input, collectingUntil: receipt.collectingUntil });
         this.armCollection(key, onReady);
@@ -736,6 +837,7 @@ export class MessageReceipts {
   }
 
   private armCollection(key: string, onReady: (agentId: string) => void): void {
+    if (this.stopped) return;
     const receipt = this.records.get(key);
     if (!receipt?.collectingUntil || receipt.state !== "queued") return;
     const oldTimer = this.collectionTimers.get(key);
@@ -798,7 +900,7 @@ export class MessageReceipts {
       }
       if (!validEvidence(snapshot) || snapshot.entry.expiresAt <= this.clock())
         throw new Error("Native evidence claim refused");
-      this.assertEvidenceCapacity(snapshot.recipient.agentId, snapshot.bytes);
+      await this.assertEvidenceCapacity(snapshot.recipient.agentId, snapshot.bytes);
       try {
         await writeJsonFileDurable(path.join(this.directory, `${key}.json`), snapshot, authorize);
         authorize();
@@ -808,6 +910,7 @@ export class MessageReceipts {
       }
       this.evidenceClaims.set(key, snapshot);
       this.diskCount++;
+      this.warnCapacity();
       return true;
     });
   }
@@ -879,7 +982,7 @@ export class MessageReceipts {
         throw new Error("Managed artifact ID already attempted; no rematerialization or replay");
       if (!validManagedArtifact(snapshot) || snapshot.entry.expiresAt <= this.clock())
         throw new Error("Managed artifact attempt refused");
-      this.assertEvidenceCapacity(
+      await this.assertEvidenceCapacity(
         snapshot.recipient.agentId,
         snapshot.bytes + snapshot.artifactReservation.size,
       );
@@ -888,6 +991,7 @@ export class MessageReceipts {
         authorize();
         this.managedClaims.set(key, snapshot);
         this.diskCount++;
+        this.warnCapacity();
         this.artifactStore ??= new NativeArtifactStore(path.join(this.directory, "artifacts"));
         this.artifactStore.validateReservations(
           [...this.managedClaims.values(), ...this.managedArtifacts.values()].map((item) =>
@@ -1002,12 +1106,13 @@ export class MessageReceipts {
         fingerprint: digest(body),
       });
       requireContentEncoding(debit);
-      this.assertEvidenceCapacity(input.identity.agentId, debit.bytes);
+      await this.assertEvidenceCapacity(input.identity.agentId, debit.bytes);
       try {
         await writeJsonFileDurable(path.join(this.directory, `${key}.json`), debit, check);
         check();
         this.contentDebits.set(key, debit);
         this.diskCount++;
+        this.warnCapacity();
         this.artifactStore ??= new NativeArtifactStore(path.join(this.directory, "artifacts"));
         const bytes = this.artifactStore
           .read(input.artifactId, record.artifactReference, check)
@@ -1068,14 +1173,13 @@ export class MessageReceipts {
     });
   }
 
-  private assertEvidenceCapacity(
+  private async assertEvidenceCapacity(
     agentId: string,
     bytes: number,
     weight = 1,
     replacing?: QueuedReceipt,
-  ): void {
-    if (this.diskCount + weight - (replacing ? this.weight(replacing) : 0) > this.terminalIdLimit)
-      throw new NativeReceiptMaintenanceError();
+  ): Promise<void> {
+    await this.requireCapacity(weight - (replacing ? this.weight(replacing) : 0));
     const live = [...this.evidence.values(), ...this.evidenceClaims.values()].filter(
       (item) => item.entry.expiresAt > this.now(),
     );
@@ -1187,8 +1291,12 @@ export class MessageReceipts {
       textBytes + input.attachmentBytes + (report ? Buffer.byteLength(JSON.stringify(report)) : 0);
     const weight = 1 + (report ? reportMembers(report).length : 0);
     this.assertNewReportMembers(report);
-    this.assertEvidenceCapacity(input.agentId, bytes, weight);
-    this.assertReservation(input.agentId, bytes, weight, report ? reportMembers(report).length : 0);
+    await this.assertReservation(
+      input.agentId,
+      bytes,
+      weight,
+      report ? reportMembers(report).length : 0,
+    );
     const receipt: QueuedReceipt = {
       version: 2,
       agentId: input.agentId,
@@ -1210,12 +1318,17 @@ export class MessageReceipts {
       // Reserve bounded outcome and consumption journal growth at admission,
       // for immediate batches as well as delayed collectors.
       receipt.bytes = Math.max(receipt.bytes, 8192);
-      this.assertEvidenceCapacity(input.agentId, receipt.bytes, weight);
-      this.assertReservation(input.agentId, receipt.bytes, weight, reportMembers(report).length);
+      await this.assertReservation(
+        input.agentId,
+        receipt.bytes,
+        weight,
+        reportMembers(report).length,
+      );
     }
     input.authorize();
     await this.commit(key, receipt, input.authorize);
     this.diskCount += weight;
+    this.warnCapacity();
     // Durability may await; recheck before returning ownership of a UI draft.
     try {
       input.authorize();
@@ -1578,10 +1691,11 @@ export class MessageReceipts {
         if (existing.state === "completed") return false;
         throw new Error("agent_request_outcome_unknown");
       }
-      if (this.diskCount >= this.terminalIdLimit) throw new NativeReceiptMaintenanceError();
+      await this.requireCapacity();
       await input.prepare?.();
       await writeJsonFileAtomic(file, { fingerprint, agentId: input.agentId, state: "pending" });
       this.diskCount++;
+      this.warnCapacity();
       return true;
     });
     if (!shouldSend) return;
@@ -1608,6 +1722,13 @@ export class MessageReceipts {
 }
 
 async function readReceipt(file: string): Promise<z.infer<typeof ReceiptSchema> | null> {
+  return (await readReceiptFile(file))?.receipt ?? null;
+}
+
+async function readReceiptFile(file: string): Promise<{
+  receipt: z.infer<typeof ReceiptSchema>;
+  modifiedAt: number;
+} | null> {
   try {
     const fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
@@ -1615,7 +1736,7 @@ async function readReceipt(file: string): Promise<z.infer<typeof ReceiptSchema> 
       if (!stat.isFile() || stat.size > 16384) throw new Error("agent_receipt_invalid_file");
       const receipt = ReceiptSchema.parse(JSON.parse(await fd.readFile("utf8")));
       if (isQueued(receipt) && receipt.report) validateReportBatchData(receipt.report);
-      return receipt;
+      return { receipt, modifiedAt: stat.mtimeMs };
     } finally {
       await fd.close();
     }

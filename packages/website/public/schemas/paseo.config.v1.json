@@ -156,6 +156,11 @@
                 }
               },
               "additionalProperties": false
+            },
+            "receiptRetentionMs": {
+              "type": "integer",
+              "exclusiveMinimum": 21600000,
+              "maximum": 9007199254740991
             }
           },
           "additionalProperties": false

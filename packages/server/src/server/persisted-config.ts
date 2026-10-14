@@ -17,6 +17,8 @@ import { PluginIdSchema, PluginSourceSchema } from "@getpaseo/protocol/plugin-co
 import { TerminalProfileSchema } from "@getpaseo/protocol/terminal-profile";
 import { PaseoServicePortAllocationSchema } from "@getpaseo/protocol/paseo-config-schema";
 
+import { ReceiptRetentionMsSchema } from "./message-receipts/retention.js";
+
 export const LogLevelSchema = z.enum(["trace", "debug", "info", "warn", "error", "fatal"]);
 export const LogFormatSchema = z.enum(["pretty", "json"]);
 
@@ -269,6 +271,7 @@ export const PersistedConfigSchema = z
         enableTerminalAgentHooks: z.boolean().optional(),
         reportUpOnTurnEnd: z.boolean().optional(),
         nativeFinishNotices: z.boolean().optional(),
+        receiptRetentionMs: ReceiptRetentionMsSchema.optional(),
         eventDispatcherEnabled: z.boolean().optional(),
         idleLeadNudge: z.boolean().optional(),
         idleLeadNudgeSkipOwners: z.array(z.string()).optional(),

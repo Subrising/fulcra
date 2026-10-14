@@ -180,6 +180,7 @@ interface WebSocketServerConfig {
   daemonStatusRpc?: boolean;
   relayConfig?: boolean;
   startPaused?: boolean;
+  receiptRetentionMs?: number;
 }
 
 type WebSocketRuntimeMetrics = SessionRuntimeMetrics & CheckoutDiffMetrics;
@@ -751,7 +752,15 @@ export class VoiceAssistantWebSocketServer {
     this.orchestrationSkills = orchestrationSkills;
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
-    this.messageReceipts = new MessageReceipts(join(paseoHome, "agent-requests"));
+    this.messageReceipts = new MessageReceipts(
+      join(paseoHome, "agent-requests"),
+      Date.now,
+      undefined,
+      {
+        retentionMs: wsConfig.receiptRetentionMs,
+        warn: (message) => this.logger.warn(message),
+      },
+    );
     agentManager.setNativeMessageReceipts(this.messageReceipts);
     this.creationService = new CreationService(
       join(paseoHome, "creations"),
@@ -1259,6 +1268,7 @@ export class VoiceAssistantWebSocketServer {
   }
 
   public async close(): Promise<void> {
+    this.messageReceipts.stop();
     this.accountUsage.stop();
     this.prepareForShutdown();
     this.unsubscribeSpeechReadiness?.();

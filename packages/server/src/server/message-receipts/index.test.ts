@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile, writeFile, readdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, readdir, utimes, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -8,6 +8,8 @@ import { MessageReceipts } from "./index.js";
 const posixTest = test.runIf(process.platform !== "win32");
 const directories: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );
@@ -422,7 +424,9 @@ posixTest(
       maxIds: 1,
       maintenanceRequired: true,
       newIdsRefused: true,
-      automaticPruning: false,
+      automaticPruning: true,
+      prunedCount: 0,
+      lastPruneAt: expect.any(Number),
     });
     const restarted = new MessageReceipts(directory, Date.now, 1);
     expect(await restarted.enqueue(input)).toMatchObject({ state: "cancelled" });
@@ -723,4 +727,220 @@ test("any other failed send keeps its pending receipt", async () => {
   };
   await expect(requests.send(input)).rejects.toThrow("lost");
   await expect(requests.send(input)).rejects.toThrow("agent_request_outcome_unknown");
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
+async function ageReceipts(directory: string, at: number) {
+  for (const file of await readdir(directory))
+    await utimes(path.join(directory, file), new Date(at), new Date(at));
+}
+function legacySend(messageId: string) {
+  return { agentId: "target", messageId, request: {}, send: vi.fn(async () => {}) };
+}
+
+test("load prunes old completed receipts but retains pending and new receipts", async () => {
+  const { directory, requests } = await fixture();
+  await requests.send(legacySend("old"));
+  await expect(
+    requests.send({
+      ...legacySend("pending"),
+      send: async () => {
+        throw new Error("unknown outcome");
+      },
+    }),
+  ).rejects.toThrow("unknown outcome");
+  await ageReceipts(directory, Date.now() - 2 * DAY);
+  await requests.send(legacySend("new"));
+  const restored = new MessageReceipts(directory);
+  expect(await restored.maintenance(() => {})).toMatchObject({
+    recordedIds: 2,
+    prunedCount: 1,
+    lastPruneAt: expect.any(Number),
+    automaticPruning: true,
+  });
+  await expect(restored.send(legacySend("pending"))).rejects.toThrow(
+    "agent_request_outcome_unknown",
+  );
+  const duplicate = legacySend("new");
+  await restored.send(duplicate);
+  expect(duplicate.send).not.toHaveBeenCalled();
+  restored.stop();
+});
+
+test("load can prune a ledger above its old limit before accepting a new send", async () => {
+  const { directory, requests } = await fixture();
+  await requests.send(legacySend("first"));
+  await requests.send(legacySend("second"));
+  await ageReceipts(directory, Date.now() - 2 * DAY);
+  const restored = new MessageReceipts(directory, Date.now, 1, { warn: () => {} });
+  const input = legacySend("new");
+  await restored.send(input);
+  expect(input.send).toHaveBeenCalledTimes(1);
+  expect(await restored.maintenance(() => {})).toMatchObject({ recordedIds: 1, prunedCount: 2 });
+  restored.stop();
+});
+
+test("capacity refusal first prunes aged terminal files without a restart", async () => {
+  const { directory } = await fixture();
+  const requests = new MessageReceipts(directory, Date.now, 1, { warn: () => {} });
+  await requests.send(legacySend("old"));
+  await ageReceipts(directory, Date.now() - 2 * DAY);
+  const next = legacySend("next");
+  await requests.send(next);
+  expect(next.send).toHaveBeenCalledTimes(1);
+  expect(await requests.maintenance(() => {})).toMatchObject({ recordedIds: 1, prunedCount: 1 });
+  requests.stop();
+});
+
+posixTest(
+  "pruning keeps queued and dispatching files and fences terminal IDs inside their lifetime",
+  async () => {
+    const { directory, requests } = await fixture();
+    const input = queued();
+    await requests.enqueue(input);
+    await ageReceipts(directory, Date.now() - 2 * DAY);
+    const observer = new MessageReceipts(directory);
+    await observer.prepareArchiveObservation();
+    expect(await readdir(directory)).toHaveLength(1);
+    observer.stop();
+    await requests.cancel("target", "ticket", input.principal, input.authorize);
+    await ageReceipts(directory, Date.now() - 2 * DAY);
+    const restored = new MessageReceipts(directory, Date.now, 1, { warn: () => {} });
+    expect(await restored.enqueue(input)).toMatchObject({ state: "cancelled" });
+    await expect(restored.enqueue({ ...input, request: { text: "changed" } })).rejects.toThrow();
+    expect(await restored.maintenance(() => {})).toMatchObject({ recordedIds: 1, prunedCount: 0 });
+    restored.stop();
+  },
+);
+
+posixTest(
+  "pruning removes old final native receipts and clears their memory reservation",
+  async () => {
+    const { directory } = await fixture();
+    let now = Date.now();
+    const requests = new MessageReceipts(directory, () => now, 1, { warn: () => {} });
+    const input = queued();
+    await requests.enqueue(input);
+    await requests.cancel("target", "ticket", input.principal, input.authorize);
+    await ageReceipts(directory, now - 2 * DAY);
+    now += 2 * DAY;
+    await expect(requests.enqueue({ ...input, messageId: "next" })).resolves.toMatchObject({
+      state: "queued",
+    });
+    expect(await requests.maintenance(() => {})).toMatchObject({ recordedIds: 1, prunedCount: 1 });
+    requests.stop();
+  },
+);
+
+posixTest(
+  "failed unlink retains the count and retry fence until a later prune succeeds",
+  async () => {
+    const { directory } = await fixture();
+    const requests = new MessageReceipts(directory, Date.now, 1, { warn: () => {} });
+    await requests.send(legacySend("old"));
+    await ageReceipts(directory, Date.now() - 2 * DAY);
+    const next = legacySend("next");
+    await chmod(directory, 0o500);
+    try {
+      await expect(requests.send(next)).rejects.toMatchObject({
+        code: "agent_receipt_maintenance_required",
+      });
+      expect(next.send).not.toHaveBeenCalled();
+      expect(await requests.maintenance(() => {})).toMatchObject({
+        recordedIds: 1,
+        prunedCount: 0,
+      });
+      expect(await readdir(directory)).toHaveLength(1);
+    } finally {
+      await chmod(directory, 0o700);
+    }
+    await requests.send(next);
+    expect(next.send).toHaveBeenCalledTimes(1);
+    requests.stop();
+  },
+);
+
+test("hourly pruning runs without sends and its timer does not keep the process alive", async () => {
+  const { directory } = await fixture();
+  const requests = new MessageReceipts(directory);
+  await requests.send(legacySend("old"));
+  const timer = Reflect.get(requests, "pruneTimer") as NodeJS.Timeout;
+  expect(timer.hasRef()).toBe(false);
+  requests.stop();
+  await ageReceipts(directory, Date.now() - 2 * DAY);
+  vi.useFakeTimers();
+  const restored = new MessageReceipts(directory);
+  await restored.maintenance(() => {});
+  await restored.send(legacySend("later"));
+  await ageReceipts(directory, Date.now() - 2 * DAY);
+  await vi.advanceTimersByTimeAsync(HOUR);
+  // The serial observation waits for the timer's file operations to finish.
+  expect(await restored.maintenance(() => {})).toMatchObject({ recordedIds: 0, prunedCount: 2 });
+  restored.stop();
+});
+
+test("retention must exceed the retry lifetime and warns once at 80% capacity", async () => {
+  const { directory } = await fixture();
+  for (const retentionMs of [6 * HOUR, 0, -1, Infinity, 6 * HOUR + 0.5])
+    expect(() => new MessageReceipts(directory, Date.now, 5, { retentionMs })).toThrow();
+  const warn = vi.fn();
+  const requests = new MessageReceipts(directory, Date.now, 5, { retentionMs: 2 * DAY, warn });
+  for (let i = 0; i < 3; i++) await requests.send(legacySend(`message-${i}`));
+  expect(warn).not.toHaveBeenCalled();
+  await requests.send(legacySend("fourth"));
+  await requests.send(legacySend("fifth"));
+  expect(warn).toHaveBeenCalledExactlyOnceWith("Native receipt ledger is at or above 80% capacity");
+  requests.stop();
+});
+
+posixTest.each(["delivered", "refused", "cancelled", "uncertain"])(
+  "load prunes expired %s native receipts",
+  async (state) => {
+    const { directory, requests } = await fixture();
+    await requests.enqueue(queued());
+    requests.stop();
+    const file = path.join(directory, (await readdir(directory))[0]!);
+    const receipt = JSON.parse(await readFile(file, "utf8"));
+    const at = Date.now() - 2 * DAY;
+    await writeFile(
+      file,
+      JSON.stringify({ ...receipt, state, admittedAt: at, expiresAt: at + 6 * HOUR }),
+    );
+    await ageReceipts(directory, at);
+    const restored = new MessageReceipts(directory);
+    expect(await restored.maintenance(() => {})).toMatchObject({ recordedIds: 0, prunedCount: 1 });
+    expect(await readdir(directory)).toEqual([]);
+    restored.stop();
+  },
+);
+
+posixTest.each(["queued", "dispatching"])(
+  "load never prunes old %s native receipts",
+  async (state) => {
+    const { directory, requests } = await fixture();
+    await requests.enqueue(queued());
+    requests.stop();
+    const file = path.join(directory, (await readdir(directory))[0]!);
+    const receipt = JSON.parse(await readFile(file, "utf8"));
+    const at = Date.now() - 2 * DAY;
+    await writeFile(
+      file,
+      JSON.stringify({ ...receipt, state, admittedAt: at, expiresAt: at + 6 * HOUR }),
+    );
+    await ageReceipts(directory, at);
+    const restored = new MessageReceipts(directory);
+    expect(await restored.maintenance(() => {})).toMatchObject({ recordedIds: 1, prunedCount: 0 });
+    expect(await readdir(directory)).toHaveLength(1);
+    restored.stop();
+  },
+);
+
+test("custom retention keeps terminal receipts beyond the default retention", async () => {
+  const { directory, requests } = await fixture();
+  await requests.send(legacySend("old"));
+  await ageReceipts(directory, Date.now() - 2 * DAY);
+  const restored = new MessageReceipts(directory, Date.now, undefined, { retentionMs: 3 * DAY });
+  expect(await restored.maintenance(() => {})).toMatchObject({ recordedIds: 1, prunedCount: 0 });
+  restored.stop();
 });

@@ -452,6 +452,7 @@ export interface PaseoDaemonConfig {
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
+  receiptRetentionMs?: number;
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   idleLeadNudgeMinIntervalMinutes?: number;
@@ -1995,6 +1996,7 @@ export async function createPaseoDaemon(
                 daemonStatusRpc: dependencies.serverFeatureOverrides?.daemonStatusRpc,
                 relayConfig: dependencies.serverFeatureOverrides?.relayConfig,
                 startPaused: true,
+                receiptRetentionMs: config.receiptRetentionMs,
               },
               workspaceAutoName,
               daemonAuth,
