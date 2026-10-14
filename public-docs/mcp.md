@@ -12,13 +12,16 @@ category: Orchestration
 
 ## Configuration
 
-| Setting                       | Default | Purpose                                               |
-| ----------------------------- | ------- | ----------------------------------------------------- |
-| `daemon.mcp.enabled`          | `true`  | Run the MCP server.                                   |
-| `daemon.mcp.injectIntoAgents` | `false` | Give agents launched by Paseo access to its tools.    |
-| `daemon.mcp.injectLabels`     | `{}`    | Require all configured labels before injecting tools. |
+| Setting                       | Default | Purpose                                                          |
+| ----------------------------- | ------- | ---------------------------------------------------------------- |
+| `daemon.mcp.enabled`          | `true`  | Run the MCP server.                                              |
+| `daemon.mcp.injectIntoAgents` | `false` | Give agents launched by Paseo access to its tools.               |
+| `daemon.mcp.injectLabels`     | `{}`    | Token filter to keep the Paseo tool list out of worker sessions. |
 
 Depending on the provider, Paseo delivers tools through its native tool interface or MCP. The capabilities are the same. Start a new agent or reload an existing one after changing injection settings.
+
+`daemon.mcp.injectLabels` is a token filter that keeps the Paseo tool list out of worker sessions.
+Agents on the same host can still act as the user; see the known limit in the release notes.
 
 An absent or empty `injectLabels` map preserves injection for every agent when `injectIntoAgents` is enabled.
 Set exact label values to select leads:
@@ -30,7 +33,7 @@ fulcra run --provider claude --label fulcra.mcp=on "Coordinate the project"
 
 Configuration changes apply to later launches. Existing sessions keep their current tools.
 Use an empty map or unset `daemon.mcp.injectLabels` to clear the filter.
-Every key in the map is reserved. Only you or a lead that already matches the whole map can write those labels.
+The token filter reserves every key in the map. Only you or a lead that already matches the whole map can write those labels.
 This rule covers creation, import, and label updates. Ordinary labels keep their existing behavior.
 
 ## Compact results

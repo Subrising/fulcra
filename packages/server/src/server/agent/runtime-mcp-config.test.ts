@@ -77,7 +77,7 @@ describe("reserved MCP injection labels", () => {
           callerLabels: {},
           agentInput: true,
         }),
-      ).toThrow("MCP injection labels are reserved");
+      ).toThrow("MCP token filter labels are reserved");
     }
   });
   test("a lead must already match every key", () => {
@@ -89,7 +89,7 @@ describe("reserved MCP injection labels", () => {
         callerLabels: { "fulcra.mcp": "on" },
         agentInput: true,
       }),
-    ).toThrow("MCP injection labels are reserved");
+    ).toThrow("MCP token filter labels are reserved");
     expect(() =>
       assertPaseoInjectionLabelWrite({
         labels: required,
@@ -106,7 +106,7 @@ describe("reserved MCP injection labels", () => {
     ).not.toThrow();
     expect(() =>
       assertPaseoInjectionLabelWrite({ labels: required, required, agentInput: true }),
-    ).toThrow("MCP injection labels are reserved");
+    ).toThrow("MCP token filter labels are reserved");
   });
   test("an empty filter and ordinary labels preserve their previous behavior", () => {
     expect(() =>
