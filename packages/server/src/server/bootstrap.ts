@@ -440,6 +440,7 @@ export interface PaseoDaemonConfig {
   trustedProxies?: true | string[];
   mcpEnabled?: boolean;
   mcpInjectIntoAgents?: boolean;
+  mcpInjectLabels?: Record<string, string>;
   browserToolsEnabled?: boolean;
   git?: {
     maxProcessesPerSecond: number;
@@ -656,15 +657,20 @@ function initialNudgeConfig(
   };
 }
 
+function initialMcpConfig(config: PaseoDaemonConfig): MutableDaemonConfig["mcp"] {
+  return {
+    enabled: config.mcpEnabled ?? true,
+    injectIntoAgents: config.mcpInjectIntoAgents ?? true,
+    injectLabels: config.mcpInjectLabels ?? {},
+  };
+}
+
 function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDaemonConfig {
   const providers = config.providerOverrides ?? {};
 
   const initialConfig: MutableDaemonConfig = {
     relay: initialRelayConfig(config),
-    mcp: {
-      enabled: config.mcpEnabled ?? true,
-      injectIntoAgents: config.mcpInjectIntoAgents ?? true,
-    },
+    mcp: initialMcpConfig(config),
     ...(config.hostnames !== undefined ? { hostnames: config.hostnames } : {}),
     cors: { allowedOrigins: config.corsAllowedOrigins },
     trustedProxies: config.trustedProxies ?? ["loopback"],
@@ -1720,6 +1726,7 @@ export async function createPaseoDaemon(
   };
   agentManager.setPaseoToolCatalogFactory(createAgentToolCatalog);
   agentManager.setPaseoToolsEnabled(config.mcpInjectIntoAgents !== false);
+  agentManager.setMcpInjectLabels(config.mcpInjectLabels ?? {});
   setAgentProviderToolsEnabled(config.mcpEnabled !== false && config.mcpInjectIntoAgents !== false);
 
   let mcpEnabled = config.mcpEnabled ?? true;
@@ -1931,6 +1938,9 @@ export async function createPaseoDaemon(
               agentManager.setMcpBaseUrl(mcpEnabled && value ? mcpBaseUrl : null);
               agentManager.setPaseoToolsEnabled(mcpEnabled && value !== false);
               setAgentProviderToolsEnabled(mcpEnabled && value !== false);
+            });
+            daemonConfigStore.onFieldChange("mcp.injectLabels", () => {
+              agentManager.setMcpInjectLabels(daemonConfigStore.get().mcp.injectLabels ?? {});
             });
             daemonConfigStore.onFieldChange("appendSystemPrompt", (value) => {
               agentManager.setAppendSystemPrompt(typeof value === "string" ? value : "");
