@@ -1,7 +1,7 @@
 export { ComposerDockBackground } from "./internal/background";
 import { ScrollView } from "@/components/ui/scroll-view";
-import type { ReactNode } from "react";
-import { View } from "react-native";
+import { useMemo, type ReactNode } from "react";
+import { View, useWindowDimensions } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { HEADER_INNER_HEIGHT } from "@/constants/layout";
 
@@ -14,9 +14,14 @@ export function ComposerDock({
   children: [content, composer, overlay],
   centered = false,
 }: ComposerDockProps) {
+  const shortViewport = useWindowDimensions().height < 500;
+  const centeredStyle = useMemo(
+    () => [styles.centered, shortViewport && styles.shortCentered],
+    [shortViewport],
+  );
   if (centered) {
     return (
-      <View style={styles.centered}>
+      <View style={centeredStyle}>
         <View style={styles.form}>
           <ScrollView style={styles.setup} keyboardShouldPersistTaps="handled">
             {content}
@@ -46,6 +51,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
     paddingBottom: HEADER_INNER_HEIGHT + 24,
   },
+  shortCentered: { paddingBottom: 0 },
   form: { flexShrink: 1, width: "100%", maxWidth: theme.contentMaxWidth },
   centeredComposer: { flexShrink: 0 },
   setup: { flexGrow: 0, flexShrink: 1, minHeight: 0 },

@@ -243,6 +243,21 @@ test.describe("New workspace: the composer is one control in two modes", () => {
           body: JSON.stringify(profileTargets),
           contentType: "application/json",
         });
+        const headingVisible = await page
+          .getByText("New workspace", { exact: true })
+          .filter({ visible: true })
+          .last()
+          .evaluate((heading) => {
+            const rect = heading.getBoundingClientRect();
+            for (let parent = heading.parentElement; parent; parent = parent.parentElement) {
+              if (!["auto", "scroll", "hidden"].includes(getComputedStyle(parent).overflowY))
+                continue;
+              const bounds = parent.getBoundingClientRect();
+              if (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1) return false;
+            }
+            return true;
+          });
+        expect(headingVisible).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`profile-${width}.png`) });
         await input.fill("Check the layout");
         await expect(input).toHaveValue("Check the layout");
