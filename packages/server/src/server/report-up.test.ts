@@ -49,6 +49,7 @@ function fixture(
     otherEnabled?: boolean;
     nudgeEnabled?: boolean;
     skipOwners?: string[];
+    minIntervalMinutes?: number;
     now?: number;
     statePath?: string;
     ledger?: Array<{ project: string; id: string; owner: string; status: string; kind?: string }>;
@@ -84,6 +85,9 @@ function fixture(
     ...(options.otherEnabled === undefined ? {} : { isOtherEnabled: () => options.otherEnabled! }),
     isNudgeEnabled: () => nudgeEnabled,
     getNudgeSkipOwners: () => options.skipOwners ?? [],
+    ...(options.minIntervalMinutes === undefined
+      ? {}
+      : { getNudgeMinIntervalMinutes: () => options.minIntervalMinutes! }),
     localServerId: "srv_local",
     logger: createTestLogger(),
     now: () => clock.now,
@@ -575,6 +579,84 @@ describe("idle-lead nudge", () => {
     expect(prompt).not.toContain("Done: tests pass");
   });
 
+  test("work growth waits for the default hour, survives shrink, and sends once at the boundary", async () => {
+    const ledger = owned.map((item) => ({ ...item }));
+    const f = fixture([lead, idleWorker()], { ledger, now: 10_000 });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      ledger.push({ ...owned[0]!, id: "FU-13" });
+      f.clock.now += 60 * 60_000 - 1;
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      ledger[0]!.status = "DONE";
+      f.clock.now++;
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(2);
+      expect(f.delivered[1]!.prompt).toContain("FU-13");
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(2);
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a custom interval remains in force after service recovery", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nudge-interval-"));
+    const statePath = join(dir, "state.json");
+    const options = { ledger: owned, now: 10_000, statePath, minIntervalMinutes: 5 };
+    const f = fixture([lead, idleWorker()], options);
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      f.service.stop();
+      const g = fixture([lead, idleWorker()], { ...options, now: 10_000 + 5 * 60_000 - 1 });
+      try {
+        g.turn(LEAD);
+        await g.settle();
+        expect(g.delivered).toEqual([]);
+        g.clock.now++;
+        g.turn(LEAD);
+        await g.settle();
+        expect(g.delivered).toHaveLength(1);
+      } finally {
+        g.service.stop();
+      }
+    } finally {
+      f.service.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the per-lead off label prevents nudges and leaves permission notices enabled", async () => {
+    const chat = { ...lead, labels: { "fulcra.nudge": "off" } };
+    const f = fixture([chat, idleWorker()], { ledger: owned });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      f.stream(WORKER, {
+        type: "permission_requested",
+        provider: "claude",
+        request: { id: "per-lead-off", name: "Bash", input: { command: "echo fixture" } },
+      });
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("waiting for permission");
+      chat.labels["fulcra.nudge"] = "";
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(2);
+      expect(f.delivered[1]!.prompt).toContain("You are idle");
+    } finally {
+      f.service.stop();
+    }
+  });
+
   test.each(["paused", "blocked"])(
     "a %s worker is excluded until its durable hold is cleared",
     async (hold) => {
@@ -584,6 +666,7 @@ describe("idle-lead nudge", () => {
       f.turn(LEAD);
       await f.settle();
       expect(f.delivered).toEqual([]);
+      f.clock.now += 60 * 60_000;
       heldWorker.labels["fulcra.hold"] = "";
       f.turn(LEAD);
       await f.settle();
@@ -605,6 +688,7 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
+    f.clock.now += 60 * 60_000;
     heldWorker.labels["fulcra.hold"] = "";
     f.turn(LEAD);
     await f.settle();
@@ -676,6 +760,7 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
+    f.clock.now += 60 * 60_000;
     departing.lifecycle = "idle";
     f.turn(LEAD);
     await f.settle();
@@ -693,6 +778,7 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
+    f.clock.now += 60 * 60_000;
     idle.lifecycle = "idle";
     f.turn(LEAD);
     await f.settle();
@@ -790,6 +876,7 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(0);
+    f.clock.now += 60 * 60_000;
     busy.backgroundWork.count = 0;
     f.turn(LEAD);
     await f.settle();
@@ -863,6 +950,7 @@ describe("idle-lead nudge", () => {
     await f.settle();
     expect(f.delivered).toHaveLength(1);
     expect(f.delivered[0]!.prompt).not.toContain("Late (late-worker)");
+    f.clock.now += 60 * 60_000;
     late.lifecycle = "idle";
     f.stream(late.id, { type: "turn_completed", provider: "claude" });
     await f.settle();
@@ -884,6 +972,7 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
+    f.clock.now += 60 * 60_000;
     busy.backgroundWork.count = 0;
     f.turn(LEAD);
     await f.settle();
@@ -897,6 +986,7 @@ describe("idle-lead nudge", () => {
     f.turn(LEAD);
     await f.settle();
     expect(f.delivered).toHaveLength(1);
+    f.clock.now += 60 * 60_000;
     ledger.push({ ...owned[0]!, id: "FU-13" });
     f.turn(LEAD);
     await f.settle();

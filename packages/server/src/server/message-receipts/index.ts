@@ -63,6 +63,7 @@ const QueuedReceiptSchema = z.object({
   bytes: z.number().int().nonnegative(),
   providerTurnId: z.string().optional(),
   report: ReportBatchSchema.optional(),
+  reportResolution: z.literal("resolved-expired").optional(),
   collectingUntil: z.number().int().nonnegative().optional(),
 });
 const ReceiptSchema = z.union([
@@ -279,6 +280,7 @@ export class MessageReceipts {
     }
     this.initialized = true;
     if (!observeOnly) await this.recoverQueued(requireEffect);
+    this.armExpiry();
   }
 
   private async recoverQueued(requireEffect?: () => void): Promise<void> {
@@ -364,7 +366,13 @@ export class MessageReceipts {
 
   private armExpiry(): void {
     if (this.expiryTimer) clearTimeout(this.expiryTimer);
-    const pending = [...this.records.values()].filter((r) => r.state === "queued");
+    const pending = [...this.records.values()].filter(
+      (r) =>
+        r.state === "queued" ||
+        (r.report &&
+          r.reportResolution !== "resolved-expired" &&
+          reportMembers(r.report).some((member) => !r.report!.consumed.includes(member.id))),
+    );
     if (!pending.length) return;
     const next = Math.min(...pending.map((r) => r.expiresAt));
     this.expiryTimer = setTimeout(
@@ -397,7 +405,12 @@ export class MessageReceipts {
 
   /** Host observation only. Recovery does not reconstruct or replay native input authority. */
   async prepareArchiveObservation(): Promise<void> {
-    await this.serial(() => this.initialize(undefined, true)).catch(() => undefined);
+    await this.serial(async () => {
+      await this.initialize(undefined, true);
+      await this.expire(this.clock());
+    }).catch(() => {
+      this.unhealthy = true;
+    });
   }
 
   archivePending(agentId: string): number | null {
@@ -405,11 +418,12 @@ export class MessageReceipts {
     return [...this.records.values()].reduce((count, receipt) => {
       if (receipt.agentId !== agentId) return count;
       const wake = ["queued", "dispatching", "uncertain"].includes(receipt.state) ? 1 : 0;
-      const unread = receipt.report
-        ? reportMembers(receipt.report).filter(
-            (member) => !receipt.report!.consumed.includes(member.id),
-          ).length
-        : 0;
+      const unread =
+        receipt.report && receipt.reportResolution !== "resolved-expired"
+          ? reportMembers(receipt.report).filter(
+              (member) => !receipt.report!.consumed.includes(member.id),
+            ).length
+          : 0;
       return count + wake + unread;
     }, 0);
   }
@@ -1259,8 +1273,19 @@ export class MessageReceipts {
 
   private async expire(now: number): Promise<void> {
     for (const [key, receipt] of this.records) {
-      if (receipt.state === "queued" && receipt.expiresAt <= now)
-        await this.commit(key, { ...receipt, state: "cancelled" });
+      if (receipt.expiresAt > now) continue;
+      const expiredUnread =
+        receipt.report &&
+        receipt.reportResolution !== "resolved-expired" &&
+        reportMembers(receipt.report).some(
+          (member) => !receipt.report!.consumed.includes(member.id),
+        );
+      if (receipt.state === "queued" || expiredUnread)
+        await this.commit(key, {
+          ...receipt,
+          ...(receipt.state === "queued" ? { state: "cancelled" as const } : {}),
+          ...(expiredUnread ? { reportResolution: "resolved-expired" as const } : {}),
+        });
     }
   }
 
@@ -1334,7 +1359,8 @@ export class MessageReceipts {
     return this.serial(async () => {
       // Consumption may commit while an attempted provider acknowledgement is pending.
       const current = this.records.get(key);
-      if (current?.report) state = { ...state, report: current.report };
+      if (current?.report)
+        state = { ...state, report: current.report, reportResolution: current.reportResolution };
       await this.commit(key, state);
       return this.view(state);
     });
@@ -1359,6 +1385,39 @@ export class MessageReceipts {
           r.expiresAt > this.now(),
       );
       const publishedMembers: import("../report-batch.js").ReportMember[] = [];
+      // Expiry resolves unread metadata without claiming human receipt or provider delivery.
+      const resolvedExpired = [...this.records.values()]
+        .filter(
+          (receipt) =>
+            receipt.reportResolution === "resolved-expired" &&
+            receipt.report?.parent.agentId === reader.identity.agentId &&
+            receipt.report.parentEpoch === reader.epoch,
+        )
+        .flatMap((receipt) =>
+          reportMembers(receipt.report!)
+            .filter((member) => {
+              if (!scopes.has(digest(member.scope)) || receipt.report!.consumed.includes(member.id))
+                return false;
+              try {
+                reader.requireMember(member);
+                publishedMembers.push(member);
+                return true;
+              } catch {
+                return false;
+              }
+            })
+            .map((member) => ({
+              eventId: member.id,
+              kind: member.kind,
+              scope: member.scope,
+              at: member.at,
+              resolution: "resolved-expired" as const,
+              consumed: false,
+              providerAccepted: receipt.state === "delivered",
+            })),
+        )
+        .sort((a, b) => b.at - a.at)
+        .slice(0, 24);
       const events = batches
         .flatMap((receipt) =>
           receipt
@@ -1436,6 +1495,7 @@ export class MessageReceipts {
         {
           events,
           overflow,
+          resolvedExpired,
           overflowCount: overflow.reduce((total, group) => total + group.count, 0),
           metadataCount: events.length + overflow.reduce((total, group) => total + group.count, 0),
           wakePendingCount: batches.filter(
