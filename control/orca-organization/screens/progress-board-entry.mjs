@@ -27,7 +27,7 @@ const colors = light
       accent: "#20744A",
       statusWarning: "#c09664",
     };
-const at = "2026-10-13T04:00:00Z";
+const at = "2026-10-14T04:00:00Z";
 const item = (id, kind, status, text) => ({
   id,
   kind,
@@ -35,12 +35,14 @@ const item = (id, kind, status, text) => ({
   item: text,
   owner: "Board worker",
   evidence: "8 tests passed.",
-  source: "Fixture brief",
+  source: "Synthetic request 2026-10-12",
+  createdAt: "2026-10-12T00:00:00Z",
 });
 const data = {
   observedAt: at,
   machine: "Fixture host",
   warnings: [],
+  humanOwners: ["owner a"],
   projects: [
     {
       id: "fixture",
@@ -52,6 +54,21 @@ const data = {
         item("FU-3", "FIX", "NEXT", "Check permission waits."),
         item("FU-4", "BUILD", "OPEN", "Check the screen on a phone."),
         item("FU-5", "FIX", "DONE", "Keep long branch names readable."),
+        item("FU-6", "FIX", "BLOCKED: dependency", "Wait for the dependent branch checks."),
+        { ...item("FU-7", "BUILD", "OPEN", "Confirm the project schedule."), owner: "Owner A" },
+        ...Array.from({ length: 36 }, (_, n) =>
+          item(
+            `FU-${n + 8}`,
+            ["BUILD", "FIX", "RULE", "DECIDE"][n % 4],
+            ["OPEN", "IN PROGRESS", "NEXT", "BLOCKED", "DONE", "DONE"][n % 6],
+            [
+              "Keep report history available when the agent session is archived. Check recovery after a reconnect and preserve existing evidence.",
+              "Show permission waits in the project board.",
+              "Check the project filter with a long workspace name.",
+              "Select which recent output to retain for the next release.",
+            ][n % 4],
+          ),
+        ),
       ],
       jobs: [
         {
