@@ -874,6 +874,73 @@ test("a refused finish notice retries once on the parent's next idle event", asy
   }
 }, 10000);
 
+test("a refused finish notice retries once when the child's new parent becomes idle", async () => {
+  const { f, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture();
+  try {
+    f.server.refuseParentTurns(1);
+    f.server.completeTurn({ threadId: childThread });
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+        status: "pending",
+        retryAfterRefusal: true,
+      }),
+    );
+    const newParent = await f.manager.createAgent(
+      { provider: "codex", cwd: f.directory, model: "gpt-5.4" },
+      undefined,
+      { workspaceId: f.agent.workspaceId },
+    );
+    await f.manager.adoptAgentParent(
+      {
+        agentId: childId,
+        parentAgentId: newParent.id,
+        expectedParentAgentId: f.agent.id,
+        childNativeSessionId: childThread,
+        parentNativeSessionId: newParent.persistence!.sessionId,
+      },
+      () => true,
+    );
+    const human = (async () => {
+      for await (const event of f.manager.streamAgent(newParent.id, "later human turn")) void event;
+    })();
+    await f.manager.waitForAgentRunStart(newParent.id);
+    f.server.completeTurn({ threadId: newParent.persistence!.sessionId });
+    await human;
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+        status: "delivered",
+        parentId: newParent.id,
+      }),
+    );
+    const noticeTurns = () =>
+      f.server
+        .requests()
+        .filter(
+          (request) =>
+            request.method === "turn/start" &&
+            (request.params as { threadId: string }).threadId !== childThread &&
+            JSON.stringify(request).includes(childId),
+        );
+    expect(
+      noticeTurns().map((request) => (request.params as { threadId: string }).threadId),
+    ).toEqual([f.agent.persistence!.sessionId, newParent.persistence!.sessionId]);
+    // A later idle from either parent must not repeat the delivered notice.
+    f.server.completeTurn({ threadId: newParent.persistence!.sessionId });
+    const oldHuman = (async () => {
+      for await (const event of f.manager.streamAgent(f.agent.id, "old parent human turn"))
+        void event;
+    })();
+    await f.manager.waitForAgentRunStart(f.agent.id);
+    f.server.completeTurn({ threadId: f.agent.persistence!.sessionId });
+    await oldHuman;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(noticeTurns()).toHaveLength(2);
+  } finally {
+    offReportUp();
+    await f.cleanup();
+  }
+}, 10000);
+
 test("a later send_agent_prompt replaces a refused pending finish notice", async () => {
   const { f, catalog, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture();
   try {
