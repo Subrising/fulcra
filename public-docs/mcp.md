@@ -30,6 +30,8 @@ fulcra run --provider claude --label fulcra.mcp=on "Coordinate the project"
 
 Configuration changes apply to later launches. Existing sessions keep their current tools.
 Use an empty map or unset `daemon.mcp.injectLabels` to clear the filter.
+Every key in the map is reserved. Only you or a lead that already matches the whole map can write those labels.
+This rule covers creation, import, and label updates. Ordinary labels keep their existing behavior.
 
 ## Compact results
 

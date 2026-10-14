@@ -291,6 +291,8 @@ async function tryConnectHost(
     url: target.url,
     clientId,
     clientType: "cli",
+    callerAgentId: process.env.PASEO_AGENT_ID?.trim() || undefined,
+    callerAgentWitness: process.env.PASEO_AGENT_CALLER_WITNESS?.trim() || undefined,
     appVersion: resolveCliVersion(),
     ...(credential?.kind === "password" ? { password: credential.password } : {}),
     ...(credential?.kind === "localCredential"
@@ -335,6 +337,8 @@ async function connectViaRelayOffer(
     url,
     clientId,
     clientType: "cli",
+    callerAgentId: process.env.PASEO_AGENT_ID?.trim() || undefined,
+    callerAgentWitness: process.env.PASEO_AGENT_CALLER_WITNESS?.trim() || undefined,
     appVersion: resolveCliVersion(),
     connectTimeoutMs: timeout,
     webSocketFactory: (

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { currentLeadEvent, recordAcceptedLeadTurn } from "../lead-events.js";
 import {
   readHostPublicCodexBaseline,
@@ -208,6 +209,7 @@ import {
   stripInternalPaseoMcpServer,
   withRuntimePaseoMcpServer,
   matchesPaseoInjectLabels,
+  assertPaseoInjectionLabelWrite,
 } from "./runtime-mcp-config.js";
 import { resolveCreateAgentTitles } from "./create-agent-title.js";
 import type { PaseoToolCatalogFactory } from "./tools/types.js";
@@ -1334,8 +1336,19 @@ export class AgentManager {
     return registry;
   }
 
+  private reportLifecycleBusy(agentId: string, allowLabelMutation: boolean): boolean {
+    return (
+      this.inFlightAgentCloses.has(agentId) ||
+      (this.lifecycleMutationTails.has(agentId) && !allowLabelMutation) ||
+      this.mcpRefreshes.has(agentId)
+    );
+  }
+
   /** Host-private identity fence. No caller labels, credentials, mode or human cursor affect reports. */
-  private currentReportIdentity(agentId: string): NativeReportIdentity | null {
+  private currentReportIdentity(
+    agentId: string,
+    allowLabelMutation = false,
+  ): NativeReportIdentity | null {
     const agent = this.agents.get(agentId);
     if (
       !this.acceptingAgentRegistrations ||
@@ -1344,9 +1357,7 @@ export class AgentManager {
       agent.archivedAt ||
       agent.lifecycle === "initializing" ||
       agent.pendingReplacement ||
-      this.inFlightAgentCloses.has(agentId) ||
-      this.lifecycleMutationTails.has(agentId) ||
-      this.mcpRefreshes.has(agentId)
+      this.reportLifecycleBusy(agentId, allowLabelMutation)
     )
       return null;
     try {
@@ -2136,6 +2147,11 @@ export class AgentManager {
   private readonly mcpAuthToken: string | null;
   private paseoToolsEnabled = true;
   private mcpInjectLabels: Record<string, string> = {};
+  private readonly labelMutations = new AsyncLocalStorage<string>();
+  private readonly agentCallers = new AsyncLocalStorage<{
+    agentId?: string;
+    validate?: () => void;
+  }>();
   private paseoToolCatalogFactory: PaseoToolCatalogFactory | null = null;
   private readonly paseoToolPolicies = new Map<string, ProviderPaseoToolsPolicy | undefined>();
   private readonly resolvePaseoToolPolicy: (
@@ -2303,6 +2319,71 @@ export class AgentManager {
 
   prepareForShutdown(): void {
     this.acceptingAgentRegistrations = false;
+  }
+
+  /** Host entry points bind the caller independently of target and parent labels. */
+  withAgentCaller<T>(agentId: string | undefined, operation: () => T, validate?: () => void): T {
+    return this.agentCallers.run({ agentId, validate }, operation);
+  }
+
+  /** Label writes retain the launch identity while their own metadata lane is active. */
+  injectionLabelCallerValidator(
+    agentId: string,
+    origin?: NativeReportOrigin,
+    witness?: string,
+  ): () => void {
+    let identity: NativeReportIdentity | undefined;
+    const launch = this.reportLaunches.get(agentId);
+    return () => {
+      if (!identity) {
+        const source = origin ?? this.nativeReportMcpOrigin(agentId, witness);
+        if (!source)
+          throw new Error("MCP injection labels require a current agent caller identity");
+        identity = requireNativeReportOrigin(source);
+      }
+      const current = this.currentReportIdentity(
+        agentId,
+        this.labelMutations.getStore() === agentId,
+      );
+      if (
+        !launch ||
+        this.reportLaunches.get(agentId) !== launch ||
+        identity.agentId !== agentId ||
+        !current ||
+        JSON.stringify(current) !== JSON.stringify(identity)
+      )
+        throw new Error("MCP injection labels require a current agent caller identity");
+    };
+  }
+
+  assertInjectionLabelWrite(labels: Record<string, unknown> | undefined): void {
+    if (!labels || !Object.keys(this.mcpInjectLabels).some((key) => Object.hasOwn(labels, key)))
+      return;
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    const source = this.trustedPlugins.currentInputSource();
+    assertPaseoInjectionLabelWrite({
+      labels,
+      required: this.mcpInjectLabels,
+      callerAgentId: caller?.agentId,
+      callerLabels: caller?.agentId ? this.getAgent(caller.agentId)?.labels : undefined,
+      agentInput:
+        (caller === undefined && source === "agent") ||
+        (caller?.agentId === undefined && source === "plugin"),
+    });
+  }
+
+  private assertChangedInjectionLabels(
+    labels: Record<string, string> | undefined,
+    stored: Record<string, string> | undefined,
+  ): void {
+    if (labels === undefined) return;
+    const changed = Object.fromEntries(
+      [...new Set([...Object.keys(labels), ...Object.keys(stored ?? {})])]
+        .filter((key) => stored?.[key] !== labels[key])
+        .map((key) => [key, labels[key] ?? null]),
+    );
+    this.assertInjectionLabelWrite(changed);
   }
 
   setMcpInjectLabels(labels: Record<string, string>): void {
@@ -2813,6 +2894,7 @@ export class AgentManager {
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
+    this.assertInjectionLabelWrite(options.labels);
     options = withoutSeatLabel(options);
     if (this.pluginLifecycle && !config.internal) {
       // Update-7 W3 (R1 P-3 seam): a create with a caller shows the hook the caller's provider, mode and mode class,
@@ -2867,6 +2949,7 @@ export class AgentManager {
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options, storedConfig.provider);
     const session = await nativeDispatch(() => {
+      this.assertInjectionLabelWrite(options.labels);
       options.creationAdmission?.(providerLaunchConfig);
       return client.createSession(providerLaunchConfig, launchContext, createOptions);
     });
@@ -2994,6 +3077,8 @@ export class AgentManager {
     // agent whose working directory may be gone.
     const record = this.registry ? await this.registry.get(resolvedAgentId) : null;
     requireRecord?.(record);
+    this.assertChangedInjectionLabels(options?.labels, record?.labels);
+    const labels = options?.labels ?? record?.labels;
     const currentResumeOptions = record
       ? { purpose: record.archivedAt ? ("history" as const) : ("interactive" as const) }
       : resumeOptions;
@@ -3002,7 +3087,7 @@ export class AgentManager {
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
-      { purpose, labels: record?.labels ?? options?.labels },
+      { purpose, labels },
     );
     const client = this.requireClient(handle.provider);
     const available = await client.isAvailable();
@@ -3033,6 +3118,7 @@ export class AgentManager {
     await this.requireExternalMcpSupport(session, storedConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
       ...options,
+      labels,
       persistence: handle,
       restoring: true,
     });
@@ -3057,6 +3143,7 @@ export class AgentManager {
   }): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(this.idFactory(), "importProviderSession");
+    this.assertInjectionLabelWrite(input.labels);
     this.requireEnabledProvider(input.provider);
 
     const client = await this.requireAvailableClient({ provider: input.provider });
@@ -3087,6 +3174,7 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    this.assertInjectionLabelWrite(input.labels);
     const imported = await client.importSession(
       {
         providerHandleId: input.providerHandleId,
@@ -4472,6 +4560,7 @@ export class AgentManager {
   }
 
   async setLabels(agentId: string, labels: Record<string, string>): Promise<void> {
+    this.assertInjectionLabelWrite(labels);
     if (Object.hasOwn(labels, PARENT_AGENT_ID_LABEL))
       throw new Error("Use native owner parent adoption to change parent metadata");
     return this.runLifecycleMutation(agentId, () =>
@@ -4479,13 +4568,17 @@ export class AgentManager {
         agentId,
         "configure",
         undefined,
-        () => this.writeLabels(this.requireAgent(agentId).id, labels).then(() => undefined),
+        () =>
+          this.labelMutations.run(agentId, async () => {
+            await this.writeLabels(this.requireAgent(agentId).id, labels);
+          }),
         commandPayload("set-labels", { labels }),
       ),
     );
   }
 
   private async writeLabels(agentId: string, patch: AgentLabelPatch): Promise<WriteLabelsResult> {
+    this.assertInjectionLabelWrite(patch);
     const liveAgent = this.agents.get(agentId);
     if (liveAgent) {
       liveAgent.labels = applyLabelPatch(liveAgent.labels, patch);
@@ -4509,6 +4602,7 @@ export class AgentManager {
     if (!record) {
       throw new Error(`Agent not found: ${agentId}`);
     }
+    this.assertInjectionLabelWrite(patch.labels);
 
     const nextRecord = {
       ...record,
@@ -4760,6 +4854,7 @@ export class AgentManager {
     updates?: { workspaceId?: string; labels?: AgentLabelPatch },
     operationHandle?: TrustedOperationHandle,
   ): Promise<boolean> {
+    this.assertInjectionLabelWrite(updates?.labels);
     return this.runLifecycleMutation(agentId, () =>
       this.withStoredInput(
         agentId,
@@ -4789,6 +4884,7 @@ export class AgentManager {
       this.syncNativeArchiveState(record.provider, record.persistence, "restore"),
     );
 
+    this.assertInjectionLabelWrite(updates?.labels);
     await registry.upsert({
       ...record,
       ...(updates?.workspaceId ? { workspaceId: updates.workspaceId } : {}),
@@ -4882,6 +4978,7 @@ export class AgentManager {
       labels?: Record<string, string>;
     },
   ): Promise<void> {
+    this.assertInjectionLabelWrite(updates.labels);
     if (updates.labels && Object.hasOwn(updates.labels, PARENT_AGENT_ID_LABEL))
       throw new Error("Use native owner parent adoption to change parent metadata");
     return this.runLifecycleMutation(agentId, () =>
@@ -4889,7 +4986,10 @@ export class AgentManager {
         agentId,
         "configure",
         undefined,
-        () => this.updateAgentMetadataUnlocked(agentId, updates),
+        () =>
+          this.labelMutations.run(agentId, () =>
+            this.updateAgentMetadataUnlocked(agentId, updates),
+          ),
         commandPayload("set-metadata", { metadata: updates }),
       ),
     );
@@ -4902,6 +5002,7 @@ export class AgentManager {
       labels?: Record<string, string>;
     },
   ): Promise<void> {
+    this.assertInjectionLabelWrite(updates.labels);
     const liveAgent = this.getAgent(agentId);
     if (liveAgent) {
       if (updates.title) {
@@ -6619,7 +6720,9 @@ export class AgentManager {
         options,
       });
 
-      managed.archivedAt = (await this.registry?.get(resolvedAgentId))?.archivedAt ?? null;
+      const registeredRecord = await this.registry?.get(resolvedAgentId);
+      this.assertChangedInjectionLabels(managed.labels, registeredRecord?.labels);
+      managed.archivedAt = registeredRecord?.archivedAt ?? null;
       // Read history before publishing the agent: a provider failure must leave the
       // session unregistered so the registration catch closes it.
       const startupHistory = await this.collectStartupHistory(managed);
@@ -9014,6 +9117,9 @@ export class AgentManager {
         ...env,
         PASEO_AGENT_ID: agentId,
         PASEO_AGENT_CWD: cwd,
+        ...(this.reportLaunches.get(agentId)?.witness
+          ? { PASEO_AGENT_CALLER_WITNESS: this.reportLaunches.get(agentId)!.witness }
+          : {}),
       },
     };
     if (publicBaselineLaunchAllowed(client.provider, opening)) {

@@ -34,6 +34,7 @@ const IMPORT_SESSION_SEARCH_SCAN_LIMIT = 500;
 export type ImportSessionAgentManager = AgentLoaderManager &
   Pick<
     AgentManager,
+    | "assertInjectionLabelWrite"
     | "archiveSnapshot"
     | "closeAgent"
     | "getTimeline"
@@ -190,6 +191,7 @@ function normalizeImportSessionQuery(query: string | undefined): string | null {
 export async function importProviderSession(
   input: ImportProviderSessionInput,
 ): Promise<ImportProviderSessionResult> {
+  input.agentManager.assertInjectionLabelWrite(input.request.labels);
   const cwd = input.request.cwd;
   if (!cwd) {
     throw new Error("Import requires cwd from the selected provider session");

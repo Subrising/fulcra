@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
 
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
-import { withRuntimePaseoMcpServer, matchesPaseoInjectLabels } from "./runtime-mcp-config.js";
+import {
+  withRuntimePaseoMcpServer,
+  matchesPaseoInjectLabels,
+  assertPaseoInjectionLabelWrite,
+} from "./runtime-mcp-config.js";
 
 const BASE_CONFIG: AgentSessionConfig = {
   provider: "claude",
@@ -59,4 +63,57 @@ test("MCP injection requires every configured label, with exact own values", () 
   expect(matchesPaseoInjectLabels({ "fulcra.mcp": "on" }, required)).toBe(false);
   expect(matchesPaseoInjectLabels({ ...required, role: "Lead" }, required)).toBe(false);
   expect(matchesPaseoInjectLabels(Object.create(required), required)).toBe(false);
+});
+
+describe("reserved MCP injection labels", () => {
+  const required = { "fulcra.mcp": "on", team: "lead" };
+  test("workers cannot set any reserved key, even to a non-matching value", () => {
+    for (const labels of [{ "fulcra.mcp": "on" }, { team: "worker" }]) {
+      expect(() =>
+        assertPaseoInjectionLabelWrite({
+          labels,
+          required,
+          callerAgentId: "worker",
+          callerLabels: {},
+          agentInput: true,
+        }),
+      ).toThrow("MCP injection labels are reserved");
+    }
+  });
+  test("a lead must already match every key", () => {
+    expect(() =>
+      assertPaseoInjectionLabelWrite({
+        labels: required,
+        required,
+        callerAgentId: "lead",
+        callerLabels: { "fulcra.mcp": "on" },
+        agentInput: true,
+      }),
+    ).toThrow("MCP injection labels are reserved");
+    expect(() =>
+      assertPaseoInjectionLabelWrite({
+        labels: required,
+        required,
+        callerAgentId: "lead",
+        callerLabels: required,
+        agentInput: true,
+      }),
+    ).not.toThrow();
+  });
+  test("a user can set reserved keys; anonymous agent input cannot", () => {
+    expect(() =>
+      assertPaseoInjectionLabelWrite({ labels: required, required, agentInput: false }),
+    ).not.toThrow();
+    expect(() =>
+      assertPaseoInjectionLabelWrite({ labels: required, required, agentInput: true }),
+    ).toThrow("MCP injection labels are reserved");
+  });
+  test("an empty filter and ordinary labels preserve their previous behavior", () => {
+    expect(() =>
+      assertPaseoInjectionLabelWrite({ labels: required, required: {}, agentInput: true }),
+    ).not.toThrow();
+    expect(() =>
+      assertPaseoInjectionLabelWrite({ labels: { phase: "test" }, required, agentInput: true }),
+    ).not.toThrow();
+  });
 });

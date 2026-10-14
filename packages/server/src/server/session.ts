@@ -2287,11 +2287,33 @@ export class Session {
   /**
    * Main entry point for processing session messages
    */
+  private readonly agentCallerSources = new WeakMap<
+    object,
+    { agentId?: string; validate?: () => void }
+  >();
+
+  /** Bound by the transport per socket, including reconnects sharing a client ID. */
+  admitAgentCallerSource(source: object, agentId: string | undefined, validate?: () => void): void {
+    this.agentCallerSources.set(source, { agentId, validate });
+  }
+
   public async handleMessage(msg: SessionInboundMessage, source?: object): Promise<void> {
-    return this.agentManager.trustedPlugins.rpc(
-      "inputProvenance" in msg ? msg.inputProvenance : undefined,
-      () => this.delivery.request(source, msg, () => this.handleRequest(msg, source)),
-    );
+    const attribution = source ? this.agentCallerSources.get(source) : undefined;
+    const requestCaller = msg.type === "create_agent_request" ? msg.callerAgentId : undefined;
+    const caller = attribution ? attribution.agentId : requestCaller;
+    const dispatch = () =>
+      this.agentManager.trustedPlugins.rpc(
+        "inputProvenance" in msg ? msg.inputProvenance : undefined,
+        () => this.delivery.request(source, msg, () => this.handleRequest(msg, source)),
+      );
+    let validate = attribution?.validate;
+    if (!attribution && requestCaller)
+      validate = () => {
+        throw new Error("MCP injection labels require a current agent caller identity");
+      };
+    return attribution || caller
+      ? this.agentManager.withAgentCaller(caller, dispatch, validate)
+      : dispatch();
   }
 
   private async handleRequest(msg: SessionInboundMessage, source?: object): Promise<void> {
@@ -5522,6 +5544,7 @@ export class Session {
     let createdWorktreeForCleanup: CreatePaseoWorktreeWorkflowResult | null = null;
     let createdAgentId: string | null = null;
     try {
+      this.agentManager.assertInjectionLabelWrite(msg.labels);
       const requestedCwd = resolve(config.cwd);
       const needsRequestedDirectory =
         Boolean(worktreeName || git || worktree) || (!msg.workspaceId && !msg.callerAgentId);
@@ -5786,6 +5809,7 @@ export class Session {
     );
 
     try {
+      this.agentManager.assertInjectionLabelWrite(normalized.labels);
       if (!normalized.cwd) {
         throw new Error("Import requires cwd from the selected provider session");
       }
