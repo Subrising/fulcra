@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
-import { withRuntimePaseoMcpServer } from "./runtime-mcp-config.js";
+import { withRuntimePaseoMcpServer, matchesPaseoInjectLabels } from "./runtime-mcp-config.js";
 
 const BASE_CONFIG: AgentSessionConfig = {
   provider: "claude",
@@ -48,4 +48,15 @@ describe("withRuntimePaseoMcpServer", () => {
 
     expect(result.mcpServers).toBeUndefined();
   });
+});
+
+test("MCP injection requires every configured label, with exact own values", () => {
+  expect(matchesPaseoInjectLabels(undefined, {})).toBe(true);
+  expect(matchesPaseoInjectLabels({}, {})).toBe(true);
+  const required = { "fulcra.mcp": "on", role: "lead" };
+  expect(matchesPaseoInjectLabels({ ...required, extra: "value" }, required)).toBe(true);
+  expect(matchesPaseoInjectLabels(undefined, required)).toBe(false);
+  expect(matchesPaseoInjectLabels({ "fulcra.mcp": "on" }, required)).toBe(false);
+  expect(matchesPaseoInjectLabels({ ...required, role: "Lead" }, required)).toBe(false);
+  expect(matchesPaseoInjectLabels(Object.create(required), required)).toBe(false);
 });

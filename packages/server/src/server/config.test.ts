@@ -27,6 +27,25 @@ describe("server config", () => {
     expect(standaloneConfig.desktopManaged).toBe(false);
   });
 
+  test("MCP injection labels default to empty and load from persisted configuration", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-mcp-labels-"));
+    roots.push(paseoHome);
+    expect(loadConfig(paseoHome, { env: {} }).mcpInjectLabels).toEqual({});
+    await writeFile(
+      path.join(paseoHome, "config.json"),
+      JSON.stringify({
+        daemon: {
+          mcp: { enabled: true, injectIntoAgents: true, injectLabels: { "fulcra.mcp": "on" } },
+        },
+      }),
+    );
+    expect(loadConfig(paseoHome, { env: {} }).mcpInjectLabels).toEqual({ "fulcra.mcp": "on" });
+    expect(
+      resolveConfigFromPersisted(paseoHome, loadPersistedConfig(paseoHome), { env: {} })
+        .mcpInjectLabels,
+    ).toEqual({ "fulcra.mcp": "on" });
+  });
+
   test("loads the independent idle-lead nudge setting", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-nudge-config-"));
     roots.push(paseoHome);

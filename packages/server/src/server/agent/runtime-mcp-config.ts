@@ -77,3 +77,12 @@ function isInternalPaseoMcpServer(config: McpServerConfig): boolean {
     return false;
   }
 }
+
+export function matchesPaseoInjectLabels(
+  labels: Record<string, string> | undefined,
+  required: Record<string, string>,
+): boolean {
+  return Object.entries(required).every(
+    ([key, value]) => labels !== undefined && Object.hasOwn(labels, key) && labels[key] === value,
+  );
+}

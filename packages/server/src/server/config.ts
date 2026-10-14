@@ -116,6 +116,7 @@ export type CliConfigOverrides = Partial<{
   relayUseTls: boolean;
   mcpEnabled: boolean;
   mcpInjectIntoAgents: boolean;
+  mcpInjectLabels: Record<string, string>;
   webUiEnabled: boolean;
   hostnames: HostnamesConfig;
 }>;
@@ -526,8 +527,7 @@ function resolveProfileLists(persisted: ReturnType<typeof loadPersistedConfig>) 
   };
 }
 
-function resolveStaticLoadConfigSettings(
-  env: NodeJS.ProcessEnv,
+function resolveMcpLoadSettings(
   cli: CliConfigOverrides | undefined,
   persisted: ReturnType<typeof loadPersistedConfig>,
 ) {
@@ -535,6 +535,17 @@ function resolveStaticLoadConfigSettings(
     mcpEnabled: cli?.mcpEnabled ?? persisted.daemon?.mcp?.enabled ?? true,
     mcpInjectIntoAgents:
       cli?.mcpInjectIntoAgents ?? persisted.daemon?.mcp?.injectIntoAgents ?? false,
+    mcpInjectLabels: cli?.mcpInjectLabels ?? persisted.daemon?.mcp?.injectLabels ?? {},
+  };
+}
+
+function resolveStaticLoadConfigSettings(
+  env: NodeJS.ProcessEnv,
+  cli: CliConfigOverrides | undefined,
+  persisted: ReturnType<typeof loadPersistedConfig>,
+) {
+  return {
+    ...resolveMcpLoadSettings(cli, persisted),
     browserToolsEnabled: resolveBrowserToolsEnabled(persisted),
     autoArchiveAfterMerge: persisted.daemon?.autoArchiveAfterMerge ?? false,
     explainDailyLimit: persisted.daemon?.explainDailyLimit,
@@ -571,6 +582,7 @@ export function resolveConfigFromPersisted(
   const {
     mcpEnabled,
     mcpInjectIntoAgents,
+    mcpInjectLabels,
     browserToolsEnabled,
     autoArchiveAfterMerge,
     explainDailyLimit,
@@ -616,6 +628,7 @@ export function resolveConfigFromPersisted(
     trustedProxies,
     mcpEnabled,
     mcpInjectIntoAgents,
+    mcpInjectLabels,
     browserToolsEnabled,
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
@@ -754,6 +767,7 @@ function resolveCoreDaemonOverridePaths(
   }
   if (cli?.mcpEnabled !== undefined) paths.push("daemon.mcp.enabled");
   if (cli?.mcpInjectIntoAgents !== undefined) paths.push("daemon.mcp.injectIntoAgents");
+  if (cli?.mcpInjectLabels !== undefined) paths.push("daemon.mcp.injectLabels");
   // Hostname sources append instead of replacing one another, so a launch value
   // does not prevent a persisted hostname edit from taking effect.
   if (parseTrustedProxiesEnv(env.PASEO_TRUSTED_PROXIES) !== undefined) {
