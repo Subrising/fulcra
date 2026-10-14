@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -8,12 +11,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import pino from "pino";
 
+import { createMemoryCredentialBackend } from "../integrations/credential-backend.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
 import { hashDaemonPassword } from "../auth.js";
 import { createPaseoDaemon, type PaseoDaemonConfig } from "../bootstrap.js";
-import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
+import { createTestAgentClient, createTestAgentClients } from "../test-utils/fake-agent-client.js";
 import type {
   AgentClient,
+  AgentPromptInput,
   AgentPersistenceHandle,
   AgentRunResult,
   AgentSession,
@@ -572,6 +577,110 @@ describe("agent MCP end-to-end (offline)", () => {
       await rm(paseoHome, { recursive: true, force: true });
       await rm(staticDir, { recursive: true, force: true });
       await rm(agentCwd, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("a CLI-started Claude parent uses injected HTTP MCP and receives one durable child finish notice", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-finish-mcp-"));
+    const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-finish-static-"));
+    const recorder: LaunchRecorder = { recordedLaunches: new Map() };
+    const prompts: AgentPromptInput[] = [];
+    const daemon = await createPaseoDaemon(
+      {
+        listen: "127.0.0.1:0",
+        paseoHome,
+        staticDir,
+        corsAllowedOrigins: [],
+        hostnames: true,
+        mcpEnabled: true,
+        mcpInjectIntoAgents: true,
+        nativeFinishNotices: false,
+        reportUpOnTurnEnd: true,
+        relayEnabled: false,
+        agentStoragePath: path.join(paseoHome, "agents"),
+        agentClients: {
+          claude: new RecordingAgentClient(
+            createTestAgentClient("claude", {
+              supportsMcpServers: true,
+              onStartTurn: (prompt) => prompts.push(prompt),
+            }),
+            recorder,
+          ),
+        },
+      },
+      pino({ level: "silent" }),
+      { credentialBackend: createMemoryCredentialBackend() },
+    );
+    const client = new Client({ name: "fixture-parent", version: "1" });
+    try {
+      await daemon.start();
+      const target = daemon.getListenTarget();
+      if (target?.type !== "tcp") throw new Error("Isolated TCP daemon required");
+      const cliEntry = fileURLToPath(new URL("../../../../cli/dist/index.js", import.meta.url));
+      const result = await promisify(execFile)(
+        process.execPath,
+        [
+          cliEntry,
+          "run",
+          "fixture parent work",
+          "--provider",
+          "claude/claude-test-model",
+          "--cwd",
+          paseoHome,
+          "--title",
+          "Fixture lead",
+          "--mode",
+          "bypassPermissions",
+          "--host",
+          `127.0.0.1:${target.port}`,
+          "--json",
+        ],
+        {
+          timeout: 15_000,
+          env: { ...process.env, PASEO_AGENT_ID: "", PASEO_WORKSPACE_ID: "", PASEO_PASSWORD: "" },
+        },
+      );
+      const parentId = (JSON.parse(result.stdout) as { agentId: string }).agentId;
+      const parent = daemon.agentManager.getAgent(parentId)!;
+      expect(parent.lifecycle).toBe("idle");
+      const server = recorder.recordedLaunches.get(parent.id)!.mcpServers!.paseo;
+      if (server.type !== "http") throw new Error("Injected HTTP MCP server required");
+      expect(server.headers).toHaveProperty("X-Paseo-Report-Origin");
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: server.headers },
+        }),
+      );
+      const catalog = await client.listTools();
+      expect(catalog.tools.map((tool) => tool.name)).toContain("create_agent");
+      const created = await client.callTool({
+        name: "create_agent",
+        arguments: {
+          provider: "claude/claude-test-model",
+          title: "Fixture child",
+          initialPrompt: "fixture child work",
+          notifyOnFinish: true,
+        },
+      });
+      expect(created.isError, JSON.stringify(created)).not.toBe(true);
+      const childId = (created.structuredContent as { agentId: string }).agentId;
+      await vi.waitFor(async () =>
+        expect((await daemon.agentStorage.getFinishNotice(childId))?.status).toBe("delivered"),
+      );
+      expect(prompts).toHaveLength(3);
+      expect(JSON.stringify(prompts[2])).toContain(childId);
+      expect(daemon.agentManager.nativeReportOwnsFinish(childId, parent.id)).toBe(false);
+      expect(daemon.agentManager.getAgent(childId)?.workspaceId).toBe(parent.workspaceId);
+      await vi.waitFor(() => expect(daemon.agentManager.hasInFlightRun(parent.id)).toBe(false));
+      await daemon.agentManager.runAgent(parent.id, "fixture follow-up");
+      await vi.waitFor(() => expect(daemon.agentManager.hasInFlightRun(parent.id)).toBe(false));
+      expect(prompts).toHaveLength(4);
+      expect(prompts.filter((prompt) => JSON.stringify(prompt).includes(childId))).toHaveLength(1);
+    } finally {
+      await client.close();
+      await daemon.stop();
+      await rm(paseoHome, { recursive: true, force: true });
+      await rm(staticDir, { recursive: true, force: true });
     }
   }, 30_000);
 

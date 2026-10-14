@@ -21,6 +21,7 @@ function nudgeSettingsOf(daemon: NonNullable<PersistedConfig["daemon"]>) {
   return {
     idleLeadNudge: daemon.idleLeadNudge,
     idleLeadNudgeSkipOwners: daemon.idleLeadNudgeSkipOwners ?? [],
+    idleLeadNudgeMinIntervalMinutes: daemon.idleLeadNudgeMinIntervalMinutes ?? 60,
   };
 }
 
@@ -1463,6 +1464,38 @@ test("nudge owner exclusions persist, reload, and clear without changing the nud
     store.patch({ idleLeadNudgeSkipOwners: ["Owner A"] });
     store.patch({ idleLeadNudgeSkipOwners: [] });
     expect(loadPersistedConfig(root).daemon?.idleLeadNudgeSkipOwners).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the nudge interval validates, persists, reloads, and returns to the default", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "nudge-interval-config-"));
+  try {
+    const store = new DaemonConfigStore(root, reloadableConfig({}), undefined, {
+      reloadSource: {
+        resolve: (persisted) => ({
+          mutable: reloadableConfig(persisted),
+          overrideControlledPaths: [],
+        }),
+      },
+    });
+    expect(store.get().idleLeadNudgeMinIntervalMinutes).toBe(60);
+    expect(
+      store.patch({ idleLeadNudgeMinIntervalMinutes: 5 }).idleLeadNudgeMinIntervalMinutes,
+    ).toBe(5);
+    expect(loadPersistedConfig(root).daemon?.idleLeadNudgeMinIntervalMinutes).toBe(5);
+    for (const value of [0, -1, 1.5])
+      expect(() => store.patch({ idleLeadNudgeMinIntervalMinutes: value })).toThrow();
+    writeFileSync(
+      path.join(root, "config.json"),
+      JSON.stringify({ daemon: { idleLeadNudgeMinIntervalMinutes: 30 } }),
+    );
+    expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudgeMinIntervalMinutes"]);
+    expect(store.get().idleLeadNudgeMinIntervalMinutes).toBe(30);
+    writeFileSync(path.join(root, "config.json"), JSON.stringify({}));
+    expect(store.reload().appliedPaths).toEqual(["daemon.idleLeadNudgeMinIntervalMinutes"]);
+    expect(store.get().idleLeadNudgeMinIntervalMinutes).toBe(60);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
