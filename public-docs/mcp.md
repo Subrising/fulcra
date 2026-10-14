@@ -12,12 +12,24 @@ category: Orchestration
 
 ## Configuration
 
-| Setting                       | Default | Purpose                                            |
-| ----------------------------- | ------- | -------------------------------------------------- |
-| `daemon.mcp.enabled`          | `true`  | Run the MCP server.                                |
-| `daemon.mcp.injectIntoAgents` | `false` | Give agents launched by Paseo access to its tools. |
+| Setting                       | Default | Purpose                                               |
+| ----------------------------- | ------- | ----------------------------------------------------- |
+| `daemon.mcp.enabled`          | `true`  | Run the MCP server.                                   |
+| `daemon.mcp.injectIntoAgents` | `false` | Give agents launched by Paseo access to its tools.    |
+| `daemon.mcp.injectLabels`     | `{}`    | Require all configured labels before injecting tools. |
 
 Depending on the provider, Paseo delivers tools through its native tool interface or MCP. The capabilities are the same. Start a new agent or reload an existing one after changing injection settings.
+
+An absent or empty `injectLabels` map preserves injection for every agent when `injectIntoAgents` is enabled.
+Set exact label values to select leads:
+
+```sh
+fulcra daemon config set daemon.mcp.injectLabels '{"fulcra.mcp":"on"}'
+fulcra run --provider claude --label fulcra.mcp=on "Coordinate the project"
+```
+
+Configuration changes apply to later launches. Existing sessions keep their current tools.
+Use an empty map or unset `daemon.mcp.injectLabels` to clear the filter.
 
 ## Compact results
 
