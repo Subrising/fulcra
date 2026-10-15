@@ -91,6 +91,8 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
             event.event.turnId ?? "initial",
             `The remote turn stopped: ${event.event.reason}`,
           );
+        else if (event.event.type === "permission_resolved")
+          service.resolveWorkerPermission(event.agentId, event.event.requestId);
         else if (event.event.type === "permission_requested")
           service.recordWorkerNotice(
             event.agentId,
@@ -166,11 +168,11 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     enqueue(request.agentId);
     return completion;
   };
-  const finish = (request: HostLinkFinishDelivery): Promise<void> =>
+  const finish = (request: HostLinkFinishDelivery): Promise<void | "suppressed"> =>
     agentManager.withAgentCaller(undefined, () =>
       agentManager.trustedPlugins.daemon(() => finishToLead(request)),
     );
-  async function finishToLead(request: HostLinkFinishDelivery): Promise<void> {
+  async function finishToLead(request: HostLinkFinishDelivery): Promise<void | "suppressed"> {
     request.check();
     const stored = await agentStorage.get(request.agentId);
     if (
@@ -196,9 +198,14 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       )
         throw new HostLinkError("refused", "The calling lead changed before notice delivery.");
     };
+    let suppressed = false;
     await heldSendsFor(agentManager, logger).holdAndWait(request.agentId, () =>
       agentManager.withAgentCaller(undefined, () =>
         agentManager.trustedPlugins.daemon(async () => {
+          if (request.prepare && !(await request.prepare())) {
+            suppressed = true;
+            return;
+          }
           const final = createFinalInputCheck(check, request.beforeHandoff);
           check();
           await sendPromptToAgent({
@@ -217,6 +224,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         }),
       ),
     );
+    if (suppressed) return "suppressed";
   }
 
   const workerCurrent = (
@@ -240,6 +248,15 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     serverId: input.serverId,
     protected: input.protected,
     finish,
+    permissionPending: (agentId, requestId) => {
+      const worker = agentManager.getAgent(agentId);
+      return Boolean(
+        worker &&
+        !worker.archivedAt &&
+        !worker.internal &&
+        worker.pendingPermissions.has(requestId),
+      );
+    },
     noticeError: (error) => logger.warn({ err: error }, "Host-link finish notice remains retained"),
     chat: async (id) => {
       const live = agentManager.getAgent(id);

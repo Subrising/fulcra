@@ -1,3 +1,4 @@
+import { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 import {
   LeadEventDispatcher,
   leadEventsFor,
@@ -199,7 +200,7 @@ export async function leadChatOf(
   return { id };
 }
 
-export const PERMISSION_NOTICE_GRACE_MS = 2000;
+export { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
 interface PendingNudge {
   handoff?: object;

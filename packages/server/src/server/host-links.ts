@@ -1,3 +1,4 @@
+import { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
@@ -70,6 +71,7 @@ export interface HostLinkRoleNotice extends HostLinkDelivery {
 }
 export interface HostLinkFinishDelivery extends HostLinkDelivery {
   beforeHandoff: () => void;
+  prepare?: () => Promise<boolean>;
   sourceSessionId: string | null;
 }
 export interface HostLinkDependencies {
@@ -84,7 +86,8 @@ export interface HostLinkDependencies {
   inspect: (id: string) => Promise<unknown>;
   workerCurrent: (id: string, profile: HostLinkProfile, parent: string) => void;
   now?: () => number;
-  finish?: (input: HostLinkFinishDelivery) => Promise<void>;
+  finish?: (input: HostLinkFinishDelivery) => Promise<void | "suppressed">;
+  permissionPending?: (workerId: string, requestId: string) => boolean;
   noticeError?: (error: unknown) => void;
 }
 function digest(value: unknown): string {
@@ -600,11 +603,39 @@ export class HostLinks {
         serverId: this.deps.serverId,
         agentId: input.agentId,
         complete: entry.complete ?? false,
-        notices: entry.notices ?? [],
+        notices: this.availableWorkerNotices(entry, input.agentId),
       });
     if (input.kind === "inspect") return this.deps.inspect(input.agentId);
     return this.workerPrompt(link, entry, input);
   }
+  private availableWorkerNotices(
+    entry: HostLinkJournal[string],
+    agentId: string,
+  ): HostLinkWorkerNotice[] {
+    return (entry.notices ?? [])
+      .filter((notice) => {
+        if (notice.kind !== "permission") return true;
+        if (entry.complete || notice.resolved || (notice.notBefore ?? 0) > this.now()) return false;
+        return this.deps.permissionPending?.(agentId, notice.permissionRequestId ?? "") ?? true;
+      })
+      .map(({ id, kind, text }) => ({ id, kind, text }));
+  }
+
+  resolveWorkerPermission(agentId: string, requestId: string): void {
+    for (const [key, entry] of Object.entries(this.journal(this.inboxFile))) {
+      if (entry.receipt.agentId !== agentId || !entry.profile || !entry.notifyOnFinish) continue;
+      const pending = (entry.notices ?? []).filter(
+        (notice) =>
+          notice.kind === "permission" &&
+          notice.permissionRequestId === requestId &&
+          !notice.resolved,
+      );
+      if (!pending.length) continue;
+      for (const notice of pending) notice.resolved = true;
+      this.save(this.inboxFile, key, entry);
+    }
+  }
+
   pendingNoticeWorkers(): Array<{ agentId: string; started: boolean }> {
     return Object.values(this.journal(this.inboxFile))
       .filter((entry) => entry.profile && entry.notifyOnFinish && !entry.complete)
@@ -649,7 +680,16 @@ export class HostLinks {
         throw new HostLinkError("unavailable", "The worker notice journal is full.");
       this.save(this.inboxFile, key, {
         ...entry,
-        notices: [...notices, notice],
+        notices: [
+          ...notices,
+          kind === "permission"
+            ? {
+                ...notice,
+                permissionRequestId: eventId,
+                notBefore: this.now() + PERMISSION_NOTICE_GRACE_MS,
+              }
+            : notice,
+        ],
         started: true,
         complete: kind !== "permission",
       });
@@ -784,21 +824,7 @@ export class HostLinks {
         ...entry,
         watch: { failures, nextAt: this.now() + Math.min(60000, 1000 * 2 ** failures) },
       });
-      const response = await fetch(hostLinkUrl(link.url, "worker"), {
-        method: "POST",
-        redirect: "error",
-        signal: AbortSignal.timeout(15000),
-        headers: {
-          authorization: `Bearer ${entry.receipt.token}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ kind: "notices", agentId: entry.receipt.agentId }),
-      });
-      if (!response.ok)
-        throw new HostLinkError("unavailable", "The remote worker notice request failed.");
-      const result = HostLinkWorkerNoticesSchema.parse(await response.json());
-      if (result.serverId !== link.serverId || result.agentId !== entry.receipt.agentId)
-        throw new HostLinkError("refused", "The worker notice identity changed.");
+      const result = await this.fetchWorkerNotices(link, entry);
       await this.notificationSource(captured);
       entry = this.journal(this.outboxFile)[key]!;
       const received = this.mergeWorkerNotices(entry, result.notices);
@@ -825,8 +851,51 @@ export class HostLinks {
     }
   }
 
+  private async fetchWorkerNotices(link: OutgoingHostLink, entry: HostLinkJournal[string]) {
+    const response = await fetch(hostLinkUrl(link.url, "worker"), {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        authorization: `Bearer ${entry.receipt.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ kind: "notices", agentId: entry.receipt.agentId }),
+    });
+    if (!response.ok)
+      throw new HostLinkError("unavailable", "The remote worker notice request failed.");
+    const result = HostLinkWorkerNoticesSchema.parse(await response.json());
+    if (result.serverId !== link.serverId || result.agentId !== entry.receipt.agentId)
+      throw new HostLinkError("refused", "The worker notice identity changed.");
+    return result;
+  }
+
+  private async permissionNoticeCurrent(key: string, id: string): Promise<boolean> {
+    const captured = this.journal(this.outboxFile)[key]!;
+    const { link } = await this.notificationSource(captured);
+    const result = await this.fetchWorkerNotices(link, captured);
+    await this.notificationSource(captured);
+    const current = this.journal(this.outboxFile)[key]!;
+    const next = {
+      ...current,
+      receivedNotices: this.mergeWorkerNotices(current, result.notices),
+      complete: result.complete,
+    };
+    this.save(this.outboxFile, key, next);
+    this.kickNoticeDeliveries(key, next);
+    return next.receivedNotices.find((notice) => notice.id === id)?.state === "queued";
+  }
+
   private mergeWorkerNotices(entry: HostLinkJournal[string], notices: HostLinkWorkerNotice[]) {
     const received = entry.receivedNotices ?? [];
+    for (const prior of received) {
+      if (
+        prior.kind === "permission" &&
+        prior.state === "queued" &&
+        !notices.some((notice) => notice.id === prior.id)
+      )
+        prior.state = "suppressed";
+    }
     for (const notice of notices) {
       const prior = received.find((item) => item.id === notice.id);
       if (prior && digest({ id: prior.id, kind: prior.kind, text: prior.text }) !== digest(notice))
@@ -880,7 +949,10 @@ export class HostLinks {
       const notice = entry.receivedNotices!.find((item) => item.id === id)!;
       if (!this.deps.finish)
         throw new HostLinkError("unavailable", "Local finish delivery is unavailable.");
-      await this.deps.finish({
+      const result = await this.deps.finish({
+        ...(notice.kind === "permission"
+          ? { prepare: () => this.permissionNoticeCurrent(key, id) }
+          : {}),
         agentId: entry.sender,
         sourceSessionId: entry.sourceSessionId ?? null,
         text: `Remote agent ${entry.receipt.agentId}@${entry.receipt.serverId} ${notice.kind}:\n${notice.text}`,
@@ -908,6 +980,12 @@ export class HostLinks {
           handedOff = true;
         },
       });
+      if (result === "suppressed") {
+        this.updateNotice(key, id, (current) => {
+          current.state = "suppressed";
+        });
+        return;
+      }
       if (!handedOff) throw new Error("Remote notice has no provider handoff receipt");
       this.updateNotice(key, id, (current) => {
         current.state = "delivered";
@@ -915,6 +993,7 @@ export class HostLinks {
     } catch (error) {
       if (this.notificationsClosed) return;
       this.updateNotice(key, id, (notice) => {
+        if (notice.state === "suppressed") return;
         notice.attempts = Math.min(8, notice.attempts + 1);
         notice.state = notice.attempts >= 8 ? "exhausted" : "queued";
         if (handedOff) notice.state = "uncertain";

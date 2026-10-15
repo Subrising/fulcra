@@ -104,6 +104,7 @@ async function fixture() {
     noticeReads: 0,
     deliveryDown: false,
     failAfterHandoff: false,
+    beforeFinish: async () => {},
     protected: true,
     failCreate: false,
     beforeNotice: () => {},
@@ -112,9 +113,12 @@ async function fixture() {
   const deps = {
     home: path.join(root, "target"),
     now: () => state.now,
-    finish: async (input: HostLinkFinishDelivery) => {
+    finish: async (input: HostLinkFinishDelivery): Promise<void | "suppressed"> => {
       input.check();
       if (state.deliveryDown) throw new Error("Local delivery is unavailable.");
+      await state.beforeFinish();
+      if (input.prepare && !(await input.prepare())) return "suppressed";
+      input.check();
       input.beforeHandoff();
       finishNotices.push({ agentId: input.agentId, messageId: input.messageId, text: input.text });
       if (state.failAfterHandoff) throw new Error("Provider acknowledgement lost.");
@@ -735,6 +739,7 @@ test("FU-170 permission checkpoints do not consume the final notice", async () =
     "permission-1",
     "Approve fixture permission-1",
   );
+  f.state.now += 2001;
   await f.source.syncNotifications();
   await f.source.flushNotificationDeliveries();
   expect(f.finishNotices).toHaveLength(1);
@@ -1100,4 +1105,66 @@ test("FU-170 a stopped source cannot continue a pending notice read", async () =
   await source.flushNotificationDeliveries();
   expect(f.state.noticeReads).toBe(1);
   expect(f.finishNotices).toHaveLength(1);
+});
+
+test("FU-167 and FU-170 suppress a remote request resolved during the grace period", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "quick-permission",
+    "Transient permission",
+  );
+  const early = await f.post(`${f.targetListener.url}/api/host-links/worker`, receipt.token!, {
+    kind: "notices",
+    agentId: receipt.agentId,
+  });
+  expect(early.body).toMatchObject({ notices: [] });
+  f.target.resolveWorkerPermission(receipt.agentId!, "quick-permission");
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Task result");
+  f.state.now += 2001;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("finished");
+  expect(f.finishNotices[0]?.text).not.toContain("Transient permission");
+});
+
+test("FU-167 and FU-170 suppress a resolved remote request while the lead is busy", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "permission", "held-permission", "Held permission");
+  f.state.now += 2001;
+  let queued!: () => void;
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    queued = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.state.beforeFinish = async () => {
+    queued();
+    await held;
+  };
+  await f.source.syncNotifications();
+  await waiting;
+  f.target.resolveWorkerPermission(receipt.agentId!, "held-permission");
+  release();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("suppressed");
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Final result");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("finished");
 });

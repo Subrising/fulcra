@@ -155,6 +155,8 @@ A pending or uncertain result requires receipt reconciliation before another cre
 
 Remote `notifyOnFinish` defaults to `true`. Set it to `false` to disable return notices.
 The destination retains permission checkpoints and the first finish or error under the worker receipt.
+Permission notices use the same grace period as local alerts. Resolved requests do not wake the lead.
+Held permission notices recheck the remote request before provider input.
 The home daemon reads these events with its retained worker credential through the same directed link.
 No reverse link, callback URL, daemon password, or worker-visible link credential is required.
 Notices name the original calling chat, rather than the current main assistant.

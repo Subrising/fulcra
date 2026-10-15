@@ -170,7 +170,7 @@ export const HostLinkWorkerNoticesSchema = z
   })
   .strict();
 const receivedNotice = HostLinkWorkerNoticeSchema.extend({
-  state: z.enum(["queued", "sending", "delivered", "uncertain", "exhausted"]),
+  state: z.enum(["queued", "sending", "delivered", "uncertain", "exhausted", "suppressed"]),
   attempts: z.number().int().min(0).max(8),
   nextAt: z.number().finite().nonnegative(),
 }).strict();
@@ -192,7 +192,16 @@ export const HostLinkJournalSchema = z.record(
       notifyOnFinish: z.boolean().optional(),
       started: z.boolean().optional(),
       complete: z.boolean().optional(),
-      notices: z.array(HostLinkWorkerNoticeSchema).max(128).optional(),
+      notices: z
+        .array(
+          HostLinkWorkerNoticeSchema.extend({
+            permissionRequestId: z.string().optional(),
+            notBefore: z.number().finite().nonnegative().optional(),
+            resolved: z.boolean().optional(),
+          }).strict(),
+        )
+        .max(128)
+        .optional(),
       receivedNotices: z.array(receivedNotice).max(128).optional(),
       watch: z
         .object({
