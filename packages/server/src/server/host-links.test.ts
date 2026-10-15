@@ -1336,6 +1336,26 @@ test("limit sharing retries an offline link without changing local limits", asyn
   expect(await f.target.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
 });
 
+test.each([undefined, false])(
+  "limit sharing stays off when shareLimits is %s",
+  async (shareLimits) => {
+    const f = await limitFixture();
+    f.sourceConfig.outgoing[0]!.shareLimits = shareLimits;
+    f.save();
+    const resetAt = new Date(f.state.now + 3600000).toISOString();
+    await markAccountLimited(
+      f.sourcePool,
+      sharedAccount,
+      { kind: "session", resetAt },
+      f.state.now,
+    );
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+    expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+      state: "ok",
+    });
+  },
+);
+
 test("limit sharing requires link authority and ignores unknown, expired, and invalid observations", async () => {
   const f = await limitFixture();
   const wire = {

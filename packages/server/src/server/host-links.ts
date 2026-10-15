@@ -889,7 +889,7 @@ export class HostLinks {
   private async readWorkerNotices(key: string, captured: HostLinkJournal[string]): Promise<void> {
     try {
       const { chat, link } = await this.notificationSource(captured);
-      if (captured.receipt.state === "pending" && captured.wire) {
+      if (captured.receipt.state === "pending" && captured.wire?.kind === "spawn") {
         await this.forward(link, chat, captured.wire, "explicit");
       }
       let entry = this.journal(this.outboxFile)[key]!;
