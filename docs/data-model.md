@@ -78,10 +78,13 @@ The `agents/{sanitized-cwd}/` directory name is derived from the agent's `cwd` b
 ## Delivery receipt retention
 
 `agent-requests/` keeps delivery retry fences. The daemon deletes terminal delivery receipts after 24 hours, at load and hourly.
-It also tries pruning before a capacity refusal. Deletion bounds disk use without a second archive that needs maintenance.
+At capacity, it also tries pruning at most once per minute. Deletion bounds disk use without a second archive that needs maintenance.
 Pending, queued, and dispatching receipts stay. Evidence journals, artifact attempts, and content debit records keep their permanent reservations.
 
 Set `daemon.receiptRetentionMs` to change retention at the next daemon start. Use an integer greater than six hours, the maximum native retry lifetime.
+The default retry window is 24 hours. Retain the original `--message-id` and retry within that window.
+After receipt deletion, the same ID can deliver again. This also applies to report-member retry fences.
+Changing `daemon.receiptRetentionMs` changes this window. It does not create permanent duplicate protection.
 Retention starts from the last file update. Native receipts must also pass their admission retention period and expiry time.
 A failed deletion keeps its capacity reservation. Owner maintenance status reports the deletion count and last prune time for this process.
 

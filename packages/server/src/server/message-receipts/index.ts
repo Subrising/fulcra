@@ -150,6 +150,7 @@ const MAX_TERMINAL_IDS = 10000;
 const MAX_TEXT_BYTES = 16 * 1024;
 const MAX_LIFETIME = MAX_RECEIPT_LIFETIME_MS;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const CAPACITY_PRUNE_INTERVAL_MS = 60 * 1000;
 export class NativeReceiptMaintenanceError extends Error {
   readonly code = "agent_receipt_maintenance_required";
   constructor() {
@@ -192,6 +193,7 @@ export class MessageReceipts {
   private diskCount = 0;
   private prunedCount = 0;
   private lastPruneAt: number | null = null;
+  private lastCapacityPruneAt: number | null = null;
   private pruneTimer?: ReturnType<typeof setTimeout>;
   private stopped = false;
   private capacityWarningLogged = false;
@@ -379,7 +381,16 @@ export class MessageReceipts {
   }
 
   private async requireCapacity(weight = 1): Promise<void> {
-    if (this.diskCount + weight > this.terminalIdLimit) await this.prune();
+    if (this.diskCount + weight > this.terminalIdLimit) {
+      const now = this.clock();
+      if (
+        this.lastCapacityPruneAt === null ||
+        now - this.lastCapacityPruneAt >= CAPACITY_PRUNE_INTERVAL_MS
+      ) {
+        this.lastCapacityPruneAt = now;
+        await this.prune();
+      }
+    }
     this.warnCapacity();
     if (this.diskCount + weight > this.terminalIdLimit) throw new NativeReceiptMaintenanceError();
   }

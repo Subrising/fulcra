@@ -793,6 +793,36 @@ test("capacity refusal first prunes aged terminal files without a restart", asyn
   requests.stop();
 });
 
+test("a full ledger prunes on demand at most once per minute", async () => {
+  const { directory } = await fixture();
+  let now = Date.now();
+  const requests = new MessageReceipts(directory, () => now, 1, { warn: () => {} });
+  try {
+    await requests.send(legacySend("old"));
+    const next = legacySend("next");
+    await expect(requests.send(next)).rejects.toMatchObject({
+      code: "agent_receipt_maintenance_required",
+    });
+    const file = path.join(directory, (await readdir(directory))[0]);
+    const content = await readFile(file);
+    await writeFile(file, "{invalid");
+    now += 59999;
+    await expect(requests.send(next)).rejects.toMatchObject({
+      code: "agent_receipt_maintenance_required",
+    });
+    expect(next.send).not.toHaveBeenCalled();
+    now++;
+    await expect(requests.send(next)).rejects.toThrow(SyntaxError);
+    await writeFile(file, content);
+    await ageReceipts(directory, now - 2 * DAY);
+    now += 60000;
+    await requests.send(next);
+    expect(next.send).toHaveBeenCalledTimes(1);
+  } finally {
+    requests.stop();
+  }
+});
+
 posixTest(
   "pruning keeps queued and dispatching files and fences terminal IDs inside their lifetime",
   async () => {
@@ -837,7 +867,8 @@ posixTest(
   "failed unlink retains the count and retry fence until a later prune succeeds",
   async () => {
     const { directory } = await fixture();
-    const requests = new MessageReceipts(directory, Date.now, 1, { warn: () => {} });
+    let now = Date.now();
+    const requests = new MessageReceipts(directory, () => now, 1, { warn: () => {} });
     await requests.send(legacySend("old"));
     await ageReceipts(directory, Date.now() - 2 * DAY);
     const next = legacySend("next");
@@ -855,6 +886,7 @@ posixTest(
     } finally {
       await chmod(directory, 0o700);
     }
+    now += 60000;
     await requests.send(next);
     expect(next.send).toHaveBeenCalledTimes(1);
     requests.stop();

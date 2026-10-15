@@ -73,7 +73,7 @@ export function addSendOptions(cmd: Command): Command {
     )
     .option(
       "--message-id <id>",
-      "Stable message ID required by --native-queue; retain it on uncertainty",
+      "Stable ID required by --native-queue; retain it on uncertainty. Retry within 24 hours (daemon.receiptRetentionMs can change this window)",
     )
     .option(
       "--from <chat>",
