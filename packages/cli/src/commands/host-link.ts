@@ -4,6 +4,8 @@ import { constants } from "node:fs";
 import { open, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { addLocalDaemonOptions, withGlobalOptions } from "../utils/command-options.js";
+import type { CommandOptions } from "../output/index.js";
 
 const ReceiptSchema = z
   .object({
@@ -42,19 +44,54 @@ export function hostLinkEndpoint(raw: string, operation: "dispatch" | "worker"):
   url.pathname = `/api/host-links/${operation}`;
   return url.href;
 }
-async function privateRead(file: string): Promise<string> {
+async function privateRead(file: string, maxBytes = 256 * 1024): Promise<string> {
   const handle = await open(resolve(file), constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();
     const wrongMode =
       process.platform !== "win32" &&
       ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.());
-    if (!stat.isFile() || wrongMode || stat.size > 256 * 1024)
+    if (!stat.isFile() || wrongMode || stat.size > maxBytes)
       throw new Error("Use a private, bounded host-link file.");
     return await handle.readFile("utf8");
   } finally {
     await handle.close();
   }
+}
+export async function hostLinkNoticeStatus(home: string): Promise<{
+  uncertain: number;
+  exhausted: number;
+  exhaustedWatches: number;
+}> {
+  const counts = { uncertain: 0, exhausted: 0, exhaustedWatches: 0 };
+  let text: string;
+  try {
+    text = await privateRead(resolve(home, "host-links-outbox.json"), 8 * 1024 * 1024);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return counts;
+    throw error;
+  }
+  const journal = z
+    .record(
+      z.string(),
+      z.object({
+        notifyOnFinish: z.boolean().optional(),
+        complete: z.boolean().optional(),
+        receivedNotices: z.array(z.object({ state: z.string() })).optional(),
+        watch: z.object({ failures: z.number().int().min(0).max(8) }).optional(),
+      }),
+    )
+    .safeParse(privateJson(text));
+  if (!journal.success) throw new Error("The host-link notice journal requires repair.");
+  for (const entry of Object.values(journal.data)) {
+    if (!entry.notifyOnFinish) continue;
+    if (!entry.complete && entry.watch?.failures === 8) counts.exhaustedWatches++;
+    for (const notice of entry.receivedNotices ?? []) {
+      if (notice.state === "uncertain") counts.uncertain++;
+      if (notice.state === "exhausted") counts.exhausted++;
+    }
+  }
+  return counts;
 }
 function privateJson(text: string): unknown {
   try {
@@ -125,6 +162,18 @@ async function workerRequest(kind: "inspect" | "prompt", options: WorkerOptions)
 }
 export function createHostLinkCommand(): Command {
   const command = new Command("host-link").description("Use restricted host links");
+  command.addCommand(
+    addLocalDaemonOptions(
+      new Command("status").description("Count return notices that need an owner check"),
+    ).action(
+      withGlobalOptions(async (options: CommandOptions) => {
+        if (options.daemonTarget.kind !== "instance") throw new Error("Use a local daemon home.");
+        process.stdout.write(
+          `${JSON.stringify(await hostLinkNoticeStatus(options.daemonTarget.home))}\n`,
+        );
+      }),
+    ),
+  );
   command
     .command("request")
     .argument("<request-file>", "Private JSON request with a retained message ID")

@@ -177,6 +177,8 @@ This reuses the worker and notice receipts. It never starts a replacement worker
 Each worker keeps up to 127 permission checkpoints and one terminal notice within the existing journal storage limits.
 Do not delete receipt files to clear capacity or retry a request.
 The private source outbox retains notice text and delivery state for owner inspection.
+Run `fulcra host-link status --home <source-home>` to count uncertain notices, exhausted deliveries, and exhausted watches.
+An exhausted watch means the home daemon stopped checking that worker for notices.
 A failed or interrupted provider handoff has state `uncertain`. It requires reconciliation; the daemon never replays it automatically.
 This preserves the native input safety rule when provider acceptance cannot be proved after a crash.
 
