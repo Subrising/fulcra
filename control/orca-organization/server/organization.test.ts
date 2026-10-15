@@ -226,7 +226,7 @@ test("two viewers coalesce and never relabel cached observations as fresh", asyn
   assert.equal((await read()).observedAt, initial.observedAt);
 });
 
-test("server entry obeys host cleanup contract and registers explicit management alongside observation", async () => {
+test("server entry obeys host cleanup contract and registers explicit management alongside observation", async (t) => {
   const { default: contribute } = await import("../index.server");
   const names: string[] = [];
   const server = new Proxy(
@@ -250,12 +250,15 @@ test("server entry obeys host cleanup contract and registers explicit management
           name === "before"
         )
           return undefined;
+        if (name === "on") return () => () => undefined;
+        if (name === "registerUsageSource") return () => undefined;
         if (name !== "handle") throw new Error(`Unexpected hook or action: ${String(name)}`);
         return target.handle;
       },
     },
   );
   const cleanup = contribute(server as unknown as Parameters<typeof contribute>[0]);
+  t.after(cleanup);
   // C1 integration: the union of every job's registered methods (J0, J3, J1, J4, J6, J8), in registration order.
   // WL (d6cd5164) registers its worktree Clean-up methods first.
   assert.equal(typeof cleanup, "function");
@@ -381,8 +384,8 @@ test("server entry obeys host cleanup contract and registers explicit management
     "organization.workspace.get_directory.request",
     "organization.workspace.receiver.request",
     "organization.workspace.update.request",
+    "progress.board.snapshot",
   ]);
-  cleanup();
 });
 
 test("the app-facing seam method name is pinned to an exact literal and is registered", async () => {
@@ -409,6 +412,7 @@ test("the app-facing seam method name is pinned to an exact literal and is regis
     },
     {
       get(target, name) {
+        if (name === "on") return () => () => undefined;
         return name in target
           ? (target as Record<string, unknown>)[name as string]
           : () => undefined;

@@ -1,3 +1,4 @@
+import { stripInternalPaseoMcpServer } from "./runtime-mcp-config.js";
 import { promises as fs, type Dirent } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -143,7 +144,22 @@ export type SerializableAgentConfig = Pick<
 
 export type StoredAgentRecord = z.infer<typeof STORED_AGENT_SCHEMA>;
 export function parseStoredAgentRecord(value: unknown): StoredAgentRecord {
-  return STORED_AGENT_SCHEMA.parse(value);
+  return stripStoredRuntimeMcp(STORED_AGENT_SCHEMA.parse(value));
+}
+
+// Runtime connections carry per-launch credentials. Keep them out of active and archived records.
+function stripStoredRuntimeMcp(record: StoredAgentRecord): StoredAgentRecord {
+  const config = record.config ? stripInternalPaseoMcpServer(record.config) : record.config;
+  const metadata = record.persistence?.metadata;
+  const cleanMetadata = metadata ? stripInternalPaseoMcpServer(metadata) : metadata;
+  if (config === record.config && cleanMetadata === metadata) return record;
+  return {
+    ...record,
+    config,
+    persistence: record.persistence
+      ? { ...record.persistence, metadata: cleanMetadata }
+      : record.persistence,
+  };
 }
 
 export class AgentStorage {
@@ -447,6 +463,7 @@ export class AgentStorage {
   }
 
   private async writeRecord(record: StoredAgentRecord): Promise<void> {
+    record = stripStoredRuntimeMcp(record);
     const agentId = record.id;
     const nextPath = this.buildRecordPath(record);
     const previousPath = this.pathById.get(agentId);
@@ -723,7 +740,11 @@ export class AgentStorage {
     try {
       const content = await fs.readFile(filePath, "utf8");
       const parsed = JSON.parse(content);
-      return parseStoredAgentRecord(parsed);
+      const original = STORED_AGENT_SCHEMA.parse(parsed);
+      const record = stripStoredRuntimeMcp(original);
+      // Cleanup must retain durable finish notices and private file permissions.
+      if (record !== original) await writeJsonQueueFile(filePath, record);
+      return record;
     } catch (error) {
       this.logger.error({ err: error, filePath }, "Skipping invalid agent record");
       return null;

@@ -16,6 +16,7 @@ import { ControlStore } from "./store.mjs";
 import { Controller } from "./controller.mjs";
 import { Events } from "./events.mjs";
 import { Manager } from "./manager.mjs";
+import { Bindings } from "./bindings.mjs";
 import { Permissions } from "./permissions.mjs";
 import { COMPANY, PROGRAMME } from "./authority.mjs";
 import { admit, guard, observation } from "../../tools/legacy-host-admission.fixture.mjs";
@@ -215,9 +216,34 @@ async function fixture(t) {
   };
 }
 
-async function automaticFixture(t, { sealed = true } = {}) {
+async function automaticFixture(t, { sealed = true, lead = false } = {}) {
   const f = await fixture(t),
     x = await f.worker();
+  if (lead) {
+    f.control.bindings = new Bindings(
+      f.control,
+      async () => ({
+        available: true,
+        partial: false,
+        projects: [],
+        membership: [],
+        observedAt: new Date().toISOString(),
+      }),
+      path.join(f.base, "grants", "role"),
+    );
+    await f.control.bindings.assign({
+      role: "prime",
+      seat: "delivery",
+      sessionId: x.id,
+      expectedSessionGeneration: f.store.get(x.id).generation,
+      expectedRevision: 0,
+      note: "Lead for the restart verification",
+    });
+    f.control.bindings.grantRole({
+      sessionId: x.id,
+      expectedGeneration: f.store.get(x.id).generation,
+    });
+  }
   const previousBoot = randomUUID(),
     boot = observation(x.id).boot;
   const original = f.store.delivery(x.sent.id),
@@ -287,6 +313,27 @@ test("automatic restart resumes only a clean-sealed interrupted original delegat
   await restarted.tick();
   await restarted.stop();
   assert.equal(f.sends(f.x.id), 2, "controller replacement never duplicates the continuation");
+});
+
+test("FU-103: a plugin-owned lead continues through its owner after a clean restart, once", async (t) => {
+  const f = await automaticFixture(t, { lead: true });
+  const binding = f.control.bindings.describe("prime", "delivery");
+  await f.queue.tick();
+  f.advance(RESTART_SETTLE_MS);
+  await f.queue.tick();
+  const [operation] = f.queue.status().items;
+  assert.equal(operation.state, "resumed", operation.outcome);
+  assert.equal(f.sends(f.x.id), 2);
+  assert.equal(f.control.bindings.describe("prime", "delivery").sessionId, binding.sessionId);
+  assert.equal(f.control.bindings.describe("prime", "delivery").revision, binding.revision);
+  const continuation = f.store.delivery(operation.continuation);
+  assert.equal(
+    JSON.parse(continuation.body).text,
+    continuationText(f.control.recovery.row(operation.interruption), "interrupted", BRIEF),
+  );
+  f.advance(RESTART_STAGGER_MS);
+  await f.queue.tick();
+  assert.equal(f.sends(f.x.id), 2);
 });
 
 test("automatic restart holds an unsealed crash visibly without regrant or replay", async (t) => {
