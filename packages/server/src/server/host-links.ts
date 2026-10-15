@@ -94,6 +94,11 @@ export interface HostLinkDependencies {
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
+// Return notices keep their authority across credential rotation and expiry renewal.
+function authorityDigest(grant: { token: string; expiresAt: number }): string {
+  const { token: _token, expiresAt: _expiresAt, ...authority } = grant;
+  return digest(authority);
+}
 function privateJson(file: string): unknown | null {
   let fd: number;
   try {
@@ -385,9 +390,10 @@ export class HostLinks {
         ? {
             wire,
             notifyOnFinish: true,
+            noticeGrant: authorityDigest(link),
             sourceSessionId: chat.sessionId ?? null,
-            sourceGrant: digest(
-              this.requiredConfig().chats.find((grant) => grant.agentId === chat.id),
+            sourceGrant: authorityDigest(
+              this.requiredConfig().chats.find((grant) => grant.agentId === chat.id)!,
             ),
             watch: { failures: 0, nextAt: 0 },
             receivedNotices: [],
@@ -545,6 +551,9 @@ export class HostLinks {
       profile: null,
       cwd: null,
       receipt: this.receipt(wire.messageId, agentId),
+      ...(wire.kind === "spawn" && wire.notifyOnFinish
+        ? { noticeGrant: authorityDigest(link) }
+        : {}),
     };
     if (wire.kind === "spawn") {
       if (wire.notifyOnFinish && this.notificationsClosed)
@@ -660,7 +669,12 @@ export class HostLinks {
     if (!entry || entry.receipt.agentId !== input.agentId || !entry.profile)
       throw new HostLinkError("refused", "The worker credential is invalid.");
     const link = this.requiredConfig().incoming.find((item) => item.id === entry.linkId);
-    if (!link || digest(link) !== entry.grant)
+    if (
+      !link ||
+      (input.kind === "notices"
+        ? authorityDigest(link) !== entry.noticeGrant
+        : digest(link) !== entry.grant)
+    )
       throw new HostLinkError("refused", "The worker grant changed.");
     this.recheck(link);
     const chat =
@@ -870,13 +884,13 @@ export class HostLinks {
       throw new HostLinkError("refused", "Host-link notices are stopped.");
     const cfg = this.requiredConfig();
     const link = this.outgoing(cfg, entry.linkId);
-    if (digest(link) !== entry.grant)
+    if (authorityDigest(link) !== entry.noticeGrant)
       throw new HostLinkError("refused", "The notification link grant changed.");
     const grant = cfg.chats.find((item) => item.agentId === entry.sender);
     if (!grant || !grant.links.includes(link.id) || !grant.operations.includes("spawn"))
       throw new HostLinkError("refused", "The calling lead no longer has the spawn grant.");
     this.live(grant);
-    if (digest(grant) !== entry.sourceGrant)
+    if (authorityDigest(grant) !== entry.sourceGrant)
       throw new HostLinkError("refused", "The calling lead's original grant changed.");
     const chat = await this.sourceChat(entry.sender);
     if ((chat.sessionId ?? null) !== (entry.sourceSessionId ?? null))
@@ -1040,9 +1054,9 @@ export class HostLinks {
           const link = this.outgoing(current, entry.linkId);
           const grant = current.chats.find((item) => item.agentId === entry.sender);
           if (
-            digest(link) !== entry.grant ||
+            authorityDigest(link) !== entry.noticeGrant ||
             !grant ||
-            digest(grant) !== entry.sourceGrant ||
+            authorityDigest(grant) !== entry.sourceGrant ||
             !grant.links.includes(link.id) ||
             !grant.operations.includes("spawn")
           )

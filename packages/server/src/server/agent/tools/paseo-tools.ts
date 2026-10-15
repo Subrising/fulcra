@@ -1592,7 +1592,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           messageId: receipt.messageId,
           state: receipt.state,
           guidance: remote.notifyOnFinish
-            ? "Finish, error, and permission notices return to this lead. Keep this request UUID. Do not create a replacement after an uncertain response."
+            ? "Permission notices and the first finish or error return to this lead. Keep this request UUID. Do not create a replacement after an uncertain response."
             : "Finish notices are disabled. Keep this request UUID. Do not create a replacement after an uncertain response.",
         }),
       };

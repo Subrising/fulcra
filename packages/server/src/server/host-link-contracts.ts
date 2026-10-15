@@ -209,6 +209,7 @@ export const HostLinkJournalSchema = z.record(
       wire: HostLinkWireSchema.optional(),
       sourceSessionId: z.string().nullable().optional(),
       sourceGrant: z.string().optional(),
+      noticeGrant: z.string().optional(),
       notifyOnFinish: z.boolean().optional(),
       started: z.boolean().optional(),
       complete: z.boolean().optional(),

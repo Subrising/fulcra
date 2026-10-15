@@ -166,7 +166,8 @@ Notices name the original calling chat, rather than the current main assistant.
 The home daemon commits a receipt before notification input. Stable event IDs suppress duplicate network replies and repeated worker events.
 Queued notices survive restart. They wait for the lead's active turn and keep daemon input provenance.
 Notice recovery starts after session revival. A running revived worker keeps its subscription.
-Changed grants, archived callers, and changed provider sessions refuse delivery. Notices never restore an archived lead.
+Changed authority, archived callers, and changed provider sessions refuse delivery. Notices never restore an archived lead.
+Credential rotation and expiry renewal preserve return notices while the grants remain active.
 
 Healthy subscriptions check for retained events every ten seconds. Network failures use eight persisted attempts with delays capped at sixty seconds.
 The home daemon reads at most four workers concurrently. It has no timer when no eligible work remains.

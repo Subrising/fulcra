@@ -871,32 +871,86 @@ test("FU-170 keeps a bounded retry count across source restarts", async () => {
   expect(f.created).toHaveLength(1);
 });
 
-test.each(["grant", "lead-session", "grant-replaced"])(
-  "FU-170 refuses changed %s before home provider input",
-  async (kind) => {
+test.each([
+  "grant",
+  "lead-session",
+  "grant-links",
+  "grant-operations",
+  "link-revoked",
+  "incoming-revoked",
+])("FU-170 refuses changed %s before home provider input", async (kind) => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Retained restricted result");
+  if (kind === "grant") {
+    f.sourceConfig.chats[0]!.revoked = true;
+    f.save();
+  } else if (kind === "grant-links") {
+    f.sourceConfig.chats[0]!.links = [];
+    f.save();
+  } else if (kind === "grant-operations") {
+    f.sourceConfig.chats[0]!.operations = ["notice"];
+    f.save();
+  } else if (kind === "link-revoked") {
+    f.sourceConfig.outgoing[0]!.revoked = true;
+    f.save();
+  } else if (kind === "incoming-revoked") {
+    f.targetConfig.incoming[0]!.revoked = true;
+    f.save();
+  } else f.chats.get("lead")!.sessionId = "replacement-session";
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+});
+
+test.each(["before-read", "before-handoff"])(
+  "FU-170 delivers after chat and link renewal %s",
+  async (when) => {
     const f = await fixture();
     const receipt = await f.source.spawnForAgent("lead", "target", {
       ...spawn,
       notifyOnFinish: true,
     });
-    f.target.recordWorkerNotice(
-      receipt.agentId!,
-      "finished",
-      "turn-1",
-      "Retained restricted result",
-    );
-    if (kind === "grant") {
-      f.sourceConfig.chats[0]!.revoked = true;
-      f.save();
-    } else if (kind === "grant-replaced") {
+    f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Renewed result");
+    const renew = async () => {
       f.sourceConfig.chats[0]!.token = `hchat1.${"Z".repeat(43)}`;
+      f.sourceConfig.chats[0]!.expiresAt += 100000;
+      f.sourceConfig.outgoing[0]!.token = `hlink1.${"Y".repeat(43)}`;
+      f.sourceConfig.outgoing[0]!.expiresAt += 100000;
+      f.targetConfig.incoming[0]!.token = f.sourceConfig.outgoing[0]!.token;
+      f.targetConfig.incoming[0]!.expiresAt += 100000;
       f.save();
-    } else f.chats.get("lead")!.sessionId = "replacement-session";
-    await f.source.syncNotifications();
-    await f.source.flushNotificationDeliveries();
-    expect(f.finishNotices).toHaveLength(0);
+    };
+    if (when === "before-read") await renew();
+    else f.state.beforeFinish = renew;
+    const source = f.restartSource();
+    await source.syncNotifications();
+    await source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    expect(f.finishNotices[0]?.text).toContain("Renewed result");
+    expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
   },
 );
+
+test("FU-170 refuses revocation at the return notice handoff", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Revoked result");
+  f.state.beforeFinish = async () => {
+    f.sourceConfig.chats[0]!.revoked = true;
+    f.save();
+  };
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("queued");
+});
 
 test("FU-170 keeps a finish that arrives before the creation reply", async () => {
   const f = await fixture();
