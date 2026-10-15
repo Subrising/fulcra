@@ -223,9 +223,13 @@ export function accountLimit(a, now = Date.now()) {
   const remote = (a.remoteLimits ?? [])
     .filter((x) => Date.parse(x.resetAt) > now && Date.parse(x.observedAt) > localTime)
     .sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt))[0];
-  if (remote) return { until: remote.resetAt, kind: remote.limitKind, source: remote.source };
-  if (a.limitedUntil && Date.parse(a.limitedUntil) > now)
+  if (
+    a.limitedUntil &&
+    Date.parse(a.limitedUntil) > now &&
+    (!remote || Date.parse(a.limitedUntil) >= Date.parse(remote.resetAt))
+  )
     return { until: a.limitedUntil, kind: a.limitKind ?? null, source: "local" };
+  if (remote) return { until: remote.resetAt, kind: remote.limitKind, source: remote.source };
   return null;
 }
 export function accountStatus(a, now = Date.now()) {

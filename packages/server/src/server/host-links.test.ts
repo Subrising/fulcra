@@ -1297,6 +1297,59 @@ test("fresh local limits and cleared limits win over an older remote observation
   });
 });
 
+test.each(["local", "source"])(
+  "the later %s limit sets status and earliest reset",
+  async (winner) => {
+    const f = await limitFixture();
+    const shortReset = new Date(f.state.now + 3600000).toISOString();
+    const longReset = new Date(f.state.now + 5 * 86400000).toISOString();
+    await markAccountLimited(
+      f.targetPool,
+      sharedAccount,
+      {
+        kind: winner === "local" ? "weekly" : "session",
+        resetAt: winner === "local" ? longReset : shortReset,
+      },
+      f.state.now,
+    );
+    f.state.now += 1000;
+    await markAccountLimited(
+      f.sourcePool,
+      sharedAccount,
+      {
+        kind: winner === "source" ? "weekly" : "session",
+        resetAt: winner === "source" ? longReset : shortReset,
+      },
+      f.state.now,
+    );
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+    const accounts = readAccounts(f.targetPool);
+    expect(publicView(accounts, f.state.now).accounts[0]).toMatchObject({
+      limitKind: "weekly",
+      status: { state: "limited", until: longReset, source: winner },
+    });
+    expect(await assign(f.targetPool, "new-session", "claude", f.state.now)).toMatchObject({
+      allLimited: true,
+      earliestReset: longReset,
+    });
+  },
+);
+
+test("a suppressed limit observation is sent once until its key changes", async () => {
+  const f = await limitFixture();
+  await update(f.targetPool, (store) => {
+    store.accounts = [];
+  });
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+  f.state.now += 1000;
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "weekly", resetAt }, f.state.now);
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+});
+
 test("a fresh local usage reading overrides an older remote limit and reports its source in usage", async () => {
   const f = await limitFixture();
   const resetAt = new Date(f.state.now + 3600000).toISOString();
@@ -1455,10 +1508,13 @@ test("local quota windows share only known account IDs and do not forward remote
 test("the running exchange sends startup limits and later file changes", async () => {
   const f = await limitFixture();
   const resetAt = new Date(f.state.now + 3600000).toISOString();
-  const waitForObservation = () =>
+  const waitForObservation = (expectedReset: string) =>
     new Promise<void>((resolve) => {
       const watcher = watch(path.join(f.targetPool, "accounts"), (_event, file) => {
-        if (file === "remote-limits.json") {
+        if (
+          file === "remote-limits.json" &&
+          accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).until === expectedReset
+        ) {
           watcher.close();
           resolve();
         }
@@ -1468,7 +1524,7 @@ test("the running exchange sends startup limits and later file changes", async (
       });
     });
   await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
-  const startup = waitForObservation();
+  const startup = waitForObservation(resetAt);
   const warnings: string[] = [];
   const close = startHostLimitSharing(f.source, path.join(f.root, "source"), () =>
     warnings.push("failed"),
@@ -1476,9 +1532,9 @@ test("the running exchange sends startup limits and later file changes", async (
   cleanups.push(async () => close());
   await startup;
   expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).until).toBe(resetAt);
-  const later = waitForObservation();
   f.state.now += 1000;
   const weeklyReset = new Date(f.state.now + 86400000).toISOString();
+  const later = waitForObservation(weeklyReset);
   await markAccountLimited(
     f.sourcePool,
     sharedAccount,

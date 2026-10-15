@@ -478,7 +478,7 @@ export class HostLinks {
               throw new HostLinkError("uncertain", "The limit receipt does not match the request.");
             if (receipt.state !== "delivered" && receipt.state !== "suppressed")
               throw new HostLinkError("uncertain", "The limit observation was not acknowledged.");
-            if (receipt.state === "delivered") this.sharedLimits.set(key, "delivered");
+            this.sharedLimits.set(key, "delivered");
             result.delivered++;
           } catch {
             // Network and parser errors can contain private transport details.
