@@ -234,6 +234,8 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     parent: string,
   ) => {
     const agent = agentManager.getAgent(id);
+    if (agent?.labels["fulcra.hold"] === "done")
+      throw new HostLinkError("refused", "The worker is held as done.");
     if (
       !agent ||
       agent.archivedAt ||

@@ -15,6 +15,7 @@ import path from "node:path";
 import type { Server } from "node:http";
 import { afterEach, expect, test, vi } from "vitest";
 import {
+  HostLinkError,
   HostLinks,
   type HostLinkChat,
   type HostLinkCreate,
@@ -658,17 +659,17 @@ test("FU-170 bound native creation selects the requested host and retains one HT
 });
 
 test.each([
-  "unknown-host",
-  "unknown-caller",
-  "missing-link",
-  "revoked",
-  "expired",
-  "ambiguous",
-  "no-spawn",
-  "wrong-profile",
-  "wrong-model",
-  "wrong-mode",
-])("FU-170 native remote creation refuses %s without provider input", async (kind) => {
+  ["unknown-host", "The requested host has no unique host link."],
+  ["unknown-caller", "This chat has no host-link spawn grant."],
+  ["missing-link", "This chat cannot use the requested host link."],
+  ["revoked", "The host-link grant is inactive."],
+  ["expired", "The host-link grant is inactive."],
+  ["ambiguous", "The requested host has no unique host link."],
+  ["no-spawn", "This chat cannot create remote workers."],
+  ["wrong-profile", "The destination refused the host-link request."],
+  ["wrong-model", "The destination refused the host-link request."],
+  ["wrong-mode", "The destination refused the host-link request."],
+])("FU-170 native remote creation refuses %s without provider input", async (kind, message) => {
   const f = await fixture();
   if (kind === "missing-link") f.sourceConfig.chats[0]!.links = [];
   if (kind === "revoked") f.sourceConfig.chats[0]!.revoked = true;
@@ -681,20 +682,20 @@ test.each([
     });
   if (kind === "no-spawn") f.sourceConfig.chats[0]!.operations = ["notice"];
   f.save();
-  await expect(
-    f.source.spawnForAgent(
-      kind === "unknown-caller" ? "other" : "lead",
-      kind === "unknown-host" ? "missing" : "target",
-      {
-        ...spawn,
-        expected: {
-          provider: kind === "wrong-profile" ? "claude" : "codex",
-          model: kind === "wrong-model" ? "other" : "gpt-test",
-          modeId: kind === "wrong-mode" ? "full-access" : "auto",
-        },
+  const result = f.source.spawnForAgent(
+    kind === "unknown-caller" ? "other" : "lead",
+    kind === "unknown-host" ? "missing" : "target",
+    {
+      ...spawn,
+      expected: {
+        provider: kind === "wrong-profile" ? "claude" : "codex",
+        model: kind === "wrong-model" ? "other" : "gpt-test",
+        modeId: kind === "wrong-mode" ? "full-access" : "auto",
       },
-    ),
-  ).rejects.toThrow();
+    },
+  );
+  await expect(result).rejects.toBeInstanceOf(HostLinkError);
+  await expect(result).rejects.toMatchObject({ code: "refused", message });
   expect(f.created).toHaveLength(0);
 });
 
@@ -940,6 +941,7 @@ test("FU-170 runtime carries a real worker finish across HTTP into the lead's pr
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const logger = createTestLogger();
   const leadInputs: unknown[] = [];
+  const workerInputs: unknown[] = [];
   let noticeArrived!: () => void;
   const notified = new Promise<void>((resolve) => {
     noticeArrived = resolve;
@@ -959,7 +961,7 @@ test("FU-170 runtime carries a real worker finish across HTTP into the lead's pr
     logger,
   });
   const targetManager = new AgentManager({
-    clients: createTestAgentClients(),
+    clients: createTestAgentClients({ onStartTurn: (prompt) => workerInputs.push(prompt) }),
     registry: targetStorage,
     logger,
   });
@@ -1067,6 +1069,20 @@ test("FU-170 runtime carries a real worker finish across HTTP into the lead's pr
     await notified;
     await sourceRuntime.service.flushNotificationDeliveries();
     expect(leadInputs).toHaveLength(1);
+    await targetManager.setLabels(receipt.agentId!, { "fulcra.hold": "done" });
+    await expect(
+      targetRuntime.service.worker(receipt.token, {
+        kind: "prompt",
+        agentId: receipt.agentId,
+        messageId: "22222222-2222-4222-8222-222222222222",
+        prompt: "Start another task.",
+      }),
+    ).rejects.toMatchObject({
+      name: "HostLinkError",
+      code: "refused",
+      message: "The worker is held as done.",
+    });
+    expect(workerInputs).toHaveLength(1);
     expect(String(leadInputs[0])).toContain(receipt.agentId!);
     expect(String(leadInputs[0])).toContain("finished");
     expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");

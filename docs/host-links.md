@@ -41,6 +41,7 @@ Grant changes, revocation, and expiry block later admissions and old worker cred
 They do not prove that earlier provider work stopped.
 The provider creation fence checks the prepared model, mode, provider, directory, and current grant after plugin preparation.
 Queued worker prompts recheck the grant, reporting line, and permission mode before provider input.
+The `fulcra.hold=done` label refuses later worker prompts.
 
 ## Configuration
 
