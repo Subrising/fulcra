@@ -4954,27 +4954,36 @@ export class AgentManager {
     operationHandle?: TrustedOperationHandle,
   ): Promise<boolean> {
     this.assertInjectionLabelWrite(updates?.labels);
-    const captured = await this.requireRegistry().get(agentId);
-    const execute = () =>
-      this.runLifecycleMutation(agentId, async () => {
-        const current = await this.requireRegistry().get(agentId);
-        if (
-          current?.persistence?.provider !== captured?.persistence?.provider ||
-          current?.persistence?.sessionId !== captured?.persistence?.sessionId
-        )
-          throw new Error("Restore refused: provider session changed.");
-        return this.withStoredInput(
-          agentId,
-          "unarchive",
-          undefined,
-          () => this.unarchiveSnapshotUnlocked(agentId, updates),
-          commandPayload("unarchive", updates),
-          operationHandle,
-        );
-      });
-    return captured?.persistence
-      ? this.withPersistenceRestore(captured.persistence, execute)
-      : execute();
+    return this.withStoredInput(
+      agentId,
+      "unarchive",
+      undefined,
+      async (admittedHandle) => {
+        const captured = await this.requireRegistry().get(agentId);
+        const execute = () =>
+          this.runLifecycleMutation(agentId, async () => {
+            const current = await this.requireRegistry().get(agentId);
+            if (
+              current?.persistence?.provider !== captured?.persistence?.provider ||
+              current?.persistence?.sessionId !== captured?.persistence?.sessionId
+            )
+              throw new Error("Restore refused: provider session changed.");
+            return this.withStoredInput(
+              agentId,
+              "unarchive",
+              undefined,
+              () => this.unarchiveSnapshotUnlocked(agentId, updates),
+              commandPayload("unarchive", updates),
+              admittedHandle,
+            );
+          });
+        return captured?.persistence
+          ? this.withPersistenceRestore(captured.persistence, execute)
+          : execute();
+      },
+      commandPayload("unarchive", updates),
+      operationHandle,
+    );
   }
 
   private async unarchiveSnapshotUnlocked(
