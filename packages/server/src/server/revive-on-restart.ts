@@ -338,6 +338,7 @@ export function defaultSessions(deps: ReviveDeps): ReviveSessions {
     // A pool-account session has a binding: limit-resume continues it.
     if (agentManager.getLimitResumeBinding(id) !== null)
       return "pool account: limit-resume continues it";
+    // The owner continues its sessions through the controller restart queue and its journal checks.
     if (!agentManager.canRunUnscopedLimitResume(id)) return "owned by a trusted plugin";
     if (live.labels[LIMIT_RESUME_OPT_OUT_LABEL] === "off") return "opted out";
     return null;

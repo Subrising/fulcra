@@ -200,6 +200,83 @@ describe("AgentStorage", () => {
     expect(JSON.stringify(record)).not.toContain("recorded");
   });
 
+  test("runtime MCP credentials stay out of new and archived records", async () => {
+    const internal = {
+      type: "http" as const,
+      url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=fixture",
+      headers: { Authorization: "fixture-credential", "X-Paseo-Report-Origin": "fixture-witness" },
+    };
+    const external = { type: "stdio" as const, command: "fixture-mcp" };
+    const agent = createManagedAgent({
+      id: "runtime-mcp",
+      config: { mcpServers: { paseo: internal, external } },
+      persistence: {
+        provider: "claude",
+        sessionId: "fixture-session",
+        metadata: { cwd: "/tmp/project", mcpServers: { paseo: internal, external } },
+      },
+    });
+    await storage.applySnapshot(agent);
+    const record = await storage.get(agent.id);
+    expect(record?.config?.mcpServers).toEqual({ external });
+    expect(record?.persistence?.metadata?.mcpServers).toEqual({ external });
+    await storage.upsert({ ...record!, archivedAt: "2026-10-15T00:00:00Z" });
+    const [project] = await fs.readdir(storagePath);
+    const content = await fs.readFile(path.join(storagePath, project, `${agent.id}.json`), "utf8");
+    expect(content.includes("fixture-credential")).toBe(false);
+    expect(content.includes("fixture-witness")).toBe(false);
+    expect(agent.persistence?.metadata?.mcpServers).toHaveProperty("paseo");
+  });
+
+  test.each([false, true])(
+    "load rewrites legacy runtime MCP credentials; archived=%s",
+    async (archived) => {
+      const project = path.join(storagePath, "legacy");
+      await fs.mkdir(project, { recursive: true });
+      const file = path.join(project, "legacy-agent.json");
+      const internal = {
+        type: "sse",
+        url: "http://127.0.0.1:6767/mcp/agents",
+        headers: { authorization: "fixture-old-credential" },
+      };
+      const finishNotice = archived
+        ? {
+            parentId: "00000000-0000-4000-8000-000000000001",
+            owner: "report-up" as const,
+            status: "pending" as const,
+            messageId: "fixture-finish-notice",
+          }
+        : undefined;
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          id: "legacy-agent",
+          provider: "claude",
+          cwd: "/tmp/legacy-project",
+          createdAt: "2026-10-01T00:00:00Z",
+          updatedAt: "2026-10-01T00:00:00Z",
+          archivedAt: archived ? "2026-10-02T00:00:00Z" : null,
+          finishNotice,
+          config: { mcpServers: { paseo: internal } },
+          persistence: {
+            provider: "claude",
+            sessionId: "legacy-session",
+            metadata: { cwd: "/tmp/legacy-project", mcpServers: { paseo: internal } },
+          },
+        }),
+      );
+      const fresh = new AgentStorage(storagePath, logger);
+      const record = await fresh.get("legacy-agent");
+      expect(record?.finishNotice).toEqual(finishNotice);
+      expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+      expect(record?.config?.mcpServers).toBeUndefined();
+      expect(record?.persistence?.metadata).toEqual({ cwd: "/tmp/legacy-project" });
+      const rewritten = await fs.readFile(file, "utf8");
+      expect(rewritten.includes("fixture-old-credential")).toBe(false);
+      expect(JSON.parse(rewritten).updatedAt).toBe("2026-10-01T00:00:00Z");
+    },
+  );
+
   test("applySnapshot persists configs and snapshot metadata", async () => {
     await storage.applySnapshot(
       createManagedAgent({

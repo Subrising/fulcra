@@ -228,6 +228,8 @@ test("the launch hook: a pooled Claude launch gets the token for this launch onl
   assert.equal(JSON.stringify(readAccounts(root)).includes(tokens.get(b.id)), false); // never stored in the account store
   assert.deepEqual((await hook(req(S(3), "claude", "history"))).env, { KEEP: "1" }); // a history read is not a launch
 });
+const mac = process.platform === "darwin" ? test : test.skip;
+
 // B6: the Keychain path is exercised against fake-security.fixture.mjs (0600 files in a scratch dir) -- never the real
 // `security`, which would create a keychain and add it to the user's keychain search list.
 function fakeSecurity(dir) {
@@ -239,25 +241,28 @@ function fakeSecurity(dir) {
   );
   return bin;
 }
-test("keychain: a token goes in through stdin only (never argv) and comes back; a bad token is refused; no real keychain is touched", async () => {
-  const dir = scratch(),
-    kc = path.join(dir, "kc"),
-    k = createKeychain({ keychain: kc, security: fakeSecurity(dir) }),
-    id = S(9),
-    tok = "sk-ant-oat01-" + "a".repeat(60);
-  await k.put(id, tok);
-  assert.equal(await k.get(id), tok);
-  await assert.rejects(() => k.put(id, "short"), /claude setup-token/);
-  await k.remove(id);
-  assert.equal(await k.get(id), null);
-  const argv = fs.readFileSync(path.join(kc, "argv.log"), "utf8");
-  assert.equal(argv.includes(tok), false, "the token never reaches argv");
-  assert.ok(
-    argv.split("\n").some((l) => l === '["-i"]'),
-    "put goes through `security -i` (stdin)",
-  );
-});
-test("B5: a failed keychain call carries no stderr (put sends the token on stdin)", async () => {
+mac(
+  "keychain: a token goes in through stdin only (never argv) and comes back; a bad token is refused; no real keychain is touched",
+  async () => {
+    const dir = scratch(),
+      kc = path.join(dir, "kc"),
+      k = createKeychain({ keychain: kc, security: fakeSecurity(dir) }),
+      id = S(9),
+      tok = "sk-ant-oat01-" + "a".repeat(60);
+    await k.put(id, tok);
+    assert.equal(await k.get(id), tok);
+    await assert.rejects(() => k.put(id, "short"), /claude setup-token/);
+    await k.remove(id);
+    assert.equal(await k.get(id), null);
+    const argv = fs.readFileSync(path.join(kc, "argv.log"), "utf8");
+    assert.equal(argv.includes(tok), false, "the token never reaches argv");
+    assert.ok(
+      argv.split("\n").some((l) => l === '["-i"]'),
+      "put goes through `security -i` (stdin)",
+    );
+  },
+);
+mac("B5: a failed keychain call carries no stderr (put sends the token on stdin)", async () => {
   const dir = scratch(),
     bin = path.join(dir, "security");
   fs.writeFileSync(bin, "#!/bin/sh\ncat >&2; exit 1\n", { mode: 0o700 }); // echoes whatever it was sent to stderr
@@ -274,7 +279,7 @@ test("B5: a failed keychain call carries no stderr (put sends the token on stdin
 });
 // Only fake subprocesses: no device Keychain or account/provider configuration.
 for (const behavior of ["interactive-refusal", "missing", "mismatch", "read-error", "whitespace"]) {
-  test(`keychain verified put: ${behavior} never reports success or leaks diagnostics`, async () => {
+  mac(`keychain verified put: ${behavior} never reports success or leaks diagnostics`, async () => {
     const dir = scratch(),
       bin = path.join(dir, "security"),
       tok = "sk-ant-oat01-" + "c".repeat(60);
@@ -312,35 +317,38 @@ if (process.argv[2] === "-i") {
     assert.equal(JSON.stringify(err, Object.getOwnPropertyNames(err)).includes(tok), false);
   });
 }
-test("keychain verified put: interactive prompts alone permit exact fixture readback and replacement", async () => {
-  const dir = scratch(),
-    bin = path.join(dir, "security"),
-    fixture = path.join(import.meta.dirname, "fake-security.fixture.mjs");
-  fs.writeFileSync(
-    bin,
-    `#!/bin/sh\nif [ "$1" = "-i" ]; then printf 'security> security> ' >&2; fi\nexec "${process.execPath}" "${fixture}" "$@"\n`,
-    { mode: 0o700 },
-  );
-  const kc = path.join(dir, "kc"),
-    k = createKeychain({ keychain: kc, security: bin });
-  await k.put(S(12), "sk-ant-oat01-" + "e".repeat(60));
-  await k.put(S(12), "sk-ant-oat01-" + "f".repeat(60));
-  assert.equal(await k.get(S(12)), "sk-ant-oat01-" + "f".repeat(60));
-  const calls = fs
-    .readFileSync(path.join(kc, "argv.log"), "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map(JSON.parse);
-  assert.equal(
-    calls.filter((args) => args[0] === "find-generic-password").length,
-    3,
-    "both writes require readback",
-  );
-  assert.equal(
-    calls.some((args) => args[0] === "delete-generic-password"),
-    false,
-  );
-});
+mac(
+  "keychain verified put: interactive prompts alone permit exact fixture readback and replacement",
+  async () => {
+    const dir = scratch(),
+      bin = path.join(dir, "security"),
+      fixture = path.join(import.meta.dirname, "fake-security.fixture.mjs");
+    fs.writeFileSync(
+      bin,
+      `#!/bin/sh\nif [ "$1" = "-i" ]; then printf 'security> security> ' >&2; fi\nexec "${process.execPath}" "${fixture}" "$@"\n`,
+      { mode: 0o700 },
+    );
+    const kc = path.join(dir, "kc"),
+      k = createKeychain({ keychain: kc, security: bin });
+    await k.put(S(12), "sk-ant-oat01-" + "e".repeat(60));
+    await k.put(S(12), "sk-ant-oat01-" + "f".repeat(60));
+    assert.equal(await k.get(S(12)), "sk-ant-oat01-" + "f".repeat(60));
+    const calls = fs
+      .readFileSync(path.join(kc, "argv.log"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    assert.equal(
+      calls.filter((args) => args[0] === "find-generic-password").length,
+      3,
+      "both writes require readback",
+    );
+    assert.equal(
+      calls.some((args) => args[0] === "delete-generic-password"),
+      false,
+    );
+  },
+);
 test("B4: a human-held session is not moved at the limit (the account is still marked limited); its next launch moves and is recorded", async () => {
   const root = scratch();
   await setRotateOnLimit(root, true); // moving between accounts is the owner's opt-in
@@ -888,26 +896,29 @@ for (const outcome of ["recovered", "unavailable", "missing", "revoked"]) {
     assert.equal(JSON.stringify(readAccounts(f.root)).includes("fixture-credential"), false);
   });
 }
-test("Keychain lookup distinguishes missing item from transient refusal without raw diagnostics", async () => {
-  const dir = scratch(),
-    bin = path.join(dir, "security");
-  for (const code of [44, 1]) {
-    fs.writeFileSync(bin, `#!/bin/sh\nprintf 'private fixture diagnostic' >&2\nexit ${code}\n`, {
-      mode: 0o700,
-    });
-    const k = createKeychain({ keychain: path.join(dir, "kc"), security: bin });
-    if (code === 44) assert.equal(await k.get(S(999)), null);
-    else
-      await assert.rejects(
-        k.get(S(999)),
-        (error) =>
-          error.code === "ACCOUNT_KEYCHAIN_UNAVAILABLE" &&
-          !JSON.stringify(error, Object.getOwnPropertyNames(error)).includes(
-            "private fixture diagnostic",
-          ),
-      );
-  }
-});
+mac(
+  "Keychain lookup distinguishes missing item from transient refusal without raw diagnostics",
+  async () => {
+    const dir = scratch(),
+      bin = path.join(dir, "security");
+    for (const code of [44, 1]) {
+      fs.writeFileSync(bin, `#!/bin/sh\nprintf 'private fixture diagnostic' >&2\nexit ${code}\n`, {
+        mode: 0o700,
+      });
+      const k = createKeychain({ keychain: path.join(dir, "kc"), security: bin });
+      if (code === 44) assert.equal(await k.get(S(999)), null);
+      else
+        await assert.rejects(
+          k.get(S(999)),
+          (error) =>
+            error.code === "ACCOUNT_KEYCHAIN_UNAVAILABLE" &&
+            !JSON.stringify(error, Object.getOwnPropertyNames(error)).includes(
+              "private fixture diagnostic",
+            ),
+        );
+    }
+  },
+);
 
 // ---- Windows DPAPI backend (a fake runner stands in for PowerShell; no real DPAPI call)
 import { createWindowsKeychain } from "./accounts.mjs";

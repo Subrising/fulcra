@@ -1,3 +1,4 @@
+import { stripInternalPaseoMcpServer } from "./runtime-mcp-config.js";
 import { withoutPublicBaselineTransport } from "./host-public-baseline.js";
 import { RecordedUsageSchema } from "@getpaseo/protocol/recorded-usage";
 import { validatedTimestamp } from "./runtime-observation.js";
@@ -72,7 +73,7 @@ export function toStoredAgentRecord(
   options?: ProjectionOptions,
 ): StoredAgentRecord {
   const createdAt = options?.createdAt ?? agent.createdAt.toISOString();
-  const config = buildSerializableConfig(agent.config);
+  const config = buildSerializableConfig(stripInternalPaseoMcpServer(agent.config));
   const persistence = sanitizePersistenceHandle(agent.persistence);
   const runtimeInfo = withoutPublicBaselineTransport(sanitizeRuntimeInfo(agent.runtimeInfo));
 
@@ -405,7 +406,7 @@ function sanitizePersistenceHandle(
   }
   const metadata = sanitizeMetadata(handle.metadata);
   if (metadata !== undefined) {
-    sanitized.metadata = metadata;
+    sanitized.metadata = stripInternalPaseoMcpServer(metadata);
   }
   return sanitized;
 }

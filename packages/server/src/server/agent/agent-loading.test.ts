@@ -6,6 +6,8 @@ import { expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { startAgentRun } from "./agent-prompt.js";
 import { AgentStorage } from "./agent-storage.js";
@@ -433,3 +435,46 @@ test.each([
     }
   },
 );
+
+test("resume injects a live MCP connection after stored runtime credentials are removed", async () => {
+  const { createTestPaseoDaemon } = await import("../test-utils/paseo-daemon.js");
+  const clients = createTestAgentClients({ supportsMcpServers: true });
+  const provider = clients.claude!;
+  const resume = provider.resumeSession.bind(provider);
+  let connected = false;
+  provider.resumeSession = async (handle, overrides, context, options) => {
+    const server = overrides?.mcpServers?.paseo;
+    if (!server || server.type !== "http") throw new Error("Runtime MCP connection missing");
+    const mcp = new Client({ name: "resume-fixture", version: "1.0.0" });
+    try {
+      await mcp.connect(
+        new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: server.headers },
+        }),
+      );
+      const tools = await mcp.listTools();
+      connected = tools.tools.length > 0;
+    } finally {
+      await mcp.close();
+    }
+    return resume(handle, overrides, context, options);
+  };
+  const daemon = await createTestPaseoDaemon({ agentClients: clients });
+  const { agentManager, agentStorage } = daemon.daemon;
+  try {
+    const agent = await agentManager.createAgent(
+      { provider: "claude", cwd: daemon.paseoHome },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await agentManager.closeAgent(agent.id);
+    await agentManager.flush();
+    const record = await agentStorage.get(agent.id);
+    expect(record?.config?.mcpServers?.paseo).toBeUndefined();
+    expect(record?.persistence?.metadata?.mcpServers).toBeUndefined();
+    await ensureAgentLoaded(agent.id, { agentManager, agentStorage, logger: createTestLogger() });
+    expect(connected).toBe(true);
+  } finally {
+    await daemon.close();
+  }
+});
