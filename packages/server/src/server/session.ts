@@ -4649,7 +4649,7 @@ export class Session {
     });
   }
 
-  private async unarchiveAgentByHandle(
+  private async findAgentByHandle(
     handle: AgentPersistenceHandle,
   ): Promise<{ record: StoredAgentRecord } | null> {
     const records = await this.agentStorage.listByProviderSession(
@@ -4664,7 +4664,6 @@ export class Session {
     if (!matched) {
       return null;
     }
-    await unarchiveAgentState(this.agentStorage, this.agentManager, matched.id);
     return {
       record: matched,
     };
@@ -5730,17 +5729,19 @@ export class Session {
     );
     try {
       const snapshot = await this.agentManager.withPersistenceRestore(handle, async () => {
-        const matched = await this.unarchiveAgentByHandle(handle);
+        const matched = await this.findAgentByHandle(handle);
         const effectiveOverrides = matched
           ? { ...buildConfigOverrides(matched.record), ...overrides }
           : overrides;
         const restoredSnapshot = matched
-          ? await ensureAgentLoaded(matched.record.id, {
-              agentManager: this.agentManager,
-              agentStorage: this.agentStorage,
-              logger: this.sessionLogger,
-              configOverrides: effectiveOverrides,
-            })
+          ? await this.agentManager.withUnarchivedSnapshot(matched.record.id, () =>
+              ensureAgentLoaded(matched.record.id, {
+                agentManager: this.agentManager,
+                agentStorage: this.agentStorage,
+                logger: this.sessionLogger,
+                configOverrides: effectiveOverrides,
+              }),
+            )
           : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
         await unarchiveAgentState(this.agentStorage, this.agentManager, restoredSnapshot.id);
         await this.agentManager.hydrateTimelineFromProvider(restoredSnapshot.id);

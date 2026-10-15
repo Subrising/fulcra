@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
@@ -277,3 +277,159 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
     await context.close();
   }
 }, 30000);
+
+test("agent sockets cannot relabel a lead to bypass archive confirmation", async () => {
+  const { createTestPaseoDaemon } = await import("../test-utils/paseo-daemon.js");
+  const { DaemonClient } = await import("../test-utils/daemon-client.js");
+  const clients = createTestAgentClients({ supportsMcpServers: true });
+  const provider = clients.codex!;
+  const create = provider.createSession.bind(provider);
+  let witness: string | undefined;
+  provider.createSession = async (config, context) => {
+    const server = config.mcpServers?.paseo;
+    if (server?.type === "http") witness = server.headers?.["X-Paseo-Report-Origin"];
+    return create(config, context);
+  };
+  const context = await createTestPaseoDaemon({ agentClients: clients });
+  const url = `ws://127.0.0.1:${context.port}/ws`;
+  const user = new DaemonClient({ url, capabilities: { app_archive_confirmation: true } });
+  let worker: InstanceType<typeof DaemonClient> | undefined;
+  try {
+    await user.connect();
+    const caller = await user.createAgent({
+      config: { provider: "codex", cwd: context.paseoHome },
+    });
+    expect(witness).toEqual(expect.any(String));
+    worker = new DaemonClient({
+      url,
+      callerAgentId: caller.id,
+      callerAgentWitness: witness,
+      capabilities: { app_archive_confirmation: true },
+    });
+    await worker.connect();
+    const protectedLabels: Record<string, string>[] = [
+      { "fulcra.role": "lead" },
+      { "fulcra.seat": "main-assistant" },
+    ];
+    for (const labels of protectedLabels) {
+      const lead = await user.createAgent({
+        config: { provider: "codex", cwd: context.paseoHome },
+      });
+      await context.daemon.agentManager.setLabels(lead.id, labels);
+      const originalTitle = (await context.daemon.agentStorage.get(lead.id))?.title;
+      await expect(
+        worker.updateAgent(lead.id, {
+          name: "Unwanted title",
+          labels: { "fulcra.role": "implementation" },
+        }),
+      ).rejects.toThrow("Lead role and seat");
+      expect((await context.daemon.agentStorage.get(lead.id))?.title).toBe(originalTitle);
+      expect((await context.daemon.agentStorage.get(lead.id))?.labels).toMatchObject(labels);
+      await expect(worker.archiveAgent(lead.id)).rejects.toThrow("Confirm in the app");
+      await expect(worker.archiveAgent(lead.id, { confirmed: true })).rejects.toThrow(
+        "confirmation from the app",
+      );
+      expect((await context.daemon.agentStorage.get(lead.id))?.archivedAt).toBeFalsy();
+      const manager = context.daemon.agentManager;
+      await expect(
+        manager.trustedPlugins.agentInput(() =>
+          manager.setLabels(lead.id, { "fulcra.seat": "worker" }),
+        ),
+      ).rejects.toThrow("Lead role and seat");
+      const source = vi
+        .spyOn(manager.trustedPlugins, "currentInputSource")
+        .mockReturnValue("plugin");
+      try {
+        await expect(
+          manager.updateAgentMetadata(lead.id, { labels: { "fulcra.role": "implementation" } }),
+        ).rejects.toThrow("Lead role and seat");
+      } finally {
+        source.mockRestore();
+      }
+      await user.updateAgent(lead.id, { labels: { fixture: "user edit" } });
+      await user.archiveAgent(lead.id, { confirmed: true });
+      const archived = (await context.daemon.agentStorage.get(lead.id))!;
+      expect(archived.archivedAt).toEqual(expect.any(String));
+      await expect(
+        manager.trustedPlugins.agentInput(() =>
+          manager.updateAgentMetadata(lead.id, { labels: { "fulcra.role": "implementation" } }),
+        ),
+      ).rejects.toThrow("Lead role and seat");
+      await expect(
+        manager.trustedPlugins.agentInput(() =>
+          manager.unarchiveSnapshot(lead.id, {
+            labels: { "fulcra.role": null, "fulcra.seat": null },
+          }),
+        ),
+      ).rejects.toThrow("Lead role and seat");
+      expect((await context.daemon.agentStorage.get(lead.id))?.archivedAt).toBe(
+        archived.archivedAt,
+      );
+    }
+    const editable = await user.createAgent({
+      config: { provider: "codex", cwd: context.paseoHome },
+      labels: { "fulcra.role": "lead" },
+    });
+    await user.updateAgent(editable.id, { labels: { "fulcra.role": "implementation" } });
+    await user.archiveAgent(editable.id);
+    expect((await context.daemon.agentStorage.get(editable.id))?.archivedAt).toEqual(
+      expect.any(String),
+    );
+  } finally {
+    await worker?.close();
+    await user.close();
+    await context.close();
+  }
+});
+
+test.each([
+  { kind: "worker", failure: "provider" },
+  { kind: "lead", failure: "provider" },
+  { kind: "active", failure: "provider" },
+  { kind: "lead", failure: "timeline" },
+])(
+  "resume by handle restores the $kind archive state after a $failure failure",
+  async ({ kind, failure }) => {
+    const { createTestPaseoDaemon } = await import("../test-utils/paseo-daemon.js");
+    const { DaemonClient } = await import("../test-utils/daemon-client.js");
+    const clients = createTestAgentClients();
+    const context = await createTestPaseoDaemon({ agentClients: clients });
+    const user = new DaemonClient({
+      url: `ws://127.0.0.1:${context.port}/ws`,
+      capabilities: { app_archive_confirmation: true },
+    });
+    try {
+      await user.connect();
+      const agent = await user.createAgent({
+        config: { provider: "codex", cwd: context.paseoHome },
+        labels: { "fulcra.role": kind === "lead" ? "lead" : "implementation" },
+      });
+      if (kind === "active") await context.daemon.agentManager.closeAgent(agent.id);
+      else await user.archiveAgent(agent.id, { confirmed: kind === "lead" });
+      const original = (await context.daemon.agentStorage.get(agent.id))!;
+      expect(original.persistence).toEqual(expect.objectContaining({ provider: "codex" }));
+      const resume =
+        failure === "provider"
+          ? vi.spyOn(clients.codex!, "resumeSession")
+          : vi.spyOn(context.daemon.agentManager, "hydrateTimelineFromProvider");
+      resume.mockRejectedValue(new Error("Fixture load failed"));
+      try {
+        await expect(user.resumeAgent(original.persistence!)).rejects.toThrow(
+          "Fixture load failed",
+        );
+        expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt).toBe(
+          original.archivedAt,
+        );
+        expect(context.daemon.agentManager.getAgent(agent.id)).toBeNull();
+      } finally {
+        resume.mockRestore();
+      }
+      const retried = await user.resumeAgent(original.persistence!);
+      expect(retried.id).toBe(agent.id);
+      expect((await context.daemon.agentStorage.get(agent.id))?.archivedAt ?? null).toBeNull();
+    } finally {
+      await user.close();
+      await context.close();
+    }
+  },
+);

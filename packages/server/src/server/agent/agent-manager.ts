@@ -2387,6 +2387,25 @@ export class AgentManager {
     });
   }
 
+  private assertArchiveLeadLabelWrite(
+    patch: AgentLabelPatch | undefined,
+    labels: Record<string, string> | undefined,
+  ): void {
+    if (
+      !patch ||
+      !isArchiveLead({ labels: labels ?? {} }) ||
+      !["fulcra.role", SEAT_LABEL].some(
+        (key) => Object.hasOwn(patch, key) && patch[key] !== labels?.[key],
+      )
+    )
+      return;
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    const source = this.trustedPlugins.currentInputSource();
+    if (caller?.agentId || source === "agent" || source === "plugin")
+      throw new Error("Lead role and seat labels require changes from the app.");
+  }
+
   private assertChangedInjectionLabels(
     labels: Record<string, string> | undefined,
     stored: Record<string, string> | undefined,
@@ -2398,6 +2417,7 @@ export class AgentManager {
         .map((key) => [key, labels[key] ?? null]),
     );
     this.assertInjectionLabelWrite(changed);
+    this.assertArchiveLeadLabelWrite(changed, stored);
   }
 
   setMcpInjectLabels(labels: Record<string, string>): void {
@@ -4191,7 +4211,9 @@ export class AgentManager {
   }
 
   withArchiveConfirmation<T>(agentId: string, operation: () => T): T {
-    if (this.trustedPlugins.currentInputSource() !== "human")
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    if (caller?.agentId || this.trustedPlugins.currentInputSource() !== "human")
       throw new Error("Protected archive requires confirmation from the app.");
     return this.archiveConfirmations.run(agentId, operation);
   }
@@ -4680,6 +4702,7 @@ export class AgentManager {
     this.assertInjectionLabelWrite(patch);
     const liveAgent = this.agents.get(agentId);
     if (liveAgent) {
+      this.assertArchiveLeadLabelWrite(patch, liveAgent.labels);
       liveAgent.labels = applyLabelPatch(liveAgent.labels, patch);
       this.touchUpdatedAt(liveAgent);
       await this.persistSnapshot(liveAgent);
@@ -4702,6 +4725,7 @@ export class AgentManager {
       throw new Error(`Agent not found: ${agentId}`);
     }
     this.assertInjectionLabelWrite(patch.labels);
+    this.assertArchiveLeadLabelWrite(patch.labels, record.labels);
 
     const nextRecord = {
       ...record,
@@ -4996,6 +5020,8 @@ export class AgentManager {
       return false;
     }
 
+    this.assertArchiveLeadLabelWrite(updates?.labels, record.labels);
+
     if (record.persistence) {
       const matches = await registry.listByProviderSession(
         record.persistence.provider,
@@ -5025,6 +5051,44 @@ export class AgentManager {
     await registry.upsert(restored);
     if (!restored.internal) this.dispatchStoredAgentState(restored);
     return true;
+  }
+
+  async withUnarchivedSnapshot<T>(agentId: string, load: () => Promise<T>): Promise<T> {
+    const captured = await this.requireRegistry().get(agentId);
+    const restore = async () => {
+      const original = await this.requireRegistry().get(agentId);
+      const changed = await this.unarchiveSnapshot(agentId);
+      if (changed) this.notifyAgentState(agentId);
+      try {
+        return await load();
+      } catch (error) {
+        if (changed && original?.archivedAt) {
+          await this.runLifecycleMutation(agentId, async () => {
+            const current = await this.requireRegistry().get(agentId);
+            if (
+              !current ||
+              current.archivedAt ||
+              current.persistence?.provider !== original.persistence?.provider ||
+              current.persistence?.sessionId !== original.persistence?.sessionId
+            )
+              return;
+            // Restore this operation's old archive fence. A new archive admission
+            // could refuse the rollback of a protected lead after its load failed.
+            const archived = await this.persistArchivedRecord(current, {
+              archivedAt: original.archivedAt!,
+            });
+            if (this.agents.has(agentId)) await this.closeAgentRuntime(agentId);
+            await this.syncNativeArchiveState(current.provider, current.persistence, "archive");
+            this.discardRetainedAgentState(agentId);
+            if (!archived.internal) this.dispatchStoredAgentState(archived);
+          });
+        }
+        throw error;
+      }
+    };
+    return captured?.persistence
+      ? this.withPersistenceRestore(captured.persistence, restore)
+      : restore();
   }
 
   async unarchiveSnapshotByHandle(handle: AgentPersistenceHandle): Promise<void> {
@@ -5133,6 +5197,7 @@ export class AgentManager {
     this.assertInjectionLabelWrite(updates.labels);
     const liveAgent = this.getAgent(agentId);
     if (liveAgent) {
+      this.assertArchiveLeadLabelWrite(updates.labels, liveAgent.labels);
       if (updates.title) {
         await this.setTitle(agentId, updates.title);
       }
