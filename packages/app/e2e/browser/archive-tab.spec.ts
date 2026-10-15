@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { test } from "../support/fixtures";
 import { getServerId } from "../support/helpers/server-id";
 import { connectSeedClient } from "../support/helpers/seed-client";
@@ -24,6 +24,20 @@ import {
   reloadWorkspace,
 } from "../support/helpers/archive-tab";
 import { expectAgentTabActive } from "../support/helpers/launcher";
+
+async function dismissProtectedConfirmation(
+  page: Page,
+  message: string,
+  action: () => Promise<unknown>,
+): Promise<void> {
+  await Promise.all([
+    page.waitForEvent("dialog").then((confirmation) => {
+      expect(confirmation.message()).toContain(message);
+      return confirmation.dismiss();
+    }),
+    action(),
+  ]);
+}
 
 test.describe("Archive tab reconciliation", () => {
   let client: Awaited<ReturnType<typeof connectSeedClient>>;
@@ -205,14 +219,12 @@ test.describe("Archive tab reconciliation", () => {
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`archive-${width}-${height}.png`) });
-      const dialog = page.waitForEvent("dialog");
-      await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
-      await page.mouse.down();
-      await page.waitForTimeout(900);
-      await page.mouse.up();
-      const confirmation = await dialog;
-      expect(confirmation.message()).toContain("lead or owner");
-      await confirmation.dismiss();
+      await dismissProtectedConfirmation(page, "lead or owner", async () => {
+        await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+        await page.mouse.down();
+        await page.waitForTimeout(900);
+        await page.mouse.up();
+      });
       expect(await fetchAgentArchivedAt(client, lead.id)).toBeNull();
       await expectSessionRowVisible(page, lead.title);
     }
@@ -236,7 +248,11 @@ test.describe("Archive tab reconciliation", () => {
       [812, 375],
     ]) {
       await page.setViewportSize({ width, height });
-      await expect(restore).toBeVisible();
+      await page.evaluate(async () => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+      });
+      await expect(restore).toBeInViewport({ ratio: 1 });
       const restoreBox = (await restore.boundingBox())!;
       expect(restoreBox.width).toBeGreaterThanOrEqual(48);
       expect(restoreBox.height).toBeGreaterThanOrEqual(48);
@@ -275,11 +291,9 @@ test.describe("Archive tab reconciliation", () => {
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`restore-${width}-${height}.png`) });
-      const dialog = page.waitForEvent("dialog");
-      await restore.click();
-      const confirmation = await dialog;
-      expect(confirmation.message()).toContain("Restore this protected session?");
-      await confirmation.dismiss();
+      await dismissProtectedConfirmation(page, "Restore this protected session?", () =>
+        restore.click(),
+      );
       await expect(restore).toBeEnabled();
       expect(await fetchAgentArchivedAt(client, lead.id)).not.toBeNull();
     }
