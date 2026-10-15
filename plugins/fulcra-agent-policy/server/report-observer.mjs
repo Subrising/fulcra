@@ -1,7 +1,7 @@
 /** Native observations select notices. The host checks ownership and dispatches them. */
 export class ReportUpObserver {
   turns = new Map();
-  permissions = new Set();
+  permissions = new Map();
   stopped = false;
 
   constructor(deps) {
@@ -60,8 +60,12 @@ export class ReportUpObserver {
     if (this.stopped || !request?.id) return;
     const key = `${id}:${request.id}`;
     if (this.permissions.has(key)) return;
-    this.permissions.add(key);
+    this.permissions.set(key, request);
     this.deps.onPermission(id, request);
+  }
+
+  hasPermission(id, request) {
+    return !this.stopped && this.permissions.get(`${id}:${request.id}`) === request;
   }
 
   permissionResolved(id, requestId) {
@@ -70,7 +74,8 @@ export class ReportUpObserver {
 
   close(id) {
     this.turns.delete(id);
-    for (const key of this.permissions) if (key.startsWith(`${id}:`)) this.permissions.delete(key);
+    for (const key of this.permissions.keys())
+      if (key.startsWith(`${id}:`)) this.permissions.delete(key);
     this.deps.onClosed?.(id);
   }
 

@@ -5,6 +5,7 @@
 // replacement under the same endpoint and serverId.
 import path from "node:path";
 import { createTestPaseoDaemon } from "./paseo-daemon.js";
+import { loadPersistedConfig } from "../persisted-config.js";
 
 const [, , daemonVersion, portArg, paseoHomeRoot] = process.argv;
 const listenPort = portArg ? Number(portArg) : 0;
@@ -12,6 +13,8 @@ if (!Number.isInteger(listenPort) || listenPort < 0) {
   throw new Error(`Invalid versioned daemon port: ${portArg ?? ""}`);
 }
 
+// The test bootstrap receives explicit config. Restore installed plugin sources across replacement.
+const saved = paseoHomeRoot ? loadPersistedConfig(path.join(paseoHomeRoot, ".paseo")) : undefined;
 const daemon = await createTestPaseoDaemon({
   daemonVersion,
   ...(listenPort > 0 ? { listenPort } : {}),
@@ -23,7 +26,8 @@ const daemon = await createTestPaseoDaemon({
         cleanup: false,
       }
     : {}),
-  pluginsEnabled: true,
+  pluginsEnabled: saved?.pluginsEnabled ?? true,
+  plugins: saved?.plugins,
   mcpEnabled: false,
   corsAllowedOrigins: ["*"],
 });

@@ -12,6 +12,7 @@ import {
   COMBINED_LIST_LIMIT,
   NUDGE_MESSAGE_PREFIX,
   PERMISSION_COMMAND_CHARS,
+  PERMISSION_NOTICE_GRACE_MS,
   REPORT_UP_SNIPPET_CHARS,
   ReportUpService,
   reportUpSwitches,
@@ -63,9 +64,11 @@ function fixture(
   const clock = { now: options.now ?? Date.now() };
   const timers: Array<{ run: () => void; ms: number }> = [];
   const byId = new Map(chats.map((chat) => [chat.id, chat]));
+  const pending = new Map<string, Map<string, { id: string }>>();
   const delivered: Array<{ leadId: string; prompt: string }> = [];
   const manager = {
     getAgent: (id: string) => byId.get(id) ?? null,
+    getPendingPermissions: (id: string) => [...(pending.get(id)?.values() ?? [])],
     getLastAssistantMessage: async (id: string) => byId.get(id)?.lastMessage ?? null,
     nativeReportOwnsFinish: () => false,
   } as unknown as AgentManager;
@@ -99,8 +102,16 @@ function fixture(
       delivered.push({ leadId, prompt });
     },
   });
-  const stream = (agentId: string, event: object) =>
+  const stream = (agentId: string, event: object) => {
+    const permission = event as { type: string; request?: { id: string }; requestId?: string };
+    if (permission.type === "permission_requested") {
+      if (!pending.has(agentId)) pending.set(agentId, new Map());
+      pending.get(agentId)!.set(permission.request!.id, permission.request!);
+    }
+    if (permission.type === "permission_resolved")
+      pending.get(agentId)?.delete(permission.requestId!);
     service.onEvent({ type: "agent_stream", agentId, event } as AgentManagerEvent);
+  };
   const turn = (agentId: string, userMessage: object = { text: "do the task" }) => {
     stream(agentId, { type: "turn_started", provider: "claude" });
     stream(agentId, {
@@ -119,13 +130,23 @@ function fixture(
     });
     stream(agentId, { type: "turn_failed", provider: "claude", error });
   };
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const flushPermissionGrace = () => {
+    for (let index = timers.length - 1; index >= 0; index--) {
+      if (timers[index]!.ms === PERMISSION_NOTICE_GRACE_MS) timers.splice(index, 1)[0]!.run();
+    }
+  };
+  const settle = () => {
+    flushPermissionGrace();
+    return new Promise((resolve) => setTimeout(resolve, 20));
+  };
   return {
     service,
     delivered,
     stream,
     turn,
     settle,
+    flushPermissionGrace,
+    pending,
     clock,
     timers,
     failedTurn,
@@ -145,6 +166,14 @@ function nativeFixture(chats: FakeChat[], options: Parameters<typeof fixture>[1]
     logger,
   );
   const hooks = new PluginService(logger, config, "0.11.0-beta.5");
+  hooks.on("agent.permission_requested", ({ agent, request }) => {
+    if (!f.pending.has(agent.id)) f.pending.set(agent.id, new Map());
+    f.pending.get(agent.id)!.set(request.id, request);
+  });
+  hooks.on("agent.permission_resolved", ({ agent, requestId }) =>
+    f.pending.get(agent.id)?.delete(requestId),
+  );
+  hooks.on("agent.closed", ({ agent }) => f.pending.delete(agent.id));
   const off = f.service.observeNative(hooks);
   const agent = (id: string) => ({
     id,
@@ -372,6 +401,67 @@ describe("report-up and permission prompts", () => {
     request: { id, name: "Bash", input: { command } },
   });
 
+  test("resolved bypass tool requests stay quiet during the grace period", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("transient", "echo fixture"));
+    expect(f.delivered).toEqual([]);
+    expect(f.timers.map((timer) => timer.ms)).toEqual([PERMISSION_NOTICE_GRACE_MS]);
+    f.stream(WORKER, { type: "permission_resolved", requestId: "transient" });
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
+  });
+
+  test.each(["Bash", "AskUserQuestion", "request_user_input"])(
+    "a pending %s prompt alerts once after the grace period",
+    async (name) => {
+      const chat = { ...worker(), config: { modeId: "bypassPermissions" } };
+      const f = fixture([lead, chat]);
+      const event = { type: "permission_requested", request: { id: "hook", name } };
+      f.stream(WORKER, event);
+      f.stream(WORKER, event);
+      expect(f.delivered).toEqual([]);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain(`Tool: ${name}`);
+      f.service.stop();
+    },
+  );
+
+  test("resolution during the grace callback cancels the notice before dispatch", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("during-read", "echo fixture"));
+    f.flushPermissionGrace();
+    f.stream(WORKER, { type: "permission_resolved", requestId: "during-read" });
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
+  });
+
+  test("the current pending list wins when a resolution event was missed", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("missing-resolution", "echo fixture"));
+    f.pending.get(WORKER)!.clear();
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
+  });
+
+  test("close and service stop cancel pending permission notices", async () => {
+    const f = fixture([lead, worker()]);
+    f.stream(WORKER, ask("closed", "echo fixture"));
+    f.service.onEvent({
+      type: "agent_state",
+      agent: { id: WORKER, lifecycle: "closed" },
+    } as AgentManagerEvent);
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.stream(WORKER, ask("stopped", "echo fixture"));
+    f.service.stop();
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+  });
+
   test("a new prompt sends the lead one notice with the chat, tool, command and folder", async () => {
     const chat: FakeChat = { ...worker(), cwd: "/work/game" };
     const f = fixture([lead, chat]);
@@ -397,6 +487,23 @@ describe("report-up and permission prompts", () => {
     f.stream(WORKER, ask("req-2", "ls"));
     await f.settle();
     expect(f.delivered).toHaveLength(2);
+  });
+
+  test("a resolved notice held at the lead's usage limit is removed", async () => {
+    const f = fixture([
+      { ...lead, lastMessage: "Claude AI usage limit reached|0000000000" },
+      worker(),
+    ]);
+    f.turn(LEAD);
+    await f.settle();
+    f.stream(WORKER, ask("held", "echo fixture"));
+    await f.settle();
+    f.stream(WORKER, { type: "permission_resolved", requestId: "held" });
+    f.clock.now += 3600_000;
+    for (const timer of f.timers) timer.run();
+    await f.settle();
+    expect(f.delivered).toEqual([]);
+    f.service.stop();
   });
 
   test("a chat with no lead, or with the owner as lead, tells nobody", async () => {
@@ -482,6 +589,7 @@ describe("report-up limit state across a restart", () => {
           enabled: switches.finishedTurns,
           otherEnabled: switches.otherNotices,
         });
+        after.pending.set(WORKER, new Map([["req-1", { id: "req-1" }]]));
         after.clock.now = NOW + 6 * 3600_000;
         for (const timer of after.timers) timer.run();
         await after.settle();
@@ -1922,6 +2030,69 @@ test("CLI run inherits project labels when a worker uses a separate folder", asy
       "paseo.parent-agent-id": parent.id,
       "fulcra.reports-to": parent.id,
     });
+  } finally {
+    await client.close();
+    await daemon.close();
+  }
+}, 30000);
+
+test("a real daemon suppresses a short permission wait and delivers a pending request once", async () => {
+  const { createTestPaseoDaemon } = await import("./test-utils/paseo-daemon.js");
+  const { createTestAgentClient } = await import("./test-utils/fake-agent-client.js");
+  const { DaemonClient } = await import("./test-utils/daemon-client.js");
+  const { vi } = await import("vitest");
+  const notices: unknown[] = [];
+  const daemon = await createTestPaseoDaemon({
+    agentClients: {
+      claude: createTestAgentClient("claude"),
+      codex: createTestAgentClient("codex", { onStartTurn: (prompt) => notices.push(prompt) }),
+    },
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  try {
+    await client.connect();
+    await client.patchDaemonConfig({
+      reportUpOnTurnEnd: undefined,
+      idleLeadNudge: false,
+      autoResumeOnLimit: false,
+    });
+    const manager = daemon.daemon.agentManager;
+    const parent = await manager.createAgent(
+      {
+        provider: "codex",
+        cwd: daemon.paseoHome,
+        modeId: "full-access",
+        title: "Lead",
+      },
+      undefined,
+      {},
+    );
+    const child = await manager.createAgent(
+      { provider: "claude", cwd: daemon.paseoHome, modeId: "default", title: "Worker" },
+      undefined,
+      { labels: { [REPORTS_TO_LABEL]: parent.id } },
+    );
+    const transient = manager.runAgent(child.id, "echo hello");
+    await vi.waitFor(() => expect(manager.getPendingPermissions(child.id)).toHaveLength(1));
+    const shortRequest = manager.getPendingPermissions(child.id)[0]!;
+    await client.respondToPermission(child.id, shortRequest.id, { behavior: "allow" });
+    await transient;
+    await new Promise((resolve) => setTimeout(resolve, PERMISSION_NOTICE_GRACE_MS + 100));
+    expect(notices).toEqual([]);
+
+    const waiting = manager.runAgent(child.id, "echo hello");
+    await vi.waitFor(() => expect(manager.getPendingPermissions(child.id)).toHaveLength(1));
+    expect(notices).toEqual([]);
+    await vi.waitFor(() => expect(notices).toHaveLength(1), {
+      timeout: PERMISSION_NOTICE_GRACE_MS + 3000,
+    });
+    expect(notices[0]).toContain("is waiting for permission");
+    expect(notices[0]).toContain("Tool: Bash");
+    const pending = manager.getPendingPermissions(child.id)[0]!;
+    await client.respondToPermission(child.id, pending.id, { behavior: "allow" });
+    await waiting;
+    expect(manager.getPendingPermissions(child.id)).toEqual([]);
+    expect(notices).toHaveLength(1);
   } finally {
     await client.close();
     await daemon.close();

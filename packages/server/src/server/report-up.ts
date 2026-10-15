@@ -152,6 +152,7 @@ type NoticeKind =
 interface HeldReport {
   prompt: string;
   kind: NoticeKind;
+  permission?: { workerId: string; requestId: string };
 }
 
 class ReportUpDisabledError extends Error {
@@ -198,6 +199,7 @@ export async function leadChatOf(
   return { id };
 }
 
+export const PERMISSION_NOTICE_GRACE_MS = 2000;
 const NUDGE_DELIVERY_TIMEOUT_MS = 60_000;
 interface PendingNudge {
   handoff?: object;
@@ -248,9 +250,12 @@ export class ReportUpService {
       },
       onEnded: (input) => this.onTurnEnd(input),
       onPermission: (id, request) => {
-        void this.notifyPermission(id, request).catch((err: unknown) =>
-          this.deps.logger.warn({ err, agentId: id }, "Permission notice failed"),
-        );
+        // Bypass and hook answers can resolve a request before a person can act on it.
+        this.schedule(() => {
+          void this.notifyPermission(id, request).catch((err: unknown) =>
+            this.deps.logger.warn({ err, agentId: id }, "Permission notice failed"),
+          );
+        }, PERMISSION_NOTICE_GRACE_MS);
       },
     });
     this.load();
@@ -976,6 +981,8 @@ export class ReportUpService {
 
   /** Tells the lead once that a chat is waiting for permission. Nothing is allowed or denied here. */
   private async notifyPermission(workerId: string, request: PermissionRequest): Promise<void> {
+    const current = () => this.permissionCurrent(workerId, request);
+    if (!current()) return;
     const owned = await this.deps.agentStorage.getFinishNotice?.(workerId);
     if (!owned && !this.otherEnabled()) return;
     const live = this.deps.agentManager.getAgent(workerId);
@@ -985,9 +992,10 @@ export class ReportUpService {
       formatPermissionNotice({
         worker,
         request,
-        cwd: (live as { cwd?: string } | null)?.cwd ?? (worker as { cwd?: string }).cwd ?? null,
+        cwd: live?.cwd ?? null,
       }),
     );
+    if (!current()) return;
     if (await this.deps.remoteNotice?.(workerId, prompt, "permission")) return;
     const lead = await this.leadOf(worker);
     if ("skip" in lead) return;
@@ -1000,7 +1008,17 @@ export class ReportUpService {
       this.deps.localServerId,
     );
     if (!decision?.allowed) return;
-    await this.toLead(workerId, lead.id, prompt, owned ? "owned-permission" : "permission");
+    await this.toLead(
+      workerId,
+      lead.id,
+      prompt,
+      owned ? "owned-permission" : "permission",
+      current,
+      {
+        workerId,
+        requestId: request.id,
+      },
+    );
   }
 
   private now(): number {
@@ -1071,12 +1089,14 @@ export class ReportUpService {
     leadId: string,
     prompt: string,
     kind: NoticeKind = "report-up",
+    current: () => boolean = () => true,
+    permission?: HeldReport["permission"],
   ): Promise<void> {
-    if (!this.noticeEnabled(kind)) return;
+    if (!this.noticeEnabled(kind) || !current()) return;
     const leadLimit = this.limitOf(leadId);
     if (leadLimit) {
       const held = this.held.get(leadId) ?? [];
-      held.push({ prompt, kind });
+      held.push({ prompt, kind, ...(permission ? { permission } : {}) });
       if (held.length > MAX_HELD_REPORTS) held.shift();
       this.held.set(leadId, held);
       this.save();
@@ -1094,8 +1114,8 @@ export class ReportUpService {
     }
     // Held until the lead's turn ends, one queue per lead, in order (held-sends.ts).
     heldSendsFor(this.deps.agentManager, this.deps.logger).hold(leadId, async () => {
-      if (!this.noticeEnabled(kind)) return;
-      await this.send(leadId, prompt, kind);
+      if (!this.noticeEnabled(kind) || !current()) return;
+      await this.send(leadId, prompt, kind, current);
       this.deps.logger.info({ agentId: workerId, lead: leadId, kind }, "Report-up delivered");
     });
   }
@@ -1123,11 +1143,45 @@ export class ReportUpService {
     }
   }
 
+  private permissionCurrent(workerId: string, request: PermissionRequest): boolean {
+    return (
+      this.observer.hasPermission(workerId, request) && this.permissionPending(workerId, request.id)
+    );
+  }
+
+  private permissionPending(workerId: string, requestId: string): boolean {
+    const worker = this.deps.agentManager.getAgent(workerId);
+    if (!worker || worker.archivedAt || worker.internal) return false;
+    try {
+      return this.deps.agentManager
+        .getPendingPermissions(workerId)
+        .some((request) => request.id === requestId);
+    } catch {
+      return false;
+    }
+  }
+
+  private heldNoticeCurrent(report: HeldReport): boolean {
+    return (
+      this.noticeEnabled(report.kind) &&
+      (!report.permission ||
+        this.permissionPending(report.permission.workerId, report.permission.requestId))
+    );
+  }
+
   private async deliverHeld(leadId: string, held: readonly HeldReport[]): Promise<void> {
-    const enabled = held.filter((report) => this.noticeEnabled(report.kind));
+    const enabled = held.filter((report) => this.heldNoticeCurrent(report));
     if (!enabled.length) return;
     if (this.limitOf(leadId)) {
-      for (const report of enabled) await this.toLead(leadId, leadId, report.prompt, report.kind);
+      for (const report of enabled)
+        await this.toLead(
+          leadId,
+          leadId,
+          report.prompt,
+          report.kind,
+          () => this.heldNoticeCurrent(report),
+          report.permission,
+        );
       return;
     }
     const body = enabled.map(({ prompt }) => prompt.trim()).join("\n\n");
@@ -1138,10 +1192,13 @@ export class ReportUpService {
       if (enabled.some((report) => report.kind === "finished-turn")) kind = "finished-turn";
       else if (enabled.every((report) => report.kind === enabled[0]!.kind)) kind = enabled[0]!.kind;
       try {
-        await this.send(leadId, notice, kind);
+        await this.send(leadId, notice, kind, undefined, undefined, undefined, () => {
+          if (!enabled.every((report) => this.heldNoticeCurrent(report)))
+            throw new ReportUpDisabledError();
+        });
       } catch (err) {
         // The final check refused input. Retry only the notices that remain enabled, with no provider input repeated.
-        const remaining = enabled.filter((report) => this.noticeEnabled(report.kind));
+        const remaining = enabled.filter((report) => this.heldNoticeCurrent(report));
         if (err instanceof ReportUpDisabledError && remaining.length < enabled.length) {
           await this.deliverHeld(leadId, remaining);
           return;
@@ -1361,7 +1418,7 @@ export class ReportUpService {
     leadId: string,
     prompt: string,
     kind: NoticeKind,
-    currentNudge?: () => boolean,
+    currentNotice?: () => boolean,
     captureHandoff?: (handle: object) => void,
     ownedMessageId?: string,
     ownedFinalCheck?: () => void,
@@ -1373,7 +1430,7 @@ export class ReportUpService {
       ownedFinalCheck?.();
       if (ownedMessageId && agentManager.hasSubmittedFinishMessageNow(leadId, ownedMessageId))
         throw new OwnedFinishAlreadyDelivered();
-      if (currentNudge && !currentNudge()) throw new Error("Idle nudge generation expired");
+      if (currentNotice && !currentNotice()) throw new Error("Notice is no longer current");
     };
     const causes = {
       "idle-nudge": "nudge",

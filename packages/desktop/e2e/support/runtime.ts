@@ -55,6 +55,8 @@ export async function loadRealDaemonState(): Promise<RealDaemonState> {
 
 export interface DesktopRuntimeConfig {
   serverId: string;
+  bundledPluginPins?: Record<string, string>;
+  additionalDaemonUrls?: string[];
   updateAvailable?: boolean;
   latestVersion?: string;
   updateReadyToInstall?: boolean;
@@ -141,6 +143,21 @@ export async function installDesktopRuntime(
   await page.addInitScript(
     (cfg) => {
       // Mutable state shared across IPC calls within this page
+      function isFixtureConnection(url: unknown) {
+        return [cfg.fixtureUrl, ...(cfg.additionalDaemonUrls ?? [])].includes(String(url));
+      }
+
+      async function installAppUpdate() {
+        if (cfg.slowInstall) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+        }
+        return {
+          installed: true,
+          version: cfg.latestVersion ?? "1.2.3",
+          message: "App update installed. Restart required.",
+        };
+      }
+
       let manageDaemon = cfg.manageBuiltInDaemon ?? false;
       let daemonRunning = true;
       let currentPid: number | null = cfg.daemonPid ?? null;
@@ -227,19 +244,13 @@ export async function installDesktopRuntime(
       } = {
         platform: "darwin",
         invoke: async (command: string, args?: Record<string, unknown>) => {
+          if (command === "desktop_bundled_plugin_pins") return cfg.bundledPluginPins ?? {};
           if (command === "check_app_update") {
             return checkAppUpdate(args?.intent);
           }
 
           if (command === "install_app_update") {
-            if (cfg.slowInstall) {
-              await new Promise<void>((resolve) => setTimeout(resolve, 3000));
-            }
-            return {
-              installed: true,
-              version: cfg.latestVersion ?? "1.2.3",
-              message: "App update installed. Restart required.",
-            };
+            return installAppUpdate();
           }
 
           if (command === "desktop_daemon_status") {
@@ -247,7 +258,7 @@ export async function installDesktopRuntime(
           }
 
           if (command === "desktop_daemon_connection_check") {
-            return args?.url === cfg.fixtureUrl;
+            return isFixtureConnection(args?.url);
           }
 
           if (command === "desktop_daemon_logs") {
