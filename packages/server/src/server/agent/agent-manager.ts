@@ -2175,6 +2175,7 @@ export class AgentManager {
   private readonly persistenceRestoreContext = new AsyncLocalStorage<string>();
   private readonly persistenceRestores = new Map<string, Promise<unknown>>();
   private readonly archiveConfirmations = new AsyncLocalStorage<string>();
+  private readonly restoreConfirmations = new AsyncLocalStorage<string>();
   private readonly archiveServerId?: string;
   private readonly archiveLedgerDirectory?: string;
   private acceptingAgentRegistrations = true;
@@ -4218,6 +4219,32 @@ export class AgentManager {
     return this.archiveConfirmations.run(agentId, operation);
   }
 
+  withRestoreConfirmation<T>(agentId: string, operation: () => T): T {
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    if (caller?.agentId || this.trustedPlugins.currentInputSource() !== "human")
+      throw new Error("Protected restore requires confirmation from the app.");
+    return this.restoreConfirmations.run(agentId, operation);
+  }
+
+  async preflightRestore(agentId: string): Promise<void> {
+    const record = await this.requireRegistry().get(agentId);
+    if (record?.archivedAt) await this.assertRestoreSafe(agentId);
+  }
+
+  private async assertRestoreSafe(agentId: string): Promise<void> {
+    const protection = await this.getArchiveProtection(agentId);
+    if (!protection.confirmationRequired) return;
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    if (
+      caller?.agentId ||
+      this.restoreConfirmations.getStore() !== agentId ||
+      this.trustedPlugins.currentInputSource() !== "human"
+    )
+      throw new Error(`Restore refused: ${protection.reasons.join(" ")} Confirm in the app.`);
+  }
+
   private async assertArchiveSafe(agentId: string, records: StoredAgentRecord[]): Promise<void> {
     const protection = await this.getArchiveProtection(agentId);
     records = await this.requireRegistry().list();
@@ -5021,6 +5048,7 @@ export class AgentManager {
     }
 
     this.assertArchiveLeadLabelWrite(updates?.labels, record.labels);
+    await this.assertRestoreSafe(agentId);
 
     if (record.persistence) {
       const matches = await registry.listByProviderSession(

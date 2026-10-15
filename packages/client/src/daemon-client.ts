@@ -3438,11 +3438,13 @@ export class DaemonClient {
   async resumeAgent(
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
+    options?: { confirmed?: boolean },
   ): Promise<AgentSnapshotPayload> {
     const requestId = this.createRequestId();
     const message = SessionInboundMessageSchema.parse({
       type: "resume_agent_request",
       requestId,
+      ...(options?.confirmed ? { confirmed: true } : {}),
       handle,
       ...(overrides ? { overrides } : {}),
     });
@@ -3583,11 +3585,16 @@ export class DaemonClient {
     });
   }
 
-  async refreshAgent(agentId: string, requestId?: string): Promise<AgentRefreshedStatusPayload> {
+  async refreshAgent(
+    agentId: string,
+    requestId?: string,
+    options?: { confirmed?: boolean },
+  ): Promise<AgentRefreshedStatusPayload> {
     const resolvedRequestId = this.createRequestId(requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "refresh_agent_request",
       agentId,
+      ...(options?.confirmed ? { confirmed: true } : {}),
       requestId: resolvedRequestId,
     });
     return this.sendRequest({

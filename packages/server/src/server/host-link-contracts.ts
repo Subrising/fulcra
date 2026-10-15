@@ -92,6 +92,15 @@ export const HostLinkSpawnSchema = z
     workload: z.enum(["standard", "heavy", "gpu"]),
     workspace: name,
     profile: name,
+    notifyOnFinish: z.boolean().optional(),
+    expected: z
+      .object({
+        provider: z.string().min(1),
+        model: z.string().min(1).optional(),
+        modeId: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     title: z.string().min(1).max(200),
     prompt: z.string().min(1).max(32000),
   })
@@ -130,6 +139,7 @@ export const HostLinkWorkerRequestSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("inspect"), agentId: name }).strict(),
+  z.object({ kind: z.literal("notices"), agentId: name }).strict(),
 ]);
 export type HostLinkWorkerRequest = z.infer<typeof HostLinkWorkerRequestSchema>;
 export const HostLinkReceiptSchema = z
@@ -143,6 +153,27 @@ export const HostLinkReceiptSchema = z
   })
   .strict();
 export type HostLinkReceipt = z.infer<typeof HostLinkReceiptSchema>;
+export const HostLinkWorkerNoticeSchema = z
+  .object({
+    id: name,
+    kind: z.enum(["finished", "failed", "permission"]),
+    text: z.string().min(1).max(4000),
+  })
+  .strict();
+export type HostLinkWorkerNotice = z.infer<typeof HostLinkWorkerNoticeSchema>;
+export const HostLinkWorkerNoticesSchema = z
+  .object({
+    serverId: name,
+    agentId: name,
+    complete: z.boolean(),
+    notices: z.array(HostLinkWorkerNoticeSchema).max(128),
+  })
+  .strict();
+const receivedNotice = HostLinkWorkerNoticeSchema.extend({
+  state: z.enum(["queued", "sending", "delivered", "uncertain", "exhausted"]),
+  attempts: z.number().int().min(0).max(8),
+  nextAt: z.number().finite().nonnegative(),
+}).strict();
 export const HostLinkJournalSchema = z.record(
   z.string(),
   z
@@ -155,6 +186,21 @@ export const HostLinkJournalSchema = z.record(
       profile: HostLinkProfileSchema.nullable(),
       cwd: z.string().nullable(),
       receipt: HostLinkReceiptSchema,
+      wire: HostLinkWireSchema.optional(),
+      sourceSessionId: z.string().nullable().optional(),
+      sourceGrant: z.string().optional(),
+      notifyOnFinish: z.boolean().optional(),
+      started: z.boolean().optional(),
+      complete: z.boolean().optional(),
+      notices: z.array(HostLinkWorkerNoticeSchema).max(128).optional(),
+      receivedNotices: z.array(receivedNotice).max(128).optional(),
+      watch: z
+        .object({
+          failures: z.number().int().min(0).max(8),
+          nextAt: z.number().finite().nonnegative(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
 );

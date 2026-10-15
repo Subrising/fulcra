@@ -15293,3 +15293,74 @@ test("FU-153 concurrent explicit restores cannot activate archived duplicate rec
     rmSync(workdir, { recursive: true, force: true });
   }
 });
+
+test.each(["lead", "owner", "planning", "orchestration", "prime", "main-assistant", "ledger"])(
+  "FU-168 protected %s restore needs human confirmation before native effects",
+  async (role) => {
+    const workdir = mkdtempSync(join(tmpdir(), "protected-restore-"));
+    const ledger = join(workdir, "ledgers");
+    const storage = new AgentStorage(join(workdir, "agents"), logger);
+    const client = new NativeArchiveRecordingClient();
+    const manager = new AgentManager({
+      clients: { codex: client },
+      registry: storage,
+      logger,
+      archiveLedgerDirectory: ledger,
+    });
+    try {
+      const labels: Record<string, string> = {};
+      if (role === "main-assistant") labels["fulcra.seat"] = role;
+      else if (role !== "ledger") labels["fulcra.role"] = role;
+      const agent = await manager.createAgent(
+        { provider: "codex", cwd: workdir, title: "Fixture protected" },
+        undefined,
+        {
+          workspaceId: undefined,
+          labels: {},
+        },
+      );
+      await manager.setLabels(agent.id, labels);
+      if (role === "ledger") {
+        mkdirSync(join(ledger, "fixture"), { recursive: true });
+        writeFileSync(
+          join(ledger, "fixture", "OPEN-ITEMS.md"),
+          "| FX-1 | Work | FIX | Fixture protected | OPEN | | |\n",
+        );
+      }
+      await manager.closeAgent(agent.id);
+      await storage.upsert({
+        ...(await storage.get(agent.id))!,
+        archivedAt: new Date().toISOString(),
+      });
+      const before = (await storage.get(agent.id))!;
+      await expect(manager.unarchiveSnapshot(agent.id)).rejects.toThrow("Confirm in the app");
+      await expect(manager.unarchiveSnapshotByHandle(before.persistence!)).rejects.toThrow(
+        "Confirm in the app",
+      );
+      await expect(manager.withUnarchivedSnapshot(agent.id, async () => "loaded")).rejects.toThrow(
+        "Confirm in the app",
+      );
+      await expect(
+        manager.trustedPlugins.agentInput(() => manager.unarchiveSnapshot(agent.id)),
+      ).rejects.toThrow("Confirm in the app");
+      const restore = () => manager.unarchiveSnapshot(agent.id);
+      const confirmRestore = () => manager.withRestoreConfirmation(agent.id, restore);
+      await expect(
+        manager.withAgentCaller("fixture-caller", () =>
+          manager.trustedPlugins.rpc(undefined, async () => confirmRestore()),
+        ),
+      ).rejects.toThrow("confirmation from the app");
+      expect(await storage.get(agent.id)).toEqual(before);
+      expect(client.unarchivedHandles).toHaveLength(0);
+      await manager.trustedPlugins.rpc(undefined, () =>
+        manager.withRestoreConfirmation(agent.id, () => manager.unarchiveSnapshot(agent.id)),
+      );
+      expect((await storage.get(agent.id))?.archivedAt).toBeNull();
+      expect(client.unarchivedHandles).toHaveLength(1);
+    } finally {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await manager.flush();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  },
+);

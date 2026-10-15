@@ -4,6 +4,7 @@ Status: source implementation. Live Mac-to-Mac and Mac-to-PC acceptance remains 
 
 FU-105 — Cross-host worker notices: Fulcra sends `role:main-assistant` notices to its configured host when no local chat holds that role.
 FU-76 — Cross-host spawn creates a worker through a directed link and a destination-owned profile.
+FU-170 — Native creation returns retained finish, error, and permission notices to the calling lead.
 
 The approved review separates reporting lines from creation ancestry (`PASEO-VS-FULCRA-2026-10-12.md:38`).
 Its delivery and suppression constraints appear at lines 350 and 369–372.
@@ -137,11 +138,49 @@ Lead success notices remain suppressed; failed lead turns can cross the link.
 Retained remote children also count for success suppression.
 A notice cannot claim role authority through its text.
 
+## Native worker creation
+
+Agent-scoped `create_agent` accepts an optional destination `serverId`.
+Omit it, or select the local server ID, to keep local creation.
+For a remote host, supply `hostLink` with `messageId`, `workload`, `workspace`, and `profile`.
+Use one retained UUID for retries. Workspace and profile identifiers name destination grants, not source paths or accounts.
+The provider, explicit model, and explicit mode must match the destination profile.
+Local workspace placement, labels, features, and detached creation are refused for remote requests.
+
+The source uses the bound caller's existing chat grant and one directed link to that server ID.
+Unknown hosts, ambiguous links, missing grants, and inactive grants refuse creation.
+The tool returns host, worker, request, and receipt state. It does not return credentials.
+The private source outbox keeps the worker receipt for owner control through the host-link interface.
+A pending or uncertain result requires receipt reconciliation before another creation.
+
+Remote `notifyOnFinish` defaults to `true`. Set it to `false` to disable return notices.
+The destination retains permission checkpoints and the first finish or error under the worker receipt.
+The home daemon reads these events with its retained worker credential through the same directed link.
+No reverse link, callback URL, daemon password, or worker-visible link credential is required.
+Notices name the original calling chat, rather than the current main assistant.
+
+The home daemon commits a receipt before notification input. Stable event IDs suppress duplicate network replies and repeated worker events.
+Queued notices survive restart. They wait for the lead's active turn and keep daemon input provenance.
+Notice recovery starts after session revival. A running revived worker keeps its subscription.
+Changed grants, archived callers, and changed provider sessions refuse delivery. Notices never restore an archived lead.
+
+Healthy subscriptions check for retained events every ten seconds. Network failures use eight persisted attempts with delays capped at sixty seconds.
+The home daemon reads at most four workers concurrently. It has no timer when no eligible work remains.
+After retry exhaustion, repeat the same native creation request with its original UUID to renew the retry budget.
+This reuses the worker and notice receipts. It never starts a replacement worker or replays a delivered notice.
+
+Each worker keeps up to 127 permission checkpoints and one terminal notice within the existing journal storage limits.
+Do not delete receipt files to clear capacity or retry a request.
+The private source outbox retains notice text and delivery state for owner inspection.
+A failed or interrupted provider handoff has state `uncertain`. It requires reconciliation; the daemon never replays it automatically.
+This preserves the native input safety rule when provider acceptance cannot be proved after a crash.
+
 ## Verification boundary
 
 Run focused tests through the existing test scripts and queue.
-The source tests use real HTTP, private files, durable receipts, and two isolated daemons with test providers.
+The source tests use real HTTP, private files, durable receipts, and isolated agent runtimes with test providers.
 They cover admission, initial input, credential refusal, permission restrictions, retries, response loss, and role moves during held delivery.
+Return-notice cases cover finish, error, permission, restart, link recovery, duplicate suppression, and the real runtime-to-provider handoff.
 They do not prove installed Mac-to-Mac or Mac-to-PC provider execution.
 The merge owner must obtain the required fresh security review before integration.
 Do not install or restart live daemons to run this batch's tests.

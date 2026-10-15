@@ -227,8 +227,65 @@ test.describe("Archive tab reconciliation", () => {
     await page.waitForTimeout(900);
     await page.mouse.up();
     await expectSessionRowArchived(page, lead.title);
-    await client.refreshAgent(lead.id);
     await clickSessionRow(page, lead.title);
+    const restore = page.getByRole("button", { name: "Unarchive", exact: true });
+    for (const [width, height] of [
+      [375, 812],
+      [768, 1024],
+      [1440, 900],
+      [812, 375],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await expect(restore).toBeVisible();
+      const restoreBox = (await restore.boundingBox())!;
+      expect(restoreBox.width).toBeGreaterThanOrEqual(48);
+      expect(restoreBox.height).toBeGreaterThanOrEqual(48);
+      expect(restoreBox.x).toBeGreaterThanOrEqual(0);
+      expect(restoreBox.x + restoreBox.width).toBeLessThanOrEqual(width);
+      expect(restoreBox.y + restoreBox.height).toBeLessThanOrEqual(height);
+      const layout = await restore.evaluate((button) => {
+        const callout = button.parentElement!;
+        const text = button.previousElementSibling as HTMLElement;
+        const rowBox = callout.getBoundingClientRect();
+        const textBox = text.getBoundingClientRect();
+        const buttonBox = button.getBoundingClientRect();
+        return {
+          rowLeft: rowBox.left,
+          rowRight: rowBox.right,
+          textLeft: textBox.left,
+          textRight: textBox.right,
+          buttonLeft: buttonBox.left,
+          buttonRight: buttonBox.right,
+          textWidth: text.clientWidth,
+          textScrollWidth: text.scrollWidth,
+          textHeight: text.clientHeight,
+          textScrollHeight: text.scrollHeight,
+        };
+      });
+      expect(layout.textLeft).toBeGreaterThanOrEqual(layout.rowLeft);
+      expect(layout.textRight).toBeLessThanOrEqual(layout.buttonLeft);
+      expect(layout.buttonRight).toBeLessThanOrEqual(layout.rowRight);
+      expect(layout.textScrollWidth).toBeLessThanOrEqual(layout.textWidth + 1);
+      expect(layout.textScrollHeight).toBeLessThanOrEqual(layout.textHeight + 1);
+      await testInfo.attach(`restore-layout-${width}`, {
+        body: JSON.stringify(layout),
+        contentType: "application/json",
+      });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`restore-${width}-${height}.png`) });
+      const dialog = page.waitForEvent("dialog");
+      await restore.click();
+      const confirmation = await dialog;
+      expect(confirmation.message()).toContain("Restore this protected session?");
+      await confirmation.dismiss();
+      await expect(restore).toBeEnabled();
+      expect(await fetchAgentArchivedAt(client, lead.id)).not.toBeNull();
+    }
+    page.once("dialog", (dialog) => dialog.accept());
+    await restore.click();
+    await expect(restore).toHaveCount(0);
     await expect(page.getByText("This agent is archived", { exact: false })).toHaveCount(0);
     expect(await fetchAgentArchivedAt(client, lead.id)).toBeNull();
   });

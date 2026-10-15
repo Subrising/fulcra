@@ -1,3 +1,5 @@
+import type { HostLinks } from "../../host-links.js";
+import { HostLinkSpawnSchema } from "../../host-link-contracts.js";
 import { noteDeliveredReport } from "../../lead-events.js";
 import { compactToolResult } from "./compact-result.js";
 import { NativeArtifactProduceInputSchema } from "@getpaseo/protocol/native-evidence";
@@ -118,6 +120,8 @@ import { noteAgentMessage } from "../../agent-message-log.js";
 
 export interface PaseoToolHostDependencies {
   nativeReportOrigin?: NativeReportOrigin;
+  serverId?: string;
+  hostLinks?: Pick<HostLinks, "spawnForAgent">;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   terminalManager?: TerminalManager | null;
@@ -1069,7 +1073,37 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       .strict()
       .describe("Create a new workspace for the agent."),
   ]);
+  const remotePlacementFields = {
+    serverId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Destination host ID. Omit for local creation."),
+    hostLink: HostLinkSpawnSchema.pick({
+      messageId: true,
+      workload: true,
+      workspace: true,
+      profile: true,
+    })
+      .optional()
+      .describe(
+        "Remote grant identifiers and retained request UUID. Remote finish notices default to enabled.",
+      ),
+  };
+  const remoteCreateAgentArgsSchema = z
+    .object({
+      ...remotePlacementFields,
+      serverId: z.string().min(1),
+      hostLink: remotePlacementFields.hostLink.unwrap(),
+      provider: ProviderOrProviderModelInputSchema,
+      title: z.string().trim().min(1).max(60),
+      initialPrompt: z.string().trim().min(1),
+      notifyOnFinish: z.boolean().optional().default(Boolean(callerAgentId)),
+      settings: z.object({ modeId: z.string().optional() }).strict().optional(),
+    })
+    .strict();
   const commonCreateAgentFields = {
+    ...remotePlacementFields,
     title: z
       .string()
       .trim()
@@ -1530,27 +1564,69 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     );
   }
 
+  async function createRemoteAgent(args: unknown): Promise<PaseoToolResult | null> {
+    const placement = z.object(remotePlacementFields).passthrough().parse(args);
+    if (placement.serverId && placement.serverId !== options.serverId) {
+      if (!callerAgentId) throw new Error("Remote creation requires an agent-scoped caller.");
+      const remote = remoteCreateAgentArgsSchema.parse(args);
+      if (!options.hostLinks) throw new Error("The requested host has no configured host link.");
+      const selected = remote.provider.includes("/")
+        ? resolveRequiredProviderModel(remote.provider)
+        : { provider: remote.provider };
+      const receipt = await options.hostLinks.spawnForAgent(callerAgentId, remote.serverId, {
+        ...remote.hostLink,
+        kind: "spawn",
+        notifyOnFinish: remote.notifyOnFinish,
+        title: remote.title,
+        prompt: remote.initialPrompt,
+        expected: {
+          ...selected,
+          ...(remote.settings?.modeId ? { modeId: remote.settings.modeId } : {}),
+        },
+      });
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          serverId: receipt.serverId,
+          agentId: receipt.agentId,
+          messageId: receipt.messageId,
+          state: receipt.state,
+          guidance: remote.notifyOnFinish
+            ? "Finish, error, and permission notices return to this lead. Keep this request UUID. Do not create a replacement after an uncertain response."
+            : "Finish notices are disabled. Keep this request UUID. Do not create a replacement after an uncertain response.",
+        }),
+      };
+    }
+    if (placement.hostLink) throw new Error("hostLink requires a remote serverId.");
+    return null;
+  }
+
   registerTool(
     "create_agent",
     {
       title: "Create agent",
       description:
-        "Create an agent. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires a provider and an initial prompt. Pass provider/model (for example codex/gpt-6.1-sol) to choose the model, or a bare provider (for example claude) to use the role default model and effort. Do not guess model ids; call list_providers and list_models first if uncertain.",
+        "Create an agent. For a remote serverId, supply hostLink grant identifiers. Finish notices return to the calling lead. Remote profiles own the model and mode. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires a provider and an initial prompt. Pass provider/model (for example codex/gpt-6.1-sol) to choose the model, or a bare provider (for example claude) to use the role default model and effort. Do not guess model ids; call list_providers and list_models first if uncertain.",
       inputSchema: createAgentInputSchema,
       outputSchema: {
-        agentId: z.string(),
-        type: AgentProviderEnum,
-        status: AgentStatusEnum,
-        cwd: z.string(),
+        agentId: z.string().nullable(),
+        serverId: z.string().optional(),
+        messageId: z.string().optional(),
+        state: z.string().optional(),
+        type: AgentProviderEnum.optional(),
+        status: AgentStatusEnum.optional(),
+        cwd: z.string().optional(),
         workspaceId: z.string().optional(),
-        currentModeId: z.string().nullable(),
-        availableModes: z.array(ProviderModeSchema),
+        currentModeId: z.string().nullable().optional(),
+        availableModes: z.array(ProviderModeSchema).optional(),
         lastMessage: z.string().nullable().optional(),
         permission: AgentPermissionRequestPayloadSchema.nullable().optional(),
         guidance: z.string().optional(),
       },
     },
     async (args: unknown) => {
+      const remote = await createRemoteAgent(args);
+      if (remote) return remote;
       const resolvedArgs = await resolveCreateAgentToolArgs(args);
       const { parsedArgs, worktree } = resolvedArgs;
       agentManager.assertInjectionLabelWrite(parsedArgs.labels);
