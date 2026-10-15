@@ -23,7 +23,7 @@ The browser checks render the real plugin surface with synthetic data and the SD
 They cover 375, 768, 1440, and 812×375 pixels in dark and light themes.
 They use 43 synthetic items with the Mini ledger columns.
 The adapter tests check owner matching before redaction and cache refresh after owner settings change.
-They check project selection, status columns, recent Done items, full text and evidence, job navigation, event refresh, errors, recovery, empty data, and subscription cleanup.
+They check project selection, status columns, recent Done items, full text and evidence, job navigation, explicit done workers, event refresh, errors, recovery, empty data, and subscription cleanup.
 Card titles have at most two lines. Card metadata and result lines can use an ellipsis.
 Full details must show all text. Only board lanes and status tabs can scroll horizontally.
 They fail on horizontal overflow, clipped text, overlapping controls, or controls below 48×48 pixels.

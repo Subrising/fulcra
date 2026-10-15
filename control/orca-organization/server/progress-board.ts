@@ -97,7 +97,7 @@ export function jobList(
     .map((a) => ({
       id: a.id,
       title: scrubFreeText(a.title ?? "Untitled job", null),
-      status: a.status,
+      status: a.labels?.["fulcra.hold"] === "done" ? "done" : a.status,
       machine: scrubFreeText(machine, null),
       createdAt: a.createdAt,
       updatedAt: a.updatedAt,

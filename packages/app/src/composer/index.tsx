@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import type { ComposerTextSource } from "./text-source";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { useStore } from "zustand";
@@ -1996,11 +1997,14 @@ function ComposerContentImpl({
   );
 
   const isVoiceSwitching = voice?.isVoiceSwitching ?? false;
+  const touch = useTouchTargets();
   const voiceButtonDisabled = !isConnected || isVoiceSwitching;
   const realtimeVoiceButtonStyle = useCallback(
-    (state: PressableStateCallbackType & { hovered?: boolean }) =>
-      buildRealtimeVoiceButtonStyle(state.hovered, voiceButtonDisabled, isCompactLayout),
-    [isCompactLayout, voiceButtonDisabled],
+    (state: PressableStateCallbackType & { hovered?: boolean }) => [
+      ...buildRealtimeVoiceButtonStyle(state.hovered, voiceButtonDisabled, isCompactLayout),
+      ...(touch ? [touchTargetStyles.icon] : []),
+    ],
+    [isCompactLayout, voiceButtonDisabled, touch],
   );
 
   const activeActionContent = useMemo(
@@ -2065,7 +2069,7 @@ function ComposerContentImpl({
   const beforeVoiceContent = useMemo(
     () =>
       hasAgent ? (
-        <View style={styles.contextWindowMeterSlot}>
+        <View style={[styles.contextWindowMeterSlot, touch && touchTargetStyles.icon]}>
           <ContextWindowMeter
             serverId={serverId}
             agentId={agentId}
@@ -2084,6 +2088,7 @@ function ComposerContentImpl({
       agentState.contextWindowUsedTokens,
       agentState.totalCostUsd,
       contextWindowMeterGlyphSize,
+      touch,
     ],
   );
 

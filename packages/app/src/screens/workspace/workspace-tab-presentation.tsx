@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useCallback, useMemo, type ReactElement, type ReactNode } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { Check, CircleAlert } from "lucide-react-native";
@@ -204,6 +205,7 @@ export function WorkspaceTabOptionRow({
   onPress,
   trailingAccessory,
 }: WorkspaceTabOptionRowProps): ReactElement {
+  const touch = useTouchTargets();
   const { t } = useTranslation();
   const isOptionActive = useCallback(
     ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) =>
@@ -213,9 +215,10 @@ export function WorkspaceTabOptionRow({
   const pressableStyle = useCallback(
     (state: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.optionMainPressable,
+      touch && touchTargetStyles.icon,
       isOptionActive(state) && styles.optionRowActive,
     ],
-    [isOptionActive],
+    [isOptionActive, touch],
   );
   const optionRowStyle = useMemo(
     () => [styles.optionRow, active && styles.optionRowActive],
@@ -223,7 +226,12 @@ export function WorkspaceTabOptionRow({
   );
   return (
     <View style={optionRowStyle}>
-      <Pressable onPress={onPress} style={pressableStyle}>
+      <Pressable
+        onPress={onPress}
+        style={pressableStyle}
+        accessibilityRole="button"
+        accessibilityLabel={presentation.label}
+      >
         {(state) => {
           const optionActive = isOptionActive(state);
           return (

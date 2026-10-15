@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useMemo, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 import { Text } from "react-native";
@@ -42,6 +43,10 @@ function mobileTabMenuTriggerStyle({ open, pressed }: { open?: boolean; pressed?
     styles.mobileTabMenuTrigger,
     (Boolean(open) || Boolean(pressed)) && styles.mobileTabMenuTriggerActive,
   ];
+}
+
+function touchMobileTabMenuTriggerStyle(state: { open?: boolean; pressed?: boolean }) {
+  return [mobileTabMenuTriggerStyle(state), touchTargetStyles.icon];
 }
 
 function MobileTabDropdownMenuItem({
@@ -102,6 +107,7 @@ export function MobileTabTrailingAccessory({
   menuEntries: WorkspaceTabMenuEntry[];
 }): ReactElement {
   const { t } = useTranslation();
+  const touch = useTouchTargets();
   return (
     <DropdownMenu compactMode="sheet">
       <DropdownMenuTrigger
@@ -109,7 +115,7 @@ export function MobileTabTrailingAccessory({
         accessibilityRole="button"
         accessibilityLabel={t("workspace.tabs.menu.openFor", { label: presentationLabel })}
         hitSlop={8}
-        style={mobileTabMenuTriggerStyle}
+        style={touch ? touchMobileTabMenuTriggerStyle : mobileTabMenuTriggerStyle}
       >
         <ThemedEllipsis size={14} uniProps={mutedColorMapping} />
       </DropdownMenuTrigger>

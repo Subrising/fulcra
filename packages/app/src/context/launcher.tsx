@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionStore } from "@/stores/session-store";
+import { Layers } from "lucide-react-native";
 import { Button } from "@/components/ui/button";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import {
@@ -9,7 +10,7 @@ import {
   useWorkspaceLayoutStore,
 } from "@/stores/workspace-layout-store";
 import { useWorkspace } from "@/stores/session-store-hooks";
-import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
+import { touchTargetStyles } from "@/hooks/use-touch-targets";
 import { openWorkspaceContext } from "@/workspace-tabs/open-supporting-view";
 import { contextWorkspaceKey, makeContextSelection, useContextScope } from "./scope";
 
@@ -57,18 +58,17 @@ export function ContextButton({
     });
   }, [workspace, selectedAgentId, selectCurrentAgent, isCompact, workspaceKey, serverId]);
   const label = t("context.open", { defaultValue: "Context" });
-  // FU-73: a 48 px target on a touch screen.
-  const touch = useTouchTargets();
   return (
     <Button
       variant="ghost"
       size="sm"
-      style={touch ? touchTargetStyles.icon : undefined}
+      style={touchTargetStyles.icon}
+      leftIcon={isCompact ? Layers : undefined}
       accessibilityLabel={label}
       disabled={!workspace}
       onPress={open}
     >
-      {label}
+      {isCompact ? undefined : label}
     </Button>
   );
 }

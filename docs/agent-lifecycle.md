@@ -180,7 +180,7 @@ An idle lead receives a nudge when its eligible idle-worker set gains a member o
 Each lead receives at most one nudge per `daemon.idleLeadNudgeMinIntervalMinutes`. The default is 60 minutes.
 The delivery time persists across daemon restarts. Work added during the interval waits for the lead's next idle event after it ends.
 A change that only removes workers or closes items sends no nudge.
-Paused or blocked workers, background jobs, blocked items, and standing rules are excluded.
+Paused, blocked, or done workers, background jobs, blocked items, and standing rules are excluded.
 Ledger ownership still matches session titles or short IDs.
 
 Use the durable worker hold label:
@@ -188,10 +188,12 @@ Use the durable worker hold label:
 ```sh
 fulcra agent update SESSION_ID --label fulcra.hold=paused
 fulcra agent update SESSION_ID --label fulcra.hold=blocked
+fulcra agent update SESSION_ID --label fulcra.hold=done
 fulcra agent update SESSION_ID --label fulcra.hold=
 ```
 
-The empty value clears the hold. The label controls nudge eligibility; use Stop to interrupt a running turn.
+Set `done` when you accept a worker's final report. The board places that worker in Done.
+Clear the hold before you give it a new job. The empty value clears the hold. The label controls nudge eligibility; use Stop to interrupt a running turn.
 
 Set a positive whole number of minutes to change the interval:
 

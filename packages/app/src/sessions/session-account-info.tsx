@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useCallback, useMemo } from "react";
 import { Pressable, Text, View, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -8,6 +9,8 @@ import { sessionAccount, sessionAccountText, type SessionAccount } from "./sessi
 
 // Use the shared menu engine with a row-safe trigger: opening information must not navigate the row.
 function SessionInfoTrigger({ account, testID }: { account: SessionAccount; testID?: string }) {
+  const touch = useTouchTargets();
+  const triggerStyle = useMemo(() => [styles.trigger, touch && touchTargetStyles.icon], [touch]);
   const { triggerRef, open, setOpen } = useMenuContext("SessionInfoTrigger");
   const accessibilityState = useMemo(() => ({ expanded: open }), [open]);
   const onPress = useCallback(
@@ -26,7 +29,7 @@ function SessionInfoTrigger({ account, testID }: { account: SessionAccount; test
       accessibilityState={accessibilityState}
       accessibilityLabel={`Session info, ${account.providerLabel}, ${sessionAccountText(account)}`}
       testID={testID}
-      style={styles.trigger}
+      style={triggerStyle}
     >
       <Text numberOfLines={1} style={styles.label}>
         {sessionAccountText(account)}

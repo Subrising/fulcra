@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { X } from "lucide-react-native";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
@@ -39,6 +40,11 @@ export function SidebarCallout({
   onDismiss,
   testID,
 }: SidebarCalloutProps) {
+  const touch = useTouchTargets();
+  const dismissStyle = useMemo(
+    () => [styles.dismissButton, touch && touchTargetStyles.icon],
+    [touch],
+  );
   const { t } = useTranslation();
   const { theme } = useUnistyles();
   const visibleActions = (actions ?? []).slice(0, 2);
@@ -69,7 +75,7 @@ export function SidebarCallout({
               <Pressable
                 onPress={onDismiss}
                 hitSlop={8}
-                style={styles.dismissButton}
+                style={dismissStyle}
                 testID={testID ? `${testID}-dismiss` : undefined}
                 accessibilityLabel={t("sidebarCallout.dismiss")}
                 accessibilityRole="button"
@@ -115,6 +121,7 @@ function SidebarCalloutActionButton({
   action: SidebarCalloutAction;
   testID?: string;
 }) {
+  const touch = useTouchTargets();
   const isPrimary = action.variant === "primary";
   const labelStyle = useMemo(
     () => [styles.actionLabel, isPrimary ? styles.actionLabelPrimary : styles.actionLabelSecondary],
@@ -123,11 +130,12 @@ function SidebarCalloutActionButton({
   const pressableStyle = useCallback(
     ({ pressed }: PressableStateCallbackType) => [
       styles.actionButton,
+      touch && touchTargetStyles.icon,
       isPrimary ? styles.actionButtonPrimary : styles.actionButtonSecondary,
       pressed ? styles.actionButtonPressed : null,
       action.disabled ? styles.actionButtonDisabled : null,
     ],
-    [action.disabled, isPrimary],
+    [action.disabled, isPrimary, touch],
   );
   return (
     <Pressable

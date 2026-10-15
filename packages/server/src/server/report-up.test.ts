@@ -657,7 +657,7 @@ describe("idle-lead nudge", () => {
     }
   });
 
-  test.each(["paused", "blocked"])(
+  test.each(["paused", "blocked", "done"])(
     "a %s worker is excluded until its durable hold is cleared",
     async (hold) => {
       const heldWorker = idleWorker();
@@ -1722,10 +1722,12 @@ test("WebSocket configuration and native report-up preserve armed finish ownersh
         ],
         { timeout: 15000 },
       );
-    await updateHold("paused");
-    expect((await daemon.daemon.agentStorage.get(idleChild.id))?.labels?.["fulcra.hold"]).toBe(
-      "paused",
-    );
+    for (const hold of ["paused", "done"]) {
+      await updateHold(hold);
+      expect((await daemon.daemon.agentStorage.get(idleChild.id))?.labels?.["fulcra.hold"]).toBe(
+        hold,
+      );
+    }
     await updateHold("");
     expect((await daemon.daemon.agentStorage.get(idleChild.id))?.labels?.["fulcra.hold"]).toBe("");
     mkdirSync(join(ledgerDir, "fixture"));
@@ -1839,3 +1841,59 @@ describe("archive report observations", () => {
     }
   });
 });
+
+test("CLI run inherits project labels when a worker uses a separate folder", async () => {
+  const { createTestPaseoDaemon } = await import("./test-utils/paseo-daemon.js");
+  const { createTestAgentClient } = await import("./test-utils/fake-agent-client.js");
+  const { DaemonClient } = await import("./test-utils/daemon-client.js");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const daemon = await createTestPaseoDaemon({
+    agentClients: { codex: createTestAgentClient("codex") },
+  });
+  const client = new DaemonClient({ url: `ws://127.0.0.1:${daemon.port}/ws` });
+  try {
+    await client.connect();
+    const parent = await client.createAgent({
+      provider: "codex",
+      cwd: daemon.paseoHome,
+      title: "Project lead",
+      labels: {
+        project: "fixture-project",
+        "fulcra.project": "fixture-project",
+        "fulcra.role": "orchestration",
+      },
+    });
+    const cwd = join(daemon.paseoHome, "worker-folder");
+    mkdirSync(cwd);
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        fileURLToPath(new URL("../../../cli/dist/index.js", import.meta.url)),
+        "run",
+        "--host",
+        `127.0.0.1:${daemon.port}`,
+        "--provider",
+        "codex",
+        "--cwd",
+        cwd,
+        "--background",
+        "--json",
+        "Fixture work",
+      ],
+      { env: { ...process.env, PASEO_AGENT_ID: parent.id }, timeout: 15000 },
+    );
+    const result = JSON.parse(stdout);
+    const saved = await daemon.daemon.agentStorage.get(result.agentId);
+    expect(saved?.cwd).toBe(cwd);
+    expect(saved?.labels).toMatchObject({
+      project: "fixture-project",
+      "fulcra.project": "fixture-project",
+      "paseo.parent-agent-id": parent.id,
+      "fulcra.reports-to": parent.id,
+    });
+  } finally {
+    await client.close();
+    await daemon.close();
+  }
+}, 30000);

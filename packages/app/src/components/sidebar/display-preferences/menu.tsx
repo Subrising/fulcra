@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   useCallback,
   useMemo,
@@ -163,6 +164,7 @@ const TRAILING_LABEL_KEYS: Record<SidebarTrailingChoice, string> = {
  * be, and it grew a row for each host on top of that.
  */
 export function SidebarDisplayPreferencesMenu(): ReactElement {
+  const touch = useTouchTargets();
   const { t } = useTranslation();
   const preferences = useSidebarDisplayPreferences();
   const hosts = useHosts();
@@ -177,9 +179,10 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
   const triggerStyle = useCallback(
     ({ hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.trigger,
+      touch && touchTargetStyles.icon,
       hovered && styles.triggerHovered,
     ],
-    [],
+    [touch],
   );
 
   const showHostFilter = hosts.length > 1;

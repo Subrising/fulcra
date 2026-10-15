@@ -1,3 +1,4 @@
+import type { StyleProp, ViewStyle } from "react-native";
 import {
   useCallback,
   useMemo,
@@ -51,10 +52,10 @@ interface SidebarHeaderRowProps {
   tall?: boolean;
 }
 
-// The lone "header" strip has its own fixed height; rows inside a group grow to a touch target.
-function useTallHeaderRow(tall: boolean, variant: SidebarHeaderRowVariant): boolean {
+// Header strips and grouped rows both grow for touch input.
+function useTallHeaderRow(tall: boolean): boolean {
   const touchRows = useSidebarTouchRows();
-  return tall || (touchRows && variant !== "header");
+  return tall || touchRows;
 }
 
 function headerRowIconSize(variant: SidebarHeaderRowVariant) {
@@ -80,7 +81,7 @@ export function SidebarHeaderRow({
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const ThemedIcon = useMemo(() => (Icon ? withUnistyles(Icon) : null), [Icon]);
   const isHighlighted = isHovered || isActive;
-  const tallRow = useTallHeaderRow(tall, variant);
+  const tallRow = useTallHeaderRow(tall);
   const iconSize = headerRowIconSize(variant);
 
   let right = trailing ?? null;
@@ -89,7 +90,7 @@ export function SidebarHeaderRow({
   }
 
   return (
-    <View ref={rowRef} collapsable={false} style={getContainerStyle(variant)}>
+    <View ref={rowRef} collapsable={false} style={getContainerStyle(variant, tallRow)}>
       <View
         style={[
           styles.row,
@@ -196,7 +197,8 @@ const styles = StyleSheet.create((theme) => ({
   },
 }));
 
-function getContainerStyle(variant: SidebarHeaderRowVariant) {
+function getContainerStyle(variant: SidebarHeaderRowVariant, tall = false): StyleProp<ViewStyle> {
+  if (tall) return [getContainerStyle(variant), sidebarTouchStyles.row];
   switch (variant) {
     case "header":
       return styles.container;
