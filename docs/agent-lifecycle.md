@@ -176,12 +176,17 @@ This setting does not change reporting rights or authorize permission responses.
 
 ## Idle-lead nudges
 
-An idle lead receives a nudge when its eligible idle-worker set gains a member or a new owned open item appears.
+An idle lead receives a nudge when its eligible worker set grows or new READY ledger work appears.
+No session in that project can be running. READY work can wake a lead that has no workers.
+Project labels and reporting lines identify related sessions. Running turns and background jobs block the nudge.
+Turn-end events and debounced ledger-file changes check these conditions.
 Each lead receives at most one nudge per `daemon.idleLeadNudgeMinIntervalMinutes`. The default is 60 minutes.
-The delivery time persists across daemon restarts. Work added during the interval waits for the lead's next idle event after it ends.
+The delivery time persists across daemon restarts. Work added during the interval waits for the next event after it ends.
+No polling or interval retry timer wakes the lead. If file watching is unavailable, turn-end checks remain active.
 A change that only removes workers or closes items sends no nudge.
-Paused, blocked, or done workers, background jobs, blocked items, and standing rules are excluded.
-Ledger ownership still matches session titles or short IDs.
+Blocked items, DECIDE rows, and standing rules are excluded.
+Ownership matches the lead's title, full or short ID, or project label.
+Paused, blocked, or done workers stay out of the suggested worker list. The lead can create another worker for READY work.
 
 Use the durable worker hold label:
 
