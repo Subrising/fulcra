@@ -1149,6 +1149,25 @@ describe("ledger items", () => {
     expect((await readOpenLedgerRows(dir)).some((row) => row.project === "huge")).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test.each(["oversized", "unreadable"])(
+    "strict ledger reads name the project for an %s ledger",
+    async (kind) => {
+      const dir = mkdtempSync(join(tmpdir(), "ledger-project-error-"));
+      const project = "fixture-project";
+      const file = join(dir, project, "OPEN-ITEMS.md");
+      mkdirSync(join(dir, project));
+      try {
+        if (kind === "oversized") writeFileSync(file, "x".repeat(600 * 1024));
+        else mkdirSync(file);
+        await expect(readOpenLedgerRows(dir, true)).rejects.toThrow('project "fixture-project"');
+        await expect(readOpenLedgerRows(dir, true)).rejects.not.toThrow(dir);
+        expect(await readOpenLedgerRows(dir)).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 // Fulcra 0.2.18 (FU-113): leads report up on purpose, so a lead's finished turn is not sent to the main assistant.
 describe("report-up from a lead to the main assistant", () => {

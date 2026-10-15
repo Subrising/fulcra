@@ -49,14 +49,18 @@ export async function readOpenLedgerRows(dir: string, strict = false): Promise<L
   try {
     projects = await readdir(dir);
   } catch (error) {
-    if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT")
+      throw new Error("Cannot list project ledgers", { cause: error });
     return rows;
   }
   for (const project of projects) {
     try {
       const file = path.join(dir, project, "OPEN-ITEMS.md");
       if ((await stat(file)).size > MAX_FILE_BYTES) {
-        if (strict) throw new Error("Ledger exceeds its size limit");
+        if (strict)
+          throw Object.assign(new Error("Ledger exceeds its size limit"), {
+            code: "LEDGER_SIZE_LIMIT",
+          });
         continue;
       }
       rows.push(...parseOpenRows(project, await readFile(file, "utf8")));
@@ -65,8 +69,13 @@ export async function readOpenLedgerRows(dir: string, strict = false): Promise<L
         strict &&
         (error as NodeJS.ErrnoException).code !== "ENOENT" &&
         (error as NodeJS.ErrnoException).code !== "ENOTDIR"
-      )
-        throw error;
+      ) {
+        const reason =
+          (error as NodeJS.ErrnoException).code === "LEDGER_SIZE_LIMIT"
+            ? "size limit exceeded"
+            : "read failed";
+        throw new Error(`Cannot read ledger for project "${project}": ${reason}`, { cause: error });
+      }
       /* no ledger here */
     }
   }
