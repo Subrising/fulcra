@@ -185,6 +185,8 @@ The delivery time persists across daemon restarts. Work added during the interva
 No polling or interval retry timer wakes the lead. If file watching is unavailable, turn-end checks remain active.
 A change that only removes workers or closes items sends no nudge.
 Blocked items, DECIDE rows, and standing rules are excluded.
+Blocked statuses can start with `OPEN` or `IN PROGRESS`, followed by separators and `BLOCKED`.
+The word `BLOCKED` later in task text does not exclude a row.
 Ownership matches the lead's title, full or short ID, or project label.
 Paused, blocked, or done workers stay out of the suggested worker list. The lead can create another worker for READY work.
 

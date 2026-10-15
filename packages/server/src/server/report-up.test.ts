@@ -856,6 +856,34 @@ describe("idle-lead nudge", () => {
     expect(f.delivered).toHaveLength(1);
   });
 
+  test("blocked status prefixes keep a worker-free lead quiet until READY work appears", async () => {
+    const ledger = [
+      "BLOCKED: dependency",
+      "OPEN: BLOCKED: dependency",
+      "OPEN (BLOCKED on owner): dependency",
+      "IN PROGRESS: BLOCKED dependency",
+    ].map((status, index) => ({
+      project: owned[0]!.project,
+      owner: owned[0]!.owner,
+      id: `FU-${20 + index}`,
+      status,
+    }));
+    const f = fixture([lead], { ledger, enabled: false });
+    try {
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      ledger.push({ ...owned[0]!, status: "OPEN: unblock the BLOCKED dialog" });
+      f.turn(LEAD);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("1 open ledger item: FU-12.");
+      expect(f.delivered[0]!.prompt).not.toMatch(/FU-2[0-3]/);
+    } finally {
+      f.service.stop();
+    }
+  });
+
   test("the default empty owner exclusion list accepts title-only ledger owners", async () => {
     const titledLead = { ...lead, title: "Owner A" };
     const f = fixture([titledLead, idleWorker()], { ledger: [{ ...owned[0]!, owner: "Owner A" }] });
@@ -1416,6 +1444,26 @@ describe("ledger items", () => {
     "| FU-3 | Moved thing | BUILD | Lead (11111111) | MOVED to fmc | — | the owner |",
     "| FU-4 | Other | BUILD | Someone else | OPEN | — | the owner |",
   ].join("\n");
+
+  test.each([
+    ["BLOCKED: x", []],
+    ["OPEN: BLOCKED: x", []],
+    ["OPEN (BLOCKED on owner): x", []],
+    ["IN PROGRESS: BLOCKED x", []],
+    ["open: blocked: x", []],
+    ["in progress - ( blocked: x", []],
+    ["OPEN: unblock the BLOCKED dialog", ["FU-1"]],
+    ["OPEN: fix the BLOCKED dialog", ["FU-1"]],
+    ["OPEN: BLOCKEDNESS in the dialog", ["FU-1"]],
+  ])("READY selection checks only the blocked status prefix in %s", (status, expected) => {
+    const rows = parseOpenRows(
+      "fixture",
+      `| FU-1 | Fix | FIX | Lead (11111111) | ${status} | — | fixture |`,
+    );
+    expect(
+      rowsEligibleForNudge({ rows, chat: { id: LEAD, title: "Lead" } }).map((row) => row.id),
+    ).toEqual(expected);
+  });
 
   test("reads only the rows that are not DONE or MOVED, and matches the owner by short id or title", () => {
     const rows = parseOpenRows("fulcra", table);
