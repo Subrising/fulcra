@@ -6678,6 +6678,7 @@ describe("FU-170 native host selection", () => {
         {
           ...request.hostLink,
           kind: "spawn",
+          notifyOnFinish: false,
           title: request.title,
           prompt: request.initialPrompt,
           expected: { provider: "codex", model: "gpt-test" },
@@ -6693,7 +6694,35 @@ describe("FU-170 native host selection", () => {
     expect(JSON.stringify(result)).not.toContain("private.invalid");
     expect(deps.spies.agentManager.createAgent).not.toHaveBeenCalled();
   });
-  it.each(["notice", "missing-link", "top-level", "local-grant"])(
+  it("defaults remote finish notices to the bound calling lead", async () => {
+    const deps = createTestDeps();
+    const calls: unknown[] = [];
+    const server = await createAgentMcpServer({
+      ...deps,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger: createTestLogger(),
+      callerAgentId: "bound-lead",
+      serverId: "source",
+      hostLinks: {
+        spawnForAgent: async (_caller, _host, body) => {
+          calls.push(body);
+          return {
+            serverId: "destination",
+            messageId: request.hostLink.messageId,
+            agentId: "remote-worker",
+            state: "created",
+            token: null,
+            endpoint: null,
+          };
+        },
+      },
+    });
+    const { notifyOnFinish: _notify, ...input } = request;
+    const result = await invokeToolWithParsedInput(registeredTool(server, "create_agent"), input);
+    expect(calls).toEqual([expect.objectContaining({ notifyOnFinish: true })]);
+    expect(result.structuredContent.guidance).toContain("return to this lead");
+  });
+  it.each(["missing-link", "top-level", "local-grant"])(
     "refuses %s before local creation",
     async (kind) => {
       const deps = createTestDeps();
@@ -6706,14 +6735,12 @@ describe("FU-170 native host selection", () => {
       });
       const args = {
         ...request,
-        ...(kind === "notice" ? { notifyOnFinish: true } : {}),
         ...(kind === "local-grant" ? { serverId: "source" } : {}),
       };
       await expect(
         invokeToolWithParsedInput(registeredTool(server, "create_agent"), args),
       ).rejects.toThrow(
         {
-          notice: "Remote finish notices",
           "top-level": "agent-scoped",
           "local-grant": "remote serverId",
           "missing-link": "host link",

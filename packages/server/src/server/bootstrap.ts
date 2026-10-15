@@ -2179,7 +2179,8 @@ export async function createPaseoDaemon(
         .catch((err) => logger.warn({ err }, "Revive on restart failed"))
         .then(() => queuedAgentMessages.start())
         .then(() => stopReportUp.recover())
-        .catch((err) => logger.warn({ err }, "Queued messages could not resume"));
+        .catch((err) => logger.warn({ err }, "Queued messages could not resume"))
+        .then(() => hostLinkRuntime.start());
     } catch (error) {
       localCredential = null;
       await deleteLocalCredential(config.paseoHome);

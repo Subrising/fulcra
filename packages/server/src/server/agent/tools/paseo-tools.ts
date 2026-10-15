@@ -1087,7 +1087,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     })
       .optional()
       .describe(
-        "Remote grant identifiers and retained request UUID. Remote creation requires notifyOnFinish=false.",
+        "Remote grant identifiers and retained request UUID. Remote finish notices default to enabled.",
       ),
   };
   const remoteCreateAgentArgsSchema = z
@@ -1569,10 +1569,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     if (placement.serverId && placement.serverId !== options.serverId) {
       if (!callerAgentId) throw new Error("Remote creation requires an agent-scoped caller.");
       const remote = remoteCreateAgentArgsSchema.parse(args);
-      if (remote.notifyOnFinish)
-        throw new Error(
-          "Remote finish notices are unavailable. Set notifyOnFinish=false and use the host-link receipt for control.",
-        );
       if (!options.hostLinks) throw new Error("The requested host has no configured host link.");
       const selected = remote.provider.includes("/")
         ? resolveRequiredProviderModel(remote.provider)
@@ -1580,6 +1576,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       const receipt = await options.hostLinks.spawnForAgent(callerAgentId, remote.serverId, {
         ...remote.hostLink,
         kind: "spawn",
+        notifyOnFinish: remote.notifyOnFinish,
         title: remote.title,
         prompt: remote.initialPrompt,
         expected: {
@@ -1594,8 +1591,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           agentId: receipt.agentId,
           messageId: receipt.messageId,
           state: receipt.state,
-          guidance:
-            "Remote finish notices are unavailable. Keep this request UUID. Do not retry with a new UUID after an uncertain response.",
+          guidance: remote.notifyOnFinish
+            ? "Finish, error, and permission notices return to this lead. Keep this request UUID. Do not create a replacement after an uncertain response."
+            : "Finish notices are disabled. Keep this request UUID. Do not create a replacement after an uncertain response.",
         }),
       };
     }
@@ -1608,7 +1606,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Create agent",
       description:
-        "Create an agent. For a remote serverId, supply hostLink grant identifiers and notifyOnFinish=false. Remote profiles own the model and mode. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires a provider and an initial prompt. Pass provider/model (for example codex/gpt-6.1-sol) to choose the model, or a bare provider (for example claude) to use the role default model and effort. Do not guess model ids; call list_providers and list_models first if uncertain.",
+        "Create an agent. For a remote serverId, supply hostLink grant identifiers. Finish notices return to the calling lead. Remote profiles own the model and mode. Agent-scoped creation defaults to your workspace and creates your subagent. Top-level creation without workspaceId creates a new local workspace. Requires a provider and an initial prompt. Pass provider/model (for example codex/gpt-6.1-sol) to choose the model, or a bare provider (for example claude) to use the role default model and effort. Do not guess model ids; call list_providers and list_models first if uncertain.",
       inputSchema: createAgentInputSchema,
       outputSchema: {
         agentId: z.string().nullable(),

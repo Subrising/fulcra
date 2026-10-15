@@ -17,6 +17,7 @@ import {
   type HostLinkChat,
   type HostLinkCreate,
   type HostLinkRoleNotice,
+  type HostLinkFinishDelivery,
 } from "./host-links.js";
 import { mountHostLinkRoutes } from "./host-link-routes.js";
 import { HostLinkReceiptSchema, type HostLinkConfig } from "./host-link-contracts.js";
@@ -81,6 +82,7 @@ async function fixture() {
   const created: HostLinkCreate[] = [];
   const notices: string[] = [];
   const prompts: string[] = [];
+  const finishNotices: Array<{ agentId: string; messageId: string; text: string }> = [];
   const chats = new Map<string, HostLinkChat>([
     [
       "lead",
@@ -97,6 +99,11 @@ async function fixture() {
   ]);
   const state = {
     holder: "main",
+    now: Date.now(),
+    linkDown: false,
+    noticeReads: 0,
+    deliveryDown: false,
+    failAfterHandoff: false,
     protected: true,
     failCreate: false,
     beforeNotice: () => {},
@@ -104,6 +111,14 @@ async function fixture() {
   };
   const deps = {
     home: path.join(root, "target"),
+    now: () => state.now,
+    finish: async (input: HostLinkFinishDelivery) => {
+      input.check();
+      if (state.deliveryDown) throw new Error("Local delivery is unavailable.");
+      input.beforeHandoff();
+      finishNotices.push({ agentId: input.agentId, messageId: input.messageId, text: input.text });
+      if (state.failAfterHandoff) throw new Error("Provider acknowledgement lost.");
+    },
     serverId: "target",
     protected: () => state.protected,
     chat: async (id: string) => chats.get(id) ?? null,
@@ -147,8 +162,16 @@ async function fixture() {
         throw new Error("Worker changed.");
     },
   };
-  const target = new HostLinks(deps);
+  let target = new HostLinks(deps);
   const targetApp = express();
+  targetApp.use((req, res, next) => {
+    if (req.path === "/api/host-links/worker") state.noticeReads++;
+    if (state.linkDown && req.path === "/api/host-links/worker") {
+      res.status(503).json({ error: "Link offline" });
+      return;
+    }
+    next();
+  });
   mountHostLinkRoutes(targetApp, () => target);
   const targetListener = await listen(targetApp);
   const targetConfig = emptyConfig();
@@ -188,12 +211,8 @@ async function fixture() {
   });
   sourceConfig.routes = { standard: "link", gpu: "link", heavy: "link", mainAssistant: "link" };
   const sourceHome = path.join(root, "source");
-  const source = new HostLinks({
-    ...deps,
-    home: sourceHome,
-    serverId: "source",
-    mainAssistant: () => null,
-  });
+  const sourceDeps = { ...deps, home: sourceHome, serverId: "source", mainAssistant: () => null };
+  let source = new HostLinks(sourceDeps);
   const sourceApp = express();
   mountHostLinkRoutes(sourceApp, () => source);
   const sourceListener = await listen(sourceApp);
@@ -231,6 +250,18 @@ async function fixture() {
     deps,
     source,
     target,
+    finishNotices,
+    sourceHome,
+    restartSource: () => {
+      source.stopNotifications();
+      source = new HostLinks(sourceDeps);
+      return source;
+    },
+    restartTarget: () => {
+      target.stopNotifications();
+      target = new HostLinks(deps);
+      return target;
+    },
     targetConfig,
     sourceConfig,
     sourceListener,
@@ -645,4 +676,428 @@ test.each([
     ),
   ).rejects.toThrow();
   expect(f.created).toHaveLength(0);
+});
+
+function retainedReturn(fixtureHome: string) {
+  return Object.values(
+    JSON.parse(readFileSync(path.join(fixtureHome, "host-links-outbox.json"), "utf8")) as Record<
+      string,
+      {
+        watch?: { failures: number; nextAt: number };
+        receivedNotices?: Array<{ id: string; state: string; text: string }>;
+      }
+    >,
+  )[0]!;
+}
+
+test.each(["finished", "failed"] as const)(
+  "FU-170 returns one durable %s notice to the calling lead",
+  async (kind) => {
+    const f = await fixture();
+    const receipt = await f.source.spawnForAgent("lead", "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    f.target.recordWorkerStarted(receipt.agentId!);
+    f.target.recordWorkerNotice(
+      receipt.agentId!,
+      kind,
+      "turn-1",
+      kind === "failed" ? "Fixture tool failed" : "Fixture task completed",
+    );
+    f.target.recordWorkerNotice(receipt.agentId!, kind, "turn-1", "Duplicate event");
+    await f.source.syncNotifications();
+    await f.source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+    expect(f.finishNotices[0]).toMatchObject({
+      agentId: "lead",
+      text: expect.stringContaining(kind),
+    });
+    expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+    const source = f.restartSource();
+    f.restartTarget();
+    f.state.now += 10000;
+    await source.syncNotifications();
+    await source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(1);
+  },
+);
+
+test("FU-170 permission checkpoints do not consume the final notice", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "permission-1",
+    "Approve fixture permission-1",
+  );
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("permission-1");
+  f.target.recordWorkerNotice(
+    receipt.agentId!,
+    "permission",
+    "permission-1",
+    "Approve fixture permission-1",
+  );
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Fixture task completed");
+  f.state.now += 10000;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(2);
+  expect(f.finishNotices[1]?.text).toContain("finished");
+  expect(f.finishNotices[0]?.messageId).not.toBe(f.finishNotices[1]?.messageId);
+});
+
+test("FU-170 retains a notice while the link is down and resumes after restart", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Retained result");
+  f.state.linkDown = true;
+  await f.source.syncNotifications();
+  expect(f.finishNotices).toHaveLength(0);
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(1);
+  f.restartTarget();
+  const source = f.restartSource();
+  f.state.linkDown = false;
+  f.state.now += 60001;
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("Retained result");
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(0);
+});
+
+test("FU-170 retries a home notice that never reached the provider across restart", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Home queue result");
+  f.state.deliveryDown = true;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("queued");
+  expect(f.finishNotices).toHaveLength(0);
+  const source = f.restartSource();
+  f.state.deliveryDown = false;
+  f.state.now += 60001;
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+});
+
+test("FU-170 retains an uncertain native handoff without replay after restart", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Uncertain receipt result");
+  f.state.failAfterHandoff = true;
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]).toMatchObject({
+    state: "uncertain",
+    text: "Uncertain receipt result",
+  });
+  const source = f.restartSource();
+  f.state.failAfterHandoff = false;
+  f.state.now += 60001;
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("FU-170 keeps a bounded retry count across source restarts", async () => {
+  const f = await fixture();
+  const request = { ...spawn, notifyOnFinish: true };
+  const receipt = await f.source.spawnForAgent("lead", "target", request);
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Retry budget result");
+  f.state.linkDown = true;
+  let source = f.source;
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    await source.syncNotifications();
+    expect(retainedReturn(f.sourceHome).watch?.failures).toBe(attempt);
+    source = f.restartSource();
+    f.state.now += 60001;
+  }
+  f.state.linkDown = false;
+  await source.syncNotifications();
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(8);
+  expect(f.finishNotices).toHaveLength(0);
+  expect(f.created).toHaveLength(1);
+  await source.spawnForAgent("lead", "target", request);
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.created).toHaveLength(1);
+});
+
+test.each(["grant", "lead-session", "grant-replaced"])(
+  "FU-170 refuses changed %s before home provider input",
+  async (kind) => {
+    const f = await fixture();
+    const receipt = await f.source.spawnForAgent("lead", "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    f.target.recordWorkerNotice(
+      receipt.agentId!,
+      "finished",
+      "turn-1",
+      "Retained restricted result",
+    );
+    if (kind === "grant") {
+      f.sourceConfig.chats[0]!.revoked = true;
+      f.save();
+    } else if (kind === "grant-replaced") {
+      f.sourceConfig.chats[0]!.token = `hchat1.${"Z".repeat(43)}`;
+      f.save();
+    } else f.chats.get("lead")!.sessionId = "replacement-session";
+    await f.source.syncNotifications();
+    await f.source.flushNotificationDeliveries();
+    expect(f.finishNotices).toHaveLength(0);
+  },
+);
+
+test("FU-170 keeps a finish that arrives before the creation reply", async () => {
+  const f = await fixture();
+  f.state.afterCreate = () =>
+    f.target.recordWorkerNotice(f.created[0]!.agentId, "finished", "turn-fast", "Fast result");
+  await f.source.spawnForAgent("lead", "target", { ...spawn, notifyOnFinish: true });
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.finishNotices[0]?.text).toContain("Fast result");
+});
+
+test("FU-170 reconciles a lost creation reply before returning the retained finish", async () => {
+  const f = await fixture();
+  f.state.afterCreate = () => f.targetListener.server.closeAllConnections();
+  await expect(
+    f.source.spawnForAgent("lead", "target", { ...spawn, notifyOnFinish: true }),
+  ).rejects.toThrow("uncertain");
+  expect(f.created).toHaveLength(1);
+  f.target.recordWorkerNotice(
+    f.created[0]!.agentId,
+    "finished",
+    "turn-1",
+    "Result after response loss",
+  );
+  f.state.afterCreate = () => {};
+  const source = f.restartSource();
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.finishNotices).toHaveLength(1);
+  expect(f.created).toHaveLength(1);
+});
+
+test("FU-170 runtime carries a real worker finish across HTTP into the lead's provider", async () => {
+  const { AgentManager } = await import("./agent/agent-manager.js");
+  const { AgentStorage } = await import("./agent/agent-storage.js");
+  const { createHostLinkRuntime } = await import("./host-link-runtime.js");
+  const { createTestAgentClients } = await import("./test-utils/fake-agent-client.js");
+  const { createTestLogger } = await import("../test-utils/test-logger.js");
+  const { heldSendsFor } = await import("./held-sends.js");
+  const root = realpathSync(await mkdtemp(path.join(tmpdir(), "host-link-runtime-")));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const logger = createTestLogger();
+  const leadInputs: unknown[] = [];
+  let noticeArrived!: () => void;
+  const notified = new Promise<void>((resolve) => {
+    noticeArrived = resolve;
+  });
+  const sourceHome = path.join(root, "source");
+  const targetHome = path.join(root, "target");
+  const sourceStorage = new AgentStorage(path.join(sourceHome, "agents"), logger);
+  const targetStorage = new AgentStorage(path.join(targetHome, "agents"), logger);
+  const sourceManager = new AgentManager({
+    clients: createTestAgentClients({
+      onStartTurn: (prompt) => {
+        leadInputs.push(prompt);
+        noticeArrived();
+      },
+    }),
+    registry: sourceStorage,
+    logger,
+  });
+  const targetManager = new AgentManager({
+    clients: createTestAgentClients(),
+    registry: targetStorage,
+    logger,
+  });
+  const sourceRuntime = await createHostLinkRuntime({
+    home: sourceHome,
+    serverId: "source",
+    protected: () => true,
+    agentManager: sourceManager,
+    agentStorage: sourceStorage,
+    logger,
+    workspace: async () => "workspace-source",
+  });
+  const targetRuntime = await createHostLinkRuntime({
+    home: targetHome,
+    serverId: "target",
+    protected: () => true,
+    agentManager: targetManager,
+    agentStorage: targetStorage,
+    logger,
+    workspace: async () => "workspace-target",
+  });
+  cleanups.push(async () => {
+    sourceRuntime.close();
+    targetRuntime.close();
+    heldSendsFor(sourceManager, logger).close();
+    heldSendsFor(targetManager, logger).close();
+    for (const manager of [sourceManager, targetManager]) {
+      for (const agent of manager.listAgents()) await manager.closeAgent(agent.id);
+      await manager.flush();
+    }
+  });
+  const targetApp = express();
+  mountHostLinkRoutes(targetApp, () => targetRuntime.service);
+  const targetListener = await listen(targetApp);
+  const lead = await sourceManager.createAgent(
+    { provider: "codex", model: "gpt-test", modeId: "full-access", cwd: root },
+    undefined,
+    { workspaceId: "workspace-source" },
+  );
+  const sourceConfig = emptyConfig();
+  sourceConfig.chats.push({
+    agentId: lead.id,
+    token: chatToken,
+    operations: ["spawn"],
+    links: ["link"],
+    expiresAt: 2000000000000,
+    revoked: false,
+  });
+  sourceConfig.outgoing.push({
+    id: "link",
+    serverId: "target",
+    token: linkToken,
+    url: targetListener.url,
+    machine: "mac",
+    reporters: [],
+    expiresAt: 2000000000000,
+    revoked: false,
+  });
+  const targetConfig = emptyConfig();
+  targetConfig.incoming.push({
+    id: "link",
+    serverId: "source",
+    token: linkToken,
+    leads: [lead.id],
+    operations: ["spawn"],
+    workloads: ["standard"],
+    workspaces: { job: root },
+    profiles: {
+      worker: {
+        provider: "codex",
+        model: "gpt-test",
+        modeId: "full-access",
+        parents: ["codex:full-access"],
+      },
+    },
+    maxWorkers: 1,
+    expiresAt: 2000000000000,
+    revoked: false,
+  });
+  writePrivateFileAtomicSync(
+    path.join(sourceHome, "host-links.json"),
+    JSON.stringify(sourceConfig),
+  );
+  writePrivateFileAtomicSync(
+    path.join(targetHome, "host-links.json"),
+    JSON.stringify(targetConfig),
+  );
+  sourceRuntime.start();
+  let finish!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const unsubscribe = targetManager.subscribe(
+    (event) => {
+      if (event.type === "agent_stream" && event.event.type === "turn_completed") finish();
+    },
+    { replayState: false },
+  );
+  try {
+    const receipt = await sourceRuntime.service.spawnForAgent(lead.id, "target", {
+      ...spawn,
+      notifyOnFinish: true,
+    });
+    await ended;
+    await notified;
+    await sourceRuntime.service.flushNotificationDeliveries();
+    expect(leadInputs).toHaveLength(1);
+    expect(String(leadInputs[0])).toContain(receipt.agentId!);
+    expect(String(leadInputs[0])).toContain("finished");
+    expect(retainedReturn(sourceHome).receivedNotices?.[0]?.state).toBe("delivered");
+    await sourceRuntime.service.syncNotifications();
+    await sourceRuntime.service.flushNotificationDeliveries();
+    expect(leadInputs).toHaveLength(1);
+  } finally {
+    unsubscribe();
+  }
+}, 30000);
+
+test("FU-170 crash recovery retains an attempted notice without replay", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Crash boundary result");
+  await f.source.syncNotifications();
+  await f.source.flushNotificationDeliveries();
+  const file = path.join(f.sourceHome, "host-links-outbox.json");
+  const journal = JSON.parse(readFileSync(file, "utf8"));
+  Object.values(journal).forEach((entry: unknown) => {
+    const record = entry as { receivedNotices: Array<{ state: string }> };
+    record.receivedNotices[0]!.state = "sending";
+  });
+  writePrivateFileAtomicSync(file, JSON.stringify(journal), { durable: true });
+  const source = f.restartSource();
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(retainedReturn(f.sourceHome).receivedNotices?.[0]).toMatchObject({
+    state: "uncertain",
+    text: "Crash boundary result",
+  });
+  expect(f.finishNotices).toHaveLength(1);
+});
+
+test("FU-170 a stopped source cannot continue a pending notice read", async () => {
+  const f = await fixture();
+  const receipt = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    notifyOnFinish: true,
+  });
+  f.target.recordWorkerNotice(receipt.agentId!, "finished", "turn-1", "Stopped source result");
+  const pending = f.source.syncNotifications();
+  f.source.stopNotifications();
+  await pending;
+  expect(f.state.noticeReads).toBe(0);
+  expect(retainedReturn(f.sourceHome).watch?.failures).toBe(0);
+  const source = f.restartSource();
+  await source.syncNotifications();
+  await source.flushNotificationDeliveries();
+  expect(f.state.noticeReads).toBe(1);
+  expect(f.finishNotices).toHaveLength(1);
 });

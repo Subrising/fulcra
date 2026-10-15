@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import type { Logger } from "pino";
 import type { AgentManager } from "./agent/agent-manager.js";
+import { ensureAgentLoaded } from "./agent/agent-loading.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
 import { createFinalInputCheck, waitForFinalInputHandoff } from "./agent/final-input-check.js";
@@ -17,6 +18,7 @@ import {
   HostLinkError,
   type HostLinkDelivery,
   type HostLinkRoleNotice,
+  type HostLinkFinishDelivery,
 } from "./host-links.js";
 
 export interface HostLinkRuntimeInput {
@@ -40,9 +42,68 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     });
   for (const record of await agentStorage.list()) if (!record.internal) remember(record);
   for (const agent of agentManager.listAgents()) remember(agent);
-  const close = agentManager.subscribe(
+  function lastWorkerMessage(agentId: string): string {
+    const messages = agentManager
+      .getTimeline(agentId)
+      .filter((item) => item.type === "assistant_message");
+    return messages.at(-1)?.text?.slice(0, 3000) ?? "";
+  }
+  let service: HostLinks | null = null;
+  const unsubscribe = agentManager.subscribe(
     (event) => {
       if (event.type === "agent_state" && !event.agent.internal) remember(event.agent);
+      if (event.type === "agent_state" && event.agent.lifecycle === "error" && service) {
+        try {
+          service.recordWorkerNotice(
+            event.agent.id,
+            "failed",
+            "state-error",
+            event.agent.lastError ?? "The remote worker failed.",
+          );
+        } catch (error) {
+          logger.error(
+            { err: error, agentId: event.agent.id },
+            "Could not retain a host-link worker error",
+          );
+        }
+      }
+      if (event.type !== "agent_stream" || !service) return;
+      try {
+        if (event.event.type === "turn_started") service.recordWorkerStarted(event.agentId);
+        else if (event.event.type === "turn_completed")
+          service.recordWorkerNotice(
+            event.agentId,
+            "finished",
+            event.event.turnId ?? "initial",
+            `The remote worker finished its turn.\n${lastWorkerMessage(event.agentId)}`,
+          );
+        else if (event.event.type === "turn_failed")
+          service.recordWorkerNotice(
+            event.agentId,
+            "failed",
+            event.event.turnId ?? "initial",
+            event.event.error,
+          );
+        else if (event.event.type === "turn_canceled")
+          service.recordWorkerNotice(
+            event.agentId,
+            "failed",
+            event.event.turnId ?? "initial",
+            `The remote turn stopped: ${event.event.reason}`,
+          );
+        else if (event.event.type === "permission_requested")
+          service.recordWorkerNotice(
+            event.agentId,
+            "permission",
+            event.event.request.id,
+            `Permission request ${event.event.request.id}:\n${JSON.stringify(event.event.request)}`,
+          );
+      } catch (error) {
+        logger.error(
+          { err: error, agentId: event.agentId },
+          "Could not retain a host-link worker notice",
+        );
+      }
     },
     { replayState: false },
   );
@@ -105,6 +166,59 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     enqueue(request.agentId);
     return completion;
   };
+  const finish = (request: HostLinkFinishDelivery): Promise<void> =>
+    agentManager.withAgentCaller(undefined, () =>
+      agentManager.trustedPlugins.daemon(() => finishToLead(request)),
+    );
+  async function finishToLead(request: HostLinkFinishDelivery): Promise<void> {
+    request.check();
+    const stored = await agentStorage.get(request.agentId);
+    if (
+      !stored ||
+      stored.archivedAt ||
+      (stored.persistence?.sessionId ?? null) !== request.sourceSessionId
+    )
+      throw new HostLinkError("refused", "The calling lead is archived or its session changed.");
+    const receiver = await ensureAgentLoaded(request.agentId, {
+      agentManager,
+      agentStorage,
+      logger,
+    });
+    const instanceId = receiver.instanceId;
+    const check = () => {
+      request.check();
+      const current = agentManager.getAgent(request.agentId);
+      if (
+        !current ||
+        current.archivedAt ||
+        current.instanceId !== instanceId ||
+        (current.persistence?.sessionId ?? null) !== request.sourceSessionId
+      )
+        throw new HostLinkError("refused", "The calling lead changed before notice delivery.");
+    };
+    await heldSendsFor(agentManager, logger).holdAndWait(request.agentId, () =>
+      agentManager.withAgentCaller(undefined, () =>
+        agentManager.trustedPlugins.daemon(async () => {
+          const final = createFinalInputCheck(check, request.beforeHandoff);
+          check();
+          await sendPromptToAgent({
+            agentManager,
+            agentStorage,
+            agentId: request.agentId,
+            prompt: formatSystemNotificationPrompt(request.text),
+            messageId: `${FINISH_NOTIFICATION_MESSAGE_PREFIX}host-link-return:${request.messageId}`,
+            runOptions: { [FINAL_INPUT_CHECK]: final },
+            activeTurnBehavior: "steer",
+            steerOnly: true,
+            unarchive: false,
+            logger,
+          });
+          await waitForFinalInputHandoff(final);
+        }),
+      ),
+    );
+  }
+
   const workerCurrent = (
     id: string,
     profile: { provider: string; modeId: string; model: string },
@@ -121,10 +235,12 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
     )
       throw new HostLinkError("refused", "The worker changed before input admission.");
   };
-  const service = new HostLinks({
+  service = new HostLinks({
     home: input.home,
     serverId: input.serverId,
     protected: input.protected,
+    finish,
+    noticeError: (error) => logger.warn({ err: error }, "Host-link finish notice remains retained"),
     chat: async (id) => {
       const live = agentManager.getAgent(id);
       const saved = live ? null : await agentStorage.get(id);
@@ -142,6 +258,7 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
         provider,
         modeId,
         model: record.config?.model ?? null,
+        sessionId: record.persistence?.sessionId ?? null,
         reportsTo: reportsTo(record),
         archived: Boolean(record.archivedAt),
         isLead,
@@ -218,5 +335,45 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       };
     },
   });
-  return { service, close };
+  let closed = false;
+  const recover = () => {
+    if (closed) return;
+    try {
+      for (const pending of service!.pendingNoticeWorkers()) {
+        const record = agentStorage
+          .listCached()
+          .find((candidate) => candidate.id === pending.agentId);
+        if (!record || !pending.started || agentManager.hasInFlightRun(pending.agentId)) continue;
+        if (
+          record.interruptedTurn ||
+          record.lastStatus === "error" ||
+          record.lastStatus === "closed" ||
+          record.attentionReason === "permission"
+        )
+          service!.recordWorkerNotice(
+            pending.agentId,
+            "failed",
+            "recovered",
+            "The remote turn stopped before daemon recovery.",
+          );
+        else if (record.lastStatus === "idle")
+          service!.recordWorkerNotice(
+            pending.agentId,
+            "finished",
+            "recovered",
+            "The remote worker's completed turn was recovered.",
+          );
+      }
+      service!.startNotifications();
+    } catch (error) {
+      service!.stopNotifications();
+      logger.error({ err: error }, "Host-link receipt recovery requires owner repair");
+    }
+  };
+  const close = () => {
+    closed = true;
+    unsubscribe();
+    service!.stopNotifications();
+  };
+  return { service, start: recover, close };
 }
