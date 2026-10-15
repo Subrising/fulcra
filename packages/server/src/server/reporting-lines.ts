@@ -151,8 +151,14 @@ function inboundDecision(
   const { sender, target, localServerId } = input;
   const targetLine = resolveLineRef(reportsTo(target), input.mainAssistantId ?? null);
   const senderServer = remote ? (sender.serverId ?? null) : localServerId;
-  if (targetLine === senderKey || sameChat(targetLine, sender.agentId, senderServer))
+  if (targetLine === senderKey || sameChat(targetLine, sender.agentId, senderServer)) {
+    if (target.labels?.["fulcra.hold"] === "done")
+      return {
+        allowed: false,
+        reason: "This worker is held as done. Clear fulcra.hold before you send new work.",
+      };
     return { allowed: true, why: "child" };
+  }
   if (target.labels?.[DIRECT_LINK_LABEL]?.trim() === senderKey)
     return { allowed: true, why: "direct link" };
   return null;

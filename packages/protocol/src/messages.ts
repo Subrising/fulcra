@@ -2030,6 +2030,7 @@ export const UsageListReportsRequestMessageSchema = z.object({
 
 export const ResumeAgentRequestMessageSchema = z.object({
   type: z.literal("resume_agent_request"),
+  confirmed: z.boolean().optional(),
   handle: AgentPersistenceHandleSchema,
   overrides: AgentSessionConfigSchema.partial().optional(),
   requestId: z.string(),
@@ -2051,6 +2052,7 @@ export const RefreshAgentRequestMessageSchema = z.object({
   inputProvenance: z.string().optional(),
   type: z.literal("refresh_agent_request"),
   agentId: z.string(),
+  confirmed: z.boolean().optional(),
   requestId: z.string(),
 });
 

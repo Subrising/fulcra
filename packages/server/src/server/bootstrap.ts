@@ -1664,6 +1664,8 @@ export async function createPaseoDaemon(
   const createAgentToolHostDependencies = (
     runtime: PaseoToolRuntimeContext,
   ): PaseoToolHostDependencies => ({
+    serverId,
+    hostLinks: hostLinkRuntime.service,
     agentManager,
     agentStorage,
     terminalManager,

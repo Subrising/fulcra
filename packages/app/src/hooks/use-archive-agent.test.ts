@@ -1,4 +1,7 @@
-import { confirmProtectedArchive } from "@/utils/confirm-protected-archive";
+import {
+  confirmProtectedArchive,
+  confirmProtectedRestore,
+} from "@/utils/confirm-protected-archive";
 import { seedSessionHosts } from "@/test/seed-session";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { QueryClient } from "@tanstack/react-query";
@@ -296,3 +299,52 @@ for (const accept of [true, false]) {
     expect(prompts).toHaveLength(1);
   });
 }
+
+for (const accept of [true, false]) {
+  it(`FU-168 requires protected restore confirmation and handles acceptance ${accept}`, async () => {
+    const client = {
+      fetchAgent: async () => ({
+        agent: {
+          archiveSafety: {
+            confirmationRequired: true,
+            reasons: ["This session is a lead or owner."],
+          },
+        },
+      }),
+    } as unknown as Parameters<typeof confirmProtectedRestore>[0]["client"];
+    const requests: unknown[] = [];
+    const result = confirmProtectedRestore(
+      { client, agentId: "fixture-lead", supported: true },
+      async (request) => {
+        requests.push(request);
+        return accept;
+      },
+    );
+    if (accept) expect(await result).toBe(true);
+    else await expect(result).rejects.toThrow("Restore cancelled.");
+    expect(requests).toEqual([
+      expect.objectContaining({
+        title: "Restore this protected session?",
+        confirmLabel: "Restore",
+        destructive: false,
+      }),
+    ]);
+  });
+}
+
+it("FU-168 restores an ordinary worker without protected confirmation", async () => {
+  const client = {
+    fetchAgent: async () => ({ agent: { archiveSafety: { confirmationRequired: false } } }),
+  } as unknown as Parameters<typeof confirmProtectedRestore>[0]["client"];
+  let confirmations = 0;
+  expect(
+    await confirmProtectedRestore(
+      { client, agentId: "fixture-worker", supported: true },
+      async () => {
+        confirmations++;
+        return true;
+      },
+    ),
+  ).toBe(false);
+  expect(confirmations).toBe(0);
+});

@@ -5730,23 +5730,30 @@ export class Session {
     try {
       const snapshot = await this.agentManager.withPersistenceRestore(handle, async () => {
         const matched = await this.findAgentByHandle(handle);
-        const effectiveOverrides = matched
-          ? { ...buildConfigOverrides(matched.record), ...overrides }
-          : overrides;
-        const restoredSnapshot = matched
-          ? await this.agentManager.withUnarchivedSnapshot(matched.record.id, () =>
-              ensureAgentLoaded(matched.record.id, {
-                agentManager: this.agentManager,
-                agentStorage: this.agentStorage,
-                logger: this.sessionLogger,
-                configOverrides: effectiveOverrides,
-              }),
-            )
-          : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
-        await unarchiveAgentState(this.agentStorage, this.agentManager, restoredSnapshot.id);
-        await this.agentManager.hydrateTimelineFromProvider(restoredSnapshot.id);
-        await this.agentUpdates.forwardLiveAgent(restoredSnapshot);
-        return restoredSnapshot;
+        if (msg.confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
+          throw new Error("Protected restore requires confirmation from the app.");
+        const restore = async () => {
+          const effectiveOverrides = matched
+            ? { ...buildConfigOverrides(matched.record), ...overrides }
+            : overrides;
+          const restoredSnapshot = matched
+            ? await this.agentManager.withUnarchivedSnapshot(matched.record.id, () =>
+                ensureAgentLoaded(matched.record.id, {
+                  agentManager: this.agentManager,
+                  agentStorage: this.agentStorage,
+                  logger: this.sessionLogger,
+                  configOverrides: effectiveOverrides,
+                }),
+              )
+            : await this.agentManager.resumeAgentFromPersistence(handle, effectiveOverrides);
+          await unarchiveAgentState(this.agentStorage, this.agentManager, restoredSnapshot.id);
+          await this.agentManager.hydrateTimelineFromProvider(restoredSnapshot.id);
+          await this.agentUpdates.forwardLiveAgent(restoredSnapshot);
+          return restoredSnapshot;
+        };
+        return matched && msg.confirmed
+          ? this.agentManager.withRestoreConfirmation(matched.record.id, restore)
+          : restore();
       });
       const timelineSize = this.agentManager.getTimeline(snapshot.id).length;
       if (requestId) {
@@ -5945,14 +5952,21 @@ export class Session {
         commandPayload("unarchive"),
         operationHandle,
       );
-      await this.restoreOwningWorkspaceForLegacyAgentRefresh(agentId);
-      await unarchiveAgentState(
-        this.agentStorage,
-        this.agentManager,
-        agentId,
-        undefined,
-        operationHandle,
-      );
+      if (msg.confirmed && !this.supports(CLIENT_CAPS.archiveConfirmation))
+        throw new Error("Protected restore requires confirmation from the app.");
+      const restore = async () => {
+        await this.agentManager.preflightRestore(agentId);
+        await this.restoreOwningWorkspaceForLegacyAgentRefresh(agentId);
+        await unarchiveAgentState(
+          this.agentStorage,
+          this.agentManager,
+          agentId,
+          undefined,
+          operationHandle,
+        );
+      };
+      if (msg.confirmed) await this.agentManager.withRestoreConfirmation(agentId, restore);
+      else await restore();
       let snapshot: ManagedAgent;
       const existing = this.agentManager.getAgent(agentId);
       if (existing) {

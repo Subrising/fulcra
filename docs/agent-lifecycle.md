@@ -193,7 +193,9 @@ fulcra agent update SESSION_ID --label fulcra.hold=
 ```
 
 Set `done` when you accept a worker's final report. The board places that worker in Done.
-Clear the hold before you give it a new job. The empty value clears the hold. The label controls nudge eligibility; use Stop to interrupt a running turn.
+Clear the hold before you give it a new job. Parent prompts through MCP or the CLI refuse workers held as `done`.
+A refused prompt keeps the hold, so failed delivery cannot move a completed worker back into the active set.
+The empty value clears the hold. Use Stop to interrupt a running turn.
 
 Set a positive whole number of minutes to change the interval:
 
@@ -240,7 +242,11 @@ The provider still owns the underlying runtime. Paseo keeps an agent record so t
 Archive is a **soft delete**: the agent record stays on disk with `archivedAt` set, the runtime is closed, and the agent disappears from active lists. Archive is **global** — it lives on the server and propagates to every connected client.
 
 The app asks you to confirm a lead, owner, or session with open ledger items before archive.
-CLI, MCP, and automatic archive refuse these sessions. Open reporting workers, unread reports,
+CLI, MCP, and automatic archive refuse these sessions.
+Protected restore uses the same lead and ledger ownership check. Agent callers cannot confirm it.
+A capable app must send explicit restore confirmation. Unconfirmed CLI restore and handle-based resume refuse protected archived sessions.
+
+Open reporting workers, unread reports,
 and pending messages block archive even after confirmation. Unknown report state also blocks it.
 Archive checks the full target set before cancellation or archive effects.
 

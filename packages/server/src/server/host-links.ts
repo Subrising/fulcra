@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   HostLinkConfigSchema,
   HostLinkDispatchSchema,
+  HostLinkSpawnSchema,
   HostLinkJournalSchema,
   HostLinkReceiptSchema,
   HostLinkWireSchema,
@@ -265,6 +266,31 @@ export class HostLinks {
     if (input.kind === "notice") noteAgentMessage(chat.id, "role:main-assistant");
     return this.forward(link, chat, input, "explicit");
   }
+  /** Native tools supply the bound caller identity. No credential enters tool results. */
+  async spawnForAgent(id: string, serverId: string, raw: unknown): Promise<HostLinkReceipt> {
+    const input = HostLinkSpawnSchema.parse(raw);
+    const cfg = this.requiredConfig();
+    const grant = cfg.chats.find((item) => item.agentId === id);
+    if (!grant) throw new HostLinkError("refused", "This chat has no host-link spawn grant.");
+    this.live(grant);
+    if (!grant.operations.includes("spawn"))
+      throw new HostLinkError("refused", "This chat cannot create remote workers.");
+    const candidates = cfg.outgoing.filter((item) => item.serverId === serverId);
+    if (candidates.length !== 1)
+      throw new HostLinkError("refused", "The requested host has no unique host link.");
+    const link = this.outgoing(cfg, candidates[0]!.id);
+    if (!grant.links.includes(link.id))
+      throw new HostLinkError("refused", "This chat cannot use the requested host link.");
+    if (input.workload !== "standard" && link.machine !== "pc")
+      throw new HostLinkError("refused", "GPU and heavy workloads require the configured PC link.");
+    const chat = await this.sourceChat(id);
+    const current = this.requiredConfig().chats.find((item) => item.agentId === id);
+    if (!current || digest(current) !== digest(grant))
+      throw new HostLinkError("refused", "The source grant changed.");
+    this.live(current);
+    return this.forward(link, chat, input, "explicit");
+  }
+
   async remoteNotice(id: string, text: string, kind: HostLinkNoticeKind): Promise<boolean> {
     const cfg = this.config();
     if (!cfg) return false;
@@ -401,6 +427,16 @@ export class HostLinks {
     if (!path.isAbsolute(cwd) || realpathSync(cwd) !== cwd)
       throw new HostLinkError("refused", "The granted workspace path changed.");
     const profile = link.profiles[wire.profile]!;
+    if (
+      wire.expected &&
+      (wire.expected.provider !== profile.provider ||
+        (wire.expected.model !== undefined && wire.expected.model !== profile.model) ||
+        (wire.expected.modeId !== undefined && wire.expected.modeId !== profile.modeId))
+    )
+      throw new HostLinkError(
+        "refused",
+        "The requested provider, model, or mode differs from the host-link profile.",
+      );
     assertHostLinkMode({ provider: wire.sourceProvider, modeId: wire.sourceMode }, profile);
     const workers = Object.values(this.journal(this.inboxFile)).filter(
       (item) => item.linkId === link.id && item.profile !== null,

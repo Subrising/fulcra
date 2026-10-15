@@ -6632,3 +6632,142 @@ describe("compact activity failures", () => {
     ]);
   });
 });
+
+describe("FU-170 native host selection", () => {
+  const request = {
+    serverId: "destination",
+    provider: "codex/gpt-test",
+    title: "Remote worker",
+    initialPrompt: "Check the task.",
+    hostLink: {
+      messageId: "11111111-1111-4111-8111-111111111111",
+      workload: "standard",
+      workspace: "job",
+      profile: "worker",
+    },
+    notifyOnFinish: false,
+  };
+  it("uses the bound caller and hides the worker credential", async () => {
+    const deps = createTestDeps();
+    const calls: unknown[][] = [];
+    const server = await createAgentMcpServer({
+      ...deps,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      logger: createTestLogger(),
+      callerAgentId: "bound-lead",
+      serverId: "source",
+      hostLinks: {
+        spawnForAgent: async (...args) => {
+          calls.push(args);
+          return {
+            serverId: "destination",
+            messageId: request.hostLink.messageId,
+            agentId: "remote-worker",
+            state: "created",
+            token: "private-worker-token",
+            endpoint: "https://private.invalid",
+          };
+        },
+      },
+    });
+    const result = await invokeToolWithParsedInput(registeredTool(server, "create_agent"), request);
+    expect(calls).toEqual([
+      [
+        "bound-lead",
+        "destination",
+        {
+          ...request.hostLink,
+          kind: "spawn",
+          title: request.title,
+          prompt: request.initialPrompt,
+          expected: { provider: "codex", model: "gpt-test" },
+        },
+      ],
+    ]);
+    expect(result.structuredContent).toMatchObject({
+      serverId: "destination",
+      agentId: "remote-worker",
+      state: "created",
+    });
+    expect(JSON.stringify(result)).not.toContain("private-worker-token");
+    expect(JSON.stringify(result)).not.toContain("private.invalid");
+    expect(deps.spies.agentManager.createAgent).not.toHaveBeenCalled();
+  });
+  it.each(["notice", "missing-link", "top-level", "local-grant"])(
+    "refuses %s before local creation",
+    async (kind) => {
+      const deps = createTestDeps();
+      const server = await createAgentMcpServer({
+        ...deps,
+        providerSnapshotManager: createOpenCodeManager().manager,
+        logger: createTestLogger(),
+        callerAgentId: kind === "top-level" ? undefined : "bound-lead",
+        serverId: "source",
+      });
+      const args = {
+        ...request,
+        ...(kind === "notice" ? { notifyOnFinish: true } : {}),
+        ...(kind === "local-grant" ? { serverId: "source" } : {}),
+      };
+      await expect(
+        invokeToolWithParsedInput(registeredTool(server, "create_agent"), args),
+      ).rejects.toThrow(
+        {
+          notice: "Remote finish notices",
+          "top-level": "agent-scoped",
+          "local-grant": "remote serverId",
+          "missing-link": "host link",
+        }[kind],
+      );
+      expect(deps.spies.agentManager.createAgent).not.toHaveBeenCalled();
+    },
+  );
+});
+
+it("FU-164 native prompts refuse a done worker before provider input", async () => {
+  const logger = createTestLogger();
+  const workdir = await mkdtemp(join(tmpdir(), "mcp-done-hold-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const parentClient = new HeldTurnAgentClient("claude", false);
+  const childClient = new HeldTurnAgentClient("codex", true);
+  const agentManager = new AgentManager({
+    clients: { claude: parentClient, codex: childClient },
+    registry: storage,
+    logger,
+  });
+  try {
+    const parent = await agentManager.createAgent({ provider: "claude", cwd: workdir }, undefined, {
+      workspaceId: "workspace-test",
+    });
+    const child = await agentManager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: "workspace-test",
+      labels: { "fulcra.reports-to": parent.id, "fulcra.hold": "done" },
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage: storage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: parent.id,
+      logger,
+    });
+    await expect(
+      invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+        agentId: child.id,
+        prompt: "New task",
+      }),
+    ).rejects.toThrow("Clear fulcra.hold");
+    expect(childClient.sessions[0]!.prompts).toEqual([]);
+    expect((await storage.get(child.id))?.labels?.["fulcra.hold"]).toBe("done");
+    await agentManager.setLabels(child.id, { "fulcra.hold": "" });
+    await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+      agentId: child.id,
+      prompt: "New task",
+      notifyOnFinish: false,
+    });
+    expect(childClient.sessions[0]!.prompts).toEqual(["New task"]);
+    childClient.sessions[0]!.finishTurn();
+  } finally {
+    await queuedAgentMessagesFor({ agentManager, agentStorage: storage, logger }).close();
+    await removeAgentStateDir(agentManager, storage, workdir);
+  }
+});

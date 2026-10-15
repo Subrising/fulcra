@@ -585,3 +585,64 @@ test("host-link credentials cannot authenticate to general HTTP, WebSocket, or M
   });
   expect(response.status).toBe(401);
 });
+
+test("FU-170 bound native creation selects the requested host and retains one HTTP worker", async () => {
+  const f = await fixture();
+  // Explicit host choice does not depend on workload routes.
+  f.sourceConfig.routes = {};
+  f.save();
+  const first = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    expected: { provider: "codex", model: "gpt-test", modeId: "auto" },
+  });
+  expect(first.state).toBe("created");
+  expect(f.created).toHaveLength(1);
+  expect(f.created[0]?.parent).toBe("lead@source");
+  const second = await f.source.spawnForAgent("lead", "target", {
+    ...spawn,
+    expected: { provider: "codex", model: "gpt-test", modeId: "auto" },
+  });
+  expect(second).toEqual(first);
+  expect(f.created).toHaveLength(1);
+});
+
+test.each([
+  "unknown-host",
+  "unknown-caller",
+  "missing-link",
+  "revoked",
+  "expired",
+  "ambiguous",
+  "no-spawn",
+  "wrong-profile",
+  "wrong-model",
+  "wrong-mode",
+])("FU-170 native remote creation refuses %s without provider input", async (kind) => {
+  const f = await fixture();
+  if (kind === "missing-link") f.sourceConfig.chats[0]!.links = [];
+  if (kind === "revoked") f.sourceConfig.chats[0]!.revoked = true;
+  if (kind === "expired") f.sourceConfig.chats[0]!.expiresAt = 1;
+  if (kind === "ambiguous")
+    f.sourceConfig.outgoing.push({
+      ...f.sourceConfig.outgoing[0]!,
+      id: "other",
+      token: `hlink1.${"D".repeat(43)}`,
+    });
+  if (kind === "no-spawn") f.sourceConfig.chats[0]!.operations = ["notice"];
+  f.save();
+  await expect(
+    f.source.spawnForAgent(
+      kind === "unknown-caller" ? "other" : "lead",
+      kind === "unknown-host" ? "missing" : "target",
+      {
+        ...spawn,
+        expected: {
+          provider: kind === "wrong-profile" ? "claude" : "codex",
+          model: kind === "wrong-model" ? "other" : "gpt-test",
+          modeId: kind === "wrong-mode" ? "full-access" : "auto",
+        },
+      },
+    ),
+  ).rejects.toThrow();
+  expect(f.created).toHaveLength(0);
+});

@@ -92,6 +92,14 @@ export const HostLinkSpawnSchema = z
     workload: z.enum(["standard", "heavy", "gpu"]),
     workspace: name,
     profile: name,
+    expected: z
+      .object({
+        provider: z.string().min(1),
+        model: z.string().min(1).optional(),
+        modeId: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     title: z.string().min(1).max(200),
     prompt: z.string().min(1).max(32000),
   })

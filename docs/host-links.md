@@ -137,6 +137,25 @@ Lead success notices remain suppressed; failed lead turns can cross the link.
 Retained remote children also count for success suppression.
 A notice cannot claim role authority through its text.
 
+## Native worker creation
+
+Agent-scoped `create_agent` accepts an optional destination `serverId`.
+Omit it, or select the local server ID, to keep local creation.
+For a remote host, supply `hostLink` with `messageId`, `workload`, `workspace`, and `profile`.
+Use one retained UUID for retries. Workspace and profile identifiers name destination grants, not source paths or accounts.
+The provider, explicit model, and explicit mode must match the destination profile.
+Local workspace placement, labels, features, and detached creation are refused for remote requests.
+
+The source uses the bound caller's existing chat grant and one directed link to that server ID.
+Unknown hosts, ambiguous links, missing grants, and inactive grants refuse creation.
+The tool returns host, worker, request, and receipt state. It does not return credentials.
+The private source outbox keeps the worker receipt for owner control through the host-link interface.
+A pending or uncertain result requires receipt reconciliation before another creation.
+
+Remote `notifyOnFinish` is not implemented. Remote creation refuses requests unless `notifyOnFinish=false`.
+This also refuses the normal agent-scoped default. Do not expect a local finish subscription for a remote worker.
+A durable finish notice addressed to the calling lead remains required before enabling this option.
+
 ## Verification boundary
 
 Run focused tests through the existing test scripts and queue.
