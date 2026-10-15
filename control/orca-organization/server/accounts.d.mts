@@ -9,6 +9,15 @@ export interface Account {
   auth: "ok" | "expired" | "signing-in";
   limitedUntil: string | null;
   limitKind?: string | null;
+  limitObservedAt?: string | null;
+  remoteLimits?: {
+    accountId: string;
+    limitKind: "session" | "weekly";
+    resetAt: string;
+    observedAt: string;
+    source: string;
+  }[];
+  usageObservedAt?: string | null;
   limitNote: string | null;
   createdAt: string;
   lastUsedAt: string | null;
@@ -27,7 +36,14 @@ export function readAccounts(root: string): AccountState;
 export function readAccountsAsync(root: string): Promise<AccountState>;
 export function update<T>(root: string, fn: (s: AccountState) => T | Promise<T>): Promise<T>;
 export function withStoreLock<T>(root: string, fn: () => T | Promise<T>): Promise<T>;
-export function accountStatus(a: Account, now?: number): { state: string; until?: string };
+export function accountLimit(
+  a: Account,
+  now?: number,
+): { until: string; kind: string | null; source: string } | null;
+export function accountStatus(
+  a: Account,
+  now?: number,
+): { state: string; until?: string; source?: string };
 export const WEEKLY_LAUNCH_CAP_PCT: number;
 export function readUsage(root: string, now?: number): Record<string, number>;
 export function readUsageAsync(root: string, now?: number): Promise<Record<string, number>>;
@@ -142,7 +158,7 @@ export interface SessionAccounts {
   accounts: {
     id: string;
     name: string;
-    status: { state: string; until?: string };
+    status: { state: string; until?: string; source?: string };
     isDefault: boolean;
   }[];
 }

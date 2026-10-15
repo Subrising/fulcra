@@ -62,7 +62,8 @@ An empty operation list grants nothing.
 | `incoming` | Link `id`, source `serverId`, `token`, named `leads`, `operations`, `workloads`, `workspaces`, `profiles`, and `maxWorkers` |
 | `routes`   | Link IDs for `standard`, `heavy`, `gpu`, and `mainAssistant`                                                                |
 
-`operations` permits `spawn`, `notice`, or both.
+Chat `operations` permits `spawn`, `notice`, or both.
+Incoming link `operations` also permits `limits` for account limit observations.
 A notice-only incoming link needs empty `workloads`, `workspaces`, and `profiles`, plus `maxWorkers: 0`.
 The outgoing and matching incoming entry use the same link credential.
 Each local chat and link identity needs a different credential.
@@ -177,12 +178,42 @@ The private source outbox retains notice text and delivery state for owner inspe
 A failed or interrupted provider handoff has state `uncertain`. It requires reconciliation; the daemon never replays it automatically.
 This preserves the native input safety rule when provider acceptance cannot be proved after a crash.
 
+## Shared account limits
+
+Set `shareLimits: true` on each outgoing link that must share account limits.
+Add `limits` to its matching incoming link's `operations`.
+These grants are independent of chat grants, worker profiles, and reporting routes.
+Existing link configurations keep their previous authority.
+
+The daemon shares session (5-hour) and weekly limits from the local pool and quota readings.
+The payload contains an account UUID, limit kind, observation time, and reset time.
+The receiver derives the source host from the authenticated link.
+It ignores unknown account UUIDs and expired observations.
+Account UUIDs must match across the pools; display names do not establish identity.
+No account credential, account name, or provider home crosses the link.
+
+Remote observations stay separate from local pool records and survive daemon restarts.
+A newer local observation, including a local clear or usage reading, takes precedence.
+Equal observation times favor the local host.
+Remote holds expire at their reset and never trigger an account switch or replay a turn.
+The account CLI and pooled usage details identify the limit source.
+
+The daemon sends retained local limits at startup and sends changes from pool file events.
+It retries failed links once per minute without changing the local account state.
+Each pass has a 15-second network deadline per link.
+It never forwards a remote observation.
+A receiver accepts at most eight days until reset and one minute of clock skew.
+Keep paired host clocks synchronized.
+The existing Windows durability restriction also applies to limit sharing.
+
 ## Verification boundary
 
 Run focused tests through the existing test scripts and queue.
 The source tests use real HTTP, private files, durable receipts, and isolated agent runtimes with test providers.
 They cover admission, initial input, credential refusal, permission restrictions, retries, response loss, and role moves during held delivery.
 Return-notice cases cover finish, error, permission, restart, link recovery, duplicate suppression, and the real runtime-to-provider handoff.
+
+Account limit tests cover sharing, reset expiry, local precedence, source details, and offline retry over HTTP.
 They do not prove installed Mac-to-Mac or Mac-to-PC provider execution.
 The merge owner must obtain the required fresh security review before integration.
 Do not install or restart live daemons to run this batch's tests.

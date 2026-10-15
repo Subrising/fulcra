@@ -26,6 +26,7 @@ import {
 } from "./host-link-contracts.js";
 import { matchesHostLinkCredential } from "./host-link-credential.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
+import { HostAccountLimits } from "./host-account-limits.js";
 import { childModeClass } from "./agent/create-agent-mode.js";
 import { noteAgentMessage } from "./agent-message-log.js";
 
@@ -163,7 +164,11 @@ export class HostLinks {
   private notificationsStopped = true;
   private notificationSync?: Promise<void>;
   private readonly notificationDeliveries = new Map<string, Promise<void>>();
+
+  private readonly accountLimits: HostAccountLimits;
+  private readonly sharedLimits = new Map<string, string>();
   constructor(private readonly deps: HostLinkDependencies) {
+    this.accountLimits = new HostAccountLimits(deps.home, privateJson, () => this.now());
     this.configFile = path.join(deps.home, "host-links.json");
     this.inboxFile = path.join(deps.home, "host-links-inbox.json");
     this.outboxFile = path.join(deps.home, "host-links-outbox.json");
@@ -430,6 +435,62 @@ export class HostLinks {
     if (latest.notifyOnFinish) this.scheduleNotifications(0);
     return finalReceipt;
   }
+  /** Failed links retry on the next pass. Remote observations are never forwarded. */
+  async shareAccountLimits(): Promise<{ delivered: number; failed: number }> {
+    const cfg = this.config();
+    const result = { delivered: 0, failed: 0 };
+    if (!cfg || !cfg.outgoing.some((link) => link.shareLimits)) return result;
+    this.requiredConfig();
+    const observations = this.accountLimits.local();
+    const currentKeys = new Set<string>();
+    await Promise.all(
+      cfg.outgoing.map(async (link) => {
+        if (!link.shareLimits || link.revoked || link.expiresAt <= this.now()) return;
+        const signal = AbortSignal.timeout(15000);
+        for (const observation of observations) {
+          const key = digest({ link, observation });
+          currentKeys.add(key);
+          if (this.sharedLimits.get(key) === "delivered") continue;
+          const messageId = this.sharedLimits.get(key) ?? randomUUID();
+          this.sharedLimits.set(key, messageId);
+          try {
+            const current = this.outgoing(this.requiredConfig(), link.id);
+            if (digest(current) !== digest(link))
+              throw new HostLinkError("refused", "The outbound link changed.");
+            const response = await fetch(hostLinkUrl(link.url, "receive"), {
+              method: "POST",
+              redirect: "error",
+              signal,
+              headers: {
+                authorization: `Bearer ${link.token}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                kind: "account_limit",
+                messageId,
+                destination: link.serverId,
+                ...observation,
+              }),
+            });
+            if (!response.ok) throw new HostLinkError("unavailable", "Limit sharing failed.");
+            const receipt = HostLinkReceiptSchema.parse(await response.json());
+            if (receipt.serverId !== link.serverId || receipt.messageId !== messageId)
+              throw new HostLinkError("uncertain", "The limit receipt does not match the request.");
+            if (receipt.state !== "delivered" && receipt.state !== "suppressed")
+              throw new HostLinkError("uncertain", "The limit observation was not acknowledged.");
+            if (receipt.state === "delivered") this.sharedLimits.set(key, "delivered");
+            result.delivered++;
+          } catch {
+            // Network and parser errors can contain private transport details.
+            result.failed++;
+          }
+        }
+      }),
+    );
+    for (const key of this.sharedLimits.keys())
+      if (!currentKeys.has(key)) this.sharedLimits.delete(key);
+    return result;
+  }
   private isLead(chat: HostLinkChat): boolean {
     if (chat.isLead) return true;
     return Object.values(this.journal(this.outboxFile)).some(
@@ -439,6 +500,22 @@ export class HostLinks {
   async receive(token: string | null, raw: unknown): Promise<HostLinkReceipt> {
     const link = this.incoming(token);
     const wire = HostLinkWireSchema.parse(raw);
+    if (wire.kind === "account_limit") {
+      if (wire.destination !== this.deps.serverId || !link.operations.includes("limits"))
+        throw new HostLinkError("refused", "The link cannot share account limits.");
+      this.recheck(link);
+      const { accountId, limitKind, resetAt, observedAt } = wire;
+      const accepted = this.accountLimits.receive(link.serverId, {
+        accountId,
+        limitKind,
+        resetAt,
+        observedAt,
+      });
+      return {
+        ...this.receipt(wire.messageId, null),
+        state: accepted ? "delivered" : "suppressed",
+      };
+    }
     if (
       wire.destination !== this.deps.serverId ||
       !link.leads.includes(wire.sender) ||
@@ -525,7 +602,7 @@ export class HostLinks {
   }
   private async admit(
     link: IncomingHostLink,
-    wire: HostLinkWire,
+    wire: Exclude<HostLinkWire, { kind: "account_limit" }>,
     key: string,
     entry: HostLinkJournal[string],
   ): Promise<HostLinkReceipt> {

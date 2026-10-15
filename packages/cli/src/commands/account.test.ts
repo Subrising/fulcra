@@ -50,6 +50,26 @@ describe("account commands", () => {
       "Ask the owner",
     );
   });
+  it("retains local and remote limit sources in account listings", async () => {
+    const p = port({
+      accounts: [
+        {
+          id: "a",
+          name: "Work",
+          status: { state: "limited", until: "2026-10-15T14:00:00Z", source: "local" },
+        },
+        {
+          id: "b",
+          name: "Personal",
+          status: { state: "limited", until: "2026-10-15T14:00:00Z", source: "peer" },
+        },
+      ],
+    });
+    expect((await listAccounts(p.client)).map((row) => row.status.source)).toEqual([
+      "local",
+      "peer",
+    ]);
+  });
   // FU-112: `account ls` says why an account is down.
   it("keeps the reason of a revoked account and shows it in the REASON column", async () => {
     const reason = "Failed to authenticate. API Error: 401 OAuth token has been revoked.";
