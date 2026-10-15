@@ -1,6 +1,7 @@
 import { DEFAULT_TERMINAL_PROFILES } from "@getpaseo/protocol/terminal-profiles";
 import { writeFile } from "node:fs/promises";
 import { expect, test, type Page } from "../support/fixtures";
+import type { Locator } from "@playwright/test";
 import { getE2EDaemonPort } from "../support/helpers/daemon-port";
 import { seedMockAgentWorkspace, openAgentRoute } from "../support/helpers/mock-agent";
 import { buildNewWorkspaceRoute } from "@/utils/host-routes";
@@ -48,6 +49,10 @@ interface SmallControl {
 function smallControls(buttons: Element[]): SmallControl[] {
   const small: SmallControl[] = [];
   for (const button of buttons) {
+    if (button.closest('[aria-hidden="true"],[inert]')) continue;
+    const style = getComputedStyle(button);
+    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0)
+      continue;
     const rect = button.getBoundingClientRect();
     if (
       rect.width &&
@@ -268,4 +273,243 @@ test.describe("New workspace: the composer is one control in two modes", () => {
       await agent.cleanup();
     }
   });
+});
+
+const CONTROL_SELECTOR =
+  'button,[role=button],[role=tab],[role=link],[role=textbox],input:not([type=hidden]),textarea,[role=switch],[role=combobox],[tabindex="0"]';
+
+function auditControls(elements: Element[]) {
+  function visibleBounds(element: Element) {
+    const rect = element.getBoundingClientRect();
+    const bounds = { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      const clip = parent.getBoundingClientRect();
+      if (style.overflowX !== "visible") {
+        bounds.left = Math.max(bounds.left, clip.left);
+        bounds.right = Math.min(bounds.right, clip.right);
+      }
+      if (style.overflowY !== "visible") {
+        bounds.top = Math.max(bounds.top, clip.top);
+        bounds.bottom = Math.min(bounds.bottom, clip.bottom);
+      }
+    }
+    return bounds;
+  }
+
+  const controls = elements.filter((element) => {
+    if (element.closest('[aria-hidden="true"],[inert]')) return false;
+    const r = element.getBoundingClientRect();
+    if (
+      !r.width ||
+      !r.height ||
+      r.right <= 0 ||
+      r.left >= innerWidth ||
+      r.bottom <= 0 ||
+      r.top >= innerHeight
+    )
+      return false;
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0)
+        return false;
+    }
+    const hit = document.elementFromPoint(
+      Math.max(0, Math.min(innerWidth - 1, r.x + r.width / 2)),
+      Math.max(0, Math.min(innerHeight - 1, r.y + r.height / 2)),
+    );
+    return !!hit && element.contains(hit);
+  });
+  const targets = controls.map((element) => {
+    const r = element.getBoundingClientRect();
+    return {
+      label: element.getAttribute("aria-label") ?? element.textContent,
+      id: element.getAttribute("data-testid"),
+      width: r.width,
+      height: r.height,
+    };
+  });
+  const clipped: string[] = [];
+  const overlaps: string[] = [];
+  for (const [index, element] of controls.entries()) {
+    const r = visibleBounds(element);
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      const bounds = parent.getBoundingClientRect();
+      const size = element.getBoundingClientRect();
+      if (
+        (style.overflowX !== "visible" && bounds.width < Math.min(48, size.width) - 1) ||
+        (style.overflowY !== "visible" && bounds.height < Math.min(48, size.height) - 1)
+      )
+        clipped.push(targets[index].label ?? "unlabelled");
+    }
+    for (let other = index + 1; other < controls.length; other++) {
+      if (element.contains(controls[other]) || controls[other].contains(element)) continue;
+      // The backdrop surrounds the sheet. The sheet masks its covered region.
+      if ([targets[index].label, targets[other].label].includes("Bottom sheet backdrop")) continue;
+      const b = visibleBounds(controls[other]);
+      if (
+        Math.min(r.right, b.right) > Math.max(r.left, b.left) + 1 &&
+        Math.min(r.bottom, b.bottom) > Math.max(r.top, b.top) + 1
+      )
+        overlaps.push(`${targets[index].label} / ${targets[other].label}`);
+    }
+  }
+  return {
+    targets,
+    small: targets.filter((r) => r.width < 48 || r.height < 48),
+    clipped,
+    overlaps,
+    sideways: document.documentElement.scrollWidth > innerWidth,
+  };
+}
+
+async function scrollSidebarControls(sidebar: Locator, record: () => Promise<void>) {
+  const controls = sidebar.locator(CONTROL_SELECTOR);
+  for (let i = 0; i < (await controls.count()); i++) {
+    const control = controls.nth(i);
+    if (!(await control.isVisible())) continue;
+    await control.scrollIntoViewIfNeeded();
+    await record();
+  }
+}
+
+test.describe("Session touch targets", () => {
+  test.use({ hasTouch: true });
+  test("sidebar and session controls fit coarse pointers at every viewport", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(180000);
+    const agent = await seedMockAgentWorkspace({
+      repoPrefix: "touch-sessions-",
+      title: "Touch session",
+    });
+    const measurements: {
+      width: number;
+      height: number;
+      surface: string;
+      audit: ReturnType<typeof auditControls>;
+    }[] = [];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const record = async (width: number, height: number, surface: string) => {
+      measurements.push({
+        width,
+        height,
+        surface,
+        audit: await page.locator(CONTROL_SELECTOR).evaluateAll(auditControls),
+      });
+    };
+    try {
+      for (const [width, height] of [
+        [375, 812],
+        [768, 1024],
+        [812, 375],
+        [1440, 900],
+      ]) {
+        await page.setViewportSize({ width, height });
+        await openAgentRoute(page, agent);
+        await expect(
+          page.getByRole("button", { name: "Context", exact: true }).first(),
+        ).toBeVisible();
+        expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+        await record(width, height, "workspace");
+        await page.screenshot({ path: testInfo.outputPath(`touch-workspace-${width}.png`) });
+        if (width === 375) {
+          await page.getByTestId("workspace-tab-switcher-trigger").tap();
+          const option = page.getByRole("button", { name: "Touch session", exact: true }).last();
+          await expect(option).toBeInViewport({ ratio: 1 });
+          await option.tap({ trial: true });
+          await record(width, height, "tab-options");
+          await page.screenshot({ path: testInfo.outputPath(`touch-tabs-${width}.png`) });
+          await option.tap();
+        }
+        const menu = page.getByRole("button", { name: "Open menu", exact: true }).first();
+        if (await menu.isVisible()) await menu.tap();
+        const newChat = page.getByTestId("sidebar-new-chat").filter({ visible: true });
+        await newChat.scrollIntoViewIfNeeded();
+        await expect(newChat).toBeInViewport({ ratio: 1 });
+        await record(width, height, "sidebar");
+        await page.screenshot({ path: testInfo.outputPath(`touch-sidebar-${width}.png`) });
+        // Include controls below the scroll boundary, including workspace row actions.
+        await scrollSidebarControls(
+          page.getByTestId("sidebar-project-workspace-list-scroll"),
+          async () => {
+            await record(width, height, "sidebar-scrolled");
+          },
+        );
+        const history = page.getByTestId("sidebar-sessions").filter({ visible: true });
+        await history.scrollIntoViewIfNeeded();
+        await history.tap();
+        await expect(page.getByTestId("sessions-search-input")).toBeVisible();
+        if (width === 375) await expect(page.getByTestId("sidebar-close")).not.toBeInViewport();
+        // Reset the shared sidebar scroll after navigation in the short window.
+        if (width !== 375) await newChat.scrollIntoViewIfNeeded();
+        const historyRow = page.locator('[data-testid^="agent-row-"][role="button"]').first();
+        expect(await historyRow.evaluate((row) => row.scrollWidth <= row.clientWidth + 1)).toBe(
+          true,
+        );
+        await record(width, height, "sessions");
+        await page.screenshot({ path: testInfo.outputPath(`touch-sessions-${width}.png`) });
+        await page.getByTestId("sessions-search-input").fill("Touch");
+        await expect(page.getByTestId("sessions-search-clear")).toBeVisible();
+        await record(width, height, "search");
+        await page.getByTestId("sessions-search-clear").tap();
+        await page.locator('[data-testid^="agent-row-"][role="button"]').first().tap();
+        await expect(
+          page.getByRole("button", { name: "Context", exact: true }).first(),
+        ).toBeVisible();
+      }
+      await writeFile(
+        testInfo.outputPath("touch-measurements.json"),
+        JSON.stringify(measurements, null, 2),
+      );
+      await testInfo.attach("touch-measurements", {
+        body: JSON.stringify(measurements),
+        contentType: "application/json",
+      });
+      for (const { width, surface, audit } of measurements) {
+        if (surface === "tab-options")
+          expect(audit.targets.map((target) => target.label)).toContain("Touch session");
+        expect(audit.small, `${width}/${surface} sizes`).toEqual([]);
+        expect(audit.clipped, `${width}/${surface} clipped`).toEqual([]);
+        expect(audit.overlaps, `${width}/${surface} overlaps`).toEqual([]);
+        expect(audit.sideways, `${width}/${surface} scroll`).toBe(false);
+      }
+      expect(errors).toEqual([]);
+    } finally {
+      await agent.cleanup();
+    }
+  });
+});
+
+test("desktop mouse controls keep their compact height", async ({ page }, testInfo) => {
+  const agent = await seedMockAgentWorkspace({
+    repoPrefix: "mouse-sessions-",
+    title: "Mouse session",
+  });
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openAgentRoute(page, agent);
+    const newChat = page.getByTestId("sidebar-new-chat").filter({ visible: true });
+    await expect(newChat).toBeVisible();
+    expect(await page.evaluate(() => matchMedia("(pointer: fine)").matches)).toBe(true);
+    const tab = page.getByTestId(`workspace-tab-agent_${agent.agentId}`);
+    await expect(page.getByRole("button", { name: "Context", exact: true }).first()).toBeVisible();
+    await expect(tab).toBeVisible();
+    const sizes = {
+      sidebar: await newChat.boundingBox(),
+      tab: await tab.boundingBox(),
+      row: await page
+        .getByTestId("workspace-pane-main")
+        .getByTestId("workspace-tabs-row")
+        .boundingBox(),
+    };
+    expect(sizes.sidebar!.height).toBe(28);
+    expect(sizes.tab!.height).toBe(28);
+    await writeFile(testInfo.outputPath("mouse-measurements.json"), JSON.stringify(sizes, null, 2));
+    await page.screenshot({ path: testInfo.outputPath("mouse-desktop-1440.png") });
+  } finally {
+    await agent.cleanup();
+  }
 });

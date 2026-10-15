@@ -54,7 +54,7 @@ import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
 import { isWeb } from "@/constants/platform";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
-import { TOUCH_TARGET } from "@/hooks/use-touch-targets";
+import { TOUCH_TARGET, useTouchTargets } from "@/hooks/use-touch-targets";
 import { RenderProfile } from "@/utils/render-profiler";
 import { useComposerHeight } from "./height";
 import { resolveComposerInputMode, type ComposerInputMode } from "@/composer/input-mode";
@@ -1144,6 +1144,10 @@ function extractErrorMessage(error: unknown): string | null {
   return null;
 }
 
+function resolveInputMinHeight(touch: boolean): number {
+  return touch ? TOUCH_TARGET : MIN_INPUT_HEIGHT;
+}
+
 export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
   function MessageInput(props, ref) {
     const {
@@ -1194,6 +1198,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     const mode = resolveComposerInputMode(inputMode);
     const { t } = useTranslation();
     const isCompact = useIsCompactFormFactor();
+    const touch = useTouchTargets();
     const { height: windowHeight } = useWindowDimensions();
     const maxInputHeight = resolveMaxInputHeight(windowHeight);
     const buttonIconSize = isWeb ? ICON_SIZE.md : ICON_SIZE.lg;
@@ -1220,7 +1225,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     const composerHeight = useComposerHeight({
       getText: getLiveText,
       textareaRef: webTextareaRef,
-      minHeight: MIN_INPUT_HEIGHT,
+      minHeight: resolveInputMinHeight(touch),
       maxHeight: maxInputHeight,
     });
     const { style: composerHeightStyle, scrollEnabled: isComposerScrollEnabled } = composerHeight;

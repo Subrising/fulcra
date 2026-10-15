@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   default as React,
@@ -183,6 +184,7 @@ export function Button({
     loading?: boolean;
   }
 >) {
+  const touch = useTouchTargets();
   const [hovered, setHovered] = useState(false);
   const isDisabled = disabled || loading;
 
@@ -222,8 +224,9 @@ export function Button({
       pressed ? styles.pressed : null,
       isDisabled ? styles.disabled : null,
       style,
+      touch && touchTargetStyles.icon,
     ],
-    [sizeStyle, variantStyle, isDisabled, style],
+    [sizeStyle, variantStyle, isDisabled, style, touch],
   );
 
   const resolvedTextStyle = useMemo(

@@ -1,3 +1,5 @@
+import { useContainerWidthBelow } from "@/hooks/use-container-width";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { SessionAccountInfo } from "@/sessions/session-account-info";
 import { sessionAccount } from "@/sessions/session-account";
 import {
@@ -190,6 +192,7 @@ function SessionRow({
 }) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
+  const touch = useTouchTargets();
   const agentKey = `${agent.serverId}:${agent.id}`;
   const isSelected = selectedAgentId === agentKey;
   // Recorded ownership outranks the placement derived from the workspace join, so
@@ -246,11 +249,12 @@ function SessionRow({
   const pressableStyle = useCallback(
     ({ pressed, hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.row,
+      touch && touchTargetStyles.icon,
       isSelected && styles.rowSelected,
       Boolean(hovered) && styles.rowHovered,
       pressed && styles.rowPressed,
     ],
-    [isSelected],
+    [isSelected, touch],
   );
 
   const handlePress = useCallback(() => onPress(agent), [onPress, agent]);
@@ -408,7 +412,9 @@ export function AgentList({
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const [actionAgent, setActionAgent] = useState<AggregatedAgent | null>(null);
-  const isMobile = useIsCompactFormFactor();
+  const compact = useIsCompactFormFactor();
+  const { isBelow: narrow, onLayout } = useContainerWidthBelow(700);
+  const isMobile = compact || narrow;
   const { archiveAgent } = useArchiveAgent();
 
   const actionClient = useSessionStore((state) =>
@@ -557,6 +563,7 @@ export function AgentList({
   return (
     <>
       <FlatList
+        onLayout={onLayout}
         data={flatItems}
         style={styles.list}
         contentContainerStyle={styles.listContent}

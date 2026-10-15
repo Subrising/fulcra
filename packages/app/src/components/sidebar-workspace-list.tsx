@@ -746,14 +746,16 @@ function NewWorktreeButton({
 }) {
   const { t } = useTranslation();
   const newWorktreeKeys = useShortcutKeys("new-worktree");
+  const touch = useTouchTargets();
 
   const pressableStyle = useCallback(
     ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.projectIconActionButton,
+      touch && touchTargetStyles.icon,
       !visible && styles.projectIconActionButtonHidden,
       (Boolean(hovered) || pressed) && !loading && styles.projectIconActionButtonHovered,
     ],
-    [visible, loading],
+    [visible, loading, touch],
   );
 
   const handlePress = useCallback(
@@ -765,7 +767,10 @@ function NewWorktreeButton({
   );
 
   return (
-    <View style={styles.projectTrailingControlSlot} pointerEvents={visible ? "auto" : "none"}>
+    <View
+      style={[styles.projectTrailingControlSlot, touch && touchTargetStyles.icon]}
+      pointerEvents={visible ? "auto" : "none"}
+    >
       <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
         <TooltipTrigger asChild disabled={!visible}>
           <Pressable

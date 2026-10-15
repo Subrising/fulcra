@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useCallback, useMemo, useRef, useState, type ReactElement } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { ChevronDown, Server } from "lucide-react-native";
@@ -41,6 +42,7 @@ export function HostFilter({
   triggerTestID,
   hostOptionTestID,
 }: HostFilterProps): ReactElement {
+  const touch = useTouchTargets();
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterAnchorRef = useRef<View>(null);
 
@@ -54,10 +56,11 @@ export function HostFilter({
   const filterTriggerStyle = useCallback(
     ({ pressed, hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.filterTrigger,
+      touch && touchTargetStyles.icon,
       Boolean(hovered) && styles.filterTriggerHovered,
       pressed && styles.filterTriggerPressed,
     ],
-    [],
+    [touch],
   );
 
   return (

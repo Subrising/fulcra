@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState, type ReactElement } from "react";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
+import { useCallback, useMemo, useRef, useState, type ReactElement } from "react";
 import { Pressable, View } from "react-native";
 import { Search, X } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -45,6 +46,9 @@ export function SearchField({
   testID,
   clearTestID,
 }: SearchFieldProps): ReactElement {
+  const touch = useTouchTargets();
+  const inputStyle = useMemo(() => [styles.input, touch && touchTargetStyles.icon], [touch]);
+  const clearStyle = useMemo(() => [styles.clear, touch && touchTargetStyles.icon], [touch]);
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<EditingTextInputHandle>(null);
   const handleFocus = useCallback(() => setIsFocused(true), []);
@@ -55,7 +59,7 @@ export function SearchField({
   }, [onChangeText]);
 
   return (
-    <View style={[styles.field, isFocused && styles.fieldFocused]}>
+    <View style={[styles.field, touch && styles.touchField, isFocused && styles.fieldFocused]}>
       <ThemedSearch size={14} uniProps={mutedColorMapping} />
       <ThemedTextInput
         testID={testID}
@@ -69,10 +73,11 @@ export function SearchField({
         autoCapitalize="none"
         autoCorrect={false}
         returnKeyType="search"
-        style={styles.input}
+        style={inputStyle}
       />
       {value.length > 0 ? (
         <Pressable
+          style={clearStyle}
           testID={clearTestID}
           onPress={handleClear}
           accessibilityRole="button"
@@ -103,6 +108,8 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.border,
   },
+  touchField: { paddingVertical: 0 },
+  clear: { alignItems: "center", justifyContent: "center" },
   fieldFocused: {
     borderColor: theme.colors.borderAccent,
     backgroundColor: theme.colors.surface2,

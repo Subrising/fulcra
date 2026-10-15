@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import {
   forwardRef,
   useCallback,
@@ -49,15 +50,16 @@ export const ComboboxTrigger = forwardRef<View, ComboboxTriggerProps>(function C
   { children, chevron, style, block = false, onFocus, onBlur, ...props },
   ref,
 ): ReactElement {
+  const touch = useTouchTargets();
   const [focused, setFocused] = useState(false);
   const pressableStyle = useCallback(
     ({ pressed, hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => {
-      if (typeof style === "function") {
-        return style({ pressed, hovered, focused });
-      }
-      return style;
+      return [
+        typeof style === "function" ? style({ pressed, hovered, focused }) : style,
+        touch && touchTargetStyles.icon,
+      ];
     },
-    [focused, style],
+    [focused, style, touch],
   );
   const handleFocus = useCallback(
     (event: NativeSyntheticEvent<TargetedEvent>) => {

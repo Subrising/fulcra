@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { getOpenAgentTabLabel } from "@getpaseo/protocol/agent-labels";
@@ -526,6 +527,9 @@ function WorkspaceDocumentTitleEffect({
 function switcherTriggerStyle({ pressed }: { pressed?: boolean }) {
   return [styles.switcherTrigger, Boolean(pressed) && styles.switcherTriggerPressed];
 }
+function touchSwitcherTriggerStyle(state: { pressed?: boolean }) {
+  return [switcherTriggerStyle(state), touchTargetStyles.icon];
+}
 
 function MobileWorkspaceTabOption({
   tab,
@@ -680,6 +684,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
   onCloseTabsBelow,
   onCloseOtherTabs,
 }: MobileWorkspaceTabSwitcherProps) {
+  const touch = useTouchTargets();
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const anchorRef = useRef<View>(null);
@@ -767,7 +772,7 @@ const MobileWorkspaceTabSwitcher = memo(function MobileWorkspaceTabSwitcher({
         testID="workspace-tab-switcher-trigger"
         accessibilityRole="button"
         accessibilityLabel={t("workspace.tabs.switcher.trigger", { count: tabs.length })}
-        style={switcherTriggerStyle}
+        style={touch ? touchSwitcherTriggerStyle : switcherTriggerStyle}
         onPress={handleOpenSwitcher}
       >
         {({ pressed }) => (

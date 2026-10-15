@@ -1,3 +1,4 @@
+import { useTouchTargets } from "@/hooks/use-touch-targets";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, View, type PressableStateCallbackType, type ViewStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -35,6 +36,7 @@ export function OverlayScrollbar({
   onScrollToOffset: (offset: number) => void;
   onUserScrollUp?: () => void;
 }) {
+  const touch = useTouchTargets();
   const geometry = useMemo(() => computeOverlayScrollbarGeometry(metrics), [metrics]);
   const geometryRef = useRef(geometry);
   const dragStartClientYRef = useRef(0);
@@ -102,7 +104,8 @@ export function OverlayScrollbar({
     ],
     [geometry.thumbOffset, geometry.thumbSize, isDragging],
   );
-  if (!geometry.isVisible) return null;
+  // Touch screens scroll the content directly.
+  if (touch || !geometry.isVisible) return null;
 
   return (
     <View style={styles.overlay} pointerEvents="box-none" testID="workspace-overlay-scrollbar">

@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, Text, View, useWindowDimensions } from "react-native";
 import Svg, { Circle } from "react-native-svg";
@@ -5,7 +6,6 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative } from "@/constants/platform";
 import { useHostReportsUsage } from "@/usage";
 import type { Theme } from "@/styles/theme";
@@ -156,8 +156,7 @@ export function ContextWindowMeter({
   // Usage cards need a wider popover; without them it keeps the plain tooltip shape.
   const showsUsage = useHostReportsUsage(serverId);
   const popoverWidth = Math.min(USAGE_POPOVER_WIDTH, width - 24);
-  // Compact screens open the details in a sheet, which can hold a pressable Refresh.
-  const isCompact = useIsCompactFormFactor();
+  // Touch screens open details in a sheet with a Refresh button.
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const openSheet = useCallback(() => setIsSheetOpen(true), []);
   const closeSheet = useCallback(() => setIsSheetOpen(false), []);
@@ -181,7 +180,11 @@ export function ContextWindowMeter({
   );
   const formattedSessionCost =
     typeof totalCostUsd === "number" ? formatSessionCost(totalCostUsd) : null;
-  const containerStyle = geometry.containerStyle;
+  const touch = useTouchTargets();
+  const containerStyle = useMemo(
+    () => [geometry.containerStyle, touch && touchTargetStyles.icon],
+    [geometry.containerStyle, touch],
+  );
   const ring = (
     <ContextWindowRing
       size={geometry.svgSize}
@@ -199,7 +202,7 @@ export function ContextWindowMeter({
     ? t("contextWindow.accessibility", { percentage: context.percentage })
     : t("contextWindow.accessibilityNoData");
 
-  if (isCompact) {
+  if (touch) {
     return (
       <>
         <Pressable

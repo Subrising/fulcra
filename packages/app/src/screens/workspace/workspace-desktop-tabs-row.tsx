@@ -1,3 +1,4 @@
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, {
   useCallback,
@@ -772,6 +773,7 @@ function TabChip({
   onCloseTab: (tabId: string) => Promise<void> | void;
   dragHandleProps: DraggableListDragHandleProps | undefined;
 }) {
+  const targets = useTabTargets(resolvedTabWidth, showCloseButton);
   const { closeButtonTestId, contextMenuTestId, menuEntries } = resolvedTab;
   const { t } = useTranslation();
   const middleClickRef = useMiddleClickClose(
@@ -788,7 +790,8 @@ function TabChip({
     isActiveFocused,
     isFilled: isActive || isHovered,
   });
-  const showCloseControl = showCloseButton && (isHovered || isNative || isCompact || isClosingTab);
+  const showCloseControl =
+    showCloseButton && (isHovered || isNative || isCompact || targets.touch || isClosingTab);
   const closeButtonDragBlockers = isWeb
     ? ({
         onPointerDown: (event: { stopPropagation?: () => void }) => {
@@ -803,17 +806,26 @@ function TabChip({
   const tabChipStyle = useCallback(
     () => [
       styles.tab,
+      targets.minimum,
       isActiveFocused && styles.tabActive,
       isActive && !isFocused && styles.tabActiveUnfocused,
       !isActive && isHovered && styles.tabHovered,
       isWeb && isDragging && ({ cursor: "grabbing" } as object),
       {
-        minWidth: resolvedTabWidth,
-        width: resolvedTabWidth,
-        maxWidth: resolvedTabWidth,
+        minWidth: targets.triggerWidth,
+        width: targets.triggerWidth,
+        maxWidth: targets.triggerWidth,
       },
     ],
-    [isActive, isActiveFocused, isDragging, isFocused, isHovered, resolvedTabWidth],
+    [
+      isActive,
+      isActiveFocused,
+      isDragging,
+      isFocused,
+      isHovered,
+      targets.triggerWidth,
+      targets.minimum,
+    ],
   );
 
   const handleTabPointerEnter = useCallback(() => {
@@ -860,7 +872,7 @@ function TabChip({
   return (
     <View
       ref={middleClickRef}
-      style={styles.tabHoverFrame}
+      style={targets.frameStyle}
       onPointerEnter={handleTabPointerEnter}
       onPointerLeave={handleTabPointerLeave}
     >
@@ -929,7 +941,7 @@ function TabChip({
               onHoverIn={handleCloseButtonHoverIn}
               onHoverOut={handleCloseButtonHoverOut}
               onPress={handleCloseButtonPress}
-              style={styles.tabCloseButton}
+              style={targets.closeStyle}
             >
               {({ hovered: closeHovered, pressed }) => {
                 const highlighted = closeHovered || pressed;
@@ -1061,6 +1073,7 @@ function ResolvedWorkspaceDesktopTabsRow({
   focusModeEnabled,
   onExitFocusMode,
 }: ResolvedWorkspaceDesktopTabsRowProps) {
+  const touch = useTouchTargets();
   const { t } = useTranslation();
   const newTabKeys = useShortcutKeys("workspace-tab-new");
   const [tabsContainerWidth, setTabsContainerWidth] = useState<number>(0);
@@ -1084,21 +1097,21 @@ function ResolvedWorkspaceDesktopTabsRow({
       rowHorizontalInset: 0,
       actionsReservedWidth: Math.max(
         0,
-        DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH +
+        (touch ? 52 : DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH) +
           (focusModeEnabled ? exitFocusModeWidth : 0) +
           (showPaneSplitActions ? PANE_SPLIT_ACTIONS_RESERVED_WIDTH : 0) +
           (showPaneMaximizeAction ? PANE_MAXIMIZE_ACTION_RESERVED_WIDTH : 0),
       ),
       rowPaddingHorizontal: TAB_ROW_PADDING_HORIZONTAL,
       tabGap: TAB_CHIP_GAP,
-      minTabWidth: TAB_MIN_WIDTH,
-      maxTabWidth: TAB_MAX_WIDTH,
+      minTabWidth: touch ? 96 : TAB_MIN_WIDTH,
+      maxTabWidth: touch ? TAB_MAX_WIDTH + 48 : TAB_MAX_WIDTH,
       tabIconWidth: TAB_ICON_WIDTH,
       tabContentGap: TAB_CONTENT_GAP,
       tabHorizontalPadding: TAB_CHIP_HORIZONTAL_PADDING,
-      closeButtonWidth: TAB_CLOSE_BUTTON_RESERVED_WIDTH,
+      closeButtonWidth: touch ? 48 : TAB_CLOSE_BUTTON_RESERVED_WIDTH,
     }),
-    [exitFocusModeWidth, focusModeEnabled, showPaneMaximizeAction, showPaneSplitActions],
+    [exitFocusModeWidth, focusModeEnabled, showPaneMaximizeAction, showPaneSplitActions, touch],
   );
 
   const panePanelKinds = useMemo(() => tabs.map(({ tab }) => tab.kind), [tabs]);
@@ -1358,7 +1371,7 @@ function ResolvedWorkspaceDesktopTabsRow({
 
   const row = (
     <View
-      style={styles.tabsContainer}
+      style={[styles.tabsContainer, touch && styles.tabsContainerTouch]}
       testID="workspace-tabs-row"
       onLayout={handleTabsContainerLayout}
     >
@@ -1584,6 +1597,20 @@ function ResolvedDesktopTabChip({
   );
 }
 
+function useTabTargets(resolvedWidth: number, showClose: boolean) {
+  const touch = useTouchTargets();
+  return useMemo(() => {
+    const width = touch ? Math.max(96, resolvedWidth) : resolvedWidth;
+    return {
+      touch,
+      triggerWidth: touch && showClose ? width - 48 : width,
+      minimum: touch ? touchTargetStyles.icon : undefined,
+      frameStyle: [styles.tabHoverFrame, touch && { width, minHeight: 48 }],
+      closeStyle: [styles.tabCloseButton, touch && styles.tabCloseTouch],
+    };
+  }, [touch, resolvedWidth, showClose]);
+}
+
 const styles = StyleSheet.create((theme) => ({
   tabsContainer: {
     minWidth: 0,
@@ -1595,6 +1622,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     overflow: "visible",
   },
+  tabsContainerTouch: { height: 56 },
   tabsScroll: {
     minWidth: 0,
   },
@@ -1755,6 +1783,7 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
     zIndex: 1,
   },
+  tabCloseTouch: { right: 0, width: 48, height: 48 },
   tabModifiedDot: {
     width: TAB_MODIFIED_DOT_SIZE,
     height: TAB_MODIFIED_DOT_SIZE,
