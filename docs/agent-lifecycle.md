@@ -144,6 +144,7 @@ Users can also detach an existing subagent from the subagents track. Detach is d
 
 `notifyOnFinish` defaults to `true` for agent-scoped creation and background prompt follow-ups because most delegated work needs to report back to the creating agent. Set it to `false` only for truly fire-and-forget agents or prompts.
 The child record keeps its finish notice owner and message ID. Report-up owns finish notices by default. `daemon.nativeFinishNotices` enables native ownership only when the parent accepts queued native turns and report rates are initialized. This setting is unsupported in 0.2.19.1. A refused, cancelled, uncertain, or missing native wake uses report-up with the same message ID, including after restart.
+A cancelled worker turn clears its armed finish notice without notifying the parent. The next native prompt can arm a new notice.
 Permission and close notices for these children use the ordinary route. A child message does not replace a finish notice.
 Permission requests are notification checkpoints, not the end of that subscription. The caller is notified again after a permission response when the child finishes, errors, or requests another permission.
 The permission notification includes the normalized request plus the child and request IDs, so the caller can inspect it and respond without fetching agent status.

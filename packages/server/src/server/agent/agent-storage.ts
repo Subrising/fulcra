@@ -252,7 +252,7 @@ export class AgentStorage {
   async recordFinishNotice(
     agentId: string,
     turnId: string,
-    reason: "finished" | "errored" | "closed",
+    reason: "finished" | "errored" | "closed" | "cancelled",
   ): Promise<FinishNotice | null> {
     await this.load();
     let result: FinishNotice | null = null;
@@ -267,6 +267,11 @@ export class AgentStorage {
         notice.status === "unknown"
       )
         return null;
+      if (reason === "cancelled") {
+        if (notice.status !== "armed") return null;
+        result = { ...notice, status: "cancelled", turnId, endedAt: Date.now() };
+        return { ...record, finishNotice: result };
+      }
       if (notice.status === "pending") {
         if (notice.turnId !== turnId) return null;
         result = notice;

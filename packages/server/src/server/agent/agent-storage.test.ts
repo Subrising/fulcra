@@ -179,6 +179,39 @@ describe("AgentStorage", () => {
     });
   });
 
+  test("a cancelled finish notice survives restart and permits rearming without dropping pending results", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const first = await storage.armFinishNotice(child, parentId, "report-up");
+    expect(await storage.recordFinishNotice(child.id, "cancelled-turn", "cancelled")).toMatchObject(
+      { status: "cancelled", messageId: first.messageId },
+    );
+    expect(await storage.recordFinishNotice(child.id, "cancelled-turn", "finished")).toBeNull();
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "cancelled",
+      messageId: first.messageId,
+    });
+    const next = (await recovered.rearmFinishNotice(child.id, parentId))!;
+    expect(next.status).toBe("armed");
+    expect(next.messageId).not.toBe(first.messageId);
+    await recovered.recordFinishNotice(child.id, "finished-turn", "finished");
+    expect(await recovered.recordFinishNotice(child.id, "cancelled-turn", "cancelled")).toBeNull();
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "pending",
+      messageId: next.messageId,
+      turnId: "finished-turn",
+    });
+    await recovered.settleFinishNotice(child.id, next.messageId, "delivered", "report-up");
+    expect(await recovered.recordFinishNotice(child.id, "finished-turn", "cancelled")).toBeNull();
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "delivered",
+      messageId: next.messageId,
+    });
+  });
+
   test("actual snapshot persistence omits live recorded usage across restart", async () => {
     await storage.applySnapshot(
       createManagedAgent({

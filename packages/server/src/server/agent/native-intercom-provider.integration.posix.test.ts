@@ -518,20 +518,25 @@ test("native provider integration: missing native acknowledgement remains uncert
   }
 });
 
-async function registerPrime(f: Awaited<ReturnType<typeof fixture>>, register = true) {
-  f.authority.management.register(
-    "orca-organization-next",
-    vi.fn(async (command, principal) => {
-      if (command.method === "leadership-transfer") {
-        consumeManagementDispatch(command, principal);
-        return {
-          ownershipTransferred: true,
-          handoffId: command.input.messageId,
-        };
-      }
-      return null;
-    }),
-  );
+async function registerPrime(
+  f: Awaited<ReturnType<typeof fixture>>,
+  register = true,
+  bridgeInstalled = false,
+) {
+  if (!bridgeInstalled)
+    f.authority.management.register(
+      "orca-organization-next",
+      vi.fn(async (command, principal) => {
+        if (command.method === "leadership-transfer") {
+          consumeManagementDispatch(command, principal);
+          return {
+            ownershipTransferred: true,
+            handoffId: command.input.messageId,
+          };
+        }
+        return null;
+      }),
+    );
   const owner = f.authority.management.open(
     {
       pluginId: "orca-organization-next",
@@ -652,6 +657,9 @@ test("native report end-to-end: actual MCP launch witness creates a scoped child
     ).toBe(f.agent.id);
     f.server.completeTurn({ threadId: child.persistence!.sessionId });
     await vi.waitFor(() => expect(f.manager.getAgent(childId!)?.lifecycle).toBe("idle"));
+    await vi.waitFor(async () =>
+      expect(await f.manager.nativeReportInbox(origin)).toMatchObject({ metadataCount: 1 }),
+    );
     const human = (async () => {
       for await (const event of f.manager.streamAgent(f.agent.id, "human held work")) void event;
     })();
@@ -799,10 +807,13 @@ test("native finish switch off gives one report-up notice and no late native tur
   }
 }, 8000);
 
-async function defaultOwnedNoticeFixture(observe = true) {
+async function defaultOwnedNoticeFixture(
+  observe = true,
+  options: { nativeFinishNotices?: boolean; registerPrime?: boolean } = {},
+) {
   const f = await fixture("valid", true);
-  await registerPrime(f, false);
-  f.finishConfig.patch({ nativeFinishNotices: false });
+  await registerPrime(f, options.registerPrime ?? false);
+  f.finishConfig.patch({ nativeFinishNotices: options.nativeFinishNotices ?? false });
   const offReportUp = observe ? observeFixtureReportUp(f) : () => {};
   const snapshots = Object.create(ProviderSnapshotManager.prototype) as ProviderSnapshotManager;
   vi.spyOn(snapshots, "resolveCreateConfig").mockResolvedValue({
@@ -1012,6 +1023,106 @@ test("startup marks an interrupted sending finish unknown and never resends it",
     );
   } finally {
     service.stop();
+    offReportUp();
+    await f.cleanup();
+  }
+});
+
+test.each([false, true])(
+  "FU-176 cancellation permits a new native prompt with native finish notices %s",
+  async (nativeFinishNotices) => {
+    const { f, catalog, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture(
+      true,
+      {
+        nativeFinishNotices,
+        registerPrime: true,
+      },
+    );
+    const parentTurns = () =>
+      f.server
+        .requests()
+        .filter(
+          (request) =>
+            request.method === "turn/start" &&
+            (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId,
+        );
+    try {
+      const first = (await f.agentStorage.getFinishNotice(childId))!;
+      expect(first.status).toBe("armed");
+      expect(await catalog.executeTool("supervisor_inbox", {})).toMatchObject({
+        structuredContent: { metadataCount: 0 },
+      });
+      f.server.completeTurn({ threadId: childThread, status: "interrupted" });
+      await vi.waitFor(async () =>
+        expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+          status: "cancelled",
+          messageId: first.messageId,
+        }),
+      );
+      expect(await catalog.executeTool("supervisor_inbox", {})).toMatchObject({
+        structuredContent: { metadataCount: 0 },
+      });
+      expect(parentTurns()).toHaveLength(0);
+      const cancelledTurnId = (await f.agentStorage.getFinishNotice(childId))!.turnId;
+      expect(cancelledTurnId).toEqual(expect.any(String));
+      const sent = await catalog.executeTool("send_agent_prompt", {
+        agentId: childId,
+        prompt: "New task after cancellation",
+        background: true,
+        notifyOnFinish: true,
+      });
+      expect(sent).toMatchObject({ structuredContent: { success: true } });
+      const armed = (await f.agentStorage.getFinishNotice(childId))!;
+      expect(armed).toMatchObject({ status: "armed", owner: "report-up" });
+      expect(armed.messageId).not.toBe(first.messageId);
+      await Reflect.get(f.manager, "dispatchSessionEvent").call(
+        f.manager,
+        f.manager.getAgent(childId),
+        {
+          type: "turn_canceled",
+          provider: "codex",
+          turnId: cancelledTurnId,
+          reason: "duplicate cancellation",
+        },
+      );
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+        status: "armed",
+        messageId: armed.messageId,
+      });
+      expect(parentTurns()).toHaveLength(0);
+      f.server.completeTurn({ threadId: childThread });
+      await vi.waitFor(async () =>
+        expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+          status: "delivered",
+          messageId: armed.messageId,
+        }),
+      );
+      f.server.completeTurn({ threadId: childThread });
+      await f.manager.flush();
+      expect(parentTurns()).toHaveLength(1);
+    } finally {
+      offReportUp();
+      await f.cleanup();
+    }
+  },
+);
+
+test("FU-176 an uninitialized report inbox refuses armed and cancelled workers until enrollment", async () => {
+  const { f, childId, childThread, offReportUp } = await defaultOwnedNoticeFixture();
+  try {
+    await expect(f.manager.nativeReportInbox(f.nativeOrigin())).rejects.toThrow(
+      "Report authority unavailable",
+    );
+    f.server.completeTurn({ threadId: childThread, status: "interrupted" });
+    await vi.waitFor(async () =>
+      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({ status: "cancelled" }),
+    );
+    await expect(f.manager.nativeReportInbox(f.nativeOrigin())).rejects.toThrow(
+      "Report authority unavailable",
+    );
+    await registerPrime(f, true, true);
+    expect(await f.manager.nativeReportInbox(f.nativeOrigin())).toMatchObject({ metadataCount: 0 });
+  } finally {
     offReportUp();
     await f.cleanup();
   }
@@ -1891,6 +2002,11 @@ test("native report wake preserves delegated journal generation through actual W
     const child = f.manager.getAgent(childId)!;
     f.server.completeTurn({ threadId: child.persistence!.sessionId });
     await vi.waitFor(() => expect(f.manager.getAgent(childId)?.lifecycle).toBe("idle"));
+    await vi.waitFor(async () =>
+      expect(await f.manager.nativeReportInbox(f.nativeOrigin())).toMatchObject({
+        metadataCount: 1,
+      }),
+    );
     await f.manager.closeAgent(childId);
     await new Promise((resolve) => setTimeout(resolve, 2500));
     expect(failures).toEqual([]);

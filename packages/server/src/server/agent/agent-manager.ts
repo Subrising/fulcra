@@ -7971,7 +7971,7 @@ export class AgentManager {
   private recordOwnedFinish(
     agent: ActiveManagedAgent,
     turnId: string | undefined,
-    reason: "finished" | "errored",
+    reason: "finished" | "errored" | "cancelled",
     foreground: boolean,
   ): Promise<void> | null {
     if (!foreground || !turnId || !this.registry) return null;
@@ -8106,7 +8106,7 @@ export class AgentManager {
           options,
         });
       case "turn_canceled":
-        this.onStreamTurnCanceled({
+        return this.onCanceledWithOwnedFinish({
           agent,
           event,
           eventTurnId,
@@ -8114,7 +8114,6 @@ export class AgentManager {
           terminalDisposition,
           options,
         });
-        return undefined;
       case "turn_started":
         this.onStreamTurnStarted({ agent, eventTurnId, isForegroundEvent, flags });
         return undefined;
@@ -8292,6 +8291,25 @@ export class AgentManager {
     if (!isForegroundEvent && !agent.activeForegroundTurnId) {
       this.emitState(agent);
     }
+  }
+
+  private onCanceledWithOwnedFinish(params: {
+    agent: ActiveManagedAgent;
+    event: Extract<AgentStreamEvent, { type: "turn_canceled" }>;
+    eventTurnId: string | undefined;
+    isForegroundEvent: boolean;
+    terminalDisposition: ActiveTurnTerminalDisposition;
+    options: HandleStreamEventOptions | undefined;
+  }): Promise<void> | undefined {
+    const persist = this.recordOwnedFinish(
+      params.agent,
+      params.eventTurnId,
+      "cancelled",
+      params.isForegroundEvent && params.terminalDisposition !== "stale",
+    );
+    if (persist) return persist.then(() => this.onStreamTurnCanceled(params));
+    this.onStreamTurnCanceled(params);
+    return undefined;
   }
 
   private onStreamTurnCanceled(params: {
