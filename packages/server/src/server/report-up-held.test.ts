@@ -12,7 +12,12 @@ import { DaemonConfigStore } from "./daemon-config-store.js";
 import { resolveConfigFromPersisted } from "./config.js";
 import { assertFinalInputCheck, recordFinalInputHandoff } from "./agent/final-input-check.js";
 import { FINAL_INPUT_CHECK } from "./agent/agent-sdk-types.js";
-import { ReportUpService, reportUpSwitches, type ReportUpDeps } from "./report-up.js";
+import {
+  PERMISSION_NOTICE_GRACE_MS,
+  ReportUpService,
+  reportUpSwitches,
+  type ReportUpDeps,
+} from "./report-up.js";
 
 const sent: Array<{ agentId: string; prompt: string }> = [];
 let beforeSend: (() => void | Promise<void>) | undefined;
@@ -56,10 +61,12 @@ function setup(
       { id: B, title: "Beta", labels: { [REPORTS_TO_LABEL]: LEAD }, lastMessage: "beta done" },
     ].map((chat) => [chat.id, chat as Record<string, unknown> & { id: string }]),
   );
+  const pending = new Map<string, Map<string, { id: string }>>();
   let busy = true;
   const listeners: Array<(event: AgentManagerEvent) => void> = [];
   const manager = {
     getAgent: (id: string) => chats.get(id) ?? null,
+    getPendingPermissions: (id: string) => [...(pending.get(id)?.values() ?? [])],
     getLastAssistantMessage: async (id: string) => (chats.get(id)?.lastMessage as string) ?? null,
     nativeReportOwnsFinish: () => false,
     hasInFlightRun: (id: string) => id === LEAD && busy,
@@ -73,6 +80,10 @@ function setup(
     get: async (id: string) => chats.get(id) ?? null,
     list: async () => [...chats.values()],
   } as unknown as AgentStorage;
+  const permissionTimers: Array<() => void> = [];
+  const flushPermissionGrace = () => {
+    for (const run of permissionTimers.splice(0)) run();
+  };
   const service = new ReportUpService({
     agentManager: manager,
     agentStorage: storage,
@@ -86,13 +97,25 @@ function setup(
     localServerId: "srv_local",
     logger: createTestLogger(),
     ...options,
+    setTimer: (run, ms) => {
+      if (ms === PERMISSION_NOTICE_GRACE_MS) permissionTimers.push(run);
+      else if (options.setTimer) options.setTimer(run, ms);
+      else setTimeout(run, ms).unref();
+    },
   });
-  const stream = (id: string, event: object) =>
+  const stream = (id: string, event: object) => {
+    const permission = event as { type: string; request?: { id: string }; requestId?: string };
+    if (permission.type === "permission_requested") {
+      if (!pending.has(id)) pending.set(id, new Map());
+      pending.get(id)!.set(permission.request!.id, permission.request!);
+    }
+    if (permission.type === "permission_resolved") pending.get(id)?.delete(permission.requestId!);
     service.onEvent({
       type: "agent_stream",
       agentId: id,
       event: { provider: "claude", ...event },
     } as AgentManagerEvent);
+  };
   const finish = (id: string, failed = false) => {
     for (const type of ["turn_started", failed ? "turn_failed" : "turn_completed"])
       service.onEvent({
@@ -122,7 +145,7 @@ function setup(
         },
       } as AgentManagerEvent);
   };
-  return { finish, stream, leadTurnEnds, leadHitsLimit, chats, service };
+  return { finish, stream, leadTurnEnds, leadHitsLimit, chats, service, flushPermissionGrace };
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -210,6 +233,7 @@ describe("report-up reload while delivery waits", () => {
           type: "permission_requested",
           request: { id: "req-1", name: "Bash", input: { command: "pwd" } },
         });
+        f.flushPermissionGrace();
         await settle();
         expect(sent).toEqual([]);
         if (atHandoff)
@@ -466,6 +490,7 @@ test("permission and limit notices survive a stalled nudge dispatch", async () =
       type: "permission_requested",
       request: { id: "request", name: "Bash", input: { command: "ls" } },
     });
+    f.flushPermissionGrace();
     f.stream(A, { type: "turn_started" });
     f.stream(A, { type: "turn_failed", error: "Claude AI usage limit reached|0000000000" });
     await flushNudge();
@@ -571,6 +596,7 @@ test("the nudge switch cancels queued nudges without disabling other notices", a
       type: "permission_requested",
       request: { id: "nudge-off", name: "Bash", input: { command: "echo fixture" } },
     });
+    f.flushPermissionGrace();
     await settle();
     expect(sent).toHaveLength(1);
     expect(sent[0]!.prompt).toContain("waiting for permission");
@@ -615,3 +641,23 @@ test("a lead off label cancels a nudge at the final queued delivery check", asyn
     f.service.stop();
   }
 });
+
+test.each([false, true])(
+  "resolved permission notices leave the busy lead queue (atHandoff=%s)",
+  async (atHandoff) => {
+    const f = setup();
+    try {
+      f.stream(A, { type: "permission_requested", request: { id: "resolved", name: "Bash" } });
+      f.flushPermissionGrace();
+      await settle();
+      const resolve = () => f.stream(A, { type: "permission_resolved", requestId: "resolved" });
+      if (atHandoff) beforeSend = resolve;
+      else resolve();
+      f.leadTurnEnds();
+      await settle();
+      expect(sent).toEqual([]);
+    } finally {
+      f.service.stop();
+    }
+  },
+);

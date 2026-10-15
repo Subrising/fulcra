@@ -49,15 +49,6 @@ export function PluginCatalogSync({
       pluginRegistry.removeHost(serverId);
       return;
     }
-    const releaseConnection = client.subscribeConnectionStatus((state) => {
-      connectionAvailable = state.status === "connected";
-      if (!connectionAvailable) {
-        // Invalidate preparation before React observes the drop, including a same-client reconnect.
-        generation++;
-        reading?.abort();
-        pluginRegistry.clearHostInputPolicy(serverId, client);
-      }
-    });
     const refresh = (replacePluginId?: string) => {
       clearTimeout(retryTimer);
       const epoch = ++generation;
@@ -112,13 +103,29 @@ export function PluginCatalogSync({
       });
       return refreshQueue;
     };
+    const releaseConnection = client.subscribeConnectionStatus((state) => {
+      const next = state.status === "connected";
+      if (next === connectionAvailable) return;
+      connectionAvailable = next;
+      if (!next) {
+        // React can batch a drop and reconnect into one render. Fence reads immediately.
+        generation++;
+        clearTimeout(retryTimer);
+        reading?.abort();
+        pluginRegistry.clearHostInputPolicy(serverId, client);
+        pluginRegistry.suspendHost(serverId);
+      } else {
+        failures = 0;
+        void refresh();
+      }
+    });
     const observation = client.observeEvents([
       "status.plugin_catalog_changed",
       "status.plugin_settings_changed",
     ]);
     observation.subscribe({
       snapshot: () => {
-        void refresh();
+        if (generation === 0) void refresh();
       },
       update: (message) => {
         if (message.type !== "status") return;
@@ -137,6 +144,8 @@ export function PluginCatalogSync({
         }
       },
     });
+    // An unchanged observation snapshot need not be emitted again after a host restart.
+    if (generation === 0) void refresh();
     return () => {
       cancelled = true;
       clearTimeout(retryTimer);

@@ -29,6 +29,7 @@ export class ReportUpObserver {
     lastAssistant?: string | null,
   ): void;
   permissionRequested(id: string, request: PermissionRequest): void;
+  hasPermission(id: string, request: PermissionRequest): boolean;
   permissionResolved(id: string, requestId: string): void;
   close(id: string): void;
   stop(): void;
