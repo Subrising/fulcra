@@ -1869,7 +1869,10 @@ test("CLI run inherits project labels when a worker uses a separate folder", asy
     const { stdout } = await promisify(execFile)(
       process.execPath,
       [
-        fileURLToPath(new URL("../../../cli/dist/index.js", import.meta.url)),
+        "--conditions=source",
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("../../../cli/src/index.ts", import.meta.url)),
         "run",
         "--host",
         `127.0.0.1:${daemon.port}`,
@@ -1881,7 +1884,15 @@ test("CLI run inherits project labels when a worker uses a separate folder", asy
         "--json",
         "Fixture work",
       ],
-      { env: { ...process.env, PASEO_AGENT_ID: parent.id }, timeout: 15000 },
+      {
+        env: {
+          ...process.env,
+          PASEO_AGENT_ID: parent.id,
+          PASEO_HOME: daemon.paseoHome,
+          FULCRA_COMMAND_CENTRE: "0",
+        },
+        timeout: 15000,
+      },
     );
     const result = JSON.parse(stdout);
     const saved = await daemon.daemon.agentStorage.get(result.agentId);
