@@ -18,7 +18,8 @@ export type {
   LimitedChat,
 } from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, watch, type FSWatcher } from "node:fs";
+import { isArchiveLead } from "./agent/archive-policy.js";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import type { Logger } from "pino";
@@ -140,6 +141,8 @@ export interface ReportUpDeps {
   statePath?: string;
   /** The open ledger rows; tests replace it. Default: the project ledgers under FULCRA_LEDGER_DIR or ~/shared-vault. */
   readLedger?: () => readonly LedgerRow[] | Promise<readonly LedgerRow[]>;
+  /** Production watches this directory. Tests can use an isolated ledger directory. */
+  ledgerDir?: string;
 }
 
 type NoticeKind =
@@ -216,6 +219,7 @@ interface NudgeState {
   workerIds: string[];
   itemIds: string[];
   itemOwners: string[];
+  projects: string[];
   needsDelivery: boolean;
   deferred?: boolean;
 }
@@ -234,6 +238,9 @@ export class ReportUpService {
   private readonly nudgeStates = new Map<string, NudgeState>();
   private readonly nudging = new Map<string, PendingNudge>();
   private nudgeGeneration = 0;
+  private ledgerRevision = 0;
+  private ledgerWatcher?: FSWatcher;
+  private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
 
   constructor(private readonly deps: ReportUpDeps) {
@@ -260,6 +267,34 @@ export class ReportUpService {
       },
     });
     this.load();
+    if (deps.ledgerDir) {
+      try {
+        this.ledgerWatcher = watch(deps.ledgerDir, { recursive: true }, (_event, file) => {
+          if (this.stopped) return;
+          if (
+            file &&
+            path.dirname(String(file)) !== "." &&
+            path.basename(String(file)) !== "OPEN-ITEMS.md"
+          )
+            return;
+          this.ledgerRevision++;
+          for (const id of this.nudging.keys()) this.cancelNudge(id, "Project ledger changed");
+          clearTimeout(this.ledgerDebounce);
+          this.ledgerDebounce = setTimeout(() => {
+            this.ledgerDebounce = undefined;
+            this.checkIdleLeads();
+          }, 100);
+          this.ledgerDebounce.unref();
+        });
+        this.ledgerWatcher.on("error", (err) => {
+          this.ledgerWatcher?.close();
+          this.deps.logger.warn({ err }, "Ledger watch stopped; turn-end checks remain active");
+        });
+        this.ledgerWatcher.unref();
+      } catch (err) {
+        this.deps.logger.warn({ err }, "Ledger watch unavailable; turn-end checks remain active");
+      }
+    }
   }
 
   /** Reads the kept state: limits that have not passed, and reports still held. Held reports are released after the reset. */
@@ -351,6 +386,8 @@ export class ReportUpService {
     if (event.type === "agent_state" && event.agent.lifecycle === "idle")
       this.retryRefusedFinishesOnIdle(event.agent.id);
     if (event.type === "agent_stream") this.observer.onStream(event.agentId, event.event);
+    if (event.type === "agent_stream" && event.event.type === "turn_canceled")
+      this.checkIdleLeads();
   }
 
   private retryRefusedFinishesOnIdle(parentId: string): void {
@@ -399,6 +436,8 @@ export class ReportUpService {
 
   stop(): void {
     this.stopped = true;
+    this.ledgerWatcher?.close();
+    clearTimeout(this.ledgerDebounce);
     this.observer.stop();
     for (const pending of this.nudging.values())
       pending.abort.abort(new Error("Idle nudge service stopped"));
@@ -427,11 +466,8 @@ export class ReportUpService {
 
   private onTurnEnd(input: ReportTurnEnd): void {
     if (this.stopped) return;
-    const { agentId, failed } = input;
-    if (!failed)
-      void this.nudgeIdleLead(agentId).catch((err: unknown) =>
-        this.deps.logger.warn({ err, agentId }, "Idle-lead nudge failed"),
-      );
+    const { agentId } = input;
+    this.checkIdleLeads();
     void this.handleOwnedFinish(input)
       .then((handled) => {
         if (!handled) this.onUnownedTurnEnd(input);
@@ -807,11 +843,15 @@ export class ReportUpService {
   }
 
   /**
-   * A lead that is idle while it owns open ledger items and has idle workers gets one message that lists them.
-   * Event-driven: it runs when the lead's turn ends. Nothing is sent when there are no idle workers, no open items,
+   * An idle lead with READY ledger work receives a nudge when its project has no running sessions.
+   * Turn-end and ledger events check it. Nothing is sent without eligible items,
    * when the lead is at a usage limit, or when eligible work has not grown since its last observation.
    */
-  private async nudgeIdleLead(leadId: string): Promise<void> {
+  private async nudgeIdleLead(
+    leadId: string,
+    rows: readonly LedgerRow[],
+    ledgerRevision: number,
+  ): Promise<void> {
     if (!this.nudgeEnabled()) {
       this.cancelNudge(leadId, "Idle nudge was turned off");
       return;
@@ -829,17 +869,18 @@ export class ReportUpService {
     const stop = classifyEndingAssistantMessage(last, this.now());
     if (stop && stop.kind !== "network") return;
     const workers = await this.idleWorkersOf(leadId);
-    const owned = rowsEligibleForNudge({
-      rows: await (this.deps.readLedger ?? (() => readOpenLedgerRows(defaultLedgerDir())))(),
-      chat: { id: leadId, title: titleOf(lead) },
-      skipOwners: this.nudgeSkipOwners(),
-    });
+    const owned = this.ownedReadyRows(lead, rows);
+    if (ledgerRevision !== this.ledgerRevision) return;
     const state = this.observeNudge(leadId, workers, owned);
     const fingerprint = state.fingerprint;
-    if (!workers.length || !owned.length) {
+    if (!owned.length) {
       state.needsDelivery = false;
       state.deferred = false;
-      this.cancelNudge(leadId, "Idle nudge has no eligible workers or owned open items");
+      this.cancelNudge(leadId, "Idle nudge has no owned READY items");
+      return;
+    }
+    if (!this.projectIdle(leadId, state.projects)) {
+      this.cancelNudge(leadId, "Project work is running");
       return;
     }
     if (this.observer.isOpen(leadId)) return;
@@ -854,6 +895,112 @@ export class ReportUpService {
       fingerprint,
       formatSystemNotificationPrompt(formatNudge(workers, owned)),
     );
+  }
+
+  private ownedReadyRows(lead: LineAgent, rows: readonly LedgerRow[]): LedgerRow[] {
+    return rowsEligibleForNudge({
+      rows,
+      chat: {
+        id: lead.id,
+        title: titleOf(lead),
+        labels:
+          isArchiveLead({ labels: lead.labels ?? {} }) ||
+          lead.labels?.["fulcra.role"] === "project-lead"
+            ? lead.labels
+            : undefined,
+      },
+      skipOwners: this.nudgeSkipOwners(),
+    });
+  }
+
+  /** Turn-end and ledger events share the existing per-lead fingerprint and delivery lane. */
+  private checkIdleLeads(): void {
+    if (!this.nudgeEnabled()) return;
+    const ledgerRevision = this.ledgerRevision;
+    void this.store
+      .list()
+      .then(async (chats) => {
+        const rows = this.deps.readLedger
+          ? await this.deps.readLedger()
+          : await readOpenLedgerRows(this.deps.ledgerDir ?? defaultLedgerDir());
+        const parents = new Set(
+          (
+            await Promise.all(
+              chats
+                .filter((chat) => !chat.archivedAt && reportsTo(chat))
+                .map((chat) => this.leadOf(chat)),
+            )
+          ).flatMap((lead) => ("id" in lead ? [lead.id] : [])),
+        );
+        return Promise.all(
+          chats.map(async (chat) => {
+            if (this.stopped || chat.archivedAt) return;
+            if (
+              reportsTo(chat) &&
+              !isArchiveLead({ labels: chat.labels ?? {} }) &&
+              chat.labels?.["fulcra.role"] !== "project-lead" &&
+              !parents.has(chat.id)
+            )
+              return;
+            await this.nudgeIdleLead(chat.id, rows, ledgerRevision);
+          }),
+        );
+      })
+      .catch((err: unknown) => this.deps.logger.warn({ err }, "Idle-lead nudge failed"));
+  }
+
+  private projectIdle(leadId: string, projects: readonly string[], admittingLead = false): boolean {
+    const agents = this.deps.agentManager.listAgents();
+    const lead = this.deps.agentManager.getAgent(leadId);
+    if (!lead || lead.archivedAt || lead.internal) return false;
+    if (lead.lifecycle !== "idle" && (!admittingLead || lead.lifecycle !== "running")) return false;
+    const names = new Set(
+      [...projects, lead.labels?.["fulcra.project"], lead.labels?.project].filter(Boolean),
+    );
+    for (const agent of agents) {
+      if (admittingLead && agent.id === leadId) continue;
+      if (!this.nudgeSessionBusy(agent.id)) continue;
+      if (
+        agent.id === leadId ||
+        [agent.labels?.["fulcra.project"], agent.labels?.project].some(
+          (name) => name && names.has(name),
+        )
+      )
+        return false;
+      if (this.reportsThrough(agent, leadId, agents)) return false;
+    }
+    return true;
+  }
+
+  private nudgeSessionBusy(id: string): boolean {
+    const live = this.deps.agentManager.getAgent(id);
+    return (
+      live?.lifecycle === "running" ||
+      this.observer.isOpen(id) ||
+      this.deps.agentManager.hasInFlightRun(id) ||
+      (live?.backgroundWork?.count ?? 0) > 0
+    );
+  }
+
+  private reportsThrough(agent: LineAgent, leadId: string, agents: readonly LineAgent[]): boolean {
+    const byId = new Map(agents.map((entry) => [entry.id, entry]));
+    let current: LineAgent | undefined = agent;
+    const seen = new Set<string>();
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      const ref = reportsTo(current);
+      if (!ref) break;
+      const leadSeat = byId.get(leadId)?.labels?.[SEAT_LABEL];
+      if (leadSeat && ref === `${ROLE_REF_PREFIX}${leadSeat}`) return true;
+      const holder = ref.startsWith(ROLE_REF_PREFIX)
+        ? findRoleHolder(agents, ref.slice(ROLE_REF_PREFIX.length))
+        : null;
+      const [id, server] = (holder && "id" in holder ? holder.id : ref).split("@", 2);
+      if (server && server !== this.deps.localServerId) break;
+      if (id === leadId) return true;
+      current = id ? byId.get(id) : undefined;
+    }
+    return false;
   }
 
   private prepareNudgeGeneration(leadId: string, fingerprint: string): boolean {
@@ -894,6 +1041,7 @@ export class ReportUpService {
       workerIds,
       itemIds,
       itemOwners,
+      projects: [...new Set(items.map((item) => item.project))],
       fingerprint,
       needsDelivery: gained || retry || Boolean(previous?.deferred),
       deferred: previous?.deferred,
@@ -942,6 +1090,9 @@ export class ReportUpService {
       !pending.abort.signal.aborted &&
       this.nudgeAllowed(leadId) &&
       this.now() - pending.startedAt < NUDGE_DELIVERY_TIMEOUT_MS &&
+      // The manager registers this nudge as running before its final provider check.
+      // Idle-only admission protects the receiver; project peers must remain idle.
+      this.projectIdle(leadId, state?.projects ?? [], Boolean(pending.handoff)) &&
       (state?.workerIds.every((id) => this.nudgeWorkerReady({ id })) ?? false) &&
       (state?.itemOwners.every((owner) => !isNudgeOwnerSkipped(owner, this.nudgeSkipOwners())) ??
         false);
@@ -1457,8 +1608,9 @@ export class ReportUpService {
             ? `${NUDGE_MESSAGE_PREFIX}${randomUUID()}`
             : `${FINISH_NOTIFICATION_MESSAGE_PREFIX}report-up:${randomUUID()}`),
         runOptions: { [FINAL_INPUT_CHECK]: finalCheck },
-        activeTurnBehavior: "steer",
-        steerOnly: true,
+        ...(kind === "idle-nudge"
+          ? { queuedOnly: true }
+          : { activeTurnBehavior: "steer" as const, steerOnly: true }),
         unarchive: false,
         logger,
       });
@@ -1509,6 +1661,7 @@ export function startReportUp(input: {
   }
   const service = new ReportUpService({
     remoteNotice: input.remoteNotice,
+    ledgerDir: defaultLedgerDir(),
     agentManager: input.agentManager,
     agentStorage: input.agentStorage,
     isEnabled: () =>
@@ -1566,7 +1719,11 @@ export function startReportUp(input: {
         service.onEvent(event);
         return;
       }
-      if (input.hooks && (event.type !== "agent_stream" || event.event.type !== "timeline")) return;
+      if (
+        input.hooks &&
+        (event.type !== "agent_stream" || !["timeline", "turn_canceled"].includes(event.event.type))
+      )
+        return;
       service.onEvent(event);
     },
     { replayState: false },

@@ -39,8 +39,12 @@ export function formatNudge(workers, items) {
     .join(", ");
   return [
     `You are idle. You own ${items.length} open ledger item${items.length === 1 ? "" : "s"}: ${itemList}${more(items.length)}.`,
-    `${workers.length} of your worker${workers.length === 1 ? " is" : "s are"} idle: ${workerList}${more(workers.length)}.`,
-    "Send each idle worker its next task, or close the item it finished.",
+    ...(workers.length
+      ? [
+          `${workers.length} of your worker${workers.length === 1 ? " is" : "s are"} idle: ${workerList}${more(workers.length)}.`,
+          "Send each idle worker its next task, or close the item it finished.",
+        ]
+      : ["Start the next READY item. Create a worker if needed."]),
   ].join("\n");
 }
 export function formatPermissionNotice(input) {
