@@ -69,6 +69,59 @@ function parseAccounts(raw) {
     ),
   };
 }
+// Remote observations stay in a separate daemon-owned file. Pool writes never turn them into local observations.
+function optionalJson(raw) {
+  return raw === null ? null : JSON.parse(raw);
+}
+function attachLimitObservations(s, remoteRaw, usageRaw) {
+  const remote = optionalJson(remoteRaw);
+  let usage = null;
+  try {
+    usage = optionalJson(usageRaw);
+  } catch {
+    /* Usage is advisory; keep local and remote holds. */
+  }
+  if (
+    remote &&
+    (remote.v !== 1 || !Array.isArray(remote.observations) || remote.observations.length > 2048)
+  )
+    throw Error("Unreadable remote account limits");
+  const valid = (x) =>
+    uuid(x?.accountId) &&
+    ["session", "weekly"].includes(x.limitKind) &&
+    typeof x.source === "string" &&
+    /^[a-zA-Z0-9_-]{1,128}$/.test(x.source) &&
+    Number.isFinite(Date.parse(x.resetAt)) &&
+    Number.isFinite(Date.parse(x.observedAt));
+  if (remote?.observations.some((x) => !valid(x))) throw Error("Unreadable remote account limits");
+  for (const a of s.accounts) {
+    a.remoteLimits = (remote?.observations ?? []).filter((x) => x.accountId === a.id);
+    const report = Array.isArray(usage?.reports)
+      ? usage.reports.find((x) => x?.accountId === a.id && x.provider === a.provider)
+      : null;
+    a.usageObservedAt =
+      report?.status !== "unavailable" && (report?.fiveHour || report?.weekly)
+        ? report.observedAt
+        : null;
+  }
+  return s;
+}
+function optionalFile(file) {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+async function optionalFileAsync(file) {
+  try {
+    return await fsp.readFile(file, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
 // FU-77: the daemon puts a meter on globalThis; without it the call just runs.
 const timed = (site, call) => {
   const meter = globalThis[Symbol.for("fulcra.syncIoMeter")];
@@ -82,7 +135,11 @@ export function readAccounts(root) {
     if (e.code === "ENOENT") return empty();
     throw e;
   }
-  return parseAccounts(raw);
+  return attachLimitObservations(
+    parseAccounts(raw),
+    optionalFile(path.join(accountsDir(root), "remote-limits.json")),
+    optionalFile(path.join(accountsDir(root), "usage-reports.json")),
+  );
 }
 // The same read without blocking the daemon's main thread on the disk (FU-77). Use this one in async code.
 export async function readAccountsAsync(root) {
@@ -93,7 +150,11 @@ export async function readAccountsAsync(root) {
     if (e.code === "ENOENT") return empty();
     throw e;
   }
-  return parseAccounts(raw);
+  const [remote, usage] = await Promise.all([
+    optionalFileAsync(path.join(accountsDir(root), "remote-limits.json")),
+    optionalFileAsync(path.join(accountsDir(root), "usage-reports.json")),
+  ]);
+  return attachLimitObservations(parseAccounts(raw), remote, usage);
 }
 async function writeAccounts(root, s) {
   const dir = accountsDir(root);
@@ -106,7 +167,13 @@ async function writeAccounts(root, s) {
       delete s.assignments[id];
   s.rotations = s.rotations.slice(-MAX_ROTATIONS);
   const tmp = path.join(dir, `.accounts-${randomUUID()}.json`);
-  await fsp.writeFile(tmp, JSON.stringify(s, null, 1) + "\n", { mode: 0o600, flag: "wx" });
+  const stored = {
+    ...s,
+    accounts: s.accounts.map(
+      ({ remoteLimits: _remoteLimits, usageObservedAt: _usageObservedAt, ...a }) => a,
+    ),
+  };
+  await fsp.writeFile(tmp, JSON.stringify(stored, null, 1) + "\n", { mode: 0o600, flag: "wx" });
   await fsp.rename(tmp, file(root));
 }
 // One writer at a time across the plugin host and the controller (separate processes): an exclusive lock file; a lock
@@ -148,14 +215,27 @@ export async function withStoreLock(root, fn) {
 }
 
 // ---- status and choice (pure)
+export function accountLimit(a, now = Date.now()) {
+  const localTime = Math.max(
+    Date.parse(a.limitObservedAt ?? "") || 0,
+    Date.parse(a.usageObservedAt ?? "") || 0,
+  );
+  const remote = (a.remoteLimits ?? [])
+    .filter((x) => Date.parse(x.resetAt) > now && Date.parse(x.observedAt) > localTime)
+    .sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt))[0];
+  if (remote) return { until: remote.resetAt, kind: remote.limitKind, source: remote.source };
+  if (a.limitedUntil && Date.parse(a.limitedUntil) > now)
+    return { until: a.limitedUntil, kind: a.limitKind ?? null, source: "local" };
+  return null;
+}
 export function accountStatus(a, now = Date.now()) {
   if (!a.enabled) return { state: "disabled" };
   // FU-112: the account's token was revoked or is invalid. Down until the owner signs it in again; no reset time.
   if (a.revoked) return { state: "revoked", reason: String(a.revoked.reason ?? "").slice(0, 200) };
   if (a.auth === "expired") return { state: "auth-expired" };
   if (a.auth === "signing-in") return { state: "signing-in" };
-  if (a.limitedUntil && Date.parse(a.limitedUntil) > now)
-    return { state: "limited", until: a.limitedUntil };
+  const limit = accountLimit(a, now);
+  if (limit) return { state: "limited", until: limit.until, source: limit.source };
   return { state: "ok" };
 }
 export function activeCount(s, accountId) {
@@ -231,7 +311,7 @@ export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
 export function earliestReset(s, provider, now = Date.now()) {
   const until = s.accounts
     .filter((a) => a.provider === provider && accountStatus(a, now).state === "limited")
-    .map((a) => a.limitedUntil)
+    .map((a) => accountStatus(a, now).until)
     .sort();
   return until[0] ?? null;
 }
@@ -312,6 +392,7 @@ export async function setAccount(root, id, patch) {
       a.limitedUntil = null;
       a.limitKind = null;
       a.limitNote = null;
+      a.limitObservedAt = iso(Date.now());
     }
     return a;
   });
@@ -402,7 +483,11 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
   if (held && accountStatus(held, now).state === "limited" && !s.rotateOnLimit) {
     held.lastUsedAt = iso(now);
     s.assignments[sessionId] = { accountId: held.id, provider, at: iso(now), ended: false };
-    return { account: { ...held }, allLimited: true, earliestReset: held.limitedUntil };
+    return {
+      account: { ...held },
+      allLimited: true,
+      earliestReset: accountStatus(held, now).until,
+    };
   }
   let a = heldState === "ok" ? held : choose(s, provider, now, except, usage);
   let allLimited = false;
@@ -415,7 +500,9 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
             !except.includes(x.id) &&
             accountStatus(x, now).state === "limited",
         )
-        .sort((x, y) => x.limitedUntil.localeCompare(y.limitedUntil))[0] ?? null;
+        .sort((x, y) =>
+          accountStatus(x, now).until.localeCompare(accountStatus(y, now).until),
+        )[0] ?? null;
     allLimited = !!a;
     if (!a)
       return {
@@ -434,13 +521,17 @@ function assignInStore(s, sessionId, provider, now, except = [], usage = {}) {
       fromName: held.name,
       to: a.id,
       toName: a.name,
-      resetAt: held.limitedUntil ?? null,
+      resetAt: accountStatus(held, now).until ?? null,
       stopId: null,
       earliestReset: null,
       reason: "launch",
     });
   s.assignments[sessionId] = { accountId: a.id, provider, at: iso(now), ended: false };
-  return { account: { ...a }, allLimited, earliestReset: allLimited ? a.limitedUntil : null };
+  return {
+    account: { ...a },
+    allLimited,
+    earliestReset: allLimited ? accountStatus(a, now).until : null,
+  };
 }
 export async function sessionEnded(root, sessionId) {
   return update(root, (s) => {
@@ -476,6 +567,7 @@ export async function markAccountLimited(
       a.limitKind = typeof kind === "string" && kind ? kind.slice(0, 24) : null;
       a.limitNote = note ? String(note).slice(0, 200) : null;
     }
+    a.limitObservedAt = iso(now);
     return { id: a.id, name: a.name, limitedUntil: a.limitedUntil, limitKind: a.limitKind };
   });
 }
@@ -512,6 +604,7 @@ export async function rotate(
       from.limitKind = typeof kind === "string" && kind ? kind.slice(0, 24) : null;
       from.limitNote = note ? String(note).slice(0, 200) : null;
     }
+    if (!revoked) from.limitObservedAt = iso(now);
     // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
     // A revoked token cannot work again by waiting, so it moves the session whatever the owner's limit setting is.
     const move = reassign && (revoked || s.rotateOnLimit === true);
@@ -689,7 +782,7 @@ export function publicView(s, now = Date.now()) {
       priority: a.priority,
       status: accountStatus(a, now),
       limitNote: a.limitNote,
-      limitKind: a.limitKind ?? null,
+      limitKind: accountLimit(a, now)?.kind ?? null,
       sessions: Object.entries(s.assignments)
         .filter(([, x]) => x.accountId === a.id && !x.ended)
         .map(([id]) => id)

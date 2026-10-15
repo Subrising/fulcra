@@ -1,6 +1,8 @@
 import express from "express";
 import { mkdtemp, rm, chmod } from "node:fs/promises";
 import {
+  watch,
+  utimesSync,
   realpathSync,
   fsyncSync,
   fstatSync,
@@ -18,8 +20,22 @@ import {
   type HostLinkCreate,
   type HostLinkRoleNotice,
 } from "./host-links.js";
+import { startHostLimitSharing } from "./host-limit-sharing.js";
 import { mountHostLinkRoutes } from "./host-link-routes.js";
 import { HostLinkReceiptSchema, type HostLinkConfig } from "./host-link-contracts.js";
+import {
+  accountStatus,
+  addAccount,
+  assign,
+  choose,
+  markAccountLimited,
+  publicView,
+  readAccounts,
+  rotate,
+  setAccount,
+  update,
+} from "../../../../control/orca-organization/server/accounts.mjs";
+import { createPoolUsage } from "../../../../control/orca-organization/server/pool-usage.js";
 import { writePrivateFileAtomicSync } from "./private-files.js";
 import {
   isAgentMcpRequestAuthorized,
@@ -98,12 +114,14 @@ async function fixture() {
   const state = {
     holder: "main",
     protected: true,
+    now: Date.parse("2026-10-15T12:00:00Z"),
     failCreate: false,
     beforeNotice: () => {},
     afterCreate: () => {},
   };
   const deps = {
     home: path.join(root, "target"),
+    now: () => state.now,
     serverId: "target",
     protected: () => state.protected,
     chat: async (id: string) => chats.get(id) ?? null,
@@ -584,4 +602,307 @@ test("host-link credentials cannot authenticate to general HTTP, WebSocket, or M
     headers: { authorization: `Bearer ${linkToken}` },
   });
   expect(response.status).toBe(401);
+});
+
+const sharedAccount = "55555555-5555-4555-8555-555555555555";
+async function limitFixture() {
+  const f = await fixture();
+  const sourcePool = path.join(f.root, "source", "command-centre");
+  const targetPool = path.join(f.root, "target", "command-centre");
+  for (const pool of [sourcePool, targetPool]) {
+    await addAccount(pool, { provider: "claude", name: "Work" }, f.state.now);
+    await update(pool, (s) => {
+      s.accounts[0].id = sharedAccount;
+    });
+  }
+  f.sourceConfig.outgoing[0].shareLimits = true;
+  f.targetConfig.incoming[0].operations.push("limits");
+  f.save();
+  return { ...f, sourcePool, targetPool };
+}
+
+for (const limitKind of ["session", "weekly"] as const) {
+  test(`shares a ${limitKind} pool limit over HTTP and expires at the reset`, async () => {
+    const f = await limitFixture();
+    const resetAt = new Date(f.state.now + 3600000).toISOString();
+    await assign(f.sourcePool, "pooled-session", "claude", f.state.now);
+    await rotate(
+      f.sourcePool,
+      "pooled-session",
+      "claude",
+      { kind: limitKind, resetAt },
+      f.state.now,
+    );
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+    expect(publicView(readAccounts(f.sourcePool), f.state.now).accounts[0].status).toEqual({
+      state: "limited",
+      until: resetAt,
+      source: "local",
+    });
+    const target = readAccounts(f.targetPool);
+    expect(publicView(target, f.state.now).accounts[0]).toMatchObject({
+      limitKind,
+      status: { state: "limited", until: resetAt, source: "source" },
+    });
+    expect(choose(target, "claude", f.state.now)).toBeNull();
+    const launch = await assign(f.targetPool, "new-session", "claude", f.state.now);
+    expect(launch).toMatchObject({ allLimited: true, earliestReset: resetAt });
+    const persisted = readFileSync(path.join(f.targetPool, "accounts", "accounts.json"), "utf8");
+    expect(persisted).not.toContain("remoteLimits");
+    expect(persisted).not.toContain("usageObservedAt");
+    expect(readAccounts(f.targetPool).accounts[0].limitedUntil).toBeNull();
+    // A new service instance reads the same retained remote state.
+    expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toMatchObject({
+      source: "source",
+    });
+    f.state.now = Date.parse(resetAt);
+    expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+      state: "ok",
+    });
+    expect(choose(readAccounts(f.targetPool), "claude", f.state.now)?.id).toBe(sharedAccount);
+    expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+  });
+}
+
+test("fresh local limits and cleared limits win over an older remote observation", async () => {
+  const f = await limitFixture();
+  const remoteReset = new Date(f.state.now + 7 * 86400000).toISOString();
+  await markAccountLimited(
+    f.sourcePool,
+    sharedAccount,
+    { kind: "weekly", resetAt: remoteReset },
+    f.state.now,
+  );
+  f.state.now += 1000;
+  const localReset = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(
+    f.targetPool,
+    sharedAccount,
+    { kind: "session", resetAt: localReset },
+    f.state.now,
+  );
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "limited",
+    until: localReset,
+    source: "local",
+  });
+  // The same remote observation can arrive late or repeat after a local clear.
+  await setAccount(f.targetPool, sharedAccount, { clearLimit: true });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "ok",
+  });
+  // The reset of the older remote window cannot bring the cleared limit back.
+  f.state.now = Date.parse(localReset);
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "ok",
+  });
+});
+
+test("a fresh local usage reading overrides an older remote limit and reports its source in usage", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  await f.source.shareAccountLimits();
+  const usage = createPoolUsage(
+    () => f.targetPool,
+    () => f.state.now,
+  );
+  expect(await usage.fetch({ accountId: sharedAccount, provider: "claude" })).toMatchObject({
+    status: "unavailable",
+    problem: { detail: expect.stringContaining("Source: remote host source") },
+  });
+  f.state.now += 1000;
+  writePrivateFileAtomicSync(
+    path.join(f.targetPool, "accounts", "usage-reports.json"),
+    JSON.stringify({
+      v: 1,
+      reports: [
+        {
+          accountId: sharedAccount,
+          provider: "claude",
+          status: "ok",
+          observedAt: new Date(f.state.now).toISOString(),
+          fiveHour: { usedPct: 20, resetsAt: resetAt },
+          weekly: null,
+        },
+      ],
+    }),
+  );
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "ok",
+  });
+  expect(await usage.fetch({ accountId: sharedAccount, provider: "claude" })).toMatchObject({
+    status: "available",
+  });
+});
+
+test("limit sharing retries an offline link without changing local limits", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  const url = f.sourceConfig.outgoing[0].url;
+  f.sourceConfig.outgoing[0].url = "http://127.0.0.1:1";
+  f.save();
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 1 });
+  expect(accountStatus(readAccounts(f.sourcePool).accounts[0], f.state.now).state).toBe("limited");
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).state).toBe("ok");
+  f.sourceConfig.outgoing[0].url = url;
+  f.save();
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).source).toBe("source");
+  expect(await f.target.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+});
+
+test("limit sharing requires link authority and ignores unknown, expired, and invalid observations", async () => {
+  const f = await limitFixture();
+  const wire = {
+    kind: "account_limit",
+    messageId,
+    destination: "target",
+    accountId: sharedAccount,
+    limitKind: "weekly",
+    resetAt: new Date(f.state.now + 86400000).toISOString(),
+    observedAt: new Date(f.state.now).toISOString(),
+  };
+  const receive = (body: unknown, token = linkToken) =>
+    f.post(`${f.targetListener.url}/api/host-links/receive`, token, body);
+  expect((await receive(wire, chatToken)).status).toBe(403);
+  expect((await receive({ ...wire, token: "synthetic-secret" })).status).toBe(400);
+  expect((await receive({ ...wire, destination: "other" })).status).toBe(403);
+  expect(
+    (await receive({ ...wire, accountId: "66666666-6666-4666-8666-666666666666" })).body,
+  ).toMatchObject({ state: "suppressed" });
+  expect(
+    (await receive({ ...wire, resetAt: new Date(f.state.now).toISOString() })).body,
+  ).toMatchObject({ state: "suppressed" });
+  expect(
+    (await receive({ ...wire, resetAt: new Date(f.state.now + 9 * 86400000).toISOString() })).body,
+  ).toMatchObject({ state: "suppressed" });
+  expect(
+    (await receive({ ...wire, observedAt: new Date(f.state.now + 120000).toISOString() })).body,
+  ).toMatchObject({ state: "suppressed" });
+  f.targetConfig.incoming[0].operations = ["spawn", "notice"];
+  f.save();
+  expect((await receive(wire)).status).toBe(403);
+  f.targetConfig.incoming[0].operations.push("limits");
+  f.targetConfig.incoming[0].revoked = true;
+  f.save();
+  expect((await receive(wire)).status).toBe(403);
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).state).toBe("ok");
+});
+
+test("local quota windows share only known account IDs and do not forward remote observations", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  writePrivateFileAtomicSync(
+    path.join(f.sourcePool, "accounts", "usage-reports.json"),
+    JSON.stringify({
+      v: 1,
+      reports: [
+        {
+          accountId: sharedAccount,
+          provider: "claude",
+          status: "limited",
+          observedAt: new Date(f.state.now).toISOString(),
+          fiveHour: { usedPct: 100, resetsAt: resetAt },
+          weekly: null,
+        },
+      ],
+    }),
+  );
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  f.targetConfig.outgoing.push({
+    ...f.sourceConfig.outgoing[0],
+    id: "reverse",
+    serverId: "source",
+    url: f.sourceListener.url,
+  });
+  f.save();
+  expect(await f.target.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });
+  const stored = JSON.parse(
+    readFileSync(path.join(f.targetPool, "accounts", "remote-limits.json"), "utf8"),
+  );
+  expect(stored.observations).toEqual([
+    {
+      accountId: sharedAccount,
+      limitKind: "session",
+      resetAt,
+      observedAt: new Date(f.state.now).toISOString(),
+      source: "source",
+    },
+  ]);
+});
+
+test("the running exchange sends startup limits and later file changes", async () => {
+  const f = await limitFixture();
+  const resetAt = new Date(f.state.now + 3600000).toISOString();
+  const waitForObservation = () =>
+    new Promise<void>((resolve) => {
+      const watcher = watch(path.join(f.targetPool, "accounts"), (_event, file) => {
+        if (file === "remote-limits.json") {
+          watcher.close();
+          resolve();
+        }
+      });
+      cleanups.push(async () => {
+        watcher.close();
+      });
+    });
+  await markAccountLimited(f.sourcePool, sharedAccount, { kind: "session", resetAt }, f.state.now);
+  const startup = waitForObservation();
+  const warnings: string[] = [];
+  const close = startHostLimitSharing(f.source, path.join(f.root, "source"), () =>
+    warnings.push("failed"),
+  );
+  cleanups.push(async () => close());
+  await startup;
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).until).toBe(resetAt);
+  const later = waitForObservation();
+  f.state.now += 1000;
+  const weeklyReset = new Date(f.state.now + 86400000).toISOString();
+  await markAccountLimited(
+    f.sourcePool,
+    sharedAccount,
+    { kind: "weekly", resetAt: weeklyReset },
+    f.state.now,
+  );
+  await later;
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now).until).toBe(
+    weeklyReset,
+  );
+  close();
+  expect(warnings).toEqual([]);
+});
+
+test("editing a legacy account cannot make its old limit override a newer local observation", async () => {
+  const f = await limitFixture();
+  const createdAt = new Date(f.state.now).toISOString();
+  const remoteReset = new Date(f.state.now + 86400000).toISOString();
+  await update(f.sourcePool, (s) => {
+    s.accounts[0].limitedUntil = remoteReset;
+    s.accounts[0].limitKind = "weekly";
+  });
+  f.state.now += 1000;
+  const localReset = new Date(f.state.now + 3600000).toISOString();
+  await markAccountLimited(
+    f.targetPool,
+    sharedAccount,
+    { kind: "session", resetAt: localReset },
+    f.state.now,
+  );
+  await setAccount(f.sourcePool, sharedAccount, { name: "Renamed" });
+  const mtime = new Date(f.state.now + 1000);
+  utimesSync(path.join(f.sourcePool, "accounts", "accounts.json"), mtime, mtime);
+  expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
+  expect(accountStatus(readAccounts(f.targetPool).accounts[0], f.state.now)).toEqual({
+    state: "limited",
+    until: localReset,
+    source: "local",
+  });
+  const stored = JSON.parse(
+    readFileSync(path.join(f.targetPool, "accounts", "remote-limits.json"), "utf8"),
+  );
+  expect(stored.observations[0].observedAt).toBe(createdAt);
 });

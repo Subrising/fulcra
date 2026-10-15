@@ -1,3 +1,4 @@
+import { startHostLimitSharing } from "./host-limit-sharing.js";
 import { realpathSync } from "node:fs";
 import type { Logger } from "pino";
 import type { AgentManager } from "./agent/agent-manager.js";
@@ -218,5 +219,14 @@ export async function createHostLinkRuntime(input: HostLinkRuntimeInput) {
       };
     },
   });
-  return { service, close };
+  const stopSharing = startHostLimitSharing(service, input.home, () =>
+    logger.warn("Account limit sharing failed; the next pass will retry."),
+  );
+  return {
+    service,
+    close: () => {
+      stopSharing();
+      close();
+    },
+  };
 }

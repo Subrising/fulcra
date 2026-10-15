@@ -49,6 +49,7 @@ export const HostLinkConfigSchema = z
             ...lifetime,
             machine: z.enum(["mac", "pc"]),
             reporters: z.array(name).max(256),
+            shareLimits: z.boolean().optional(),
           })
           .strict(),
       )
@@ -62,7 +63,7 @@ export const HostLinkConfigSchema = z
             token: credential("hlink1"),
             ...lifetime,
             leads: z.array(name).max(256),
-            operations: z.array(z.enum(["spawn", "notice"])).max(2),
+            operations: z.array(z.enum(["spawn", "notice", "limits"])).max(3),
             workloads: z.array(z.enum(["standard", "heavy", "gpu"])).max(3),
             workspaces: z.record(name, z.string().min(1).max(4096)),
             profiles: z.record(name, HostLinkProfileSchema),
@@ -110,7 +111,26 @@ const origin = {
   sourceProvider: z.string().min(1).max(256),
   sourceMode: z.string().min(1).max(256),
 };
+export const HostAccountLimitSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    limitKind: z.enum(["session", "weekly"]),
+    resetAt: z.string().datetime(),
+    observedAt: z.string().datetime(),
+  })
+  .strict();
+export type HostAccountLimit = z.infer<typeof HostAccountLimitSchema>;
+export const RemoteAccountLimitSchema = HostAccountLimitSchema.extend({ source: name }).strict();
+export const RemoteAccountLimitsSchema = z
+  .object({ v: z.literal(1), observations: z.array(RemoteAccountLimitSchema).max(2048) })
+  .strict();
+export const HostAccountLimitWireSchema = HostAccountLimitSchema.extend({
+  kind: z.literal("account_limit"),
+  ...identity,
+  destination: name,
+}).strict();
 export const HostLinkWireSchema = z.discriminatedUnion("kind", [
+  HostAccountLimitWireSchema,
   HostLinkSpawnSchema.extend(origin).strict(),
   HostLinkNoticeSchema.extend({
     ...origin,

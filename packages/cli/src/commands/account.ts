@@ -13,6 +13,7 @@ const account = z.object({
     state: z.string(),
     until: z.string().optional(),
     reason: z.string().optional(),
+    source: z.string().optional(),
   }),
   isDefault: z.boolean().optional(),
 });
@@ -125,6 +126,7 @@ const schema: OutputSchema<Account> = {
     { header: "ACCOUNT", field: "name" },
     { header: "PROVIDER", field: (row) => row.provider ?? "" },
     { header: "STATUS", field: (row) => row.status.state },
+    { header: "SOURCE", field: (row) => row.status.source ?? "" },
     // Why an account is down: the CLI's own line for a revoked token, or the reset time of a usage limit.
     { header: "REASON", field: (row) => statusReason(row.status) },
   ],
