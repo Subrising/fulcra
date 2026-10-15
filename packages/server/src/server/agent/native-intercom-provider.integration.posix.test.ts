@@ -32,7 +32,7 @@ import { TrustedPlugins } from "../plugins/trusted.js";
 import { MessageReceipts } from "../message-receipts/index.js";
 import { DaemonConfigStore } from "../daemon-config-store.js";
 import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
-import { ReportUpService } from "../report-up.js";
+import { ReportUpService, PERMISSION_NOTICE_GRACE_MS } from "../report-up.js";
 import { LeadEventDispatcher, registerLeadEvents } from "../lead-events.js";
 import { noteAgentMessage, resetAgentMessageLogForTests } from "../agent-message-log.js";
 import { consumeManagementDispatch } from "../plugins/management.js";
@@ -1661,7 +1661,9 @@ test("a refused native permission wake leaves the request visible to the parent"
     });
     await vi.waitFor(() => expect(f.manager.getAgent(childId)!.pendingPermissions.size).toBe(1));
     const requestId = [...f.manager.getAgent(childId)!.pendingPermissions.keys()][0]!;
-    await vi.waitFor(() => expect(f.turnCount()).toBe(2));
+    await vi.waitFor(() => expect(f.turnCount()).toBe(2), {
+      timeout: PERMISSION_NOTICE_GRACE_MS + 5000,
+    });
     const parentTurns = f.server
       .requests()
       .filter(

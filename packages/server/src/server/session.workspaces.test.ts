@@ -121,6 +121,7 @@ interface SessionTestAccess {
     upsert(record: unknown): Promise<void>;
   };
   agentManager: {
+    preflightRestore(agentId: string): Promise<void>;
     listAgents(): unknown[];
     getAgent(agentId: string): unknown;
     reloadAgentSession(agentId: string, overrides?: unknown, options?: unknown): Promise<unknown>;
@@ -5376,6 +5377,7 @@ test("refresh_agent_request leaves workspace archival independent when its direc
     updatedAt: "2026-03-10T00:00:00.000Z",
   });
   session.agentManager.getAgent = () => managed;
+  session.agentManager.preflightRestore = async () => {};
   session.interruptAgentIfRunning = async () => undefined;
   session.agentManager.reloadAgentSession = async () => managed;
   session.agentManager.hydrateTimelineFromProvider = async () => undefined;
@@ -5474,6 +5476,7 @@ test("refresh_agent_request leaves workspace archival independent when its direc
     updatedAt: "2026-03-10T00:00:00.000Z",
   });
   session.agentManager.getAgent = () => managed;
+  session.agentManager.preflightRestore = async () => {};
   session.interruptAgentIfRunning = async () => undefined;
   session.agentManager.reloadAgentSession = async () => managed;
   session.agentManager.hydrateTimelineFromProvider = async () => undefined;
@@ -5565,6 +5568,7 @@ test("refresh_agent_request does not recreate or unarchive a deleted worktree", 
     updatedAt: "2026-03-10T00:00:00.000Z",
   });
   session.agentManager.getAgent = () => managed;
+  session.agentManager.preflightRestore = async () => {};
   session.interruptAgentIfRunning = async () => undefined;
   session.agentManager.reloadAgentSession = async () => managed;
   session.agentManager.hydrateTimelineFromProvider = async () => undefined;
@@ -5664,6 +5668,7 @@ test("refresh_agent_request does not inspect an archived worktree branch", async
     updatedAt: "2026-03-10T00:00:00.000Z",
   });
   session.agentManager.getAgent = () => managed;
+  session.agentManager.preflightRestore = async () => {};
   session.interruptAgentIfRunning = async () => undefined;
   session.agentManager.reloadAgentSession = async () => managed;
   session.agentManager.hydrateTimelineFromProvider = async () => undefined;
@@ -5793,6 +5798,7 @@ test("legacy refresh_agent_request restores a real deleted worktree", async () =
     updatedAt: "2026-03-10T00:00:00.000Z",
   });
   session.agentManager.getAgent = () => managed;
+  session.agentManager.preflightRestore = async () => {};
   session.interruptAgentIfRunning = async () => undefined;
   session.agentManager.reloadAgentSession = async () => managed;
   session.agentManager.hydrateTimelineFromProvider = async () => undefined;
