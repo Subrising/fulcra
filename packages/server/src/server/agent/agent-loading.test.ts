@@ -257,6 +257,7 @@ test("FU-153 websocket archive requires confirmation and resume restores one ori
     const result = await promisify(execFile)(
       process.execPath,
       [
+        "--conditions=source",
         "--import",
         "tsx",
         fileURLToPath(new URL("../../../../cli/src/index.ts", import.meta.url)),
