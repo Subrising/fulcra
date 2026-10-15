@@ -1028,6 +1028,7 @@ test("advertises client capabilities in hello", async () => {
     clientType: "cli",
     protocolVersion: 1,
     capabilities: {
+      app_archive_confirmation: false,
       all_providers: true,
       selective_agent_timeline: true,
       timeline_replacement_invalidation: true,
