@@ -197,8 +197,9 @@ executable.
 ## Checked trees and completion events
 
 `ci-passed` remains the required PR gate. Every selected job must succeed.
-CI and shared-library changes select the full suite. Unknown root inputs also
-select it. Package-local changes retain the routes in `.github/ci-paths.yml`.
+CI and shared-library changes select all non-browser contracts. Unknown root inputs
+also select them. Browser PR checks select only app and UI paths in
+`.github/ci-paths.yml`. Other package changes retain their contract routes.
 The nightly schedule uses UTC. Release tags starting with `v` run full CI.
 
 Main does not repeat PR CI. After a successful bot merge, `CI finished` checks
@@ -206,6 +207,28 @@ GitHub API records from trusted main. It compares the merged tree with the
 checked PR head. It verifies the bot identity, merge parents, exact successful
 head check, and CI workflow provenance. A mismatch creates no green check.
 A matching tree receives `ci-passed`, with a link to the original CI run.
+
+Browser CI builds one production web export and daemon stack. All sixteen timed
+browser jobs restore that exact input archive. They serve the web files locally
+and reuse one isolated compiled daemon per worker. They do not start Metro.
+The small recovery-fixture job retains Metro for its injected error entry point.
+No test server uses the installed daemon home or port.
+
+The planner uses successful case times from PR #40 run 38874816118, attempt 1.
+It assigns long cases first and writes exact test lists. New cases receive a
+conservative default weight. Every discovered case belongs to one list.
+The browser jobs also check that selection returns the planned case count.
+The format follows [Playwright test lists](https://playwright.dev/docs/test-cli#test-list).
+
+Playwright retries a failing case once. A failed-job rerun restores only the
+failed case list for that same run and head. It never reruns a whole shard.
+An absent retry list or incomplete earlier run fails closed. A source change
+starts a new workflow and a new complete plan. Native CI completion notices
+still use the outbound local watcher below.
+
+The sidebar scroll check has one case per viewport. Pointer mode is fixed for
+that page. Post-reload checks wait for the menu or sidebar before opening it.
+The case retains its geometry assertions and screenshots. It is not quarantined.
 
 Build caches use exact source, toolchain, platform, and target keys. They have
 no fallback restore keys. They store generated outputs, without credentials.

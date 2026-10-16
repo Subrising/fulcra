@@ -189,6 +189,14 @@ export default async function globalSetup() {
   const repoRoot = path.resolve(__dirname, "../../../..");
   await loadHarnessEnvironment(repoRoot);
 
+  if (process.env.E2E_STATIC_WEB === "1") {
+    const { startStaticWeb } = await import("../../../../.github/scripts/static-e2e-web.mjs");
+    const web = await startStaticWeb(path.resolve(repoRoot, "packages/app/.e2e-web"));
+    process.env.E2E_METRO_PORT = String(web.port);
+    console.log(`[e2e] Prebuilt web bundle on port ${web.port}; no Metro process`);
+    return web.close;
+  }
+
   const metroPort = await getAvailableE2EPort();
   const metroOutput = createLineBuffer();
   let metroProcess: ChildProcess | null = null;

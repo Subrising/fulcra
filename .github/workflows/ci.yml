@@ -38,7 +38,7 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
       app: ${{ steps.filter.outputs.app }}
       sdk: ${{ steps.filter.outputs.sdk }}
-      browser: ${{ steps.filter.outputs.browser }}
+      browser: ${{ github.event_name != 'pull_request' || steps.filter.outputs.browser != 'false' }}
       relay: ${{ steps.filter.outputs.relay }}
       cli: ${{ steps.filter.outputs.cli }}
     steps:
@@ -207,6 +207,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
     runs-on: ubuntu-latest
+    env:
+      SERVER_UNIT_SHARD: "1/2"
     steps: &server_test_steps
       - uses: actions/checkout@v4
         with:
@@ -247,17 +249,25 @@ jobs:
 
       - name: Run server tests
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
-        run: npm run test --workspace=@getpaseo/server
+        run: npm run test:unit --workspace=@getpaseo/server -- --shard=${{ env.SERVER_UNIT_SHARD }} --maxWorkers=2
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      - name: Run server integration tests
+        if: ${{ env.SERVER_UNIT_SHARD == '1/2' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
+        run: npm run test:integration --workspace=@getpaseo/server
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Run built-in plugin tests
-        if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
+        if: ${{ env.SERVER_UNIT_SHARD == '1/2' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
         run: npm run test --workspace=@getpaseo/builtin-plugins
       - name: Run controller lifecycle contracts
-        if: ${{ runner.os == 'Linux' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
+        if: ${{ env.SERVER_UNIT_SHARD == '1/2' && runner.os == 'Linux' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
         env:
           ORCA_HOME: ${{ runner.temp }}/fulcra-controller-contracts
         run: |
@@ -273,6 +283,15 @@ jobs:
 
   # Fulcra runs on macOS. native-recursive.ts serves darwin; this job exercises it on a
   # macOS runner. Scoped to the observer/watcher suites to bound runtime.
+  server-tests-ubuntu-2:
+    name: server-tests (ubuntu-latest, unit 2/2)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
+    runs-on: ubuntu-latest
+    env:
+      SERVER_UNIT_SHARD: "2/2"
+    steps: *server_test_steps
+
   server-tests-macos:
     name: server-tests (macos-14, file observation)
     needs: changes
@@ -396,7 +415,7 @@ jobs:
 
       - name: Run desktop renderer E2E
         if: ${{ env.DESKTOP_SUITE == 'renderer' }}
-        run: npm run test:e2e:renderer --workspace=@getpaseo/desktop
+        run: npm run test:e2e:renderer --workspace=@getpaseo/desktop -- --shard=${{ env.DESKTOP_RENDERER_SHARD }}
 
       - name: Run desktop browser E2E
         if: ${{ runner.os == 'Linux' && env.DESKTOP_SUITE != 'renderer' }}
@@ -434,6 +453,20 @@ jobs:
       contents: read
     env:
       DESKTOP_SUITE: renderer
+      DESKTOP_RENDERER_SHARD: "1/2"
+    steps: *desktop_test_steps
+
+  desktop-renderer-2:
+    name: desktop-renderer (2/2)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DESKTOP_SUITE: renderer
+      DESKTOP_RENDERER_SHARD: "2/2"
     steps: *desktop_test_steps
 
   app-tests:
@@ -520,14 +553,55 @@ jobs:
       - name: Typecheck client examples
         run: npm run typecheck:examples --workspace=@getpaseo/client
 
-  playwright-1:
-    name: playwright (shard 1/8)
+  browser-prepare:
+    name: browser-prepare
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.inputs.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm install --global npm@11.12.1
+      - run: node scripts/npm-retry.mjs ci
+      - name: Identify immutable browser inputs
+        id: inputs
+        run: echo "key=browser-inputs-v1-${{ runner.os }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Restore exact browser build
+        id: shared-cache
+        uses: actions/cache@v4
+        with:
+          path: browser-inputs.tgz
+          key: ${{ steps.inputs.outputs.key }}
+      - name: Build web and daemon once; plan timed cases
+        if: steps.shared-cache.outputs.cache-hit != 'true'
+        env:
+          E2E_PLAN_ONLY: "1"
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          npm run build:server
+          npm run build --workspace=@getpaseo/expo-two-way-audio
+          npm exec --workspace=@getpaseo/app -- expo export --platform web --output-dir .e2e-web --max-workers 2
+          npm run test:e2e --workspace=@getpaseo/app -- --list --reporter=../../.github/scripts/browser-ci-reporter.mjs
+          E2E_PLAN_ONLY=0 E2E_SELECTED_LIST=.e2e-plan/all.txt npm run test:e2e --workspace=@getpaseo/app -- --list --test-list=.e2e-plan/all.txt --reporter=../../.github/scripts/browser-ci-reporter.mjs
+          node --input-type=module -e 'import { existsSync, readdirSync, writeFileSync } from "node:fs"; const paths = readdirSync("packages").map(p => `packages/${p}/dist`).filter(existsSync); paths.push("plugins/dist", "packages/app/.e2e-web", "packages/app/.e2e-plan"); if (existsSync("packages/expo-two-way-audio/build")) paths.push("packages/expo-two-way-audio/build"); writeFileSync("browser-input-paths.txt", paths.join("\n") + "\n");'
+          tar -czf browser-inputs.tgz -T browser-input-paths.txt
+
+  playwright-1:
+    name: playwright (shard 1/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "1/8"
       PLAYWRIGHT_ARTIFACT: "1"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: &playwright_test_steps
       - uses: actions/checkout@v4
 
@@ -547,32 +621,39 @@ jobs:
         timeout-minutes: 10
         run: npx playwright install chromium
 
-      - name: Restore server build outputs
-        id: build-cache
-        uses: actions/cache@v4
+      - name: Restore shared browser inputs
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            packages/*/dist
-            plugins/dist
-          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          path: browser-inputs.tgz
+          key: ${{ needs.browser-prepare.outputs.cache-key }}
+          fail-on-cache-miss: true
 
-      - name: Build server stack
-        if: steps.build-cache.outputs.cache-hit != 'true'
-        run: npm run build:server
+      - name: Unpack tested browser inputs
+        run: tar -xzf browser-inputs.tgz
 
-      - name: Build native app dependency
-        run: npm run build --workspace=@getpaseo/expo-two-way-audio
+      - name: Restore failed test list on a job retry
+        if: ${{ github.run_attempt != '1' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: packages/app/.e2e-retry
+          key: browser-failed-${{ github.run_id }}-${{ github.sha }}-${{ env.PLAYWRIGHT_ARTIFACT }}-${{ github.run_attempt }}
+          restore-keys: browser-failed-${{ github.run_id }}-${{ github.sha }}-${{ env.PLAYWRIGHT_ARTIFACT }}-
 
       - name: Install agent CLIs for provider tests
         run: node scripts/npm-retry.mjs install -g @anthropic-ai/claude-code @openai/codex@0.105.0 opencode-ai
 
-      - name: Run Playwright E2E tests
-        run: npm run test:e2e --workspace=@getpaseo/app -- --shard=${{ env.PLAYWRIGHT_SHARD }}
+      - name: Run timed browser test selection
+        id: browser-tests
+        run: node .github/scripts/run-browser-ci.mjs "$PLAYWRIGHT_ARTIFACT"
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Weight file groups by observed duration; raw test counts overload
-          # early agent/Changes specs. Required check names remain unchanged.
-          PWTEST_SHARD_WEIGHTS: "1:1:1:1:1:1:1:1"
+
+      - name: Save failed test list for this exact run and head
+        if: ${{ failure() && steps.browser-tests.outcome == 'failure' }}
+        uses: actions/cache/save@v4
+        with:
+          path: packages/app/.e2e-retry
+          key: browser-failed-${{ github.run_id }}-${{ github.sha }}-${{ env.PLAYWRIGHT_ARTIFACT }}-${{ github.run_attempt }}
 
       # Diagnostics only. Actions storage quota must not fail a build whose
       # tests and packaging passed; the failure is reported instead. Every
@@ -596,73 +677,211 @@ jobs:
           echo "Diagnostic artifact \`playwright-results\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
 
   playwright-2:
-    name: playwright (shard 2/8)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    name: playwright (shard 2/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "2/8"
       PLAYWRIGHT_ARTIFACT: "2"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
 
   playwright-3:
-    name: playwright (shard 3/8)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    name: playwright (shard 3/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "3/8"
       PLAYWRIGHT_ARTIFACT: "3"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
 
   playwright-4:
-    name: playwright (shard 4/8)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    name: playwright (shard 4/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "4/8"
       PLAYWRIGHT_ARTIFACT: "4"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
 
   playwright-5:
-    name: playwright (shard 5/8)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    name: playwright (shard 5/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "5/8"
       PLAYWRIGHT_ARTIFACT: "5"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
 
   playwright-6:
-    name: playwright (shard 6/8)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    name: playwright (shard 6/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "6/8"
       PLAYWRIGHT_ARTIFACT: "6"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
 
   playwright-7:
-    name: playwright (shard 7/8)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    name: playwright (shard 7/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "7/8"
       PLAYWRIGHT_ARTIFACT: "7"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
 
   playwright-8:
-    name: playwright (shard 8/8)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    name: playwright (shard 8/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     env:
-      PLAYWRIGHT_SHARD: "8/8"
       PLAYWRIGHT_ARTIFACT: "8"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-9:
+    name: playwright (shard 9/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "9"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-10:
+    name: playwright (shard 10/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "10"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-11:
+    name: playwright (shard 11/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "11"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-12:
+    name: playwright (shard 12/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "12"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-13:
+    name: playwright (shard 13/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "13"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-14:
+    name: playwright (shard 14/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "14"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-15:
+    name: playwright (shard 15/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "15"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-16:
+    name: playwright (shard 16/16)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "16"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  browser-recovery:
+    name: browser-recovery
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: recovery
+      E2E_STATIC_WEB: "0"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
     steps: *playwright_test_steps
 
   relay-tests:
@@ -816,9 +1035,11 @@ jobs:
       - machine-data
       - typecheck
       - server-tests-ubuntu
+      - server-tests-ubuntu-2
       - server-tests-macos
       - desktop-tests-ubuntu
       - desktop-renderer
+      - desktop-renderer-2
       - app-tests
       - sdk-tests
       - playwright-1
@@ -829,6 +1050,16 @@ jobs:
       - playwright-6
       - playwright-7
       - playwright-8
+      - playwright-9
+      - playwright-10
+      - playwright-11
+      - playwright-12
+      - playwright-13
+      - playwright-14
+      - playwright-15
+      - playwright-16
+      - browser-prepare
+      - browser-recovery
       - relay-tests
       - relay-grant-e2e
       - cli-tests-1

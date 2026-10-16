@@ -17,7 +17,6 @@ import { getServerId } from "../support/helpers/server-id";
 // Command Centre); the sidebar code under test is the app's own.
 const PLUGIN_ID = "orca-organization-next";
 const LEADS = 14;
-const SHOTS = process.env.FU62_SHOTS_DIR ?? path.join(tmpdir(), "fu62-sidebar-shots");
 // Phone and tablet sizes run as touch screens (a finger as the pointer); the desktop sizes use a mouse.
 const SIZES = [
   { name: "phone-375", width: 375, height: 812, touch: true },
@@ -32,7 +31,8 @@ type Measured = Awaited<ReturnType<typeof measure>>;
 // The pointer type is set per case, never taken from the runner: a headless CI browser reports no fine pointer, and
 // the app then (rightly) treats the desktop sizes as touch. Pointer and hover media queries answer from
 // `window.__e2ePointer`; every other query goes to the browser.
-function installPointerQueries() {
+function installPointerQueries(pointerMode: "fine" | "coarse") {
+  (window as unknown as { __e2ePointer?: string }).__e2ePointer = pointerMode;
   const answer = (query: string, mode: "fine" | "coarse"): boolean | undefined => {
     const fine = mode === "fine";
     const known: Record<string, boolean> = {
@@ -52,18 +52,16 @@ function installPointerQueries() {
     const mode = (window as unknown as { __e2ePointer?: "fine" | "coarse" }).__e2ePointer;
     const matches = mode ? answer(query, mode) : undefined;
     if (matches === undefined) return list;
-    return Object.defineProperty(list, "matches", { get: () => matches });
+    return Object.defineProperty(list, "matches", { configurable: true, get: () => matches });
   };
 }
 
 /** Makes the page a touch screen or a mouse desktop for the next navigation. */
 async function setSize(page: Page, size: Size) {
   await page.setViewportSize({ width: size.width, height: size.height });
-  // Init scripts run in the order they were added, so the last case's mode wins.
-  await page.addInitScript(
-    (mode) => {
-      (window as unknown as { __e2ePointer?: string }).__e2ePointer = mode;
-    },
+  // One pointer mode per test. Playwright does not guarantee init-script ordering.
+  await page.addInitScript<"fine" | "coarse">(
+    installPointerQueries,
     size.touch ? "coarse" : "fine",
   );
   const cdp = await page.context().newCDPSession(page);
@@ -71,6 +69,7 @@ async function setSize(page: Page, size: Size) {
     enabled: size.touch,
     maxTouchPoints: size.touch ? 5 : 1,
   });
+  await cdp.detach();
 }
 
 /** The pass criteria: reach, no overflow, no clipping, no sideways scroll, and 48 px touch targets. */
@@ -353,14 +352,19 @@ async function measure(page: Page) {
 }
 
 // The host home is the controller surface, which has no shell menu on a phone; a workspace page has it.
-async function openSidebar(page: Page, workspaceId: string) {
-  await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
+async function ensureSidebarOpen(page: Page) {
   // Wait for the page: a phone shows the menu, a wider screen shows the sidebar.
   const menu = page.getByRole("button", { name: "Open menu" }).filter({ visible: true }).first();
   const leads = page.getByTestId("sidebar-top-primes").filter({ visible: true }).first();
   await expect(menu.or(leads).first()).toBeVisible({ timeout: 30_000 });
   if (!(await leads.isVisible())) await menu.click();
   await expect(leads).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => (await leads.boundingBox())?.x ?? -1).toBeGreaterThanOrEqual(0);
+}
+
+async function openSidebar(page: Page, workspaceId: string) {
+  await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
+  await ensureSidebarOpen(page);
   await expect(
     page
       .getByTestId("sidebar-lead-p-" + uuid(100))
@@ -370,157 +374,168 @@ async function openSidebar(page: Page, workspaceId: string) {
   });
 }
 
-test("the sidebar scrolls as one area with many leads, at phone, tablet and desktop sizes", async ({
-  page,
-}) => {
-  test.setTimeout(480_000);
-  await mkdir(SHOTS, { recursive: true });
-  await page.addInitScript(installPointerQueries);
-  const directory = await mkdtemp(path.join(tmpdir(), "paseo-fu62-plugin-"));
-  const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
-  const seeded: SeededWorkspace[] = [];
-  // Every daemon connection goes through this route, so the test can cut it and refuse new ones, as a daemon
-  // restart does.
-  const sockets = new Set<WebSocketRoute>();
-  let refuse = false;
-  await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
-    if (refuse) {
-      void socket.close({ code: 1012, reason: "Synthetic daemon restart" });
-      return;
-    }
-    socket.connectToServer();
-    sockets.add(socket);
-  });
-  try {
-    const sources = pluginSources();
-    await writeFile(
-      path.join(directory, "paseo-plugin.json"),
-      JSON.stringify({ id: PLUGIN_ID, requirements: pluginRequirements }),
-    );
-    await writeFile(path.join(directory, "index.client.tsx"), sources.client);
-    await writeFile(path.join(directory, "index.server.ts"), sources.server);
-    await client.patchDaemonConfig({ pluginsEnabled: true });
-    await client.installDirectoryPlugin(directory);
-    for (let i = 0; i < 3; i++) {
-      const workspace = await seedWorkspace({
-        repoPrefix: `fu62-${i}-`,
-        title: `Synthetic chat ${i + 1}`,
-        git: false,
-      });
-      seeded.push(workspace);
-      await workspace.client.createAgent({
-        provider: "mock",
-        cwd: workspace.workspaceDirectory,
-        workspaceId: workspace.workspaceId,
-        title: `Synthetic session ${i + 1}`,
-      });
-      if (i < 2) await workspace.client.setWorkspacePinned(workspace.workspaceId, true);
-    }
-
-    const results: Record<string, unknown> = {};
-    for (const size of SIZES) {
-      await setSize(page, size);
-      await openSidebar(page, seeded[0]!.workspaceId);
-      const result = await measure(page);
-      results[size.name] = result;
-      await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
-      await page.screenshot({ path: path.join(SHOTS, `${size.name}.png`) });
-      await page.getByTestId("sidebar-pinned-section").first().scrollIntoViewIfNeeded();
-      await page.screenshot({ path: path.join(SHOTS, `${size.name}-scrolled.png`) });
-
-      expectSidebarPasses(size.name, size, result);
-    }
-
-    // The host home is the controller surface. On a phone it must have a menu that opens the sidebar.
-    for (const size of SIZES) {
-      await setSize(page, size);
-      // The host index restores the last workspace, so open the home surface's own route.
-      await page.goto(
-        buildPluginSurfaceRoute(getServerId(), PLUGIN_ID, { kind: "sidebar", id: "organization" }),
-      );
-      await expect(page.getByTestId("plugin-surface-title")).toBeVisible({ timeout: 30_000 });
-      // Like a workspace, the home page has the sidebar toggle at every size. A phone opens the sidebar with it.
-      const menu = page.getByTestId("menu-button").filter({ visible: true }).first();
-      await expect(menu, `${size.name}: home menu`).toBeVisible({ timeout: 30_000 });
-      if (size.name === "phone-375") {
-        const menuBox = await menu.boundingBox();
-        expect.soft(menuBox?.width, `${size.name}: home menu width`).toBeGreaterThanOrEqual(48);
-        expect.soft(menuBox?.height, `${size.name}: home menu height`).toBeGreaterThanOrEqual(48);
-        await page.screenshot({ path: path.join(SHOTS, `home-${size.name}-closed.png`) });
-        await menu.click();
+for (const size of SIZES) {
+  test(`the sidebar scrolls as one area with many leads at ${size.name}`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(120_000);
+    const shots = process.env.FU62_SHOTS_DIR
+      ? path.join(process.env.FU62_SHOTS_DIR, size.name)
+      : testInfo.outputPath("sidebar");
+    await mkdir(shots, { recursive: true });
+    await setSize(page, size);
+    const directory = await mkdtemp(path.join(tmpdir(), "paseo-fu62-plugin-"));
+    const client = await connectNewWorkspaceDaemonClient({ ownProjects: false });
+    const seeded: SeededWorkspace[] = [];
+    // Every daemon connection goes through this route, so the test can cut it and refuse new ones, as a daemon
+    // restart does.
+    const sockets = new Set<WebSocketRoute>();
+    let refuse = false;
+    await page.routeWebSocket(daemonWsRoutePattern(), (socket) => {
+      if (refuse) {
+        void socket.close({ code: 1012, reason: "Synthetic daemon restart" });
+        return;
       }
-      await expect(page.getByTestId("sidebar-top-primes").first()).toBeVisible({ timeout: 30_000 });
-      // The lead rows load after the Leads header.
-      await expect(page.getByText(/Synthetic project 1 /).first()).toBeVisible({ timeout: 30_000 });
-      const result = await measure(page);
-      results[`home-${size.name}`] = result;
-      await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
-      await page.screenshot({ path: path.join(SHOTS, `home-${size.name}.png`) });
-      expectSidebarPasses(`home ${size.name}`, size, result);
+      socket.connectToServer();
+      sockets.add(socket);
+    });
+    try {
+      const sources = pluginSources();
+      await writeFile(
+        path.join(directory, "paseo-plugin.json"),
+        JSON.stringify({ id: PLUGIN_ID, requirements: pluginRequirements }),
+      );
+      await writeFile(path.join(directory, "index.client.tsx"), sources.client);
+      await writeFile(path.join(directory, "index.server.ts"), sources.server);
+      await client.patchDaemonConfig({ pluginsEnabled: true });
+      await client.installDirectoryPlugin(directory);
+      for (let i = 0; i < 3; i++) {
+        const workspace = await seedWorkspace({
+          repoPrefix: `fu62-${i}-`,
+          title: `Synthetic chat ${i + 1}`,
+          git: false,
+        });
+        seeded.push(workspace);
+        await workspace.client.createAgent({
+          provider: "mock",
+          cwd: workspace.workspaceDirectory,
+          workspaceId: workspace.workspaceId,
+          title: `Synthetic session ${i + 1}`,
+        });
+        if (i < 2) await workspace.client.setWorkspacePinned(workspace.workspaceId, true);
+      }
+
+      const results: Record<string, unknown> = {};
+      {
+        await openSidebar(page, seeded[0]!.workspaceId);
+        const result = await measure(page);
+        results[size.name] = result;
+        await writeFile(path.join(shots, "measurements.json"), JSON.stringify(results, null, 2));
+        await page.screenshot({ path: path.join(shots, `${size.name}.png`) });
+        await page.getByTestId("sidebar-pinned-section").first().scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(shots, `${size.name}-scrolled.png`) });
+
+        expectSidebarPasses(size.name, size, result);
+      }
+
+      // The host home is the controller surface. On a phone it must have a menu that opens the sidebar.
+      {
+        // The host index restores the last workspace, so open the home surface's own route.
+        await page.goto(
+          buildPluginSurfaceRoute(getServerId(), PLUGIN_ID, {
+            kind: "sidebar",
+            id: "organization",
+          }),
+        );
+        await expect(page.getByTestId("plugin-surface-title")).toBeVisible({ timeout: 30_000 });
+        // Like a workspace, the home page has the sidebar toggle at every size. A phone opens the sidebar with it.
+        const menu = page.getByTestId("menu-button").filter({ visible: true }).first();
+        await expect(menu, `${size.name}: home menu`).toBeVisible({ timeout: 30_000 });
+        if (size.name === "phone-375") {
+          const menuBox = await menu.boundingBox();
+          expect.soft(menuBox?.width, `${size.name}: home menu width`).toBeGreaterThanOrEqual(48);
+          expect.soft(menuBox?.height, `${size.name}: home menu height`).toBeGreaterThanOrEqual(48);
+          await page.screenshot({ path: path.join(shots, `home-${size.name}-closed.png`) });
+          await menu.click();
+        }
+        await ensureSidebarOpen(page);
+        // The lead rows load after the Leads header.
+        await expect(page.getByText(/Synthetic project 1 /).first()).toBeVisible({
+          timeout: 30_000,
+        });
+        const result = await measure(page);
+        results[`home-${size.name}`] = result;
+        await writeFile(path.join(shots, "measurements.json"), JSON.stringify(results, null, 2));
+        await page.screenshot({ path: path.join(shots, `home-${size.name}.png`) });
+        expectSidebarPasses(`home ${size.name}`, size, result);
+      }
+      await writeFile(path.join(shots, "measurements.json"), JSON.stringify(results, null, 2));
+
+      // FU-62 (user report, 11 Oct): while the daemon restarts and after it is back, the Leads rows must not overlap.
+      {
+        await openSidebar(page, seeded[0]!.workspaceId);
+        refuse = true;
+        for (const socket of sockets)
+          await socket.close({ code: 1012, reason: "Synthetic daemon restart" });
+        sockets.clear();
+        await expect(page.getByText(RECONNECTING).first()).toBeVisible({ timeout: 30_000 });
+        const down = await measure(page);
+        results[`reconnecting-${size.name}`] = down;
+        await page.screenshot({ path: path.join(shots, `reconnecting-${size.name}.png`) });
+        expect.soft(down.overlaps, `reconnecting ${size.name}: overlapping rows`).toEqual([]);
+        expect.soft(down.sideways, `reconnecting ${size.name}: sideways scroll`).toBe(false);
+        expect.soft(down.overflow, `reconnecting ${size.name}: overflow`).toEqual([]);
+        expect.soft(down.clipped, `reconnecting ${size.name}: clipped text`).toEqual([]);
+        refuse = false;
+        await expect(page.getByText(/Synthetic project 1 /).first()).toBeVisible({
+          timeout: 60_000,
+        });
+        await expect(page.getByText(RECONNECTING)).toHaveCount(0, {
+          timeout: 60_000,
+        });
+        const back = await measure(page);
+        results[`reconnected-${size.name}`] = back;
+        await page.screenshot({ path: path.join(shots, `reconnected-${size.name}.png`) });
+        expect.soft(back.overlaps, `reconnected ${size.name}: overlapping rows`).toEqual([]);
+        await writeFile(path.join(shots, "measurements.json"), JSON.stringify(results, null, 2));
+      }
+
+      // The arrow folds Leads and the choice survives a reload. After a reload a phone can hold a hidden copy of
+      // the sidebar, so every control here is the visible one.
+      if (size.name === "phone-375") {
+        const leadsArrow = page.locator('[data-testid="sidebar-leads-collapse"]:visible').first();
+        await openSidebar(page, seeded[0]!.workspaceId);
+        await leadsArrow.click();
+        await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
+        await page.screenshot({ path: path.join(shots, "phone-375-leads-folded.png") });
+        await page.reload();
+        await ensureSidebarOpen(page);
+        await expect(leadsArrow).toHaveAttribute("aria-expanded", "false", { timeout: 30_000 });
+        await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
+
+        // FU-86: All sessions also keeps its fold after a reload (it opened again on every app start).
+        const allSessions = page
+          .locator('[data-testid="sidebar-all-sessions-toggle"]:visible')
+          .first();
+        const sessionRows = page.locator('[data-testid^="sidebar-session-open-"]:visible');
+        await expect(sessionRows.first()).toBeVisible();
+        await allSessions.click();
+        await expect(sessionRows).toHaveCount(0);
+        await page.reload();
+        await ensureSidebarOpen(page);
+        // The rows stay hidden after the reload (the group header shows before the saved fold is read).
+        await expect(allSessions).toBeVisible({ timeout: 30_000 });
+        await expect(sessionRows).toHaveCount(0);
+        await page.screenshot({ path: path.join(shots, "phone-375-all-sessions-folded.png") });
+        await allSessions.click();
+        await expect(sessionRows.first()).toBeVisible();
+        await leadsArrow.click();
+      }
+    } finally {
+      await client.removePlugin(PLUGIN_ID).catch(() => {});
+      await client.close?.();
+      for (const workspace of seeded) await workspace.cleanup().catch(() => {});
+      await rm(directory, { recursive: true, force: true });
     }
-    await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
-
-    // FU-62 (user report, 11 Oct): while the daemon restarts and after it is back, the Leads rows must not overlap.
-    for (const size of SIZES) {
-      await setSize(page, size);
-      await openSidebar(page, seeded[0]!.workspaceId);
-      refuse = true;
-      for (const socket of sockets)
-        await socket.close({ code: 1012, reason: "Synthetic daemon restart" });
-      sockets.clear();
-      await expect(page.getByText(RECONNECTING).first()).toBeVisible({ timeout: 30_000 });
-      const down = await measure(page);
-      results[`reconnecting-${size.name}`] = down;
-      await page.screenshot({ path: path.join(SHOTS, `reconnecting-${size.name}.png`) });
-      expect.soft(down.overlaps, `reconnecting ${size.name}: overlapping rows`).toEqual([]);
-      expect.soft(down.sideways, `reconnecting ${size.name}: sideways scroll`).toBe(false);
-      expect.soft(down.overflow, `reconnecting ${size.name}: overflow`).toEqual([]);
-      expect.soft(down.clipped, `reconnecting ${size.name}: clipped text`).toEqual([]);
-      refuse = false;
-      await expect(page.getByText(/Synthetic project 1 /).first()).toBeVisible({ timeout: 60_000 });
-      await expect(page.getByText(RECONNECTING)).toHaveCount(0, {
-        timeout: 60_000,
-      });
-      const back = await measure(page);
-      results[`reconnected-${size.name}`] = back;
-      await page.screenshot({ path: path.join(SHOTS, `reconnected-${size.name}.png`) });
-      expect.soft(back.overlaps, `reconnected ${size.name}: overlapping rows`).toEqual([]);
-      await writeFile(path.join(SHOTS, "measurements.json"), JSON.stringify(results, null, 2));
-    }
-
-    // The arrow folds Leads and the choice survives a reload. After a reload a phone can hold a hidden copy of
-    // the sidebar, so every control here is the visible one.
-    const leadsArrow = page.locator('[data-testid="sidebar-leads-collapse"]:visible').first();
-    await setSize(page, SIZES[0]!);
-    await openSidebar(page, seeded[0]!.workspaceId);
-    await leadsArrow.click();
-    await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
-    await page.screenshot({ path: path.join(SHOTS, "phone-375-leads-folded.png") });
-    await page.reload();
-    const menu = page.getByRole("button", { name: "Open menu" });
-    if (await menu.isVisible().catch(() => false)) await menu.click();
-    await expect(leadsArrow).toHaveAttribute("aria-expanded", "false", { timeout: 30_000 });
-    await expect(page.getByText(/Synthetic project 1 /)).toHaveCount(0);
-
-    // FU-86: All sessions also keeps its fold after a reload (it opened again on every app start).
-    const allSessions = page.locator('[data-testid="sidebar-all-sessions-toggle"]:visible').first();
-    const sessionRows = page.locator('[data-testid^="sidebar-session-open-"]:visible');
-    await expect(sessionRows.first()).toBeVisible();
-    await allSessions.click();
-    await expect(sessionRows).toHaveCount(0);
-    await page.reload();
-    if (await menu.isVisible().catch(() => false)) await menu.click();
-    // The rows stay hidden after the reload (the group header shows before the saved fold is read).
-    await expect(allSessions).toBeVisible({ timeout: 30_000 });
-    await expect(sessionRows).toHaveCount(0);
-    await page.screenshot({ path: path.join(SHOTS, "phone-375-all-sessions-folded.png") });
-    await allSessions.click();
-    await expect(sessionRows.first()).toBeVisible();
-    await leadsArrow.click();
-  } finally {
-    await client.removePlugin(PLUGIN_ID).catch(() => {});
-    await client.close?.();
-    for (const workspace of seeded) await workspace.cleanup().catch(() => {});
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+  });
+}

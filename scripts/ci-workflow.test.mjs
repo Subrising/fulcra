@@ -16,6 +16,8 @@ import { relative as relativePath } from "node:path";
 import test from "node:test";
 import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
+import { balanceTests, testListPath } from "../.github/scripts/browser-shards.mjs";
+import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
 import { watchOperation } from "../.github/scripts/watch-ci.mjs";
 
 test("main CI ignores a refused merge dispatch and retains CI failure detection", () => {
@@ -161,7 +163,11 @@ test("every new shard and desktop lane remains failure-sensitive", () => {
   const gate = jobs.get("ci-passed").join("\n");
   for (const name of [
     "desktop-renderer",
-    ...Array.from({ length: 8 }, (_, i) => `playwright-${i + 1}`),
+    "desktop-renderer-2",
+    "server-tests-ubuntu-2",
+    "browser-prepare",
+    "browser-recovery",
+    ...Array.from({ length: 16 }, (_, i) => `playwright-${i + 1}`),
   ]) {
     assert.ok(jobs.has(name), name);
     assert.ok(gate.includes(`- ${name}\n`), name);
@@ -169,7 +175,12 @@ test("every new shard and desktop lane remains failure-sensitive", () => {
   assert.match(source, /schedule:\s*\n\s+- cron:/);
   assert.match(source, /tags: \["v\*"\]/);
   assert.doesNotMatch(source.split("jobs:")[0], /push:\s*\n\s+branches:/);
-  assert.doesNotMatch(source, /restore-keys:/);
+  assert.ok(
+    source
+      .split("\n")
+      .filter((line) => line.includes("restore-keys:"))
+      .every((line) => line.includes("browser-failed-")),
+  );
   assert.match(source, /steps\.shared\.outputs\.full != 'false'/);
 });
 
@@ -303,10 +314,10 @@ const gatedCiJobs = new Map([
   ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
   ["sdk-tests", { name: "sdk-tests", contract: "sdk" }],
-  ["playwright-1", { name: "playwright (shard 1/8)", contract: "browser" }],
-  ["playwright-2", { name: "playwright (shard 2/8)", contract: "browser" }],
-  ["playwright-3", { name: "playwright (shard 3/8)", contract: "browser" }],
-  ["playwright-4", { name: "playwright (shard 4/8)", contract: "browser" }],
+  ["playwright-1", { name: "playwright (shard 1/16)", contract: "browser" }],
+  ["playwright-2", { name: "playwright (shard 2/16)", contract: "browser" }],
+  ["playwright-3", { name: "playwright (shard 3/16)", contract: "browser" }],
+  ["playwright-4", { name: "playwright (shard 4/16)", contract: "browser" }],
   ["relay-tests", { name: "relay-tests", contract: "relay" }],
   ["cli-tests-1", { name: "cli-tests (shard 1/3)", contract: "cli" }],
   ["cli-tests-2", { name: "cli-tests (shard 2/3)", contract: "cli" }],
@@ -373,7 +384,9 @@ test("gated checks are statically named jobs with real job-level gating", () => 
     const job = jobs.get(jobId)?.join("\n");
     assert.ok(job, `missing static job ${jobId}`);
     assert.match(job, new RegExp(`^    name: ${expected.name.replace(/[()]/g, "\\$&")}$`, "m"));
-    assert.match(job, /needs\.changes\.outputs\.full != 'false'/);
+    if (expected.contract !== "browser")
+      assert.match(job, /needs\.changes\.outputs\.full != 'false'/);
+    else assert.doesNotMatch(job, /needs\.changes\.outputs\.full/);
     for (const contract of expected.contracts ?? [expected.contract]) {
       assert.match(job, new RegExp(`needs\\.changes\\.outputs\\.${contract} != 'false'`));
     }
@@ -401,7 +414,8 @@ test("focused contracts stay inside existing required checks", () => {
   assert.doesNotMatch(changes, /Install dependencies|npm run build/);
 
   assert.match(server, /test:hub-cli-contract/);
-  assert.match(server, /npm run test --workspace=@getpaseo\/server/);
+  assert.match(server, /npm run test:unit --workspace=@getpaseo\/server/);
+  assert.match(server, /npm run test:integration --workspace=@getpaseo\/server/);
   // FU-90: the Command Centre plugin is packaged in CI, inside the typecheck check.
   assert.match(jobs.get("typecheck")?.join("\n") ?? "", /node scripts\/build-command-centre\.mjs/);
   assert.ok(!jobs.has("hub-cli-contract"));
@@ -469,26 +483,10 @@ test("PR routing declares stable behavior ownership", () => {
       "packages/protocol/**",
     ],
     browser: [
-      "packages/server/src/server/agent/provider-snapshot-manager.ts",
-      "packages/server/src/server/session/provider/provider-catalog-session.ts",
-      "packages/client/src/compat/normalize-provider-models.ts",
-      "packages/protocol/src/client-capabilities.ts",
-      "packages/server/src/server/agent/provider-registry.ts",
-      "packages/server/src/server/agent/agent-sdk-types.ts",
-      "packages/server/src/server/agent/providers/codex-app-server-agent.ts",
-      "packages/server/src/server/agent/providers/claude/agent.ts",
-      "packages/server/src/server/agent/plugin-provider.ts",
-      "packages/server/src/server/plugins/{index,plugin-process,plugin-process-protocol,runtime}.ts",
-      "packages/server/src/executable-resolution/**",
-      "packages/plugin/src/server/provider.ts",
-      "packages/app/src/!(desktop)/**",
-      "packages/app/e2e/browser/**",
-      "packages/app/e2e/support/**",
-      "packages/app/assets/**",
-      "packages/app/public/**",
-      "packages/app/index.ts",
-      "packages/app/*config.{cjs,js,ts}",
-      "packages/app/package.json",
+      "packages/app/**",
+      "packages/expo-two-way-audio/**",
+      "control/orca-organization/client/**",
+      "control/orca-organization/shared/**",
     ],
     relay: ["packages/relay/**"],
     cli: ["packages/cli/**"],
@@ -563,26 +561,10 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
     "packages/app/package.json",
   ]);
   assert.deepEqual(filters.browser, [
-    "packages/server/src/server/agent/provider-snapshot-manager.ts",
-    "packages/server/src/server/session/provider/provider-catalog-session.ts",
-    "packages/client/src/compat/normalize-provider-models.ts",
-    "packages/protocol/src/client-capabilities.ts",
-    "packages/server/src/server/agent/provider-registry.ts",
-    "packages/server/src/server/agent/agent-sdk-types.ts",
-    "packages/server/src/server/agent/providers/codex-app-server-agent.ts",
-    "packages/server/src/server/agent/providers/claude/agent.ts",
-    "packages/server/src/server/agent/plugin-provider.ts",
-    "packages/server/src/server/plugins/{index,plugin-process,plugin-process-protocol,runtime}.ts",
-    "packages/server/src/executable-resolution/**",
-    "packages/plugin/src/server/provider.ts",
-    "packages/app/src/!(desktop)/**",
-    "packages/app/e2e/browser/**",
-    "packages/app/e2e/support/**",
-    "packages/app/assets/**",
-    "packages/app/public/**",
-    "packages/app/index.ts",
-    "packages/app/*config.{cjs,js,ts}",
-    "packages/app/package.json",
+    "packages/app/**",
+    "packages/expo-two-way-audio/**",
+    "control/orca-organization/client/**",
+    "control/orca-organization/shared/**",
   ]);
 });
 
@@ -1250,6 +1232,51 @@ else process.exit(2);
       false,
     );
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("timed browser planning assigns every case once and splits a slow file", () => {
+  const tests = Array.from({ length: 64 }, (_, index) => ({
+    key: `same-file case ${index}`,
+    line: `case ${index}`,
+  }));
+  const seconds = Object.fromEntries(tests.map((item, index) => [item.key, index < 16 ? 100 : 10]));
+  const shards = balanceTests(tests, seconds);
+  assert.equal(shards.length, 16);
+  assert.equal(shards.flatMap((shard) => shard.tests).length, 64);
+  assert.equal(new Set(shards.flatMap((shard) => shard.tests.map((item) => item.key))).size, 64);
+  assert.ok(Math.max(...shards.map((shard) => shard.seconds)) <= 130);
+});
+
+test("a browser job retry selects only failures and fails closed without them", () => {
+  const files = new Map([
+    ["packages/app/.e2e-plan/shard-1.txt", "first\nsecond"],
+    ["packages/app/.e2e-retry/failed.txt", "second"],
+  ]);
+  const ports = { exists: (file) => files.has(file), read: (file) => files.get(file) };
+  assert.equal(testListPath(1, 1, ports), ".e2e-plan/shard-1.txt");
+  assert.equal(testListPath(1, 2, ports), ".e2e-retry/failed.txt");
+  files.delete("packages/app/.e2e-retry/failed.txt");
+  assert.throws(() => testListPath(1, 2, ports), /Refusing to rerun a whole shard/);
+  files.set("packages/app/.e2e-retry/failed.txt", "");
+  assert.equal(testListPath(1, 2, ports), null);
+  files.set("packages/app/.e2e-retry/incomplete", "failed setup");
+  assert.throws(() => testListPath(1, 2, ports), /incomplete/);
+});
+
+test("prebuilt web server serves SPA routes without masking missing bundle assets", async () => {
+  const root = mkdtempSync(join(tmpdir(), "browser-static-"));
+  writeFileSync(join(root, "index.html"), "<main>built app</main>");
+  writeFileSync(join(root, "app.js"), "console.log(1)");
+  const server = await startStaticWeb(root);
+  try {
+    const origin = `http://127.0.0.1:${server.port}`;
+    assert.equal(await (await fetch(`${origin}/host/workspace`)).text(), "<main>built app</main>");
+    assert.equal((await fetch(`${origin}/missing.js`)).status, 404);
+    assert.match((await fetch(`${origin}/app.js`)).headers.get("content-type"), /javascript/);
+  } finally {
+    await server.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
