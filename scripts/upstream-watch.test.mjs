@@ -175,6 +175,23 @@ test("dry run reports both tags without commits, pushes, or PR creation", () => 
   }
 });
 
+test("large PR histories do not exceed the command output buffer", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(
+      f.state,
+      JSON.stringify([{ number: 99, title: "Unrelated PR", body: "x".repeat(2 * 1024 * 1024) }]),
+    );
+    const result = f.run(["--dry-run"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /would merge paseo v0\.11\.3/);
+    assert.match(result.stdout, /would merge paseo v0\.11\.4/);
+    assert.equal(f.prs().length, 1);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("a manual intake marker covers both tags without relying on PR titles", () => {
   const f = fixture();
   try {

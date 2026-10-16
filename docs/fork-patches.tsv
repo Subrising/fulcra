@@ -563,8 +563,8 @@ build-ci	A	51	0	scripts/test-support/test-home.cjs
 build-ci	A	4	0	scripts/test-support/test-home.d.cts
 build-ci	A	55	0	scripts/test-support/test-home.test.mjs
 build-ci	A	264	0	scripts/updater-dependency-overrides.test.mjs
-build-ci	A	284	0	scripts/upstream-watch.mjs
-build-ci	A	226	0	scripts/upstream-watch.test.mjs
+build-ci	A	286	0	scripts/upstream-watch.mjs
+build-ci	A	243	0	scripts/upstream-watch.test.mjs
 build-ci	A	11	0	scripts/vitest-global-setup.mjs
 build-ci	A	135	0	scripts/websocket-dependency-overrides.test.mjs
 build-ci	A	38	0	scripts/windows-update/update-script.test.mjs

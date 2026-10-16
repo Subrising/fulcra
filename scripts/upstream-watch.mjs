@@ -18,6 +18,8 @@ function run(cmd, cmdArgs, { allowFail = false } = {}) {
   try {
     return execFileSync(cmd, cmdArgs, {
       encoding: "utf8",
+      // PR bodies can exceed Node's default buffer when listing release history.
+      maxBuffer: 16 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   } catch (error) {
