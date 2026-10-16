@@ -84,23 +84,38 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin "$SHA"
           git merge-base --is-ancestor origin/main "$SHA"
-          # Rebuild this namespace from the upstream server. Fork tags never establish trust.
-          git for-each-ref --format='%(refname)' refs/verified-paseo-release-tags/ > "$RUNNER_TEMP/paseo-old-refs"
-          while IFS= read -r ref; do
-            git update-ref -d "$ref"
-          done < "$RUNNER_TEMP/paseo-old-refs"
-          git fetch --no-tags https://github.com/getpaseo/paseo.git '+refs/tags/v*:refs/verified-paseo-release-tags/v*'
-          git rev-list --glob='refs/verified-paseo-release-tags/v*' > "$RUNNER_TEMP/paseo-release-commits"
-          test -s "$RUNNER_TEMP/paseo-release-commits"
           commits=$(git rev-list "origin/main..$SHA")
           test -n "$commits"
+          : > "$RUNNER_TEMP/paseo-required-commits"
           while IFS= read -r commit; do
             identity=$(git show -s --format='%an <%ae>|%cn <%ce>' "$commit")
             case "$identity" in
               'Fulcra <fulcra@users.noreply.github.com>|Fulcra <fulcra@users.noreply.github.com>'|'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>|GitHub <noreply@github.com>') ;;
-              *) grep -Fxq "$commit" "$RUNNER_TEMP/paseo-release-commits" || { echo false; exit 1; } ;;
+              *) echo "$commit" >> "$RUNNER_TEMP/paseo-required-commits" ;;
             esac
           done <<< "$commits"
+          if test -s "$RUNNER_TEMP/paseo-required-commits"; then
+            # Rebuild this namespace from the upstream server. Fork tags never establish trust.
+            git for-each-ref --format='%(refname)' refs/verified-paseo-release-tags/ > "$RUNNER_TEMP/paseo-old-refs"
+            while IFS= read -r ref; do
+              git update-ref -d "$ref"
+            done < "$RUNNER_TEMP/paseo-old-refs"
+            git fetch --no-tags https://github.com/getpaseo/paseo.git '+refs/tags/v*:refs/verified-paseo-release-tags/v*'
+            git for-each-ref --format='%(refname)' refs/verified-paseo-release-tags/ > "$RUNNER_TEMP/paseo-fetched-refs"
+            : > "$RUNNER_TEMP/paseo-final-refs"
+            while IFS= read -r ref; do
+              tag=${ref#refs/verified-paseo-release-tags/}
+              if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "$ref" >> "$RUNNER_TEMP/paseo-final-refs"
+              fi
+            done < "$RUNNER_TEMP/paseo-fetched-refs"
+            test -s "$RUNNER_TEMP/paseo-final-refs"
+            git rev-list --stdin < "$RUNNER_TEMP/paseo-final-refs" > "$RUNNER_TEMP/paseo-release-commits"
+            test -s "$RUNNER_TEMP/paseo-release-commits"
+            while IFS= read -r commit; do
+              grep -Fxq "$commit" "$RUNNER_TEMP/paseo-release-commits" || { echo false; exit 1; }
+            done < "$RUNNER_TEMP/paseo-required-commits"
+          fi
           echo true
 
       - name: Scan candidate commit metadata

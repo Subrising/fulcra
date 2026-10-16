@@ -594,6 +594,14 @@ const r=spawnSync(process.env.REAL_GIT,a,{stdio:'inherit'});process.exit(r.statu
     upstreamIdentity,
     git,
     create: (identity = {}) => createAt(project, main, "Candidate fixture", identity),
+    prerelease(tag) {
+      const sha = createAt(upstream, release, `Prerelease fixture ${tag}`, upstreamIdentity);
+      gitAt(upstream, "tag", tag, sha);
+      git("fetch", "--no-tags", upstream, `refs/tags/${tag}:refs/fixture/${tag}`);
+      return sha;
+    },
+    deleteFinalTag: () => gitAt(upstream, "tag", "-d", "v0.11.4"),
+    calls: () => readFileSync(calls, "utf8"),
     run(name, sha, overrides = {}) {
       git("update-ref", "refs/heads/candidate", sha);
       return spawnSync("bash", ["-c", mergeStep(name)], {
@@ -651,6 +659,44 @@ test("workflow identity gate accepts an upstream ancestor of a fetched release t
   }
 });
 
+test("workflow identity gate trusts only final release tag names", () => {
+  const f = identityFixture();
+  try {
+    for (const tag of ["v0.12.0-beta.1", "v0.12.0-rc.1", "v0.12.0+build.1", "v0.12"]) {
+      const sha = f.prerelease(tag);
+      assert.notEqual(f.run("Check candidate commit identities", sha).status, 0, tag);
+    }
+    assert.equal(f.run("Check candidate commit identities", f.ancestor).status, 0);
+    f.deleteFinalTag();
+    assert.notEqual(f.run("Check candidate commit identities", f.ancestor).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate skips upstream fetch for approved identities during an outage", () => {
+  const f = identityFixture();
+  try {
+    for (const identity of [
+      {},
+      {
+        GIT_AUTHOR_NAME: "github-actions[bot]",
+        GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+        GIT_COMMITTER_NAME: "GitHub",
+        GIT_COMMITTER_EMAIL: "noreply@github.com",
+      },
+    ]) {
+      const result = f.run("Check candidate commit identities", f.create(identity), {
+        FAIL_UPSTREAM_FETCH: "1",
+      });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    assert.doesNotMatch(f.calls(), /https:\/\/github\.com\/getpaseo\/paseo\.git/);
+  } finally {
+    f.close();
+  }
+});
+
 test("workflow identity gate refuses a non-Fulcra commit outside upstream releases", () => {
   const f = identityFixture();
   try {
@@ -677,7 +723,7 @@ test("workflow identity gate refuses an upstream fetch failure without using cac
   try {
     assert.equal(f.run("Check candidate commit identities", f.ancestor).status, 0);
     assert.notEqual(
-      f.run("Check candidate commit identities", f.create(), { FAIL_UPSTREAM_FETCH: "1" }).status,
+      f.run("Check candidate commit identities", f.ancestor, { FAIL_UPSTREAM_FETCH: "1" }).status,
       0,
     );
   } finally {
