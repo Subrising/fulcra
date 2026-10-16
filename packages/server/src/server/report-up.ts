@@ -1,3 +1,6 @@
+import { LedgerDirectoryWatch } from "./ledger-routing/watch.js";
+import { LedgerRoutingService, parseWorkerResult } from "./ledger-routing/service.js";
+import type { BoundCreateAgentCommand } from "./agent/create-agent/create.js";
 import { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 import {
   LeadEventDispatcher,
@@ -18,7 +21,7 @@ export type {
   LimitedChat,
 } from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
 import { randomUUID } from "node:crypto";
-import { readFileSync, watch, type FSWatcher } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isArchiveLead } from "./agent/archive-policy.js";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
@@ -119,6 +122,8 @@ interface PendingFinish {
 export const NUDGE_MESSAGE_PREFIX = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}idle-nudge:`;
 
 export interface ReportUpDeps {
+  routing?: LedgerRoutingService;
+  isDispatchLead?: (id: string) => boolean;
   remoteNotice?: (workerId: string, prompt: string, kind: HostLinkNoticeKind) => Promise<boolean>;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -240,7 +245,7 @@ export class ReportUpService {
   private nudgeGeneration = 0;
   private ledgerRevision = 0;
   private readonly nudgeStopped = new Set<string>();
-  private ledgerWatcher?: FSWatcher;
+  private ledgerWatcher?: LedgerDirectoryWatch;
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
 
@@ -252,6 +257,8 @@ export class ReportUpService {
       isSystemInjectedEnvelope,
       onStarted: (id) => {
         this.finishOwners.delete(id);
+        const worker = deps.agentManager.getAgent(id);
+        if (worker) deps.routing?.begin(worker);
       },
       onClosed: (id) => {
         this.finishOwners.delete(id);
@@ -269,34 +276,40 @@ export class ReportUpService {
     });
     this.load();
     if (deps.ledgerDir) {
-      try {
-        this.ledgerWatcher = watch(deps.ledgerDir, { recursive: true }, (_event, file) => {
+      this.ledgerWatcher = new LedgerDirectoryWatch(
+        deps.ledgerDir,
+        () => {
           if (this.stopped) return;
-          if (
-            file &&
-            path.dirname(String(file)) !== "." &&
-            path.basename(String(file)) !== "OPEN-ITEMS.md"
-          )
-            return;
           this.ledgerRevision++;
           this.nudgeStopped.clear();
           for (const id of this.nudging.keys()) this.cancelNudge(id, "Project ledger changed");
           clearTimeout(this.ledgerDebounce);
           this.ledgerDebounce = setTimeout(() => {
             this.ledgerDebounce = undefined;
+            void this.deps.routing
+              ?.changed()
+              .catch((err: unknown) =>
+                this.deps.logger.warn({ err }, "Ledger routing event failed"),
+              );
             this.checkIdleLeads();
           }, 100);
           this.ledgerDebounce.unref();
-        });
-        this.ledgerWatcher.on("error", (err) => {
-          this.ledgerWatcher?.close();
-          this.deps.logger.warn({ err }, "Ledger watch stopped; turn-end checks remain active");
-        });
-        this.ledgerWatcher.unref();
-      } catch (err) {
-        this.deps.logger.warn({ err }, "Ledger watch unavailable; turn-end checks remain active");
-      }
+        },
+        (err) =>
+          this.deps.logger.warn(
+            { err },
+            "Ledger directory watch unavailable; turn-end checks remain active",
+          ),
+      );
     }
+  }
+
+  async prepareLedgerObservation(): Promise<void> {
+    await this.ledgerWatcher?.ready;
+    await this.ledgerWatcher?.refresh();
+  }
+  observesProject(project: string): boolean {
+    return this.ledgerWatcher?.covers(project) === true;
   }
 
   /** Reads the kept state: limits that have not passed, and reports still held. Held reports are released after the reset. */
@@ -383,10 +396,25 @@ export class ReportUpService {
 
   /** Raw events remain as a test adapter and a source of first-message provenance. */
   onEvent(event: AgentManagerEvent): void {
+    if (
+      event.type === "agent_state" &&
+      (event.agent.archivedAt || event.agent.labels?.["fulcra.dispatch-state"] === "abandoned")
+    )
+      void this.deps.routing
+        ?.wake()
+        .catch((err: unknown) =>
+          this.deps.logger.warn({ err }, "Ledger archive reconciliation failed"),
+        );
     if (event.type === "agent_state" && event.agent.lifecycle === "closed")
       this.observer.close(event.agent.id);
-    if (event.type === "agent_state" && event.agent.lifecycle === "idle")
+    if (event.type === "agent_state" && event.agent.lifecycle === "idle") {
       this.retryRefusedFinishesOnIdle(event.agent.id);
+      void this.deps.routing
+        ?.wake()
+        .catch((err: unknown) =>
+          this.deps.logger.warn({ err }, "Ledger routing idle event failed"),
+        );
+    }
     if (event.type === "agent_stream") this.observer.onStream(event.agentId, event.event);
     if (event.type === "agent_stream" && event.event.type === "turn_canceled") {
       this.stopNudge(event.agentId);
@@ -477,7 +505,8 @@ export class ReportUpService {
     if (input.failed) this.stopNudge(agentId);
     else this.nudgeStopped.delete(agentId);
     this.checkIdleLeads();
-    void this.handleOwnedFinish(input)
+    void this.handleRoutedFinish(input)
+      .then((handled) => handled || this.handleOwnedFinish(input))
       .then((handled) => {
         if (!handled) this.onUnownedTurnEnd(input);
         return undefined;
@@ -485,6 +514,58 @@ export class ReportUpService {
       .catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Owned finish notice failed"),
       );
+  }
+
+  async routingNotice(leadId: string, line: string, messageId: string): Promise<void> {
+    await heldSendsFor(this.deps.agentManager, this.deps.logger).holdAndWait(leadId, () =>
+      this.send(
+        leadId,
+        formatSystemNotificationPrompt(line),
+        "owned-finish",
+        undefined,
+        undefined,
+        messageId,
+      ),
+    );
+  }
+
+  private async handleRoutedFinish(input: ReportTurnEnd): Promise<boolean> {
+    const routing = this.deps.routing;
+    if (!routing || input.fromNotice) return false;
+    const worker = await this.store.get(input.agentId);
+    if (!worker) return false;
+    const text =
+      input.lastAssistant === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(input.agentId).catch(() => null)
+        : input.lastAssistant;
+    const routed = await routing.observeEnd({
+      worker,
+      eventId: `${input.agentId}:${input.startedAt}`,
+      text,
+      failed: input.failed,
+      fromNotice: input.fromNotice,
+    });
+    if (!routed) return false;
+    const notice = await this.deps.agentStorage.getFinishNotice(input.agentId);
+    if (
+      routed.fresh &&
+      routed.result &&
+      notice &&
+      ["delivered", "cancelled", "unknown"].includes(notice.status)
+    )
+      await this.deps.agentStorage.rearmFinishNotice(input.agentId, notice.parentId);
+    if (notice || this.hasFinishOwner(input.agentId)) return false;
+    if (routed.fresh && routed.result) {
+      const lead = await this.leadOf(worker);
+      if ("id" in lead && (await this.reportingLineAllows(input.agentId, lead.id)))
+        await this.toLead(
+          input.agentId,
+          lead.id,
+          formatSystemNotificationPrompt(routed.result.line),
+          "owned-finish",
+        );
+    }
+    return true;
   }
 
   private stopNudge(agentId: string): void {
@@ -697,8 +778,13 @@ export class ReportUpService {
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
+    const result =
+      notice.reason === "finished" && this.deps.routing?.enabledForLead(notice.parentId)
+        ? parseWorkerResult(lastMessage)
+        : null;
     return formatSystemNotificationPrompt(
-      formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
+      result?.line ??
+        formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
     );
   }
 
@@ -871,6 +957,14 @@ export class ReportUpService {
     return hold !== "paused" && hold !== "blocked" && hold !== "done";
   }
 
+  private nudgeSuppressed(leadId: string): boolean {
+    return Boolean(
+      this.deps.isDispatchLead?.(leadId) ||
+      this.deps.routing?.enabledForLead(leadId) ||
+      !this.nudgeEnabled(),
+    );
+  }
+
   /**
    * An idle lead with READY ledger work receives a nudge when its project has no running sessions.
    * Turn-end and ledger events check it. Nothing is sent without eligible items,
@@ -881,7 +975,7 @@ export class ReportUpService {
     rows: readonly LedgerRow[],
     ledgerRevision: number,
   ): Promise<void> {
-    if (!this.nudgeEnabled()) {
+    if (this.nudgeSuppressed(leadId)) {
       this.cancelNudge(leadId, "Idle nudge was turned off");
       return;
     }
@@ -1667,6 +1761,8 @@ export class ReportUpService {
 }
 
 export function startReportUp(input: {
+  createAgent?: BoundCreateAgentCommand;
+  ensureRoutingWorkspace?: (cwd: string) => Promise<string>;
   remoteNotice?: ReportUpDeps["remoteNotice"];
   hooks?: PolicyHooks;
   paseoHome?: string;
@@ -1690,7 +1786,42 @@ export function startReportUp(input: {
       input.logger.warn({ err }, "Lead event state not loaded; dispatcher disabled");
     }
   }
-  const service = new ReportUpService({
+  let routing: LedgerRoutingService | undefined;
+  if (input.paseoHome && input.createAgent && input.ensureRoutingWorkspace) {
+    // A corrupt journal must disable automatic routing, not erase its claims.
+    try {
+      routing = new LedgerRoutingService({
+        statePath: path.join(input.paseoHome, "ledger-routing.json"),
+        ledgerDir: defaultLedgerDir(),
+        hostId: input.localServerId ?? "",
+        daemonHome: input.paseoHome,
+        enabled: () => input.daemonConfigStore.get().ledgerDispatchEnabled === true,
+        prepareLedger: () => service.prepareLedgerObservation(),
+        observesProject: (project) => service.observesProject(project),
+        notify: (lead, line, messageId) => service.routingNotice(lead, line, messageId),
+        config: () => input.daemonConfigStore.get().projectDispatch ?? {},
+        agentManager: input.agentManager,
+        agentStorage: input.agentStorage,
+        createAgent: input.createAgent,
+        ensureWorkspace: input.ensureRoutingWorkspace,
+        logger: input.logger,
+      });
+    } catch (err) {
+      input.logger.error({ err }, "Ledger routing disabled: journal unavailable");
+    }
+  }
+  const offRoutingConfig = input.daemonConfigStore.onChange(() => {
+    void routing
+      ?.changed()
+      .catch((err: unknown) => input.logger.warn({ err }, "Ledger routing config event failed"));
+  });
+  const service: ReportUpService = new ReportUpService({
+    routing,
+    isDispatchLead: (id) =>
+      input.daemonConfigStore.get().ledgerDispatchEnabled === true &&
+      Object.values(input.daemonConfigStore.get().projectDispatch ?? {}).some(
+        (config) => config.enabled && config.leadId === id,
+      ),
     remoteNotice: input.remoteNotice,
     ledgerDir: defaultLedgerDir(),
     agentManager: input.agentManager,
@@ -1720,6 +1851,7 @@ export function startReportUp(input: {
           .catch((err: unknown) =>
             input.logger.warn({ err, agentId: event.agent.id }, "Close notice failed"),
           );
+      reconcileRoutingArchive(event, routing, input.logger);
       if (event.type === "agent_state" && event.agent.archivedAt) {
         const dispatcher = leadEventsFor(input.agentManager);
         if (dispatcher)
@@ -1760,11 +1892,31 @@ export function startReportUp(input: {
     { replayState: false },
   );
   const stop = () => {
+    offRoutingConfig();
+    void routing?.stop();
     offArchive();
     offHooks?.();
     offEvents?.();
     offStream();
     service.stop();
   };
-  return Object.assign(stop, { recover: () => service.recoverOwnedFinishes() });
+  return Object.assign(stop, {
+    recover: async () => {
+      await routing?.changed();
+      await service.recoverOwnedFinishes();
+    },
+  });
+}
+
+function reconcileRoutingArchive(
+  event: AgentManagerEvent,
+  routing: LedgerRoutingService | undefined,
+  logger: Logger,
+): void {
+  if (event.type !== "agent_state") return;
+  if (!event.agent.archivedAt && event.agent.labels?.["fulcra.dispatch-state"] !== "abandoned")
+    return;
+  void routing
+    ?.wake()
+    .catch((err: unknown) => logger.warn({ err }, "Ledger archive reconciliation failed"));
 }

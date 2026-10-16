@@ -2458,7 +2458,13 @@ test("worker completion and ledger changes wake idle leads through the isolated 
     });
     await manager.runAgent(WORKER, "Complete fixture work");
     await vi.waitFor(() => expect(prompts).toHaveLength(2));
-    expect(prompts[1]).toContain("You are idle. You own 1 open ledger item: FX-1");
+    // Startup recovery can nudge the lead before the worker starts.
+    expect(prompts).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Complete fixture work"),
+        expect.stringContaining("You are idle. You own 1 open ledger item: FX-1"),
+      ]),
+    );
     await vi.waitFor(() => expect(manager.hasInFlightRun(LEAD)).toBe(false));
     const next = await manager.createAgent({ ...config, title: "Next lead" }, undefined, {});
     writeFileSync(file, row("FX-1", LEAD) + row("FX-2", next.id));

@@ -638,6 +638,8 @@ export function resolveConfigFromPersisted(
     reportUpOnTurnEnd: persistedSettings.reportUpOnTurnEnd,
     nativeFinishNotices: persistedSettings.nativeFinishNotices,
     receiptRetentionMs: persisted.daemon?.receiptRetentionMs,
+    ledgerDispatchEnabled: persistedSettings.ledgerDispatchEnabled,
+    projectDispatch: persistedSettings.projectDispatch,
     idleLeadNudge: persistedSettings.idleLeadNudge,
     idleLeadNudgeSkipOwners: persistedSettings.idleLeadNudgeSkipOwners,
     idleLeadNudgeMinIntervalMinutes: persistedSettings.idleLeadNudgeMinIntervalMinutes,
@@ -698,6 +700,8 @@ function orchestrationSettings(persisted: PersistedConfig) {
   return {
     reportUpOnTurnEnd: daemon?.reportUpOnTurnEnd,
     nativeFinishNotices: daemon?.nativeFinishNotices ?? false,
+    ledgerDispatchEnabled: daemon?.ledgerDispatchEnabled ?? false,
+    projectDispatch: daemon?.projectDispatch,
     idleLeadNudge: daemon?.idleLeadNudge,
     idleLeadNudgeSkipOwners: daemon?.idleLeadNudgeSkipOwners ?? [],
     idleLeadNudgeMinIntervalMinutes: daemon?.idleLeadNudgeMinIntervalMinutes ?? 60,

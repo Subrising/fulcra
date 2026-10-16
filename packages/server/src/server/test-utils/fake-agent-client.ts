@@ -54,6 +54,8 @@ interface Deferred<T> {
 }
 
 interface FakeAgentSessionOptions {
+  accountLabel?: string;
+  response?: (prompt: string) => string;
   providerName: string;
   config: AgentSessionConfig;
   supportsMcpServers?: boolean;
@@ -64,6 +66,8 @@ interface FakeAgentSessionOptions {
 }
 
 export interface TestAgentClientOptions {
+  accountLabel?: string;
+  response?: (prompt: string) => string;
   beforeCreateSession?: () => Promise<void>;
   closeSession?: () => Promise<void>;
   onStartTurn?: (prompt: AgentPromptInput) => void;
@@ -341,7 +345,12 @@ class FakeAgentSession implements AgentSession {
   private readonly closeSession: (() => Promise<void>) | undefined;
   private readonly onStartTurn: ((prompt: AgentPromptInput) => void) | undefined;
 
+  private readonly testAccountLabel?: string;
+  private readonly response?: (prompt: string) => string;
+
   constructor(options: FakeAgentSessionOptions) {
+    this.testAccountLabel = options.accountLabel;
+    this.response = options.response;
     this.capabilities = {
       ...TEST_CAPABILITIES,
       supportsMcpServers: options.supportsMcpServers === true,
@@ -790,7 +799,7 @@ class FakeAgentSession implements AgentSession {
         }
       }
 
-      const assistantText = this.buildAssistantText(textPrompt);
+      const assistantText = this.responseText(textPrompt);
       const assistantChunkA: AgentStreamEvent = {
         type: "timeline",
         provider: this.providerName,
@@ -982,6 +991,16 @@ class FakeAgentSession implements AgentSession {
       timeline: [{ type: "assistant_message", text: "PASEO_SKILL_OK" }],
       usage: { inputTokens: 1, outputTokens: 1 },
     };
+  }
+
+  usageCredential(): ReturnType<NonNullable<AgentSession["usageCredential"]>> {
+    return this.testAccountLabel
+      ? { credential: { kind: "unavailable" }, label: this.testAccountLabel }
+      : null;
+  }
+
+  private responseText(prompt: string): string {
+    return this.response ? this.response(prompt) : this.buildAssistantText(prompt);
   }
 
   private buildAssistantText(prompt: string): string {
@@ -1231,6 +1250,8 @@ class FakeAgentClient implements AgentClient {
       supportsMcpServers: this.options.supportsMcpServers,
       closeSession: this.options.closeSession,
       onStartTurn: this.options.onStartTurn,
+      accountLabel: this.options.accountLabel,
+      response: this.options.response,
     });
   }
 
@@ -1256,6 +1277,8 @@ class FakeAgentClient implements AgentClient {
       memoryMarker: typeof marker === "string" ? marker : null,
       closeSession: this.options.closeSession,
       onStartTurn: this.options.onStartTurn,
+      accountLabel: this.options.accountLabel,
+      response: this.options.response,
     });
   }
 

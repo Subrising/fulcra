@@ -1,3 +1,4 @@
+import { ProjectDispatchMapSchema } from "./project-dispatch.js";
 import { RecordedUsageSchema } from "./recorded-usage.js";
 import { GitAiDraftRequestSchema, GitAiDraftResponseSchema } from "./git-ai-draft.js";
 import {
@@ -285,6 +286,8 @@ export const MutableDaemonConfigSchema = z
     // FULCRA(orchestration): true adds finished-turn notices; false disables permission and limit notices. Nudges have their own switch.
     reportUpOnTurnEnd: z.boolean().optional(),
     nativeFinishNotices: z.boolean().optional(),
+    ledgerDispatchEnabled: z.boolean().optional(),
+    projectDispatch: ProjectDispatchMapSchema.optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
     idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),
@@ -322,6 +325,8 @@ export const MutableDaemonConfigPatchSchema = z
     enableTerminalAgentHooks: z.boolean().optional(),
     reportUpOnTurnEnd: z.boolean().optional(),
     nativeFinishNotices: z.boolean().optional(),
+    ledgerDispatchEnabled: z.boolean().optional(),
+    projectDispatch: ProjectDispatchMapSchema.optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
     idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),

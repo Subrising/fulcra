@@ -175,6 +175,80 @@ Set `daemon.eventDispatcherEnabled` to `false` in `config.json` to restore norma
 The host reads this switch at each dispatch. Event counts continue while the switch is off.
 This setting does not change reporting rights or authorize permission responses.
 
+## Ledger event routing
+
+Automatic dispatch needs both `daemon.ledgerDispatchEnabled: true` and an enabled `daemon.projectDispatch.PROJECT` template.
+Both switches default to off. Only the owner can edit these settings through the native configuration path.
+Agent-attributed RPC patches, agent-attributed reloads, and local configuration commands from agent environments refuse dispatch edits.
+The checks use native caller identity. They do not isolate a process that already controls the daemon's operating-system account.
+
+Every project template records:
+
+- `enableId`: a new UUID for each owner-approved allowance.
+- `hostId`: the authoritative daemon's server ID.
+- `daemonHome` and `ledgerRoot`: canonical local directories. Ledger mirrors never dispatch.
+- `leadId`, `maxParallel` (1–8), and `holdLabels`.
+- `maxTotalStarts` (default 10), `dailyStartBudget` (default 5), and `minStartIntervalSeconds` (default 60).
+- `roles`: exact ledger owner text, role, provider, model, thinking option, restricted mode, and account.
+- `approvals`: owner-attested item records, keyed by ledger ID.
+
+The daemon enforces a hard total of 16 active automatic sessions across projects.
+The authoritative ledger also permits at most 100 automatic starts per UTC day.
+Project budgets count worker starts, including reserved starts. They do not estimate monetary charges.
+A fresh `enableId` resets the total allowance. It does not reset the daily allowance.
+Rate limits wait for another ledger or session event. No retry timer or polling loop starts work.
+Exhausted total and daily allowances send the lead one notice.
+
+Only status exactly `READY`, with kind `BUILD` or `FIX`, qualifies.
+`OPEN`, `IN PROGRESS`, parked rows, and rows waiting for a person never start automatically.
+The older standalone ledger command cannot set `READY`.
+Use the packaged `ledger-dispatch.py` CLI for explicit readiness and claims. It shares the ledger command's project lock.
+Its JSON input uses `action: "inspect"` to return an item's digest, or `action: "ready"` with that digest to mark it ready.
+Input also names the absolute `root`, `project`, and `item`. Ordinary `ledger close` still requires evidence.
+
+Before readiness, the owner records an approval in the project template:
+
+```json
+{
+  "generation": "00000000-0000-4000-8000-000000000001",
+  "digest": "SHA256_OF_THE_INSPECTED_ROW",
+  "addedBy": "owner",
+  "cwd": "/workspace/prepared-item-worktree"
+}
+```
+
+`addedBy` is the owner's attestation of who added the task. It must be `owner` or the configured lead's exact session ID.
+Ledger source text cannot supply that authority. Worker-authored or unapproved items never dispatch.
+Changing the task invalidates its digest. Reopening an accepted or abandoned task needs a new owner-approved generation.
+A dispatched worker cannot approve its own follow-on work.
+
+Prepare a separate worktree or directory for every approved item. Directory aliases cannot share an item workspace.
+The role mode must be Codex `auto`, or Claude `default` or `plan`. Full-access and bypass modes are refused.
+The account defaults to `personal-workspace-api`. `personal-api-key` and `work-api-key` are refused.
+The native account pool pins the selected account. Missing, disabled, limited, or changed accounts cannot fall back before provider input.
+The first prompt uses a fixed template with the item encoded as untrusted ledger data.
+The task text cannot replace the daemon's instructions, permissions, account, or budgets.
+
+The claim CLI atomically records the dispatch ID, generation, creator, and reserved session in the ledger before creation.
+A process-held kernel lease permits only one dispatcher per authoritative ledger.
+A crash releases that lease. Restart and session events reconcile interrupted claims without replaying prompts.
+Unproven handoffs become visible blocked items and send one lead notice. They do not retain a slot forever.
+Archived or explicitly abandoned sessions free their slot. `fulcra.dispatch-state=abandoned` records explicit abandonment.
+A BLOCKED or DECISION result retains only its own slot.
+
+Each dispatched session keeps its item ID and generation. Metadata edits cannot retarget it to another item.
+Follow-ups for the same ask keep that session. A different item uses a new session and approval.
+The final result line accepts simple emphasis, a colon, or a dash after DONE, BLOCKED, or DECISION.
+A later sign-off line still prevents automatic completion. DONE releases a slot only after evidence closure.
+Notice turns do not relay results another level.
+
+The private hot journal keeps active claims and the latest 128 terminal records.
+The ledger holds visible claims. A compact indexed receipt store preserves consumed generations across journal rotation.
+Uncertain records reconcile on restart, archive, and session events. They need no hand edit of the private journal.
+Use `daemon.ledgerDispatchEnabled: false` for the global kill switch.
+Project disable, lead holds, configured hold labels, and `fulcra.dispatch=off` also stop admission.
+Durable dispatch requires POSIX directory synchronization and Python 3. The live configuration remains off until the owner enables it.
+
 ## Idle-lead nudges
 
 An idle lead receives a nudge when its eligible worker set grows or new READY ledger work appears.
@@ -184,7 +258,8 @@ Turn-end events and debounced ledger-file changes check these conditions.
 Each lead receives at most one nudge per `daemon.idleLeadNudgeMinIntervalMinutes`. The default is 60 minutes.
 The delivery time persists across daemon restarts. Work added during the interval waits for the next event after it ends.
 No polling or interval retry timer wakes the lead.
-The ledger watch stops on error until daemon restart; turn-end checks remain active.
+Directory watches survive atomic ledger replacement.
+Native work events recheck an unavailable directory watch. Turn-end checks remain active.
 A change that only removes workers or closes items sends no nudge.
 Blocked items, DECIDE rows, and standing rules are excluded.
 Blocked statuses can start with `OPEN` or `IN PROGRESS`, followed by separators and `BLOCKED`.
