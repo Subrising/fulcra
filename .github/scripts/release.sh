@@ -2,7 +2,13 @@
 # Merge a tested PR through the workflow. Create an annotated tag and source release.
 set -euo pipefail
 fail() { echo "$1" >&2; exit 1; }
-[ "$#" -eq 3 ] || fail 'usage: release.sh <version> <pr> <sha>'
+{ [ "$#" -eq 3 ] || [ "$#" -eq 5 ]; } || fail 'usage: release.sh <version> <pr> <sha> [--after-merge <run-id>]'
+MERGE_RUN=
+if [ "$#" -eq 5 ]; then
+  [ "$4" = --after-merge ] || fail 'Invalid resume option.'
+  [[ "$5" =~ ^[0-9]+$ ]] || fail 'Invalid merge run ID.'
+  MERGE_RUN=$5
+fi
 VERSION=$1
 PR=$2
 SHA=$3
@@ -31,8 +37,18 @@ trap cleanup EXIT
 git fetch -q origin main
 MAIN=$(git rev-parse origin/main)
 git fetch -q origin "refs/pull/$PR/head"
-git fetch -q origin "refs/pull/$PR/merge"
-TEST_MERGE=$(git rev-parse FETCH_HEAD)
+if [ -n "$MERGE_RUN" ]; then
+  gh api "repos/$REPO/actions/runs/$MERGE_RUN" > "$TMP/run.json"
+  jq -e --arg title "Merge PR $PR at $SHA" '.path == ".github/workflows/merge-pr.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .status == "completed" and .conclusion == "success" and .display_title == $title and .repository.full_name == "Subrising/fulcra"' "$TMP/run.json" >/dev/null || fail 'Merge completion does not match.'
+  gh api "repos/$REPO/pulls/$PR" > "$TMP/pr.json"
+  TEST_MERGE=$(jq -er '.merge_commit_sha' "$TMP/pr.json")
+  [[ "$TEST_MERGE" =~ ^[0-9a-f]{40}$ ]] || fail 'Invalid merged SHA.'
+  git fetch -q origin "$TEST_MERGE"
+  MAIN=$(git rev-parse "$TEST_MERGE^1")
+else
+  git fetch -q origin "refs/pull/$PR/merge"
+  TEST_MERGE=$(git rev-parse FETCH_HEAD)
+fi
 [ "$(git rev-parse "$TEST_MERGE^1")" = "$MAIN" ] || fail 'The tested base is stale.'
 [ "$(git rev-parse "$TEST_MERGE^2")" = "$SHA" ] || fail 'The tested head is stale.'
 git merge-base --is-ancestor "$MAIN" "$SHA" || fail 'Update the candidate from main.'
@@ -45,7 +61,11 @@ PREVIOUS=$(gh release view -R "$REPO" --json tagName --jq .tagName)
 git fetch -q origin "refs/tags/$PREVIOUS:refs/tags/$PREVIOUS"
 git merge-base --is-ancestor "$PREVIOUS" "$MAIN" || fail 'The release base is outside main.'
 gh api "repos/$REPO/pulls/$PR" > "$TMP/pr.json"
-jq -e --arg sha "$SHA" '.state == "open" and .base.ref == "main" and .head.sha == $sha and .draft == false' "$TMP/pr.json" >/dev/null || fail 'The PR does not match.'
+if [ -n "$MERGE_RUN" ]; then
+  jq -e --arg sha "$SHA" '.merged == true and .base.ref == "main" and .head.sha == $sha' "$TMP/pr.json" >/dev/null || fail 'The merged PR does not match.'
+else
+  jq -e --arg sha "$SHA" '.state == "open" and .base.ref == "main" and .head.sha == $sha and .draft == false' "$TMP/pr.json" >/dev/null || fail 'The PR does not match.'
+fi
 gh api "repos/$REPO/commits/$SHA/check-runs?check_name=ci-passed&filter=latest&per_page=100" > "$TMP/checks.json"
 jq -e --arg sha "$SHA" '[.check_runs[] | select(.name == "ci-passed" and .app.id == 15368)] | length == 1 and all(.head_sha == $sha and .status == "completed" and .conclusion == "success")' "$TMP/checks.json" >/dev/null || fail 'CI did not pass on this SHA.'
 IDENTITIES=$(git log --format='%an <%ae>|%cn <%ce>' "$PREVIOUS..$SHA")
@@ -97,6 +117,10 @@ begin
     raise if events.key?('release') || events.key?('create')
     next unless events.key?('push')
     push = events.fetch('push')
+    if path == '.github/workflows/ci.yml' && document['permissions'] == { 'contents' => 'read' } &&
+      push.is_a?(Hash) && push == { 'tags' => ['v*'] }
+      next
+    end
     # Only explicit branch filters exclude tag pushes.
     raise unless push.is_a?(Hash) &&
       (push.key?('branches') || push.key?('branches-ignore')) &&
@@ -111,11 +135,14 @@ RUBY
 }
 check_publishers || fail 'Workflow trigger check failed.'
 echo 'candidate_verified=true'
-DISPATCH=$(gh workflow run merge-pr.yml -R "$REPO" --ref main -f pr="$PR" -f sha="$SHA")
-RUN_ID=$(printf '%s\n' "$DISPATCH" | sed -n 's|^https://github.com/Subrising/fulcra/actions/runs/\([0-9][0-9]*\)$|\1|p')
-[[ "$RUN_ID" =~ ^[0-9]+$ ]] || fail 'No exact workflow run ID. Inspect the dispatch before any retry.'
-# One native workflow wait. A failed run stops tagging and publication.
-gh run watch "$RUN_ID" -R "$REPO" --exit-status > "$TMP/watch.log" 2>&1 || fail 'Merge workflow failed.'
+if [ -z "$MERGE_RUN" ]; then
+  DISPATCH=$(gh workflow run merge-pr.yml -R "$REPO" --ref main -f pr="$PR" -f sha="$SHA")
+  RUN_ID=$(printf '%s\n' "$DISPATCH" | sed -n 's|^https://github.com/Subrising/fulcra/actions/runs/\([0-9][0-9]*\)$|\1|p')
+  [[ "$RUN_ID" =~ ^[0-9]+$ ]] || fail 'No exact workflow run ID. Inspect the dispatch before any retry.'
+  echo "merge_dispatched=$RUN_ID"
+  echo "Resume only after the completion event: release.sh $VERSION $PR $SHA --after-merge $RUN_ID"
+  exit 0
+fi
 gh api "repos/$REPO/pulls/$PR" > "$TMP/merged.json"
 jq -e --arg sha "$SHA" '.merged == true and .base.ref == "main" and .head.sha == $sha' "$TMP/merged.json" >/dev/null || fail 'The merged PR does not match.'
 MERGED=$(jq -er '.merge_commit_sha' "$TMP/merged.json")

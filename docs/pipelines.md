@@ -170,7 +170,7 @@ test, build and packaging step.
 
 Nothing above removes coverage:
 
-- **CI** — format, lint, typecheck, tests, on every push and pull request.
+- **CI** — affected contracts on pull requests, with full checks nightly and on release tags.
 - **Docker** — builds, and publishes to `ghcr.io/<owner>/paseo`, which is this
   fork's own namespace. It needs no gate and has none.
 - **Desktop Packages** — real packaging and smoke on main and on pull requests
@@ -193,3 +193,45 @@ identifier from `packages/desktop/package.json` and
 `packages/desktop/electron-builder.yml`. The assertions still fail when
 packaging produces no bundle, more than one bundle, or a bundle without its
 executable.
+
+## Checked trees and completion events
+
+`ci-passed` remains the required PR gate. Every selected job must succeed.
+CI and shared-library changes select the full suite. Unknown root inputs also
+select it. Package-local changes retain the routes in `.github/ci-paths.yml`.
+The nightly schedule uses UTC. Release tags starting with `v` run full CI.
+
+Main does not repeat PR CI. After a successful bot merge, `CI finished` checks
+GitHub API records from trusted main. It compares the merged tree with the
+checked PR head. It verifies the bot identity, merge parents, exact successful
+head check, and CI workflow provenance. A mismatch creates no green check.
+A matching tree receives `ci-passed`, with a link to the original CI run.
+
+Build caches use exact source, toolchain, platform, and target keys. They have
+no fallback restore keys. They store generated outputs, without credentials.
+The privileged completion workflow never loads candidate code or caches.
+
+`release.sh` returns after dispatching `Merge PR`. It prints the exact run ID.
+It does not wait for CI or merge completion. Resume it with `--after-merge`
+only after a matching completion event. The resume verifies the successful
+workflow, head, tree, parents, identity, current main, source scan, and publisher
+guards before it can publish. CI is the only permitted tag validation workflow.
+
+The completion receiver needs `FULCRA_CI_NOTICE_URL` and the
+`FULCRA_CI_NOTICE_TOKEN` secret. The URL must use HTTPS. Configure the receiver
+before enabling release subscriptions. Missing configuration fails the notice
+step. It does not convert an untested tree into a successful check.
+
+The receiver must authenticate the token, then map the exact repository and run
+ID to a registered requester. It must not accept a recipient from GitHub data.
+It stores `repository:runId:attempt` before its single native delivery attempt.
+It must reconcile an uncertain delivery before retrying. It sends one combined
+Fulcra notice through the existing native notice route. Any new worker turn
+uses `notifyOnFinish`. No worker timer checks GitHub.
+
+The notice contains the workflow, run ID, attempt, PR numbers, tested SHA,
+conclusion, and run URL. Successful merges also include the merge SHA and tree.
+A stale completion must not resume a release for another SHA. Failed CI sends
+a failure notice; it does not start a merge. Deploy the receiver through the
+existing alarm service, after workflow review. No receiver URL is configured
+in the repository at this draft stage.

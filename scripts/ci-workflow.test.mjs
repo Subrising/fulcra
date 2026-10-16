@@ -14,6 +14,164 @@ import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
+import { requiresFullSuite } from "./ci-shared-changes.mjs";
+import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
+
+test("shared dependencies and unknown root files run the full suite", () => {
+  for (const path of [
+    "package.json",
+    "new.config",
+    "scripts/check.mjs",
+    "control/src/config.mjs",
+    "packages/protocol/src/messages.ts",
+    "packages/client/src/client.ts",
+    "packages/new-package/index.ts",
+    "skills/verify/SKILL.md",
+  ]) {
+    assert.equal(requiresFullSuite([path]), true, path);
+  }
+  for (const path of [
+    "packages/app/src/index.tsx",
+    "packages/server/src/server/session.ts",
+    "packages/cli/src/index.ts",
+    "docs/testing.md",
+    "README.md",
+  ]) {
+    assert.equal(requiresFullSuite([path]), false, path);
+  }
+});
+
+test("every new shard and desktop lane remains failure-sensitive", () => {
+  const source = readFileSync(ciWorkflowPath, "utf8");
+  const jobs = jobBlocks(source);
+  const gate = jobs.get("ci-passed").join("\n");
+  for (const name of [
+    "desktop-renderer",
+    ...Array.from({ length: 8 }, (_, i) => `playwright-${i + 1}`),
+  ]) {
+    assert.ok(jobs.has(name), name);
+    assert.ok(gate.includes(`- ${name}\n`), name);
+  }
+  assert.match(source, /schedule:\s*\n\s+- cron:/);
+  assert.match(source, /tags: \["v\*"\]/);
+  assert.doesNotMatch(source.split("jobs:")[0], /push:\s*\n\s+branches:/);
+  assert.doesNotMatch(source, /restore-keys:/);
+  assert.match(source, /steps\.shared\.outputs\.full != 'false'/);
+});
+
+function proofFixture() {
+  const sha = "a".repeat(40),
+    merged = "b".repeat(40),
+    tree = "c".repeat(40);
+  const run = {
+    id: 123,
+    run_attempt: 1,
+    path: ".github/workflows/merge-pr.yml",
+    event: "workflow_dispatch",
+    head_branch: "main",
+    conclusion: "success",
+    display_title: `Merge PR 1 at ${sha}`,
+    repository: { full_name: "Subrising/fulcra" },
+  };
+  const data = {
+    pr: {
+      merged: true,
+      base: { ref: "main", repo: run.repository },
+      head: { sha, repo: run.repository },
+      merge_commit_sha: merged,
+    },
+    merge: {
+      parents: [{ sha: "d".repeat(40) }, { sha }],
+      commit: {
+        tree: { sha: tree },
+        author: {
+          name: "github-actions[bot]",
+          email: "41898282+github-actions[bot]@users.noreply.github.com",
+        },
+        committer: { name: "GitHub", email: "noreply@github.com" },
+      },
+    },
+    head: { commit: { tree: { sha: tree } } },
+    checks: {
+      check_runs: [
+        {
+          name: "ci-passed",
+          app: { id: 15368 },
+          head_sha: sha,
+          status: "completed",
+          conclusion: "success",
+          details_url: "https://github.com/Subrising/fulcra/actions/runs/456/job/789",
+        },
+      ],
+    },
+    ci: {
+      path: ".github/workflows/ci.yml",
+      event: "pull_request",
+      head_sha: sha,
+      conclusion: "success",
+      repository: run.repository,
+      pull_requests: [{ number: 1 }],
+      html_url: "https://github.com/Subrising/fulcra/actions/runs/456",
+    },
+  };
+  const writes = [];
+  const api = async (path, body) => {
+    if (body) {
+      writes.push(body);
+      return {};
+    }
+    if (path === "/pulls/1") return data.pr;
+    if (path === `/commits/${sha}`) return data.head;
+    if (path === `/commits/${merged}`) return data.merge;
+    if (path.startsWith(`/commits/${sha}/check-runs`)) return data.checks;
+    if (path.startsWith(`/commits/${merged}/check-runs`))
+      return { check_runs: writes.map((write) => ({ ...write, app: { id: 15368 } })) };
+    if (path === "/actions/runs/456") return data.ci;
+    throw new Error(`Unexpected API route ${path}`);
+  };
+  return { run, data, api, writes };
+}
+
+test("merge proof refuses changed trees, identities, workflows and stale checks", async () => {
+  const good = proofFixture();
+  assert.equal((await proveMerge(good.run, good.api)).number, 1);
+  for (const mutate of [
+    (f) => (f.data.head.commit.tree.sha = "e".repeat(40)),
+    (f) => (f.data.pr.head.sha = "e".repeat(40)),
+    (f) => (f.data.pr.base.ref = "other"),
+    (f) => f.data.merge.parents.pop(),
+    (f) => (f.data.merge.commit.author.name = "account"),
+    (f) => (f.data.checks.check_runs[0].conclusion = "failure"),
+    (f) => (f.data.checks.check_runs[0].app.id = 1),
+    (f) => f.data.checks.check_runs.push(f.data.checks.check_runs[0]),
+    (f) => (f.data.ci.path = ".github/workflows/other.yml"),
+    (f) => (f.data.ci.event = "push"),
+    (f) => (f.run.event = "pull_request"),
+    (f) => (f.run.display_title = "Merge PR 1 at invalid"),
+  ]) {
+    const f = proofFixture();
+    mutate(f);
+    await assert.rejects(proveMerge(f.run, f.api));
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test("completion reconciles its merge gate and sends one keyed notice per invocation", async () => {
+  const f = proofFixture(),
+    notices = [];
+  const event = { repository: f.run.repository, workflow_run: f.run };
+  await complete(event, f.api, async (notice) => notices.push(notice));
+  await complete(event, f.api, async (notice) => notices.push(notice));
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].conclusion, "success");
+  assert.equal(notices.length, 2);
+  assert.equal(notices[0].eventId, notices[1].eventId);
+  await assert.rejects(
+    complete(event, f.api, async () => {
+      throw new Error("Receiver unavailable");
+    }),
+  );
+});
 
 const repoRoot = new URL("../", import.meta.url);
 const ciWorkflowPath = new URL(".github/workflows/ci.yml", repoRoot);
@@ -31,10 +189,10 @@ const gatedCiJobs = new Map([
   ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
   ["sdk-tests", { name: "sdk-tests", contract: "sdk" }],
-  ["playwright-1", { name: "playwright (shard 1/4)", contract: "browser" }],
-  ["playwright-2", { name: "playwright (shard 2/4)", contract: "browser" }],
-  ["playwright-3", { name: "playwright (shard 3/4)", contract: "browser" }],
-  ["playwright-4", { name: "playwright (shard 4/4)", contract: "browser" }],
+  ["playwright-1", { name: "playwright (shard 1/8)", contract: "browser" }],
+  ["playwright-2", { name: "playwright (shard 2/8)", contract: "browser" }],
+  ["playwright-3", { name: "playwright (shard 3/8)", contract: "browser" }],
+  ["playwright-4", { name: "playwright (shard 4/8)", contract: "browser" }],
   ["relay-tests", { name: "relay-tests", contract: "relay" }],
   ["cli-tests-1", { name: "cli-tests (shard 1/3)", contract: "cli" }],
   ["cli-tests-2", { name: "cli-tests (shard 2/3)", contract: "cli" }],
@@ -646,10 +804,10 @@ test("source release rejects every active tag or release trigger with a generic 
   }
 });
 
-test("source release uses one workflow wait and refuses unsafe candidates", () => {
+test("source release returns after dispatch and resumes only from a matching completion", () => {
   const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
   assert.doesNotMatch(source, /pulls\/[^"\s]+\/merge["\s]|gh pr merge|refs\/heads\/main/);
-  assert.equal((source.match(/gh run watch /g) ?? []).length, 1);
+  assert.doesNotMatch(source, /gh run watch /);
   const root = mkdtempSync(join(tmpdir(), "fulcra-release-test-"));
   try {
     const remote = join(root, "origin.git"),
@@ -740,7 +898,7 @@ const r=spawnSync(process.env.REAL_GIT,a,{stdio:'inherit'}); process.exit(r.stat
 const fs=require('node:fs'),{execFileSync}=require('node:child_process'),p=process.env.ROOT,a=process.argv.slice(2),f=JSON.parse(fs.readFileSync(p+'/fixture.json'));
 fs.appendFileSync(p+'/calls',JSON.stringify(a)+'\\n');
 if(a[0]==='workflow'){fs.writeFileSync(p+'/dispatched','');execFileSync(process.env.REAL_GIT,['--git-dir',p+'/origin.git','fetch','-q',process.cwd(),f.merged+':refs/heads/main']);console.log('https://github.com/Subrising/fulcra/actions/runs/123');}
-else if(a[0]==='run') process.exit(0);
+else if(a[1].includes('/actions/runs/'))console.log(JSON.stringify({path:'.github/workflows/merge-pr.yml',event:'workflow_dispatch',head_branch:'main',status:'completed',conclusion:process.env.BAD_MERGE?'failure':'success',display_title:'Merge PR 1 at '+f.sha,repository:{full_name:'Subrising/fulcra'}}));
 else if(a[0]==='release'){if(a[1]==='create')fs.writeFileSync(p+'/released','');else console.log(a.includes('assets,isDraft,tagName')?'true':'v1.0.0');}
 else if(a.includes('repos/Subrising/fulcra/actions/workflows?per_page=100'))console.log(JSON.stringify([{workflows:[{path:'.github/workflows/ci.yml',state:'active'},{path:'.github/workflows/new-publisher.yml',state:process.env.BAD_PUBLISHER?'active':'disabled_manually'}]}]));
 else if(a[1].includes('/pulls/'))console.log(JSON.stringify({state:'open',base:{ref:'main'},head:{sha:f.sha},draft:false,merged:fs.existsSync(p+'/dispatched'),merge_commit_sha:f.merged}));
@@ -770,11 +928,23 @@ else process.exit(2);
       encoding: "utf8",
     });
     assert.equal(good.status, 0, `${good.stdout}\n${good.stderr}`);
+    assert.equal(existsSync(join(root, "released")), false);
+    assert.match(good.stdout, /merge_dispatched=123/);
+    const resumeArgs = [script, "1.0.1", "1", sha, "--after-merge", "123"];
+    const failedMerge = spawnSync("bash", resumeArgs, {
+      cwd: checkout,
+      env: { ...env, BAD_MERGE: "1" },
+      encoding: "utf8",
+    });
+    assert.notEqual(failedMerge.status, 0);
+    assert.equal(existsSync(join(root, "released")), false);
+    const resumed = spawnSync("bash", resumeArgs, { cwd: checkout, env, encoding: "utf8" });
+    assert.equal(resumed.status, 0, `${resumed.stdout}\n${resumed.stderr}`);
     assert.equal(existsSync(join(root, "released")), true);
     assert.equal(git("rev-parse", "v1.0.1^{}"), merged);
     const calls = readFileSync(join(root, "calls"), "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(calls.filter((a) => a[0] === "workflow").length, 1);
-    assert.equal(calls.filter((a) => a[0] === "run").length, 1);
+    assert.equal(calls.filter((a) => a[0] === "run").length, 0);
     assert.equal(
       calls.some((a) => a.some((x) => x.endsWith("/merge"))),
       false,

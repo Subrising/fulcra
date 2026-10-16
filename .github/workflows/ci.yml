@@ -2,11 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "17 16 * * *"
   pull_request:
     branches: [main]
   merge_group:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -25,7 +30,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      full: ${{ github.event_name != 'pull_request' || steps.filter.outputs.routing != 'false' || steps.filter.outputs.workspace != 'false' || steps.filter.outputs.ci != 'false' }}
+      full: ${{ github.event_name != 'pull_request' || steps.filter.outputs.routing != 'false' || steps.filter.outputs.workspace != 'false' || steps.filter.outputs.ci != 'false' || steps.shared.outputs.full != 'false' }}
       format: ${{ steps.filter.outputs.format }}
       quality: ${{ steps.filter.outputs.quality }}
       hub: ${{ steps.filter.outputs.hub }}
@@ -50,6 +55,14 @@ jobs:
         uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
         with:
           filters: .github/ci-paths.yml
+
+      - name: Detect shared and root changes
+        id: shared
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci-shared-changes.mjs
 
       - name: Validate CI contracts
         run: node --test scripts/ci-workflow.test.mjs scripts/windows-update/update-script.test.mjs scripts/install-git-hooks.test.mjs scripts/daemon-launch-contract.test.mjs scripts/test-support/test-home.test.mjs scripts/sync-fdroid-changelogs.test.mjs scripts/upload-release-assets.test.mjs
@@ -148,7 +161,17 @@ jobs:
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
 
+      - name: Restore server build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build server stack
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:server
 
       - name: Verify built-in plugins from built output
@@ -209,7 +232,17 @@ jobs:
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         run: node scripts/npm-retry.mjs install -g @anthropic-ai/claude-code opencode-ai
 
+      - name: Restore server-deps build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build server dependencies
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:server-deps
 
       - name: Run server tests
@@ -256,7 +289,17 @@ jobs:
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
 
+      - name: Restore server-deps build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build server dependencies
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:server-deps
 
       - name: Run file observation tests
@@ -275,6 +318,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      DESKTOP_SUITE: lifecycle
     steps: &desktop_test_steps
       - uses: actions/checkout@v4
 
@@ -290,10 +335,21 @@ jobs:
       - name: Install dependencies with retry
         run: node scripts/npm-retry.mjs ci
 
+      - name: Restore server build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build server stack
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:server
 
       - name: Run desktop tests
+        if: ${{ env.DESKTOP_SUITE != 'renderer' }}
         run: npm run test --workspace=@getpaseo/desktop
 
       - name: Install virtual display
@@ -309,7 +365,7 @@ jobs:
         run: npx vitest run packages/cli/src/commands/daemon/lifecycle.e2e.test.ts --bail=1 --maxWorkers=1 -t "Windows unbound|managed two-home"
 
       - name: Run desktop lifecycle E2E (Linux)
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ runner.os == 'Linux' && env.DESKTOP_SUITE != 'renderer' }}
         run: xvfb-run -a --server-args="-screen 0 1280x800x24" npm run test:e2e:lifecycle --workspace=@getpaseo/desktop
         env:
           PASEO_DESKTOP_LIFECYCLE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-lifecycle
@@ -339,11 +395,11 @@ jobs:
         run: npm run test:e2e:lifecycle --workspace=@getpaseo/desktop
 
       - name: Run desktop renderer E2E
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ env.DESKTOP_SUITE == 'renderer' }}
         run: npm run test:e2e:renderer --workspace=@getpaseo/desktop
 
       - name: Run desktop browser E2E
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ runner.os == 'Linux' && env.DESKTOP_SUITE != 'renderer' }}
         run: npm run test:e2e:browser-tabs --workspace=@getpaseo/desktop
         env:
           PASEO_DESKTOP_BROWSER_E2E_ARTIFACT_DIR: ${{ runner.temp }}/desktop-browser-e2e
@@ -367,6 +423,18 @@ jobs:
         run: |
           echo "::warning title=Diagnostic upload failed::desktop-browser-e2e was not uploaded. The job log still has the full output."
           echo "Diagnostic artifact \`desktop-browser-e2e\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
+
+  desktop-renderer:
+    name: desktop-renderer
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      DESKTOP_SUITE: renderer
+    steps: *desktop_test_steps
 
   app-tests:
     name: app-tests
@@ -395,7 +463,17 @@ jobs:
         timeout-minutes: 10
         run: npx playwright install chromium
 
+      - name: Restore app-deps build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-app-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build app dependencies
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:app-deps
 
       - name: Run app unit tests
@@ -443,12 +521,12 @@ jobs:
         run: npm run typecheck:examples --workspace=@getpaseo/client
 
   playwright-1:
-    name: playwright (shard 1/4)
+    name: playwright (shard 1/8)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
     runs-on: ubuntu-latest
     env:
-      PLAYWRIGHT_SHARD: "1/4"
+      PLAYWRIGHT_SHARD: "1/8"
       PLAYWRIGHT_ARTIFACT: "1"
     steps: &playwright_test_steps
       - uses: actions/checkout@v4
@@ -469,7 +547,17 @@ jobs:
         timeout-minutes: 10
         run: npx playwright install chromium
 
+      - name: Restore server build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build server stack
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:server
 
       - name: Build native app dependency
@@ -484,7 +572,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Weight file groups by observed duration; raw test counts overload
           # early agent/Changes specs. Required check names remain unchanged.
-          PWTEST_SHARD_WEIGHTS: "111:172:137:160"
+          PWTEST_SHARD_WEIGHTS: "1:1:1:1:1:1:1:1"
 
       # Diagnostics only. Actions storage quota must not fail a build whose
       # tests and packaging passed; the failure is reported instead. Every
@@ -508,33 +596,73 @@ jobs:
           echo "Diagnostic artifact \`playwright-results\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
 
   playwright-2:
-    name: playwright (shard 2/4)
+    name: playwright (shard 2/8)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
     runs-on: ubuntu-latest
     env:
-      PLAYWRIGHT_SHARD: "2/4"
+      PLAYWRIGHT_SHARD: "2/8"
       PLAYWRIGHT_ARTIFACT: "2"
     steps: *playwright_test_steps
 
   playwright-3:
-    name: playwright (shard 3/4)
+    name: playwright (shard 3/8)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
     runs-on: ubuntu-latest
     env:
-      PLAYWRIGHT_SHARD: "3/4"
+      PLAYWRIGHT_SHARD: "3/8"
       PLAYWRIGHT_ARTIFACT: "3"
     steps: *playwright_test_steps
 
   playwright-4:
-    name: playwright (shard 4/4)
+    name: playwright (shard 4/8)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
     runs-on: ubuntu-latest
     env:
-      PLAYWRIGHT_SHARD: "4/4"
+      PLAYWRIGHT_SHARD: "4/8"
       PLAYWRIGHT_ARTIFACT: "4"
+    steps: *playwright_test_steps
+
+  playwright-5:
+    name: playwright (shard 5/8)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_SHARD: "5/8"
+      PLAYWRIGHT_ARTIFACT: "5"
+    steps: *playwright_test_steps
+
+  playwright-6:
+    name: playwright (shard 6/8)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_SHARD: "6/8"
+      PLAYWRIGHT_ARTIFACT: "6"
+    steps: *playwright_test_steps
+
+  playwright-7:
+    name: playwright (shard 7/8)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_SHARD: "7/8"
+      PLAYWRIGHT_ARTIFACT: "7"
+    steps: *playwright_test_steps
+
+  playwright-8:
+    name: playwright (shard 8/8)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.browser != 'false') }}
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_SHARD: "8/8"
+      PLAYWRIGHT_ARTIFACT: "8"
     steps: *playwright_test_steps
 
   relay-tests:
@@ -557,7 +685,17 @@ jobs:
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
 
+      - name: Restore relay build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-relay-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build relay
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:relay
 
       - name: Run relay tests
@@ -584,7 +722,17 @@ jobs:
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
 
+      - name: Restore server-deps build outputs
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+
       - name: Build server dependencies
+        if: steps.build-cache.outputs.cache-hit != 'true'
         run: npm run build:server-deps
 
       - name: Run the relay transport and Command Centre grant e2e
@@ -670,12 +818,17 @@ jobs:
       - server-tests-ubuntu
       - server-tests-macos
       - desktop-tests-ubuntu
+      - desktop-renderer
       - app-tests
       - sdk-tests
       - playwright-1
       - playwright-2
       - playwright-3
       - playwright-4
+      - playwright-5
+      - playwright-6
+      - playwright-7
+      - playwright-8
       - relay-tests
       - relay-grant-e2e
       - cli-tests-1
