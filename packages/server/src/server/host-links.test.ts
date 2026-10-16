@@ -1302,12 +1302,20 @@ for (const limitKind of ["session", "weekly"] as const) {
     const f = await limitFixture();
     const resetAt = new Date(f.state.now + 3600000).toISOString();
     await assign(f.sourcePool, "pooled-session", "claude", f.state.now);
+    const confirmLimit = vi.fn(async ({ accountId }: { accountId: string }) => ({
+      accountId,
+      kind: limitKind,
+      resetAt,
+    }));
     await rotate(
       f.sourcePool,
       "pooled-session",
       "claude",
-      { kind: limitKind, resetAt },
+      { kind: limitKind, resetAt, confirmLimit },
       f.state.now,
+    );
+    expect(confirmLimit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ accountId: sharedAccount }),
     );
     expect(await f.source.shareAccountLimits()).toEqual({ delivered: 1, failed: 0 });
     expect(await f.source.shareAccountLimits()).toEqual({ delivered: 0, failed: 0 });

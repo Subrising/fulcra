@@ -95,7 +95,7 @@ test.describe("usage settings", () => {
     await expect(card.getByText("Beta plan", { exact: true })).toBeVisible();
     await expect(card.getByText("70%")).toBeVisible();
     await expect(card.getByText("1,234 left", { exact: true })).toBeVisible();
-    await expect(card.getByText("$5.00 / $20.00", { exact: true })).toBeVisible();
+    await expect(card.getByText("$5.00 of $20.00", { exact: true })).toBeVisible();
     await expect(card.getByText("2026-12-31", { exact: true })).toBeVisible();
     await expect(card.getByText("Gamma auth expired", { exact: true })).toBeVisible();
 
