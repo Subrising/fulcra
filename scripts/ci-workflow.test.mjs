@@ -403,6 +403,40 @@ test("completion reconciles its merge gate and sends one keyed notice per invoca
   );
 });
 
+test("bot merge completion records main green without a main CI run", async () => {
+  const f = proofFixture();
+  const reads = [];
+  await complete(
+    { repository: f.run.repository, workflow_run: f.run },
+    async (path, body) => {
+      if (!body) reads.push(path);
+      return f.api(path, body);
+    },
+    async () => {},
+  );
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].name, "ci-passed");
+  assert.equal(f.writes[0].head_sha, f.data.pr.merge_commit_sha);
+  assert.equal(f.writes[0].external_id, `tested-tree:${f.data.pr.merge_commit_sha}`);
+  assert.equal(f.writes[0].details_url, f.data.ci.html_url);
+  assert.deepEqual(
+    reads.filter((path) => path.startsWith("/actions/")),
+    ["/actions/runs/456"],
+  );
+  const workflow = readFileSync(
+    new URL("../.github/workflows/ci-finished.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    workflow,
+    /workflow_run:\s*\n\s+workflows: \[Merge PR\]\s*\n\s+types: \[completed\]/,
+  );
+  assert.doesNotMatch(workflow.split("jobs:")[0], /^\s+(push|pull_request|pull_request_target):/m);
+  assert.match(workflow, /checks: write/);
+  assert.match(workflow, /ref: main/);
+  assert.match(workflow, /persist-credentials: false/);
+});
+
 const repoRoot = new URL("../", import.meta.url);
 const ciWorkflowPath = new URL(".github/workflows/ci.yml", repoRoot);
 const dockerWorkflowPath = new URL(".github/workflows/docker.yml", repoRoot);
