@@ -627,6 +627,11 @@ test("merge workflow limits writes and authenticates check reads", () => {
     source.indexOf("- name: Check candidate commit identities") <
       source.indexOf("- name: Merge with the workflow token"),
   );
+  assert.ok(
+    source.indexOf("- name: Scan candidate commit metadata") <
+      source.indexOf("- name: Merge with the workflow token"),
+  );
+  assert.match(mergeStep("Scan candidate commit metadata"), /--commits "origin\/main\.\.\$SHA"/);
   assert.match(
     mergeStep("Scan the merge commit and source"),
     /node "\$RUNNER_TEMP\/check-machine-data.mjs" --commits "\$MERGED\^1\.\.\$MERGED"/,
@@ -787,51 +792,120 @@ console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('
   }
 });
 
-test("workflow identity gate accepts the allowlist and rejects other commit identities", () => {
+function identityFixture({ upstreamMessage = "Upstream ancestor fixture" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "fulcra-identities-test-"));
+  const project = join(root, "project"),
+    upstream = join(root, "upstream.git"),
+    bin = join(root, "bin");
+  mkdirSync(project);
+  mkdirSync(bin);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Fulcra",
+    GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+    GIT_COMMITTER_NAME: "Fulcra",
+    GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+    RUNNER_TEMP: root,
+    FULCRA_PRIVATE_PATTERNS: "i\tDO_NOT_PUBLISH",
+  };
+  const gitAt = (cwd, ...args) =>
+    execFileSync(realGit, args, {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  const git = (...args) => gitAt(project, ...args);
+  git("init", "--initial-branch=main");
+  writeFileSync(join(project, "fixture"), "Identity fixture.\n");
+  git("add", ".");
+  git("commit", "-qm", "Identity fixture base");
+  const main = git("rev-parse", "HEAD"),
+    tree = git("rev-parse", "HEAD^{tree}");
+  gitAt(root, "clone", "--bare", project, upstream);
+  const createAt = (cwd, parent, message, identity = {}) =>
+    execFileSync(realGit, ["commit-tree", tree, "-p", parent, "-m", message], {
+      cwd,
+      env: { ...env, ...identity },
+      encoding: "utf8",
+    }).trim();
+  const upstreamIdentity = {
+    GIT_AUTHOR_NAME: "Upstream Fixture",
+    GIT_AUTHOR_EMAIL: "upstream@fixture.invalid",
+    GIT_COMMITTER_NAME: "Upstream Fixture",
+    GIT_COMMITTER_EMAIL: "upstream@fixture.invalid",
+  };
+  const ancestor = createAt(upstream, main, upstreamMessage, upstreamIdentity);
+  const release = createAt(upstream, ancestor, "Upstream release fixture", upstreamIdentity);
+  gitAt(upstream, "tag", "-a", "v0.11.4", "-m", "Release fixture", release);
+  git("fetch", "--no-tags", upstream, "refs/tags/v0.11.4:refs/fixture/upstream-release");
+  git("update-ref", "refs/remotes/origin/main", main);
+  git("remote", "add", "origin", project);
+  const calls = join(root, "calls.jsonl");
+  executable(
+    join(bin, "git"),
+    `#!/usr/bin/env node
+const fs=require('node:fs');const {spawnSync}=require('node:child_process');const a=process.argv.slice(2);
+fs.appendFileSync(process.env.CALLS,JSON.stringify(a)+'\\n');
+if(a[0]==='fetch'){
+ const at=a.indexOf('https://github.com/getpaseo/paseo.git');
+ if(at>=0){if(process.env.FAIL_UPSTREAM_FETCH==='1')process.exit(1);a[at]=process.env.FIXTURE_UPSTREAM;}
+ else if(!a.includes('origin'))process.exit(2);
+}
+const r=spawnSync(process.env.REAL_GIT,a,{stdio:'inherit'});process.exit(r.status??1);
+`,
+  );
+  writeFileSync(
+    join(root, "check-machine-data.mjs"),
+    readFileSync(new URL("scripts/check-machine-data.mjs", repoRoot)),
+  );
+  return {
+    ancestor,
+    release,
+    upstreamIdentity,
+    git,
+    create: (identity = {}) => createAt(project, main, "Candidate fixture", identity),
+    prerelease(tag) {
+      const sha = createAt(upstream, release, `Prerelease fixture ${tag}`, upstreamIdentity);
+      gitAt(upstream, "tag", tag, sha);
+      git("fetch", "--no-tags", upstream, `refs/tags/${tag}:refs/fixture/${tag}`);
+      return sha;
+    },
+    deleteFinalTag: () => gitAt(upstream, "tag", "-d", "v0.11.4"),
+    calls: () => readFileSync(calls, "utf8"),
+    run(name, sha, overrides = {}) {
+      git("update-ref", "refs/heads/candidate", sha);
+      return spawnSync("bash", ["-c", mergeStep(name)], {
+        cwd: project,
+        encoding: "utf8",
+        env: {
+          ...env,
+          SHA: sha,
+          PATH: `${bin}:${env.PATH}`,
+          REAL_GIT: realGit,
+          FIXTURE_UPSTREAM: upstream,
+          CALLS: calls,
+          ...overrides,
+        },
+      });
+    },
+    close: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+test("workflow identity gate accepts the allowlist and rejects other commit identities", () => {
+  const f = identityFixture();
+  const run = (identity) => f.run("Check candidate commit identities", f.create(identity));
   try {
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Fulcra",
-      GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
-      GIT_COMMITTER_NAME: "Fulcra",
-      GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
-    };
-    const git = (...args) =>
-      execFileSync("git", args, {
-        cwd: root,
-        env,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      }).trim();
-    git("init", "--initial-branch=main");
-    writeFileSync(join(root, "fixture"), "Identity fixture.\n");
-    git("add", ".");
-    git("commit", "-qm", "Identity fixture base");
-    const main = git("rev-parse", "HEAD"),
-      tree = git("rev-parse", "HEAD^{tree}");
-    git("update-ref", "refs/remotes/origin/main", main);
-    git("remote", "add", "origin", root);
-    const run = (identity) => {
-      const sha = execFileSync(
-        "git",
-        ["commit-tree", tree, "-p", main, "-m", "Identity fixture candidate"],
-        { cwd: root, env: { ...env, ...identity }, encoding: "utf8" },
-      ).trim();
-      return spawnSync("bash", ["-c", mergeStep("Check candidate commit identities")], {
-        cwd: root,
-        env: { ...env, SHA: sha },
-        encoding: "utf8",
-      }).status;
-    };
-    assert.equal(run({}), 0);
+    assert.equal(run({}).status, 0);
     assert.equal(
       run({
         GIT_AUTHOR_NAME: "github-actions[bot]",
         GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
         GIT_COMMITTER_NAME: "GitHub",
         GIT_COMMITTER_EMAIL: "noreply@github.com",
-      }),
+      }).status,
       0,
     );
     for (const identity of [
@@ -840,9 +914,119 @@ test("workflow identity gate accepts the allowlist and rejects other commit iden
       { GIT_COMMITTER_NAME: "unlisted" },
       { GIT_COMMITTER_EMAIL: "invalid" },
     ])
-      assert.notEqual(run(identity), 0);
+      assert.notEqual(run(identity).status, 0);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    f.close();
+  }
+});
+
+test("workflow identity gate accepts an upstream ancestor of a fetched release tag", () => {
+  const f = identityFixture();
+  try {
+    assert.notEqual(f.ancestor, f.release);
+    const result = f.run("Check candidate commit identities", f.ancestor);
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate trusts only final release tag names", () => {
+  const f = identityFixture();
+  try {
+    for (const tag of ["v0.12.0-beta.1", "v0.12.0-rc.1", "v0.12.0+build.1", "v0.12"]) {
+      const sha = f.prerelease(tag);
+      assert.notEqual(f.run("Check candidate commit identities", sha).status, 0, tag);
+    }
+    assert.equal(f.run("Check candidate commit identities", f.ancestor).status, 0);
+    f.deleteFinalTag();
+    assert.notEqual(f.run("Check candidate commit identities", f.ancestor).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate skips upstream fetch for approved identities during an outage", () => {
+  const f = identityFixture();
+  try {
+    for (const identity of [
+      {},
+      {
+        GIT_AUTHOR_NAME: "github-actions[bot]",
+        GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+        GIT_COMMITTER_NAME: "GitHub",
+        GIT_COMMITTER_EMAIL: "noreply@github.com",
+      },
+    ]) {
+      const result = f.run("Check candidate commit identities", f.create(identity), {
+        FAIL_UPSTREAM_FETCH: "1",
+      });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    assert.doesNotMatch(f.calls(), /https:\/\/github\.com\/getpaseo\/paseo\.git/);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate refuses a non-Fulcra commit outside upstream releases", () => {
+  const f = identityFixture();
+  try {
+    const sha = f.create({ GIT_AUTHOR_NAME: "Other Fixture" });
+    assert.notEqual(f.run("Check candidate commit identities", sha).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate refuses a matching upstream name without ancestry", () => {
+  const f = identityFixture();
+  try {
+    const sha = f.create(f.upstreamIdentity);
+    assert.notEqual(sha, f.ancestor);
+    assert.notEqual(f.run("Check candidate commit identities", sha).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate refuses an upstream fetch failure without using cached refs", () => {
+  const f = identityFixture();
+  try {
+    assert.equal(f.run("Check candidate commit identities", f.ancestor).status, 0);
+    assert.notEqual(
+      f.run("Check candidate commit identities", f.ancestor, { FAIL_UPSTREAM_FETCH: "1" }).status,
+      0,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate ignores fork-only tags and clears stale verification refs", () => {
+  const f = identityFixture();
+  try {
+    const sha = f.create(f.upstreamIdentity);
+    f.git("tag", "v99.0.0", sha);
+    f.git("update-ref", "refs/verified-paseo-release-tags/v99.0.0", sha);
+    assert.notEqual(f.run("Check candidate commit identities", sha).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("candidate scanner still refuses personal data in an accepted upstream ancestor", () => {
+  const f = identityFixture({ upstreamMessage: "DO_NOT_PUBLISH" });
+  try {
+    const identity = f.run("Check candidate commit identities", f.release);
+    assert.equal(identity.status, 0, identity.stderr);
+    const scan = f.run("Scan candidate commit metadata", f.release);
+    assert.notEqual(scan.status, 0);
+    assert.match(scan.stderr, /private-1/);
+    assert.ok(scan.stderr.includes(f.ancestor.slice(0, 12)));
+    assert.ok(!scan.stderr.includes("DO_NOT_PUBLISH"));
+  } finally {
+    f.close();
   }
 });
 
