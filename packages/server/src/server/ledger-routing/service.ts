@@ -357,7 +357,11 @@ export class LedgerRoutingService {
         continue;
       }
       if (!agent) {
-        await this.settle(claim, "abandoned");
+        await this.settle(
+          claim,
+          "abandoned",
+          "interrupted creation has no retained session; approval is consumed",
+        );
         continue;
       }
       if (claim.stage === "started") {

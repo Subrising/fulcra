@@ -246,6 +246,10 @@ test("4: a ledger claim without a local journal is recovered and releases an abs
   await f.routing.changed();
   expect(f.createAgent).not.toHaveBeenCalled();
   expect((await f.state()).claims[0].stage).toBe("abandoned");
+  expect(f.notify).toHaveBeenCalledTimes(1);
+  expect(f.notify.mock.calls[0][1]).toContain("no retained session");
+  await f.routing.changed();
+  expect(f.notify).toHaveBeenCalledTimes(1);
 });
 test.each(["archived", "abandoned"])(
   "5: a %s blocked worker frees its slot and does not block its role",
