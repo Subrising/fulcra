@@ -39,8 +39,9 @@ class EvidenceTests(unittest.TestCase):
             '            c[5] = clean(o["evidence"], "--evidence")',
             '    return p, open(p).read().split("\\n")',
         ])
-        with self.assertRaisesRegex(ValueError, "retired"):
+        with self.assertRaises(ValueError):
             prepare_ledger(source)
+        self.assertNotIn("from ledger_close_time import", source)
 
 
 @unittest.skipUnless(installed, "Set LEDGER_TEST_MODULE to check the installed private command.")
