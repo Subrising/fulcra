@@ -2,8 +2,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
-import type { ProjectDispatch } from "@getpaseo/protocol/messages";
-import { MutableDaemonConfigSchema, ProjectDispatchMapSchema } from "@getpaseo/protocol/messages";
+import type { ProjectDispatch } from "@getpaseo/protocol/project-dispatch";
+import { MutableDaemonConfigSchema } from "@getpaseo/protocol/messages";
+import { ProjectDispatchMapSchema } from "@getpaseo/protocol/project-dispatch";
 import { DaemonConfigStore } from "../daemon-config-store.js";
 import { loadConfig } from "../config.js";
 

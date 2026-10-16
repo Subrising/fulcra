@@ -1,4 +1,4 @@
-import { ProjectDispatchMapSchema } from "@getpaseo/protocol/messages";
+import { ProjectDispatchMapSchema } from "@getpaseo/protocol/project-dispatch";
 import { readNotificationSetting, writeNotificationSetting } from "./notification-settings.js";
 import { PluginRegistriesSchema } from "@getpaseo/protocol/plugin-registry";
 import { existsSync, readFileSync } from "node:fs";

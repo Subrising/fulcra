@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { ProjectDispatchSchema } from "@getpaseo/protocol/messages";
+import { ProjectDispatchSchema } from "@getpaseo/protocol/project-dispatch";
 import { createTestPaseoDaemon } from "../test-utils/paseo-daemon.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
 import type { AgentManager, AgentManagerEvent } from "../agent/agent-manager.js";
