@@ -1,4 +1,6 @@
-export function balanceTests(tests, seconds, count = 16) {
+export const BROWSER_SHARDS = 24;
+
+export function balanceTests(tests, seconds, count = BROWSER_SHARDS) {
   const buckets = Array.from({ length: count }, () => ({ seconds: 0, tests: [] }));
   const weighted = tests.map((test) => ({ ...test, seconds: seconds[test.key] ?? 12 }));
   weighted.sort((a, b) => b.seconds - a.seconds || a.key.localeCompare(b.key));

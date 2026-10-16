@@ -65,7 +65,7 @@ jobs:
         run: node scripts/ci-shared-changes.mjs
 
       - name: Validate CI contracts
-        run: node --test scripts/ci-workflow.test.mjs .github/scripts/browser-routing.test.mjs scripts/windows-update/update-script.test.mjs scripts/install-git-hooks.test.mjs scripts/daemon-launch-contract.test.mjs scripts/test-support/test-home.test.mjs scripts/sync-fdroid-changelogs.test.mjs scripts/upload-release-assets.test.mjs scripts/upstream-watch.test.mjs scripts/fork-ledger.test.mjs
+        run: node --test scripts/ci-workflow.test.mjs .github/scripts/browser-routing.test.mjs .github/scripts/ci-built-cli.test.mjs scripts/windows-update/update-script.test.mjs scripts/install-git-hooks.test.mjs scripts/daemon-launch-contract.test.mjs scripts/test-support/test-home.test.mjs scripts/sync-fdroid-changelogs.test.mjs scripts/upload-release-assets.test.mjs scripts/upstream-watch.test.mjs scripts/fork-ledger.test.mjs
 
   format:
     name: format
@@ -138,7 +138,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server stack
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -201,7 +201,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -211,6 +211,7 @@ jobs:
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         run: npm run test:unit --workspace=@getpaseo/server -- --shard=${{ env.SERVER_UNIT_SHARD }} --maxWorkers=2
         env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -219,6 +220,7 @@ jobs:
         if: ${{ env.SERVER_UNIT_SHARD == '1/2' && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
         run: npm run test:integration --workspace=@getpaseo/server
         env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -275,7 +277,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -288,6 +290,8 @@ jobs:
             src/server/workspace-git-service.observation.test.ts \
             src/server/workspace-git-service.observation.integration.test.ts \
             --bail=1
+        env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
 
   desktop-tests-ubuntu:
     name: desktop-tests (ubuntu-latest)
@@ -311,7 +315,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server stack
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -445,7 +449,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-app-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-app-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build app dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -453,6 +457,8 @@ jobs:
 
       - name: Run app unit tests
         run: npm run test --workspace=@getpaseo/app
+        env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
 
   sdk-tests:
     name: sdk-tests
@@ -464,23 +470,38 @@ jobs:
 
       - uses: ./.github/actions/ci-deps
 
-      - name: Build client dependencies
-        run: npm run build:relay && npm run build:client
+      - name: Restore exact SDK dependencies
+        id: sdk-build
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
-      - name: Build plugin SDK
-        run: npm run build:plugin
+      - name: Build SDK dependencies
+        if: steps.sdk-build.outputs.cache-hit != 'true'
+        run: npm run build:server-deps
 
       - name: Run plugin SDK tests
         run: npm run test --workspace=@getpaseo/plugin
+        env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
 
       - name: Run protocol tests
         run: npm run test --workspace=@getpaseo/protocol
+        env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
 
       - name: Run client tests
         run: npm run test --workspace=@getpaseo/client
+        env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
 
       - name: Run highlight tests
         run: npm run test --workspace=@getpaseo/highlight
+        env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
 
       - name: Typecheck client examples
         run: npm run typecheck:examples --workspace=@getpaseo/client
@@ -511,13 +532,13 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
       - name: Restore exact web export
         id: web-build
         uses: actions/cache@v4
         with:
           path: packages/app/.e2e-web
-          key: browser-web-v1-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml', 'package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: browser-web-v2-${{ runner.os }}-${{ hashFiles('.github/scripts/export-browser-web.sh', 'package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
       - name: Build web and daemon once; plan timed cases
         if: steps.shared-cache.outputs.cache-hit != 'true'
         env:
@@ -531,7 +552,7 @@ jobs:
           # Both branches read built dependencies. Preserve each exit status.
           (if [ "$DAEMON_BUILD_HIT" != 'true' ]; then npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli; fi) &
           daemon_pid=$!
-          (if [ "$WEB_BUILD_HIT" != 'true' ]; then npm exec --workspace=@getpaseo/app -- expo export --platform web --output-dir .e2e-web --max-workers 2; fi) &
+          (if [ "$WEB_BUILD_HIT" != 'true' ]; then bash .github/scripts/export-browser-web.sh; fi) &
           web_pid=$!
           daemon_status=0; wait "$daemon_pid" || daemon_status=$?
           web_status=0; wait "$web_pid" || web_status=$?
@@ -542,7 +563,7 @@ jobs:
           tar -czf browser-inputs.tgz -T browser-input-paths.txt
 
   playwright-1:
-    name: playwright (shard 1/16)
+    name: playwright (shard 1/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -617,7 +638,7 @@ jobs:
           echo "Diagnostic artifact \`playwright-results\` could not be uploaded, commonly Actions storage quota. This did not affect any test, build or packaging result; the job log is unchanged." >> "$GITHUB_STEP_SUMMARY"
 
   playwright-2:
-    name: playwright (shard 2/16)
+    name: playwright (shard 2/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -630,7 +651,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-3:
-    name: playwright (shard 3/16)
+    name: playwright (shard 3/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -643,7 +664,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-4:
-    name: playwright (shard 4/16)
+    name: playwright (shard 4/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -656,7 +677,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-5:
-    name: playwright (shard 5/16)
+    name: playwright (shard 5/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -669,7 +690,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-6:
-    name: playwright (shard 6/16)
+    name: playwright (shard 6/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -682,7 +703,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-7:
-    name: playwright (shard 7/16)
+    name: playwright (shard 7/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -695,7 +716,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-8:
-    name: playwright (shard 8/16)
+    name: playwright (shard 8/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -708,7 +729,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-9:
-    name: playwright (shard 9/16)
+    name: playwright (shard 9/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -721,7 +742,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-10:
-    name: playwright (shard 10/16)
+    name: playwright (shard 10/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -734,7 +755,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-11:
-    name: playwright (shard 11/16)
+    name: playwright (shard 11/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -747,7 +768,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-12:
-    name: playwright (shard 12/16)
+    name: playwright (shard 12/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -760,7 +781,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-13:
-    name: playwright (shard 13/16)
+    name: playwright (shard 13/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -773,7 +794,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-14:
-    name: playwright (shard 14/16)
+    name: playwright (shard 14/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -786,7 +807,7 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-15:
-    name: playwright (shard 15/16)
+    name: playwright (shard 15/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
@@ -799,13 +820,117 @@ jobs:
     steps: *playwright_test_steps
 
   playwright-16:
-    name: playwright (shard 16/16)
+    name: playwright (shard 16/24)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "16"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-17:
+    name: playwright (shard 17/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "17"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-18:
+    name: playwright (shard 18/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "18"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-19:
+    name: playwright (shard 19/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "19"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-20:
+    name: playwright (shard 20/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "20"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-21:
+    name: playwright (shard 21/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "21"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-22:
+    name: playwright (shard 22/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "22"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-23:
+    name: playwright (shard 23/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "23"
+      E2E_STATIC_WEB: "1"
+      E2E_REPORT_CI: "1"
+      E2E_USE_BUILT_DAEMON: "1"
+    steps: *playwright_test_steps
+
+  playwright-24:
+    name: playwright (shard 24/24)
+    needs: [changes, browser-prepare]
+    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      PLAYWRIGHT_ARTIFACT: "24"
       E2E_STATIC_WEB: "1"
       E2E_REPORT_CI: "1"
       E2E_USE_BUILT_DAEMON: "1"
@@ -841,7 +966,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-relay-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-relay-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build relay
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -868,7 +993,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v1-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -896,18 +1021,31 @@ jobs:
       - name: Install agent CLIs for provider tests
         run: node scripts/npm-retry.mjs install -g @anthropic-ai/claude-code @openai/codex@0.105.0 opencode-ai
 
-      # The local runner builds its dependencies and shards its own E2E files.
+      - name: Restore exact CLI dependencies
+        id: cli-build
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+
+      - name: Build CLI test dependencies
+        if: steps.cli-build.outputs.cache-hit != 'true'
+        run: npm run build:server
+
+      # The local runner retains its default build outside this verified CI path.
       - name: Run CLI E2E tests
         if: ${{ env.CLI_SUITE != 'source' }}
         run: npm run test:local --workspace=@getpaseo/cli
-
-      - name: Build CLI source-test dependencies
-        if: ${{ env.CLI_SUITE == 'source' }}
-        run: npm run build:server
+        env:
+          PASEO_CLI_TEST_USE_BUILT: "1"
 
       - name: Run CLI source tests
         if: ${{ env.CLI_SUITE == 'source' }}
         run: npm run test:unit --workspace=@getpaseo/cli -- --maxConcurrency=2
+        env:
+          PASEO_SKIP_PROTOCOL_BUILD: "1"
 
   cli-tests-2:
     name: cli-tests (shard 2/3)
@@ -983,6 +1121,14 @@ jobs:
       - playwright-14
       - playwright-15
       - playwright-16
+      - playwright-17
+      - playwright-18
+      - playwright-19
+      - playwright-20
+      - playwright-21
+      - playwright-22
+      - playwright-23
+      - playwright-24
       - browser-prepare
       - browser-recovery
       - relay-tests

@@ -11,7 +11,7 @@ runs:
     - id: key
       shell: bash
       env:
-        INPUT_HASH: ${{ hashFiles('package-lock.json', 'package.json', 'packages/*/package.json', 'plugins/package.json', 'scripts/**', 'patches/**', '.npmrc', '.github/actions/ci-deps/action.yml') }}
+        INPUT_HASH: ${{ hashFiles('package-lock.json', 'package.json', 'packages/*/package.json', 'plugins/package.json', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**', '.npmrc', '.github/actions/ci-deps/action.yml') }}
       run: echo "key=installed-v1-${{ runner.os }}-${{ runner.arch }}-${ImageOS:-unknown}-node22-npm11-${INPUT_HASH}" >> "$GITHUB_OUTPUT"
     - id: dependencies
       uses: actions/cache/restore@v4

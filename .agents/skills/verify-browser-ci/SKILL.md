@@ -23,3 +23,15 @@ Retain the test's touch-target assertions. Keep one pointer mode per page.
 
 Use CI for the full suite. Register its exact run with `.github/scripts/watch-ci.mjs`.
 Retry failed cases through their saved list. Missing or incomplete records must not trigger a whole-shard retry.
+
+For CLI cache changes, check the compiled entries before using the CI runner mode.
+CI must restore the exact build key or complete a source build first.
+
+```sh
+node --input-type=module -e 'import { requireBuiltCli } from "./.github/scripts/ci-built-cli.mjs"; await requireBuiltCli(process.cwd());'
+PASEO_CLI_TEST_USE_BUILT=1 PASEO_CLI_TEST_SHARD=2 PASEO_CLI_TEST_SHARD_TOTAL=3 npm run test:local --workspace=@getpaseo/cli
+```
+
+Provider checks need the current agent CLIs used by CI. Use an isolated npm prefix if local tools are older.
+Retry only a failed file after correcting its test environment. Preserve successful file results.
+Do not replace the installed tools or change the installed daemon.

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { needsMetro } from "./browser-routing.mjs";
-import { balanceTests } from "./browser-shards.mjs";
+import { balanceTests, BROWSER_SHARDS } from "./browser-shards.mjs";
 
 function identity(test, rootDir) {
   const titles = [test.title];
@@ -74,7 +74,7 @@ export default class BrowserReporter {
         2,
       ),
     );
-    console.log(`Planned ${this.tests.length} tests into 16 timed shards.`);
+    console.log(`Planned ${this.tests.length} tests into ${BROWSER_SHARDS} timed shards.`);
   }
   onEnd(runResult) {
     if (process.env.E2E_PLAN_ONLY === "1") return;

@@ -16,7 +16,7 @@ import { relative as relativePath } from "node:path";
 import test from "node:test";
 import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
-import { balanceTests, testListPath } from "../.github/scripts/browser-shards.mjs";
+import { balanceTests, testListPath, BROWSER_SHARDS } from "../.github/scripts/browser-shards.mjs";
 import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
 import { browserInputPaths } from "../.github/scripts/browser-inputs.mjs";
 import { watchOperation } from "../.github/scripts/watch-ci.mjs";
@@ -218,7 +218,7 @@ test("every new shard and desktop lane remains failure-sensitive", () => {
     "cli-source-tests",
     "browser-prepare",
     "browser-recovery",
-    ...Array.from({ length: 16 }, (_, i) => `playwright-${i + 1}`),
+    ...Array.from({ length: BROWSER_SHARDS }, (_, i) => `playwright-${i + 1}`),
   ]) {
     assert.ok(jobs.has(name), name);
     assert.ok(gate.includes(`- ${name}\n`), name);
@@ -365,10 +365,10 @@ const gatedCiJobs = new Map([
   ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
   ["sdk-tests", { name: "sdk-tests", contract: "sdk" }],
-  ["playwright-1", { name: "playwright (shard 1/16)", contract: "browser" }],
-  ["playwright-2", { name: "playwright (shard 2/16)", contract: "browser" }],
-  ["playwright-3", { name: "playwright (shard 3/16)", contract: "browser" }],
-  ["playwright-4", { name: "playwright (shard 4/16)", contract: "browser" }],
+  ["playwright-1", { name: "playwright (shard 1/24)", contract: "browser" }],
+  ["playwright-2", { name: "playwright (shard 2/24)", contract: "browser" }],
+  ["playwright-3", { name: "playwright (shard 3/24)", contract: "browser" }],
+  ["playwright-4", { name: "playwright (shard 4/24)", contract: "browser" }],
   ["relay-tests", { name: "relay-tests", contract: "relay" }],
   ["cli-tests-1", { name: "cli-tests (shard 1/3)", contract: "cli" }],
   ["cli-tests-2", { name: "cli-tests (shard 2/3)", contract: "cli" }],
@@ -1294,7 +1294,7 @@ test("timed browser planning assigns every case once and splits a slow file", ()
   }));
   const seconds = Object.fromEntries(tests.map((item, index) => [item.key, index < 16 ? 100 : 10]));
   const shards = balanceTests(tests, seconds);
-  assert.equal(shards.length, 16);
+  assert.equal(shards.length, BROWSER_SHARDS);
   assert.equal(shards.flatMap((shard) => shard.tests).length, 64);
   assert.equal(new Set(shards.flatMap((shard) => shard.tests.map((item) => item.key))).size, 64);
   assert.ok(Math.max(...shards.map((shard) => shard.seconds)) <= 130);
