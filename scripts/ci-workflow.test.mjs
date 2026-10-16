@@ -20,6 +20,60 @@ import { balanceTests, testListPath, BROWSER_SHARDS } from "../.github/scripts/b
 import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
 import { browserInputPaths } from "../.github/scripts/browser-inputs.mjs";
 import { watchOperation } from "../.github/scripts/watch-ci.mjs";
+import { runInNewContext } from "node:vm";
+
+test("costly Linux checks reuse preparation and still run when browsers are not selected", () => {
+  const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
+  for (const name of [
+    "typecheck",
+    "server-tests-ubuntu",
+    "server-tests-ubuntu-2",
+    "desktop-tests-ubuntu",
+    "desktop-renderer",
+    "desktop-renderer-2",
+    "app-tests",
+    "sdk-tests",
+    "relay-grant-e2e",
+    "cli-tests-1",
+    "cli-tests-2",
+    "cli-tests-3",
+    "cli-source-tests",
+  ]) {
+    const source = jobs.get(name).join("\n");
+    assert.match(source, /needs: \[changes, browser-prepare\]/, name);
+    const expression = source.match(/^    if: \$\{\{ (.+) \}\}$/m)[1];
+    assert.ok(expression.startsWith("!cancelled()"), name);
+    const evaluate = (selected, cancelled, result) =>
+      runInNewContext(expression, {
+        cancelled: () => cancelled,
+        needs: {
+          changes: {
+            outputs: new Proxy(
+              { full: selected ? "true" : "false" },
+              {
+                get: (outputs, key) => outputs[key] ?? "false",
+              },
+            ),
+          },
+          "browser-prepare": { result },
+        },
+      });
+    for (const result of ["success", "skipped"]) {
+      assert.equal(evaluate(true, false, result), true, `${name}: ${result}`);
+      assert.equal(evaluate(false, false, result), false, name);
+      assert.equal(evaluate(true, true, result), false, name);
+    }
+    if (source.includes("key: build-v2-")) {
+      assert.match(source, /key: build-v2-.*-node22-server-/, name);
+      assert.match(source, /run: npm run build:server\n/, name);
+      assert.doesNotMatch(source, /-node22-(server-deps|app-deps)-/, name);
+    }
+  }
+  assert.match(
+    jobs.get("app-tests").join("\n"),
+    /Build audio types\n\s+run: npm run build --workspace=@getpaseo\/expo-two-way-audio/,
+  );
+});
 
 test("both parallel browser build exits remain required", () => {
   const source = readFileSync(ciWorkflowPath, "utf8");

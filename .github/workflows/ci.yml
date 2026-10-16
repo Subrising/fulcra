@@ -123,7 +123,7 @@ jobs:
 
   typecheck:
     name: typecheck
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.quality != 'false') }}
     runs-on: ubuntu-24.04
     steps:
@@ -174,7 +174,7 @@ jobs:
 
   server-tests-ubuntu:
     name: server-tests (ubuntu-latest)
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
     runs-on: ubuntu-24.04
     env:
@@ -201,11 +201,11 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
-        run: npm run build:server-deps
+        run: npm run build:server
 
       - name: Run server tests
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
@@ -247,7 +247,7 @@ jobs:
   # macOS runner. Scoped to the observer/watcher suites to bound runtime.
   server-tests-ubuntu-2:
     name: server-tests (ubuntu-latest, unit 2/2)
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
     runs-on: ubuntu-24.04
     env:
@@ -295,7 +295,7 @@ jobs:
 
   desktop-tests-ubuntu:
     name: desktop-tests (ubuntu-latest)
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -399,7 +399,7 @@ jobs:
 
   desktop-renderer:
     name: desktop-renderer
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -413,7 +413,7 @@ jobs:
 
   desktop-renderer-2:
     name: desktop-renderer (2/2)
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.desktop != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -427,7 +427,7 @@ jobs:
 
   app-tests:
     name: app-tests
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.app != 'false') }}
     runs-on: ubuntu-24.04
     steps:
@@ -449,11 +449,14 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-app-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build app dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
-        run: npm run build:app-deps
+        run: npm run build:server
+
+      - name: Build audio types
+        run: npm run build --workspace=@getpaseo/expo-two-way-audio
 
       - name: Run app unit tests
         run: npm run test --workspace=@getpaseo/app
@@ -462,7 +465,7 @@ jobs:
 
   sdk-tests:
     name: sdk-tests
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.sdk != 'false') }}
     runs-on: ubuntu-24.04
     steps:
@@ -477,11 +480,11 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build SDK dependencies
         if: steps.sdk-build.outputs.cache-hit != 'true'
-        run: npm run build:server-deps
+        run: npm run build:server
 
       - name: Run plugin SDK tests
         run: npm run test --workspace=@getpaseo/plugin
@@ -1089,7 +1092,7 @@ jobs:
   # FULCRA 0.2.11: the Command Centre grant e2e (relay-transport.e2e) is in neither test:unit nor test:integration.
   relay-grant-e2e:
     name: relay-grant-e2e
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.relay != 'false') }}
     runs-on: ubuntu-24.04
     steps:
@@ -1104,18 +1107,18 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
-        run: npm run build:server-deps
+        run: npm run build:server
 
       - name: Run the relay transport and Command Centre grant e2e
         run: npm run test:integration:relay --workspace=@getpaseo/server
 
   cli-tests-1:
     name: cli-tests (shard 1/3)
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
     runs-on: ubuntu-24.04
     env:
@@ -1160,7 +1163,7 @@ jobs:
 
   cli-tests-2:
     name: cli-tests (shard 2/3)
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
     runs-on: ubuntu-24.04
     env:
@@ -1173,7 +1176,7 @@ jobs:
 
   cli-tests-3:
     name: cli-tests (shard 3/3)
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
     runs-on: ubuntu-24.04
     env:
@@ -1186,7 +1189,7 @@ jobs:
 
   cli-source-tests:
     name: cli-source-tests
-    needs: changes
+    needs: [changes, browser-prepare]
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
     runs-on: ubuntu-24.04
     env:
