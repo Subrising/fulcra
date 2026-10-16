@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { terminateWithTreeKill } from "./tree-kill.js";
+import { terminateWithTreeKill, withDetachedJobsPreserved } from "./tree-kill.js";
 
 const pollIntervalMs = 50;
 
@@ -181,4 +181,71 @@ describe("terminateWithTreeKill", () => {
       );
     },
   );
+});
+
+describe.runIf(process.platform !== "win32")("daemon shutdown", () => {
+  test("preserves a detached job and its saved output and exit code", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "paseo-bgjob-"));
+    const childPidPath = join(tempDir, "job.pid");
+    const logPath = join(tempDir, "job.log");
+    const exitPath = join(tempDir, "job.exit");
+    ownerProcess = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+      const {spawn} = require('node:child_process');
+      const fs = require('node:fs');
+      process.on('SIGTERM', () => {});
+      const child = spawn('/bin/sh', ['-c',
+        'echo started; sleep 1; echo finished; (exit 7); echo $? > "$1"',
+        'bgjob', ${JSON.stringify(exitPath)}], {
+        detached: true, stdio: ['ignore', fs.openSync(${JSON.stringify(logPath)}, 'a'), 'ignore']
+      });
+      child.unref();
+      fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));
+      setInterval(() => {}, 1000);
+    `,
+      ],
+      { stdio: "ignore" },
+    );
+    await waitForFixtureReady(childPidPath);
+    const result = await withDetachedJobsPreserved(() =>
+      terminateWithTreeKill(ownerProcess!, {
+        gracefulTimeoutMs: 50,
+        forceTimeoutMs: 2000,
+      }),
+    );
+    expect(result).toBe("killed");
+    expect(isProcessRunning(ownerProcess.pid!)).toBe(false);
+    expect(isProcessRunning(descendantPid!)).toBe(true);
+    await waitFor(
+      async () => {
+        try {
+          return (await readFile(exitPath, "utf8")) === "7\n";
+        } catch {
+          return false;
+        }
+      },
+      5000,
+      "detached job did not save its exit code",
+    );
+    expect(await readFile(logPath, "utf8")).toBe("started\nfinished\n");
+    expect(await readFile(exitPath, "utf8")).toBe("7\n");
+  });
+
+  test("still kills attached descendants during daemon shutdown", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "paseo-bgjob-attached-"));
+    const childPidPath = join(tempDir, "child.pid");
+    ownerProcess = spawnOwnerWithDescendant({ childPidPath, detachedDescendant: false });
+    await waitForFixtureReady(childPidPath);
+    const result = await withDetachedJobsPreserved(() =>
+      terminateWithTreeKill(ownerProcess!, {
+        gracefulTimeoutMs: 50,
+        forceTimeoutMs: 2000,
+      }),
+    );
+    expect(result).toBe("killed");
+    await expectOwnerAndDescendantStopped("attached process survived daemon shutdown");
+  });
 });

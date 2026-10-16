@@ -234,7 +234,7 @@ import {
   createSystemManagedProcessTable,
   type ManagedProcessRegistry,
 } from "./managed-processes/managed-processes.js";
-import { terminateWithTreeKill } from "../utils/tree-kill.js";
+import { terminateWithTreeKill, withDetachedJobsPreserved } from "../utils/tree-kill.js";
 import { withTimeout } from "../utils/promise-timeout.js";
 import { isHostnameAllowed, type HostnamesConfig } from "./hostnames.js";
 import {
@@ -2233,7 +2233,9 @@ export async function createPaseoDaemon(
       paseoHome: config.paseoHome,
       agents: agentManager.listAgents(),
     }).catch((err) => logger.warn({ err }, "Could not record the open sessions for the next boot"));
-    await trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage));
+    await withDetachedJobsPreserved(() =>
+      trustedPlugins.shutdownClosure(() => closeAllAgents(logger, agentManager, agentStorage)),
+    );
     await withTimeout({
       promise: pluginRuntime.drainEvents(),
       timeoutMs: AGENT_CLOSE_TIMEOUT_MS,
@@ -2246,7 +2248,7 @@ export async function createPaseoDaemon(
     await sealStopRecord({ paseoHome: config.paseoHome }).catch((err) =>
       logger.warn({ err }, "Could not seal the stop record"),
     );
-    await agentProviderRuntime.shutdown();
+    await withDetachedJobsPreserved(() => agentProviderRuntime.shutdown());
     // W1 row 9: seal this boot at the end of the orderly shutdown, synchronously before the host closes, so no
     // input can be admitted after the counters are captured. A boot that never gets here has no seal.
     try {
