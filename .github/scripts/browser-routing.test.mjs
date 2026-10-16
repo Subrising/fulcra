@@ -5,6 +5,37 @@ import path from "node:path";
 import test from "node:test";
 import { needsMetro } from "./browser-routing.mjs";
 import BrowserReporter from "./browser-ci-reporter.mjs";
+import { balanceTests } from "./browser-shards.mjs";
+
+test("ordinary files share setup while slow files still split without losing cases", () => {
+  const ordinary = Array.from({ length: 8 }, (_, file) =>
+    Array.from({ length: 6 }, (unused, index) => ({
+      file: `${file}.spec.ts`,
+      key: `${file}.spec.ts › ${index}`,
+      line: `${file}/${index}`,
+    })),
+  ).flat();
+  const weights = Object.fromEntries(ordinary.map((item) => [item.key, 1]));
+  const groups = balanceTests(ordinary, weights, 4);
+  for (let file = 0; file < 8; file++) {
+    assert.equal(
+      groups.filter((group) => group.tests.some((item) => item.file === `${file}.spec.ts`)).length,
+      1,
+    );
+  }
+  assert.equal(groups.flatMap((group) => group.tests).length, ordinary.length);
+  const slow = Array.from({ length: 32 }, (_, index) => ({
+    file: "slow.spec.ts",
+    key: `slow.spec.ts › ${index}`,
+    line: `slow/${index}`,
+  }));
+  const split = balanceTests(slow, Object.fromEntries(slow.map((item) => [item.key, 10])), 4);
+  assert.ok(split.every((group) => group.tests.length > 0 && group.seconds <= 120));
+  assert.equal(
+    new Set(split.flatMap((group) => group.tests.map((item) => item.key))).size,
+    slow.length,
+  );
+});
 
 test("infrastructure and teardown failures cannot become empty successful retries", () => {
   const root = mkdtempSync(path.join(tmpdir(), "browser-retry-errors-"));

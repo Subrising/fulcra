@@ -33,7 +33,6 @@ const result = spawnSync(
     "test",
     "--project=browser",
     `--test-list=${list}`,
-    "--fully-parallel",
     "--workers=3",
     "--global-timeout=420000",
   ],

@@ -12,6 +12,7 @@ function identity(test, rootDir) {
   }
   const file = path.relative(rootDir, test.location.file).replaceAll("\\", "/");
   return {
+    file,
     key: `${path.basename(file)} › ${titles.join(" › ")}`,
     line: `[browser] › ${file} › ${titles.join(" › ")}`,
   };
@@ -67,6 +68,7 @@ export default class BrowserReporter {
           total: this.tests.length,
           shards: buckets.map((bucket) => ({
             tests: bucket.tests.length,
+            files: new Set(bucket.tests.map((test) => test.file)).size,
             observedSeconds: Math.round(bucket.seconds),
           })),
         },

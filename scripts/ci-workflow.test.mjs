@@ -1289,6 +1289,7 @@ else process.exit(2);
 
 test("timed browser planning assigns every case once and splits a slow file", () => {
   const tests = Array.from({ length: 64 }, (_, index) => ({
+    file: "slow.spec.ts",
     key: `same-file case ${index}`,
     line: `case ${index}`,
   }));
