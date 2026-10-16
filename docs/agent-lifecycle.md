@@ -258,7 +258,8 @@ Turn-end events and debounced ledger-file changes check these conditions.
 Each lead receives at most one nudge per `daemon.idleLeadNudgeMinIntervalMinutes`. The default is 60 minutes.
 The delivery time persists across daemon restarts. Work added during the interval waits for the next event after it ends.
 No polling or interval retry timer wakes the lead.
-The ledger watch stops on error until daemon restart; turn-end checks remain active.
+Directory watches survive atomic ledger replacement.
+Native work events recheck an unavailable directory watch. Turn-end checks remain active.
 A change that only removes workers or closes items sends no nudge.
 Blocked items, DECIDE rows, and standing rules are excluded.
 Blocked statuses can start with `OPEN` or `IN PROGRESS`, followed by separators and `BLOCKED`.

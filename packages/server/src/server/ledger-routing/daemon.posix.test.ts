@@ -158,7 +158,7 @@ test("real daemon claims READY work, reports one level, and keeps a follow-up in
         .listAgents()
         .map((agent) => ({ item: agent.labels["fulcra.item"], lifecycle: agent.lifecycle }));
       throw new Error(
-        `${error instanceof Error ? error.message : error}; agents=${JSON.stringify(agents)}; journal=${journal}`,
+        `${error instanceof Error ? error.message : error}; agents=${JSON.stringify(agents)}; journal=${journal}; ledger=${ledger}`,
       );
     });
   try {

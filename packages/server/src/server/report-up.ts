@@ -1,3 +1,4 @@
+import { LedgerDirectoryWatch } from "./ledger-routing/watch.js";
 import { LedgerRoutingService, parseWorkerResult } from "./ledger-routing/service.js";
 import type { BoundCreateAgentCommand } from "./agent/create-agent/create.js";
 import { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
@@ -20,7 +21,7 @@ export type {
   LimitedChat,
 } from "../../../../plugins/fulcra-agent-policy/server/report-notices.mjs";
 import { randomUUID } from "node:crypto";
-import { readFileSync, watch, type FSWatcher } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isArchiveLead } from "./agent/archive-policy.js";
 import path from "node:path";
 import { writePrivateFileAtomicSync } from "./private-files.js";
@@ -244,7 +245,7 @@ export class ReportUpService {
   private nudgeGeneration = 0;
   private ledgerRevision = 0;
   private readonly nudgeStopped = new Set<string>();
-  private ledgerWatcher?: FSWatcher;
+  private ledgerWatcher?: LedgerDirectoryWatch;
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
 
@@ -275,16 +276,10 @@ export class ReportUpService {
     });
     this.load();
     if (deps.ledgerDir) {
-      try {
-        this.ledgerWatcher = watch(deps.ledgerDir, { recursive: true }, (_event, file) => {
+      this.ledgerWatcher = new LedgerDirectoryWatch(
+        deps.ledgerDir,
+        () => {
           if (this.stopped) return;
-          if (file && path.basename(String(file)).startsWith(".fulcra-dispatch")) return;
-          if (
-            file &&
-            path.dirname(String(file)) !== "." &&
-            path.basename(String(file)) !== "OPEN-ITEMS.md"
-          )
-            return;
           this.ledgerRevision++;
           this.nudgeStopped.clear();
           for (const id of this.nudging.keys()) this.cancelNudge(id, "Project ledger changed");
@@ -299,16 +294,22 @@ export class ReportUpService {
             this.checkIdleLeads();
           }, 100);
           this.ledgerDebounce.unref();
-        });
-        this.ledgerWatcher.on("error", (err) => {
-          this.ledgerWatcher?.close();
-          this.deps.logger.warn({ err }, "Ledger watch stopped; turn-end checks remain active");
-        });
-        this.ledgerWatcher.unref();
-      } catch (err) {
-        this.deps.logger.warn({ err }, "Ledger watch unavailable; turn-end checks remain active");
-      }
+        },
+        (err) =>
+          this.deps.logger.warn(
+            { err },
+            "Ledger directory watch unavailable; turn-end checks remain active",
+          ),
+      );
     }
+  }
+
+  async prepareLedgerObservation(): Promise<void> {
+    await this.ledgerWatcher?.ready;
+    await this.ledgerWatcher?.refresh();
+  }
+  observesProject(project: string): boolean {
+    return this.ledgerWatcher?.covers(project) === true;
   }
 
   /** Reads the kept state: limits that have not passed, and reports still held. Held reports are released after the reset. */
@@ -1795,6 +1796,8 @@ export function startReportUp(input: {
         hostId: input.localServerId ?? "",
         daemonHome: input.paseoHome,
         enabled: () => input.daemonConfigStore.get().ledgerDispatchEnabled === true,
+        prepareLedger: () => service.prepareLedgerObservation(),
+        observesProject: (project) => service.observesProject(project),
         notify: (lead, line, messageId) => service.routingNotice(lead, line, messageId),
         config: () => input.daemonConfigStore.get().projectDispatch ?? {},
         agentManager: input.agentManager,

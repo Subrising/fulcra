@@ -90,6 +90,8 @@ interface RoutingDeps {
   logger: Logger;
   notify: (lead: string, line: string, messageId: string) => Promise<void>;
   now?: () => number;
+  prepareLedger?: () => Promise<void>;
+  observesProject?: (project: string) => boolean;
 }
 const terminal = (claim: Claim) => claim.stage === "closed" || claim.stage === "abandoned";
 const MAX_ACTIVE = 16;
@@ -444,6 +446,7 @@ export class LedgerRoutingService {
       await this.lease.close();
       this.lease = undefined;
     }
+    await this.deps.prepareLedger?.();
     this.lease ??= ledgerLease(this.deps.ledgerDir);
     if (!(await this.lease.ready)) {
       await this.lease.close();
@@ -465,6 +468,14 @@ export class LedgerRoutingService {
     }
   }
   private async dispatchProject(project: string, config: ProjectDispatch): Promise<void> {
+    if (this.deps.observesProject && !this.deps.observesProject(project)) {
+      await this.notice(
+        config,
+        `${project}:${config.enableId}:watch`,
+        `BLOCKED ${project}: ledger directory observation is unavailable.`,
+      );
+      return;
+    }
     const agents = await this.deps.agentStorage.list();
     const lead = agents.find((a) => a.id === config.leadId);
     if (!lead || lead.archivedAt || this.held(lead, config)) return;
@@ -553,6 +564,7 @@ export class LedgerRoutingService {
       if (
         this.stopped ||
         !this.lease?.alive() ||
+        (this.deps.observesProject && !this.deps.observesProject(project)) ||
         !this.deps.enabled() ||
         !current?.enabled ||
         !this.hostMatches(current) ||
