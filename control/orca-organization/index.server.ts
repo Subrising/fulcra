@@ -611,9 +611,9 @@ export default function contribute(
     if (authError) throw new Error(authError);
     return accounts.add(input);
   });
-  handle(accountUpdateRpc, (input) => {
+  handle(accountUpdateRpc, (input, { paseo }) => {
     if (authError) throw new Error(authError);
-    return accounts.update(input as any);
+    return accounts.update(input as any, paseo);
   });
   handle(poolSettingsRpc, (input, context) => {
     if (authError) throw new Error(authError);

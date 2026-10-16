@@ -79,6 +79,22 @@ export async function switchAccountSession(
   return result.message ?? "Switched account.";
 }
 
+export async function revokeAccount(client: AccountClient, name: string): Promise<string> {
+  const wanted = name.trim().toLowerCase();
+  const found = (await listAccounts(client)).find(
+    (a) => a.id.toLowerCase() === wanted || a.name.toLowerCase() === wanted,
+  );
+  if (!wanted || !found) throw new Error("No such account");
+  const result = reply.parse(
+    await client.invokePluginRpc(await controllerId(client), "organization.accounts.update", {
+      id: found.id,
+      revoke: true,
+    }),
+  );
+  if (!result.ok) throw new Error(result.message ?? "The key could not be revoked");
+  return result.message ?? "Revoked locally.";
+}
+
 /** The environment name the host's account hook reads to pin a launch to one pooled account (FU-59). */
 export const ACCOUNT_REQUEST_ENV = "FULCRA_ACCOUNT_REQUEST";
 
@@ -167,6 +183,29 @@ export function createAccountCommand(): Command {
               { header: "SESSION", field: "agentId" as const },
               { header: "RESULT", field: "message" as const },
             ],
+          },
+        };
+      } finally {
+        await client.close().catch(() => {});
+      }
+    }),
+  );
+  addJsonAndDaemonHostOptions(
+    cmd
+      .command("revoke")
+      .argument("<name>", "Account name or ID")
+      .description("Block the account, remove its key, and stop its API processes"),
+  ).action(
+    withOutput(async (name: string, options: AccountOptions, _command: Command) => {
+      const client = await connectToDaemon({ target: options.daemonTarget });
+      try {
+        const message = await revokeAccount(client, name);
+        return {
+          type: "single" as const,
+          data: { message },
+          schema: {
+            idField: "message" as const,
+            columns: [{ header: "RESULT", field: "message" as const }],
           },
         };
       } finally {

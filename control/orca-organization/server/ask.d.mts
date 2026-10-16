@@ -26,6 +26,9 @@ export const DEFAULT_ASK_TIMEOUT_MS: number;
 export const RATE_LIMIT_HOLD_MS: number;
 export function spawnClaudeOnce(o: {
   token: string;
+  root?: string;
+  accountId?: string;
+  keyEpoch?: string;
   model: string;
   prompt: string;
   schema?: unknown;

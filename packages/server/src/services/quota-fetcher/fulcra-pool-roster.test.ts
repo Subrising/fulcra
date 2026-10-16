@@ -293,6 +293,9 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
   );
   for (const file of [
     "accounts.mjs",
+    "api-key-helper.mjs",
+    "api-runtime-channel.mjs",
+    "api-process-tree.mjs",
     "owned.mjs",
     "account-billing.mjs",
     "ask.mjs",

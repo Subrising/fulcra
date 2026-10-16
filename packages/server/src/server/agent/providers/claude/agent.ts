@@ -97,7 +97,12 @@ import {
   type ClaudeProviderOptions,
 } from "./options.js";
 import { renderPromptAttachmentAsText } from "../../prompt-attachments.js";
-import { claudeQuery, type ClaudeOptions, type ClaudeQueryFactory } from "./query.js";
+import {
+  claudeQuery,
+  sanitizeClaudeApiEnv,
+  type ClaudeOptions,
+  type ClaudeQueryFactory,
+} from "./query.js";
 import {
   realClaudeRewindSdk,
   revertClaudeConversation,
@@ -3662,7 +3667,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private buildSdkEnv() {
-    return createProviderEnv({
+    const env = createProviderEnv({
       baseEnv: process.env,
       runtimeSettings: this.runtimeSettings,
       overlays: [
@@ -3672,6 +3677,8 @@ class ClaudeAgentSession implements AgentSession {
         { CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" },
       ],
     });
+    if (this.launchEnv?.FULCRA_API_KEY_HELPER) sanitizeClaudeApiEnv(env);
+    return env;
   }
 
   private async buildOptions(
@@ -3773,15 +3780,24 @@ class ClaudeAgentSession implements AgentSession {
     providerOptions: ClaudeProviderOptions,
     input: { ultracode: boolean },
   ): Pick<ClaudeOptions, "settings"> | Record<string, never> {
+    const apiKeyHelper = this.launchEnv?.FULCRA_API_KEY_HELPER;
     const fastMode = this.resolveFastModeSetting();
     // Internal agents do daemon work such as naming a branch, so the user's and
     // project's hooks must not run for them.
     const disableAllHooks = this.config.internal === true;
-    if (fastMode === null && !input.ultracode && !disableAllHooks) {
+    if (fastMode === null && !input.ultracode && !disableAllHooks && !apiKeyHelper) {
       return {};
     }
+    // A pooled API launch owns authentication. Settings cannot replace it or inject a key into child tools.
+    const pooledSettings = apiKeyHelper
+      ? {
+          ...(typeof providerOptions.settings === "object" ? providerOptions.settings : {}),
+          env: {},
+        }
+      : providerOptions.settings;
     return {
-      settings: mergeClaudeSettings(providerOptions.settings, {
+      settings: mergeClaudeSettings(pooledSettings, {
+        ...(apiKeyHelper ? { apiKeyHelper } : {}),
         ...(fastMode === null ? {} : { fastMode }),
         ...(input.ultracode ? { ultracode: true } : {}),
         ...(disableAllHooks ? { disableAllHooks: true } : {}),

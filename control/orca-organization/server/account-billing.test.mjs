@@ -184,7 +184,14 @@ test("credit errors persist secret-free ask.billing_error and cause failover bel
   await createAccountBudgets({ store: { get: () => null } }, root).check();
   assert.equal(readAccounts(root).defaults.claude, b.id);
   assert.equal(readAccounts(root).accounts[0].limitedUntil, null);
-  assert.equal(launchEnv("claude", a, { token, root }).ANTHROPIC_API_KEY, token);
+  if (["darwin", "win32"].includes(process.platform)) {
+    assert.equal(launchEnv("claude", a, { token, root }).ANTHROPIC_API_KEY, "");
+    assert.equal(JSON.stringify(launchEnv("claude", a, { token, root })).includes(token), false);
+  } else
+    assert.throws(
+      () => launchEnv("claude", a, { token, root }),
+      /require macOS Keychain or Windows DPAPI/,
+    );
 });
 
 test("a persisted billing update triggers budget failover without a polling monitor", async (t) => {
