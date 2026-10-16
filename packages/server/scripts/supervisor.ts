@@ -4,7 +4,7 @@ import {
   createStream as createRotatingFileStream,
   type RotatingFileStream,
 } from "rotating-file-stream";
-import { signalProcessTree } from "../src/utils/tree-kill.js";
+import { signalProcessTree, withDetachedJobsPreserved } from "../src/utils/tree-kill.js";
 
 const WORKER_HEARTBEAT_INTERVAL_MS = 1_000;
 // FU-74: every stop has a hard deadline. A worker that has not exited 30 s after the request is killed with its tree.
@@ -23,7 +23,14 @@ interface SupervisorLogFileOptions {
   };
 }
 
+interface OwnedProcessMessage {
+  type: "paseo:owned-process";
+  action: "add" | "remove";
+  pid: number;
+}
+
 type WorkerLifecycleMessage =
+  | OwnedProcessMessage
   | {
       type: "paseo:shutdown";
       reason?: string;
@@ -79,11 +86,24 @@ function describeExit(code: number | null, signal: NodeJS.Signals | null): strin
   return signal ?? (typeof code === "number" ? `code ${code}` : "unknown");
 }
 
+function parseOwnedProcessMessage(msg: object): OwnedProcessMessage | null {
+  if (
+    !("pid" in msg) ||
+    typeof msg.pid !== "number" ||
+    !Number.isSafeInteger(msg.pid) ||
+    msg.pid <= 0
+  )
+    return null;
+  if (!("action" in msg) || (msg.action !== "add" && msg.action !== "remove")) return null;
+  return { type: "paseo:owned-process", action: msg.action, pid: msg.pid };
+}
+
 function parseLifecycleMessage(msg: unknown): WorkerLifecycleMessage | null {
   if (typeof msg !== "object" || msg === null || !("type" in msg)) {
     return null;
   }
   const type = (msg as { type?: unknown }).type;
+  if (type === "paseo:owned-process") return parseOwnedProcessMessage(msg);
   if (type === "paseo:shutdown") {
     const reason = (msg as { reason?: unknown }).reason;
     return {
@@ -192,7 +212,7 @@ function ignoreClosedOutput(error: NodeJS.ErrnoException): void {
 export function runSupervisor(options: SupervisorOptions): SupervisorController {
   const restartOnCrash = options.restartOnCrash ?? false;
   const workerArgs = options.workerArgs ?? process.argv.slice(2);
-  const workerEnv = options.workerEnv ?? process.env;
+  const workerEnv = { ...(options.workerEnv ?? process.env), PASEO_SUPERVISED: "1" };
   const workerExecArgv = options.workerExecArgv ?? ["--import", "tsx"];
   const resolveWorkerSpawnSpec = options.resolveWorkerSpawnSpec;
   const heartbeatIntervalMs = options.timings?.heartbeatIntervalMs ?? WORKER_HEARTBEAT_INTERVAL_MS;
@@ -201,6 +221,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   const maxMissedTicks = Math.max(1, Math.ceil(unresponsiveMs / heartbeatIntervalMs));
 
   let child: ChildProcess | null = null;
+  let ownedDetachedPids = new Set<number>();
   let restarting = false;
   let shuttingDown = false;
   let exiting = false;
@@ -277,7 +298,10 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
           workerPid: currentChild.pid ?? null,
         },
       );
-      void signalProcessTree(currentChild, "SIGKILL").catch((error) => {
+      void withDetachedJobsPreserved(
+        () => signalProcessTree(currentChild, "SIGKILL"),
+        ownedDetachedPids,
+      ).catch((error) => {
         writeLifecycleLog("Failed to force-kill worker process tree", {
           error: error instanceof Error ? error.message : String(error),
           supervisorPid: process.pid,
@@ -289,6 +313,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
   };
 
   const spawnWorker = () => {
+    ownedDetachedPids = new Set<number>();
     let workerEntry: string;
     try {
       // Resolve at spawn time so restarts pick up current filesystem state.
@@ -305,7 +330,7 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
     if (spawnSpec) {
       child = spawn(spawnSpec.command, spawnSpec.args, {
         stdio: ["inherit", "pipe", "pipe", "ipc"],
-        env: spawnSpec.env ?? workerEnv,
+        env: { ...(spawnSpec.env ?? workerEnv), PASEO_SUPERVISED: "1" },
       });
     } else {
       child = fork(workerEntry, workerArgs, {
@@ -372,6 +397,11 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
         return;
       }
 
+      if (lifecycleMessage.type === "paseo:owned-process") {
+        if (lifecycleMessage.action === "add") ownedDetachedPids.add(lifecycleMessage.pid);
+        else ownedDetachedPids.delete(lifecycleMessage.pid);
+        return;
+      }
       if (lifecycleMessage.type === "paseo:worker-heartbeat") {
         answering = true;
         answeredSinceTick = true;

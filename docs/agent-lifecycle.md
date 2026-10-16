@@ -28,6 +28,13 @@ replacement. Once closure succeeds, a failed resume leaves the durable agent clo
 Idle agents remain resident indefinitely. Runtime closure happens only through an explicit lifecycle
 action such as archive, replacement, reload, workspace teardown, or daemon shutdown.
 
+Daemon shutdown preserves detached jobs without a controlling terminal. Provider-owned detached
+helpers still close. Archive and explicit agent termination still clean up the full provider tree.
+Use a detached wrapper such as `bgjob` for long external commands. The wrapper must save output
+and exit status outside the provider process. A new daemon can read these files after restart,
+including results saved during downtime. Provider-native tasks inside the runtime cannot survive
+its exit.
+
 A provider runtime can still die on its own — crash, OOM kill, host suspend. Work the agent parked
 inside that process dies with it: Claude Code's background Bash shells, `Monitor` watches, and
 workflows all live in the CLI process, and the completion notification that would have woken the

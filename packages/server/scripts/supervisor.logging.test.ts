@@ -21,6 +21,7 @@ function isProcessRunning(pid: number): boolean {
 
 async function runSupervisorFixture(options: {
   workerSource: string;
+  workerExecArgv?: string[];
   restartOnCrash?: boolean;
   timeoutMs?: number;
   /** POSIX RLIMIT_FSIZE for the supervisor, in 512-byte blocks: writes past it fail like a full disk. */
@@ -62,7 +63,7 @@ async function runSupervisorFixture(options: {
         resolveWorkerEntry: () => ${JSON.stringify(workerPath)},
         workerArgs: [],
         workerEnv: process.env,
-        workerExecArgv: [],
+        workerExecArgv: ${JSON.stringify(options.workerExecArgv ?? [])},
         restartOnCrash: ${JSON.stringify(options.restartOnCrash ?? false)},
         ${options.terminationGraceMs === undefined ? "" : `timings: { terminationGraceMs: ${options.terminationGraceMs} },`}
         logFile: {
@@ -462,3 +463,39 @@ describe("supervisor durable logging", () => {
     expect(result.log).toContain('"reason":"log_recovery_probe"');
   });
 });
+
+test.skipIf(isPlatform("win32"))(
+  "forced shutdown kills an owned detached helper and preserves a detached job",
+  async () => {
+    const spawnModule = pathToFileURL(
+      path.join(repoRoot, "packages/server/src/utils/spawn.ts"),
+    ).href;
+    const result = await runSupervisorFixture({
+      workerExecArgv: ["--import", "tsx"],
+      terminationGraceMs: 100,
+      workerSource: `
+      import {spawn} from 'node:child_process';
+      import {spawnProcess} from ${JSON.stringify(spawnModule)};
+      const job = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {detached:true, stdio:'ignore'});
+      const helper = spawnProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {detached:true, stdio:'ignore'});
+      process.stdout.write('JOB_PID='+job.pid+'\\nHELPER_PID='+helper.pid+'\\n');
+      job.unref(); helper.unref();
+      process.send({type:'paseo:shutdown', reason:'owned_helper_cleanup'});
+      setInterval(()=>{},1000);
+    `,
+    });
+    const jobPid = Number(result.stdout.match(/JOB_PID=(\d+)/)?.[1]);
+    const helperPid = Number(result.stdout.match(/HELPER_PID=(\d+)/)?.[1]);
+    try {
+      expect(Number.isInteger(jobPid)).toBe(true);
+      expect(Number.isInteger(helperPid)).toBe(true);
+      expect(result.code).toBe(0);
+      expect(isProcessRunning(jobPid)).toBe(true);
+      expect(isProcessRunning(helperPid)).toBe(false);
+    } finally {
+      for (const pid of [jobPid, helperPid]) {
+        if (Number.isInteger(pid) && isProcessRunning(pid)) process.kill(pid, "SIGKILL");
+      }
+    }
+  },
+);
