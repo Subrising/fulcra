@@ -116,16 +116,19 @@ export function rowsEligibleForNudge({
   chat,
   skipOwners = [],
 }: NudgeRowSelection): LedgerRow[] {
-  return rowsOwnedBy(rows, chat).filter((row) => {
-    const status = row.status.trim();
-    const kind = row.kind?.trim() ?? "";
-    return (
-      !isNudgeOwnerSkipped(row.owner, skipOwners) &&
-      !/^(DONE|MOVED|DECIDE|STANDING)\b/i.test(status) &&
-      !/^(?:(?:OPEN|IN PROGRESS)\b)?[\s:(,–—-]*BLOCKED\b/i.test(status) &&
-      !/^(RULE|DECIDE|STANDING)\b/i.test(kind)
-    );
-  });
+  return rowsOwnedBy(rows, chat).filter(
+    (row) => !isNudgeOwnerSkipped(row.owner, skipOwners) && isLedgerRowReady(row),
+  );
+}
+
+export function isLedgerRowReady(row: Pick<LedgerRow, "status" | "kind">): boolean {
+  const status = row.status.trim();
+  const kind = row.kind?.trim() ?? "";
+  return (
+    !/^(DONE|MOVED|DECIDE|STANDING)\b/i.test(status) &&
+    !/^(?:(?:OPEN|IN PROGRESS)\b)?[\s:(,–—-]*BLOCKED\b/i.test(status) &&
+    !/^(RULE|DECIDE|STANDING)\b/i.test(kind)
+  );
 }
 
 export function isNudgeOwnerSkipped(owner: string, skipOwners: readonly string[]): boolean {

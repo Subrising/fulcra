@@ -1,3 +1,4 @@
+import { ProjectDispatchMapSchema } from "@getpaseo/protocol/messages";
 import { readNotificationSetting, writeNotificationSetting } from "./notification-settings.js";
 import { PluginRegistriesSchema } from "@getpaseo/protocol/plugin-registry";
 import { existsSync, readFileSync } from "node:fs";
@@ -273,6 +274,7 @@ export const PersistedConfigSchema = z
         nativeFinishNotices: z.boolean().optional(),
         receiptRetentionMs: ReceiptRetentionMsSchema.optional(),
         eventDispatcherEnabled: z.boolean().optional(),
+        projectDispatch: ProjectDispatchMapSchema.optional(),
         idleLeadNudge: z.boolean().optional(),
         idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
         idleLeadNudgeMinIntervalMinutes: z.number().int().positive().optional(),

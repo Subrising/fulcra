@@ -161,6 +161,81 @@
               "type": "integer",
               "exclusiveMinimum": 21600000,
               "maximum": 9007199254740991
+            },
+            "projectDispatch": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "leadId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "maxParallel": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 32
+                  },
+                  "holdLabels": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "roles": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "owner": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": ["claude", "codex"]
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "thinking": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "mode": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "cwd": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["role", "owner", "provider", "model", "mode", "cwd"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["leadId", "maxParallel", "roles"],
+                "additionalProperties": false
+              }
             }
           },
           "additionalProperties": false

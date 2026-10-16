@@ -87,6 +87,7 @@ export interface CreateAgentFromSessionInput {
 
 export interface CreateAgentFromMcpInput {
   reportCreation?: NativeReportCreation;
+  creationAdmission?: CreateAgentOptions["creationAdmission"];
   kind: "mcp";
   provider: string;
   title: string;
@@ -194,7 +195,9 @@ export async function createAgentCommand(
     input.kind === "session" ? input.agentId : undefined,
     {
       ...resolved.createOptions,
-      ...(input.kind === "mcp" ? { reportCreation: input.reportCreation } : {}),
+      ...(input.kind === "mcp"
+        ? { reportCreation: input.reportCreation, creationAdmission: input.creationAdmission }
+        : {}),
     },
   );
 

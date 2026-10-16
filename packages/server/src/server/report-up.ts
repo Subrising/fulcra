@@ -1,3 +1,5 @@
+import { LedgerRoutingService, parseWorkerResult } from "./ledger-routing/service.js";
+import type { BoundCreateAgentCommand } from "./agent/create-agent/create.js";
 import { PERMISSION_NOTICE_GRACE_MS } from "./permission-notice.js";
 import {
   LeadEventDispatcher,
@@ -119,6 +121,8 @@ interface PendingFinish {
 export const NUDGE_MESSAGE_PREFIX = `${FINISH_NOTIFICATION_MESSAGE_PREFIX}idle-nudge:`;
 
 export interface ReportUpDeps {
+  routing?: LedgerRoutingService;
+  isDispatchLead?: (id: string) => boolean;
   remoteNotice?: (workerId: string, prompt: string, kind: HostLinkNoticeKind) => Promise<boolean>;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -252,6 +256,8 @@ export class ReportUpService {
       isSystemInjectedEnvelope,
       onStarted: (id) => {
         this.finishOwners.delete(id);
+        const worker = deps.agentManager.getAgent(id);
+        if (worker) deps.routing?.begin(worker);
       },
       onClosed: (id) => {
         this.finishOwners.delete(id);
@@ -284,6 +290,11 @@ export class ReportUpService {
           clearTimeout(this.ledgerDebounce);
           this.ledgerDebounce = setTimeout(() => {
             this.ledgerDebounce = undefined;
+            void this.deps.routing
+              ?.changed()
+              .catch((err: unknown) =>
+                this.deps.logger.warn({ err }, "Ledger routing event failed"),
+              );
             this.checkIdleLeads();
           }, 100);
           this.ledgerDebounce.unref();
@@ -385,8 +396,14 @@ export class ReportUpService {
   onEvent(event: AgentManagerEvent): void {
     if (event.type === "agent_state" && event.agent.lifecycle === "closed")
       this.observer.close(event.agent.id);
-    if (event.type === "agent_state" && event.agent.lifecycle === "idle")
+    if (event.type === "agent_state" && event.agent.lifecycle === "idle") {
       this.retryRefusedFinishesOnIdle(event.agent.id);
+      void this.deps.routing
+        ?.wake()
+        .catch((err: unknown) =>
+          this.deps.logger.warn({ err }, "Ledger routing idle event failed"),
+        );
+    }
     if (event.type === "agent_stream") this.observer.onStream(event.agentId, event.event);
     if (event.type === "agent_stream" && event.event.type === "turn_canceled") {
       this.stopNudge(event.agentId);
@@ -477,7 +494,8 @@ export class ReportUpService {
     if (input.failed) this.stopNudge(agentId);
     else this.nudgeStopped.delete(agentId);
     this.checkIdleLeads();
-    void this.handleOwnedFinish(input)
+    void this.handleRoutedFinish(input)
+      .then((handled) => handled || this.handleOwnedFinish(input))
       .then((handled) => {
         if (!handled) this.onUnownedTurnEnd(input);
         return undefined;
@@ -485,6 +503,45 @@ export class ReportUpService {
       .catch((err: unknown) =>
         this.deps.logger.warn({ err, agentId }, "Owned finish notice failed"),
       );
+  }
+
+  private async handleRoutedFinish(input: ReportTurnEnd): Promise<boolean> {
+    const routing = this.deps.routing;
+    if (!routing) return false;
+    const worker = await this.store.get(input.agentId);
+    if (!worker) return false;
+    const text =
+      input.lastAssistant === undefined
+        ? await this.deps.agentManager.getLastAssistantMessage(input.agentId).catch(() => null)
+        : input.lastAssistant;
+    const routed = await routing.observeEnd({
+      worker,
+      eventId: `${input.agentId}:${input.startedAt}`,
+      text,
+      failed: input.failed,
+      fromNotice: input.fromNotice,
+    });
+    if (!routed) return false;
+    const notice = await this.deps.agentStorage.getFinishNotice(input.agentId);
+    if (
+      routed.fresh &&
+      routed.result &&
+      notice &&
+      ["delivered", "cancelled", "unknown"].includes(notice.status)
+    )
+      await this.deps.agentStorage.rearmFinishNotice(input.agentId, notice.parentId);
+    if (notice || this.hasFinishOwner(input.agentId)) return false;
+    if (routed.fresh && routed.result) {
+      const lead = await this.leadOf(worker);
+      if ("id" in lead && (await this.reportingLineAllows(input.agentId, lead.id)))
+        await this.toLead(
+          input.agentId,
+          lead.id,
+          formatSystemNotificationPrompt(routed.result.line),
+          "owned-finish",
+        );
+    }
+    return true;
   }
 
   private stopNudge(agentId: string): void {
@@ -697,8 +754,12 @@ export class ReportUpService {
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
+    const result = this.deps.routing?.enabledForLead(notice.parentId)
+      ? parseWorkerResult(lastMessage)
+      : null;
     return formatSystemNotificationPrompt(
-      formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
+      result?.line ??
+        formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
     );
   }
 
@@ -871,6 +932,14 @@ export class ReportUpService {
     return hold !== "paused" && hold !== "blocked" && hold !== "done";
   }
 
+  private nudgeSuppressed(leadId: string): boolean {
+    return Boolean(
+      this.deps.isDispatchLead?.(leadId) ||
+      this.deps.routing?.enabledForLead(leadId) ||
+      !this.nudgeEnabled(),
+    );
+  }
+
   /**
    * An idle lead with READY ledger work receives a nudge when its project has no running sessions.
    * Turn-end and ledger events check it. Nothing is sent without eligible items,
@@ -881,7 +950,7 @@ export class ReportUpService {
     rows: readonly LedgerRow[],
     ledgerRevision: number,
   ): Promise<void> {
-    if (!this.nudgeEnabled()) {
+    if (this.nudgeSuppressed(leadId)) {
       this.cancelNudge(leadId, "Idle nudge was turned off");
       return;
     }
@@ -1667,6 +1736,8 @@ export class ReportUpService {
 }
 
 export function startReportUp(input: {
+  createAgent?: BoundCreateAgentCommand;
+  ensureRoutingWorkspace?: (cwd: string) => Promise<string>;
   remoteNotice?: ReportUpDeps["remoteNotice"];
   hooks?: PolicyHooks;
   paseoHome?: string;
@@ -1690,7 +1761,35 @@ export function startReportUp(input: {
       input.logger.warn({ err }, "Lead event state not loaded; dispatcher disabled");
     }
   }
+  let routing: LedgerRoutingService | undefined;
+  if (input.paseoHome && input.createAgent && input.ensureRoutingWorkspace) {
+    // A corrupt journal must disable automatic routing, not erase its claims.
+    try {
+      routing = new LedgerRoutingService({
+        statePath: path.join(input.paseoHome, "ledger-routing.json"),
+        ledgerDir: defaultLedgerDir(),
+        config: () => input.daemonConfigStore.get().projectDispatch ?? {},
+        agentManager: input.agentManager,
+        agentStorage: input.agentStorage,
+        createAgent: input.createAgent,
+        ensureWorkspace: input.ensureRoutingWorkspace,
+        logger: input.logger,
+      });
+    } catch (err) {
+      input.logger.error({ err }, "Ledger routing disabled: journal unavailable");
+    }
+  }
+  const offRoutingConfig = input.daemonConfigStore.onChange(() => {
+    void routing
+      ?.changed()
+      .catch((err: unknown) => input.logger.warn({ err }, "Ledger routing config event failed"));
+  });
   const service = new ReportUpService({
+    routing,
+    isDispatchLead: (id) =>
+      Object.values(input.daemonConfigStore.get().projectDispatch ?? {}).some(
+        (config) => config.enabled && config.leadId === id,
+      ),
     remoteNotice: input.remoteNotice,
     ledgerDir: defaultLedgerDir(),
     agentManager: input.agentManager,
@@ -1760,11 +1859,18 @@ export function startReportUp(input: {
     { replayState: false },
   );
   const stop = () => {
+    offRoutingConfig();
+    routing?.stop();
     offArchive();
     offHooks?.();
     offEvents?.();
     offStream();
     service.stop();
   };
-  return Object.assign(stop, { recover: () => service.recoverOwnedFinishes() });
+  return Object.assign(stop, {
+    recover: async () => {
+      await routing?.changed();
+      await service.recoverOwnedFinishes();
+    },
+  });
 }

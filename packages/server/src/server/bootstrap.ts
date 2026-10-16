@@ -453,6 +453,7 @@ export interface PaseoDaemonConfig {
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
   receiptRetentionMs?: number;
+  projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   idleLeadNudgeMinIntervalMinutes?: number;
@@ -654,9 +655,13 @@ function initialNudgeConfig(
   config: PaseoDaemonConfig,
 ): Pick<
   MutableDaemonConfig,
-  "idleLeadNudge" | "idleLeadNudgeSkipOwners" | "idleLeadNudgeMinIntervalMinutes"
+  | "projectDispatch"
+  | "idleLeadNudge"
+  | "idleLeadNudgeSkipOwners"
+  | "idleLeadNudgeMinIntervalMinutes"
 > {
   return {
+    projectDispatch: config.projectDispatch,
     idleLeadNudge: config.idleLeadNudge,
     idleLeadNudgeSkipOwners: config.idleLeadNudgeSkipOwners ?? [],
     idleLeadNudgeMinIntervalMinutes: config.idleLeadNudgeMinIntervalMinutes ?? 60,
@@ -1610,6 +1615,8 @@ export async function createPaseoDaemon(
   });
   // FULCRA(orchestration): a worker's finished turn reaches its lead as one notice (report-up.ts).
   const stopReportUp = startReportUp({
+    createAgent,
+    ensureRoutingWorkspace: (cwd) => ensureWorkspaceForCreateAndBroadcastExternal(cwd),
     hooks: pluginRuntime,
     paseoHome: config.paseoHome,
     agentManager,

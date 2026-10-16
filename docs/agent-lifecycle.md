@@ -175,6 +175,73 @@ Set `daemon.eventDispatcherEnabled` to `false` in `config.json` to restore norma
 The host reads this switch at each dispatch. Event counts continue while the switch is off.
 This setting does not change reporting rights or authorize permission responses.
 
+## Ledger event routing
+
+Ledger dispatch is off unless `daemon.projectDispatch.PROJECT.enabled` is `true`.
+The owner selects a local lead, worker templates, and a project worker limit.
+Use the ledger directory name as `PROJECT` and exact ledger owner text in each template.
+READY uses the existing ledger selection: open, unblocked work of kind `BUILD` or `FIX`.
+The CLI stores those rows as `OPEN` or `IN PROGRESS`.
+`DECIDE` rows and standing rules require a separate action.
+The item text is the worker's complete first prompt. Include its constraints and checks there.
+
+Example `config.json` fragment:
+
+```json
+{
+  "daemon": {
+    "projectDispatch": {
+      "example": {
+        "enabled": true,
+        "leadId": "00000000-0000-4000-8000-000000000001",
+        "maxParallel": 1,
+        "holdLabels": ["example.release-hold"],
+        "roles": [
+          {
+            "role": "implementation",
+            "owner": "example builders",
+            "provider": "codex",
+            "model": "MODEL_ID",
+            "mode": "MODE_ID",
+            "thinking": "THINKING_OPTION_ID",
+            "cwd": "/workspace/example"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Reload configuration through the normal daemon configuration command.
+An empty `projectDispatch` map removes all templates.
+Template directories must exist. Use a prepared worktree directory when the task requires isolation.
+Before enabling dispatch, label each existing worker with its ledger ID in `fulcra.item`.
+Each new item gets a new session, its configured workspace, and a `fulcra.item` label.
+Native creation still checks the lead's provider restrictions.
+Follow-ups addressed to that session keep its ID and context.
+The daemon does not interpret prose to choose a different session.
+
+The final nonempty assistant line must start with literal `DONE`, `BLOCKED reason`, or `DECISION question`.
+The daemon sends that line to the immediate lead through the existing finish notice path.
+A notice turn cannot relay the result another level.
+`DONE` releases a slot only after the same item has exact `DONE` status and nonempty evidence.
+A new turn in that session clears its earlier result before routing continues.
+`BLOCKED` and `DECISION` retain the slot and stop that role's dispatch.
+Continue the same session to resolve either state.
+
+Turn ends, idle transitions, configuration changes, ledger file changes, and startup recovery trigger selection.
+The opted-in lead receives no READY-selection nudge.
+Set `fulcra.dispatch=off` or a nonempty `fulcra.hold` on the lead to stop project dispatch.
+Configured hold labels also stop admission. A held worker retains its slot.
+Disable the project setting to restore its ordinary nudge behavior.
+
+The private `ledger-routing.json` journal records each claim before creation.
+An item cannot start twice, including after restart or an uncertain creation response.
+An uncertain claim retains its item and slot for owner reconciliation; automatic recovery never repeats its prompt.
+Keep the journal during recovery. A corrupt journal disables dispatch.
+Durable dispatch currently requires POSIX directory synchronization, as host-link creation does.
+
 ## Idle-lead nudges
 
 An idle lead receives a nudge when its eligible worker set grows or new READY ledger work appears.

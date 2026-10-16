@@ -32,6 +32,7 @@ interface SupportedMutableConfigPatch {
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
+  projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   idleLeadNudgeMinIntervalMinutes?: number;
@@ -197,6 +198,7 @@ const RELOADABLE_PATHS = [
   "daemon.enableTerminalAgentHooks",
   "daemon.reportUpOnTurnEnd",
   "daemon.nativeFinishNotices",
+  "daemon.projectDispatch",
   "daemon.idleLeadNudge",
   "daemon.idleLeadNudgeSkipOwners",
   "daemon.idleLeadNudgeMinIntervalMinutes",
@@ -230,6 +232,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.reportUpOnTurnEnd", "reportUpOnTurnEnd"],
   ["daemon.nativeFinishNotices", "nativeFinishNotices"],
+  ["daemon.projectDispatch", "projectDispatch"],
   ["daemon.idleLeadNudge", "idleLeadNudge"],
   ["daemon.idleLeadNudgeSkipOwners", "idleLeadNudgeSkipOwners"],
   ["daemon.idleLeadNudgeMinIntervalMinutes", "idleLeadNudgeMinIntervalMinutes"],
@@ -285,6 +288,7 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 function reportUpField(patch: MutableDaemonConfigPatch): {
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
+  projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
   idleLeadNudgeMinIntervalMinutes?: number;
@@ -303,6 +307,7 @@ function reportUpField(patch: MutableDaemonConfigPatch): {
     ...(patch.idleLeadNudgeMinIntervalMinutes !== undefined
       ? { idleLeadNudgeMinIntervalMinutes: patch.idleLeadNudgeMinIntervalMinutes }
       : {}),
+    ...(patch.projectDispatch !== undefined ? { projectDispatch: patch.projectDispatch } : {}),
     ...(patch.idleLeadNudge !== undefined ? { idleLeadNudge: patch.idleLeadNudge } : {}),
     ...(patch.reviveOnRestart !== undefined ? { reviveOnRestart: patch.reviveOnRestart } : {}),
   };
@@ -485,6 +490,8 @@ export class DaemonConfigStore {
     if (parsedPatch.skills?.selection !== undefined) {
       merged.skills = { selection: parsedPatch.skills.selection };
     }
+    if (parsedPatch.projectDispatch !== undefined)
+      merged.projectDispatch = parsedPatch.projectDispatch;
     if (parsedPatch.plugins !== undefined) merged.plugins = parsedPatch.plugins;
     const next = MutableDaemonConfigSchema.parse(
       omitMetadataGenerationProvidersFromConfig(
