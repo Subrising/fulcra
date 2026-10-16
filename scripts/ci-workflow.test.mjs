@@ -6,11 +6,12 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
@@ -261,6 +262,145 @@ test("shared dependencies and unknown root files run the full suite", () => {
   }
 });
 
+function browserRouting(paths) {
+  const filters = loadFilters(filtersPath);
+  const outputs = Object.fromEntries(
+    ["routing", "workspace", "ci", "browser"].map((name) => [
+      name,
+      paths.some((path) => filters[name].some((pattern) => matchesGlob(path, pattern)))
+        ? "true"
+        : "false",
+    ]),
+  );
+  const changes = jobBlocks(readFileSync(ciWorkflowPath, "utf8")).get("changes").join("\n");
+  const context = {
+    github: { event_name: "pull_request" },
+    steps: {
+      filter: { outputs },
+      shared: { outputs: { full: String(requiresFullSuite(paths)) } },
+    },
+  };
+  const evaluate = (name) =>
+    runInNewContext(
+      changes.match(new RegExp(`^      ${name}: \\$\\{\\{ (.+) \\}\\}$`, "m"))[1],
+      context,
+    );
+  return { full: evaluate("full"), browser: evaluate("browser"), filter: outputs };
+}
+
+function requireBrowserJobs(path) {
+  const routing = browserRouting([path]);
+  const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
+  for (const name of [
+    "browser-prepare",
+    "browser-recovery",
+    ...Array.from({ length: BROWSER_SHARDS }, (_, index) => `playwright-${index + 1}`),
+  ]) {
+    const expression = jobs
+      .get(name)
+      .join("\n")
+      .match(/^    if: \$\{\{ (.+) \}\}$/m)[1]
+      .replaceAll("needs.browser-prepare", 'needs["browser-prepare"]');
+    const selected = runInNewContext(expression, {
+      cancelled: () => false,
+      needs: {
+        changes: {
+          result: "success",
+          outputs: { full: String(routing.full), browser: String(routing.browser) },
+        },
+        "browser-prepare": { result: "success" },
+      },
+    });
+    assert.equal(selected, true, `${path}: ${name} must run`);
+  }
+  return routing;
+}
+
+test("M1: shared and root changes retain every browser job", () => {
+  assert.equal(browserRouting(["docs/testing.md"]).browser, false);
+  assert.equal(browserRouting(["README.md"]).browser, false);
+  for (const path of [
+    "package-lock.json",
+    "package.json",
+    "packages/protocol/src/messages.ts",
+    "packages/client/src/index.ts",
+    "packages/plugin/src/index.ts",
+    "packages/server/src/server/session.ts",
+    "packages/server/src/server/agent/providers/mock-load-test-agent.ts",
+    "scripts/build-server.mjs",
+    "unknown.config",
+    ".github/actions/ci-deps/action.yml",
+    ".github/workflows/ci.yml",
+  ]) {
+    requireBrowserJobs(path);
+  }
+});
+
+test("M2: CI scripts and timing data select their real browser consumers", () => {
+  for (const path of [
+    ".github/scripts/run-browser-ci.mjs",
+    ".github/scripts/browser-shards.mjs",
+    ".github/scripts/browser-ci-reporter.mjs",
+    ".github/scripts/browser-inputs.mjs",
+    ".github/scripts/static-e2e-web.mjs",
+    ".github/scripts/export-browser-web.sh",
+    ".github/scripts/ci-built-cli.mjs",
+    ".github/scripts/install-cache-inputs.mjs",
+    ".github/browser-test-times.json",
+  ]) {
+    const routing = requireBrowserJobs(path);
+    assert.equal(routing.filter.ci, "true", path);
+    assert.equal(routing.full, true, path);
+  }
+});
+
+test("L2: moving a shared file into app keeps the full fallback", () => {
+  const root = mkdtempSync(join(tmpdir(), "ci-rename-routing-"));
+  try {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Fulcra",
+      GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Fulcra",
+      GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+    };
+    const git = (...args) => execFileSync("git", args, { cwd: root, env, encoding: "utf8" }).trim();
+    git("init", "--initial-branch=main");
+    mkdirSync(join(root, "packages/protocol/src"), { recursive: true });
+    mkdirSync(join(root, "packages/app/src"), { recursive: true });
+    writeFileSync(join(root, "packages/protocol/src/moved.ts"), "export const fixture = true;\n");
+    git("add", ".");
+    const base = git("commit-tree", git("write-tree"), "-m", "Shared source fixture");
+    renameSync(
+      join(root, "packages/protocol/src/moved.ts"),
+      join(root, "packages/app/src/moved.ts"),
+    );
+    git("add", "-A");
+    const head = git(
+      "commit-tree",
+      git("write-tree"),
+      "-p",
+      base,
+      "-m",
+      "Move shared source fixture",
+    );
+    const output = join(root, "outputs");
+    const result = spawnSync(
+      process.execPath,
+      [new URL("scripts/ci-shared-changes.mjs", repoRoot).pathname],
+      {
+        cwd: root,
+        env: { ...env, EVENT: "pull_request", BASE: base, HEAD: head, GITHUB_OUTPUT: output },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(readFileSync(output, "utf8"), /full=true/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("every new shard and desktop lane remains failure-sensitive", () => {
   const source = readFileSync(ciWorkflowPath, "utf8");
   const jobs = jobBlocks(source);
@@ -287,6 +427,20 @@ test("every new shard and desktop lane remains failure-sensitive", () => {
       .every((line) => line.includes("browser-failed-") || line.includes("metro-web-v1-")),
   );
   assert.match(source, /steps\.shared\.outputs\.full != 'false'/);
+});
+
+test("L5: the web cache key is captured before restored build outputs exist", () => {
+  const source = jobBlocks(readFileSync(ciWorkflowPath, "utf8")).get("browser-prepare").join("\n");
+  assert.ok(
+    source.indexOf("WEB_SOURCE_HASH:") < source.indexOf("name: Restore exact server build"),
+  );
+  assert.match(source, /WEB_SOURCE_HASH:.*'!packages\/\*\/dist\/\*\*'/);
+  assert.match(source, /WEB_SOURCE_HASH:.*'!plugins\/dist\/\*\*'/);
+  const restore = source.slice(
+    source.indexOf("name: Restore exact web export"),
+    source.indexOf("name: Restore Metro transform cache"),
+  );
+  assert.match(restore, /key: \$\{\{ steps\.inputs\.outputs\.web_key \}\}/);
 });
 
 function proofFixture() {
@@ -335,6 +489,9 @@ function proofFixture() {
       ],
     },
     ci: {
+      id: 456,
+      run_attempt: 1,
+      status: "completed",
       path: ".github/workflows/ci.yml",
       event: "pull_request",
       head_sha: sha,
@@ -376,6 +533,9 @@ test("merge proof refuses changed trees, identities, workflows and stale checks"
     (f) => f.data.checks.check_runs.push(f.data.checks.check_runs[0]),
     (f) => (f.data.ci.path = ".github/workflows/other.yml"),
     (f) => (f.data.ci.event = "push"),
+    (f) => (f.data.ci.id = 999),
+    (f) => (f.data.ci.run_attempt = 0),
+    (f) => (f.data.ci.status = "in_progress"),
     (f) => (f.run.event = "pull_request"),
     (f) => (f.run.display_title = "Merge PR 1 at invalid"),
   ]) {
@@ -417,7 +577,7 @@ test("bot merge completion records main green without a main CI run", async () =
   assert.equal(f.writes.length, 1);
   assert.equal(f.writes[0].name, "ci-passed");
   assert.equal(f.writes[0].head_sha, f.data.pr.merge_commit_sha);
-  assert.equal(f.writes[0].external_id, `tested-tree:${f.data.pr.merge_commit_sha}`);
+  assert.equal(f.writes[0].external_id, `tested-tree:${f.data.pr.merge_commit_sha}:456:1`);
   assert.equal(f.writes[0].details_url, f.data.ci.html_url);
   assert.deepEqual(
     reads.filter((path) => path.startsWith("/actions/")),
@@ -435,6 +595,17 @@ test("bot merge completion records main green without a main CI run", async () =
   assert.match(workflow, /checks: write/);
   assert.match(workflow, /ref: main/);
   assert.match(workflow, /persist-credentials: false/);
+});
+
+test("M3 and L1: main proof binds the CI run and exact attempt outside the display URL", async () => {
+  const f = proofFixture();
+  f.data.ci.run_attempt = 2;
+  await complete({ repository: f.run.repository, workflow_run: f.run }, f.api, async () => {});
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].external_id, `tested-tree:${f.data.pr.merge_commit_sha}:456:2`);
+  f.writes[0].details_url = "https://github.com/Subrising/fulcra/actions/runs/123/job/999";
+  await complete({ repository: f.run.repository, workflow_run: f.run }, f.api, async () => {});
+  assert.equal(f.writes.length, 1, "a replaced display URL must not duplicate the bound gate");
 });
 
 const repoRoot = new URL("../", import.meta.url);
@@ -587,7 +758,12 @@ test("PR routing declares stable behavior ownership", () => {
       "tsconfig.base.json",
       "vitest.config.ts",
     ],
-    ci: [".github/actions/**", ".github/workflows/ci.yml"],
+    ci: [
+      ".github/actions/**",
+      ".github/workflows/ci.yml",
+      ".github/scripts/**",
+      ".github/browser-test-times.json",
+    ],
     format: [
       ".agents/**/*.{cjs,css,html,js,json,jsonc,jsx,md,mjs,ts,tsx,yaml,yml}",
       ".github/**/*.{cjs,css,html,js,json,jsonc,jsx,md,mjs,ts,tsx,yaml,yml}",
@@ -623,6 +799,7 @@ test("PR routing declares stable behavior ownership", () => {
     ],
     browser: [
       "packages/app/**",
+      "packages/server/**",
       "packages/expo-two-way-audio/**",
       "control/orca-organization/client/**",
       "control/orca-organization/shared/**",
@@ -701,6 +878,7 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
   ]);
   assert.deepEqual(filters.browser, [
     "packages/app/**",
+    "packages/server/**",
     "packages/expo-two-way-audio/**",
     "control/orca-organization/client/**",
     "control/orca-organization/shared/**",
@@ -1151,7 +1329,7 @@ test("candidate scanner still refuses personal data in an accepted upstream ance
   }
 });
 
-test("source release rejects every active tag or release trigger with a generic YAML check", () => {
+test("L3: source release rejects tag publishers and job-level write permissions", () => {
   const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
   const code = source.split("<<'RUBY'\n")[1].split("\nRUBY")[0];
   const root = mkdtempSync(join(tmpdir(), "fulcra-triggers-test-"));
@@ -1172,7 +1350,7 @@ test("source release rejects every active tag or release trigger with a generic 
       }).trim();
     git("init", "--initial-branch=main");
     mkdirSync(join(root, ".github/workflows"), { recursive: true });
-    const path = ".github/workflows/future-publisher.yaml";
+    const defaultPath = ".github/workflows/future-publisher.yaml";
     const cases = [
       ["on: {push: {branches: [main]}}\n", "active", true],
       ["on: {push: {branches-ignore: [archive]}}\n", "active", true],
@@ -1196,7 +1374,30 @@ test("source release rejects every active tag or release trigger with a generic 
       ["on: release\n", null, false],
       ["on: {push: {branches: [main]}}\n", null, true],
     ];
-    for (const [yaml, state, allowed] of cases) {
+    const ciTag = (permissions) =>
+      `on: {push: {tags: ['v*']}}\npermissions: {contents: read}\njobs:\n  validate:\n${permissions === null ? "" : `    permissions: ${permissions}\n`}    runs-on: ubuntu-latest\n    steps: []\n`;
+    for (const [permissions, allowed] of [
+      [null, true],
+      ["{}", true],
+      ["read-all", true],
+      ["{checks: read, contents: none}", true],
+      ["{contents: write}", false],
+      ["{checks: write}", false],
+      ["{id-token: write}", false],
+      ["write-all", false],
+    ]) {
+      cases.push([ciTag(permissions), "active", allowed, ".github/workflows/ci.yml"]);
+    }
+    cases.push([
+      ciTag(null) +
+        "  publish:\n    permissions: {contents: write}\n    runs-on: ubuntu-latest\n    steps: []\n",
+      "active",
+      false,
+      ".github/workflows/ci.yml",
+    ]);
+    for (const [yaml, state, allowed, path = defaultPath] of cases) {
+      for (const file of readdirSync(join(root, ".github/workflows")))
+        rmSync(join(root, ".github/workflows", file));
       writeFileSync(join(root, path), yaml);
       git("add", ".github/workflows");
       const sha = git("commit-tree", git("write-tree"), "-m", "Workflow trigger fixture");
@@ -1329,6 +1530,21 @@ else process.exit(2);
 `,
     );
     const script = new URL(".github/scripts/release.sh", repoRoot).pathname;
+    for (const ownerEnv of [{ FULCRA_CI_OWNER: "8a195a05" }, { PASEO_AGENT_ID: "8a195a05" }]) {
+      const invalidOwner = spawnSync("bash", [script, "1.0.1", "1", sha], {
+        cwd: checkout,
+        env: { ...env, ...ownerEnv },
+        encoding: "utf8",
+      });
+      assert.notEqual(invalidOwner.status, 0);
+      assert.match(invalidOwner.stderr, /CI owner must be a full lowercase session UUID/);
+      assert.equal(existsSync(join(root, "dispatched")), false);
+      assert.equal(
+        existsSync(join(root, "calls")),
+        false,
+        "L6: owner validation must precede GitHub calls",
+      );
+    }
     const bad = spawnSync("bash", [script, "1.0.1", "1", sha], {
       cwd: checkout,
       env: { ...env, BAD_CI: "1" },
@@ -1351,6 +1567,7 @@ else process.exit(2);
     assert.equal(good.status, 0, `${good.stdout}\n${good.stderr}`);
     assert.equal(existsSync(join(root, "released")), false);
     assert.match(good.stdout, /merge_dispatched=123/);
+    assert.match(good.stdout, /Resume only after the completion event/);
     const resumeArgs = [script, "1.0.1", "1", sha, "--after-merge", "123"];
     const failedMerge = spawnSync("bash", resumeArgs, {
       cwd: checkout,

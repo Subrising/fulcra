@@ -38,7 +38,7 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
       app: ${{ steps.filter.outputs.app }}
       sdk: ${{ steps.filter.outputs.sdk }}
-      browser: ${{ github.event_name != 'pull_request' || steps.filter.outputs.browser != 'false' }}
+      browser: ${{ github.event_name != 'pull_request' || steps.filter.outputs.routing != 'false' || steps.filter.outputs.workspace != 'false' || steps.filter.outputs.ci != 'false' || steps.shared.outputs.full != 'false' || steps.filter.outputs.browser != 'false' }}
       relay: ${{ steps.filter.outputs.relay }}
       cli: ${{ steps.filter.outputs.cli }}
     steps:
@@ -522,7 +522,11 @@ jobs:
       - uses: ./.github/actions/ci-deps
       - name: Identify immutable browser inputs
         id: inputs
-        run: echo "key=browser-inputs-v1-${{ runner.os }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        env:
+          WEB_SOURCE_HASH: ${{ hashFiles('.github/scripts/export-browser-web.sh', 'package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/dist/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/app/src/**/*.test.*', '!packages/app/src/**/*.spec.*', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', '!plugins/dist/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+        run: |
+          echo "key=browser-inputs-v1-${{ runner.os }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "web_key=browser-web-v2-${{ runner.os }}-${WEB_SOURCE_HASH}" >> "$GITHUB_OUTPUT"
       - name: Restore exact browser build
         id: shared-cache
         uses: actions/cache@v4
@@ -542,7 +546,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: packages/app/.e2e-web
-          key: browser-web-v2-${{ runner.os }}-${{ hashFiles('.github/scripts/export-browser-web.sh', 'package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/app/src/**/*.test.*', '!packages/app/src/**/*.spec.*', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: ${{ steps.inputs.outputs.web_key }}
       - name: Restore Metro transform cache
         uses: actions/cache@v4
         with:
@@ -620,8 +624,8 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      - name: Save failed test list for this exact run and head
-        if: ${{ failure() && steps.browser-tests.outcome == 'failure' }}
+      - name: Save retry list for this exact run and head
+        if: ${{ !cancelled() && (steps.browser-tests.outcome == 'success' || steps.browser-tests.outcome == 'failure') }}
         uses: actions/cache/save@v4
         with:
           path: packages/app/.e2e-retry

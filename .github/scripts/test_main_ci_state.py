@@ -9,17 +9,17 @@ HEAD = 'b' * 40
 
 class MainCiTests(unittest.TestCase):
     def fixture(self, attested=False):
-        run = {'id': 10, 'path': '.github/workflows/ci.yml', 'head_sha': HEAD if attested else SHA,
+        run = {'id': 10, 'run_attempt': 1, 'path': '.github/workflows/ci.yml', 'head_sha': HEAD if attested else SHA,
                'head_branch': 'candidate' if attested else 'main', 'event': 'pull_request' if attested else 'workflow_dispatch',
                'status': 'completed', 'conclusion': 'success', 'repository': {'full_name': REPO}}
         data = {
             'runs': {'workflow_runs': [] if attested else [run]},
             'run': run,
-            'jobs': {'jobs': [{'name': 'ci-passed', 'run_id': 10, 'status': 'completed', 'conclusion': 'success'}]},
+            'jobs': {'jobs': [{'name': 'ci-passed', 'run_id': 10, 'run_attempt': 1, 'status': 'completed', 'conclusion': 'success'}]},
             'checks': {'check_runs': [
                 {'name': 'merge', 'status': 'completed', 'conclusion': 'failure', 'head_sha': SHA, 'app': {'id': 15368}},
                 {'name': 'ci-passed', 'status': 'completed', 'conclusion': 'success', 'head_sha': SHA, 'app': {'id': 15368},
-                 'external_id': f'tested-tree:{SHA}', 'details_url': f'https://github.com/{REPO}/actions/runs/10'},
+                 'external_id': f'tested-tree:{SHA}:10:1', 'details_url': f'https://github.com/{REPO}/actions/runs/10'},
             ]},
             'merge': {'parents': [{'sha': 'c' * 40}, {'sha': HEAD}], 'commit': {'tree': {'sha': 'd' * 40}}},
             'head': {'commit': {'tree': {'sha': 'd' * 40}}},
@@ -31,10 +31,14 @@ class MainCiTests(unittest.TestCase):
             if path.startswith('actions/workflows/ci.yml/runs?'):
                 return data['runs']
             if path == 'actions/runs/10/jobs?filter=latest&per_page=100':
+                return data.get('latest_jobs', data['jobs'])
+            if path == 'actions/runs/10/attempts/1/jobs?per_page=100':
                 return data['jobs']
             if path.startswith(f'commits/{SHA}/check-runs?'):
                 return data['checks']
             if path == 'actions/runs/10':
+                return data.get('latest_run', data['run'])
+            if path == 'actions/runs/10/attempts/1':
                 return data['run']
             if path == f'commits/{SHA}':
                 return data['merge']
@@ -80,6 +84,35 @@ class MainCiTests(unittest.TestCase):
     def test_tested_tree_gate_ignores_the_failed_merge_check(self):
         _, _, api = self.fixture(attested=True)
         self.assertEqual(ci_workflow_state(REPO, 'main', SHA, api), 'green')
+
+    def test_m3_handler_job_url_does_not_replace_the_controlled_ci_identity(self):
+        data, _, api = self.fixture(attested=True)
+        data['checks']['check_runs'][1]['external_id'] = f'tested-tree:{SHA}:10:1'
+        data['checks']['check_runs'][1]['details_url'] = f'https://github.com/{REPO}/actions/runs/99/job/100'
+        self.assertEqual(ci_workflow_state(REPO, 'main', SHA, api), 'green')
+
+    def test_l1_failed_later_attempt_does_not_change_the_attested_attempt(self):
+        data, calls, api = self.fixture(attested=True)
+        data['latest_run'] = {**data['run'], 'run_attempt': 2, 'conclusion': 'failure'}
+        data['latest_jobs'] = {'jobs': [{**data['jobs']['jobs'][0], 'run_attempt': 2, 'conclusion': 'failure'}]}
+        self.assertEqual(ci_workflow_state(REPO, 'main', SHA, api), 'green')
+        self.assertIn('actions/runs/10/attempts/1', calls)
+        self.assertIn('actions/runs/10/attempts/1/jobs?per_page=100', calls)
+        self.assertNotIn('actions/runs/10', calls)
+        self.assertNotIn('actions/runs/10/jobs?filter=latest&per_page=100', calls)
+
+    def test_attempt_identity_and_malformed_attestations_fail_closed(self):
+        for identity in [f'tested-tree:{SHA}', f'tested-tree:{SHA}:10:0',
+                         f'tested-tree:{SHA}:invalid:1', f'tested-tree:{HEAD}:10:1']:
+            data, _, api = self.fixture(attested=True)
+            data['checks']['check_runs'][1]['external_id'] = identity
+            self.assertEqual(ci_workflow_state(REPO, 'main', SHA, api), 'unknown')
+        for mutate in [lambda data: data['run'].update(run_attempt=2),
+                       lambda data: data['run'].update(id=11),
+                       lambda data: data['jobs']['jobs'][0].update(run_attempt=2)]:
+            data, _, api = self.fixture(attested=True)
+            mutate(data)
+            self.assertEqual(ci_workflow_state(REPO, 'main', SHA, api), 'unknown')
 
     def test_unrelated_workflow_or_tree_cannot_supply_a_green_gate(self):
         for change in [lambda data: data['run'].update(path='.github/workflows/merge-pr.yml'),

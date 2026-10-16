@@ -1,6 +1,6 @@
 # Pull-request checks are routed by the behavior they prove. Package consumers
-# do not inherit their dependencies' test suites. Browser checks run only for UI
-# paths on PRs; nightly, release-tag and manual runs execute every contract.
+# do not inherit their dependencies' test suites. Browser checks cover UI and
+# server paths plus the shared/root fallback. Nightly and release runs cover all.
 routing:
   - ".github/ci-paths.yml"
 
@@ -18,6 +18,8 @@ workspace:
 ci:
   - ".github/actions/**"
   - ".github/workflows/ci.yml"
+  - ".github/scripts/**"
+  - ".github/browser-test-times.json"
 
 format:
   - ".agents/**/*.{cjs,css,html,js,json,jsonc,jsx,md,mjs,ts,tsx,yaml,yml}"
@@ -63,6 +65,7 @@ sdk:
 
 browser:
   - "packages/app/**"
+  - "packages/server/**"
   - "packages/expo-two-way-audio/**"
   - "control/orca-organization/client/**"
   - "control/orca-organization/shared/**"

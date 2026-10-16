@@ -13,8 +13,66 @@ import path from "node:path";
 import test from "node:test";
 import { needsMetro } from "./browser-routing.mjs";
 import BrowserReporter from "./browser-ci-reporter.mjs";
-import { balanceTests } from "./browser-shards.mjs";
+import { balanceTests, testListPath } from "./browser-shards.mjs";
 import { installCacheSafe } from "./install-cache-inputs.mjs";
+import { runInNewContext } from "node:vm";
+
+test("L4: passing shards save an empty retry list and rerun without repeating cases", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "browser-passed-retry-"));
+  const cwd = process.cwd();
+  const previous = process.env.E2E_PLAN_ONLY;
+  try {
+    const app = path.join(root, "packages/app");
+    mkdirSync(app, { recursive: true });
+    process.chdir(app);
+    process.env.E2E_PLAN_ONLY = "0";
+    const reporter = new BrowserReporter();
+    reporter.rootDir = app;
+    reporter.tests = [
+      {
+        title: "passing case",
+        location: { file: path.join(app, "case.spec.ts") },
+        expectedStatus: "passed",
+        results: [{ status: "passed", duration: 1 }],
+        outcome: () => "expected",
+      },
+    ];
+    reporter.onEnd({ status: "passed" });
+    assert.equal(readFileSync(".e2e-retry/failed.txt", "utf8").trim(), "");
+    assert.equal(
+      testListPath(1, 2, {
+        exists: (file) => existsSync(path.join(root, file)),
+        read: (file) => readFileSync(path.join(root, file), "utf8"),
+      }),
+      null,
+    );
+    const workflow = readFileSync(new URL("../workflows/ci.yml", import.meta.url), "utf8");
+    const condition = workflow
+      .match(/name: Save retry list for this exact run and head\n\s+if: \$\{\{ (.+) \}\}/)[1]
+      .replaceAll("steps.browser-tests", 'steps["browser-tests"]');
+    for (const outcome of ["success", "failure"]) {
+      assert.equal(
+        runInNewContext(condition, {
+          cancelled: () => false,
+          steps: { "browser-tests": { outcome } },
+        }),
+        true,
+      );
+    }
+    assert.equal(
+      runInNewContext(condition, {
+        cancelled: () => true,
+        steps: { "browser-tests": { outcome: "success" } },
+      }),
+      false,
+    );
+  } finally {
+    process.chdir(cwd);
+    if (previous === undefined) delete process.env.E2E_PLAN_ONLY;
+    else process.env.E2E_PLAN_ONLY = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("unknown install lifecycle inputs use fresh installs instead of cached dependencies", () => {
   const root = mkdtempSync(path.join(tmpdir(), "install-inputs-"));

@@ -9,6 +9,9 @@ Two mechanisms carry that split. Neither disables a check.
 
 ## Release tags
 
+The checked-tree release guard below is the current Fulcra rule.
+The inherited tag notes in this section record earlier fork behavior.
+
 `scripts/release-version-utils.mjs` accepts `X.Y.Z` and `X.Y.Z-beta.N`. Any
 other prerelease is rejected, so a `v0.1.0-private-preview` tag started Desktop
 Release, Android APK Release, Release Notes Sync and Deploy App and then failed
@@ -197,18 +200,23 @@ executable.
 ## Checked trees and completion events
 
 `ci-passed` remains the required PR gate. Every selected job must succeed.
-CI and shared-library changes select all non-browser contracts. Unknown root inputs
-also select them. Browser PR checks select only app and UI paths in
-`.github/ci-paths.yml`. Other package changes retain their contract routes.
+CI, shared-library and unknown root changes select the full suite, including browser checks.
+The browser output uses the same full fallback as other contracts.
+App, UI and server paths also select browser checks directly.
+CI scripts and browser timing data are CI inputs in `.github/ci-paths.yml`.
+Rename detection is disabled so moves retain both the old and new path.
+Other package changes keep their contract routes.
 The nightly schedule uses UTC. Release tags starting with `v` run full CI.
 
 Main does not repeat PR CI. After a successful bot merge, `CI finished` checks
 GitHub API records from trusted main. It compares the merged tree with the
 checked PR head. It verifies the bot identity, merge parents, exact successful
 head check, and CI workflow provenance. A mismatch creates no green check.
-A matching tree receives `ci-passed`, with a link to the original CI run.
+A matching tree receives `ci-passed`. Its controlled external ID is
+`tested-tree:<merge-sha>:<ci-run-id>:<attempt>`. The display URL is only a link.
+GitHub can replace that URL without changing the proof identity.
 
-Browser CI builds one production web export and daemon stack. All sixteen timed
+Browser CI builds one production web export and daemon stack. All thirty-two timed
 browser jobs restore that exact input archive. They serve the web files locally
 and reuse one isolated compiled daemon per worker. They do not start Metro.
 The small recovery-fixture job retains Metro for its injected error entry point.
@@ -222,7 +230,8 @@ The format follows [Playwright test lists](https://playwright.dev/docs/test-cli#
 
 Playwright retries a failing case once. A failed-job rerun restores only the
 failed case list for that same run and head. It never reruns a whole shard.
-An absent retry list or incomplete earlier run fails closed. A source change
+Passing shards also save an empty retry list. A full workflow rerun can reuse that result
+without repeating the passed cases. An absent list or incomplete earlier run fails closed. A source change
 starts a new workflow and a new complete plan. Native CI completion notices
 still use the outbound local watcher below.
 
@@ -232,6 +241,8 @@ The case retains its geometry assertions and screenshots. It is not quarantined.
 
 Build caches use exact source, toolchain, platform, and target keys. They have
 no fallback restore keys. They store generated outputs, without credentials.
+The web key is captured before compiled output restores. Generated dist directories
+are excluded, so a server cache hit does not change the web source key.
 The privileged completion workflow never loads candidate code or caches.
 
 The main alarm uses `.github/scripts/main_ci_state.py` beside its local
@@ -241,15 +252,21 @@ main; those checks do not describe main CI. Legacy commit-status totals also
 remain outside this alarm's Fulcra classification. Other repositories retain
 their existing alarm rules.
 
-When main reuses a tested tree, the alarm validates the gate's CI workflow
-source, merge parent, and tree equality. Missing CI or an invalid tree proof
-remains unknown. A real CI failure remains red.
+When main reuses a tested tree, the alarm reads the run and attempt from the external ID.
+It validates that pinned attempt, its ci-passed job, workflow, event, repository, parent and tree.
+A later PR CI rerun does not change the recorded proof. Missing or invalid proof stays unknown.
+A real main CI failure still takes priority and stays red.
+After deployment, read the first real handler check before the alarm uses its proof.
+Verify its external ID, app, run and attempt. Keep the installed alarm helper at the same reviewed version.
 
 `release.sh` returns after dispatching `Merge PR`. It prints the exact run ID.
 It does not wait for CI or merge completion. Resume it with `--after-merge`
 only after a matching completion event. The resume verifies the successful
 workflow, head, tree, parents, identity, current main, source scan, and publisher
 guards before it can publish. CI is the only permitted tag validation workflow.
+The 16 Oct FU-187 task explicitly requests full CI on release tags.
+That exception requires read-only top-level permissions and read-only or absent permissions in every job.
+A job cannot grant write access through a tag-triggered CI workflow.
 
 CI and merge completion use an outbound local watcher. No inbound endpoint,
 receiver token, or daemon exposure is needed. Register it with:
@@ -274,6 +291,7 @@ fails immediately. Native sends are never retried automatically.
 
 `release.sh` uses the caller session in `PASEO_AGENT_ID` by default.
 Set `FULCRA_CI_OWNER` to select another retained owner session.
+A provided owner must be a full lowercase UUID. Validation occurs before dispatch.
 The release tool registers the same watcher after its merge dispatch. The notice
 contains pass or fail, the run URL, attempt, and head SHA. Resume the release with
 the exact run ID from that notice. A completion for another head cannot resume it.

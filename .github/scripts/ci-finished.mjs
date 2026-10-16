@@ -42,6 +42,10 @@ async function testedCI(sha, api) {
     ci.path !== ".github/workflows/ci.yml" ||
     ci.event !== "pull_request" ||
     ci.head_sha !== sha ||
+    ci.id !== Number(source[1]) ||
+    !Number.isSafeInteger(ci.run_attempt) ||
+    ci.run_attempt < 1 ||
+    ci.status !== "completed" ||
     ci.conclusion !== "success" ||
     ci.repository.full_name !== repository
   ) {
@@ -83,6 +87,8 @@ export async function proveMerge(run, api) {
     merged: pr.merge_commit_sha,
     tree: head.commit.tree.sha,
     ci: ci.html_url,
+    ciRunId: ci.id,
+    ciAttempt: ci.run_attempt,
   };
 }
 
@@ -95,7 +101,7 @@ export async function complete(event, api, postNotice) {
   if (run.path === ".github/workflows/merge-pr.yml" && run.conclusion === "success") {
     proof = await proveMerge(run, api);
     // Reconcile retries through an external ID. Do not make duplicate gates.
-    const externalId = `tested-tree:${proof.merged}`;
+    const externalId = `tested-tree:${proof.merged}:${proof.ciRunId}:${proof.ciAttempt}`;
     const existing = await api(
       `/commits/${proof.merged}/check-runs?check_name=ci-passed&filter=latest&per_page=100`,
     );

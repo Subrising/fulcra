@@ -17,6 +17,9 @@ SHA=$3
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Invalid version.'
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || fail 'Invalid PR number.'
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'Use the full tested SHA.'
+if [ -z "$MERGE_RUN" ] && [ -n "$CI_OWNER" ]; then
+  [[ "$CI_OWNER" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]] || fail 'CI owner must be a full lowercase session UUID.'
+fi
 REPO=Subrising/fulcra
 TAG=v$VERSION
 SOURCE=${FULCRA_RELEASE_REPO:-$PWD}
@@ -91,6 +94,10 @@ gh api --paginate --slurp "repos/$REPO/actions/workflows?per_page=100" > "$TMP/w
 # Ruby's standard YAML parser needs no repository dependencies.
 ruby -rjson -ryaml -ropen3 - "$TMP/workflows.json" "$SHA" <<'RUBY'
 begin
+  read_only_permissions = lambda do |permissions|
+    permissions.nil? || permissions == 'read-all' ||
+      (permissions.is_a?(Hash) && permissions.values.all? { |level| ['read', 'none'].include?(level) })
+  end
   states = {}
   JSON.parse(File.read(ARGV[0])).each do |page|
     page.fetch('workflows').each do |workflow|
@@ -120,7 +127,8 @@ begin
     next unless events.key?('push')
     push = events.fetch('push')
     if path == '.github/workflows/ci.yml' && document['permissions'] == { 'contents' => 'read' } &&
-      push.is_a?(Hash) && push == { 'tags' => ['v*'] }
+      push.is_a?(Hash) && push == { 'tags' => ['v*'] } && document['jobs'].is_a?(Hash) &&
+      document['jobs'].values.all? { |job| job.is_a?(Hash) && read_only_permissions.call(job['permissions']) }
       next
     end
     # Only explicit branch filters exclude tag pushes.

@@ -21,9 +21,13 @@ if (process.env.GITHUB_OUTPUT) {
     if (![BASE, HEAD].every((sha) => /^[a-f0-9]{40}$/.test(sha ?? ""))) {
       throw new Error("Missing PR comparison SHA");
     }
-    const paths = execFileSync("git", ["diff", "--name-only", "-z", `${BASE}...${HEAD}`], {
-      encoding: "utf8",
-    })
+    const paths = execFileSync(
+      "git",
+      ["diff", "--no-renames", "--name-only", "-z", `${BASE}...${HEAD}`],
+      {
+        encoding: "utf8",
+      },
+    )
       .split("\0")
       .filter(Boolean);
     full = requiresFullSuite(paths);
