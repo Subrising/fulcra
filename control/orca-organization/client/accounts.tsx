@@ -82,6 +82,61 @@ export function statusText(s: AccountsView["accounts"][number]["status"]) {
       return "Turned off";
   }
 }
+function ApiBudgetForm({
+  account,
+  theme,
+  busy,
+  save,
+}: {
+  account: AccountsView["accounts"][number];
+  theme: Props["theme"];
+  busy: boolean;
+  save: (budget: { limitUsd: number; startAt: string }) => void;
+}) {
+  const [amount, setAmount] = useState(String(account.budget?.limitUsd ?? ""));
+  const [start, setStart] = useState(account.budget?.startAt.slice(0, 10) ?? "");
+  const valid =
+    Number(amount) > 0 &&
+    Number.isFinite(Number(amount)) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(start) &&
+    Number.isFinite(Date.parse(start));
+  const style = {
+    minHeight: 48,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 8,
+    color: theme.colors.foreground,
+    width: "100%" as const,
+  };
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={{ color: theme.colors.foreground }}>API budget (USD)</Text>
+      <TextInput
+        accessibilityLabel={`Budget for ${account.name} in USD`}
+        value={amount}
+        onChangeText={setAmount}
+        keyboardType="decimal-pad"
+        style={style}
+      />
+      <Text style={{ color: theme.colors.foreground }}>Count costs from (YYYY-MM-DD)</Text>
+      <TextInput
+        accessibilityLabel={`Budget start date for ${account.name}`}
+        value={start}
+        onChangeText={setStart}
+        style={style}
+      />
+      <WorkButton
+        theme={theme}
+        label={`Save budget for ${account.name}`}
+        disabled={busy || !valid}
+        onPress={() => save({ limitUsd: Number(amount), startAt: new Date(start).toISOString() })}
+      >
+        Save budget
+      </WorkButton>
+    </View>
+  );
+}
 export function AccountsSurface({ theme, layout, host }: Props) {
   const read = useContract(accountsRpc),
     add = useContract(accountAddRpc),
@@ -219,6 +274,15 @@ export function AccountsSurface({ theme, layout, host }: Props) {
                   <Text
                     style={{ color: c.foregroundMuted }}
                   >{`${a.sessions.length} session${a.sessions.length === 1 ? "" : "s"} using it now${a.lastUsedAt ? ` · last used ${when(a.lastUsedAt)}` : ""}${a.limitNote ? ` · ${a.limitNote}` : ""}`}</Text>
+                  {a.credentialKind === "api-key" && (
+                    <ApiBudgetForm
+                      key={`${a.id}:${a.budget?.startAt}:${a.budget?.limitUsd}`}
+                      account={a}
+                      theme={theme}
+                      busy={busy}
+                      save={(budget) => void act(() => update({ id: a.id, budget }))}
+                    />
+                  )}
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                     {i > 0 && (
                       <WorkButton

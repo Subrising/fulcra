@@ -210,6 +210,29 @@ export class Wakes {
   }
   // FU-112: an account's token was revoked or is invalid. The session's lead (and its manager) and the main assistant
   // hear it once per account: the identity holds the holder and the account, not the session.
+  accountBudget(key, payload) {
+    if (!this.has("role_bindings")) return 0;
+    const holders = this.db
+      .prepare(
+        "SELECT DISTINCT session FROM role_bindings WHERE role='prime' AND seat='main' AND state='assigned' AND session IS NOT NULL",
+      )
+      .all()
+      .filter((b) => uuid(b.session));
+    let n = 0;
+    for (const b of holders) {
+      if (
+        this.enqueue(
+          { holder: b.session, seat: null, session: null },
+          "account-budget",
+          ["account-budget", key],
+          payload,
+        )
+      )
+        n++;
+    }
+    if (n) this.pump();
+    return holders.length;
+  }
   accountDown(session, r) {
     if (!r?.from) return 0;
     const holders = [];
@@ -372,6 +395,8 @@ export class Wakes {
           : `- [needs input] ${who} is waiting on "${p.requestTitle || p.name}" (${p.requestKind ?? "permission"}). Inspect it with role_inspect_session; an operator decides permissions.`;
       if (w.kind === "error")
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
+      if (w.kind === "account-budget")
+        return `- [API budget] Account "${p.account}" has spent $${Number(p.usedUsd).toFixed(2)} of $${p.limitUsd ?? "unset"}. ${p.moved ? `Delegated sessions on this API account switch to "${p.moved}" as active turns finish.` : "Check this account's budget and credit balance."} ${p.held ? `${p.held} owner-controlled session(s) stay on their account.` : ""} ${p.failed ? `${p.failed} session(s) could not switch. Inspect the recorded refusal before another attempt.` : ""}`;
       if (w.kind === "account-down")
         return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
       if (w.kind === "account-rotated" && p.revoked)

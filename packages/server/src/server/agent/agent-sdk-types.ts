@@ -248,6 +248,8 @@ export interface AgentUsage {
   cachedInputTokens?: number;
   outputTokens?: number;
   totalCostUsd?: number;
+  /** Known query increment. Absent on the first resumed result; native-session billing resolves its history. */
+  turnCostUsd?: number;
   contextWindowMaxTokens?: number;
   contextWindowUsedTokens?: number;
 }
@@ -468,6 +470,7 @@ export type AgentStreamEvent =
     }
   | {
       type: "turn_failed";
+      usage?: AgentUsage;
       provider: AgentProvider;
       error: string;
       code?: string;

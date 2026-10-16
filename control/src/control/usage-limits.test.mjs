@@ -292,6 +292,11 @@ function fixture(t) {
     limitTail: async (id) => tails.get(id) ?? null,
   };
   const control = new Controller({ store, native, authority: async (id) => issue(id) });
+  control.confirmAccountLimit = async ({ accountId, resetAt, kind }) => ({
+    accountId,
+    resetAt,
+    kind: kind ?? "session",
+  });
   const clock = { now: at("2026-09-24T11:48:00Z") };
   control.recovery = new Recovery(control, { now: () => clock.now });
   control.usageLimits = new UsageLimits(control, { now: () => clock.now, random: () => 0 });
@@ -550,7 +555,7 @@ test("a limit on a session that is not enrolled marks its pool account limited, 
   const now = f.clock.now;
   const work = await addAccount(root, { provider: "claude", name: "Work" }, now);
   const personal = await addAccount(root, { provider: "claude", name: "Personal" }, now + 1);
-  assert.equal((await assign(root, id, "claude", now)).account.id, work.id);
+  assert.equal((await assign(root, id, "claude", now - 60_000)).account.id, work.id);
   f.tails.set(id, limitTail());
   await f.limits.onAgent({ id, provider: "claude", status: "idle", updatedAt: "u1" });
   const stored = readAccounts(root).accounts.find((a) => a.id === work.id);

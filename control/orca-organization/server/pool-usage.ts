@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { accountSpend } from "./account-billing.mjs";
 import { accountLimit, readAccounts } from "./accounts.mjs";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
@@ -91,6 +92,36 @@ export function createPoolUsage(root: () => string, now = Date.now) {
       });
       if (!account) return unavailable("This pooled account is no longer available.");
       if (!account.enabled) return unavailable("This pooled account is disabled.");
+      const stored = readAccounts(root()).accounts.find((a) => a.id === account.id);
+      const spend = stored && accountSpend(root(), stored);
+      if (spend)
+        return {
+          status: "available",
+          windows: [],
+          balances: [
+            {
+              id: "api-budget",
+              label: "API budget",
+              unit: "usd",
+              used: spend.usedUsd,
+              limit: spend.limitUsd,
+              remaining:
+                spend.limitUsd === null ? null : Math.max(0, spend.limitUsd - spend.usedUsd),
+              tone:
+                spend.limitUsd === null
+                  ? "default"
+                  : toneFromUsedPct((spend.usedUsd / spend.limitUsd) * 100),
+            },
+          ],
+          details: [
+            { id: "budget-start", label: "Costs since", value: spend.startAt },
+            {
+              id: "cost-source",
+              label: "Cost source",
+              value: "Recorded Claude API costs on this host",
+            },
+          ],
+        };
       const parsed = z
         .object({ v: z.literal(1), reports: z.array(rowSchema) })
         .safeParse(readJson(join(root(), "accounts", "usage-reports.json")));

@@ -15364,3 +15364,70 @@ test.each(["lead", "owner", "planning", "orchestration", "prime", "main-assistan
     }
   },
 );
+
+test("quiet reconnect loads a dormant session with the same history, owner and workspace and no model turn", async () => {
+  const f = await quietMcpFixture();
+  try {
+    const before = await f.timeline.fetchCommitted(f.created.id);
+    await f.manager.closeAgent(f.created.id);
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    expect(state).toMatchObject({ lifecycle: "closed" });
+    const result = await f.manager.refreshAgentMcp({
+      agentId: f.created.id,
+      expected: {
+        provider: state!.provider,
+        sessionId: state!.sessionId!,
+        configRevision: state!.configRevision,
+      },
+      changes: {},
+      reconnect: true,
+    });
+    expect(result).toMatchObject({ outcome: "refreshed", state: { lifecycle: "idle" } });
+    const after = f.manager.getAgent(f.created.id)!;
+    expect(after).toMatchObject({
+      id: f.created.id,
+      persistence: f.created.persistence,
+      owner: f.created.owner,
+      workspaceId: f.created.workspaceId,
+      labels: f.created.labels,
+    });
+    expect(await f.timeline.fetchCommitted(f.created.id)).toEqual(before);
+    expect(f.client.sessions[1].startCount).toBe(0);
+    expect(f.client.sessions[1].historyCount).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("dormant quiet reconnect refuses stale state and revoked authority before loading", async () => {
+  const admission = { revision: "live", allowed: true };
+  const f = await quietMcpFixture({ mcpRefreshAdmission: () => admission });
+  try {
+    await f.manager.closeAgent(f.created.id);
+    const state = await f.manager.getAgentMcpRefreshState(f.created.id);
+    const input = {
+      agentId: f.created.id,
+      expected: {
+        provider: state!.provider,
+        sessionId: state!.sessionId!,
+        configRevision: state!.configRevision,
+      },
+      changes: {},
+      reconnect: true,
+    };
+    expect(
+      await f.manager.refreshAgentMcp({
+        ...input,
+        expected: { ...input.expected, configRevision: "stale" },
+      }),
+    ).toMatchObject({ outcome: "refused", reason: "stale" });
+    admission.allowed = false;
+    expect(await f.manager.refreshAgentMcp(input)).toMatchObject({
+      outcome: "refused",
+      reason: "stale",
+    });
+    expect(f.client.sessions).toHaveLength(1);
+  } finally {
+    await f.cleanup();
+  }
+});

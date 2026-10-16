@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentLsFetchOptions } from "./ls.js";
+import { buildAgentLsFetchOptions, toListItem } from "./ls.js";
 
 describe("buildAgentLsFetchOptions", () => {
   it("fetches active agents by default", () => {
@@ -58,4 +58,19 @@ describe("buildAgentLsFetchOptions", () => {
       },
     });
   });
+});
+
+it("shows the native closed state when the saved session status is idle", () => {
+  const agent = {
+    id: "dormant",
+    title: "Dormant",
+    provider: "claude",
+    model: null,
+    status: "idle",
+    nativeLifecycle: "closed",
+    cwd: "/tmp",
+    createdAt: new Date().toISOString(),
+  } as Parameters<typeof toListItem>[0];
+  expect(toListItem(agent).status).toBe("closed");
+  expect(toListItem({ ...agent, nativeLifecycle: undefined }).status).toBe("idle");
 });

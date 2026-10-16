@@ -709,3 +709,11 @@ it("public baseline transport digest is live only, excluded from stored and clos
   ).toEqual({ existing: "keep" });
   expect(agent.runtimeInfo?.extra?.hostPublicBaselineTransport).toEqual(digest);
 });
+
+it("keeps native dormancy visible when a stored status reads idle", () => {
+  const record = toStoredAgentRecord(createManagedAgent());
+  expect(buildStoredAgentPayload(record, ["claude"])).toMatchObject({
+    status: "idle",
+    nativeLifecycle: "closed",
+  });
+});

@@ -11,7 +11,7 @@ import {
   setPolicy,
   setRotateOnLimit,
   assign,
-  rotate,
+  rotate as rotateAccount,
   readAccounts,
   publicView,
   accountOf,
@@ -32,6 +32,23 @@ import {
   readUsageAsync,
 } from "./accounts.mjs";
 import { markAccountRevoked, accountStatus } from "./accounts.mjs";
+
+// Pool state tests inject a fresh confirmation. The live ask boundary has separate integration tests.
+const rotate = (root, session, provider, options = {}, now) =>
+  rotateAccount(
+    root,
+    session,
+    provider,
+    {
+      ...options,
+      confirmLimit: async ({ accountId }) => ({
+        accountId,
+        resetAt: options.resetAt,
+        kind: options.kind ?? "session",
+      }),
+    },
+    now,
+  );
 
 const T0 = Date.parse("2026-10-01T00:00:00Z");
 const scratch = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-accounts-")));

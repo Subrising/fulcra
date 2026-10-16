@@ -2036,6 +2036,11 @@ function readClaudeParentToolUseId(message: SDKMessage): string | null {
 }
 
 class ClaudeContextUsageState {
+  private billedQueryUsd: number | null = 0;
+  resetBillingQuery(resumed = false): void {
+    // A resumed CLI restores historical totals. The durable native-session cursor owns that first increment.
+    this.billedQueryUsd = resumed ? null : 0;
+  }
   private contextWindowMaxTokens: number | undefined;
   private streamRequestInputTokens: number | undefined;
   private streamRequestOutputTokens: number | undefined;
@@ -2103,7 +2108,14 @@ class ClaudeContextUsageState {
         ...message,
         modelUsage: modelUsage ?? message.modelUsage,
       });
+      const cost = message.total_cost_usd;
+      const turnCostUsd =
+        Number.isFinite(cost) && this.billedQueryUsd !== null && cost >= this.billedQueryUsd
+          ? cost - this.billedQueryUsd
+          : undefined;
+      if (Number.isFinite(cost) && cost >= 0) this.billedQueryUsd = cost;
       const usage: AgentUsage = {
+        ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
         ...(recorded ? { recorded } : {}),
         inputTokens: message.usage.input_tokens,
         cachedInputTokens: message.usage.cache_read_input_tokens,
@@ -3529,6 +3541,9 @@ class ClaudeAgentSession implements AgentSession {
     this.input = input;
     // A fresh Claude process has no turn of its own in flight.
     this.mainTurnInFlight = false;
+    this.contextUsage.resetBillingQuery(
+      this.claudeSessionId !== null && !this.pendingFreshSessionId,
+    );
     this.query = claudeQuery(
       { prompt: input.iterable, options },
       {
@@ -4991,7 +5006,7 @@ class ClaudeAgentSession implements AgentSession {
         ? message.errors.join("\n")
         : "Claude run failed";
     events.push(...this.sidechainTracker.finishAll("failed"));
-    events.push(this.buildTurnFailedEvent(errorMessage));
+    events.push({ ...this.buildTurnFailedEvent(errorMessage), usage });
   }
 
   // Claude reports the mode it actually enforces in every init. When that differs from the mode this launch asked

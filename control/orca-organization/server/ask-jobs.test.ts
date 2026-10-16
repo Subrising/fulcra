@@ -113,3 +113,35 @@ test("a child that prints the account credential leaks it into no job result and
     );
   }
 });
+
+test("billing errors remain visible after the in-memory ask job is lost", async (t) => {
+  const { readBilling } = await import("./account-billing.mjs");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "api-ask-billing-job-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const account = await addAccount(root, { provider: "claude", name: "personal-workspace-api" });
+  let finished!: Promise<unknown>;
+  const jobs = createAskJobs<{ prompt: string; model: string }>({
+    run: (input) => {
+      const call = askOnce({
+        root,
+        input,
+        keychain: { get: async () => "fixture-api-secret" },
+        spawnClaude: async () => ({
+          is_error: true,
+          result: "credit balance too low fixture-api-secret",
+        }),
+      });
+      finished = call.catch(() => undefined);
+      return call;
+    },
+  });
+  const { id } = jobs.start({ prompt: "private", model: "claude-sonnet-5-5" });
+  await finished;
+  await tick();
+  assert.equal(jobs.result(id).error?.code, "BILLING_ERROR");
+  const freshJobs = createAskJobs({ run: async () => result });
+  assert.equal(freshJobs.result(id).error?.code, "UNKNOWN_JOB");
+  assert.equal(readBilling(root).events[0].type, "ask.billing_error");
+  assert.equal(readBilling(root).events[0].accountId, account.id);
+  assert.equal(JSON.stringify(readBilling(root)).includes("fixture-api-secret"), false);
+});

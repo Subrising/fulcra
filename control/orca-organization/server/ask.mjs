@@ -3,6 +3,8 @@
 // It creates no agent, no workspace and no session record, so nothing shows in any list. A usage limit marks the
 // account limited (kind and reset time) and the call is tried once more on the next usable account. The machine's own
 // login is never used: with no pooled account the call fails.
+import { randomUUID } from "node:crypto";
+import { recordAccountCost, recordBillingError, isBillingError } from "./account-billing.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +12,9 @@ import { spawn } from "node:child_process";
 import { parseLimitLine, parseRevokedLine } from "./limit-line.mjs";
 import {
   accountStatus,
+  credentialKind,
+  setAccount,
+  isApiAccount,
   choose,
   markAccountLimited,
   markAccountRevoked,
@@ -78,8 +83,8 @@ export function spawnClaudeOnce({
     ...(env.TEMP ? { TEMP: env.TEMP } : {}),
     // A scratch config home: nothing is read from, or written to, the machine's own Claude settings or login.
     CLAUDE_CONFIG_DIR: path.join(scratch, "config"),
-    CLAUDE_CODE_OAUTH_TOKEN: token,
-    ANTHROPIC_API_KEY: "",
+    CLAUDE_CODE_OAUTH_TOKEN: credentialKind(token) === "api-key" ? "" : token,
+    ANTHROPIC_API_KEY: credentialKind(token) === "api-key" ? token : "",
     ANTHROPIC_AUTH_TOKEN: "",
   };
   const command = bin ?? env.FULCRA_CLAUDE_BIN ?? "claude";
@@ -296,9 +301,11 @@ export async function askOnce({
   keychain,
   input,
   spawnClaude = spawnClaudeOnce,
+  limitProbe = false,
   now = Date.now,
 }) {
   const { prompt, model, schema = null, account = null } = input;
+  if (limitProbe && !account) throw new AskError("A limit probe needs an account", "BAD_INPUT");
   if (typeof prompt !== "string" || !prompt.trim())
     throw new AskError("Give a prompt", "BAD_INPUT");
   if (prompt.length > MAX_PROMPT_CHARS) throw new AskError("The prompt is too long", "BAD_INPUT");
@@ -322,7 +329,10 @@ export async function askOnce({
       picked = namedAccount(state, account);
       if (!picked) throw new AskError(`No Claude account is named "${account}"`, "NO_ACCOUNT");
       const status = accountStatus(picked, at);
-      if (status.state !== "ok")
+      if (
+        status.state !== "ok" &&
+        !(status.state === "limited" && (limitProbe || picked.credentialKind == null))
+      )
         throw new AskError(
           `Account "${picked.name}" cannot be used now (${status.state}${status.until ? ` until ${status.until}` : ""})`,
           status.state === "limited" ? "ACCOUNT_LIMITED" : "NO_ACCOUNT",
@@ -348,6 +358,13 @@ export async function askOnce({
     const token = await lookupCredential(keychain, picked.id, deadline - now());
     if (!token)
       throw new AskError(`The credential for "${picked.name}" is not available`, "NO_CREDENTIAL");
+    const kind = credentialKind(token);
+    await setAccount(root, picked.id, { credentialKind: kind });
+    picked.credentialKind = kind;
+    if (!limitProbe && accountStatus({ ...picked, credentialKind: kind }, at).state === "limited")
+      throw new AskError("The subscription account is at its limit", "ACCOUNT_LIMITED");
+    if (limitProbe && isApiAccount(picked))
+      throw new AskError("API accounts have no subscription limit", "API_ACCOUNT");
     const spawnMs = deadline - now();
     if (spawnMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
     let result;
@@ -364,8 +381,23 @@ export async function askOnce({
       );
     } catch (error) {
       // Only an error this module made is passed on; anything else has no text of its own here.
+      if (isBillingError(error?.message)) {
+        await recordBillingError(root, picked.id, new Date(now()).toISOString());
+        throw new AskError("The API account has insufficient credit", "BILLING_ERROR");
+      }
       if (error instanceof AskError) throw error;
       throw new AskError("The Claude call failed", "ASK_FAILED");
+    }
+    if (typeof result?.total_cost_usd === "number")
+      await recordAccountCost(root, {
+        id: `ask:${randomUUID()}`,
+        accountId: picked.id,
+        costUsd: result.total_cost_usd,
+        at: new Date(now()).toISOString(),
+      });
+    if (result?.is_error && isBillingError(result?.result)) {
+      await recordBillingError(root, picked.id, new Date(now()).toISOString());
+      throw new AskError("The API account has insufficient credit", "BILLING_ERROR");
     }
     if (isRevoked(result)) {
       const line = String(result.result ?? "");
@@ -381,6 +413,16 @@ export async function askOnce({
     if (isLimit(result, at)) {
       const line = String(result.result ?? "");
       const parsed = parseLimitLine(line, at);
+      if (limitProbe) {
+        if (!parsed)
+          throw new AskError("The probe did not report a subscription limit", "PROBE_UNCONFIRMED");
+        const error = new AskError(
+          "The live ask confirmed a subscription limit",
+          "CONFIRMED_LIMIT",
+        );
+        error.confirmedLimit = { accountId: picked.id, resetAt: parsed.resetAt, kind: parsed.kind };
+        throw error;
+      }
       const marked = await markAccountLimited(
         root,
         picked.id,
@@ -389,6 +431,8 @@ export async function askOnce({
           : { resetAt: new Date(at + RATE_LIMIT_HOLD_MS).toISOString(), kind: "rate", note: line },
         at,
       );
+      if (!marked)
+        throw new AskError("The API request was rate limited; retry later", "API_RATE_LIMITED");
       tried.push({
         id: picked.id,
         name: picked.name,

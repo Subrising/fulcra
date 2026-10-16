@@ -38,6 +38,11 @@ import { managementRpc, taskManagementRpc } from "./shared/management";
 import { createManagement, createTaskManagement, localCall } from "./server/management";
 import { operatorInvokeRpc } from "./shared/operator-invoke";
 import { operatorInvoke } from "./server/operator-invoke.mjs";
+import {
+  recordAccountCost,
+  recordBillingError,
+  isBillingError,
+} from "./server/account-billing.mjs";
 import { registerPoolUsage } from "./server/pool-usage";
 import { taskCatalogRpc, usageRpc } from "./shared/tasks";
 import { readTaskCatalog, taskPage, singleFlight, createUsageReader } from "./server/tasks";
@@ -568,6 +573,23 @@ export default function contribute(
   // credential for that launch only; no pool leaves the launch exactly as before.
   const poolRoot = () => (loadConfig() as { home: string }).home;
   registerPoolUsage(server, poolRoot);
+  const stopBilling =
+    typeof server.on === "function"
+      ? server.on("agent.turn_ended", async (event) => {
+          const accountId = event.agent.accountId;
+          if (event.agent.provider !== "claude" || !accountId) return;
+          if (event.turnId && event.usage?.totalCostUsd !== undefined)
+            await recordAccountCost(poolRoot(), {
+              id: `turn:${event.agent.id}:${event.turnId}`,
+              accountId,
+              costUsd: event.usage.turnCostUsd ?? event.usage.totalCostUsd,
+              runtimeSessionId: event.usage.recorded?.runtimeSessionId,
+              cumulativeUsd: event.usage.totalCostUsd,
+            });
+          if (event.outcome.kind === "failed" && isBillingError(event.outcome.error.message))
+            await recordBillingError(poolRoot(), accountId, undefined, "session.billing_error");
+        })
+      : undefined;
   const stopPool: unknown =
     typeof server.before === "function"
       ? server.before("agent.session_open", sessionOpenHook({ root: poolRoot }) as any)
@@ -965,6 +987,7 @@ export default function contribute(
     readers.clear();
     workMapProjects.clear();
     workMap = undefined;
+    stopBilling?.();
     usage = undefined;
     fleet = undefined;
     projects = undefined;

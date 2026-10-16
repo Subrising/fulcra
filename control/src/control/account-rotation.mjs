@@ -29,6 +29,8 @@ export async function rotateOnLimit(
     resetAt = null,
     note = null,
     stopId,
+    accountId = null,
+    stoppedAt = null,
     now = Date.now(),
     delegated = true,
     kind = null,
@@ -42,7 +44,16 @@ export async function rotateOnLimit(
       root,
       session,
       provider,
-      { resetAt, note, stopId, reassign: delegated, kind },
+      {
+        resetAt,
+        note,
+        stopId,
+        reassign: delegated,
+        kind,
+        accountId,
+        stoppedAt,
+        ...(control.confirmAccountLimit ? { confirmLimit: control.confirmAccountLimit } : {}),
+      },
       now,
     );
   } catch {

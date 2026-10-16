@@ -182,8 +182,9 @@ async function writeAccounts(root, s) {
 export async function update(root, fn) {
   return withStoreLock(root, async () => {
     const s = await readAccountsAsync(root);
+    const before = JSON.stringify(s);
     const out = await fn(s);
-    await writeAccounts(root, s);
+    if (JSON.stringify(s) !== before) await writeAccounts(root, s);
     return out;
   });
 }
@@ -215,7 +216,29 @@ export async function withStoreLock(root, fn) {
 }
 
 // ---- status and choice (pure)
+export function isApiAccount(a) {
+  return (
+    a?.provider === "claude" &&
+    (a.credentialKind === "api-key" ||
+      (a.credentialKind == null &&
+        ["personal-workspace-api", "work-workspace-api"].includes(a.name)))
+  );
+}
+export function credentialKind(token) {
+  return /^sk-ant-api/i.test(String(token)) ? "api-key" : "subscription";
+}
+export function accountBudget(a) {
+  if (!isApiAccount(a)) return null;
+  return (
+    a.budget ?? {
+      limitUsd:
+        a.name === "personal-workspace-api" ? 200 : a.name === "work-workspace-api" ? 500 : null,
+      startAt: a.createdAt,
+    }
+  );
+}
 export function accountLimit(a, now = Date.now()) {
+  if (isApiAccount(a)) return null;
   const localTime = Math.max(
     Date.parse(a.limitObservedAt ?? "") || 0,
     Date.parse(a.usageObservedAt ?? "") || 0,
@@ -290,12 +313,19 @@ export async function readUsageAsync(root, now = Date.now()) {
 // holds back accounts at or above WEEKLY_LAUNCH_CAP_PCT while another is below it; when all are, the one with the most
 // left is used. Returns null when none is available.
 export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
+  const budgetHeld = (a) => {
+    const budget = accountBudget(a);
+    return budget && s.budgetActions?.[`${a.id}:${budget.startAt}`]?.targetId;
+  };
   const ready = s.accounts.filter(
     (a) =>
-      a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
+      a.provider === provider &&
+      !except.includes(a.id) &&
+      accountStatus(a, now).state === "ok" &&
+      !budgetHeld(a),
   );
   if (!ready.length) return null;
-  const used = (a) => usage[a.id] ?? 0;
+  const used = (a) => (isApiAccount(a) ? 0 : (usage[a.id] ?? 0));
   const room = ready.filter((a) => used(a) < WEEKLY_LAUNCH_CAP_PCT);
   const ok = room.length ? room : [...ready].sort((x, y) => used(x) - used(y)).slice(0, 1);
   const preferred = ok.find((a) => a.id === s.defaults?.[provider]);
@@ -379,6 +409,27 @@ export async function setAccount(root, id, patch) {
       )
         throw Error("An account with that name exists");
       a.name = n;
+    }
+    if (patch.credentialKind !== undefined) {
+      if (!["api-key", "subscription"].includes(patch.credentialKind))
+        throw Error("Unknown credential kind");
+      a.credentialKind = patch.credentialKind;
+      if (isApiAccount(a)) {
+        a.limitedUntil = null;
+        a.limitKind = null;
+        a.limitNote = null;
+      }
+    }
+    if (patch.budget !== undefined) {
+      const b = patch.budget;
+      if (
+        !isApiAccount(a) ||
+        !Number.isFinite(b?.limitUsd) ||
+        b.limitUsd <= 0 ||
+        !Number.isFinite(Date.parse(b?.startAt))
+      )
+        throw Error("Invalid API budget");
+      a.budget = { limitUsd: b.limitUsd, startAt: new Date(b.startAt).toISOString() };
     }
     if (patch.enabled !== undefined) a.enabled = patch.enabled === true;
     if (patch.priority !== undefined) {
@@ -564,7 +615,7 @@ export async function markAccountLimited(
 ) {
   return update(root, (s) => {
     const a = s.accounts.find((x) => x.id === accountId);
-    if (!a) return null;
+    if (!a || isApiAccount(a)) return null;
     const until = resetAt && Date.parse(resetAt) > now ? resetAt : iso(now + DEFAULT_LIMIT_MS);
     if (!a.limitedUntil || Date.parse(a.limitedUntil) < Date.parse(until)) {
       a.limitedUntil = until;
@@ -575,6 +626,50 @@ export async function markAccountLimited(
     return { id: a.id, name: a.name, limitedUntil: a.limitedUntil, limitKind: a.limitKind };
   });
 }
+// A saved stop is only a hint. A new, pinned ask must confirm a Claude subscription limit.
+export async function confirmAccountLimit({
+  root,
+  accountId,
+  now = Date.now,
+  keychain = createKeychain(),
+  spawnClaude,
+}) {
+  const { askOnce } = await import("./ask.mjs");
+  try {
+    await askOnce({
+      root,
+      keychain,
+      spawnClaude,
+      now,
+      limitProbe: true,
+      input: {
+        account: accountId,
+        model: "claude-haiku-5-5",
+        prompt: "Reply OK.",
+        timeoutMs: 15000,
+      },
+    });
+    return { accountId, limited: false };
+  } catch (error) {
+    if (error.code === "CONFIRMED_LIMIT" && error.confirmedLimit?.accountId === accountId)
+      return error.confirmedLimit;
+  }
+  return null;
+}
+function stopAccount(s, sessionId, provider, accountId, stoppedAt) {
+  const cur = s.assignments[sessionId];
+  if (cur?.takeover) return null;
+  if (!accountId && stoppedAt && Date.parse(cur?.at) > Date.parse(stoppedAt)) {
+    accountId = s.rotations
+      .filter((r) => r.session === sessionId && Date.parse(r.at) > Date.parse(stoppedAt))
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0]?.from;
+    if (!accountId) return null;
+  }
+  return (
+    s.accounts.find((a) => a.id === (accountId ?? cur?.accountId) && a.provider === provider) ??
+    null
+  );
+}
 // A usage limit on `sessionId`'s account: mark that account limited until `resetAt` (or DEFAULT_LIMIT_MS) and, only when
 // the pool's rotateOnLimit is on, move the session to the next available account. Off (the default), the rotation is
 // recorded as held and the session stays on its account; the usage-limit resume picks it up after the reset. Returns { from, to, earliestReset } -- `to` null when every account is limited.
@@ -584,15 +679,78 @@ export async function rotate(
   root,
   sessionId,
   provider,
-  { resetAt = null, note = null, stopId = null, reassign = true, kind = null } = {},
+  {
+    resetAt = null,
+    note = null,
+    stopId = null,
+    reassign = true,
+    kind = null,
+    accountId = null,
+    stoppedAt = null,
+    confirmLimit = confirmAccountLimit,
+  } = {},
   now = Date.now(),
 ) {
+  const snapshot = await readAccountsAsync(root);
+  const binding = stopId && snapshot.limitChecks?.[stopId];
+  if (binding && accountId && accountId !== binding.accountId) return null;
+  accountId = binding?.accountId ?? accountId;
+  const source = stopAccount(snapshot, sessionId, provider, accountId, stoppedAt);
+  if (!source || (stopId && snapshot.rotations.some((r) => r.stopId === stopId))) return null;
+  accountId = source.id;
+  if (provider === "claude" && kind !== "revoked") {
+    if (isApiAccount(source)) return null;
+    const claim = await update(root, (s) => {
+      s.limitChecks ??= {};
+      const prior = stopId && s.limitChecks[stopId];
+      if (prior && prior.accountId !== accountId) return false;
+      if (prior && (!["unavailable", "checking"].includes(prior.outcome) || now < prior.retryAt))
+        return false;
+      if (stopId)
+        s.limitChecks[stopId] = {
+          accountId,
+          at: iso(now),
+          outcome: "checking",
+          retryAt: now + 300_000,
+        };
+      return true;
+    });
+    if (!claim) return null;
+    let confirmation;
+    try {
+      confirmation = await confirmLimit({ root, accountId, resetAt, kind, now: () => now });
+    } catch {
+      /* fail closed */
+    }
+    const confirmed =
+      confirmation?.accountId === accountId && ["session", "weekly"].includes(confirmation.kind);
+    await update(root, (s) => {
+      if (stopId)
+        s.limitChecks[stopId] = {
+          accountId,
+          at: iso(now),
+          outcome: confirmed
+            ? "limited"
+            : confirmation?.limited === false
+              ? "clear"
+              : "unavailable",
+          retryAt: now + 300_000,
+        };
+    });
+    if (!confirmed) return null;
+    resetAt = confirmation.resetAt;
+    kind = confirmation.kind;
+    note = "A pinned live ask confirmed this account's subscription limit.";
+  }
   return update(root, (s) => {
+    // A stop belongs to one launch. Reconnection must never apply it to a new account.
+    if (stopId && s.rotations.some((r) => r.stopId === stopId)) return null;
     const cur = s.assignments[sessionId];
-    if (cur?.takeover) return null; // an in-flight/uncertain switch owns this assignment
-    const from = cur ? s.accounts.find((a) => a.id === cur.accountId) : null;
-    if (!from) return null; // not a pooled launch: nothing to rotate
+    if (cur?.takeover) return null;
+    const from = s.accounts.find((a) => a.id === accountId && a.provider === provider);
+    if (!from) return null;
     const revoked = kind === "revoked";
+    if (!revoked && isApiAccount(from)) return null;
     const freshRevoked = revoked && !from.revoked;
     if (freshRevoked)
       from.revoked = { at: iso(now), reason: note ? String(note).slice(0, 200) : "" };
@@ -611,7 +769,7 @@ export async function rotate(
     if (!revoked) from.limitObservedAt = iso(now);
     // Moving spends another account's usage, so it needs both the caller's ask and the owner's setting.
     // A revoked token cannot work again by waiting, so it moves the session whatever the owner's limit setting is.
-    const move = reassign && (revoked || s.rotateOnLimit === true);
+    const move = reassign && cur?.accountId === from.id && (revoked || s.rotateOnLimit === true);
     const to = move ? choose(s, provider, now, [from.id]) : null;
     if (to) {
       s.assignments[sessionId] = { accountId: to.id, provider, at: iso(now), ended: false };
@@ -785,7 +943,9 @@ export function publicView(s, now = Date.now()) {
       enabled: a.enabled,
       priority: a.priority,
       status: accountStatus(a, now),
-      limitNote: a.limitNote,
+      credentialKind: isApiAccount(a) ? "api-key" : "subscription",
+      budget: accountBudget(a),
+      limitNote: isApiAccount(a) ? null : a.limitNote,
       limitKind: accountLimit(a, now)?.kind ?? null,
       sessions: Object.entries(s.assignments)
         .filter(([, x]) => x.accountId === a.id && !x.ended)
@@ -1088,7 +1248,9 @@ export function codexSignedIn(root, id) {
 // ---- the launch hook (agent.session_open): the account's credential for THIS launch only, never persisted.
 export function launchEnv(provider, account, { token, root, env = process.env }) {
   if (provider === "claude")
-    return { CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "" };
+    return credentialKind(token) === "api-key"
+      ? { CLAUDE_CODE_OAUTH_TOKEN: "", ANTHROPIC_API_KEY: token, ANTHROPIC_AUTH_TOKEN: "" }
+      : { CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "" };
   if (provider === "codex")
     return { CODEX_HOME: codexHome(root, account.id), CODEX_SQLITE_HOME: codexBase(env) };
   return {};
@@ -1196,6 +1358,7 @@ export function sessionOpenHook({
             if (provider === "codex") account.auth = "signing-in";
             return null;
           }
+          if (provider === "claude") account.credentialKind = credentialKind(token);
           // The current assignment/one-use intent and account eligibility are checked together,
           // immediately before publishing this launch's environment. Labels are never admission evidence.
           return {

@@ -18,6 +18,13 @@ const DISPLAY_AS_OPTIONS: SegmentedControlOption<UsageDisplayAs>[] = [
   { value: "remaining", label: usageCopy.displayRemaining, testID: "usage-display-remaining" },
 ];
 
+const ACTION_TARGET = {
+  minWidth: 48,
+  minHeight: 48,
+  alignItems: "center",
+  justifyContent: "center",
+} as const;
+
 const ThemedSettings = withUnistyles(Settings);
 
 /** The shared usage preferences, opened from a cog as a popover or compact sheet. */
@@ -29,6 +36,7 @@ export function UsageOptions() {
     <DropdownMenu compactMode="sheet">
       <ToolbarButton
         kind="menu"
+        style={ACTION_TARGET}
         label={usageCopy.options}
         compact={compact}
         testID="usage-options-menu"

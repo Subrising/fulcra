@@ -544,3 +544,41 @@ test("accountDown tells each holder once per account, and the notice names the a
   assert.match(text, /\[account down\] The token of account "Tommi" was revoked or is invalid/);
   assert.match(text, /must sign the account in again/);
 });
+
+test("API budget notices target Main once, using a durable account and period key", () => {
+  const MAIN = T(71),
+    queued = new Set();
+  let pumps = 0;
+  const fake = {
+    has: () => true,
+    db: {
+      prepare: (sql) => {
+        assert.match(sql, /seat='main'/);
+        return { all: () => [{ session: MAIN }] };
+      },
+    },
+    enqueue: (target, kind, identity) => {
+      assert.equal(target.holder, MAIN);
+      assert.equal(kind, "account-budget");
+      const key = JSON.stringify(identity);
+      if (queued.has(key)) return false;
+      queued.add(key);
+      return true;
+    },
+    pump: () => {
+      pumps++;
+    },
+  };
+  Wakes.prototype.accountBudget.call(fake, "account:period", {
+    account: "API",
+    usedUsd: 190,
+    limitUsd: 200,
+  });
+  Wakes.prototype.accountBudget.call(fake, "account:period", {
+    account: "API",
+    usedUsd: 191,
+    limitUsd: 200,
+  });
+  assert.equal(queued.size, 1);
+  assert.equal(pumps, 1);
+});

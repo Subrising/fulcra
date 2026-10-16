@@ -2742,6 +2742,47 @@ describe("ClaudeAgentSession context window usage", () => {
     };
   }
 
+  test("L4: the first resumed result leaves its restored historical cost to the durable billing cursor", async () => {
+    const queryFactory = createQueryFactoryForTurns([
+      [createInitMessage(), createSuccessResult({ total_cost_usd: 0.4 })],
+      [createSuccessResult({ total_cost_usd: 0.55, uuid: "next-resumed-result" })],
+    ]);
+    const client = new ClaudeAgentClient({
+      logger,
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.resumeSession({
+      provider: "claude",
+      sessionId: "session-1",
+      metadata: { cwd: process.cwd() },
+    });
+    try {
+      const first = await session.run("one");
+      expect(first.usage?.totalCostUsd).toBe(0.4);
+      expect(first.usage?.turnCostUsd).toBeUndefined();
+      const next = await session.run("two");
+      expect(next.usage?.turnCostUsd).toBeCloseTo(0.15);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("API turn costs use query deltas rather than repeatedly adding cumulative SDK costs", async () => {
+    const session = await createSessionForTurns([
+      [initMessage("default"), createSuccessResult({ total_cost_usd: 0.25 })],
+      [createSuccessResult({ total_cost_usd: 0.4, uuid: "second-result" })],
+    ]);
+    try {
+      const first = await session.run("one");
+      const second = await session.run("two");
+      expect(first.usage?.turnCostUsd).toBe(0.25);
+      expect(second.usage?.turnCostUsd).toBeCloseTo(0.15);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("passive recorded usage comes from actual injected SDK result with distinct cache creation", async () => {
     const session = await createSessionForTurns([
       [

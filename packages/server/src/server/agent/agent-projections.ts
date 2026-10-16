@@ -142,6 +142,7 @@ export function toAgentPayload(
     updatedAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: validatedTimestamp(agent.lastUserMessageAt),
     status: agent.lifecycle,
+    nativeLifecycle: agent.lifecycle,
     activeTurn: agent.activeTurnId
       ? {
           turnId: agent.activeTurnId,
@@ -286,6 +287,7 @@ export function buildStoredAgentPayload(
     updatedAt: updatedAt.toISOString(),
     lastUserMessageAt: lastUserMessageAt ? lastUserMessageAt.toISOString() : null,
     status: storedAgentStatus(record),
+    nativeLifecycle: "closed",
     capabilities: defaultCapabilities,
     currentModeId: record.lastModeId ?? null,
     availableModes: [],
@@ -312,6 +314,7 @@ export function toAgentListItemPayload(agent: AgentSnapshotPayload): AgentListIt
     thinkingOptionId: agent.thinkingOptionId,
     effectiveThinkingOptionId: agent.effectiveThinkingOptionId,
     status: agent.status,
+    nativeLifecycle: agent.nativeLifecycle,
     cwd: agent.cwd,
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
@@ -517,6 +520,7 @@ function sanitizeUsage(value: unknown): AgentUsage | undefined {
     "cachedInputTokens",
     "outputTokens",
     "totalCostUsd",
+    "turnCostUsd",
     "contextWindowMaxTokens",
     "contextWindowUsedTokens",
   ];

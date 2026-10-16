@@ -3094,6 +3094,7 @@ export class AgentManager {
     },
     resumeOptions?: AgentResumeSessionOptions,
     requireRecord?: (record: StoredAgentRecord | null) => void,
+    beforeResume?: () => void,
   ): Promise<ManagedAgent> {
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(
@@ -3147,9 +3148,11 @@ export class AgentManager {
       },
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
+    beforeResume?.();
     const session = await nativeDispatch(() =>
       client.resumeSession(handle, providerLaunchConfig, launchContext, currentResumeOptions),
     );
+    await this.checkDormantResumeIdentity(session, handle, beforeResume);
     await this.requireExternalMcpSupport(session, storedConfig);
     return this.registerSession(session, storedConfig, resolvedAgentId, {
       ...options,
@@ -3157,6 +3160,17 @@ export class AgentManager {
       persistence: handle,
       restoring: true,
     });
+  }
+
+  private async checkDormantResumeIdentity(
+    session: AgentSession,
+    handle: AgentPersistenceHandle,
+    guard?: () => void,
+  ): Promise<void> {
+    if (guard && !matchesContextPersistence(session, handle, false)) {
+      await this.closeUnregisteredSession(session);
+      throw new Error("Provider resumed a different dormant session");
+    }
   }
 
   importProviderSession(input: {
@@ -3286,7 +3300,7 @@ export class AgentManager {
     };
   }
 
-  private readMcpRefreshAdmission(agent: ActiveManagedAgent): {
+  private readMcpRefreshAdmission(agent: ManagedAgent): {
     revision: string;
     allowed: boolean;
     contextRotationAllowed?: boolean;
@@ -3345,11 +3359,92 @@ export class AgentManager {
     return "resume_failed";
   }
 
+  private dormantMcpAdmission(record: StoredAgentRecord) {
+    return this.readMcpRefreshAdmission({
+      ...record,
+      config: buildStoredAgentConfig(record),
+      session: null,
+      lifecycle: "closed",
+    } as unknown as ManagedAgent);
+  }
+
+  private async reconnectDormantAgent(
+    request: AgentMcpRefreshInput,
+    initialState: AgentMcpRefreshState | null,
+    guard?: () => void,
+  ): Promise<AgentMcpRefreshResult> {
+    if (!initialState || initialState.lifecycle !== "closed" || request.reconnect !== true)
+      return { outcome: "refused", reason: "not_resident", state: initialState };
+    const { agentId, expected, changes } = request;
+    let state: AgentMcpRefreshState | null = initialState;
+    const refused = (reason: AgentMcpRefreshResult["reason"]): AgentMcpRefreshResult => ({
+      outcome: "refused",
+      reason,
+      state,
+    });
+    // Quietly restore the same durable session. Do not run the owner's reload path:
+    // it revokes delegation and can restore archived workspaces.
+    if (
+      state.provider !== expected.provider ||
+      state.sessionId !== expected.sessionId ||
+      state.configRevision !== expected.configRevision
+    )
+      return refused("stale");
+    if (Object.keys(changes).length || request.toolPolicy !== undefined)
+      return refused("invalid_changes");
+    const record = await this.registry?.get(agentId);
+    if (!record || record.archivedAt || record.internal || !record.persistence?.sessionId)
+      return refused("not_resident");
+    const authority = (value: StoredAgentRecord) => this.dormantMcpAdmission(value);
+    const admission = authority(record);
+    if (!admission.allowed) return refused("stale");
+    try {
+      this.invokeReportRelaunchGuard(guard);
+      await this.resumeAgentFromPersistenceInternal(
+        record.persistence,
+        buildStoredAgentConfig(record),
+        agentId,
+        {
+          createdAt: new Date(record.createdAt),
+          updatedAt: new Date(record.updatedAt ?? record.createdAt),
+          lastUserMessageAt: record.lastUserMessageAt ? new Date(record.lastUserMessageAt) : null,
+          labels: record.labels,
+          workspaceId: record.workspaceId,
+          owner: record.owner,
+          attention: extractAttention(record),
+        },
+        { purpose: "interactive" },
+        (fresh) => {
+          if (
+            !fresh ||
+            fresh.archivedAt ||
+            this.mcpConfigRevision(fresh) !== this.mcpConfigRevision(record) ||
+            authority(fresh).revision !== admission.revision ||
+            !authority(fresh).allowed
+          )
+            throw new Error("Dormant session changed before account switch");
+          this.invokeReportRelaunchGuard(guard);
+        },
+        () => {
+          if (authority(record).revision !== admission.revision || !authority(record).allowed)
+            throw new Error("Dormant session authority changed before resume");
+          this.invokeReportRelaunchGuard(guard);
+        },
+      );
+      state = await this.readAgentMcpRefreshState(agentId);
+      return { outcome: "refreshed", reason: null, state };
+    } catch {
+      state = await this.readAgentMcpRefreshState(agentId);
+      return { outcome: "failed", reason: "resume_failed", state };
+    }
+  }
+
   /** Patch an already owned, quiet runtime; never import or replay a provider session. */
   refreshAgentMcp(input: AgentMcpRefreshInput): Promise<AgentMcpRefreshResult> {
     // Copy and validate before queuing so a caller cannot mutate the admitted request.
     const request = AgentMcpRefreshInputSchema.parse(input);
     const reportRelaunch = this.captureReportRelaunch(request.agentId);
+    const quietGuard = reportRelaunch?.beforeClose;
     return this.trackAgentRegistrationOperation(
       this.runLifecycleMutation(request.agentId, async (): Promise<AgentMcpRefreshResult> => {
         const { agentId, expected, changes } = request;
@@ -3360,7 +3455,7 @@ export class AgentManager {
           state,
         });
         const existing = this.agents.get(agentId);
-        if (!existing?.session) return refused("not_resident");
+        if (!existing?.session) return this.reconnectDormantAgent(request, state, quietGuard);
         if (!state?.supported) return refused("unsupported");
         const stale = () =>
           !state ||
@@ -9066,7 +9161,11 @@ export class AgentManager {
     if (this.pluginLifecycle && agent && !agent.internal && event.type !== "timeline") {
       publishAgentStream(
         this.pluginLifecycle,
-        describeHookAgent({ ...agent, title: agent.config.title }),
+        describeHookAgent({
+          ...agent,
+          title: agent.config.title,
+          accountId: agent.session?.limitResumeAccountBinding?.()?.replace(/^pool:/, ""),
+        }),
         event,
         this.timelineStore.getItems(agentId),
       );
