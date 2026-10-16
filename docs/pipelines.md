@@ -234,6 +234,9 @@ Private state uses the run ID, attempt, and owner UUID. Exclusive registration
 prevents duplicate watchers. The watcher records its send attempt before native
 delivery. An uncertain receipt needs inspection before another attempt.
 A watcher error sends one blocked notice with the retained run URL.
+If GitHub times out before completion, the local watcher resumes the same native
+wait up to three times. It sends no intermediate notice. A changed run identity
+fails immediately. Native sends are never retried automatically.
 
 `release.sh` uses the caller session in `PASEO_AGENT_ID` by default.
 Set `FULCRA_CI_OWNER` to select another retained owner session.

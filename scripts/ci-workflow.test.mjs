@@ -87,6 +87,42 @@ test("outbound watcher reports stale completion and never retries an uncertain n
   assert.equal(messages.length, 1);
 });
 
+test("an annotation timeout resumes the same native wait without an intermediate notice", async () => {
+  const operation = {
+    runId: 123,
+    attempt: 1,
+    headSha: "a".repeat(40),
+    workflow: ".github/workflows/ci.yml",
+    owner: "owner",
+    url: "https://github.com/Subrising/fulcra/actions/runs/123",
+    notice: "none",
+  };
+  let waits = 0;
+  const notices = [],
+    states = [];
+  await watchOperation(operation, {
+    wait: async (id) => {
+      assert.equal(id, 123);
+      waits++;
+    },
+    read: async () => ({
+      repository: { full_name: "Subrising/fulcra" },
+      id: 123,
+      run_attempt: 1,
+      head_sha: operation.headSha,
+      path: operation.workflow,
+      status: waits === 1 ? "in_progress" : "completed",
+      conclusion: waits === 1 ? null : "success",
+    }),
+    persist: async (value) => states.push(value.notice),
+    deliver: async (_owner, text) => notices.push(text),
+  });
+  assert.equal(waits, 2);
+  assert.deepEqual(states, ["attempted", "accepted"]);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /^PASS:/);
+});
+
 test("shared dependencies and unknown root files run the full suite", () => {
   for (const path of [
     "package.json",

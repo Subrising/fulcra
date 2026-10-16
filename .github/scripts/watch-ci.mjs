@@ -21,24 +21,41 @@ function save(path, operation) {
   renameSync(`${path}.tmp`, path);
 }
 
+function matchesOperation(run, operation) {
+  return !(
+    run.repository.full_name !== repository ||
+    run.id !== operation.runId ||
+    run.run_attempt !== operation.attempt ||
+    run.head_sha !== operation.headSha ||
+    run.path !== operation.workflow
+  );
+}
+
+async function completedRun(operation, { wait, read }) {
+  // gh can exit on an annotation API timeout while CI still runs. Resume only
+  // the same native wait. Never retry a delivered or uncertain notice.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let run;
+    try {
+      await wait(operation.runId);
+      run = await read(operation.runId);
+    } catch {
+      continue;
+    }
+    if (!matchesOperation(run, operation)) {
+      throw new Error("The completion does not match the registered run");
+    }
+    if (run.status === "completed" && /^[a-z_]{1,40}$/.test(run.conclusion ?? "")) return run;
+  }
+  throw new Error("Native workflow wait could not verify completion after three attempts");
+}
+
 export async function watchOperation(operation, { wait, read, deliver, persist }) {
   if (operation.notice !== "none")
     throw new Error("Reconcile the retained notice before another attempt");
   let summary;
   try {
-    await wait(operation.runId);
-    const run = await read(operation.runId);
-    if (
-      run.repository.full_name !== repository ||
-      run.id !== operation.runId ||
-      run.run_attempt !== operation.attempt ||
-      run.head_sha !== operation.headSha ||
-      run.path !== operation.workflow ||
-      run.status !== "completed" ||
-      !/^[a-z_]{1,40}$/.test(run.conclusion ?? "")
-    ) {
-      throw new Error("The completion does not match the registered run");
-    }
+    const run = await completedRun(operation, { wait, read });
     const label = operation.workflow === ".github/workflows/ci.yml" ? "CI" : "Merge PR";
     summary = `${run.conclusion === "success" ? "PASS" : "FAIL"}: ${label} (${run.conclusion}).`;
   } catch {
@@ -55,9 +72,23 @@ export async function watchOperation(operation, { wait, read, deliver, persist }
 
 function waitForRun(runId) {
   return new Promise((done, reject) => {
-    const child = spawn("gh", ["run", "watch", String(runId), "-R", repository, "--exit-status"], {
-      stdio: "inherit",
-    });
+    const child = spawn(
+      "gh",
+      [
+        "run",
+        "watch",
+        String(runId),
+        "-R",
+        repository,
+        "--exit-status",
+        "--compact",
+        "--interval",
+        "10",
+      ],
+      {
+        stdio: "inherit",
+      },
+    );
     child.once("error", reject);
     // A failing CI run also exits nonzero. Read its terminal conclusion before reporting it.
     child.once("exit", () => done());
