@@ -185,7 +185,7 @@ async function waitForExitOrTimeout(
   exitPromise: Promise<void>,
   timeoutMs: number,
 ): Promise<boolean> {
-  let timer: NodeJS.Timeout | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
       exitPromise.then(() => true),
