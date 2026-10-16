@@ -211,6 +211,7 @@ try {
         ["organization.accounts", {}],
         ["organization.accounts.add", { provider: "codex", name: "Extra" }],
         ["organization.accounts.update", { id: first.id, remove: true }],
+        ["organization.accounts.update", { id: first.id, revoke: true }],
         ["organization.accounts.update", { id: first.id, enabled: false }],
         ["organization.accounts.update", { id: first.id, token: "synthetic-token-never-used" }],
         ["organization.accounts.update", { id: first.id, priority: 99 }],

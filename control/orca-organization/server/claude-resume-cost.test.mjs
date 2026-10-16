@@ -5,9 +5,11 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { addAccount, readAccounts } from "./accounts.mjs";
+import { scratchKeychain } from "./scratch-keychain.fixture.mjs";
+import { apiKeyHelperCommand } from "./api-key-helper.mjs";
+import { addAccount, readAccounts, setAccount } from "./accounts.mjs";
 import { recordAccountCost, accountSpend } from "./account-billing.mjs";
 const binary =
   process.env.FULCRA_TEST_CLAUDE_BIN ??
@@ -90,7 +92,7 @@ function reply(req, res) {
     res.end();
   });
 }
-function run(home, baseUrl, args) {
+function run(home, baseUrl, args, helper, key) {
   return new Promise((resolve, reject) => {
     let out = "",
       err = "";
@@ -104,6 +106,8 @@ function run(home, baseUrl, args) {
         "",
         "--setting-sources",
         "",
+        "--settings",
+        JSON.stringify({ apiKeyHelper: helper }),
         "--model",
         "claude-sonnet-4-6",
         ...args,
@@ -115,7 +119,9 @@ function run(home, baseUrl, args) {
           PATH: process.env.PATH,
           HOME: home,
           CLAUDE_CONFIG_DIR: path.join(home, "config"),
-          ANTHROPIC_API_KEY: "sk-ant-api03-SYNTHETIC-LOCAL-ONLY",
+          ANTHROPIC_API_KEY: "",
+          CLAUDE_CODE_OAUTH_TOKEN: "",
+          ANTHROPIC_AUTH_TOKEN: "",
           ANTHROPIC_BASE_URL: baseUrl,
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
           DISABLE_TELEMETRY: "1",
@@ -124,6 +130,18 @@ function run(home, baseUrl, args) {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    if (process.platform === "darwin") {
+      const processView = execFileSync(
+        "/bin/ps",
+        ["eww", "-p", String(child.pid), "-o", "command="],
+        { encoding: "utf8" },
+      );
+      assert.equal(
+        processView.includes(key),
+        false,
+        "Native process argv and environment must not contain the key",
+      );
+    }
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(Error(`Scratch CLI timed out: ${err.slice(0, 300)}`));
@@ -151,10 +169,18 @@ function run(home, baseUrl, args) {
 }
 test(
   "L4: a new real CLI process resumes cumulative cost without charging the old cost to the new account",
-  { skip: !binary, timeout: 65000 },
+  { skip: !binary || !["darwin", "win32"].includes(process.platform), timeout: 120000 },
   async (t) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "api-cost-native-resume-"));
-    const server = http.createServer(reply);
+    const key = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    let authenticated = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url.startsWith("/v1/messages")) {
+        assert.equal(req.headers["x-api-key"] === key, true);
+        authenticated++;
+      }
+      reply(req, res);
+    });
     t.after(() => {
       server.closeAllConnections();
       server.close();
@@ -165,8 +191,13 @@ test(
       nativeId = randomUUID();
     const a = await addAccount(root, { provider: "claude", name: "personal-workspace-api" });
     const b = await addAccount(root, { provider: "claude", name: "work-workspace-api" });
+    const { store, env } = scratchKeychain(root);
+    t.after(() => store.remove(a.id));
+    await store.put(a.id, key);
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const helper = apiKeyHelperCommand({ root, id: a.id, env });
     const url = `http://127.0.0.1:${server.address().port}`;
-    const first = await run(home, url, ["--session-id", nativeId]);
+    const first = await run(home, url, ["--session-id", nativeId], helper, key);
     await recordAccountCost(root, {
       id: "first",
       accountId: a.id,
@@ -174,7 +205,22 @@ test(
       runtimeSessionId: nativeId,
       cumulativeUsd: first.total_cost_usd,
     });
-    const second = await run(home, url, ["--resume", nativeId]);
+    const second = await run(home, url, ["--resume", nativeId], helper, key);
+    assert.equal(authenticated, 2);
+    // Scan actual Claude session records, logs and settings. The native Keychain file is encrypted.
+    const scan = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) scan(file);
+        else
+          assert.equal(
+            fs.readFileSync(file).includes(Buffer.from(key)),
+            false,
+            `Key found in ${entry.name}`,
+          );
+      }
+    };
+    scan(home);
     assert.equal(first.session_id, nativeId);
     assert.equal(second.session_id, nativeId);
     assert.ok(first.total_cost_usd > 0);

@@ -4,7 +4,7 @@ Use a Mac with full Xcode, CocoaPods, Node.js and your own free Apple Account. T
 
 ## What was actually tested
 
-A physical iPhone build used software source `01eaec63c52a7754b26bf4b6fafd99e8c55eac6f` in an isolated checkout. Its version was set to **0.2.0 as build metadata**, replacing the retained upstream package version 0.10.2. Prebuild, CocoaPods, Xcode Release/device build, strict signature verification, installation and launch succeeded. It was **not checked out and tested from the public v0.2.0 tag**, and the published presentation commit was not device-built by that worker.
+A physical iPhone build used software source `01eaec63c52a7754b26bf4b6fafd99e8c55eac6f` in an isolated checkout. Its version was set to **0.2.0 as build metadata**, replacing the retained upstream package version 0.10.2. That historical approach can fail current plugin checks. Keep the runtime package version unchanged for new builds. Prebuild, CocoaPods, Xcode Release/device build, strict signature verification, installation and launch succeeded. It was **not checked out and tested from the public v0.2.0 tag**, and the published presentation commit was not device-built by that worker.
 
 Recorded tools: Node 24.3.0, npm 11.4.2, CocoaPods 1.16.2, Xcode 26.4 (17E192), iPhoneOS SDK 26.4. The generated workspace/scheme was **Fulcra**. Actual dependencies were reused by matching APFS clones; the fresh-install commands below are source-derived setup, not a claim that a new install was run for this guide.
 
@@ -27,6 +27,22 @@ npm run build:app-deps
 The published [macOS/CLI guide](getting-started.md) explains the separate root/control locks. Keep generated native edits in Expo config/plugins: `prebuild --clean` replaces the generated project. Do not copy another user's credentials, signing team, device identifier or runtime state.
 
 ## Prebuild and CocoaPods
+
+Keep the upstream runtime version in `packages/app/package.json`. Plugin compatibility uses that value.
+Set `FULCRA_DISPLAY_VERSION=0.2.22` for a public display label. This changes the native label while runtime build numbers stay separate.
+Do not replace the package version with the display label.
+
+After `npm run build:app-deps`, check compatibility before bundling:
+
+```bash
+node scripts/check-app-plugin-compatibility.mjs
+# Also check a live host's controller manifest when available:
+node scripts/check-app-plugin-compatibility.mjs --manifest "$CONTROLLER_MANIFEST"
+```
+
+The `ios` and `ios:release` scripts run this check before Expo builds.
+The check uses the same compatibility function as the app. It rejects a package/workspace version mismatch or an incompatible controller.
+After bundling, pass `--runtime-version "$BUILT_RUNTIME_VERSION"` to check the recorded build input again. Keep that proof with the signed artifact.
 
 `BUNDLE_ID` below is your own registerable reverse-domain identifier, using the existing personal-device override. It is not a supplied identity or a global runtime rename.
 

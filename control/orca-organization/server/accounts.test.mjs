@@ -1108,3 +1108,193 @@ test("a revoked token moves a session at once even when moving on a limit is off
   assert.equal(accountOf(readAccounts(root), S(7)).id, b.id);
   assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).limitedUntil, null);
 });
+
+// Real native store, fake key. The helper is the only subprocess allowed to output it.
+test(
+  "API helper uses a native scratch store and refuses stale, disabled and revoked accounts",
+  {
+    skip: !["darwin", "win32"].includes(process.platform),
+    timeout: 90000,
+  },
+  async (t) => {
+    const { exec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { apiKeyHelperCommand } = await import("./api-key-helper.mjs");
+    const { scratchKeychain } = await import("./scratch-keychain.fixture.mjs");
+    const root = scratch();
+    const { store, env } = scratchKeychain(root);
+    const a = await addAccount(root, { provider: "claude", name: "API fixture" });
+    const key = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    t.after(async () => {
+      await store.remove(a.id);
+    });
+    await store.put(a.id, key);
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const command = apiKeyHelperCommand({ root, id: a.id, env });
+    assert.equal(command.includes(key), false);
+    const runHelper = () =>
+      promisify(exec)(command, {
+        env: { HOME: process.env.HOME, SystemRoot: process.env.SystemRoot, PATH: process.env.PATH },
+        timeout: 20000,
+      });
+    const result = await runHelper();
+    assert.equal(result.stdout === key, true);
+    assert.equal(result.stderr, "");
+    await setAccount(root, a.id, { enabled: false });
+    await assert.rejects(
+      runHelper,
+      (e) => !String(e.stdout).includes(key) && !String(e.stderr).includes(key),
+    );
+    await setAccount(root, a.id, { enabled: true, keyEpoch: randomUUID() });
+    await assert.rejects(runHelper);
+    await markAccountRevoked(root, a.id);
+    await assert.rejects(runHelper);
+    await store.remove(a.id);
+    assert.equal(await store.get(a.id), null);
+    const json = fs.readFileSync(path.join(root, "accounts/accounts.json"), "utf8");
+    assert.equal(json.includes(key), false);
+  },
+);
+
+test(
+  "API launch records contain only account references and the helper, including copied authentication values",
+  { skip: !["darwin", "win32"].includes(process.platform) },
+  async () => {
+    const root = scratch();
+    const key = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    const a = await addAccount(root, { provider: "claude", name: "API fixture" });
+    const hook = sessionOpenHook({ root: () => root, keychain: { get: async () => key } });
+    const out = await hook({
+      request: {
+        agentId: S(1),
+        provider: "claude",
+        purpose: "interactive",
+        env: { ANTHROPIC_API_KEY: key, COPY: key },
+      },
+    });
+    assert.equal(JSON.stringify(out).includes(key), false);
+    assert.equal(JSON.stringify(readAccounts(root)).includes(key), false);
+    assert.equal(out.env.ANTHROPIC_API_KEY, "");
+    assert.equal(typeof out.env.FULCRA_API_KEY_HELPER, "string");
+    assert.equal(out.env.FULCRA_ACCOUNT_ID, a.id);
+  },
+);
+
+test(
+  "orphan runtime lease: recover a crashed owner and stop its recorded child tree",
+  { skip: process.platform === "win32", timeout: 15000 },
+  async (t) => {
+    const { spawn } = await import("node:child_process");
+    const { once } = await import("node:events");
+    const { processIdentity } = await import("./api-process-tree.mjs");
+    const { waitForApiRuntimes } = await import("./accounts.mjs");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "api-orphan-fixture-"));
+    const id = randomUUID();
+    const module = new URL("./api-runtime-channel.mjs", import.meta.url).href;
+    const owner = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+    import { spawn } from 'node:child_process';
+    import { createApiRuntimeChannel } from ${JSON.stringify(module)};
+    const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {env:{},stdio:'ignore'});
+    const channel = createApiRuntimeChannel({root:${JSON.stringify(root)},accountId:${JSON.stringify(id)},onStop:()=>{}});
+    channel.attach(child);
+    process.stdout.write(String(child.pid)+'\\n');
+  `,
+      ],
+      { env: {}, stdio: ["ignore", "pipe", "inherit"] },
+    );
+    let childPid;
+    t.after(() => {
+      owner.kill("SIGKILL");
+      if (childPid) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {}
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const [data] = await once(owner.stdout, "data");
+    childPid = Number(String(data).trim());
+    assert.ok(processIdentity(childPid));
+    const ownerExit = once(owner, "exit");
+    owner.kill("SIGKILL");
+    await ownerExit;
+    await waitForApiRuntimes(root, id);
+    assert.equal(processIdentity(childPid), null);
+    assert.deepEqual(fs.readdirSync(path.join(root, "accounts/api-runtimes")), []);
+    await waitForApiRuntimes(root, id);
+  },
+);
+
+test("helper fixes the Keychain reader and uses a shell-neutral Windows entry", async () => {
+  const { apiKeyHelperCommand } = await import("./api-key-helper.mjs");
+  const base = {
+    root: os.tmpdir(),
+    id: randomUUID(),
+    env: {
+      FULCRA_ACCOUNTS_KEYCHAIN: "/scratch-only",
+      FULCRA_ACCOUNTS_SECURITY: "/tmp/untrusted-reader",
+    },
+  };
+  const mac = apiKeyHelperCommand({ ...base, platform: "darwin" });
+  const encoded = /[A-Za-z0-9+/]{100,}={0,2}/.exec(mac)[0];
+  const source = Buffer.from(encoded, "base64").toString();
+  assert.equal(source.includes('"security":"/usr/bin/security"'), true);
+  assert.equal(source.includes("/tmp/untrusted-reader"), false);
+  const windows = apiKeyHelperCommand({ ...base, platform: "win32" });
+  assert.match(
+    windows,
+    /^"C:\/Windows\/System32\/WindowsPowerShell\/v1.0\/powershell.exe" -NoProfile -NonInteractive -EncodedCommand [A-Za-z0-9+/=]+$/,
+  );
+  const script = Buffer.from(windows.split(" ").at(-1), "base64").toString("utf16le");
+  assert.ok(script.startsWith("$env:ELECTRON_RUN_AS_NODE='1'; & '"));
+  assert.ok(script.endsWith("; exit $LASTEXITCODE"));
+  assert.equal(windows.includes('set "'), false);
+  assert.ok(windows.length < 7500);
+  const { inflateRawSync } = await import("node:zlib");
+  const packed = /Buffer.from\(''([A-Za-z0-9+/=]+)'',''base64''\)/.exec(script)[1];
+  const unpacked = inflateRawSync(Buffer.from(packed, "base64")).toString();
+  assert.equal(unpacked, source);
+});
+
+test(
+  "orphan recovery refuses a reused child identity and retains stop evidence",
+  { timeout: 15000 },
+  async (t) => {
+    const { spawn } = await import("node:child_process");
+    const { once } = await import("node:events");
+    const { processIdentity } = await import("./api-process-tree.mjs");
+    const { waitForApiRuntimes } = await import("./accounts.mjs");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "api-identity-fixture-"));
+    const id = randomUUID();
+    const dead = spawn(process.execPath, ["-e", ""], { env: {}, stdio: "ignore" });
+    await once(dead, "exit");
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      env: {},
+      stdio: "ignore",
+    });
+    t.after(() => {
+      child.kill("SIGKILL");
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const dir = path.join(root, "accounts/api-runtimes");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${randomUUID()}.json`);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        accountId: id,
+        ownerPid: dead.pid,
+        childPid: child.pid,
+        childStart: "different creation time",
+      }),
+    );
+    await assert.rejects(waitForApiRuntimes(root, id), /identity changed/);
+    assert.ok(processIdentity(child.pid));
+    assert.equal(fs.existsSync(file), true);
+  },
+);

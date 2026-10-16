@@ -159,6 +159,7 @@ export const accountUpdateRpc = defineContract({
       token: z.string().max(1024).optional(),
       signIn: z.literal(true).optional(),
       remove: z.literal(true).optional(),
+      revoke: z.literal(true).optional(),
       // 7b fold: swap with the neighbour of the same provider, atomically on the server.
       move: z.enum(["up", "down"]).optional(),
     })

@@ -100,7 +100,10 @@ const variants = {
 };
 
 const variant = variants[appVariant] ?? variants.production;
-const nativeReleaseVersion = getNativeReleaseVersion(pkg.version);
+const nativeReleaseVersion = getNativeReleaseVersion(
+  pkg.version,
+  process.env.FULCRA_DISPLAY_VERSION,
+);
 
 export default {
   expo: {

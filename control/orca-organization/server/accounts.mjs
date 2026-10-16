@@ -1,3 +1,4 @@
+import { processIdentity, stopRecordedTree } from "./api-process-tree.mjs";
 // Update-7: the account pool. Fulcra owns a list of subscription accounts per provider (Claude, Codex); every session
 // launch takes one by policy, and a session stopped by a usage limit continues on the next available account.
 //
@@ -15,9 +16,11 @@
 //             a thread started on one account resumes on another with its history (resume looks up the rollout and
 //             the state db in the home it runs in).
 // Nothing here is logged, returned to a client, or placed in argv.
+import { apiKeyHelperCommand } from "./api-key-helper.mjs";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
+import net from "node:net";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
@@ -256,6 +259,7 @@ export function accountLimit(a, now = Date.now()) {
   return null;
 }
 export function accountStatus(a, now = Date.now()) {
+  if (a.localRevoked) return { state: "revoked", reason: "Revoked by the owner" };
   if (!a.enabled) return { state: "disabled" };
   // FU-112: the account's token was revoked or is invalid. Down until the owner signs it in again; no reset time.
   if (a.revoked) return { state: "revoked", reason: String(a.revoked.reason ?? "").slice(0, 200) };
@@ -401,10 +405,12 @@ export async function addAccount(root, { provider, name, priority }, now = Date.
     return a;
   });
 }
-export async function setAccount(root, id, patch) {
+export async function setAccount(root, id, patch, expectedEpoch) {
   return update(root, (s) => {
     const a = s.accounts.find((x) => x.id === id);
     if (!a) throw Error("No such account");
+    if (expectedEpoch !== undefined && (a.keyEpoch ?? null) !== expectedEpoch)
+      throw Error("The credential changed during replacement; the account stays blocked");
     if (patch.name !== undefined) {
       const n = String(patch.name).trim().slice(0, 60);
       if (!n) throw Error("Name the account");
@@ -445,13 +451,18 @@ export async function setAccount(root, id, patch) {
         throw Error("Priority is 1 to 99");
       a.priority = patch.priority;
     }
+    if (patch.keyEpoch !== undefined) {
+      if (!uuid(patch.keyEpoch)) throw Error("Bad credential generation");
+      a.keyEpoch = patch.keyEpoch;
+    }
+    if (patch.localRevoked !== undefined) a.localRevoked = patch.localRevoked === true;
     if (patch.auth !== undefined) {
       if (!["ok", "expired", "signing-in"].includes(patch.auth)) throw Error("Unknown auth state");
       a.auth = patch.auth;
-      if (patch.auth === "ok") a.revoked = null;
+      if (patch.auth === "ok" && !a.localRevoked) a.revoked = null;
     }
     if (patch.clearLimit === true) {
-      a.revoked = null;
+      if (!a.localRevoked) a.revoked = null;
       a.limitedUntil = null;
       a.limitKind = null;
       a.limitNote = null;
@@ -996,11 +1007,22 @@ const run = (bin, args, input, env) =>
     const p = execFile(
       bin,
       args,
-      { timeout: 15000, maxBuffer: 65536, encoding: "utf8", env: env ?? process.env },
+      {
+        timeout: 15000,
+        maxBuffer: 65536,
+        encoding: "utf8",
+        env:
+          env ??
+          Object.fromEntries(
+            ["PATH", "HOME", "SystemRoot", "TEMP", "TMP", "USERPROFILE"]
+              .filter((k) => process.env[k] !== undefined)
+              .map((k) => [k, process.env[k]]),
+          ),
+      },
       (e, out, err) => {
         // Interactive security can report refusal, then exit zero. Prompts alone
         // are normal; discard every other diagnostic and never retain raw errors.
-        if (e || err.replace(/security>\s*/g, "").trim())
+        if (e || (args[0] === "-i" && err.replace(/security>\s*/g, "").trim()))
           reject(
             Object.assign(Error("Account Keychain: operation-failed"), {
               code: e?.code === 44 ? "ACCOUNT_ITEM_MISSING" : "ACCOUNT_KEYCHAIN_UNAVAILABLE",
@@ -1113,9 +1135,8 @@ export function createWindowsKeychain({
     },
     async remove(id) {
       if (!uuid(id)) return;
-      try {
-        fs.rmSync(fileOf(id), { force: true });
-      } catch {}
+      fs.rmSync(fileOf(id), { force: true });
+      if (fs.existsSync(fileOf(id))) throw unavailable();
     },
   };
 }
@@ -1169,7 +1190,16 @@ export function createKeychain({
       if (!uuid(id)) return;
       try {
         await run(security, ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", id, ...kc]);
-      } catch {}
+      } catch (error) {
+        if (error?.code !== "ACCOUNT_ITEM_MISSING") throw error;
+      }
+      try {
+        await read(id);
+      } catch (error) {
+        if (error?.code === "ACCOUNT_ITEM_MISSING") return;
+        throw error;
+      }
+      throw Error("Account Keychain: delete-failed");
     },
   };
 }
@@ -1256,11 +1286,33 @@ export function codexSignedIn(root, id) {
 }
 
 // ---- the launch hook (agent.session_open): the account's credential for THIS launch only, never persisted.
-export function launchEnv(provider, account, { token, root, env = process.env }) {
+export function launchEnv(provider, account, { token, root, session = null, env = process.env }) {
   if (provider === "claude")
     return credentialKind(token) === "api-key"
-      ? { CLAUDE_CODE_OAUTH_TOKEN: "", ANTHROPIC_API_KEY: token, ANTHROPIC_AUTH_TOKEN: "" }
-      : { CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "" };
+      ? {
+          CLAUDE_CODE_OAUTH_TOKEN: "",
+          ANTHROPIC_API_KEY: "",
+          ANTHROPIC_AUTH_TOKEN: "",
+          FULCRA_API_KEY_ACCOUNT: JSON.stringify({
+            root,
+            id: account.id,
+            epoch: account.keyEpoch ?? null,
+          }),
+          FULCRA_API_KEY_HELPER: apiKeyHelperCommand({
+            root,
+            id: account.id,
+            session,
+            epoch: account.keyEpoch ?? null,
+            env,
+          }),
+        }
+      : {
+          CLAUDE_CODE_OAUTH_TOKEN: token,
+          ANTHROPIC_API_KEY: "",
+          ANTHROPIC_AUTH_TOKEN: "",
+          FULCRA_API_KEY_HELPER: "",
+          FULCRA_API_KEY_ACCOUNT: "",
+        };
   if (provider === "codex")
     return { CODEX_HOME: codexHome(root, account.id), CODEX_SQLITE_HOME: codexBase(env) };
   return {};
@@ -1360,6 +1412,8 @@ export function sessionOpenHook({
           if (JSON.stringify(s.assignments[sessionId]) !== expected) throw refused();
           const account = s.accounts.find((a) => a.id === r.account.id && a.provider === provider);
           const state = account && accountStatus(account, now()).state;
+          if (provider === "claude" && (account?.keyEpoch ?? null) !== (r.account.keyEpoch ?? null))
+            throw refused();
           if (state !== "ok" && !(r.allLimited && state === "limited")) throw refused();
           if (!ready) {
             if (r.takeover) throw refused();
@@ -1374,8 +1428,15 @@ export function sessionOpenHook({
           return {
             ...request,
             env: {
-              ...request.env,
-              ...launchEnv(provider, account, { token, root: storeRoot, env }),
+              ...Object.fromEntries(
+                Object.entries(request.env ?? {}).filter(
+                  ([, value]) =>
+                    credentialKind(token) !== "api-key" ||
+                    typeof value !== "string" ||
+                    !value.includes(token),
+                ),
+              ),
+              ...launchEnv(provider, account, { token, root: storeRoot, session: sessionId, env }),
               FULCRA_ACCOUNT_ID: account.id,
               FULCRA_ACCOUNT_NAME: String(account.name ?? "").slice(0, 60),
             },
@@ -1389,4 +1450,152 @@ export function sessionOpenHook({
       throw refused();
     }
   };
+}
+
+// Credential I/O can exceed the metadata lock's stale timeout. This separate lock never expires while its owner lives.
+export async function withCredentialLock(root, id, fn, { recoverStale = false } = {}) {
+  if (!uuid(id)) throw Error("Bad account id");
+  const dir = accountsDir(root);
+  await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+  const lock = path.join(dir, `.credential-${id}.lock`);
+  const deadline = Date.now() + 60000;
+  for (;;) {
+    try {
+      // The metadata lock serializes acquisition and recovery between all contenders.
+      await update(root, () => {
+        try {
+          fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+        } catch (error) {
+          if (error.code !== "EEXIST") throw error;
+          const owner = Number(fs.readFileSync(lock, "utf8"));
+          const age = Date.now() - fs.statSync(lock).mtimeMs;
+          let dead = false;
+          if (Number.isSafeInteger(owner) && owner > 0) {
+            try {
+              process.kill(owner, 0);
+            } catch (e) {
+              dead = e.code === "ESRCH";
+            }
+          }
+          if (!dead || !recoverStale || age < 1000) throw error;
+          fs.unlinkSync(lock);
+          fs.writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+        }
+      });
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (Date.now() >= deadline) throw Error("The account credential store is busy");
+      // Wake on the owner's unlink. The timeout bounds a lost native filesystem event.
+      await new Promise((resolve) => {
+        const watcher = fs.watch(dir, () => {
+          watcher.close();
+          clearTimeout(timer);
+          resolve();
+        });
+        const timer = setTimeout(
+          () => {
+            watcher.close();
+            resolve();
+          },
+          Math.max(1, Math.min(1000, deadline - Date.now())),
+        );
+        watcher.on("error", () => {
+          watcher.close();
+          clearTimeout(timer);
+          resolve();
+        });
+        // Close the registration race when the lock was removed before watch started.
+        if (!fs.existsSync(lock)) {
+          watcher.close();
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await fsp.rm(lock, { force: true });
+  }
+}
+
+export async function revokeLocalAccount(root, id, now = Date.now()) {
+  return update(root, (s) => {
+    const a = s.accounts.find((a) => a.id === id);
+    if (!a || !isApiAccount(a)) throw Error("No such API account");
+    a.localRevoked = true;
+    a.keyEpoch = randomUUID();
+    a.auth = "expired";
+    a.revoked = { at: iso(now), reason: "Revoked by the owner" };
+    return a;
+  });
+}
+
+// Runtime leases are written by the actual Claude spawn boundary, before any helper can run.
+export async function waitForApiRuntimes(root, accountId, timeoutMs = 5000) {
+  const dir = path.join(accountsDir(root), "api-runtimes");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const pending = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
+    const file = path.join(dir, name);
+    let lease;
+    try {
+      lease = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw Error("API runtime stop could not be confirmed");
+    }
+    if (lease.accountId !== accountId) continue;
+    const ownerStart = processIdentity(lease.ownerPid);
+    if (ownerStart === null || (lease.ownerStart && ownerStart !== lease.ownerStart)) {
+      pending.push(
+        (async () => {
+          await stopRecordedTree(lease.childPid, lease.childStart);
+          fs.rmSync(file, { force: true });
+          // A dead owner cannot clean its private Unix socket directory.
+          if (
+            typeof lease.address === "string" &&
+            /^\/tmp\/fulcra-api-[^/]+\/control\.sock$/.test(lease.address)
+          ) {
+            try {
+              fs.rmSync(lease.address, { force: true });
+              fs.rmdirSync(path.dirname(lease.address));
+            } catch {
+              /* Process termination is already confirmed. */
+            }
+          }
+        })(),
+      );
+      continue;
+    }
+    pending.push(
+      new Promise((resolve, reject) => {
+        if (typeof lease.address !== "string" || !uuid(lease.stopToken)) {
+          reject(Error("API runtime stop could not be confirmed"));
+          return;
+        }
+        const socket = net.createConnection(lease.address);
+        let reply = "",
+          settled = false;
+        const finish = (ok) => {
+          if (settled) return;
+          settled = true;
+          socket.destroy();
+          ok ? resolve() : reject(Error("API runtime stop could not be confirmed"));
+        };
+        socket.setTimeout(timeoutMs, () => finish(false));
+        socket.once("connect", () => socket.write(`${lease.stopToken}\n`));
+        socket.on("data", (chunk) => {
+          reply += chunk.toString();
+          if (reply.includes("\n")) finish(reply === "stopped\n" && !fs.existsSync(file));
+        });
+        socket.once("error", () => finish(!fs.existsSync(file)));
+        socket.once("close", () => finish(!fs.existsSync(file)));
+      }),
+    );
+  }
+  await Promise.all(pending);
 }

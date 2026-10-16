@@ -1,6 +1,8 @@
 export const PROVIDERS: readonly ["claude", "codex"];
 export const POLICIES: readonly ["priority", "spread"];
 export interface Account {
+  keyEpoch?: string;
+  localRevoked?: boolean;
   credentialKind?: "api-key" | "subscription";
   budget?: { limitUsd: number | null; startAt: string };
   id: string;
@@ -71,6 +73,7 @@ export function setAccount(
   root: string,
   id: string,
   patch: Record<string, unknown>,
+  expectedEpoch?: string | null,
 ): Promise<Account>;
 export function moveAccount(root: string, id: string, direction: "up" | "down"): Promise<Account>;
 export function removeAccount(root: string, id: string): Promise<Account>;
@@ -213,3 +216,21 @@ export function confirmAccountLimit(input: {
 >;
 
 export function publicAccountText(value: unknown, fallback: string): string;
+export function launchEnv(
+  provider: string,
+  account: { id: string; keyEpoch?: string },
+  options: { token: string; root: string; session?: string | null; env?: NodeJS.ProcessEnv },
+): Record<string, string>;
+
+export function withCredentialLock<T>(
+  root: string,
+  id: string,
+  fn: () => Promise<T>,
+  options?: { recoverStale?: boolean },
+): Promise<T>;
+export function revokeLocalAccount(root: string, id: string, now?: number): Promise<Account>;
+export function waitForApiRuntimes(
+  root: string,
+  accountId: string,
+  timeoutMs?: number,
+): Promise<void>;
