@@ -75,6 +75,12 @@ export interface PluginHostSummary {
 export declare function useHosts(): readonly PluginHostSummary[];
 /** Borrow an online host's API under this installation's lifetime. */
 export declare function getPaseoClient(serverId: string): import("@getpaseo/client").PaseoApi;
+/** Invoke this installation's RPC on a configured, connected host. */
+export declare function invokeHostRpc(
+  serverId: string,
+  method: string,
+  input: unknown,
+): Promise<unknown>;
 /** Open an absolute HTTP(S) URL using the client platform’s external opener. */
 export declare function openExternalUrl(url: string): Promise<void>;
 

@@ -134,7 +134,8 @@ import type { Fetcher } from "./server/trackers/http.mjs";
 
 // Node's fetch body is a ReadableStream, which is async iterable at runtime; the DOM lib type does not declare it.
 const trackerFetch = fetch as unknown as Fetcher;
-import { loadConfig } from "./server/config.mjs";
+import path from "node:path";
+import { stateRoot, loadConfig } from "./server/config.mjs";
 import { readProjects } from "./server/projects";
 import { briefingRpc } from "./shared/briefing";
 import { createBriefingReader } from "./server/briefing";
@@ -943,6 +944,7 @@ export default function contribute(
   });
   const stopWorkspaceOrganization = contributeWorkspaceOrganization(handle);
   const progressBoard = createProgressBoard(server, {
+    historyFile: path.join(stateRoot(), "progress-history.json"),
     humanOwners: () => loadConfig().board.humanOwners,
   });
   handleRead(progressBoardRpc, (_input, { paseo }) => progressBoard.read(paseo));
