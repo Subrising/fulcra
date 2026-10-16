@@ -1,0 +1,124 @@
+name: Merge PR
+run-name: Merge PR ${{ inputs.pr || github.event.pull_request.number }} at ${{ inputs.sha || github.event.pull_request.head.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+      sha:
+        description: Full tested head SHA
+        required: true
+        type: string
+  # FU-182 bootstrap only. Remove this trigger through the next checked PR.
+  pull_request:
+    types: [labeled]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: merge-pr-main
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'fu182-bootstrap'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ inputs.pr || github.event.pull_request.number }}
+      SHA: ${{ inputs.sha || github.event.pull_request.head.sha }}
+      ACTOR: ${{ github.actor }}
+      TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      OWNER: ${{ github.repository_owner }}
+      FULCRA_PRIVATE_PATTERNS: ${{ secrets.FULCRA_PRIVATE_PATTERNS }}
+    steps:
+      - name: Check the caller and inputs
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          test "$GH_REPO" = Subrising/fulcra
+          test "$ACTOR" = "$OWNER"
+          test "$TRIGGERING_ACTOR" = "$OWNER"
+          if [ "$EVENT" = workflow_dispatch ]; then
+            test "$REF" = refs/heads/main
+          else
+            test "$EVENT" = pull_request
+            test "$HEAD_REF" = fix/merge-bot
+            test "$HEAD_REPO" = "$GH_REPO"
+          fi
+          [[ "$PR" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test -n "$FULCRA_PRIVATE_PATTERNS"
+
+      # Keep the scanner from the trusted base, outside the candidate checkout.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the PR, tested SHA, and merge title
+        run: |
+          set -euo pipefail
+          cp scripts/check-machine-data.mjs "$RUNNER_TEMP/check-machine-data.mjs"
+          gh api "repos/$GH_REPO/pulls/$PR" > "$RUNNER_TEMP/pr.json"
+          jq -e --arg sha "$SHA" '.state == "open" and .base.ref == "main" and .head.sha == $sha and .draft == false' "$RUNNER_TEMP/pr.json"
+          # Public read: the token needs no checks permission.
+          curl --fail --silent --show-error \
+            -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GH_REPO/commits/$SHA/check-runs?check_name=ci-passed&filter=latest&per_page=100" > "$RUNNER_TEMP/checks.json"
+          jq -e --arg sha "$SHA" '[.check_runs[] | select(.name == "ci-passed" and .app.id == 15368)] | length == 1 and all(.head_sha == $sha and .status == "completed" and .conclusion == "success")' "$RUNNER_TEMP/checks.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { findInText, parsePrivateRules, genericRules } = await import(`${process.env.RUNNER_TEMP}/check-machine-data.mjs`);
+          const pr = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/pr.json`, 'utf8'));
+          const title = `Fulcra ${pr.title} (#${process.env.PR})`;
+          const privateRules = parsePrivateRules(process.env.FULCRA_PRIVATE_PATTERNS);
+          if (!privateRules.length) process.exit(1);
+          const found = findInText(title, [...genericRules, ...privateRules], 'merge-title');
+          console.log(found.length === 0);
+          if (found.length) process.exit(1);
+          NODE
+
+      - name: Merge with the workflow token
+        id: merge
+        run: |
+          set -euo pipefail
+          title=$(jq -r --arg pr "$PR" '"Fulcra " + .title + " (#" + $pr + ")"' "$RUNNER_TEMP/pr.json")
+          gh api --method PUT "repos/$GH_REPO/pulls/$PR/merge" \
+            -f sha="$SHA" -f merge_method=merge \
+            -f commit_title="$title" -f commit_message='' > "$RUNNER_TEMP/merged.json"
+          jq -e '.merged == true' "$RUNNER_TEMP/merged.json"
+          merged=$(jq -er '.sha' "$RUNNER_TEMP/merged.json")
+          [[ "$merged" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$merged" >> "$GITHUB_OUTPUT"
+
+      - name: Check the merge identity
+        env:
+          MERGED: ${{ steps.merge.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/commits/$MERGED" > "$RUNNER_TEMP/commit.json"
+          jq -e '[(.commit.author.name == "github-actions[bot]" and .commit.author.email == "41898282+github-actions[bot]@users.noreply.github.com"), (.commit.committer.name == "GitHub" and .commit.committer.email == "noreply@github.com")] | all' "$RUNNER_TEMP/commit.json"
+
+      - name: Scan the merge commit and source
+        env:
+          MERGED: ${{ steps.merge.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$MERGED"
+          git checkout --detach "$MERGED"
+          node "$RUNNER_TEMP/check-machine-data.mjs" --commits "$MERGED^1..$MERGED"
+          echo "merge_verified=true" >> "$GITHUB_STEP_SUMMARY"
