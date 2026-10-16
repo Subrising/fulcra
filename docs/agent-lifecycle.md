@@ -177,70 +177,77 @@ This setting does not change reporting rights or authorize permission responses.
 
 ## Ledger event routing
 
-Ledger dispatch is off unless `daemon.projectDispatch.PROJECT.enabled` is `true`.
-The owner selects a local lead, worker templates, and a project worker limit.
-Use the ledger directory name as `PROJECT` and exact ledger owner text in each template.
-READY uses the existing ledger selection: open, unblocked work of kind `BUILD` or `FIX`.
-The CLI stores those rows as `OPEN` or `IN PROGRESS`.
-`DECIDE` rows and standing rules require a separate action.
-The item text is the worker's complete first prompt. Include its constraints and checks there.
+Automatic dispatch needs both `daemon.ledgerDispatchEnabled: true` and an enabled `daemon.projectDispatch.PROJECT` template.
+Both switches default to off. Only the owner can edit these settings through the native configuration path.
+Agent-attributed RPC patches, agent-attributed reloads, and local configuration commands from agent environments refuse dispatch edits.
+The checks use native caller identity. They do not isolate a process that already controls the daemon's operating-system account.
 
-Example `config.json` fragment:
+Every project template records:
+
+- `enableId`: a new UUID for each owner-approved allowance.
+- `hostId`: the authoritative daemon's server ID.
+- `daemonHome` and `ledgerRoot`: canonical local directories. Ledger mirrors never dispatch.
+- `leadId`, `maxParallel` (1–8), and `holdLabels`.
+- `maxTotalStarts` (default 10), `dailyStartBudget` (default 5), and `minStartIntervalSeconds` (default 60).
+- `roles`: exact ledger owner text, role, provider, model, thinking option, restricted mode, and account.
+- `approvals`: owner-attested item records, keyed by ledger ID.
+
+The daemon enforces a hard total of 16 active automatic sessions across projects.
+The authoritative ledger also permits at most 100 automatic starts per UTC day.
+Project budgets count worker starts, including reserved starts. They do not estimate monetary charges.
+A fresh `enableId` resets the total allowance. It does not reset the daily allowance.
+Rate limits wait for another ledger or session event. No retry timer or polling loop starts work.
+Exhausted total and daily allowances send the lead one notice.
+
+Only status exactly `READY`, with kind `BUILD` or `FIX`, qualifies.
+`OPEN`, `IN PROGRESS`, parked rows, and rows waiting for a person never start automatically.
+The older standalone ledger command cannot set `READY`.
+Use the packaged `ledger-dispatch.py` CLI for explicit readiness and claims. It shares the ledger command's project lock.
+Its JSON input uses `action: "inspect"` to return an item's digest, or `action: "ready"` with that digest to mark it ready.
+Input also names the absolute `root`, `project`, and `item`. Ordinary `ledger close` still requires evidence.
+
+Before readiness, the owner records an approval in the project template:
 
 ```json
 {
-  "daemon": {
-    "projectDispatch": {
-      "example": {
-        "enabled": true,
-        "leadId": "00000000-0000-4000-8000-000000000001",
-        "maxParallel": 1,
-        "holdLabels": ["example.release-hold"],
-        "roles": [
-          {
-            "role": "implementation",
-            "owner": "example builders",
-            "provider": "codex",
-            "model": "MODEL_ID",
-            "mode": "MODE_ID",
-            "thinking": "THINKING_OPTION_ID",
-            "cwd": "/workspace/example"
-          }
-        ]
-      }
-    }
-  }
+  "generation": "00000000-0000-4000-8000-000000000001",
+  "digest": "SHA256_OF_THE_INSPECTED_ROW",
+  "addedBy": "owner",
+  "cwd": "/workspace/prepared-item-worktree"
 }
 ```
 
-Reload configuration through the normal daemon configuration command.
-An empty `projectDispatch` map removes all templates.
-Template directories must exist. Use a prepared worktree directory when the task requires isolation.
-Before enabling dispatch, label each existing worker with its ledger ID in `fulcra.item`.
-Each new item gets a new session, its configured workspace, and a `fulcra.item` label.
-Native creation still checks the lead's provider restrictions.
-Follow-ups addressed to that session keep its ID and context.
-The daemon does not interpret prose to choose a different session.
+`addedBy` is the owner's attestation of who added the task. It must be `owner` or the configured lead's exact session ID.
+Ledger source text cannot supply that authority. Worker-authored or unapproved items never dispatch.
+Changing the task invalidates its digest. Reopening an accepted or abandoned task needs a new owner-approved generation.
+A dispatched worker cannot approve its own follow-on work.
 
-The final nonempty assistant line must start with literal `DONE`, `BLOCKED reason`, or `DECISION question`.
-The daemon sends that line to the immediate lead through the existing finish notice path.
-A notice turn cannot relay the result another level.
-`DONE` releases a slot only after the same item has exact `DONE` status and nonempty evidence.
-A new turn in that session clears its earlier result before routing continues.
-`BLOCKED` and `DECISION` retain the slot and stop that role's dispatch.
-Continue the same session to resolve either state.
+Prepare a separate worktree or directory for every approved item. Directory aliases cannot share an item workspace.
+The role mode must be Codex `auto`, or Claude `default` or `plan`. Full-access and bypass modes are refused.
+The account defaults to `personal-workspace-api`. `personal-api-key` and `work-api-key` are refused.
+The native account pool pins the selected account. Missing, disabled, limited, or changed accounts cannot fall back before provider input.
+The first prompt uses a fixed template with the item encoded as untrusted ledger data.
+The task text cannot replace the daemon's instructions, permissions, account, or budgets.
 
-Turn ends, idle transitions, configuration changes, ledger file changes, and startup recovery trigger selection.
-The opted-in lead receives no READY-selection nudge.
-Set `fulcra.dispatch=off` or a nonempty `fulcra.hold` on the lead to stop project dispatch.
-Configured hold labels also stop admission. A held worker retains its slot.
-Disable the project setting to restore its ordinary nudge behavior.
+The claim CLI atomically records the dispatch ID, generation, creator, and reserved session in the ledger before creation.
+A process-held kernel lease permits only one dispatcher per authoritative ledger.
+A crash releases that lease. Restart and session events reconcile interrupted claims without replaying prompts.
+Unproven handoffs become visible blocked items and send one lead notice. They do not retain a slot forever.
+Archived or explicitly abandoned sessions free their slot. `fulcra.dispatch-state=abandoned` records explicit abandonment.
+A BLOCKED or DECISION result retains only its own slot.
 
-The private `ledger-routing.json` journal records each claim before creation.
-An item cannot start twice, including after restart or an uncertain creation response.
-An uncertain claim retains its item and slot for owner reconciliation; automatic recovery never repeats its prompt.
-Keep the journal during recovery. A corrupt journal disables dispatch.
-Durable dispatch currently requires POSIX directory synchronization, as host-link creation does.
+Each dispatched session keeps its item ID and generation. Metadata edits cannot retarget it to another item.
+Follow-ups for the same ask keep that session. A different item uses a new session and approval.
+The final result line accepts simple emphasis, a colon, or a dash after DONE, BLOCKED, or DECISION.
+A later sign-off line still prevents automatic completion. DONE releases a slot only after evidence closure.
+Notice turns do not relay results another level.
+
+The private hot journal keeps active claims and the latest 128 terminal records.
+The ledger holds visible claims. A compact indexed receipt store preserves consumed generations across journal rotation.
+Uncertain records reconcile on restart, archive, and session events. They need no hand edit of the private journal.
+Use `daemon.ledgerDispatchEnabled: false` for the global kill switch.
+Project disable, lead holds, configured hold labels, and `fulcra.dispatch=off` also stop admission.
+Durable dispatch requires POSIX directory synchronization and Python 3. The live configuration remains off until the owner enables it.
 
 ## Idle-lead nudges
 

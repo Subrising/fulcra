@@ -286,6 +286,7 @@ export const MutableDaemonConfigSchema = z
     // FULCRA(orchestration): true adds finished-turn notices; false disables permission and limit notices. Nudges have their own switch.
     reportUpOnTurnEnd: z.boolean().optional(),
     nativeFinishNotices: z.boolean().optional(),
+    ledgerDispatchEnabled: z.boolean().optional(),
     projectDispatch: ProjectDispatchMapSchema.optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
@@ -324,6 +325,7 @@ export const MutableDaemonConfigPatchSchema = z
     enableTerminalAgentHooks: z.boolean().optional(),
     reportUpOnTurnEnd: z.boolean().optional(),
     nativeFinishNotices: z.boolean().optional(),
+    ledgerDispatchEnabled: z.boolean().optional(),
     projectDispatch: ProjectDispatchMapSchema.optional(),
     idleLeadNudge: z.boolean().optional(),
     idleLeadNudgeSkipOwners: z.array(z.string()).optional(),

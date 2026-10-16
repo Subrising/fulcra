@@ -453,6 +453,7 @@ export interface PaseoDaemonConfig {
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
   receiptRetentionMs?: number;
+  ledgerDispatchEnabled?: boolean;
   projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
@@ -655,12 +656,14 @@ function initialNudgeConfig(
   config: PaseoDaemonConfig,
 ): Pick<
   MutableDaemonConfig,
+  | "ledgerDispatchEnabled"
   | "projectDispatch"
   | "idleLeadNudge"
   | "idleLeadNudgeSkipOwners"
   | "idleLeadNudgeMinIntervalMinutes"
 > {
   return {
+    ledgerDispatchEnabled: config.ledgerDispatchEnabled ?? false,
     projectDispatch: config.projectDispatch,
     idleLeadNudge: config.idleLeadNudge,
     idleLeadNudgeSkipOwners: config.idleLeadNudgeSkipOwners ?? [],
@@ -1164,6 +1167,7 @@ export async function createPaseoDaemon(
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
     logger,
   });
+  daemonConfigStore.setDispatchOwnerAdmission(() => agentManager.assertDispatchOwner());
   // Display-only background-job sample for providers without a task protocol (MULTIHOST-DESIGN §6).
   agentManager.startBackgroundWorkSampling();
   const syncPluginProviders = () => {

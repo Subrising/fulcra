@@ -278,6 +278,7 @@ export class ReportUpService {
       try {
         this.ledgerWatcher = watch(deps.ledgerDir, { recursive: true }, (_event, file) => {
           if (this.stopped) return;
+          if (file && path.basename(String(file)).startsWith(".fulcra-dispatch")) return;
           if (
             file &&
             path.dirname(String(file)) !== "." &&
@@ -394,6 +395,15 @@ export class ReportUpService {
 
   /** Raw events remain as a test adapter and a source of first-message provenance. */
   onEvent(event: AgentManagerEvent): void {
+    if (
+      event.type === "agent_state" &&
+      (event.agent.archivedAt || event.agent.labels?.["fulcra.dispatch-state"] === "abandoned")
+    )
+      void this.deps.routing
+        ?.wake()
+        .catch((err: unknown) =>
+          this.deps.logger.warn({ err }, "Ledger archive reconciliation failed"),
+        );
     if (event.type === "agent_state" && event.agent.lifecycle === "closed")
       this.observer.close(event.agent.id);
     if (event.type === "agent_state" && event.agent.lifecycle === "idle") {
@@ -505,9 +515,22 @@ export class ReportUpService {
       );
   }
 
+  async routingNotice(leadId: string, line: string, messageId: string): Promise<void> {
+    await heldSendsFor(this.deps.agentManager, this.deps.logger).holdAndWait(leadId, () =>
+      this.send(
+        leadId,
+        formatSystemNotificationPrompt(line),
+        "owned-finish",
+        undefined,
+        undefined,
+        messageId,
+      ),
+    );
+  }
+
   private async handleRoutedFinish(input: ReportTurnEnd): Promise<boolean> {
     const routing = this.deps.routing;
-    if (!routing) return false;
+    if (!routing || input.fromNotice) return false;
     const worker = await this.store.get(input.agentId);
     if (!worker) return false;
     const text =
@@ -754,9 +777,10 @@ export class ReportUpService {
       observedLast === undefined
         ? await this.deps.agentManager.getLastAssistantMessage(worker.id).catch(() => null)
         : observedLast;
-    const result = this.deps.routing?.enabledForLead(notice.parentId)
-      ? parseWorkerResult(lastMessage)
-      : null;
+    const result =
+      notice.reason === "finished" && this.deps.routing?.enabledForLead(notice.parentId)
+        ? parseWorkerResult(lastMessage)
+        : null;
     return formatSystemNotificationPrompt(
       result?.line ??
         formatReportUpNotice({ worker, failed: notice.reason === "errored", lastMessage }),
@@ -1768,6 +1792,10 @@ export function startReportUp(input: {
       routing = new LedgerRoutingService({
         statePath: path.join(input.paseoHome, "ledger-routing.json"),
         ledgerDir: defaultLedgerDir(),
+        hostId: input.localServerId ?? "",
+        daemonHome: input.paseoHome,
+        enabled: () => input.daemonConfigStore.get().ledgerDispatchEnabled === true,
+        notify: (lead, line, messageId) => service.routingNotice(lead, line, messageId),
         config: () => input.daemonConfigStore.get().projectDispatch ?? {},
         agentManager: input.agentManager,
         agentStorage: input.agentStorage,
@@ -1787,6 +1815,7 @@ export function startReportUp(input: {
   const service = new ReportUpService({
     routing,
     isDispatchLead: (id) =>
+      input.daemonConfigStore.get().ledgerDispatchEnabled === true &&
       Object.values(input.daemonConfigStore.get().projectDispatch ?? {}).some(
         (config) => config.enabled && config.leadId === id,
       ),
@@ -1819,6 +1848,7 @@ export function startReportUp(input: {
           .catch((err: unknown) =>
             input.logger.warn({ err, agentId: event.agent.id }, "Close notice failed"),
           );
+      reconcileRoutingArchive(event, routing, input.logger);
       if (event.type === "agent_state" && event.agent.archivedAt) {
         const dispatcher = leadEventsFor(input.agentManager);
         if (dispatcher)
@@ -1860,7 +1890,7 @@ export function startReportUp(input: {
   );
   const stop = () => {
     offRoutingConfig();
-    routing?.stop();
+    void routing?.stop();
     offArchive();
     offHooks?.();
     offEvents?.();
@@ -1873,4 +1903,17 @@ export function startReportUp(input: {
       await service.recoverOwnedFinishes();
     },
   });
+}
+
+function reconcileRoutingArchive(
+  event: AgentManagerEvent,
+  routing: LedgerRoutingService | undefined,
+  logger: Logger,
+): void {
+  if (event.type !== "agent_state") return;
+  if (!event.agent.archivedAt && event.agent.labels?.["fulcra.dispatch-state"] !== "abandoned")
+    return;
+  void routing
+    ?.wake()
+    .catch((err: unknown) => logger.warn({ err }, "Ledger archive reconciliation failed"));
 }

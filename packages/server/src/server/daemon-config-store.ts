@@ -32,6 +32,7 @@ interface SupportedMutableConfigPatch {
   enableTerminalAgentHooks?: boolean;
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
+  ledgerDispatchEnabled?: boolean;
   projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
@@ -198,6 +199,7 @@ const RELOADABLE_PATHS = [
   "daemon.enableTerminalAgentHooks",
   "daemon.reportUpOnTurnEnd",
   "daemon.nativeFinishNotices",
+  "daemon.ledgerDispatchEnabled",
   "daemon.projectDispatch",
   "daemon.idleLeadNudge",
   "daemon.idleLeadNudgeSkipOwners",
@@ -232,6 +234,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.enableTerminalAgentHooks", "enableTerminalAgentHooks"],
   ["daemon.reportUpOnTurnEnd", "reportUpOnTurnEnd"],
   ["daemon.nativeFinishNotices", "nativeFinishNotices"],
+  ["daemon.ledgerDispatchEnabled", "ledgerDispatchEnabled"],
   ["daemon.projectDispatch", "projectDispatch"],
   ["daemon.idleLeadNudge", "idleLeadNudge"],
   ["daemon.idleLeadNudgeSkipOwners", "idleLeadNudgeSkipOwners"],
@@ -288,6 +291,7 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 function reportUpField(patch: MutableDaemonConfigPatch): {
   reportUpOnTurnEnd?: boolean;
   nativeFinishNotices?: boolean;
+  ledgerDispatchEnabled?: boolean;
   projectDispatch?: MutableDaemonConfig["projectDispatch"];
   idleLeadNudge?: boolean;
   idleLeadNudgeSkipOwners?: string[];
@@ -306,6 +310,9 @@ function reportUpField(patch: MutableDaemonConfigPatch): {
       : {}),
     ...(patch.idleLeadNudgeMinIntervalMinutes !== undefined
       ? { idleLeadNudgeMinIntervalMinutes: patch.idleLeadNudgeMinIntervalMinutes }
+      : {}),
+    ...(patch.ledgerDispatchEnabled !== undefined
+      ? { ledgerDispatchEnabled: patch.ledgerDispatchEnabled }
       : {}),
     ...(patch.projectDispatch !== undefined ? { projectDispatch: patch.projectDispatch } : {}),
     ...(patch.idleLeadNudge !== undefined ? { idleLeadNudge: patch.idleLeadNudge } : {}),
@@ -475,7 +482,19 @@ export class DaemonConfigStore {
     return this.applySupportedPatch({ skills: { selection } });
   }
 
+  private dispatchOwnerAdmission: () => void = () => {
+    throw new Error("Dispatch configuration needs owner authority");
+  };
+  public setDispatchOwnerAdmission(check: () => void): void {
+    this.dispatchOwnerAdmission = check;
+  }
+
   private applySupportedPatch(parsedPatch: SupportedMutableConfigPatch): MutableDaemonConfig {
+    if (
+      parsedPatch.projectDispatch !== undefined ||
+      parsedPatch.ledgerDispatchEnabled !== undefined
+    )
+      this.dispatchOwnerAdmission();
     if (parsedPatch.relay?.enabled !== undefined && !this.relayEnabledMutable) {
       throw new Error(
         "Relay is controlled by a daemon launch override. Remove PASEO_RELAY_ENABLED or the relay CLI flag before changing it here.",
@@ -551,6 +570,11 @@ export class DaemonConfigStore {
         readNotificationSetting(this.paseoHome) ?? resolved.mutable.notificationMode,
       plugins: this.current.plugins,
     });
+    if (
+      !isEqualValue(this.current.projectDispatch, desired.projectDispatch) ||
+      this.current.ledgerDispatchEnabled !== desired.ledgerDispatchEnabled
+    )
+      this.dispatchOwnerAdmission();
     const changedSinceLastApply = diffPaths(this.lastKnownPersisted, persisted);
     const overrideControlledPaths = compactOwnedPaths(
       changedSinceLastApply.filter((path) =>

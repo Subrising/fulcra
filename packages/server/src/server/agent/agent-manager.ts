@@ -4211,6 +4211,13 @@ export class AgentManager {
     return { confirmationRequired: reasons.length > 0, reasons };
   }
 
+  assertDispatchOwner(): void {
+    const caller = this.agentCallers.getStore();
+    caller?.validate?.();
+    if (caller?.agentId || this.trustedPlugins.currentInputSource() !== "human")
+      throw new Error("Only the owner can change ledger dispatch settings");
+  }
+
   withArchiveConfirmation<T>(agentId: string, operation: () => T): T {
     const caller = this.agentCallers.getStore();
     caller?.validate?.();
@@ -5223,6 +5230,19 @@ export class AgentManager {
     },
   ): Promise<void> {
     this.assertInjectionLabelWrite(updates.labels);
+    const existing = this.getAgent(agentId) ?? (await this.registry?.get(agentId));
+    if (existing?.labels?.["fulcra.dispatch-id"] && updates.labels) {
+      for (const key of [
+        "fulcra.item",
+        "fulcra.item-generation",
+        "fulcra.dispatch-id",
+        "fulcra.project",
+      ])
+        if (Object.hasOwn(updates.labels, key) && updates.labels[key] !== existing.labels[key])
+          throw new Error(
+            "A dispatched session keeps its approved item identity; start a new item in a new session",
+          );
+    }
     const liveAgent = this.getAgent(agentId);
     if (liveAgent) {
       this.assertArchiveLeadLabelWrite(updates.labels, liveAgent.labels);

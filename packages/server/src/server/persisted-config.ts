@@ -274,6 +274,7 @@ export const PersistedConfigSchema = z
         nativeFinishNotices: z.boolean().optional(),
         receiptRetentionMs: ReceiptRetentionMsSchema.optional(),
         eventDispatcherEnabled: z.boolean().optional(),
+        ledgerDispatchEnabled: z.boolean().optional(),
         projectDispatch: ProjectDispatchMapSchema.optional(),
         idleLeadNudge: z.boolean().optional(),
         idleLeadNudgeSkipOwners: z.array(z.string()).optional(),
@@ -642,6 +643,15 @@ export function editPersistedConfig(
   }
   if ("unset" in edit) delete object[key];
   else object[key] = edit.value;
+  if (process.env.PASEO_AGENT_ID || process.env.FULCRA_AGENT_ID) {
+    const previous = readPersistedConfig(paseoHome, { defaultsIfMissing: true });
+    if (
+      JSON.stringify(previous.daemon?.projectDispatch) !==
+        JSON.stringify(config.daemon?.projectDispatch) ||
+      previous.daemon?.ledgerDispatchEnabled !== config.daemon?.ledgerDispatchEnabled
+    )
+      throw new Error("Only the owner can edit ledger dispatch settings");
+  }
   writeExplicitPreferences(paseoHome, field, edit, config);
   savePersistedConfig(paseoHome, config);
   return config;
