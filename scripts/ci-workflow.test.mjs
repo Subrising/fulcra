@@ -18,6 +18,14 @@ import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
 import { watchOperation } from "../.github/scripts/watch-ci.mjs";
 
+test("main CI ignores a refused merge dispatch and retains CI failure detection", () => {
+  const result = spawnSync("python3", ["-B", ".github/scripts/test_main_ci_state.py"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
 test("outbound watcher sends one native notice for successful and failed runs", async () => {
   for (const conclusion of ["success", "failure", "cancelled", "timed_out"]) {
     const operation = {

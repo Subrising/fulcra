@@ -211,6 +211,17 @@ Build caches use exact source, toolchain, platform, and target keys. They have
 no fallback restore keys. They store generated outputs, without credentials.
 The privileged completion workflow never loads candidate code or caches.
 
+The main alarm uses `.github/scripts/main_ci_state.py` beside its local
+`red-main.py` entry point. It reads only the CI workflow and that run's
+`ci-passed` job. Refused merge dispatches can attach failed `merge` checks to
+main; those checks do not describe main CI. Legacy commit-status totals also
+remain outside this alarm's Fulcra classification. Other repositories retain
+their existing alarm rules.
+
+When main reuses a tested tree, the alarm validates the gate's CI workflow
+source, merge parent, and tree equality. Missing CI or an invalid tree proof
+remains unknown. A real CI failure remains red.
+
 `release.sh` returns after dispatching `Merge PR`. It prints the exact run ID.
 It does not wait for CI or merge completion. Resume it with `--after-merge`
 only after a matching completion event. The resume verifies the successful
