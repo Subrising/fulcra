@@ -24,7 +24,7 @@ export default defineConfig({
     fileParallelism: false,
     // Windows runners intermittently starve subprocess-heavy Git tests at the
     // default worker count, leaving child processes alive past their deadlines.
-    maxWorkers: process.platform === "win32" ? 2 : undefined,
+    maxWorkers: process.platform === "win32" ? 1 : undefined,
     exclude: [
       "**/node_modules/**",
       "**/dist/**",

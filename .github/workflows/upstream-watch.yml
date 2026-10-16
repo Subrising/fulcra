@@ -1,7 +1,7 @@
 name: Upstream watch
 
 # Opens "Sync <upstream> <version>" PRs for new Paseo, Radius and Archify releases.
-# Never merges. See "Upstream sync" in the README.
+# Never merges. See "Upstream watcher" in docs/fork-patches.md.
 #
 # Trust split: only `watch` holds a write token, and it runs no npm code. `verify`
 # installs and typechecks the merged upstream tree with a read-only token and no
@@ -31,8 +31,31 @@ env:
   ONNXRUNTIME_NODE_INSTALL: skip
 
 jobs:
+  dry-run:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check pending tags without writes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          args=(--dry-run)
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          node scripts/upstream-watch.mjs "${args[@]}"
+
   watch:
     name: watch
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

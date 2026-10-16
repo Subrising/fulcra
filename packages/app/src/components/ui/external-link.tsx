@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { Pressable, Text } from "react-native";
+import { Pressable, Text, type StyleProp, type ViewStyle } from "react-native";
 import { ArrowUpRight } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -14,6 +14,7 @@ export interface ExternalLinkProps {
   tooltip?: ReactNode;
   testID?: string;
   accessibilityLabel?: string;
+  style?: StyleProp<ViewStyle>;
 }
 
 /**
@@ -29,6 +30,7 @@ export function ExternalLink({
   tooltip,
   testID,
   accessibilityLabel,
+  style,
 }: ExternalLinkProps) {
   const handlePress = useCallback(() => {
     void openExternalUrl(href).catch(onError ?? console.error);
@@ -41,7 +43,7 @@ export function ExternalLink({
       accessibilityRole="link"
       accessibilityLabel={accessibilityLabel ?? label}
       testID={testID}
-      style={styles.trigger}
+      style={[styles.trigger, style]}
     >
       <Text style={styles.label}>{children ?? label}</Text>
       <ThemedArrowUpRight size={12} uniProps={iconColor} />
