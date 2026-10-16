@@ -1178,12 +1178,24 @@ test("FU-176 an uninitialized report inbox refuses armed and stopped workers unt
       "Report authority unavailable",
     );
     f.server.completeTurn({ threadId: childThread, status: "interrupted" });
-    await vi.waitFor(async () =>
-      expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
-        status: "delivered",
-        reason: "stopped",
-      }),
+    // Native acknowledgement and its durable receipt can exceed the default one-second wait.
+    await vi.waitFor(
+      async () =>
+        expect(await f.agentStorage.getFinishNotice(childId)).toMatchObject({
+          status: "delivered",
+          reason: "stopped",
+        }),
+      { timeout: 5000 },
     );
+    const notices = f.server
+      .requests()
+      .filter(
+        (request) =>
+          request.method === "turn/start" &&
+          (request.params as { threadId?: string }).threadId === f.agent.persistence!.sessionId,
+      );
+    expect(notices).toHaveLength(1);
+    expect(JSON.stringify(notices[0])).toContain("worker turn stopped");
     await expect(f.manager.nativeReportInbox(f.nativeOrigin())).rejects.toThrow(
       "Report authority unavailable",
     );
