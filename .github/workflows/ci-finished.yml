@@ -2,7 +2,7 @@ name: CI finished
 
 on:
   workflow_run:
-    workflows: [CI, Merge PR]
+    workflows: [Merge PR]
     types: [completed]
 
 permissions:
@@ -25,9 +25,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Record the tested merge tree and send one completion event
+      - name: Record the tested merge tree
         env:
           GH_TOKEN: ${{ github.token }}
-          FULCRA_CI_NOTICE_URL: ${{ vars.FULCRA_CI_NOTICE_URL }}
-          FULCRA_CI_NOTICE_TOKEN: ${{ secrets.FULCRA_CI_NOTICE_TOKEN }}
         run: node .github/scripts/ci-finished.mjs

@@ -16,6 +16,76 @@ import { relative as relativePath } from "node:path";
 import test from "node:test";
 import { requiresFullSuite } from "./ci-shared-changes.mjs";
 import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
+import { watchOperation } from "../.github/scripts/watch-ci.mjs";
+
+test("outbound watcher sends one native notice for successful and failed runs", async () => {
+  for (const conclusion of ["success", "failure", "cancelled", "timed_out"]) {
+    const operation = {
+      runId: 123,
+      attempt: 1,
+      headSha: "a".repeat(40),
+      workflow: ".github/workflows/ci.yml",
+      owner: "owner",
+      url: "https://github.com/Subrising/fulcra/actions/runs/123",
+      notice: "none",
+    };
+    const delivered = [],
+      states = [];
+    const ports = {
+      wait: async (id) => assert.equal(id, 123),
+      read: async () => ({
+        repository: { full_name: "Subrising/fulcra" },
+        id: 123,
+        run_attempt: 1,
+        head_sha: operation.headSha,
+        path: operation.workflow,
+        status: "completed",
+        name: "CI",
+        conclusion,
+      }),
+      deliver: async (owner, text) => {
+        assert.equal(states.at(-1), "attempted");
+        delivered.push({ owner, text });
+      },
+      persist: async (state) => states.push(state.notice),
+    };
+    await watchOperation(operation, ports);
+    assert.deepEqual(states, ["attempted", "accepted"]);
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].owner, "owner");
+    assert.match(delivered[0].text, conclusion === "success" ? /^PASS:/ : /^FAIL:/);
+    assert.ok(delivered[0].text.includes(operation.url));
+    await assert.rejects(watchOperation(operation, ports), /Reconcile/);
+    assert.equal(delivered.length, 1);
+  }
+});
+
+test("outbound watcher reports stale completion and never retries an uncertain notice", async () => {
+  const operation = {
+    runId: 123,
+    attempt: 1,
+    headSha: "a".repeat(40),
+    workflow: ".github/workflows/ci.yml",
+    owner: "owner",
+    url: "https://github.com/Subrising/fulcra/actions/runs/123",
+    notice: "none",
+  };
+  const messages = [];
+  const ports = {
+    wait: async () => {},
+    read: async () => ({ repository: { full_name: "another/repo" } }),
+    persist: async () => {},
+    deliver: async (_owner, text) => {
+      messages.push(text);
+      throw new Error("Receipt uncertain");
+    },
+  };
+  await assert.rejects(watchOperation(operation, ports), /Receipt uncertain/);
+  assert.match(messages[0], /^BLOCKED:/);
+  assert.equal(operation.notice, "attempted");
+  await assert.rejects(watchOperation(operation, ports), /Reconcile/);
+  assert.equal(messages.length, 1);
+});
 
 test("shared dependencies and unknown root files run the full suite", () => {
   for (const path of [

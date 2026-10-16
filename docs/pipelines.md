@@ -217,21 +217,25 @@ only after a matching completion event. The resume verifies the successful
 workflow, head, tree, parents, identity, current main, source scan, and publisher
 guards before it can publish. CI is the only permitted tag validation workflow.
 
-The completion receiver needs `FULCRA_CI_NOTICE_URL` and the
-`FULCRA_CI_NOTICE_TOKEN` secret. The URL must use HTTPS. Configure the receiver
-before enabling release subscriptions. Missing configuration fails the notice
-step. It does not convert an untested tree into a successful check.
+CI and merge completion use an outbound local watcher. No inbound endpoint,
+receiver token, or daemon exposure is needed. Register it with:
 
-The receiver must authenticate the token, then map the exact repository and run
-ID to a registered requester. It must not accept a recipient from GitHub data.
-It stores `repository:runId:attempt` before its single native delivery attempt.
-It must reconcile an uncertain delivery before retrying. It sends one combined
-Fulcra notice through the existing native notice route. Any new worker turn
-uses `notifyOnFinish`. No worker timer checks GitHub.
+```sh
+node .github/scripts/watch-ci.mjs <run-id> <owner-session-UUID>
+```
 
-The notice contains the workflow, run ID, attempt, PR numbers, tested SHA,
-conclusion, and run URL. Successful merges also include the merge SHA and tree.
-A stale completion must not resume a release for another SHA. Failed CI sends
-a failure notice; it does not start a merge. Deploy the receiver through the
-existing alarm service, after workflow review. No receiver URL is configured
-in the repository at this draft stage.
+The command starts one detached process and returns. That process uses
+`gh run watch <run-id> --exit-status`. It reads the final GitHub result and
+sends one native notice with `fulcra send <owner-session> --no-wait`.
+It preserves the selected CLI home and caller environment. No agent turn
+waits, and no agent timer checks GitHub. A failed run still sends a notice.
+
+Private state uses the run ID, attempt, and owner UUID. Exclusive registration
+prevents duplicate watchers. The watcher records its send attempt before native
+delivery. An uncertain receipt needs inspection before another attempt.
+A watcher error sends one blocked notice with the retained run URL.
+
+Set `FULCRA_CI_OWNER` to the retained owner session UUID when using `release.sh`.
+The release tool registers the same watcher after its merge dispatch. The notice
+contains pass or fail, the run URL, attempt, and head SHA. Resume the release with
+the exact run ID from that notice. A completion for another head cannot resume it.

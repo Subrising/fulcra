@@ -157,23 +157,7 @@ async function main() {
     if (!response.ok) throw new Error(`GitHub API failed: ${response.status}`);
     return response.json();
   };
-  await complete(event, api, async (notice) => {
-    const url = process.env.FULCRA_CI_NOTICE_URL;
-    const token = process.env.FULCRA_CI_NOTICE_TOKEN;
-    console.log(JSON.stringify(notice));
-    if (!url || !token)
-      throw new Error("Configure the authenticated Fulcra CI completion receiver");
-    if (new URL(url).protocol !== "https:")
-      throw new Error("The completion receiver requires HTTPS");
-    const response = await fetch(url, {
-      method: "POST",
-      redirect: "error",
-      signal: AbortSignal.timeout(10000),
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(notice),
-    });
-    if (!response.ok) throw new Error(`Completion delivery failed: ${response.status}`);
-  });
+  await complete(event, api, async (notice) => console.log(JSON.stringify(notice)));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

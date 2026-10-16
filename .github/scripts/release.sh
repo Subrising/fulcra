@@ -1,6 +1,7 @@
 #!/bin/bash
 # Merge a tested PR through the workflow. Create an annotated tag and source release.
 set -euo pipefail
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 fail() { echo "$1" >&2; exit 1; }
 { [ "$#" -eq 3 ] || [ "$#" -eq 5 ]; } || fail 'usage: release.sh <version> <pr> <sha> [--after-merge <run-id>]'
 MERGE_RUN=
@@ -140,6 +141,11 @@ if [ -z "$MERGE_RUN" ]; then
   RUN_ID=$(printf '%s\n' "$DISPATCH" | sed -n 's|^https://github.com/Subrising/fulcra/actions/runs/\([0-9][0-9]*\)$|\1|p')
   [[ "$RUN_ID" =~ ^[0-9]+$ ]] || fail 'No exact workflow run ID. Inspect the dispatch before any retry.'
   echo "merge_dispatched=$RUN_ID"
+  if [ -n "${FULCRA_CI_OWNER:-}" ]; then
+    node "$SCRIPT_DIR/watch-ci.mjs" "$RUN_ID" "$FULCRA_CI_OWNER"
+  else
+    echo 'Register the printed run with watch-ci.mjs and the owner session UUID.'
+  fi
   echo "Resume only after the completion event: release.sh $VERSION $PR $SHA --after-merge $RUN_ID"
   exit 0
 fi
