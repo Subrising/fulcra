@@ -25,7 +25,7 @@ env:
 jobs:
   changes:
     name: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -65,27 +65,17 @@ jobs:
         run: node scripts/ci-shared-changes.mjs
 
       - name: Validate CI contracts
-        run: node --test scripts/ci-workflow.test.mjs scripts/windows-update/update-script.test.mjs scripts/install-git-hooks.test.mjs scripts/daemon-launch-contract.test.mjs scripts/test-support/test-home.test.mjs scripts/sync-fdroid-changelogs.test.mjs scripts/upload-release-assets.test.mjs scripts/upstream-watch.test.mjs scripts/fork-ledger.test.mjs
+        run: node --test scripts/ci-workflow.test.mjs .github/scripts/browser-routing.test.mjs scripts/windows-update/update-script.test.mjs scripts/install-git-hooks.test.mjs scripts/daemon-launch-contract.test.mjs scripts/test-support/test-home.test.mjs scripts/sync-fdroid-changelogs.test.mjs scripts/upload-release-assets.test.mjs scripts/upstream-watch.test.mjs scripts/fork-ledger.test.mjs
 
   format:
     name: format
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.format != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Check formatting
         run: npm run format:check
@@ -94,21 +84,11 @@ jobs:
     name: lint
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.quality != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Lint lockfile
         run: npx --yes lockfile-lint --path package-lock.json --type npm --allowed-hosts npm --validate-https --validate-integrity
@@ -123,7 +103,7 @@ jobs:
   # from a secret. On pull requests, GitHub's own test merge commit is skipped: it carries the account identity.
   machine-data:
     name: machine-data
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,21 +125,11 @@ jobs:
     name: typecheck
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.quality != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Restore server build outputs
         id: build-cache
@@ -206,7 +176,7 @@ jobs:
     name: server-tests (ubuntu-latest)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.hub != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SERVER_UNIT_SHARD: "1/2"
     steps: &server_test_steps
@@ -214,21 +184,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
+      - uses: ./.github/actions/ci-deps
 
       - name: Fetch origin/main (worktree tests)
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
         run: git fetch --no-tags origin main:refs/remotes/origin/main
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
 
       - name: Install agent CLIs for provider tests
         if: ${{ needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' }}
@@ -287,7 +247,7 @@ jobs:
     name: server-tests (ubuntu-latest, unit 2/2)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SERVER_UNIT_SHARD: "2/2"
     steps: *server_test_steps
@@ -342,17 +302,7 @@ jobs:
     steps: &desktop_test_steps
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies with retry
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Restore server build outputs
         id: build-cache
@@ -475,21 +425,11 @@ jobs:
     name: app-tests
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.app != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies with retry
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Verify dependency overrides
         run: npm run test:dependency-overrides
@@ -518,21 +458,11 @@ jobs:
     name: sdk-tests
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.sdk != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Build client dependencies
         run: npm run build:relay && npm run build:client
@@ -559,17 +489,12 @@ jobs:
     name: browser-prepare
     needs: changes
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       cache-key: ${{ steps.inputs.outputs.key }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm install --global npm@11.12.1
-      - run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
       - name: Identify immutable browser inputs
         id: inputs
         run: echo "key=browser-inputs-v1-${{ runner.os }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
@@ -579,18 +504,34 @@ jobs:
         with:
           path: browser-inputs.tgz
           key: ${{ steps.inputs.outputs.key }}
+      - name: Restore exact server build
+        id: daemon-build
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/*/dist
+            plugins/dist
+          key: build-v1-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
+      - name: Restore exact web export
+        id: web-build
+        uses: actions/cache@v4
+        with:
+          path: packages/app/.e2e-web
+          key: browser-web-v1-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml', 'package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', 'patches/**') }}
       - name: Build web and daemon once; plan timed cases
         if: steps.shared-cache.outputs.cache-hit != 'true'
         env:
           E2E_PLAN_ONLY: "1"
           NODE_OPTIONS: --max-old-space-size=4096
+          DAEMON_BUILD_HIT: ${{ steps.daemon-build.outputs.cache-hit }}
+          WEB_BUILD_HIT: ${{ steps.web-build.outputs.cache-hit }}
         run: |
-          npm run build:server-deps
+          if [ "$DAEMON_BUILD_HIT" != 'true' ]; then npm run build:server-deps; fi
           npm run build --workspace=@getpaseo/expo-two-way-audio
           # Both branches read built dependencies. Preserve each exit status.
-          (npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli) &
+          (if [ "$DAEMON_BUILD_HIT" != 'true' ]; then npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli; fi) &
           daemon_pid=$!
-          npm exec --workspace=@getpaseo/app -- expo export --platform web --output-dir .e2e-web --max-workers 2 &
+          (if [ "$WEB_BUILD_HIT" != 'true' ]; then npm exec --workspace=@getpaseo/app -- expo export --platform web --output-dir .e2e-web --max-workers 2; fi) &
           web_pid=$!
           daemon_status=0; wait "$daemon_pid" || daemon_status=$?
           web_status=0; wait "$web_pid" || web_status=$?
@@ -604,7 +545,7 @@ jobs:
     name: playwright (shard 1/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "1"
@@ -614,17 +555,7 @@ jobs:
     steps: &playwright_test_steps
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies with retry
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Install Playwright browsers
         timeout-minutes: 10
@@ -689,7 +620,7 @@ jobs:
     name: playwright (shard 2/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "2"
@@ -702,7 +633,7 @@ jobs:
     name: playwright (shard 3/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "3"
@@ -715,7 +646,7 @@ jobs:
     name: playwright (shard 4/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "4"
@@ -728,7 +659,7 @@ jobs:
     name: playwright (shard 5/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "5"
@@ -741,7 +672,7 @@ jobs:
     name: playwright (shard 6/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "6"
@@ -754,7 +685,7 @@ jobs:
     name: playwright (shard 7/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "7"
@@ -767,7 +698,7 @@ jobs:
     name: playwright (shard 8/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "8"
@@ -780,7 +711,7 @@ jobs:
     name: playwright (shard 9/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "9"
@@ -793,7 +724,7 @@ jobs:
     name: playwright (shard 10/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "10"
@@ -806,7 +737,7 @@ jobs:
     name: playwright (shard 11/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "11"
@@ -819,7 +750,7 @@ jobs:
     name: playwright (shard 12/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "12"
@@ -832,7 +763,7 @@ jobs:
     name: playwright (shard 13/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "13"
@@ -845,7 +776,7 @@ jobs:
     name: playwright (shard 14/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "14"
@@ -858,7 +789,7 @@ jobs:
     name: playwright (shard 15/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "15"
@@ -871,7 +802,7 @@ jobs:
     name: playwright (shard 16/16)
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: "16"
@@ -884,7 +815,7 @@ jobs:
     name: browser-recovery
     needs: [changes, browser-prepare]
     if: ${{ !cancelled() && needs.browser-prepare.result == 'success' && needs.changes.outputs.browser != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       PLAYWRIGHT_ARTIFACT: recovery
@@ -897,21 +828,11 @@ jobs:
     name: relay-tests
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.relay != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Restore relay build outputs
         id: build-cache
@@ -934,21 +855,11 @@ jobs:
     name: relay-grant-e2e
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.server != 'false' || needs.changes.outputs.relay != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Restore server-deps build outputs
         id: build-cache
@@ -970,7 +881,7 @@ jobs:
     name: cli-tests (shard 1/3)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
       PASEO_DICTATION_ENABLED: "0"
@@ -980,17 +891,7 @@ jobs:
     steps: &cli_test_steps
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      # npm 10 mis-resolves the root markdown-it override in this lockfile.
-      - name: Use the lockfile-compatible npm version
-        run: npm install --global npm@11.12.1
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
+      - uses: ./.github/actions/ci-deps
 
       - name: Install agent CLIs for provider tests
         run: node scripts/npm-retry.mjs install -g @anthropic-ai/claude-code @openai/codex@0.105.0 opencode-ai
@@ -1012,7 +913,7 @@ jobs:
     name: cli-tests (shard 2/3)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
       PASEO_DICTATION_ENABLED: "0"
@@ -1025,7 +926,7 @@ jobs:
     name: cli-tests (shard 3/3)
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
       PASEO_DICTATION_ENABLED: "0"
@@ -1038,7 +939,7 @@ jobs:
     name: cli-source-tests
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.cli != 'false') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CLI_SUITE: source
       PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: "0"
@@ -1090,7 +991,7 @@ jobs:
       - cli-tests-2
       - cli-tests-3
       - cli-source-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Every job passed or was skipped
         env:

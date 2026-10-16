@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
+import { needsMetro } from "./browser-routing.mjs";
 import { balanceTests } from "./browser-shards.mjs";
 
 function identity(test, rootDir) {
@@ -17,6 +18,9 @@ function identity(test, rootDir) {
 }
 
 export default class BrowserReporter {
+  onError() {
+    this.infrastructureError = true;
+  }
   onBegin(config, suite) {
     this.rootDir = config.rootDir;
     this.tests = suite.allTests();
@@ -35,9 +39,7 @@ export default class BrowserReporter {
     const history = JSON.parse(
       readFileSync(new URL("../browser-test-times.json", import.meta.url), "utf8"),
     );
-    const recovery = this.tests.filter(
-      (test) => path.basename(test.location.file) === "root-error-recovery.spec.ts",
-    );
+    const recovery = this.tests.filter((test) => needsMetro(test));
     const regular = this.tests.filter((test) => !recovery.includes(test));
     const buckets = balanceTests(
       regular.map((test) => identity(test, this.rootDir)),
@@ -78,9 +80,12 @@ export default class BrowserReporter {
     if (process.env.E2E_PLAN_ONLY === "1") return;
     mkdirSync(".e2e-retry", { recursive: true });
     this.tests ??= [];
+    const failed = this.tests.filter((test) => test.outcome() === "unexpected");
     const incomplete =
       runResult.status !== "passed" &&
-      (!this.tests.length ||
+      (this.infrastructureError ||
+        failed.length === 0 ||
+        !this.tests.length ||
         this.tests.some(
           (test) =>
             test.expectedStatus !== "skipped" &&
@@ -95,7 +100,6 @@ export default class BrowserReporter {
         "The run ended before all selected tests executed. Diagnose infrastructure before retrying.",
       );
     else rmSync(".e2e-retry/incomplete", { force: true });
-    const failed = this.tests.filter((test) => test.outcome() === "unexpected");
     writeFileSync(
       ".e2e-retry/failed.txt",
       failed.map((test) => identity(test, this.rootDir).line).join("\n") + "\n",
