@@ -74,6 +74,9 @@ export function createPluginHosts(source: PluginHostsSource, signal: AbortSignal
         listeners.delete(listener);
       };
     },
+    getClientForRpc(serverId: string): DaemonClient {
+      return resolve(serverId);
+    },
     getPaseoClient(serverId: string): PaseoApi {
       const client = resolve(serverId);
       const existing = clients.get(serverId);

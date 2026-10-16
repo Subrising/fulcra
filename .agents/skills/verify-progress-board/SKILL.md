@@ -1,39 +1,39 @@
 ---
 name: verify-progress-board
-description: Check the Fulcra Progress board adapters and real browser render at phone, tablet, desktop, and landscape sizes.
+description: Check the Progress board data, host selection, and browser layout.
 ---
 
 # Verify the Progress board
 
-Run from the repository root. Use the existing dependencies. Do not change a live host or install an app.
+Run from the repository root. Use the existing dependencies. Keep host config and sessions unchanged. Use temporary ledgers for close-time tests.
 
-1. Run the focused adapter tests:
+1. Run the focused server and shared tests with the existing `tsx` test runner.
+2. Run the app host-runtime tests in `packages/app/src/plugins/hosts/index.test.ts`.
+3. Run type checks for the plugin and app. Build current workspace declarations first.
+4. Run `npm run lint --` with the changed files.
+5. Run `node control/orca-organization/verify-progress-board-screens.mjs`.
+6. Inspect every required viewport screenshot.
 
-   ```sh
-   TMPDIR=/tmp slot-run --pool fulcra --slots 1 --timeout 60 -- node --import tsx --test control/orca-organization/server/progress-board.test.ts control/orca-organization/shared/progress-board.test.ts control/src/config.test.mjs
-   ```
+The browser script mounts the production screen with its production RPC context.
+Its default data are synthetic. They test completion dates, mirrored ledgers, and blocked work.
+They also test host selection, offline states, item expansion, and session navigation.
+Set `PROGRESS_BOARD_SNAPSHOTS` to a JSON file with `mini` and `book` snapshots for live-data rendering.
+Record how each snapshot was obtained. Fixture data do not prove live host integration.
 
-2. Run the browser checks:
+Check 375×812, 768×1024, 1440×900, and 812×375 in both themes.
+Fail on overflow, overlaps, clipped text, sideways scrolling, or controls below 48×48 pixels.
+Inspect the Running now, Next, Blocked, and Done captures.
+Check both Done filters. File times and observed dates must never enter their counts.
+Check the collapsed `Closed earlier (date unknown)` group and its separate count.
+Expand it and check that no item has an elapsed-time label.
+Test committed row dates in a ledger repository and an enclosing vault.
+Check each host through its native session API.
+Do not infer running work from the number of retained sessions.
+Check the model ID against the native session record.
+The default output is `docs/qa-evidence/progress-board/`. A folder argument overrides it.
+Start Expo with `BROWSER=none` when Playwright owns the browser. This avoids a blocked macOS browser-launch request.
 
-   ```sh
-   TMPDIR=/tmp slot-run --pool fulcra --slots 1 --timeout 60 -- node control/orca-organization/verify-progress-board-screens.mjs
-   ```
+Use a fresh browser context for each app viewport. Wait for fonts and two layout frames before capture.
+A reused page can show an incomplete resize.
 
-The browser checks render the real plugin surface with synthetic data and the SDK context providers.
-They cover 375, 768, 1440, and 812×375 pixels in dark and light themes.
-They use 43 synthetic items with the Mini ledger columns.
-The adapter tests check owner matching before redaction and cache refresh after owner settings change.
-They check project selection, status columns, recent Done items, full text and evidence, job navigation, explicit done workers, event refresh, errors, recovery, empty data, and subscription cleanup.
-Card titles have at most two lines. Card metadata and result lines can use an ellipsis.
-Full details must show all text. Only board lanes and status tabs can scroll horizontally.
-They fail on horizontal overflow, clipped text, overlapping controls, or controls below 48×48 pixels.
-The script closes the browser and loopback server when it stops.
-
-Inspect the PNG files and `checks.json` in `local/screens/progress-board/`.
-Pass a folder argument to save captures elsewhere.
-Check the landscape lane capture as well as the page capture.
-These renders do not prove installation or native device behavior.
-
-Run `npm --prefix control/orca-organization run typecheck` through the shared slot.
-Run `npm run lint --` with the changed paths.
-If workspace declarations are missing, build the client and plugin packages through the shared slot first.
+Check the complete app shell separately. These screen renders do not prove an installed release.
