@@ -35,3 +35,15 @@ PASEO_CLI_TEST_USE_BUILT=1 PASEO_CLI_TEST_SHARD=2 PASEO_CLI_TEST_SHARD_TOTAL=3 n
 Provider checks need the current agent CLIs used by CI. Use an isolated npm prefix if local tools are older.
 Retry only a failed file after correcting its test environment. Preserve successful file results.
 Do not replace the installed tools or change the installed daemon.
+
+For retained plugin messages, use the app workspace test configuration.
+
+```sh
+npm run test --workspace=@getpaseo/app -- src/agent-stream/presentation.test.ts src/agent-stream/model.test.ts src/agent-stream/layout.test.ts src/plugins/timeline/projection.test.ts
+bash .github/scripts/export-browser-web.sh
+E2E_STATIC_WEB=1 E2E_USE_BUILT_DAEMON=1 npm run test:e2e --workspace=@getpaseo/app -- e2e/browser/plugin-timeline.spec.ts --workers=3 --fully-parallel --retries=0
+```
+
+Inspect `timeline-layout.json` and the screenshots for all six widths.
+Require complete messages after reload, no sideways scroll, no row overlap, and buttons of at least 48×48 pixels.
+Check both scroll positions in the landscape case. The message uses normal vertical scrolling.

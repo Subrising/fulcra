@@ -150,7 +150,11 @@ export function createStreamPresentation() {
     const head: StreamItem[] = [];
     const promoted: StreamItem[] = [];
     const nextLiveSources = new Map<string, AssistantMessageItem>();
-    for (const item of projectPluginTimelineItems(input.head, input.transform, "streaming")) {
+    for (const item of projectPluginTimelineItems(
+      input.head,
+      input.transform,
+      input.isTurnActive ? "streaming" : "complete",
+    )) {
       const blocks = nativeBlocks(item);
       if (item.kind === "assistant_message") nextLiveSources.set(item.id, item);
       if (item.kind === "assistant_message" && blocks.length > 1) {

@@ -124,6 +124,20 @@ function rows(result: { tail: StreamItem[]; head: StreamItem[] }): StreamItem[] 
 }
 
 describe("stream presentation through installed plugins", () => {
+  it("settles a retained assistant head when its turn becomes idle", () => {
+    const source = assistantMessage("retained", 1);
+    const transform = installedTransform(installProbe("assistant_message"));
+    const present = createStreamPresentation();
+    const input = { ...presentationOptions, tail: [], head: [source], transform };
+    const active = rows(present(input));
+    const idle = rows(present({ ...input, isTurnActive: false }));
+    expect(pluginData(active)).toEqual([{ text: "retained", phase: "streaming" }]);
+    expect(pluginData(idle)).toEqual([{ text: "retained", phase: "complete" }]);
+    expect(idle.map((item) => item.id)).toEqual(active.map((item) => item.id));
+    const restored = rows(createStreamPresentation()({ ...input, isTurnActive: false }));
+    expect(pluginData(restored)).toEqual([{ text: "retained", phase: "complete" }]);
+  });
+
   it("offers every source tool call to an installed transformer in Overview mode", () => {
     const calls = [toolCall("call-1", "bash"), toolCall("call-2", "read")];
     const rendered = createStreamPresentation()({
