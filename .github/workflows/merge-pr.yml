@@ -20,6 +20,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  checks: read
 
 concurrency:
   group: merge-pr-main
@@ -75,10 +76,7 @@ jobs:
           cp scripts/check-machine-data.mjs "$RUNNER_TEMP/check-machine-data.mjs"
           gh api "repos/$GH_REPO/pulls/$PR" > "$RUNNER_TEMP/pr.json"
           jq -e --arg sha "$SHA" '.state == "open" and .base.ref == "main" and .head.sha == $sha and .draft == false' "$RUNNER_TEMP/pr.json"
-          # Public read: the token needs no checks permission.
-          curl --fail --silent --show-error \
-            -H 'Accept: application/vnd.github+json' \
-            "$GITHUB_API_URL/repos/$GH_REPO/commits/$SHA/check-runs?check_name=ci-passed&filter=latest&per_page=100" > "$RUNNER_TEMP/checks.json"
+          gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=ci-passed&filter=latest&per_page=100" > "$RUNNER_TEMP/checks.json"
           jq -e --arg sha "$SHA" '[.check_runs[] | select(.name == "ci-passed" and .app.id == 15368)] | length == 1 and all(.head_sha == $sha and .status == "completed" and .conclusion == "success")' "$RUNNER_TEMP/checks.json"
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
@@ -91,6 +89,21 @@ jobs:
           console.log(found.length === 0);
           if (found.length) process.exit(1);
           NODE
+
+      - name: Check candidate commit identities
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$SHA"
+          git merge-base --is-ancestor origin/main "$SHA"
+          identities=$(git log --format='%an <%ae>|%cn <%ce>' "origin/main..$SHA")
+          test -n "$identities"
+          while IFS= read -r identity; do
+            case "$identity" in
+              'Fulcra <fulcra@users.noreply.github.com>|Fulcra <fulcra@users.noreply.github.com>'|'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>|GitHub <noreply@github.com>') ;;
+              *) echo false; exit 1 ;;
+            esac
+          done <<< "$identities"
+          echo true
 
       - name: Merge with the workflow token
         id: merge

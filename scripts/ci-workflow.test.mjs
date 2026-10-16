@@ -340,12 +340,21 @@ function executable(path, source) {
   chmodSync(path, 0o755);
 }
 
-test("merge workflow grants only the two required write permissions", () => {
+test("merge workflow limits writes and authenticates check reads", () => {
   const source = mergeWorkflow();
-  assert.match(source, /permissions:\n  contents: write\n  pull-requests: write\n\n/);
+  assert.match(
+    source,
+    /permissions:\n  contents: write\n  pull-requests: write\n  checks: read\n\n/,
+  );
   assert.equal((source.match(/permissions:/g) ?? []).length, 1);
   assert.match(source, /persist-credentials: false/);
   assert.match(source, /group: merge-pr-main/);
+  assert.match(mergeStep("Check the PR, tested SHA, and merge title"), /gh api .*check-runs/);
+  assert.doesNotMatch(source, /curl/);
+  assert.ok(
+    source.indexOf("- name: Check candidate commit identities") <
+      source.indexOf("- name: Merge with the workflow token"),
+  );
   assert.match(
     mergeStep("Scan the merge commit and source"),
     /node "\$RUNNER_TEMP\/check-machine-data.mjs" --commits "\$MERGED\^1\.\.\$MERGED"/,
@@ -369,13 +378,7 @@ test("merge workflow rejects unsafe callers, PRs, CI results, and identities", (
       `#!/usr/bin/env node
 const fs=require('node:fs'); const f=JSON.parse(fs.readFileSync(process.env.FIXTURE)); const a=process.argv.slice(2);
 fs.appendFileSync(process.env.CALLS,JSON.stringify(a)+'\\n');
-console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('/commits/')) ? f.commit : f.pr));
-`,
-    );
-    executable(
-      join(bin, "curl"),
-      `#!/usr/bin/env node
-console.log(JSON.stringify(JSON.parse(require('node:fs').readFileSync(process.env.FIXTURE)).checks));
+console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('/check-runs')) ? f.checks : a.some(x=>x.includes('/commits/')) ? f.commit : f.pr));
 `,
     );
     const sha = "a".repeat(40);
@@ -512,6 +515,137 @@ console.log(JSON.stringify(JSON.parse(require('node:fs').readFileSync(process.en
   }
 });
 
+test("workflow identity gate accepts the allowlist and rejects other commit identities", () => {
+  const root = mkdtempSync(join(tmpdir(), "fulcra-identities-test-"));
+  try {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Fulcra",
+      GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Fulcra",
+      GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+    };
+    const git = (...args) =>
+      execFileSync("git", args, {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "--initial-branch=main");
+    writeFileSync(join(root, "fixture"), "Identity fixture.\n");
+    git("add", ".");
+    git("commit", "-qm", "Identity fixture base");
+    const main = git("rev-parse", "HEAD"),
+      tree = git("rev-parse", "HEAD^{tree}");
+    git("update-ref", "refs/remotes/origin/main", main);
+    git("remote", "add", "origin", root);
+    const run = (identity) => {
+      const sha = execFileSync(
+        "git",
+        ["commit-tree", tree, "-p", main, "-m", "Identity fixture candidate"],
+        { cwd: root, env: { ...env, ...identity }, encoding: "utf8" },
+      ).trim();
+      return spawnSync("bash", ["-c", mergeStep("Check candidate commit identities")], {
+        cwd: root,
+        env: { ...env, SHA: sha },
+        encoding: "utf8",
+      }).status;
+    };
+    assert.equal(run({}), 0);
+    assert.equal(
+      run({
+        GIT_AUTHOR_NAME: "github-actions[bot]",
+        GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+        GIT_COMMITTER_NAME: "GitHub",
+        GIT_COMMITTER_EMAIL: "noreply@github.com",
+      }),
+      0,
+    );
+    for (const identity of [
+      { GIT_AUTHOR_NAME: "unlisted" },
+      { GIT_AUTHOR_EMAIL: "invalid" },
+      { GIT_COMMITTER_NAME: "unlisted" },
+      { GIT_COMMITTER_EMAIL: "invalid" },
+    ])
+      assert.notEqual(run(identity), 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("source release rejects every active tag or release trigger with a generic YAML check", () => {
+  const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
+  const code = source.split("<<'RUBY'\n")[1].split("\nRUBY")[0];
+  const root = mkdtempSync(join(tmpdir(), "fulcra-triggers-test-"));
+  try {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Fulcra",
+      GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Fulcra",
+      GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+    };
+    const git = (...args) =>
+      execFileSync("git", args, {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "--initial-branch=main");
+    mkdirSync(join(root, ".github/workflows"), { recursive: true });
+    const path = ".github/workflows/future-publisher.yaml";
+    const cases = [
+      ["on: {push: {branches: [main]}}\n", "active", true],
+      ["on: {push: {branches-ignore: [archive]}}\n", "active", true],
+      ["on: [workflow_dispatch, pull_request]\n", "active", true],
+      ["on: {workflow_dispatch: {inputs: {tags: {type: string}}}}\n", "active", true],
+      ["on: release\n", "disabled_manually", true],
+      ["on: release\n", "active", false],
+      ["'on': [workflow_dispatch, release]\n", "active", false],
+      ["on: {release: {types: [published]}}\n", "active", false],
+      ["on:\n  push:\n    tags: [v*]\n", "active", false],
+      ['"on": {push: {"tags": ["v*"]}}\n', "active", false],
+      ["filters: &filters {tags: ['v*']}\non: {push: *filters}\n", "active", false],
+      ["on: {push: {tags-ignore: ['*']}}\n", "active", false],
+      ["on: push\n", "active", false],
+      ["on: [push, workflow_dispatch]\n", "active", false],
+      ["on:\n  push:\n", "active", false],
+      ["on: {push: {paths: ['src/**']}}\n", "active", false],
+      ["on: create\n", "active", false],
+      ["on: [release\n", "active", false],
+      ["on: workflow_dispatch\n---\non: release\n", "active", false],
+      ["on: release\n", null, false],
+      ["on: {push: {branches: [main]}}\n", null, true],
+    ];
+    for (const [yaml, state, allowed] of cases) {
+      writeFileSync(join(root, path), yaml);
+      git("add", ".github/workflows");
+      const sha = git("commit-tree", git("write-tree"), "-m", "Workflow trigger fixture");
+      // A second page proves that the check includes every workflow page.
+      const workflows = state ? [{ path, state }] : [];
+      const metadata = join(root, "workflows.json");
+      writeFileSync(
+        metadata,
+        JSON.stringify([
+          { workflows: [{ path: ".github/workflows/deleted.yml", state: "active" }] },
+          { workflows },
+        ]),
+      );
+      const result = spawnSync("ruby", ["-rjson", "-ryaml", "-ropen3", "-", metadata, sha], {
+        cwd: root,
+        env,
+        input: code,
+        encoding: "utf8",
+      });
+      assert.equal(result.status === 0, allowed, `${yaml}: ${result.stderr}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("source release uses one workflow wait and refuses unsafe candidates", () => {
   const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
   assert.doesNotMatch(source, /pulls\/[^"\s]+\/merge["\s]|gh pr merge|refs\/heads\/main/);
@@ -554,6 +688,9 @@ test("source release uses one workflow wait and refuses unsafe candidates", () =
     );
     writeFileSync(join(checkout, "local/personal-patterns.tsv"), "i\tDO_NOT_PUBLISH\n");
     writeFileSync(join(checkout, ".gitignore"), "local/\n");
+    mkdirSync(join(checkout, ".github/workflows"), { recursive: true });
+    writeFileSync(join(checkout, ".github/workflows/ci.yml"), "on: {push: {branches: [main]}}\n");
+    writeFileSync(join(checkout, ".github/workflows/new-publisher.yml"), "on: release\n");
     git("add", ".");
     git("commit", "-qm", "Release fixture base");
     git("tag", "v1.0.0");
@@ -605,7 +742,7 @@ fs.appendFileSync(p+'/calls',JSON.stringify(a)+'\\n');
 if(a[0]==='workflow'){fs.writeFileSync(p+'/dispatched','');execFileSync(process.env.REAL_GIT,['--git-dir',p+'/origin.git','fetch','-q',process.cwd(),f.merged+':refs/heads/main']);console.log('https://github.com/Subrising/fulcra/actions/runs/123');}
 else if(a[0]==='run') process.exit(0);
 else if(a[0]==='release'){if(a[1]==='create')fs.writeFileSync(p+'/released','');else console.log(a.includes('assets,isDraft,tagName')?'true':'v1.0.0');}
-else if(a.includes('repos/Subrising/fulcra/actions/workflows?per_page=100'))console.log(JSON.stringify([{workflows:['desktop-release','android-apk-release','release-notes-sync','deploy-app'].map(name=>({path:'.github/workflows/'+name+'.yml',state:process.env.BAD_PUBLISHER?'active':'disabled_manually'}))}]));
+else if(a.includes('repos/Subrising/fulcra/actions/workflows?per_page=100'))console.log(JSON.stringify([{workflows:[{path:'.github/workflows/ci.yml',state:'active'},{path:'.github/workflows/new-publisher.yml',state:process.env.BAD_PUBLISHER?'active':'disabled_manually'}]}]));
 else if(a[1].includes('/pulls/'))console.log(JSON.stringify({state:'open',base:{ref:'main'},head:{sha:f.sha},draft:false,merged:fs.existsSync(p+'/dispatched'),merge_commit_sha:f.merged}));
 else if(a[1].includes('/check-runs'))console.log(JSON.stringify({check_runs:[{name:'ci-passed',app:{id:15368},head_sha:f.sha,status:'completed',conclusion:process.env.BAD_CI?'failure':'success'}]}));
 else if(a[1].includes('/git/ref/heads/main'))console.log(f.merged);

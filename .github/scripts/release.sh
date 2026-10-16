@@ -64,8 +64,52 @@ git worktree add -q --detach "$WORKTREE" "$SHA"
 (cd "$WORKTREE" && node "$TMP/check-machine-data.mjs" --commits "$PREVIOUS..$SHA") > "$TMP/scan.log" 2>&1 || fail 'Candidate scan failed.'
 git show "$SHA:RELEASE-NOTES-$VERSION.md" > "$TMP/notes.md"
 [ -s "$TMP/notes.md" ] || fail 'Release notes are missing.'
-gh api --paginate --slurp "repos/$REPO/actions/workflows?per_page=100" > "$TMP/workflows.json"
-jq -e '[.[].workflows[] | select(.path == ".github/workflows/desktop-release.yml" or .path == ".github/workflows/android-apk-release.yml" or .path == ".github/workflows/release-notes-sync.yml" or .path == ".github/workflows/deploy-app.yml")] | length == 4 and all(.state == "disabled_manually")' "$TMP/workflows.json" >/dev/null || fail 'A tag publisher is enabled or missing.'
+check_publishers() {
+gh api --paginate --slurp "repos/$REPO/actions/workflows?per_page=100" > "$TMP/workflows.json" || return 1
+# Ruby's standard YAML parser needs no repository dependencies.
+ruby -rjson -ryaml -ropen3 - "$TMP/workflows.json" "$SHA" <<'RUBY'
+begin
+  states = {}
+  JSON.parse(File.read(ARGV[0])).each do |page|
+    page.fetch('workflows').each do |workflow|
+      path = workflow.fetch('path')
+      state = workflow.fetch('state')
+      raise unless path.is_a?(String) && state.is_a?(String)
+      states[path] = state
+    end
+  end
+  output, status = Open3.capture2e('git', 'ls-tree', '-rz', '--name-only', ARGV[1], '--', '.github/workflows/')
+  raise unless status.success?
+  paths = output.split("\0").select { |path| path.match?(/\A\.github\/workflows\/[^\/]+\.ya?ml\z/) }
+  # GitHub retains records for deleted files. Only files in this tree can run.
+  # New definitions have no API state yet and become active on main.
+  paths.each do |path|
+    next if states[path]&.start_with?('disabled_')
+    source, status = Open3.capture2e('git', 'show', "#{ARGV[1]}:#{path}")
+    raise unless status.success? && YAML.parse_stream(source).children.length == 1
+    document = YAML.safe_load(source, aliases: true)
+    raise unless document.is_a?(Hash)
+    # Psych uses YAML 1.1, where an unquoted `on` key becomes true.
+    events = document.key?('on') ? document.fetch('on') : document.fetch(true)
+    events = { events => nil } if events.is_a?(String)
+    events = events.to_h { |event| [event, nil] } if events.is_a?(Array)
+    raise unless events.is_a?(Hash) && events.keys.all? { |event| event.is_a?(String) }
+    raise if events.key?('release') || events.key?('create')
+    next unless events.key?('push')
+    push = events.fetch('push')
+    # Only explicit branch filters exclude tag pushes.
+    raise unless push.is_a?(Hash) &&
+      (push.key?('branches') || push.key?('branches-ignore')) &&
+      !push.key?('tags') && !push.key?('tags-ignore')
+  end
+  puts true
+rescue StandardError
+  warn false
+  exit 1
+end
+RUBY
+}
+check_publishers || fail 'Workflow trigger check failed.'
 echo 'candidate_verified=true'
 DISPATCH=$(gh workflow run merge-pr.yml -R "$REPO" --ref main -f pr="$PR" -f sha="$SHA")
 RUN_ID=$(printf '%s\n' "$DISPATCH" | sed -n 's|^https://github.com/Subrising/fulcra/actions/runs/\([0-9][0-9]*\)$|\1|p')
@@ -86,11 +130,14 @@ git fetch -q origin main
 git -C "$WORKTREE" checkout -q --detach "$MERGED"
 (cd "$WORKTREE" && node "$TMP/check-machine-data.mjs" --commits "$PREVIOUS..$MERGED") > "$TMP/scan.log" 2>&1 || fail 'Merged source or commit scan failed.'
 echo 'merge_verified=true'
+check_publishers || fail 'Workflow trigger check failed.'
 git -c user.name=Fulcra -c user.email=fulcra@users.noreply.github.com tag -a "$TAG" -m "Fulcra $VERSION" "$MERGED"
 [ "$(git for-each-ref --format='%(taggername) <%(taggeremail:trim)>' "refs/tags/$TAG")" = 'Fulcra <fulcra@users.noreply.github.com>' ] || fail 'Tag identity failed.'
 [ "$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)" = "$MERGED" ] || fail 'Main moved before tag publication.'
 git push origin "refs/tags/$TAG"
 [ "$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)" = "$MERGED" ] || fail 'The remote tag differs.'
+[ "$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)" = "$MERGED" ] || fail 'Main moved before release publication.'
+check_publishers || fail 'Workflow trigger check failed.'
 gh release create "$TAG" -R "$REPO" --verify-tag --title "Fulcra $VERSION — Source only" --notes-file "$TMP/notes.md"
 gh release view "$TAG" -R "$REPO" --json assets,isDraft,tagName --jq '.assets == [] and .isDraft == false and .tagName == "'"$TAG"'"' | grep -qx true || fail 'Source release verification failed.'
 echo 'source_release_verified=true'
