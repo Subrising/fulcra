@@ -26,4 +26,7 @@ Inspect the Running now, Next, Blocked, and Done captures.
 The default output is `docs/qa-evidence/progress-board/`. A folder argument overrides it.
 Start Expo with `BROWSER=none` when Playwright owns the browser. This avoids a blocked macOS browser-launch request.
 
+Use a fresh browser context for each app viewport. Wait for fonts and two layout frames before capture.
+A reused page can show an incomplete resize.
+
 Check the complete app shell separately. These screen renders do not prove an installed release.

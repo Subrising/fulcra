@@ -484,10 +484,11 @@ export function createProgressBoard(
           .filter((a) => a.status === "running" || a.status === "initializing")
           .map(async (a) => {
             try {
-              const page = await paseo.agents.ref(a.id).timeline.refetch({ limit: 6 });
-              const last = page.entries
-                .toReversed()
-                .find((e) => e.item.type === "assistant_message" || e.item.type === "tool_call");
+              const page = await paseo.agents.ref(a.id).timeline.refetch({ limit: 20 });
+              const entries = page.entries.toReversed();
+              const last =
+                entries.find((e) => e.item.type === "assistant_message" && oneLine(e.item.text)) ??
+                entries.find((e) => e.item.type === "tool_call");
               if (last?.item.type === "assistant_message") {
                 const line = oneLine(last.item.text);
                 if (line) results.set(a.id, line);
@@ -495,16 +496,22 @@ export function createProgressBoard(
                 const detail = last.item.detail;
                 const activity =
                   detail.type === "shell"
-                    ? `Running: ${detail.command}`
+                    ? /(?:test|vitest|playwright|lint|typecheck)\b/i.test(detail.command)
+                      ? "Running checks"
+                      : /(?:build|compile)\b/i.test(detail.command)
+                        ? "Building the project"
+                        : "Running a command"
                     : detail.type === "read"
-                      ? `Reading ${detail.filePath}`
+                      ? "Reading project files"
                       : detail.type === "edit" || detail.type === "write"
-                        ? `Editing ${detail.filePath}`
+                        ? "Updating project files"
                         : detail.type === "search"
-                          ? `Searching: ${detail.query}`
-                          : detail.type === "plain_text"
-                            ? (detail.text ?? detail.label ?? `Using ${last.item.name}`)
-                            : `Using ${last.item.name}`;
+                          ? "Searching for information"
+                          : detail.type === "fetch"
+                            ? "Reading a web page"
+                            : detail.type === "plain_text"
+                              ? (detail.label ?? "Working on the task")
+                              : "Working on the task";
                 results.set(a.id, oneLine(activity) ?? "Using a tool");
               }
             } catch {

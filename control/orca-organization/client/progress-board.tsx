@@ -196,7 +196,9 @@ export function ProgressBoardView({
                           : "Start time unavailable"}
                       </Text>
                       <Text style={muted}>
-                        {entry.result ? plain(entry.result) : "No activity text received yet."}
+                        {entry.result
+                          ? summary(plain(entry.result))
+                          : "No activity text received yet."}
                       </Text>
                       {!!entry.permissions && (
                         <Text style={{ ...muted, color: colors.blocked }}>

@@ -549,3 +549,28 @@ test("ledger changes record completion while no screen is mounted", async (t) =>
   assert.equal(saved.rows["fixture:FU-1"].status, "DONE");
   assert.ok(Number.isFinite(Date.parse(saved.rows["fixture:FU-1"].completedAt)));
 });
+
+test("running activity uses readable updates instead of raw commands", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-activity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const board = createProgressBoard({ on: () => () => {} }, { root });
+  t.after(() => board.close());
+  const tool = {
+    item: {
+      type: "tool_call",
+      name: "shell",
+      detail: { type: "shell", command: "npm run test -- --long-private-option" },
+    },
+  };
+  let timeline: unknown[] = [tool];
+  const api = {
+    agents: {
+      list: async () => ({ entries: [{ agent: boardLead }], pageInfo: { hasMore: false } }),
+      ref: () => ({ timeline: { refetch: async () => ({ entries: timeline }) } }),
+    },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  assert.equal((await board.read(api)).projects[0]!.jobs[0]!.result, "Running checks");
+  timeline = [{ item: { type: "assistant_message", text: "Checking the phone layout." } }, tool];
+  assert.equal((await board.read(api)).projects[0]!.jobs[0]!.result, "Checking the phone layout.");
+});
