@@ -268,6 +268,58 @@ export class QueuedAgentMessages {
     });
   }
 
+  private async refuseClosedReceiver(
+    agentId: string,
+    selected: readonly Record[] = [],
+  ): Promise<boolean> {
+    const { agentManager, agentStorage } = this.deps;
+    const target = agentManager.getAgent(agentId) ?? (await agentStorage.get(agentId));
+    if (
+      target &&
+      !target.archivedAt &&
+      ("lifecycle" in target ? target.lifecycle : target.lastStatus) !== "closed"
+    )
+      return false;
+    const pending = this.records.filter(
+      (record) =>
+        record.agentId === agentId &&
+        (["queued", "dispatching"].includes(record.state) ||
+          (record.state === "refused" && selected.includes(record))),
+    );
+    if (!pending.length) return true;
+    const reason = "The receiver is closed or archived";
+    const senders = new Map<string, Record[]>();
+    for (const record of pending) {
+      record.state = "refused";
+      record.reason = reason;
+      if (record.request.notifyOnFinish)
+        disarmFinishNotification(agentManager, agentId, record.request.sender.agentId);
+      const sender = record.request.sender;
+      const server = sender.serverId || record.localServerId;
+      const key = JSON.stringify([server, sender.agentId]);
+      const group = senders.get(key) ?? [];
+      group.push(record);
+      senders.set(key, group);
+    }
+    // Save the whole refusal before any notice. Retries and restarts must not repeat the notices.
+    await this.save();
+    const timer = this.timers.get(agentId);
+    if (timer) clearTimeout(timer);
+    this.timers.delete(agentId);
+    for (const group of senders.values()) {
+      const record = group[0]!;
+      tellSenderUndelivered({
+        ...this.deps,
+        sender: record.request.sender,
+        targetId: agentId,
+        localServerId: record.localServerId,
+        reason,
+        count: group.length,
+      });
+    }
+    return true;
+  }
+
   private kick(agentId: string): void {
     if (!this.active || this.stopped || this.draining.has(agentId)) return;
     this.draining.add(agentId);
@@ -390,7 +442,8 @@ export class QueuedAgentMessages {
   private async drain(agentId: string): Promise<void> {
     await this.load();
     const { agentManager } = this.deps;
-    if (this.stopped || agentManager.hasInFlightRun(agentId)) return;
+    if (this.stopped || (await this.refuseClosedReceiver(agentId))) return;
+    if (agentManager.hasInFlightRun(agentId)) return;
     const waiting = this.records.filter((r) => r.agentId === agentId && r.state === "queued");
     if (!waiting.length) return;
     const resumeAt = Math.max(...waiting.map((r) => r.resumeAt ?? 0));
@@ -404,6 +457,7 @@ export class QueuedAgentMessages {
     );
     const candidates = firstDifferentMode < 0 ? waiting : waiting.slice(0, firstDifferentMode);
     const eligible = await this.eligibleRecords(candidates, agentId);
+    if (await this.refuseClosedReceiver(agentId, candidates)) return;
     if (this.stopped || agentManager.hasInFlightRun(agentId)) {
       await this.save();
       return;
@@ -488,6 +542,7 @@ export class QueuedAgentMessages {
         });
       }
     } catch (error) {
+      if (await this.refuseClosedReceiver(agentId)) return;
       if (error instanceof QueuedLinesChangedError) {
         for (const { record, reason } of error.refused) {
           record.state = "refused";

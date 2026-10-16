@@ -244,7 +244,8 @@ export class ReportUpService {
   private readonly nudging = new Map<string, PendingNudge>();
   private nudgeGeneration = 0;
   private ledgerRevision = 0;
-  private readonly nudgeStopped = new Set<string>();
+  private ledgerSnapshot?: { revision: number; rows: readonly LedgerRow[] };
+  private readonly nudgeStopped = new Map<string, Promise<ReadonlySet<string> | null>>();
   private ledgerWatcher?: LedgerDirectoryWatch;
   private ledgerDebounce?: ReturnType<typeof setTimeout>;
   private readonly nudgeDeliveredAt = new Map<string, number>();
@@ -281,7 +282,6 @@ export class ReportUpService {
         () => {
           if (this.stopped) return;
           this.ledgerRevision++;
-          this.nudgeStopped.clear();
           for (const id of this.nudging.keys()) this.cancelNudge(id, "Project ledger changed");
           clearTimeout(this.ledgerDebounce);
           this.ledgerDebounce = setTimeout(() => {
@@ -307,6 +307,7 @@ export class ReportUpService {
   async prepareLedgerObservation(): Promise<void> {
     await this.ledgerWatcher?.ready;
     await this.ledgerWatcher?.refresh();
+    await this.readLedgerSnapshot();
   }
   observesProject(project: string): boolean {
     return this.ledgerWatcher?.covers(project) === true;
@@ -569,8 +570,35 @@ export class ReportUpService {
   }
 
   private stopNudge(agentId: string): void {
-    this.nudgeStopped.add(agentId);
+    this.nudgeStopped.set(agentId, this.readyAtStop(agentId));
     this.cancelNudge(agentId, "Receiver turn stopped or failed");
+  }
+
+  private async readyAtStop(agentId: string): Promise<ReadonlySet<string> | null> {
+    try {
+      const revision = this.ledgerRevision;
+      const snapshot = this.ledgerSnapshot;
+      const rows =
+        snapshot?.revision === revision ? snapshot.rows : await this.readLedgerSnapshot();
+      if (revision !== this.ledgerRevision) return null;
+      const lead = await this.store.get(agentId);
+      return new Set(
+        lead ? this.ownedReadyRows(lead, rows).map((row) => `${row.project}:${row.id}`) : [],
+      );
+    } catch (err) {
+      this.deps.logger.warn({ err, agentId }, "Stopped lead READY rows could not be read");
+      return null;
+    }
+  }
+
+  private async readLedgerSnapshot(): Promise<readonly LedgerRow[]> {
+    const revision = this.ledgerRevision;
+    const rows = this.deps.readLedger
+      ? await this.deps.readLedger()
+      : await readOpenLedgerRows(this.deps.ledgerDir ?? defaultLedgerDir(), true);
+    const snapshot = structuredClone(rows);
+    if (revision === this.ledgerRevision) this.ledgerSnapshot = { revision, rows: snapshot };
+    return snapshot;
   }
 
   private async deliverStoppedFinish(agentId: string): Promise<void> {
@@ -980,8 +1008,7 @@ export class ReportUpService {
       return;
     }
     await new Promise((resolve) => setImmediate(resolve));
-    if (this.nudgeStopped.has(leadId) || this.observer.isOpen(leadId) || this.limitOf(leadId))
-      return;
+    if (this.observer.isOpen(leadId) || this.limitOf(leadId)) return;
     const lead = await this.store.get(leadId);
     const live = this.deps.agentManager.getAgent(leadId);
     if (!lead || lead.archivedAt || live?.internal) return;
@@ -994,6 +1021,7 @@ export class ReportUpService {
     if (stop && stop.kind !== "network") return;
     const workers = await this.idleWorkersOf(leadId);
     const owned = this.ownedReadyRows(lead, rows);
+    if (!(await this.rearmStoppedNudge(leadId, owned, ledgerRevision))) return;
     if (ledgerRevision !== this.ledgerRevision) return;
     const state = this.observeNudge(leadId, workers, owned);
     const fingerprint = state.fingerprint;
@@ -1021,6 +1049,29 @@ export class ReportUpService {
     );
   }
 
+  private async rearmStoppedNudge(
+    leadId: string,
+    owned: readonly LedgerRow[],
+    ledgerRevision: number,
+  ): Promise<boolean> {
+    const stopped = this.nudgeStopped.get(leadId);
+    if (stopped) {
+      const baseline = await stopped;
+      if (this.nudgeStopped.get(leadId) !== stopped) return false;
+      if (ledgerRevision !== this.ledgerRevision) return false;
+      if (!baseline) {
+        this.nudgeStopped.set(
+          leadId,
+          Promise.resolve(new Set(owned.map((row) => `${row.project}:${row.id}`))),
+        );
+        return false;
+      }
+      if (!owned.some((row) => !baseline.has(`${row.project}:${row.id}`))) return false;
+      this.nudgeStopped.delete(leadId);
+    }
+    return true;
+  }
+
   private ownedReadyRows(lead: LineAgent, rows: readonly LedgerRow[]): LedgerRow[] {
     return rowsEligibleForNudge({
       rows,
@@ -1044,9 +1095,7 @@ export class ReportUpService {
     void this.store
       .list()
       .then(async (chats) => {
-        const rows = this.deps.readLedger
-          ? await this.deps.readLedger()
-          : await readOpenLedgerRows(this.deps.ledgerDir ?? defaultLedgerDir());
+        const rows = await this.readLedgerSnapshot();
         const parents = new Set(
           (
             await Promise.all(
