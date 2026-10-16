@@ -1303,3 +1303,43 @@ it("a chat-list lead opens its chat even when the host registry check refuses, n
   expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: GAG_CHAT });
   expect(f.push).not.toHaveBeenCalled();
 });
+
+it("lists session leads without a selected or installed Command Centre", async () => {
+  gagChat();
+  f.controller = null;
+  mountPinned();
+  expect(await screen.findByTestId(`sidebar-chat-lead-book-${GAG_CHAT}`)).toBeTruthy();
+  expect(f.read).not.toHaveBeenCalled();
+});
+
+it("shows each session lead once when the Command Centre section is mounted", async () => {
+  gagChat();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  render(
+    <QueryClientProvider client={client}>
+      <PinnedMainAssistant />
+      <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
+    </QueryClientProvider>,
+  );
+  await vi.waitFor(() =>
+    expect(screen.getAllByTestId(`sidebar-chat-lead-book-${GAG_CHAT}`)).toHaveLength(1),
+  );
+});
+
+it("keeps an unlabelled main assistant out of fallback leads once its pin is known", async () => {
+  f.remote.mini = { directory: { available: true, primes: [prime()] } };
+  f.chats = {
+    mini: {
+      "original-prime": {
+        id: "original-prime",
+        title: "Main",
+        status: "idle",
+        labels: { "fulcra.reports-to": "role:main-assistant" },
+      },
+    },
+  };
+  mountPinned();
+  await screen.findByTestId("sidebar-pinned-main-assistant");
+  expect(screen.queryByTestId("sidebar-chat-lead-mini-original-prime")).toBeNull();
+});

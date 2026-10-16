@@ -162,6 +162,7 @@ const SIZES = [
 
 const f = vi.hoisted(() => ({
   push: vi.fn(),
+  sessionLeads: false,
   scenario: null as null | {
     offline: string[];
     connecting?: string[];
@@ -177,20 +178,45 @@ vi.mock("./host-navigation", () => ({
 vi.mock("@/stores/session-store", () => ({
   useSessionStore: (select: (state: unknown) => unknown) =>
     select({
-      sessions: {
-        book: {
-          agents: new Map([
-            ["prime-2", {}],
-            ["lead-1", {}],
-          ]),
-        },
-        mini: {
-          agents: new Map([
-            ["prime-1", {}],
-            ["gag-1", {}],
-          ]),
-        },
-      },
+      sessions: f.sessionLeads
+        ? {
+            book: {
+              agents: new Map([
+                [
+                  "parent",
+                  {
+                    id: "parent",
+                    title: "Project lead",
+                    status: "idle",
+                    labels: { "fulcra.reports-to": "role:main-assistant" },
+                  },
+                ],
+                [
+                  "nested",
+                  {
+                    id: "nested",
+                    title: "Game lead",
+                    status: "idle",
+                    labels: { role: "game-lead", "fulcra.reports-to": "parent" },
+                  },
+                ],
+              ]),
+            },
+          }
+        : {
+            book: {
+              agents: new Map([
+                ["prime-2", {}],
+                ["lead-1", {}],
+              ]),
+            },
+            mini: {
+              agents: new Map([
+                ["prime-1", {}],
+                ["gag-1", {}],
+              ]),
+            },
+          },
     }),
 }));
 const HOSTS = [
@@ -287,6 +313,7 @@ let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
 beforeEach(() => {
+  f.sessionLeads = false;
   vi.stubGlobal("React", React);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 });
@@ -299,7 +326,7 @@ afterEach(() => {
 });
 
 const NEW_CONTROLS =
-  /^(sidebar-pinned-main-assistant|sidebar-use-remote-main-assistant|sidebar-set-up-main-assistant|sidebar-lead-|sidebar-remote-lead-)/;
+  /^(sidebar-pinned-main-assistant|sidebar-use-remote-main-assistant|sidebar-set-up-main-assistant|sidebar-lead-|sidebar-remote-lead-|sidebar-chat-lead-)/;
 
 function measure(box: HTMLElement): string[] {
   const problems: string[] = [];
@@ -367,3 +394,43 @@ for (const scenario of SCENARIOS)
         });
       });
     });
+
+for (const size of SIZES)
+  it(`lists remote session leads without Command Centre at ${size.name}`, async () => {
+    theme.current = darkTheme;
+    f.sessionLeads = true;
+    f.scenario = { offline: [], directories: { book: empty, mini: empty } };
+    useMainAssistantMemory.setState({ byHost: {} });
+    await page.viewport(size.width, size.height);
+    document.body.style.margin = "0";
+    container = document.createElement("div");
+    container.style.width = `${size.sidebar}px`;
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() =>
+      root?.render(
+        <QueryClientProvider client={client}>
+          <PinnedMainAssistant />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container!.textContent).toContain("Game lead"));
+    expect(container.textContent).toContain("Project lead");
+    const nested = container.querySelector(
+      '[data-testid="sidebar-chat-lead-book-nested"]',
+    ) as HTMLElement;
+    expect(
+      [...nested.querySelectorAll("*")].some(
+        (element) => getComputedStyle(element).webkitLineClamp === "2",
+      ),
+    ).toBe(true);
+    expect(measure(container)).toEqual([]);
+    (
+      container.querySelector('[data-testid="sidebar-chat-lead-book-nested"]') as HTMLElement
+    ).click();
+    await page.screenshot({
+      element: container,
+      path: `../../.vitest-screenshots/sidebar/remote-leads-${size.name}.png`,
+    });
+  });

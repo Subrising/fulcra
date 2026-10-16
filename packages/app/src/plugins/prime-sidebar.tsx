@@ -171,6 +171,11 @@ export function PrimeSidebarRows({
   hasTeamMap?: boolean;
   retryDelay?: (attempt: number) => number;
 }) {
+  const setSection = useLeadsListedMainAssistant((state) => state.setSection);
+  useEffect(() => {
+    setSection(serverId, true);
+    return () => setSection(serverId, false);
+  }, [serverId, setSection]);
   const read = useContract(roleDirectoryRpc);
   const readFleet = useContract(fleetRpc);
   const readProjects = useContract(projectsRpc);
@@ -343,9 +348,19 @@ function LeadsCollapseToggle({
  */
 export const useLeadsListedMainAssistant = create<{
   hosts: ReadonlySet<string>;
+  sections: ReadonlySet<string>;
+  setSection(serverId: string, listed: boolean): void;
   set(serverId: string, listed: boolean): void;
 }>()((set, get) => ({
   hosts: new Set(),
+  sections: new Set(),
+  setSection(serverId, listed) {
+    if (get().sections.has(serverId) === listed) return;
+    const sections = new Set(get().sections);
+    if (listed) sections.add(serverId);
+    else sections.delete(serverId);
+    set({ sections });
+  },
   set(serverId, listed) {
     if (get().hosts.has(serverId) === listed) return;
     const hosts = new Set(get().hosts);
@@ -764,6 +779,38 @@ export function PinnedMainAssistant({ onBeforeNavigate }: { onBeforeNavigate?: (
           />
         );
       })}
+      <SessionLeadRows
+        shownIds={new Set(shown.map((entry) => entry.sessionId))}
+        onBeforeNavigate={onBeforeNavigate}
+      />
+    </>
+  );
+}
+
+/** List already-authorized session data when no Command Centre Leads section is mounted. */
+function SessionLeadRows({
+  shownIds,
+  onBeforeNavigate,
+}: {
+  shownIds: ReadonlySet<string>;
+  onBeforeNavigate?: () => void;
+}) {
+  const sections = useLeadsListedMainAssistant((state) => state.sections);
+  const sessions = useSessionStore((state) => state.sessions);
+  const hosts = useHosts();
+  const leads = useMemo(() => chatLeads(sessions, shownIds), [sessions, shownIds]);
+  const collapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedLeads);
+  if (sections.size > 0 || collapsed) return null;
+  return (
+    <>
+      {leads.map((lead) => (
+        <ChatLeadRow
+          key={`${lead.serverId}:${lead.agentId}`}
+          lead={lead}
+          hostLabel={hosts.find((host) => host.serverId === lead.serverId)?.label}
+          onBeforeNavigate={onBeforeNavigate}
+        />
+      ))}
     </>
   );
 }
@@ -964,7 +1011,7 @@ function ChatLeadRow({
 }: {
   lead: { serverId: string; agentId: string; title: string; status: string | undefined };
   hostLabel: string | undefined;
-  navigation: ReturnType<typeof usePluginHostNavigation>;
+  navigation?: ReturnType<typeof usePluginHostNavigation>;
   onBeforeNavigate?: () => void;
 }) {
   const status = ["Lead", lastKnownStatusLine(lead.status), hostLabel ?? "another computer"].join(
@@ -976,7 +1023,7 @@ function ChatLeadRow({
   const open = useCallback(() => {
     const result =
       hostNavigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId }) ??
-      navigation.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId });
+      navigation?.openAgentOnHost?.({ serverId: lead.serverId, agentId: lead.agentId });
     if (result !== "requested") {
       // The chat is in this computer's loaded chat list, so its computer is there: open it anyway, instead of the
       // Leads page, when the host registry check refuses (the owner saw the Leads page, 11 Oct).
@@ -1000,7 +1047,7 @@ function ChatLeadRow({
           style={styles.main}
         >
           <ThemedUsers size={14} uniProps={mutedColor} />
-          <LeadLine title={lead.title} status={status} />
+          <LeadLine title={lead.title} status={status} wrap />
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -1181,9 +1228,17 @@ function LeadRow({
 }
 
 /** FU-62: one line per lead, "title · status", so a long Leads list does not fill the sidebar. */
-function LeadLine({ title, status }: { title: string; status: string }) {
+function LeadLine({
+  title,
+  status,
+  wrap = false,
+}: {
+  title: string;
+  status: string;
+  wrap?: boolean;
+}) {
   return (
-    <Text style={styles.text} numberOfLines={1}>
+    <Text style={styles.text} numberOfLines={wrap ? 2 : 1}>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.status}>{" · "}</Text>
       <Text style={styles.status}>{status}</Text>
