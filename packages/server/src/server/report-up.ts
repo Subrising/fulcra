@@ -1815,7 +1815,7 @@ export function startReportUp(input: {
       ?.changed()
       .catch((err: unknown) => input.logger.warn({ err }, "Ledger routing config event failed"));
   });
-  const service = new ReportUpService({
+  const service: ReportUpService = new ReportUpService({
     routing,
     isDispatchLead: (id) =>
       input.daemonConfigStore.get().ledgerDispatchEnabled === true &&
