@@ -1,4 +1,5 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useTranslation } from "react-i18next";
 import { Pressable } from "react-native";
 import { router } from "expo-router";
@@ -19,6 +20,8 @@ function goBack(): void {
 }
 
 export function BackHeader({ title, titleAccessory, rightContent, onBack }: BackHeaderProps) {
+  const touch = useTouchTargets();
+  const backStyle = useMemo(() => [styles.backButton, touch && touchTargetStyles.icon], [touch]);
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const handleBack = useCallback(() => {
@@ -35,7 +38,7 @@ export function BackHeader({ title, titleAccessory, rightContent, onBack }: Back
         <>
           <Pressable
             onPress={handleBack}
-            style={styles.backButton}
+            style={backStyle}
             accessibilityRole="button"
             accessibilityLabel={t("common.actions.back")}
           >

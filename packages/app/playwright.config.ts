@@ -6,7 +6,8 @@ const baseURL =
   process.env.E2E_BASE_URL ?? `http://localhost:${process.env.E2E_METRO_PORT ?? "8081"}`;
 const relayDeploymentSpec = "**/relay-deployment-reconnect.real.spec.ts";
 
-function videoMode(): "on" | "on-first-retry" | "retain-on-failure" {
+function videoMode(): "off" | "on" | "on-first-retry" | "retain-on-failure" {
+  if (process.env.E2E_RECORD_VIDEO === "0") return "off";
   if (process.env.E2E_RECORD_VIDEO === "1") return "on";
   if (process.env.CI) return "on-first-retry";
   return "retain-on-failure";
@@ -41,7 +42,10 @@ export default defineConfig({
         "**/*.real.spec.ts",
         ...(process.env.E2E_STATIC_WEB === "1" ? ["**/root-error-recovery.spec.ts"] : []),
       ],
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(process.env.E2E_BROWSER_CHANNEL ? { channel: process.env.E2E_BROWSER_CHANNEL } : {}),
+      },
     },
     {
       name: "real-provider",

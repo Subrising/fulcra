@@ -10,6 +10,7 @@ import {
   type PressableStateCallbackType,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { touchTargetStyles, useTouchTargets } from "@/hooks/use-touch-targets";
 import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -818,11 +819,19 @@ function MenuRow({
   onPress,
   testID,
 }: MenuRowProps) {
+  const touch = useTouchTargets();
   const { theme } = useUnistyles();
   const accessibilityState = useMemo(() => ({ selected: isSelected }), [isSelected]);
   const labelStyle = useMemo(
     () => [sidebarStyles.label, isSelected && { color: theme.colors.foreground }],
     [isSelected, theme.colors.foreground],
+  );
+  const rowStyle = useCallback(
+    (state: PressableStateCallbackType & { hovered?: boolean }) => [
+      (isSelected ? selectedSidebarItemStyle : sidebarItemStyle)(state),
+      touch && touchTargetStyles.text,
+    ],
+    [isSelected, touch],
   );
   return (
     <Pressable
@@ -831,7 +840,7 @@ function MenuRow({
       accessibilityHint={description}
       onPress={onPress}
       testID={testID}
-      style={isSelected ? selectedSidebarItemStyle : sidebarItemStyle}
+      style={rowStyle}
     >
       <IconComponent
         size={theme.iconSize.md}
@@ -983,6 +992,7 @@ function HostPicker({
   onAddHost,
   enableBuiltInDaemonOption,
 }: HostPickerProps) {
+  const touch = useTouchTargets();
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<View | null>(null);
@@ -997,9 +1007,10 @@ function HostPicker({
   const triggerStyle = useCallback(
     ({ hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
       sidebarStyles.pickerTrigger,
+      touch && touchTargetStyles.text,
       hovered && sidebarStyles.pickerTriggerHovered,
     ],
-    [],
+    [touch],
   );
 
   return (
@@ -1065,6 +1076,14 @@ function SettingsSidebar({
   activeHostServerId,
   layout,
 }: SettingsSidebarProps) {
+  const touch = useTouchTargets();
+  const advancedStyle = useCallback(
+    (state: PressableStateCallbackType & { hovered?: boolean }) => [
+      sidebarItemStyle(state),
+      touch && touchTargetStyles.text,
+    ],
+    [touch],
+  );
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const hosts = useHosts();
@@ -1223,7 +1242,7 @@ function SettingsSidebar({
           }
           onPress={toggleAdvanced}
           testID="settings-advanced-toggle"
-          style={sidebarItemStyle}
+          style={advancedStyle}
         >
           {advancedOpen ? (
             <ChevronDown size={theme.iconSize.md} color={theme.colors.foregroundMuted} />
