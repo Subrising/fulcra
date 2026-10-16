@@ -2036,9 +2036,10 @@ function readClaudeParentToolUseId(message: SDKMessage): string | null {
 }
 
 class ClaudeContextUsageState {
-  private billedQueryUsd = 0;
-  resetBillingQuery(): void {
-    this.billedQueryUsd = 0;
+  private billedQueryUsd: number | null = 0;
+  resetBillingQuery(resumed = false): void {
+    // A resumed CLI restores historical totals. The durable native-session cursor owns that first increment.
+    this.billedQueryUsd = resumed ? null : 0;
   }
   private contextWindowMaxTokens: number | undefined;
   private streamRequestInputTokens: number | undefined;
@@ -2109,9 +2110,10 @@ class ClaudeContextUsageState {
       });
       const cost = message.total_cost_usd;
       const turnCostUsd =
-        Number.isFinite(cost) && cost >= 0 ? Math.max(0, cost - this.billedQueryUsd) : undefined;
-      if (Number.isFinite(cost) && cost >= 0)
-        this.billedQueryUsd = Math.max(this.billedQueryUsd, cost);
+        Number.isFinite(cost) && this.billedQueryUsd !== null && cost >= this.billedQueryUsd
+          ? cost - this.billedQueryUsd
+          : undefined;
+      if (Number.isFinite(cost) && cost >= 0) this.billedQueryUsd = cost;
       const usage: AgentUsage = {
         ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
         ...(recorded ? { recorded } : {}),
@@ -3539,7 +3541,9 @@ class ClaudeAgentSession implements AgentSession {
     this.input = input;
     // A fresh Claude process has no turn of its own in flight.
     this.mainTurnInFlight = false;
-    this.contextUsage.resetBillingQuery();
+    this.contextUsage.resetBillingQuery(
+      this.claudeSessionId !== null && !this.pendingFreshSessionId,
+    );
     this.query = claudeQuery(
       { prompt: input.iterable, options },
       {

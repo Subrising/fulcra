@@ -1,5 +1,6 @@
 export class AskError extends Error {
   code: string;
+  confirmedLimit?: { accountId: string; resetAt: string | null; kind: string };
 }
 export function killProcessTree(
   child: {
@@ -43,5 +44,6 @@ export function askOnce(o: {
     timeoutMs?: number;
   };
   spawnClaude?: (o: any) => Promise<any>;
+  limitProbe?: boolean;
   now?: () => number;
 }): Promise<{ output: unknown; account: string; model: string; costUsd: number | null }>;

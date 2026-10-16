@@ -20,7 +20,8 @@ export async function takeOverSession(
   } = {},
 ) {
   const accountId = typeof targetAccount === "string" ? targetAccount : targetAccount?.id;
-  if (!["manual", "limit"].includes(reason)) return refused("Invalid account switch reason");
+  if (!["manual", "limit", "budget"].includes(reason))
+    return refused("Invalid account switch reason");
   if (
     !uuid(sessionId) ||
     !uuid(accountId) ||
@@ -38,7 +39,7 @@ export async function takeOverSession(
       const current = control.store.get(sessionId) ?? null;
       if (current && !["human", "delegated"].includes(current.mode))
         return refused("Session control changed; refresh before switching");
-      if (reason === "limit" && current?.mode !== "delegated")
+      if (reason !== "manual" && current?.mode !== "delegated")
         return refused("Session control changed; automatic account rotation requires delegation");
       if (current?.mode === "delegated" && current.generation !== generation)
         return refused("Session control changed; refresh before switching");
@@ -77,6 +78,8 @@ export async function takeOverSession(
       const pool = readAccounts(root),
         previous = pool.assignments[sessionId];
       const from = pool.accounts.find((a) => a.id === previous?.accountId);
+      if (reason === "budget" && (previous?.ended || from?.id !== targetAccount?.fromAccountId))
+        return refused("The budget source account changed before switching");
       const unresolvedId = reconcile ? (switchId ?? previous?.takeover) : previous?.takeover;
       const unresolved = unresolvedId && control.store.delivery(unresolvedId);
       if (
@@ -108,7 +111,7 @@ export async function takeOverSession(
         )
           return refused("Session identity changed; the earlier switch needs host reconciliation");
       }
-      if (reason === "limit" && current?.mode !== "delegated")
+      if (reason !== "manual" && current?.mode !== "delegated")
         return refused("Session control changed; automatic account rotation requires delegation");
       // Revalidate inside the session fence; plugin reads are only advisory.
       const target = readAccounts(root).accounts.find((a) => a.id === accountId);
@@ -198,7 +201,7 @@ export async function takeOverSession(
           if (live) live.lastUsedAt = at;
           // Pool history is a projection of the journal switch, keyed for crash replay.
           // Limit rotation already wrote its own row when it selected this target.
-          if (reason === "manual" && !state.rotations.some((r) => r.switchId === eventId)) {
+          if (reason !== "limit" && !state.rotations.some((r) => r.switchId === eventId)) {
             state.rotations.push({
               at,
               session: sessionId,

@@ -182,8 +182,9 @@ async function writeAccounts(root, s) {
 export async function update(root, fn) {
   return withStoreLock(root, async () => {
     const s = await readAccountsAsync(root);
+    const before = JSON.stringify(s);
     const out = await fn(s);
-    await writeAccounts(root, s);
+    if (JSON.stringify(s) !== before) await writeAccounts(root, s);
     return out;
   });
 }
@@ -219,7 +220,8 @@ export function isApiAccount(a) {
   return (
     a?.provider === "claude" &&
     (a.credentialKind === "api-key" ||
-      ["personal-workspace-api", "work-workspace-api"].includes(a.name))
+      (a.credentialKind == null &&
+        ["personal-workspace-api", "work-workspace-api"].includes(a.name)))
   );
 }
 export function credentialKind(token) {
@@ -311,9 +313,16 @@ export async function readUsageAsync(root, now = Date.now()) {
 // holds back accounts at or above WEEKLY_LAUNCH_CAP_PCT while another is below it; when all are, the one with the most
 // left is used. Returns null when none is available.
 export function choose(s, provider, now = Date.now(), except = [], usage = {}) {
+  const budgetHeld = (a) => {
+    const budget = accountBudget(a);
+    return budget && s.budgetActions?.[`${a.id}:${budget.startAt}`]?.targetId;
+  };
   const ready = s.accounts.filter(
     (a) =>
-      a.provider === provider && !except.includes(a.id) && accountStatus(a, now).state === "ok",
+      a.provider === provider &&
+      !except.includes(a.id) &&
+      accountStatus(a, now).state === "ok" &&
+      !budgetHeld(a),
   );
   if (!ready.length) return null;
   const used = (a) => (isApiAccount(a) ? 0 : (usage[a.id] ?? 0));
@@ -617,6 +626,50 @@ export async function markAccountLimited(
     return { id: a.id, name: a.name, limitedUntil: a.limitedUntil, limitKind: a.limitKind };
   });
 }
+// A saved stop is only a hint. A new, pinned ask must confirm a Claude subscription limit.
+export async function confirmAccountLimit({
+  root,
+  accountId,
+  now = Date.now,
+  keychain = createKeychain(),
+  spawnClaude,
+}) {
+  const { askOnce } = await import("./ask.mjs");
+  try {
+    await askOnce({
+      root,
+      keychain,
+      spawnClaude,
+      now,
+      limitProbe: true,
+      input: {
+        account: accountId,
+        model: "claude-haiku-5-5",
+        prompt: "Reply OK.",
+        timeoutMs: 15000,
+      },
+    });
+    return { accountId, limited: false };
+  } catch (error) {
+    if (error.code === "CONFIRMED_LIMIT" && error.confirmedLimit?.accountId === accountId)
+      return error.confirmedLimit;
+  }
+  return null;
+}
+function stopAccount(s, sessionId, provider, accountId, stoppedAt) {
+  const cur = s.assignments[sessionId];
+  if (cur?.takeover) return null;
+  if (!accountId && stoppedAt && Date.parse(cur?.at) > Date.parse(stoppedAt)) {
+    accountId = s.rotations
+      .filter((r) => r.session === sessionId && Date.parse(r.at) > Date.parse(stoppedAt))
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0]?.from;
+    if (!accountId) return null;
+  }
+  return (
+    s.accounts.find((a) => a.id === (accountId ?? cur?.accountId) && a.provider === provider) ??
+    null
+  );
+}
 // A usage limit on `sessionId`'s account: mark that account limited until `resetAt` (or DEFAULT_LIMIT_MS) and, only when
 // the pool's rotateOnLimit is on, move the session to the next available account. Off (the default), the rotation is
 // recorded as held and the session stays on its account; the usage-limit resume picks it up after the reset. Returns { from, to, earliestReset } -- `to` null when every account is limited.
@@ -634,23 +687,68 @@ export async function rotate(
     kind = null,
     accountId = null,
     stoppedAt = null,
+    confirmLimit = confirmAccountLimit,
   } = {},
   now = Date.now(),
 ) {
+  const snapshot = await readAccountsAsync(root);
+  const binding = stopId && snapshot.limitChecks?.[stopId];
+  if (binding && accountId && accountId !== binding.accountId) return null;
+  accountId = binding?.accountId ?? accountId;
+  const source = stopAccount(snapshot, sessionId, provider, accountId, stoppedAt);
+  if (!source || (stopId && snapshot.rotations.some((r) => r.stopId === stopId))) return null;
+  accountId = source.id;
+  if (provider === "claude" && kind !== "revoked") {
+    if (isApiAccount(source)) return null;
+    const claim = await update(root, (s) => {
+      s.limitChecks ??= {};
+      const prior = stopId && s.limitChecks[stopId];
+      if (prior && prior.accountId !== accountId) return false;
+      if (prior && (!["unavailable", "checking"].includes(prior.outcome) || now < prior.retryAt))
+        return false;
+      if (stopId)
+        s.limitChecks[stopId] = {
+          accountId,
+          at: iso(now),
+          outcome: "checking",
+          retryAt: now + 300_000,
+        };
+      return true;
+    });
+    if (!claim) return null;
+    let confirmation;
+    try {
+      confirmation = await confirmLimit({ root, accountId, resetAt, kind, now: () => now });
+    } catch {
+      /* fail closed */
+    }
+    const confirmed =
+      confirmation?.accountId === accountId && ["session", "weekly"].includes(confirmation.kind);
+    await update(root, (s) => {
+      if (stopId)
+        s.limitChecks[stopId] = {
+          accountId,
+          at: iso(now),
+          outcome: confirmed
+            ? "limited"
+            : confirmation?.limited === false
+              ? "clear"
+              : "unavailable",
+          retryAt: now + 300_000,
+        };
+    });
+    if (!confirmed) return null;
+    resetAt = confirmation.resetAt;
+    kind = confirmation.kind;
+    note = "A pinned live ask confirmed this account's subscription limit.";
+  }
   return update(root, (s) => {
     // A stop belongs to one launch. Reconnection must never apply it to a new account.
     if (stopId && s.rotations.some((r) => r.stopId === stopId)) return null;
     const cur = s.assignments[sessionId];
-    if (!accountId && stoppedAt && Date.parse(cur?.at) > Date.parse(stoppedAt)) {
-      const next = s.rotations
-        .filter((r) => r.session === sessionId && Date.parse(r.at) > Date.parse(stoppedAt))
-        .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
-      accountId = next?.from ?? null;
-      if (!accountId) return null;
-    }
-    if (cur?.takeover) return null; // an in-flight/uncertain switch owns this assignment
-    const from = s.accounts.find((a) => a.id === (accountId ?? cur?.accountId));
-    if (!from) return null; // not a pooled launch: nothing to rotate
+    if (cur?.takeover) return null;
+    const from = s.accounts.find((a) => a.id === accountId && a.provider === provider);
+    if (!from) return null;
     const revoked = kind === "revoked";
     if (!revoked && isApiAccount(from)) return null;
     const freshRevoked = revoked && !from.revoked;

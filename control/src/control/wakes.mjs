@@ -396,7 +396,7 @@ export class Wakes {
       if (w.kind === "error")
         return `- [error] ${who} stopped with an error: "${p.error}". The controller recovers provider auth and usage-limit stops itself where it can; inspect it with role_inspect_session.`;
       if (w.kind === "account-budget")
-        return `- [API budget] Account "${p.account}" has spent $${Number(p.usedUsd).toFixed(2)} of $${p.limitUsd ?? "unset"}. ${p.moved ? `Claude sessions switch to "${p.moved}" as active turns finish.` : "Check this account's budget and credit balance."}`;
+        return `- [API budget] Account "${p.account}" has spent $${Number(p.usedUsd).toFixed(2)} of $${p.limitUsd ?? "unset"}. ${p.moved ? `Delegated sessions on this API account switch to "${p.moved}" as active turns finish.` : "Check this account's budget and credit balance."} ${p.held ? `${p.held} owner-controlled session(s) stay on their account.` : ""} ${p.failed ? `${p.failed} session(s) could not switch. Inspect the recorded refusal before another attempt.` : ""}`;
       if (w.kind === "account-down")
         return `- [account down] The token of account "${p.account}" was revoked or is invalid, so its sessions cannot run. ${p.moved ? `Fulcra moved the first stopped session to "${p.moved}"; others move as they stop.` : "No other account was ready."} The owner must sign the account in again (account screen); until then the pool does not use it.`;
       if (w.kind === "account-rotated" && p.revoked)

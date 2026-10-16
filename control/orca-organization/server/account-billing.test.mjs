@@ -11,7 +11,7 @@ import {
   readAccounts,
   markAccountLimited,
   accountLimit,
-  rotate,
+  rotate as rotateAccount,
   switchSession,
   setAccount,
   launchEnv,
@@ -19,6 +19,21 @@ import {
 import { accountSpend, recordAccountCost, readBilling } from "./account-billing.mjs";
 import { createAccountBudgets } from "../../src/control/account-budgets.mjs";
 import { askOnce } from "./ask.mjs";
+const rotate = (root, session, provider, options = {}, now) =>
+  rotateAccount(
+    root,
+    session,
+    provider,
+    {
+      ...options,
+      confirmLimit: async ({ accountId }) => ({
+        accountId,
+        resetAt: options.resetAt,
+        kind: options.kind ?? "session",
+      }),
+    },
+    now,
+  );
 function world(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "api-accounts-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -96,11 +111,16 @@ test("95% switches all pooled Claude sessions after busy turns finish and notifi
   const b = await addAccount(root, { provider: "claude", name: "work-workspace-api" }, time);
   const ids = [randomUUID(), randomUUID()];
   for (const id of ids) await assign(root, id, "claude", time);
+  await update(root, (s) => {
+    s.defaults.claude = a.id;
+  });
   await recordAccountCost(root, { id: "one", accountId: a.id, costUsd: 189.99 });
+  let timeNow = time;
   let busy = true,
     notices = 0;
   const control = {
-    store: { get: () => null },
+    store: { get: () => ({ mode: "delegated", generation: 1 }) },
+    native: { snapshot: async () => ({ status: "idle" }) },
     wakes: {
       accountBudget: () => {
         notices++;
@@ -109,10 +129,11 @@ test("95% switches all pooled Claude sessions after busy turns finish and notifi
     },
   };
   const deps = {
-    switchSession: async (id, accountId) => {
+    now: () => timeNow,
+    switchSession: async (id, account) => {
       if (id === ids[1] && busy) return { ok: false };
       await update(root, (s) => {
-        s.assignments[id].accountId = accountId;
+        s.assignments[id].accountId = account.id;
       });
       return { ok: true };
     },
@@ -127,7 +148,8 @@ test("95% switches all pooled Claude sessions after busy turns finish and notifi
   assert.equal(readAccounts(root).assignments[ids[1]].accountId, a.id);
   busy = false;
   budgets = createAccountBudgets(control, root, deps);
-  await budgets.check();
+  timeNow += 60_001;
+  await budgets.check({ id: ids[1], status: "idle" });
   assert.equal(readAccounts(root).assignments[ids[1]].accountId, b.id);
   assert.equal(readAccounts(root).defaults.claude, b.id);
   assert.equal(notices, 1);
@@ -156,6 +178,9 @@ test("credit errors persist secret-free ask.billing_error and cause failover bel
   const serialized = fs.readFileSync(path.join(root, "accounts/billing.json"), "utf8");
   assert.equal(serialized.includes(token), false);
   assert.equal(serialized.includes("private prompt"), false);
+  await update(root, (s) => {
+    s.defaults.claude = a.id;
+  });
   await createAccountBudgets({ store: { get: () => null } }, root).check();
   assert.equal(readAccounts(root).defaults.claude, b.id);
   assert.equal(readAccounts(root).accounts[0].limitedUntil, null);
@@ -170,9 +195,13 @@ test("a persisted billing update triggers budget failover without a polling moni
   const notified = new Promise((resolve) => {
     notice = resolve;
   });
+  await update(root, (s) => {
+    s.defaults.claude = a.id;
+  });
   const budgets = createAccountBudgets(
     {
-      store: { get: () => null },
+      store: { get: () => ({ mode: "delegated", generation: 1 }) },
+      native: { snapshot: async () => ({ status: "idle" }) },
       wakes: {
         accountBudget: () => {
           notice();
@@ -196,4 +225,58 @@ test("a persisted billing update triggers budget failover without a polling moni
   }
   await budgets.check();
   assert.equal(readAccounts(root).defaults.claude, b.id);
+});
+
+test("L3: retention drops costs before the oldest budget start and collapses repeated billing errors", async (t) => {
+  const { recordBillingError } = await import("./account-billing.mjs");
+  const root = world(t),
+    a = await addAccount(root, { provider: "claude", name: "personal-workspace-api" });
+  await setAccount(root, a.id, { budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" } });
+  await recordAccountCost(root, {
+    id: "old",
+    accountId: a.id,
+    costUsd: 25,
+    at: "2026-10-02T00:00:00Z",
+  });
+  await setAccount(root, a.id, { budget: { limitUsd: 200, startAt: "2026-10-10T00:00:00Z" } });
+  await recordAccountCost(root, {
+    id: "kept",
+    accountId: a.id,
+    costUsd: 7,
+    at: "2026-10-11T00:00:00Z",
+  });
+  await recordBillingError(root, a.id, "2026-10-11T00:00:00Z");
+  await recordBillingError(root, a.id, "2026-10-12T00:00:00Z");
+  const billing = readBilling(root);
+  assert.deepEqual(Object.keys(billing.calls), ["kept"]);
+  assert.equal(billing.events.length, 1);
+  assert.equal(
+    accountSpend("/not-read-with-a-snapshot", readAccounts(root).accounts[0], billing).usedUsd,
+    7,
+  );
+});
+
+test("L3/L4: advancing retention preserves the native cursor across account and budget changes", async (t) => {
+  const root = world(t),
+    a = await addAccount(root, { provider: "claude", name: "personal-workspace-api" });
+  await setAccount(root, a.id, { budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00Z" } });
+  await recordAccountCost(root, {
+    id: "old-native-turn",
+    accountId: a.id,
+    costUsd: 25,
+    cumulativeUsd: 25,
+    runtimeSessionId: "retained-native-id",
+    at: "2026-10-02T00:00:00Z",
+  });
+  await setAccount(root, a.id, { budget: { limitUsd: 200, startAt: "2026-10-10T00:00:00Z" } });
+  await recordAccountCost(root, {
+    id: "resumed-native-turn",
+    accountId: a.id,
+    costUsd: 32,
+    cumulativeUsd: 32,
+    runtimeSessionId: "retained-native-id",
+    at: "2026-10-11T00:00:00Z",
+  });
+  assert.equal(accountSpend(root, readAccounts(root).accounts[0]).usedUsd, 7);
+  assert.equal(Object.hasOwn(readBilling(root).calls, "old-native-turn"), false);
 });

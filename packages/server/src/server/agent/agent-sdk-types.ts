@@ -248,7 +248,7 @@ export interface AgentUsage {
   cachedInputTokens?: number;
   outputTokens?: number;
   totalCostUsd?: number;
-  /** Cost added by this result, after subtracting the SDK query total already recorded. */
+  /** Known query increment. Absent on the first resumed result; native-session billing resolves its history. */
   turnCostUsd?: number;
   contextWindowMaxTokens?: number;
   contextWindowUsedTokens?: number;

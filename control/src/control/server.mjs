@@ -323,7 +323,7 @@ export async function startController({
   const unsubscribeLimits = native.subscribe((a) => {
     void control.usageLimits.onAgent(a);
     if (a.provider === "claude" && ["idle", "closed", "error"].includes(a.status))
-      void budgets.check().catch((e) => log.line({ accountBudgetError: e.message }));
+      void budgets.check(a).catch((e) => log.line({ accountBudgetError: e.message }));
     void control.wakes.onAgent(a);
     void control.providerRecovery.onAgent(a);
     void control.compactionLoops.onAgent(a);

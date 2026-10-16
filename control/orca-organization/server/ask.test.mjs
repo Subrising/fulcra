@@ -1,10 +1,24 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { addAccount, readAccounts, setAccount, publicView } from "./accounts.mjs";
 import { askOnce, AskError, refuseShellShim, spawnClaudeOnce } from "./ask.mjs";
+
+// Concurrent account probes use their own process. Keep this suite's scratch-count assertion local.
+const previousTemp = Object.fromEntries(
+  ["TMPDIR", "TEMP", "TMP"].map((key) => [key, process.env[key]]),
+);
+const suiteTemp = fs.mkdtempSync(path.join(os.tmpdir(), "ask-suite-"));
+for (const key of Object.keys(previousTemp)) process.env[key] = suiteTemp;
+after(() => {
+  for (const [key, value] of Object.entries(previousTemp)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  fs.rmSync(suiteTemp, { recursive: true, force: true });
+});
 
 const T0 = Date.parse("2026-10-11T00:00:00Z");
 const scratch = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-ask-test-")));

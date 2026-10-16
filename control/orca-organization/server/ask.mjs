@@ -13,6 +13,8 @@ import { parseLimitLine, parseRevokedLine } from "./limit-line.mjs";
 import {
   accountStatus,
   credentialKind,
+  setAccount,
+  isApiAccount,
   choose,
   markAccountLimited,
   markAccountRevoked,
@@ -299,9 +301,11 @@ export async function askOnce({
   keychain,
   input,
   spawnClaude = spawnClaudeOnce,
+  limitProbe = false,
   now = Date.now,
 }) {
   const { prompt, model, schema = null, account = null } = input;
+  if (limitProbe && !account) throw new AskError("A limit probe needs an account", "BAD_INPUT");
   if (typeof prompt !== "string" || !prompt.trim())
     throw new AskError("Give a prompt", "BAD_INPUT");
   if (prompt.length > MAX_PROMPT_CHARS) throw new AskError("The prompt is too long", "BAD_INPUT");
@@ -325,7 +329,10 @@ export async function askOnce({
       picked = namedAccount(state, account);
       if (!picked) throw new AskError(`No Claude account is named "${account}"`, "NO_ACCOUNT");
       const status = accountStatus(picked, at);
-      if (status.state !== "ok")
+      if (
+        status.state !== "ok" &&
+        !(status.state === "limited" && (limitProbe || picked.credentialKind == null))
+      )
         throw new AskError(
           `Account "${picked.name}" cannot be used now (${status.state}${status.until ? ` until ${status.until}` : ""})`,
           status.state === "limited" ? "ACCOUNT_LIMITED" : "NO_ACCOUNT",
@@ -351,6 +358,13 @@ export async function askOnce({
     const token = await lookupCredential(keychain, picked.id, deadline - now());
     if (!token)
       throw new AskError(`The credential for "${picked.name}" is not available`, "NO_CREDENTIAL");
+    const kind = credentialKind(token);
+    await setAccount(root, picked.id, { credentialKind: kind });
+    picked.credentialKind = kind;
+    if (!limitProbe && accountStatus({ ...picked, credentialKind: kind }, at).state === "limited")
+      throw new AskError("The subscription account is at its limit", "ACCOUNT_LIMITED");
+    if (limitProbe && isApiAccount(picked))
+      throw new AskError("API accounts have no subscription limit", "API_ACCOUNT");
     const spawnMs = deadline - now();
     if (spawnMs < MIN_ATTEMPT_MS) throw new AskError("The call timed out", "TIMEOUT");
     let result;
@@ -399,6 +413,16 @@ export async function askOnce({
     if (isLimit(result, at)) {
       const line = String(result.result ?? "");
       const parsed = parseLimitLine(line, at);
+      if (limitProbe) {
+        if (!parsed)
+          throw new AskError("The probe did not report a subscription limit", "PROBE_UNCONFIRMED");
+        const error = new AskError(
+          "The live ask confirmed a subscription limit",
+          "CONFIRMED_LIMIT",
+        );
+        error.confirmedLimit = { accountId: picked.id, resetAt: parsed.resetAt, kind: parsed.kind };
+        throw error;
+      }
       const marked = await markAccountLimited(
         root,
         picked.id,

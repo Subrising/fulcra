@@ -9,6 +9,7 @@ import { takeOverSession } from "./session-takeover.mjs";
 import { ControlStore } from "./store.mjs";
 import {
   addAccount,
+  choose,
   assign,
   update,
   readAccounts,
@@ -385,4 +386,168 @@ test("a dormant session switches quietly with its native id, history and control
   assert.equal(w.launched().id, w.nativeId);
   assert.equal(w.launched().history, fs.readFileSync(w.transcript, "utf8"));
   assert.deepEqual(w.store.get(w.id), before);
+});
+
+// PR #55 repair: exercise budget automation through the real takeover gate and journal.
+import { createAccountBudgets, BUDGET_RETRY_MS, MAX_BUDGET_REFUSALS } from "./account-budgets.mjs";
+import { recordAccountCost } from "../../orca-organization/server/account-billing.mjs";
+async function budgetWorld(t) {
+  const w = await world(t);
+  await setAccount(w.root, w.a.id, { name: "personal-workspace-api", credentialKind: "api-key" });
+  await setAccount(w.root, w.b.id, { name: "work-workspace-api", credentialKind: "api-key" });
+  w.control.promptIdentityChanged = () => false;
+  const notices = [];
+  w.control.wakes = {
+    accountBudget: (key, value) => {
+      notices.push({ key, ...value });
+      return 1;
+    },
+  };
+  await recordAccountCost(w.root, { id: "budget-trigger", accountId: w.a.id, costUsd: 190 });
+  return { ...w, notices };
+}
+for (const enrolled of [true, false])
+  test(`M1: budget takeover refuses ${enrolled ? "human-mode" : "owner's unregistered"} chats`, async (t) => {
+    const w = await world(t, "claude", { enrolled });
+    const result = await takeOverSession(
+      w.id,
+      { id: w.b.id, fromAccountId: w.a.id },
+      {
+        control: w.control,
+        reason: "budget",
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.message, /requires delegation/);
+    assert.equal(w.calls(), 0);
+    assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
+    assert.equal(w.store.db.prepare("SELECT count(*) n FROM deliveries").get().n, 0);
+  });
+test("M1: the budget notice counts human and unregistered chats without moving them", async (t) => {
+  const w = await budgetWorld(t),
+    own = randomUUID();
+  await update(w.root, (s) => {
+    s.assignments[own] = { ...s.assignments[w.id] };
+  });
+  const budgets = createAccountBudgets(w.control, w.root);
+  await budgets.check();
+  await budgets.check();
+  assert.equal(w.calls(), 0);
+  assert.equal(w.notices.length, 1);
+  assert.equal(w.notices[0].held, 2);
+  assert.equal(readAccounts(w.root).assignments[own].accountId, w.a.id);
+});
+test("M2: the real budget takeover moves only active delegated sessions on the source API account", async (t) => {
+  const w = await budgetWorld(t);
+  w.store.transfer(w.id, "delegated", "Fixture delegation for budget test");
+  const subscription = await addAccount(w.root, { provider: "claude", name: "Subscription" });
+  const subSession = randomUUID(),
+    endedSession = randomUUID();
+  await update(w.root, (s) => {
+    s.assignments[subSession] = { accountId: subscription.id, provider: "claude", ended: false };
+    s.assignments[endedSession] = { accountId: w.a.id, provider: "claude", ended: true };
+    s.defaults.claude = subscription.id;
+    s.budgetActions = {
+      [`${w.a.id}:${s.accounts[0].createdAt}`]: {
+        accountId: w.a.id,
+        targetId: w.b.id,
+        pending: [w.id, subSession, endedSession],
+        notified: false,
+      },
+    };
+  });
+  await createAccountBudgets(w.control, w.root).check();
+  const state = readAccounts(w.root);
+  assert.equal(w.calls(), 1);
+  assert.equal(state.assignments[w.id].accountId, w.b.id);
+  assert.equal(state.assignments[subSession].accountId, subscription.id);
+  assert.equal(state.assignments[endedSession].accountId, w.a.id);
+  assert.equal(state.defaults.claude, subscription.id);
+  assert.equal(choose(state, "claude").id, subscription.id);
+  assert.equal(
+    w.store.db.prepare("SELECT count(*) n FROM deliveries WHERE kind='account-switch'").get().n,
+    1,
+  );
+  assert.equal(state.rotations.at(-1).reason, "budget");
+});
+test("M3: real refused reconnect and rollback writes cannot feed a watch loop; retries have backoff and a fixed end", async (t) => {
+  const w = await budgetWorld(t);
+  w.store.transfer(w.id, "delegated", "Fixture delegation for refused budget switch");
+  let attempts = 0,
+    time = Date.now();
+  w.control.native.recover = async () => {
+    attempts++;
+    return { outcome: "refused", reason: "not_resident" };
+  };
+  let budgets = createAccountBudgets(w.control, w.root, { now: () => time });
+  t.after(() => budgets.close());
+  await budgets.start();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(attempts, 1);
+  budgets.close();
+  budgets = createAccountBudgets(w.control, w.root, { now: () => time });
+  await budgets.start();
+  assert.equal(attempts, 1, "restart does not replay the persisted refusal");
+  const file = path.join(w.root, "accounts/accounts.json");
+  const before = fs.statSync(file).mtimeMs;
+  await update(w.root, () => {});
+  assert.equal(fs.statSync(file).mtimeMs, before, "no-op rollback/update does not write");
+  await budgets.check({ id: w.id, status: "idle" });
+  assert.equal(attempts, 1);
+  time += BUDGET_RETRY_MS + 1;
+  await budgets.check({ id: randomUUID(), status: "idle" });
+  assert.equal(attempts, 1);
+  for (let n = 1; n < MAX_BUDGET_REFUSALS; n++) {
+    await budgets.check({ id: w.id, status: "idle" });
+    time += BUDGET_RETRY_MS + 1;
+  }
+  await budgets.check({ id: w.id, status: "idle" });
+  assert.equal(attempts, MAX_BUDGET_REFUSALS);
+  const action = Object.values(readAccounts(w.root).budgetActions)[0];
+  assert.deepEqual(action.pending, []);
+  assert.equal(action.refusals[w.id].attempts, MAX_BUDGET_REFUSALS);
+  assert.equal(action.skipped[w.id], "refused");
+  assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
+  assert.equal(
+    w.store.db.prepare("SELECT count(*) n FROM deliveries WHERE kind='account-switch'").get().n,
+    MAX_BUDGET_REFUSALS,
+  );
+  assert.equal(w.notices.at(-1).failed, 1);
+});
+test("L5: unavailable and remote pending sessions leave the queue with a notice", async (t) => {
+  const w = await budgetWorld(t),
+    remote = randomUUID();
+  w.store.transfer(w.id, "delegated", "Fixture delegation for unavailable session");
+  w.store.created(remote, randomUUID(), w.cwd);
+  w.store.transfer(remote, "delegated", "Fixture delegation for remote session");
+  await update(w.root, (s) => {
+    s.assignments[remote] = { ...s.assignments[w.id] };
+  });
+  w.control.native.route = (id) => (id === remote ? "other-host" : null);
+  w.control.native.snapshot = async () => {
+    throw Error("Session not found");
+  };
+  await createAccountBudgets(w.control, w.root).check();
+  const action = Object.values(readAccounts(w.root).budgetActions)[0];
+  assert.deepEqual(action.pending, []);
+  assert.equal(w.calls(), 0);
+  assert.equal(action.skipped[w.id], "session-unavailable");
+  assert.equal(action.skipped[remote], "remote-host");
+  assert.equal(w.notices[0].failed, 2);
+});
+
+test("M1: a handback during budget inspection keeps the account and emits one held-session notice", async (t) => {
+  const w = await budgetWorld(t);
+  w.store.transfer(w.id, "delegated", "Fixture delegation before handback race");
+  w.control.native.inspect = async () => {
+    w.store.transfer(w.id, "human", "Fixture owner handback during budget inspection");
+    return { pending: 0, status: "idle" };
+  };
+  const budgets = createAccountBudgets(w.control, w.root);
+  await budgets.check();
+  await budgets.check();
+  assert.equal(readAccounts(w.root).assignments[w.id].accountId, w.a.id);
+  assert.equal(w.calls(), 0);
+  assert.equal(w.notices.length, 1);
+  assert.equal(w.notices[0].held, 1);
 });

@@ -83,7 +83,7 @@ export const accountsView = z
             to: z.string().max(60).nullable(),
             resetAt: z.string().nullable(),
             earliestReset: z.string().nullable(),
-            reason: z.enum(["manual", "revoked"]).optional(),
+            reason: z.enum(["manual", "revoked", "budget"]).optional(),
           })
           .strict(),
       )

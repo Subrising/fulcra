@@ -88,6 +88,11 @@ export function rotate(
     stopId?: string | null;
     accountId?: string | null;
     stoppedAt?: string | null;
+    confirmLimit?: (input: {
+      root: string;
+      accountId: string;
+      now: () => number;
+    }) => Promise<{ accountId: string; resetAt: string | null; kind: string } | null>;
     reassign?: boolean;
     kind?: string | null;
   },
@@ -190,3 +195,14 @@ export function switchSession(
 export function isApiAccount(a: Account): boolean;
 export function credentialKind(token: string): "api-key" | "subscription";
 export function accountBudget(a: Account): { limitUsd: number | null; startAt: string } | null;
+export function confirmAccountLimit(input: {
+  root: string;
+  accountId: string;
+  now?: () => number;
+  keychain?: { get(id: string): Promise<string | null> };
+  spawnClaude?: (options: any) => Promise<any>;
+}): Promise<
+  | { accountId: string; limited: false }
+  | { accountId: string; resetAt: string | null; kind: string }
+  | null
+>;

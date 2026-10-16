@@ -291,7 +291,13 @@ it("native pool usage crosses the plugin subprocess and WebSocket with one bound
     ),
     path.join(pluginRoot, "server", "pool-usage.ts"),
   );
-  for (const file of ["accounts.mjs", "owned.mjs"]) {
+  for (const file of [
+    "accounts.mjs",
+    "owned.mjs",
+    "account-billing.mjs",
+    "ask.mjs",
+    "limit-line.mjs",
+  ]) {
     await cp(
       fileURLToPath(
         new URL(`../../../../../control/orca-organization/server/${file}`, import.meta.url),

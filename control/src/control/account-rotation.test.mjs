@@ -104,6 +104,11 @@ function world(t, provider = "claude") {
     },
   };
   const control = new Controller({ store, native, authority: async (id) => issue(id) });
+  control.confirmAccountLimit = async ({ accountId, resetAt, kind }) => ({
+    accountId,
+    resetAt,
+    kind: kind ?? "session",
+  });
   control.poolRoot = path.join(dir, "home");
   fs.mkdirSync(control.poolRoot);
   control.recovery = new Recovery(control, { now: () => clock.now });

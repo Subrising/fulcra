@@ -12,7 +12,7 @@ Use installed Chrome with `E2E_BROWSER_CHANNEL=chrome` when the bundled browser 
 Run the account tests:
 
 ```sh
-node --test control/orca-organization/server/account-billing.test.mjs control/orca-organization/server/accounts.test.mjs control/src/control/account-rotation.test.mjs control/src/control/session-takeover.test.mjs control/src/control/usage-limits.test.mjs control/src/control/wakes.test.mjs
+node --test control/orca-organization/server/account-billing.test.mjs control/orca-organization/server/account-limit-confirmation.test.mjs control/orca-organization/server/claude-resume-cost.test.mjs control/orca-organization/server/accounts.test.mjs control/src/control/account-rotation.test.mjs control/src/control/session-takeover.test.mjs control/src/control/usage-limits.test.mjs control/src/control/wakes.test.mjs
 node --import tsx --test control/orca-organization/server/ask-jobs.test.ts control/orca-organization/server/accounts-rpc.test.ts
 npx vitest run --maxWorkers=1 packages/server/src/server/agent/agent-manager.test.ts packages/server/src/server/agent/providers/claude/agent.test.ts packages/cli/src/commands/account.test.ts packages/cli/src/commands/agent/ls.test.ts
 ```
@@ -40,3 +40,10 @@ node control/orca-organization/verify-ui.mjs "$PWD" accounts.ui.test.mjs
 
 Run the workspace type checks, lint, and format checks before committing.
 Keep Git hooks enabled. Only the merge lane merges the PR.
+
+For PR #55 repairs, check the real takeover gate for held chats, subscription sources, and refused reconnects.
+The refusal test starts the directory watch and checks the journal count, backoff, and retry limit.
+The limit test runs a scratch CLI through `askOnce` before it accepts a limit mark.
+The resume-cost test uses actual Claude CLI processes with a loopback API and synthetic keys.
+It makes no external provider request and does not read live credentials.
+It skips when no native Claude CLI exists. Run it on a host with the CLI before accepting cost changes.

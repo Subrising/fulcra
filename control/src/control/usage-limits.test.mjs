@@ -292,6 +292,11 @@ function fixture(t) {
     limitTail: async (id) => tails.get(id) ?? null,
   };
   const control = new Controller({ store, native, authority: async (id) => issue(id) });
+  control.confirmAccountLimit = async ({ accountId, resetAt, kind }) => ({
+    accountId,
+    resetAt,
+    kind: kind ?? "session",
+  });
   const clock = { now: at("2026-09-24T11:48:00Z") };
   control.recovery = new Recovery(control, { now: () => clock.now });
   control.usageLimits = new UsageLimits(control, { now: () => clock.now, random: () => 0 });
