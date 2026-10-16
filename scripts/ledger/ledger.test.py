@@ -32,9 +32,15 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("PR 50", reopened)
         self.assertIn("PR 51", reopened)
 
-    def test_changed_installation_is_refused(self):
-        with self.assertRaises(ValueError):
-            prepare_ledger("different tool")
+    def test_legacy_patch_cannot_restore_the_runtime_import(self):
+        source = '\n'.join([
+            'HOME = os.path.expanduser("~")',
+            '        c[5] = ev if c[5] in ("—", "") else f"{ev}; earlier: {c[5]}"',
+            '            c[5] = clean(o["evidence"], "--evidence")',
+            '    return p, open(p).read().split("\\n")',
+        ])
+        with self.assertRaisesRegex(ValueError, "retired"):
+            prepare_ledger(source)
 
 
 @unittest.skipUnless(installed, "Set LEDGER_TEST_MODULE to check the installed private command.")

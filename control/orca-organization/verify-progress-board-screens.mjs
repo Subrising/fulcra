@@ -37,11 +37,18 @@ const snapshot = {
       branches: [],
       items: [
         fixtureItem("EX-1", "READY"),
-        fixtureItem("EX-2", "DONE", { completedAt: now }),
+        fixtureItem("EX-2", "DONE", { completedAt: now, completedSource: "record" }),
         fixtureItem("EX-3", "BLOCKED: waiting for review", {
           blockedAt: new Date(Date.now() - 7200000).toISOString(),
         }),
         fixtureItem("EX-4", "DONE"),
+        ...Array.from({ length: 600 }, (_, n) =>
+          fixtureItem(`OLD-${n}`, "DONE", {
+            completedAt: now,
+            completedSource: "file",
+            item: "An earlier task with no recorded close date.",
+          }),
+        ),
         fixtureItem("EX-5", "IN PROGRESS"),
         fixtureItem("EX-6", "DONE", {
           completedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
@@ -177,6 +184,16 @@ try {
           await page.getByTestId("board-section-done").innerText(),
           /Example project · 1/,
         );
+      if (!liveFile) {
+        assert.equal(await page.getByTestId("board-closed-earlier-count").innerText(), "601");
+        assert.equal(await page.getByTestId("board-closed-earlier-items").count(), 0);
+        await page.getByTestId("board-closed-earlier-toggle").click();
+        const text = await page.getByTestId("board-closed-earlier-items").innerText();
+        assert.doesNotMatch(text, /Closed .*ago|approx/);
+        await measure();
+        await page.getByTestId("board-closed-earlier-toggle").click();
+        assert.equal(await page.getByTestId("board-closed-earlier-items").count(), 0);
+      }
       await measure();
       await page.screenshot({
         path: path.join(output, `${width}x${height}-${theme}.png`),

@@ -484,7 +484,7 @@ test("configured mirror includes ledger-only projects and every running session"
   assert.equal(result.machine, "This computer");
 });
 
-test("observed transitions survive a restart without dating existing closed work", async (t) => {
+test("blocked observations survive a restart; undated completions remain unknown", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-history-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, "fixture"));
@@ -502,20 +502,20 @@ test("observed transitions survive a restart without dating existing closed work
   write("OPEN");
   const board = createProgressBoard({ on: () => () => {} }, { root, historyFile });
   t.after(() => board.close());
-  assert.equal((await board.read(api)).projects[0]!.items[1]!.completedSource, "file");
+  assert.equal((await board.read(api)).projects[0]!.items[1]!.completedAt, undefined);
   write("BLOCKED: waiting for review");
   const blockedAt = (await board.read(api)).projects[0]!.items[0]!.blockedAt;
   assert.ok(blockedAt);
   write("DONE");
   const completedAt = (await board.read(api)).projects[0]!.items[0]!.completedAt;
-  assert.ok(completedAt);
+  assert.equal(completedAt, undefined);
   board.close();
   const restarted = createProgressBoard({ on: () => () => {} }, { root, historyFile });
   t.after(() => restarted.close());
   assert.equal((await restarted.read(api)).projects[0]!.items[0]!.completedAt, completedAt);
 });
 
-test("ledger changes record completion while no screen is mounted", async (t) => {
+test("explicit close records are retained while no screen is mounted", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-background-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, "fixture"));
@@ -543,7 +543,11 @@ test("ledger changes record completion while no screen is mounted", async (t) =>
       }
     });
   });
-  fs.writeFileSync(file, `${header}\n| FU-1 | Task | FIX | Worker | DONE | PR 12 | brief |`);
+  fs.writeFileSync(
+    file + ".next",
+    `${header}\n| FU-1 | Task | FIX | Worker | DONE | Closed at 2026-10-16T02:00:00Z; PR 12 | brief |`,
+  );
+  fs.renameSync(file + ".next", file);
   await observed;
   const saved = JSON.parse(fs.readFileSync(historyFile, "utf8"));
   assert.equal(saved.rows["fixture:FU-1"].status, "DONE");
@@ -586,7 +590,7 @@ test("ledger close records preserve ISO dates and evidence", async () => {
   assert.match(output, /Closed at \d{4}-\d{2}-\d{2}T/);
 });
 
-test("close records outrank line history, with marked file dates when history is absent", async () => {
+test("close records outrank line history, with unknown completion dates when history is absent", async () => {
   const { dateLedgerItems } = await import("./progress-board");
   const at = "2026-10-16T02:00:00Z";
   const rows = parseLedger(
@@ -609,8 +613,8 @@ test("close records outrank line history, with marked file dates when history is
   const fallback = await dateLedgerItems(rows, "/fixture/OPEN-ITEMS.md", mtime, async () => {
     throw Error("No history");
   });
-  assert.equal(fallback[1]!.completedAt, mtime);
-  assert.equal(fallback[1]!.completedSource, "file");
+  assert.equal(fallback[1]!.completedAt, undefined);
+  assert.equal(fallback[1]!.completedSource, undefined);
 });
 
 test("session model ID outranks stale runtime information", () => {
@@ -666,4 +670,86 @@ test("each host reads native running sessions even without a board plugin", asyn
     assert.deepEqual(calls, [undefined, "next"]);
     assert.match(board.warnings[0]!, /Project lists are unavailable/);
   }
+});
+
+test("committed row dates work in a ledger repository and an enclosing vault", async (t) => {
+  const { execFileSync } = await import("node:child_process");
+  const { dateLedgerItems } = await import("./progress-board");
+  for (const nested of ["project", "projects/project"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-git-dates-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const folder = path.join(root, nested),
+      file = path.join(folder, "OPEN-ITEMS.md");
+    fs.mkdirSync(folder, { recursive: true });
+    const git = (args: string[], date = "2026-10-16T02:00:00Z") =>
+      execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Fulcra",
+          GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+          GIT_COMMITTER_NAME: "Fulcra",
+          GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_DATE: date,
+        },
+      });
+    git(["init", "--quiet"]);
+    fs.writeFileSync(
+      file,
+      `${header}\n| FU-1 | Task | FIX | Worker | DONE | PR 50 | brief |\n| FU-2 | Other task | FIX | Worker | OPEN | — | brief |`,
+    );
+    git(["add", "."]);
+    git(["commit", "--quiet", "-m", "Record completed work"]);
+    // An uncommitted close has no recorded Git date. A later file touch cannot date it.
+    const text = fs.readFileSync(file, "utf8").replace("| OPEN | — |", "| DONE | PR 51 |");
+    fs.writeFileSync(file, text);
+    const rows = await dateLedgerItems(parseLedger(text).items, file, "2026-10-16T12:00:00Z");
+    assert.equal(rows[0]!.completedAt, "2026-10-16T02:00:00.000Z");
+    assert.equal(rows[0]!.completedSource, "git");
+    assert.equal(rows[1]!.completedAt, undefined);
+    git(["rm", "--force", path.relative(root, file)]);
+    git(["commit", "--quiet", "-m", "Remove old list"], "2026-10-17T02:00:00Z");
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(file, text);
+    const restored = await dateLedgerItems(parseLedger(text).items, file, "2026-10-18T12:00:00Z");
+    assert.equal(restored[0]!.completedAt, "2026-10-16T02:00:00.000Z");
+    assert.equal(restored[1]!.completedAt, undefined);
+  }
+});
+
+test("old observed completion cache cannot turn an undated close into recent work", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-old-cache-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "fixture"));
+  fs.writeFileSync(
+    path.join(root, "fixture", "OPEN-ITEMS.md"),
+    `${header}\n| FU-1 | Task | FIX | Worker | DONE | PR 50 | brief |`,
+  );
+  const historyFile = path.join(root, "history.json");
+  fs.writeFileSync(
+    historyFile,
+    JSON.stringify({
+      version: 1,
+      rows: { "fixture:FU-1": { status: "DONE", completedAt: new Date().toISOString() } },
+    }),
+  );
+  const board = createProgressBoard(
+    { on: () => () => {} },
+    {
+      root,
+      historyFile,
+      run: async () => {
+        throw Error("No Git history");
+      },
+    },
+  );
+  t.after(() => board.close());
+  const api = {
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  const item = (await board.read(api)).projects[0]!.items[0]!;
+  assert.equal(item.completedAt, undefined);
 });
