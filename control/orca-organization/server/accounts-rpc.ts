@@ -13,6 +13,7 @@ import {
   setRotateOnLimit,
   setDefaultAccount,
   sessionAccounts,
+  publicAccountText,
   switchSession,
   controllerTakeOver,
   createKeychain,
@@ -27,7 +28,12 @@ import {
   projectRoleOverrides,
   MODE_CHOICES,
 } from "./role-defaults-store.mjs";
-import { accountAuthority, askOwner, recordAccountAction } from "./account-authority.mjs";
+import {
+  accountAuthority,
+  askOwner,
+  recordAccountAction,
+  accountSessionScope,
+} from "./account-authority.mjs";
 import type { AccountsView, SessionAccountsView } from "../shared/accounts";
 
 type Paseo =
@@ -123,14 +129,14 @@ export function createAccountHandlers(d: Deps) {
       )
       .catch(() => {});
   };
-  // U7 accounts.manage: every account RPC needs the host's account-management flag for this invocation (the owner, or a
-  // device the owner granted it; never the read tier). A remote action is audited for the owner once it has happened;
-  // the audit gets the action and the account's label only, and the host adds the device and the time.
+  // Administration requires local owner authority. A paired list or switch needs the host-bound session.
+  // The audit contains the account label; the host adds the authenticated device and time.
   const ask = () => askOwner(d.host?.());
   const gate = async (
     run: () => Promise<{ reply: Reply; audit?: Audit | null }>,
+    sessionId?: string,
   ): Promise<Reply> => {
-    const authority = accountAuthority();
+    const authority = accountAuthority(undefined, sessionId);
     if (!authority.allowed) return refused(ask());
     const { reply, audit } = await run();
     if (!reply.ok || !audit || !authority.remote) return reply;
@@ -147,8 +153,8 @@ export function createAccountHandlers(d: Deps) {
       };
     }
   };
-  const readable = () => {
-    if (!accountAuthority().allowed) throw new Error(ask());
+  const readable = (sessionId?: string) => {
+    if (!accountAuthority(undefined, sessionId).allowed) throw new Error(ask());
   };
   const nameOf = async (id: string | null | undefined) =>
     (await readAccountsAsync(d.root())).accounts.find((x) => x.id === id)?.name ?? null;
@@ -252,16 +258,38 @@ export function createAccountHandlers(d: Deps) {
       }
     },
     async session(input: { agentId: string }, paseo: Paseo): Promise<SessionAccountsView> {
-      readable();
+      readable(input.agentId);
       const provider = await providerOf(paseo, d.root(), input.agentId);
       if (!provider || !(PROVIDERS as readonly string[]).includes(provider))
         return { provider: null, current: null, accounts: [] };
-      return sessionAccounts(
+      const view = sessionAccounts(
         await readAccountsAsync(d.root()),
         input.agentId,
         provider,
         now(),
-      ) as SessionAccountsView;
+      );
+      if (accountSessionScope())
+        return {
+          ...view,
+          accounts: view.accounts.map(({ id, name, status }) => ({
+            id,
+            name: publicAccountText(name, "Pooled account").slice(0, 60),
+            status:
+              status.state === "revoked"
+                ? { ...status, reason: publicAccountText(status.reason, "Sign-in required") }
+                : status.state === "limited"
+                  ? {
+                      ...status,
+                      ...(status.source
+                        ? {
+                            source: publicAccountText(status.source, "Account limit").slice(0, 128),
+                          }
+                        : {}),
+                    }
+                  : status,
+          })),
+        };
+      return view as SessionAccountsView;
     },
     async switch(
       input: { agentId: string; account: string },
@@ -271,8 +299,11 @@ export function createAccountHandlers(d: Deps) {
       const provider = await providerOf(paseo, d.root(), input.agentId);
       if (!provider) return refused("That session could not be found");
       try {
-        if (!accountAuthority().allowed) return refused(ask());
-        if (operation === "takeover" && !d.takeOver)
+        if (
+          !accountAuthority(undefined, operation === "switch" ? input.agentId : undefined).allowed
+        )
+          return refused(ask());
+        if ((operation === "takeover" || accountSessionScope()) && !d.takeOver)
           return refused("Account continuation is unavailable on this host");
         const r = await switchSession(
           d.root(),
@@ -419,7 +450,7 @@ export function createAccountHandlers(d: Deps) {
       gate(async () => {
         const r = await switchTo(input, paseo);
         return "reply" in r ? r : { reply: r };
-      }),
+      }, input.agentId),
     takeover: (input: { agentId: string; account: string }, paseo: Paseo) =>
       gate(async () => {
         const r = await switchTo(input, paseo, "takeover");

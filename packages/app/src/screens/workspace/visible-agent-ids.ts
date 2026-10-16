@@ -3,6 +3,15 @@ import { collectAllPanes, type WorkspaceLayout } from "@/stores/workspace-layout
 import type { WorkspaceTab } from "@/workspace-tabs/model";
 import { deriveWorkspacePaneState } from "./workspace-pane-state";
 
+/** An agent panel still displays that native session, including its account picker. */
+export function agentIdForViewedTab(
+  target: WorkspaceTab["target"] | null | undefined,
+): string | null {
+  if (target?.kind === "agent" || (target?.kind === "plugin" && target.context === "agent"))
+    return target.agentId;
+  return null;
+}
+
 export function selectVisibleAgentIds(input: {
   layout: WorkspaceLayout | null;
   tabs: WorkspaceTab[];
@@ -21,7 +30,8 @@ export function selectVisibleAgentIds(input: {
       panes.flatMap((pane) => {
         const target = deriveWorkspacePaneState({ pane, tabs: input.tabs }).activeTab?.descriptor
           .target;
-        return target?.kind === "agent" ? [target.agentId] : [];
+        const agentId = agentIdForViewedTab(target);
+        return agentId ? [agentId] : [];
       }),
     ),
   ].sort();

@@ -1181,15 +1181,15 @@ export class VoiceAssistantWebSocketServer {
       return false;
     const auth = admission.authentication;
     if (!auth) return !manages;
-    // D13: a read-only grant authenticates the device for Command Centre READS only: it holds no management
-    // permission, and every plugin call and management command it makes is checked as a read (session, host).
+    // A normal paired key authenticates only its own socket. Command Centre authority still needs its grant.
+    // The account path checks the physical source's viewed timeline separately.
     if (!manages)
       return (
         auth.authentication === "paired-device" &&
         auth.id === admission.principalId &&
         auth.deviceId === admission.deviceId &&
-        !admission.permissions.includes("daemon.manage") &&
-        new DeviceRegistry(this.paseoHome).hasReadOnlyCommandCentre(admission.deviceId)
+        !new DeviceRegistry(this.paseoHome).isRevoked(admission.deviceId) &&
+        new DeviceRegistry(this.paseoHome).list().some((d) => d.deviceId === admission.deviceId)
       );
     return (
       manages &&

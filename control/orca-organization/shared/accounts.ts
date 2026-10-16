@@ -198,7 +198,7 @@ export const sessionAccountsView = z
             id: z.string().uuid(),
             name: z.string().max(60),
             status,
-            isDefault: z.boolean(),
+            isDefault: z.boolean().optional(),
           })
           .strict(),
       )

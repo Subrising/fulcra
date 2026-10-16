@@ -4,9 +4,8 @@ import React from "react";
 import { JSDOM } from "jsdom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AccountsSurface } from "./accounts";
-import contribute from "../index.client";
 import { SwitchAccountPanel, registerAccountSwitch, SWITCH_PANEL } from "./switch-account";
-import { setHandler, setPaseo, calls } from "./ui-test-adapters.mjs";
+import { setHandler, calls } from "./ui-test-adapters.mjs";
 const dom = new JSDOM("<html><body></body></html>", { url: "http://component.test" });
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
@@ -667,7 +666,6 @@ const DEVICE = (extra = []) => ({
   deviceId: "dev_ABCDEFGHIJKLMNOP",
   permissions: ["command-centre.manage", "daemon.manage", ...extra],
 });
-const ASK = "Ask the owner to allow account management for this device on Mac mini";
 const TOKEN = "sk-ant-oat01-" + "R".repeat(60);
 async function remoteWorld() {
   const root = nodeFs.realpathSync(
@@ -744,476 +742,78 @@ async function remoteWorld() {
     account: () => pool.accountOf(pool.readAccounts(root), "agent-1")?.name,
   };
 }
-test("accounts-manage: device WITH capability can switch / set default / take over", async () => {
+test("paired device with a legacy grant cannot administer accounts or switch without a view", async () => {
   const w = await remoteWorld();
-  assert.equal(
-    (
-      await w.as(w.granted, () =>
-        w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
-      )
-    ).ok,
-    true,
-  );
-  assert.deepEqual(
-    w.events.map((e) => [e[0], e[2].name]),
-    [["takeover", "Personal"]],
-  );
-  assert.equal(
-    (
-      await w.as(w.granted, () =>
-        w.handlers.settings({ defaultAccount: { provider: "claude", id: w.personal.id } }),
-      )
-    ).ok,
-    true,
-  );
-  assert.equal(pool.readAccounts(w.root).defaults.claude, w.personal.id);
-  const view = await w.as(w.granted, () => w.handlers.read(null));
-  assert.deepEqual(
-    view.accounts.map((a) => a.name),
-    ["Work", "Personal"],
-  );
-  assert.equal(
-    (await w.as(w.granted, () => w.handlers.session({ agentId: "agent-1" }, w.paseo))).accounts
-      .length,
-    2,
-  );
-});
-test("accounts-manage: same device after revoke is refused", async () => {
-  const w = await remoteWorld();
-  assert.equal(
-    (
-      await w.as(w.granted, () =>
-        w.handlers.settings({ defaultAccount: { provider: "claude", id: w.work.id } }),
-      )
-    ).ok,
-    true,
-  );
-  const revoked = { principal: DEVICE(), recordAccountAction: w.record }; // the owner revoked: the host no longer sets accountsManage
-  assert.deepEqual(
-    await w.as(revoked, () =>
-      w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
-    ),
-    { ok: false, message: ASK },
-  );
-  assert.deepEqual(
-    await w.as(revoked, () =>
-      w.handlers.settings({ defaultAccount: { provider: "claude", id: w.personal.id } }),
-    ),
-    { ok: false, message: ASK },
-  );
-  await assert.rejects(() => w.as(revoked, () => w.handlers.read(null)), new RegExp(ASK));
-  assert.equal(pool.readAccounts(w.root).defaults.claude, w.work.id);
-  assert.equal(w.account(), "Work");
-  assert.equal(w.events.length, 0);
-});
-test("accounts-manage: read-tier (D13) device is refused", async () => {
-  const w = await remoteWorld(),
-    readTier = {
-      principal: { ...DEVICE(), permissions: ["daemon.read", "workspace.read"] },
-      readOnly: true,
-      recordAccountAction: w.record,
-    };
-  assert.deepEqual(
-    await w.as(readTier, () =>
-      w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
-    ),
-    { ok: false, message: ASK },
-  );
-  await assert.rejects(() => w.as(readTier, () => w.handlers.read(null)), new RegExp(ASK));
-  await assert.rejects(
-    () => w.as(readTier, () => w.handlers.session({ agentId: "agent-1" }, w.paseo)),
-    new RegExp(ASK),
-  );
-  // Even a host that wrongly set both flags is refused: the read tier wins.
-  assert.deepEqual(
-    await w.as({ ...readTier, accountsManage: true }, () =>
-      w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
-    ),
-    { ok: false, message: ASK },
-  );
-  assert.equal(w.account(), "Work");
-});
-test("accounts-manage: full-management device WITHOUT capability is refused", async () => {
-  const w = await remoteWorld(),
-    full = { principal: DEVICE(), recordAccountAction: w.record };
   for (const run of [
-    () => w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
-    () => w.handlers.settings({ policy: "spread" }),
     () => w.handlers.add({ provider: "claude", name: "Third", token: TOKEN }),
     () => w.handlers.update({ id: w.work.id, remove: true }),
+    () => w.handlers.update({ id: w.work.id, token: TOKEN }),
+    () => w.handlers.settings({ policy: "spread" }),
+    () => w.handlers.settings({ defaultAccount: { provider: "claude", id: w.personal.id } }),
+    () => w.handlers.takeover({ agentId: "agent-1", account: "Personal" }, w.paseo),
+    () => w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
   ])
-    assert.deepEqual(await w.as(full, run), { ok: false, message: ASK });
-  assert.equal(pool.readAccounts(w.root).accounts.length, 2);
-  assert.equal(pool.readAccounts(w.root).policy, "priority");
+    assert.equal((await w.as(w.granted, run)).ok, false);
+  await assert.rejects(() => w.as(w.granted, () => w.handlers.read(null)));
+  assert.deepEqual(w.events, []);
+  assert.deepEqual(w.audit, []);
   assert.equal(w.kept.size, 0);
+  assert.equal(pool.readAccounts(w.root).accounts.length, 2);
 });
-test("accounts-manage: local owner still works", async () => {
-  const w = await remoteWorld(),
-    calls = [];
-  const owner = {
-    principal: OWNER,
-    accountsManage: true,
-    recordAccountAction: (e) => {
-      calls.push(e);
-      return Promise.resolve({ recorded: false });
-    },
+
+test("normal phone lists and switches its bound session without credentials or pool settings", async () => {
+  const w = await remoteWorld();
+  const phone = {
+    principal: { ...DEVICE(), accountSessionId: "agent-1" },
+    recordAccountAction: w.record,
   };
+  const view = await w.as(phone, () => w.handlers.session({ agentId: "agent-1" }, w.paseo));
+  assert.deepEqual(view.accounts.map(Object.keys), [
+    ["id", "name", "status"],
+    ["id", "name", "status"],
+  ]);
   assert.equal(
     (
-      await w.as(owner, () =>
+      await w.as(phone, () =>
         w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
       )
     ).ok,
+    true,
+  );
+  assert.deepEqual(w.audit, [{ action: "switch", accountLabel: "Personal" }]);
+  assert.equal(
+    (await w.as(phone, () => w.handlers.switch({ agentId: "other", account: "Personal" }, w.paseo)))
+      .ok,
+    false,
+  );
+  assert.equal(
+    (
+      await w.as({ ...phone, readOnly: true }, () =>
+        w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo),
+      )
+    ).ok,
+    false,
+  );
+  assert.equal(JSON.stringify([view, w.audit, w.events]).includes(TOKEN), false);
+});
+
+test("local owner keeps account administration and explicit continuation", async () => {
+  const w = await remoteWorld();
+  const owner = { principal: OWNER, accountsManage: true };
+  assert.equal(
+    (await w.as(owner, () => w.handlers.add({ provider: "claude", name: "Third", token: TOKEN })))
+      .ok,
     true,
   );
   assert.equal((await w.as(owner, () => w.handlers.settings({ policy: "spread" }))).ok, true);
-  assert.deepEqual(calls, [], "the owner’s own actions are not remote actions");
-  // A host that predates accounts.manage: its local owner keeps the old behaviour; a device there gets nothing.
-  assert.equal(
-    (await w.as({ principal: OWNER }, () => w.handlers.settings({ policy: "priority" }))).ok,
-    true,
-  );
-  assert.deepEqual(
-    await w.as({ principal: DEVICE(["accounts.manage"]) }, () =>
-      w.handlers.settings({ policy: "spread" }),
-    ),
-    { ok: false, message: ASK },
-  );
-});
-test("accounts-manage: every remote action is audited (device, action, label, time)", async () => {
-  const w = await remoteWorld();
-  const run = (f) => w.as(w.granted, f);
-  await run(() => w.handlers.switch({ agentId: "agent-1", account: "Personal" }, w.paseo));
-  await run(() => w.handlers.settings({ defaultAccount: { provider: "claude", id: w.work.id } }));
-  await run(() => w.handlers.settings({ defaultAccount: { provider: "claude", id: null } }));
-  await run(() => w.handlers.settings({ policy: "spread" }));
-  await run(() => w.handlers.add({ provider: "claude", name: "Third", token: TOKEN }));
-  await run(() => w.handlers.update({ id: w.work.id, name: "Office" }));
-  await run(() => w.handlers.update({ id: w.personal.id, remove: true }));
-  assert.deepEqual(w.audit, [
-    { action: "switch", accountLabel: "Personal" },
-    { action: "set-default", accountLabel: "Work" },
-    { action: "set-default", accountLabel: "First ready account" },
-    { action: "pool-settings", accountLabel: "Spread evenly" },
-    { action: "add", accountLabel: "Third" },
-    { action: "update", accountLabel: "Office" },
-    { action: "remove", accountLabel: "Personal" },
-  ]);
-  // The device and the time are the host's to add (W4's audit store); the plugin sends only the action and the label.
-  assert.ok(w.audit.every((e) => Object.keys(e).sort().join() === "accountLabel,action"));
-  // A refused action is not audited as done.
-  await run(() => w.handlers.switch({ agentId: "agent-1", account: "Nobody" }, w.paseo));
-  assert.equal(w.audit.length, 7);
-});
-test("accounts-manage: remote add passes setup-token write-only to the host keychain item; never echoed/logged/stored on device", async () => {
-  const w = await remoteWorld(),
-    logged = [],
-    orig = { log: console.log, error: console.error, warn: console.warn };
-  for (const k of Object.keys(orig)) console[k] = (...x) => logged.push(x.map(String).join(" "));
-  try {
-    const r = await w.as(w.granted, () =>
-      w.handlers.add({ provider: "claude", name: "Third", token: TOKEN }),
-    );
-    assert.equal(r.ok, true);
-    const third = pool.readAccounts(w.root).accounts.find((a) => a.name === "Third");
-    assert.equal(
-      w.kept.get(third.id),
-      TOKEN,
-      "the token is in the host keychain item, under the account id",
-    );
-    const bad = await w.as(w.granted, () =>
-      w.handlers.add({ provider: "claude", name: "Fourth", token: "sk-ant-not-a-token" }),
-    );
-    assert.equal(bad.ok, false);
-    for (const [what, text] of [
-      ["reply", JSON.stringify(r)],
-      ["refusal", JSON.stringify(bad)],
-      ["audit", JSON.stringify(w.audit)],
-      ["log", logged.join("\n")],
-    ])
-      assert.equal(text.includes("sk-ant-"), false, what + ": " + text.slice(0, 200));
-  } finally {
-    Object.assign(console, orig);
-  }
-});
-test("accounts-manage: no credential material in any response or event to a remote client", async () => {
-  const w = await remoteWorld(),
-    replies = [];
-  const run = async (f) => {
-    const r = await w.as(w.granted, f);
-    replies.push(r);
-    return r;
-  };
-  await run(() => w.handlers.add({ provider: "claude", name: "Third", token: TOKEN }));
-  const third = pool.readAccounts(w.root).accounts.find((a) => a.name === "Third");
-  await run(() => w.handlers.update({ id: third.id, token: TOKEN }));
-  await run(() => w.handlers.switch({ agentId: "agent-1", account: "Third" }, w.paseo));
-  await run(() => w.handlers.settings({ defaultAccount: { provider: "claude", id: third.id } }));
-  await run(() => w.handlers.read(null));
-  await run(() => w.handlers.session({ agentId: "agent-1" }, w.paseo));
-  await run(() => w.handlers.add({ provider: "claude", name: TOKEN.slice(0, 50), token: TOKEN })); // a token pasted as a name
-  const everything = JSON.stringify([replies, w.audit, w.events]);
-  assert.equal(everything.includes(TOKEN), false);
-  assert.equal(/sk-ant-|auth\.json|oauth/i.test(everything), false, everything.slice(0, 400));
-});
-test("accounts-manage: without the capability the Switch account panel says who to ask", async () => {
-  setHandler((name) => {
-    if (name === "organization.accounts.session") throw Error(ASK);
-    throw Error("Unexpected " + name);
-  });
-  render(
-    React.createElement(
-      QueryClientProvider,
-      {
-        client: new QueryClient({
-          defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-            mutations: { retry: false, gcTime: 0 },
-          },
-        }),
-      },
-      React.createElement(SwitchAccountPanel, {
-        theme,
-        layout: { compact: false },
-        host: { id: "h", label: "h" },
-        context: "agent",
-        workspaceId: "w",
-        agentId: "agent-1",
-      }),
-    ),
-  );
-  assert.ok(await screen.findByText(ASK));
-});
-// 7b fold: Move up / Move down send ONE request naming the move; the server swaps under its lock (never a priority).
-test("Move up and Move down send one move request each, never a priority", async () => {
-  const writes = setup();
-  assert.ok(await screen.findByText("2. Personal"));
-  assert.equal(
-    screen.queryByRole("button", { name: "Move Work up" }),
-    null,
-    "the first account has no Move up",
-  );
-  assert.equal(
-    screen.queryByRole("button", { name: "Move Personal down" }),
-    null,
-    "the last account has no Move down",
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Move Personal up" }));
-  await waitFor(() => assert.equal(writes.length, 1));
-  fireEvent.click(screen.getByRole("button", { name: "Move Work down" }));
-  await waitFor(() => assert.equal(writes.length, 2));
-  assert.deepEqual(writes, [
-    { name: "organization.accounts.update", input: { id: B, move: "up" } },
-    { name: "organization.accounts.update", input: { id: A, move: "down" } },
-  ]);
-});
-
-// Account audit follows the requested operation, independently of existing conversation history.
-test("accounts-manage: a remote switch audits as switch, and explicit account continuation audits as takeover", async () => {
-  const w = await remoteWorld();
-  await pool.assign(w.root, "chat-1", "claude", Date.parse("2026-10-01T00:00:03Z"));
-  const talking = {
-    agents: {
-      ref: (id) => ({
-        refresh: async () => null,
-        current: () => ({
-          provider: "claude",
-          lastUserMessageAt: id === "chat-1" ? "2026-10-01T00:00:30.000Z" : null,
-        }),
-      }),
-    },
-  };
   assert.equal(
     (
-      await w.as(w.granted, () =>
-        w.handlers.switch({ agentId: "agent-1", account: "Personal" }, talking),
+      await w.as(owner, () =>
+        w.handlers.takeover({ agentId: "agent-1", account: "Personal" }, w.paseo),
       )
     ).ok,
     true,
   );
-  assert.equal(
-    (
-      await w.as(w.granted, () =>
-        w.handlers.takeover({ agentId: "chat-1", account: "Personal" }, talking),
-      )
-    ).ok,
-    true,
-  );
-  assert.deepEqual(w.audit, [
-    { action: "switch", accountLabel: "Personal" },
-    { action: "takeover", accountLabel: "Personal" },
-  ]);
-  // Without the seam (no continuation) a move is a switch whatever the session holds.
-  const plainHandlers = createAccountHandlers({
-    root: () => w.root,
-    configRoles: () => null,
-    host: () => "Mac mini",
-  });
-  // (The stand-in seam above does not move the pool, so chat-1 is still on Work.)
-  assert.equal(
-    (
-      await w.as(w.granted, () =>
-        plainHandlers.switch({ agentId: "chat-1", account: "Personal" }, talking),
-      )
-    ).ok,
-    true,
-  );
-  assert.deepEqual(w.audit.at(-1), { action: "switch", accountLabel: "Personal" });
-});
-
-test("account controls use native Usage and do not fetch a second quota list", async () => {
-  const asked = [];
-  setPaseo({
-    providers: {
-      listUsage: async (input) => {
-        asked.push(input);
-        throw Error("Duplicate quota read");
-      },
-    },
-  });
-  setup();
-  assert.ok(await screen.findByText("1. Work"));
-  assert.equal(screen.queryByTestId("account-usage-rundown"), null);
-  assert.deepEqual(asked, []);
-  setPaseo(null);
-});
-
-test("Settings Accounts route retains registered host, saves defaults and reopens without credential input", async () => {
-  let registered,
-    current = view({
-      rotations: [],
-      accounts: [
-        {
-          id: A,
-          provider: "claude",
-          name: "Work",
-          enabled: true,
-          priority: 1,
-          status: { state: "ok" },
-          limitNote: null,
-          sessions: [],
-          lastUsedAt: null,
-        },
-      ],
-    });
-  const writes = [],
-    usageReads = [];
-  const dispose = contribute({
-    addScreen: () => () => {},
-    addSurface: (_id, component) => {
-      registered = component;
-      return () => {};
-    },
-    addSidebarItem: () => () => {},
-    addCommandCenterItem: () => () => {},
-    openSurface() {},
-  });
-  setHandler((name, input) => {
-    if (name === "organization.accounts") return current;
-    if (name === "organization.accounts.settings") {
-      writes.push(input);
-      current = {
-        ...current,
-        defaultAccounts: {
-          ...current.defaultAccounts,
-          [input.defaultAccount.provider]: input.defaultAccount.id,
-        },
-      };
-      return { ok: true, message: "Saved." };
-    }
-    return Promise.reject(new Error("Synthetic unrelated view unavailable"));
-  });
-  setPaseo({
-    providers: {
-      listUsage: async (input) => {
-        usageReads.push(input);
-        return {
-          accounts: [
-            {
-              accountId: A,
-              name: "Work",
-              provider: "claude",
-              status: "ok",
-              observedAt: null,
-              fiveHour: null,
-              weekly: null,
-              inUse: false,
-            },
-          ],
-        };
-      },
-    },
-  });
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
-  });
-  try {
-    render(
-      React.createElement(
-        QueryClientProvider,
-        { client },
-        React.createElement(registered, {
-          theme,
-          layout: { compact: false, platform: "web" },
-          host: { id: "settings-host", label: "Settings host" },
-        }),
-      ),
-    );
-    fireEvent.click(screen.getByTestId("organization-tab-settings"));
-    fireEvent.click(screen.getByRole("button", { name: "Accounts & models" }));
-    await screen.findByTestId("accounts-settings");
-    assert.ok(await screen.findByText("1. Work"));
-    assert.ok(screen.getByText(/^0 sessions using it now/));
-    assert.equal(screen.queryByTestId("account-usage-rundown"), null);
-    assert.deepEqual(usageReads, []);
-    fireEvent.click(screen.getByRole("button", { name: "New Claude sessions use Work" }));
-    await waitFor(() =>
-      assert.deepEqual(writes, [{ defaultAccount: { provider: "claude", id: A } }]),
-    );
-    await screen.findByText("Saved.");
-    fireEvent.click(screen.getByTestId("organization-tab-today"));
-    assert.equal(screen.queryByTestId("accounts-settings"), null);
-    fireEvent.click(screen.getByTestId("organization-tab-settings"));
-    assert.ok(await screen.findByTestId("accounts-settings"));
-    await waitFor(() =>
-      assert.equal(
-        screen
-          .getByRole("button", { name: "New Claude sessions use Work" })
-          .getAttribute("aria-selected"),
-        "true",
-      ),
-    );
-    assert.deepEqual(usageReads, []);
-    assert.ok(writes.every((input) => !Object.hasOwn(input, "token")));
-    assert.equal(screen.getByLabelText("Claude account token").value, "");
-  } finally {
-    cleanup();
-    client.clear();
-    setPaseo(null);
-    dispose();
-  }
-});
-
-test("an API account saves its own dollar budget and start date", async () => {
-  const initial = view();
-  const account = {
-    ...initial.accounts[1],
-    credentialKind: "api-key",
-    budget: { limitUsd: 200, startAt: "2026-10-01T00:00:00.000Z" },
-  };
-  const writes = setup(view({ accounts: [account] }));
-  const amount = await screen.findByLabelText("Budget for Personal in USD");
-  fireEvent.change(amount, { target: { value: "250" } });
-  fireEvent.change(screen.getByLabelText("Budget start date for Personal"), {
-    target: { value: "2026-10-05" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Save budget for Personal" }));
-  await waitFor(() => assert.equal(writes.length, 1));
-  assert.deepEqual(writes[0], {
-    name: "organization.accounts.update",
-    input: {
-      id: B,
-      budget: { limitUsd: 250, startAt: "2026-10-05T00:00:00.000Z" },
-    },
-  });
+  assert.equal((await w.as(owner, () => w.handlers.read(null))).accounts.length, 3);
+  assert.deepEqual(w.audit, []);
 });

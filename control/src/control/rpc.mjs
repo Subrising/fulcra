@@ -297,7 +297,7 @@ async function roleDefaultsTable(control) {
   return out;
 }
 export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
-  return async (request) => {
+  return async (request, managementPrincipal) => {
     if (
       !request ||
       Object.keys(request).some(
@@ -904,6 +904,7 @@ export function rpc(control, operator, { allowOperatorWrites = true } = {}) {
           root: control.poolRoot ?? poolRoot(),
           generation,
           reason: "manual",
+          requireUnowned: !!managementPrincipal?.accountSessionId,
         });
         const state = result.switchId && control.store.delivery(result.switchId)?.state;
         return {
@@ -1067,6 +1068,7 @@ export function managementDispatcher(control) {
     } catch (error) {
       throw managementRefusal(error.message);
     }
+    if (principal?.accountSessionId !== undefined) requireManagementPrincipal(principal, parsed);
     if (parsed.method === "health") return { ready: true };
     if (parsed.method === "list") {
       const rows = control.store.list();
@@ -1078,27 +1080,27 @@ export function managementDispatcher(control) {
       return result;
     }
     if (READ_METHODS.includes(parsed.method)) return dispatch({ ...parsed, operator: gate });
-    requireManagementPrincipal(principal);
-    // Manual account switching is an owner management write. A paired device may make it only when the host admitted
-    // it with accounts.manage -- a separate grant the owner gives per device (U7), never implied by command-centre.manage
-    // and never on the read tier (which requireManagementPrincipal above already refuses).
+    requireManagementPrincipal(principal, parsed);
+    // Paired devices can switch only through the host-bound account path.
     if (
       parsed.method === "session-takeover" &&
       principal.authentication === "paired-device" &&
-      !principal.permissions.includes("accounts.manage")
+      !principal.accountSessionId
     )
-      throw Object.assign(
-        Error(
-          "Account switching needs account management for this device; ask the owner to allow it",
-        ),
-        { code: "unauthorised" },
-      );
+      throw Object.assign(Error("Open this session before changing its account"), {
+        code: "unauthorised",
+      });
+    if (
+      principal.accountSessionId &&
+      control.store.get(principal.accountSessionId)?.mode === "delegated"
+    )
+      throw Object.assign(Error("Another owner controls this session"), { code: "unauthorised" });
     const done = recordManagementCall(control.store.db, parsed, principal);
     let result;
     try {
       result = TEAM_METHODS.has(parsed.method)
         ? teamCommand(control, parsed.method, parsed.input, principal)
-        : dispatch({ ...parsed, operator: gate });
+        : dispatch({ ...parsed, operator: gate }, principal);
     } catch (e) {
       done("error: " + e.message);
       throw e;

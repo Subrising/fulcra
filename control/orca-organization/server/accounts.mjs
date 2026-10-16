@@ -358,6 +358,14 @@ export function poolFor(s, provider) {
 // pasted into the name field never becomes a label (the same shapes the host's audit refuses).
 const SECRET_SHAPED =
   /sk-ant-|\bsk-[A-Za-z0-9_-]{16,}|\bgh[opsu]_|github_pat_|\bxox[abp]-|\beyJ[A-Za-z0-9_-]{8,}\.|auth\.json|access_token|refresh_token|[A-Za-z0-9+/_-]{40,}/i;
+export function publicAccountText(value, fallback) {
+  const text = String(value ?? "")
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .trim();
+  return !text || SECRET_SHAPED.test(text) || /-----BEGIN .*PRIVATE KEY-----/i.test(text)
+    ? fallback
+    : text.slice(0, 200);
+}
 const NAME_LOOKS_SECRET = "That looks like a token, not a name. Name the account, for example Work";
 export async function addAccount(root, { provider, name, priority }, now = Date.now()) {
   if (!PROVIDERS.includes(provider)) throw Error("Unknown provider");
@@ -820,6 +828,8 @@ export async function switchSession(
       return {
         refused: `No ${LABEL[provider]} account has that name. Type /account to list them.`,
       };
+    if (publicAccountText(to.name, null) !== to.name)
+      return { refused: "This account needs a valid name on the host" };
     const st = accountStatus(to, now);
     if (st.state === "limited") return { refused: `${to.name} is limited until ${st.until}.` };
     if (st.state === "disabled") return { refused: `${to.name} is turned off.` };

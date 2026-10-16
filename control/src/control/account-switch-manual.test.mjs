@@ -190,25 +190,21 @@ const takeover = (w, principal) =>
     { method: "session-takeover", input: { session: w.id, accountId: w.b.id } },
     principal,
   );
-test("accounts-manage: device WITH capability can take over (controller)", async (t) => {
+test("legacy account grant cannot switch an arbitrary session", async (t) => {
   const w = await world(t);
-  const r = await takeover(w, device(["accounts.manage"]));
-  assert.equal(r.state, "delivered");
-  assert.equal(accountOf(readAccounts(w.root), w.id).id, w.b.id);
-  assert.equal(
-    w.store.db
-      .prepare(
-        "SELECT authentication, deviceId FROM management_calls WHERE method='session-takeover'",
-      )
-      .get().deviceId,
-    "dev_ABCDEFGHIJKLMNOP",
+  await assert.rejects(
+    () => Promise.resolve().then(() => takeover(w, device(["accounts.manage"]))),
+    /Open this session/i,
   );
+  assert.equal(accountOf(readAccounts(w.root), w.id).id, w.a.id);
+  assert.deepEqual(w.recovers, []);
 });
+
 test("accounts-manage: full-management device WITHOUT capability is refused (controller)", async (t) => {
   const w = await world(t);
   await assert.rejects(
     () => Promise.resolve().then(() => takeover(w, device())),
-    /account management/i,
+    /Open this session/i,
   );
   assert.equal(accountOf(readAccounts(w.root), w.id).id, w.a.id);
   assert.deepEqual(w.recovers, []);

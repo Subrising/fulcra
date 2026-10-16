@@ -30,7 +30,7 @@ A pairing invitation is neither. It is an expiring, single-use exchange that cre
 | `workspace.manage`      | Create, rename, archive, and remove projects and workspaces                |
 | `automation.manage`     | Schedules, heartbeats, and loops                                           |
 | `command-centre.manage` | Per-request authenticated bundled controller management                    |
-| `accounts.manage`       | List, switch, set the default and take over chats onto another account     |
+| `accounts.manage`       | Local owner account administration and account switching                   |
 | `hub.execute`           | Agent lifecycle, workspace titling, observation, and recovery              |
 
 Agents and terminals use workspace authority. Both can execute code and mutate the workspace, so separate write permissions would claim an isolation boundary the daemon cannot enforce.
@@ -39,7 +39,19 @@ Owner, operator, and viewer are UI presets expanded into explicit permissions. D
 
 Permissions are additive allows. Missing authority denies the operation. Do not add deny precedence.
 
-A paired device never stores `command-centre.manage` or `accounts.manage` in its permission list. The device registry adds them per admission only while this Mac's owner has granted them (Settings, this Mac, Pair a device: "Allow Command Centre"; `pairing/device-registry.ts`). The grant is off when a device pairs; the pairing screen offers it for a device that pairs while its code is shown. Today only relay sockets carry the device login; a direct connection uses the host password. See [device-key login on direct connections](direct-device-login.md) for the planned change. `accounts.manage` is a separate grant that needs a full, not read-only, Command Centre grant; removing or narrowing Command Centre clears it. Remote account actions are recorded for the owner in `accounts-audit.json`, labels only. Clients without `command_centre_permission` never receive either permission on the wire: their permission enum is closed.
+A paired device never stores `command-centre.manage` or `accounts.manage` in its permission list.
+The registry adds a management permission only while this Mac's owner has granted it. Each grant starts off.
+Today only relay sockets carry device authentication. A direct connection uses the host password.
+See [device-key login on direct connections](direct-device-login.md) for the planned change.
+`accounts.manage` is a legacy device grant. It does not permit account administration or cross-session account switches on a paired device.
+
+A normal paired device can use `/account` without either management grant. It needs `daemon.read`, `workspace.read`, and `workspace.write`.
+The host binds the list and switch to the source socket's focused chat and live timeline. It checks this binding before dispatch and reply.
+A switch uses the existing idle, account-limit, history, and native recovery checks. A session under another owner's delegation refuses the switch.
+The account list contains routing IDs, names, provider, and status only. Status can include a limit reason and reset time.
+The list excludes credentials, pool settings, budgets, and other session assignments. Successful device switches record the device ID in `accounts-audit.json`.
+Account creation, removal, credentials, pool settings, and explicit account takeover require the local owner on the host Mac.
+Clients without `command_centre_permission` do not receive the management permissions on the wire because their permission enum is closed.
 
 An operation may require several existing permissions together. Session-bound quota reads require both `workspace.read` for the native session identity and `daemon.read` for account usage. Apply this conjunction to requests and replies so revocation also prevents delivery of an in-flight result. Existing arrays of alternative permissions remain any-of requirements.
 

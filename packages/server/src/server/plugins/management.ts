@@ -42,7 +42,7 @@ export interface ManagementInvocation {
   readonly principal: ManagementPrincipalV11;
   /** D13: opened for a read-only principal (sent to the plugin so it refuses writes too). */
   readonly readOnly: boolean;
-  /** U7: the principal may manage accounts (the owner, or a device the owner granted accounts.manage); never read-only. */
+  /** Local owner account administration. Paired switches use accountSessionId instead. */
   readonly accountsManage: boolean;
   /** U7: audits a remote account action for this invocation's device (see ManagementAuthority.recordAccountAction). */
   recordAccountAction(entry: unknown): Promise<{ recorded: boolean }>;
@@ -59,6 +59,8 @@ interface Invocation {
   bridge: Bridge;
   /** D13: opened for a read-only principal; every command must be a read. */
   readOnly: boolean;
+  accountSessionId?: string;
+  accountRecorded?: boolean;
 }
 
 const dispatchScope = new AsyncLocalStorage<
@@ -175,23 +177,27 @@ export class ManagementAuthority {
   open(
     target: ManagementTarget | undefined,
     reader: PrincipalReader,
-    mode?: { readOnly?: boolean },
+    mode?: { readOnly?: boolean; accountSessionId?: string },
   ): ManagementInvocation | undefined {
     const principal = reader();
     const pluginId = target?.pluginId;
     // D13: a read-only invocation needs a read principal and the distribution's read classifier; it never widens.
     const readOnly = mode?.readOnly === true;
+    const accountSessionId = mode?.accountSessionId;
     if (
       this.stopped ||
       pluginId !== this.controllerPluginId ||
       !this.bridge ||
       !this.enabled(target) ||
       !principal ||
-      !(readOnly ? this.readAuthorised(principal) : this.authorised(principal))
+      !this.invocationAuthorised(principal, { accountSessionId, readOnly })
     )
       return undefined;
     const id = randomUUID();
-    const snapshot = this.snapshot(principal);
+    const snapshot = this.snapshot({
+      ...principal,
+      ...(accountSessionId ? { accountSessionId } : {}),
+    });
     this.invocations.set(id, {
       pluginId,
       target,
@@ -201,6 +207,7 @@ export class ManagementAuthority {
       calls: new Set(),
       bridge: this.bridge,
       readOnly,
+      accountSessionId,
     });
     return Object.freeze({
       id,
@@ -208,7 +215,7 @@ export class ManagementAuthority {
         candidate === target && this.enabled(target),
       principal: snapshot,
       readOnly,
-      accountsManage: !readOnly && this.managesAccounts(snapshot),
+      accountsManage: !accountSessionId && !readOnly && this.managesAccounts(snapshot),
       recordAccountAction: (entry: unknown) => this.recordAccountAction(id, pluginId, entry),
       invoke: (callId: string, command: unknown) => this.invoke(id, pluginId, callId, command),
       close: () => this.revoke(id),
@@ -248,8 +255,15 @@ export class ManagementAuthority {
       throw new Error("Invalid management capability");
     const invocation = this.check(id, pluginId);
     // No await between the final authority check, one-use consume, and protected bridge dispatch.
-    const principal = this.snapshot(invocation.reader()!);
-    if (command.method === "session-takeover" && !this.managesAccounts(principal))
+    const principal = this.invocationPrincipal(invocation);
+    this.checkAccountCommand(invocation, command);
+    if (invocation.accountSessionId && !this.accountActions)
+      throw new Error("The account audit is unavailable on this host");
+    if (
+      command.method === "session-takeover" &&
+      !invocation.accountSessionId &&
+      !this.managesAccounts(principal)
+    )
       throw new Error("This device may not manage accounts");
     const ownerHandler = this.ownerHandlers.get(command.method);
     if (ownerHandler) {
@@ -303,7 +317,8 @@ export class ManagementAuthority {
     const completion = dispatchScope.run(
       (actualCommand, actualPrincipal) => {
         const live = this.check(id, pluginId);
-        const currentPrincipal = this.snapshot(live.reader()!);
+        const currentPrincipal = this.invocationPrincipal(live);
+        this.checkAccountCommand(live, actualCommand);
         if (
           consumed ||
           this.digest(actualCommand) !== binding.digest ||
@@ -311,13 +326,37 @@ export class ManagementAuthority {
           canonicalJson(actualPrincipal) !== canonicalJson(currentPrincipal)
         )
           throw new Error("Invalid management write capability");
-        if (actualCommand.method === "session-takeover" && !this.managesAccounts(currentPrincipal))
+        if (
+          actualCommand.method === "session-takeover" &&
+          !live.accountSessionId &&
+          !this.managesAccounts(currentPrincipal)
+        )
           throw new Error("This device may not manage accounts");
         consumed = true;
       },
       () => invocation.bridge(command, principal),
     );
     return completion.then((result) => {
+      // Record a completed effect even if the phone closes its view before the reply arrives.
+      if (
+        invocation.accountSessionId &&
+        isJsonObject(result) &&
+        result.ok === true &&
+        isJsonObject(result.account) &&
+        typeof result.account.name === "string" &&
+        principal.deviceId
+      ) {
+        const entry = AccountActionInputSchema.parse({
+          action: "switch",
+          accountLabel: result.account.name,
+        });
+        this.accountActions!.record({
+          at: new Date().toISOString(),
+          deviceId: principal.deviceId,
+          ...entry,
+        });
+        invocation.accountRecorded = true;
+      }
       // Only the actual consumed bridge's successful durable transfer is a host lifecycle fact.
       if (
         consumed &&
@@ -347,7 +386,7 @@ export class ManagementAuthority {
       !this.enabled(invocation.target) ||
       Date.now() >= invocation.expires ||
       !principal ||
-      !(invocation.readOnly ? this.readAuthorised(principal) : this.authorised(principal)) ||
+      !this.invocationAuthorised(principal, invocation) ||
       principal.id !== invocation.principal.id ||
       principal.authentication !== invocation.principal.authentication ||
       principal.deviceId !== invocation.principal.deviceId
@@ -358,11 +397,14 @@ export class ManagementAuthority {
     return invocation;
   }
   /**
-   * U7: whether the principal may manage accounts. It holds accounts.manage as well as full management: this Mac's
-   * owner holds it; a paired device only by the owner's explicit grant (the registry and relay gate add it).
+   * Account administration stays local. A legacy device grant cannot confer it.
    */
   private managesAccounts(principal: ManagementPrincipalV11): boolean {
-    return this.authorised(principal) && principal.permissions.includes("accounts.manage");
+    return (
+      this.authorised(principal) &&
+      principal.authentication !== "paired-device" &&
+      principal.permissions.includes("accounts.manage")
+    );
   }
   /**
    * U7: records a remote account action for the owner. The invocation must still be live and its principal must hold
@@ -376,13 +418,21 @@ export class ManagementAuthority {
   ): Promise<{ recorded: boolean }> {
     const invocation = this.check(id, pluginId);
     const principal = invocation.reader();
-    if (invocation.readOnly || !principal || !this.managesAccounts(principal))
+    if (
+      invocation.readOnly ||
+      !principal ||
+      !(invocation.accountSessionId
+        ? this.accountSessionAuthorised(principal)
+        : this.managesAccounts(principal))
+    )
       throw new Error("This device may not manage accounts");
     const parsed = AccountActionInputSchema.safeParse(entry);
-    if (!parsed.success) throw new Error("Invalid account action");
+    if (!parsed.success || (invocation.accountSessionId && parsed.data.action !== "switch"))
+      throw new Error("Invalid account action");
     if (principal.authentication !== "paired-device" || !principal.deviceId)
       return { recorded: false };
     if (!this.accountActions) throw new Error("The account audit is unavailable on this host");
+    if (invocation.accountRecorded) return { recorded: true };
     this.accountActions.record({
       at: new Date().toISOString(),
       deviceId: principal.deviceId,
@@ -418,6 +468,43 @@ export class ManagementAuthority {
       principal.permissions.includes("command-centre.manage") &&
       principal.permissions.includes("daemon.manage")
     );
+  }
+  private invocationAuthorised(
+    principal: ManagementPrincipalV11,
+    mode: { accountSessionId?: string; readOnly?: boolean },
+  ): boolean {
+    if (mode.accountSessionId) return this.accountSessionAuthorised(principal);
+    if (mode.readOnly) return this.readAuthorised(principal);
+    return this.authorised(principal);
+  }
+  private accountSessionAuthorised(principal: ManagementPrincipalV11): boolean {
+    return (
+      principal.authentication === "paired-device" &&
+      !!principal.deviceId &&
+      principal.id === `device:${principal.deviceId}` &&
+      ["daemon.read", "workspace.read", "workspace.write"].every((p) =>
+        principal.permissions.some((permission) => permission === p),
+      )
+    );
+  }
+  private invocationPrincipal(invocation: Invocation): ManagementPrincipalV11 {
+    return this.snapshot({
+      ...invocation.reader()!,
+      ...(invocation.accountSessionId ? { accountSessionId: invocation.accountSessionId } : {}),
+    });
+  }
+  private checkAccountCommand(
+    invocation: Invocation,
+    command: ControllerManagementCommandV11,
+  ): void {
+    if (
+      invocation.accountSessionId &&
+      (command.method !== "session-takeover" ||
+        !isJsonObject(command.input) ||
+        command.input.session !== invocation.accountSessionId ||
+        command.input.reason !== "manual")
+    )
+      throw new Error("Only the viewed session account can change");
   }
   private snapshot(principal: ManagementPrincipalV11): ManagementPrincipalV11 {
     return Object.freeze({

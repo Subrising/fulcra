@@ -3222,11 +3222,38 @@ export class Session {
     // D13: a caller without daemon.manage (a read-only device) is admitted for plugin reads only: the runtime refuses
     // any method the bundled Command Centre plugin did not register as a read, and its management runs reads only.
     const readOnlyCaller = !this.authorization.allowsPermission("daemon.manage");
+    const accountAdmission = source && this.managementSources.get(source);
+    const scopedAccount =
+      msg.pluginId === this.agentManager.trustedPlugins.controllerPluginId &&
+      ["organization.accounts.session", "organization.accounts.switch"].includes(msg.method) &&
+      accountAdmission &&
+      accountAdmission.authentication.authentication === "paired-device";
+    const accountSessionId =
+      scopedAccount && typeof msg.input === "object" && msg.input !== null
+        ? Reflect.get(msg.input, "agentId")
+        : undefined;
+    const assertAccountView = () => {
+      if (!scopedAccount) return;
+      const ids = new Set<string>();
+      const subscriptions = new Set(this.delivery.subscriptionIds(source!, "timelines"));
+      for (const [id, subscription] of this.timelineSubscriptions)
+        if (subscriptions.has(id)) for (const agentId of subscription.agentIds) ids.add(agentId);
+      const activity = this.getClientActivity(source);
+      if (
+        typeof accountSessionId !== "string" ||
+        !ids.has(accountSessionId) ||
+        !activity?.appVisible ||
+        activity.focusedAgentId !== accountSessionId
+      )
+        throw new Error("Open this session before changing its account");
+    };
+    assertAccountView();
     const management =
       source && !this.pluginOriginId
         ? this.agentManager.trustedPlugins.management.open(
             this.pluginRuntime.managementTarget?.(msg.pluginId),
             () => {
+              assertAccountView();
               const admission = this.managementSources.get(source);
               return admission && !this.isCleanedUp
                 ? {
@@ -3237,7 +3264,7 @@ export class Session {
                   }
                 : undefined;
             },
-            { readOnly: readOnlyCaller },
+            { readOnly: readOnlyCaller, ...(scopedAccount ? { accountSessionId } : {}) },
           )
         : undefined;
     if (management && source) this.managementInvocations.set(management, source);
@@ -3252,6 +3279,7 @@ export class Session {
         if (management) this.managementInvocations.delete(management);
       })
       .then((output) => {
+        assertAccountView();
         this.emit({
           type: "plugin.rpc.invoke.response",
           payload: { requestId: msg.requestId, output },

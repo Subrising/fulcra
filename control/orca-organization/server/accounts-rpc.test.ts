@@ -8,7 +8,7 @@ import path from "node:path";
 import { createAccountHandlers } from "./accounts-rpc";
 import { withManagementInvocation } from "./management-context.mjs";
 import { readRoleDefaults } from "./role-defaults-store.mjs";
-import { addAccount, readAccounts, setAccount } from "./accounts.mjs";
+import { addAccount, readAccounts, setAccount, update } from "./accounts.mjs";
 
 const scratch = () =>
   fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fulcra-accounts-rpc-")));
@@ -329,16 +329,21 @@ test("concurrent moves and saves run one at a time under the store lock: no tie,
   );
 });
 
-test("a remote move is audited for the owner (device from the host, action and label only)", async () => {
+test("a paired device cannot reorder accounts even with a legacy grant", async () => {
   const root = scratch(),
     recorded: unknown[] = [];
-  await addAccount(root, { provider: "claude", name: "Work" });
-  const b = await addAccount(root, { provider: "claude", name: "Personal" });
-  assert.equal((await mover(root, DEVICE(recorded))({ id: b.id, move: "up" })).ok, true);
-  assert.deepEqual(recorded, [{ action: "update", accountLabel: "Personal" }]);
-  // A refused move records nothing.
-  await mover(root, DEVICE(recorded))({ id: b.id, move: "up" });
-  assert.equal(recorded.length, 1);
+  try {
+    await addAccount(root, { provider: "claude", name: "Work" });
+    const spare = await addAccount(root, { provider: "claude", name: "Spare" });
+    assert.equal((await mover(root, DEVICE(recorded))({ id: spare.id, move: "up" })).ok, false);
+    assert.deepEqual(order(root), [
+      ["Work", 1],
+      ["Spare", 2],
+    ]);
+    assert.deepEqual(recorded, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("a read-only invocation (or a device without accounts.manage) can't move an account", async () => {
@@ -352,7 +357,7 @@ test("a read-only invocation (or a device without accounts.manage) can't move an
   ]) {
     const out = await mover(root, context)({ id: b.id, move: "up" });
     assert.equal(out.ok, false);
-    assert.match(out.message!, /Ask the owner to allow account management/);
+    assert.match(out.message!, /local owner/);
   }
   assert.deepEqual(order(root), [
     ["Work", 1],
@@ -361,76 +366,141 @@ test("a read-only invocation (or a device without accounts.manage) can't move an
   assert.deepEqual(recorded, []);
 });
 
-test("remote account switch and explicit takeover audit operation intent; revoked and read-only devices cannot continue", async (t) => {
+test("local owner can continue a session; an unscoped paired grant cannot", async (t) => {
   const root = scratch();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const a = await addAccount(root, { provider: "claude", name: "Alpha" });
-  const b = await addAccount(root, { provider: "claude", name: "Beta" });
-  await setAccount(root, a.id, { auth: "ok" });
-  await setAccount(root, b.id, { auth: "ok" });
-  const audit: Array<{ action: string; accountLabel: string }> = [];
-  const continued: Array<{ session: string; account: string }> = [];
+  const account = await addAccount(root, { provider: "claude", name: "Spare" });
+  let moved = 0;
   const h = createAccountHandlers({
     root: () => root,
     configRoles: () => null,
-    takeOver: async (session, account) => {
-      continued.push({ session, account: account.id });
-      return { ok: true, outcome: "refreshed", message: "Continued" };
+    takeOver: async () => {
+      moved++;
+      return { ok: true };
     },
   });
-  const native = {
-    agents: {
-      ref: () => ({
-        refresh: async () => {},
-        current: () => ({ provider: "claude", lastUserMessageAt: new Date().toISOString() }),
-      }),
-    },
-  };
-  const device = {
-    management: {
-      invoke: async () => ({}),
-      principal: { authentication: "paired-device", id: "owner-phone" },
-      accountsManage: true,
-      readOnly: false,
-      recordAccountAction: async (entry: { action: string; accountLabel: string }) => {
-        audit.push(entry);
-        return { recorded: true };
+  const native = { agents: { ref: () => ({ current: () => ({ provider: "claude" }) }) } };
+  assert.equal(
+    (
+      await withManagementInvocation(DEVICE([]), false, () =>
+        h.takeover({ agentId: "chat", account: account.id }, native),
+      )
+    ).ok,
+    false,
+  );
+  assert.equal(
+    (await asOwner(() => h.takeover({ agentId: "chat", account: account.id }, native))).ok,
+    true,
+  );
+  assert.equal(moved, 1);
+});
+
+test("normal paired phone lists a narrow projection and switches only its bound session", async () => {
+  const root = scratch();
+  try {
+    const account = await addAccount(root, { provider: "claude", name: "Spare" });
+    const agentId = "11111111-1111-4111-8111-111111111111";
+    const audits: unknown[] = [];
+    const moves: unknown[] = [];
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      takeOver: async (...args: unknown[]) => {
+        moves.push(args);
+        return { ok: true, message: "Switched." };
       },
-    },
-  };
-  const publicNative = native as unknown as Parameters<typeof h.switch>[1];
-  const asDevice = <T>(run: () => Promise<T>, readOnly = false) => {
-    device.management.readOnly = readOnly;
-    return withManagementInvocation(device, readOnly, run);
-  };
-  assert.equal(
-    (await asDevice(() => h.switch({ agentId: "chat", account: b.id }, publicNative))).ok,
-    true,
-  );
-  assert.deepEqual(
-    audit,
-    [{ action: "switch", accountLabel: "Beta" }],
-    "existing history does not turn switch into takeover",
-  );
-  assert.equal(
-    (await asDevice(() => h.takeover({ agentId: "chat", account: a.id }, publicNative))).ok,
-    true,
-  );
-  assert.deepEqual(audit[1], { action: "takeover", accountLabel: "Alpha" });
-  assert.deepEqual(continued, [
-    { session: "chat", account: b.id },
-    { session: "chat", account: a.id },
-  ]);
-  device.management.accountsManage = false;
-  assert.equal(
-    (await asDevice(() => h.takeover({ agentId: "chat", account: b.id }, publicNative))).ok,
-    false,
-  );
-  device.management.accountsManage = true;
-  assert.equal(
-    (await asDevice(() => h.takeover({ agentId: "chat", account: b.id }, publicNative), true)).ok,
-    false,
-  );
-  assert.equal(continued.length, 2);
-  assert.equal(audit.length, 2);
+      keychain: {
+        put: async () => {
+          throw Error("must not write");
+        },
+      } as any,
+    });
+    const phone = {
+      management: {
+        invoke: async () => null,
+        principal: {
+          id: "device:phone",
+          authentication: "paired-device",
+          deviceId: "phone",
+          permissions: ["daemon.read", "workspace.read", "workspace.write"],
+          accountSessionId: agentId,
+        },
+        recordAccountAction: async (entry: unknown) => {
+          audits.push(entry);
+          return { recorded: true };
+        },
+      },
+    };
+    const native = { agents: { ref: () => ({ current: () => ({ provider: "claude" }) }) } };
+    const asPhone = <T>(run: () => Promise<T>) =>
+      withManagementInvocation(phone, false, run) as Promise<T>;
+    const view = await asPhone(() => h.session({ agentId }, native));
+    assert.deepEqual(view, {
+      provider: "claude",
+      current: null,
+      accounts: [{ id: account.id, name: "Spare", status: { state: "ok" } }],
+    });
+    assert.equal(
+      (await asPhone(() => h.switch({ agentId, account: account.id }, native))).ok,
+      true,
+    );
+    assert.equal(moves.length, 1);
+    assert.deepEqual(audits, [{ action: "switch", accountLabel: "Spare" }]);
+    assert.equal(
+      (await asPhone(() => h.switch({ agentId: "other", account: account.id }, native))).ok,
+      false,
+    );
+    await assert.rejects(asPhone(() => h.session({ agentId: "other" }, native)));
+    await assert.rejects(asPhone(() => h.read(native)));
+    for (const run of [
+      () => h.add({ provider: "codex", name: "Extra" }),
+      () => h.update({ id: account.id, remove: true }),
+      () => h.update({ id: account.id, token: "synthetic" }),
+      () => h.settings({ policy: "spread" }),
+      () => h.settings({ defaultAccount: { provider: "claude", id: account.id } }),
+      () => h.settings({ rotateOnLimit: true }),
+      () => h.takeover({ agentId, account: account.id }, native),
+    ])
+      assert.equal((await asPhone(run)).ok, false);
+    assert.equal(moves.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("paired list removes secret-shaped legacy labels and status text", async () => {
+  const root = scratch();
+  try {
+    const a = await addAccount(root, { provider: "claude", name: "Spare" });
+    const canary = "sk-ant-oat01-" + "S".repeat(60);
+    await update(root, (s) => {
+      s.accounts[0].name = canary;
+      s.accounts[0].revoked = { at: new Date().toISOString(), reason: canary };
+      (s.accounts[0] as any).token = canary;
+      return null;
+    });
+    const h = createAccountHandlers({ root: () => root, configRoles: () => null });
+    const context = {
+      management: {
+        invoke: async () => null,
+        principal: { authentication: "paired-device", accountSessionId: "viewed" },
+      },
+    };
+    const view = await withManagementInvocation(context, false, () =>
+      h.session(
+        { agentId: "viewed" },
+        { agents: { ref: () => ({ current: () => ({ provider: "claude" }) }) } },
+      ),
+    );
+    assert.deepEqual(view.accounts, [
+      {
+        id: a.id,
+        name: "Pooled account",
+        status: { state: "revoked", reason: "Sign-in required" },
+      },
+    ]);
+    assert.equal(JSON.stringify(view).includes(canary), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

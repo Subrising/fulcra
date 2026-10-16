@@ -551,3 +551,35 @@ test("M1: a handback during budget inspection keeps the account and emits one he
   assert.equal(w.notices.length, 1);
   assert.equal(w.notices[0].held, 1);
 });
+
+test("phone switch keeps busy, limit, history and ownership guards", async (t) => {
+  const w = await world(t, "claude", { enrolled: false });
+  w.status("running");
+  assert.equal(
+    (await takeOverSession(w.id, w.b.id, { control: w.control, requireUnowned: true })).ok,
+    false,
+  );
+  w.status("idle");
+  await setAccount(w.root, w.b.id, { enabled: false });
+  assert.equal(
+    (await takeOverSession(w.id, w.b.id, { control: w.control, requireUnowned: true })).ok,
+    false,
+  );
+  await setAccount(w.root, w.b.id, { enabled: true });
+  assert.equal(
+    (await takeOverSession(w.id, w.b.id, { control: w.control, requireUnowned: true })).ok,
+    true,
+  );
+  assert.equal(w.launched().id, w.nativeId);
+  assert.equal(w.launched().history, fs.readFileSync(w.transcript, "utf8"));
+  w.store.created(w.id, randomUUID(), w.cwd);
+  w.store.transfer(w.id, "delegated", "Synthetic owner");
+  const result = await takeOverSession(w.id, w.a.id, {
+    control: w.control,
+    generation: w.store.get(w.id).generation,
+    requireUnowned: true,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /Another owner/);
+  assert.equal(w.calls(), 1);
+});

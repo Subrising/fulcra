@@ -1,6 +1,10 @@
 import { bundledTarget } from "./test-utils/management.js";
 import { expect, test, vi } from "vitest";
-import { ManagementAuthority, type ManagementStartup } from "./management.js";
+import {
+  ManagementAuthority,
+  consumeManagementDispatch as consumeAccountDispatch,
+  type ManagementStartup,
+} from "./management.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "../authorization/index.js";
 import { createManagementContext } from "./plugin-management-context.js";
 
@@ -284,19 +288,14 @@ test("accounts-manage: local owner still works", async () => {
   expect(recorded).toEqual([]);
 });
 
-test("accounts-manage: device WITH capability can switch / set default / take over", async () => {
+test("legacy account grant cannot give a paired device account administration", async () => {
   const { authority, recorded, device, FULL } = accountsFixture();
   const invocation = authority.open(bundledTarget, () => device([...FULL, "accounts.manage"]))!;
-  expect(invocation.accountsManage).toBe(true);
-  const context = contextFor(invocation);
-  expect(context.accountsManage).toBe(true);
-  for (const action of ["switch", "set-default", "takeover"] as const)
-    await expect(
-      context.recordAccountAction({ action, accountLabel: "Personal" }),
-    ).resolves.toEqual({
-      recorded: true,
-    });
-  expect(recorded).toHaveLength(3);
+  expect(invocation.accountsManage).toBe(false);
+  await expect(
+    invocation.recordAccountAction({ action: "set-default", accountLabel: "Spare" }),
+  ).rejects.toThrow();
+  expect(recorded).toEqual([]);
 });
 
 test("accounts-manage: full-management device WITHOUT capability is refused", async () => {
@@ -331,7 +330,7 @@ test("accounts-manage: same device after revoke is refused", async () => {
   const { authority, device, FULL } = accountsFixture();
   let permissions: DaemonPermission[] = [...FULL, "accounts.manage"];
   const invocation = authority.open(bundledTarget, () => device(permissions))!;
-  expect(invocation.accountsManage).toBe(true);
+  expect(invocation.accountsManage).toBe(false);
   permissions = FULL; // the owner revoked accounts.manage: checked live, not from the opening snapshot
   await expect(
     invocation.recordAccountAction({ action: "switch", accountLabel: "Work" }),
@@ -339,42 +338,37 @@ test("accounts-manage: same device after revoke is refused", async () => {
   expect(authority.open(bundledTarget, () => device(permissions))!.accountsManage).toBe(false);
 });
 
-test("accounts-manage: every remote action is audited (device, action, label, time)", async () => {
+test("scoped account audit adds the device and rejects caller-selected attribution", async () => {
   const { authority, recorded, device, FULL } = accountsFixture();
-  const invocation = authority.open(bundledTarget, () => device([...FULL, "accounts.manage"]))!;
-  await invocation.recordAccountAction({ action: "takeover", accountLabel: "Claude Max (work)" });
+  const principal = device([...FULL, "workspace.write"]);
+  const invocation = authority.open(bundledTarget, () => principal, { accountSessionId: "chat" })!;
+  await invocation.recordAccountAction({ action: "switch", accountLabel: "Spare" });
   expect(recorded).toEqual([
     {
       at: expect.stringMatching(/^\d{4}-\d\d-\d\dT/),
       deviceId: "dev_phone",
-      action: "takeover",
-      accountLabel: "Claude Max (work)",
+      action: "switch",
+      accountLabel: "Spare",
     },
   ]);
-  // The plugin names neither the device nor the time, and cannot add fields.
   await expect(
-    invocation.recordAccountAction({
-      action: "switch",
-      accountLabel: "Work",
-      deviceId: "dev_other",
-    } as never),
-  ).rejects.toThrow("Invalid account action");
-  await expect(
-    invocation.recordAccountAction({ action: "delete-everything", accountLabel: "x" } as never),
+    invocation.recordAccountAction({ action: "switch", accountLabel: "Spare", deviceId: "other" }),
   ).rejects.toThrow("Invalid account action");
 });
 
 test("accounts-manage: no credential material in any response or event to a remote client (audit labels)", async () => {
   const { authority, recorded, device, FULL } = accountsFixture();
-  const invocation = authority.open(bundledTarget, () => device([...FULL, "accounts.manage"]))!;
+  const invocation = authority.open(bundledTarget, () => device([...FULL, "workspace.write"]), {
+    accountSessionId: "chat",
+  })!;
   for (const accountLabel of [
     "sk-ant-oat01-CANARYCANARYCANARYCANARY",
     "ghp_CANARYCANARYCANARYCANARY0000",
     'auth.json {"access_token":"x"}',
   ])
-    await expect(invocation.recordAccountAction({ action: "add", accountLabel })).rejects.toThrow(
-      "Invalid account action",
-    );
+    await expect(
+      invocation.recordAccountAction({ action: "switch", accountLabel }),
+    ).rejects.toThrow("Invalid account action");
   expect(JSON.stringify(recorded)).not.toMatch(/CANARY|access_token/);
 });
 
@@ -386,7 +380,9 @@ test("account continuation rechecks accounts.manage after invocation opens; hand
     method: "session-takeover",
     input: { session: "chat", accountId: "pooled" },
   };
-  await expect(invocation.invoke("continue", continuation)).resolves.toEqual({ ok: true });
+  await expect(invocation.invoke("continue", continuation)).rejects.toThrow(
+    "This device may not manage accounts",
+  );
   permissions = FULL;
   await expect(invocation.invoke("revoked", continuation)).rejects.toThrow(
     "This device may not manage accounts",
@@ -597,4 +593,105 @@ test("configured bundled identity routes only its original current target and ke
   current = false;
   expect(authority.open(target, reader)).toBeUndefined();
   expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+test("normal paired device receives only a bound account switch and switch audit", async () => {
+  const entries: unknown[] = [];
+  const authority = new ManagementAuthority(
+    { enabled: () => true, validate: (c) => c },
+    {
+      accountActions: {
+        record: (entry) => {
+          entries.push(entry);
+        },
+      },
+    },
+  );
+  const dispatch = vi.fn(async () => null);
+  authority.register("orca-organization-next", dispatch);
+  const session = "11111111-1111-4111-8111-111111111111";
+  let live = true;
+  const reader = () =>
+    live
+      ? {
+          id: "device:phone",
+          authentication: "paired-device" as const,
+          deviceId: "phone",
+          permissions: ["daemon.read", "workspace.read", "workspace.write"] as const,
+        }
+      : undefined;
+  expect(authority.open(bundledTarget, reader)).toBeUndefined();
+  const invocation = authority.open(bundledTarget, reader, { accountSessionId: session })!;
+  expect(invocation.accountsManage).toBe(false);
+  expect(invocation.principal.accountSessionId).toBe(session);
+  for (const [id, method, input] of [
+    ["other", "session-takeover", { session: "other", reason: "manual" }],
+    ["admin", "create", {}],
+    ["read", "list", null],
+  ] as const)
+    await expect(invocation.invoke(id, { method, input })).rejects.toThrow("Only the viewed");
+  await invocation.invoke("own", {
+    method: "session-takeover",
+    input: { session, reason: "manual" },
+  });
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  await expect(
+    invocation.recordAccountAction({ action: "pool-settings", accountLabel: "Pool" }),
+  ).rejects.toThrow();
+  await invocation.recordAccountAction({ action: "switch", accountLabel: "Spare" });
+  expect(entries).toEqual([
+    expect.objectContaining({ deviceId: "phone", action: "switch", accountLabel: "Spare" }),
+  ]);
+  live = false;
+  await expect(
+    invocation.invoke("revoked", {
+      method: "session-takeover",
+      input: { session, reason: "manual" },
+    }),
+  ).rejects.toThrow();
+  authority.close();
+});
+
+test("completed paired switch stays audited after the admitting source closes", async () => {
+  const entries: unknown[] = [];
+  const authority = new ManagementAuthority(
+    { enabled: () => true, validate: (c) => c },
+    {
+      accountActions: {
+        record: (entry) => {
+          entries.push(entry);
+        },
+      },
+    },
+  );
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  authority.register("orca-organization-next", async (accountCommand, principal) => {
+    consumeAccountDispatch(accountCommand, principal);
+    await held;
+    return { ok: true, account: { name: "Spare" } };
+  });
+  let live = true;
+  const principal = {
+    id: "device:phone",
+    deviceId: "phone",
+    authentication: "paired-device" as const,
+    permissions: ["daemon.read", "workspace.read", "workspace.write"] as const,
+  };
+  const invocation = authority.open(bundledTarget, () => (live ? principal : undefined), {
+    accountSessionId: "chat",
+  })!;
+  const pending = invocation.invoke("switch", {
+    method: "session-takeover",
+    input: { session: "chat", reason: "manual" },
+  });
+  live = false;
+  release();
+  await pending;
+  expect(entries).toEqual([
+    expect.objectContaining({ deviceId: "phone", action: "switch", accountLabel: "Spare" }),
+  ]);
+  authority.close();
 });

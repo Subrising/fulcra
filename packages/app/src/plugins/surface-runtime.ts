@@ -22,7 +22,7 @@ export function createPluginSurfaceRuntime(
     paseo: createPaseoApi(client, { signal: plugin.lifetime.signal }),
     invoke: (method, input) =>
       // L46: never send a Command Centre read the relay cannot authenticate; say why instead.
-      needsDirectConnection(plugin.id, activeConnectionOfClient(client), client)
+      needsDirectConnection(plugin.id, activeConnectionOfClient(client), client, method)
         ? Promise.reject(new CommandCentreNeedsDirectConnectionError())
         : client.invokePluginRpc(plugin.id, method, input),
   };

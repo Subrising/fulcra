@@ -206,3 +206,5 @@ export function confirmAccountLimit(input: {
   | { accountId: string; resetAt: string | null; kind: string }
   | null
 >;
+
+export function publicAccountText(value: unknown, fallback: string): string;

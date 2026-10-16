@@ -142,7 +142,8 @@ async function receive(input) {
     // Host principal is kept separate from public service traffic.
     readCommand = READ_METHODS.includes(command.command.method);
     // Cutover A2: a write without an authorised host principal is refused BEFORE dispatch (reported 'unauthorised', not uncertain).
-    if (!readCommand) requireManagementPrincipal(command.principal);
+    if (!readCommand || command.principal.accountSessionId !== undefined)
+      requireManagementPrincipal(command.principal, command.command);
     managementDispatched = true;
     const result = await management(command.command, command.principal);
     send({ id: command.id, epoch, ok: true, result });
