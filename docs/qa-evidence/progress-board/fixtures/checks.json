@@ -1,0 +1,58 @@
+[
+  {
+    "width": 375,
+    "height": 812,
+    "theme": "dark",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  },
+  {
+    "width": 375,
+    "height": 812,
+    "theme": "light",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  },
+  {
+    "width": 768,
+    "height": 1024,
+    "theme": "dark",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  },
+  {
+    "width": 768,
+    "height": 1024,
+    "theme": "light",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  },
+  {
+    "width": 1440,
+    "height": 900,
+    "theme": "dark",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  },
+  {
+    "width": 1440,
+    "height": 900,
+    "theme": "light",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  },
+  {
+    "width": 812,
+    "height": 375,
+    "theme": "dark",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  },
+  {
+    "width": 812,
+    "height": 375,
+    "theme": "light",
+    "source": "synthetic behavior fixtures",
+    "pass": true
+  }
+]

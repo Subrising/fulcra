@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
@@ -56,6 +57,21 @@ export function parseLedger(
     };
     // Source dates describe the request; evidence prose does not reliably date completion.
     row.createdAt = ledgerDate(row.source);
+    // Only labelled transition dates qualify; dates in PR prose do not date the closure.
+    const transition = (label: string) => {
+      const match = cells
+        .slice(4, 6)
+        .join(" ")
+        .match(
+          new RegExp(
+            `\\b${label}\\s*(?:at|on|since)?\\s*[:=]?\\s*(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)`,
+            "i",
+          ),
+        );
+      return match && Number.isFinite(Date.parse(match[1]!)) ? match[1] : undefined;
+    };
+    row.completedAt = transition("(?:closed|completed)");
+    row.blockedAt = transition("blocked");
     // Match original labels. Redaction can map different owners to the same display text.
     row.needsHuman = matchesHumanOwner(cells[3]!, humanOwners);
     items.push(row);
@@ -68,7 +84,7 @@ export function oneLine(text: string): string | null {
   const first = text
     .trim()
     .split(/\r?\n/)
-    .find((line) => line.trim())
+    .find((line) => line.trim() && !/^[-_*=#]{2,}$/.test(line.trim()))
     ?.replace(/\s+/g, " ");
   return first ? scrubFreeText(first, null).slice(0, 320) : null;
 }
@@ -102,6 +118,8 @@ export function jobList(
       createdAt: a.createdAt,
       updatedAt: a.updatedAt,
       permissions: a.pendingPermissions.length,
+      model: a.runtimeInfo?.model ?? a.model,
+      startedAt: a.activeTurn?.startedAt ?? null,
       result: oneLine(results.get(a.id) ?? a.lastError ?? ""),
     }));
 }
@@ -211,32 +229,95 @@ export function createProgressBoard(
     machine?: string;
     run?: RunRead;
     humanOwners?: () => readonly string[];
+    historyFile?: string;
   } = {},
 ) {
-  const root = options.root ?? path.join(os.homedir(), "shared-vault", "projects");
-  const machine = options.machine ?? os.hostname();
-  const results = new Map<string, string>();
-  const ledgers = new Map<string, { items: BoardItem[]; state: string; signature?: string }>();
-  const branches = new Map<string, { at: number; row: Awaited<ReturnType<typeof readBranch>> }>();
-  const pending = new Set<string>();
-  const attemptedResults = new Set<string>();
-  const queue: Array<() => Promise<void>> = [];
-  let active = 0;
-  let closed = false;
-  function enqueue(work: () => Promise<void>) {
-    queue.push(work);
-    drain();
-  }
-  function drain() {
-    if (closed) return;
-    while (active < 2 && queue.length) {
-      active++;
-      void queue.shift()!().finally(() => {
-        active--;
-        drain();
-      });
+  const root =
+    options.root ??
+    (process.env.FULCRA_LEDGER_DIR?.trim() || path.join(os.homedir(), "shared-vault", "projects"));
+  const historyFile = options.historyFile;
+  type Transition = {
+    status: string;
+    observedAt?: string;
+    completedAt?: string;
+    blockedAt?: string;
+  };
+  let transitions: Record<string, Transition> = {};
+  if (historyFile) {
+    try {
+      const stat = fs.lstatSync(historyFile);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2097152)
+        throw Error("Invalid cache");
+      const fd = fs.openSync(historyFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      let saved;
+      try {
+        saved = JSON.parse(fs.readFileSync(fd, "utf8"));
+      } finally {
+        fs.closeSync(fd);
+      }
+      if (saved.version === 1 && saved.rows && typeof saved.rows === "object")
+        transitions = saved.rows;
+    } catch {
+      /* The first observation cannot date old work. */
     }
   }
+  function track(
+    name: string,
+    item: BoardItem,
+    observedAt: string,
+    watchedChange = false,
+  ): BoardItem {
+    const key = `${name}:${item.id}`;
+    const previous = Object.hasOwn(transitions, key) ? transitions[key] : undefined;
+    const continuous =
+      watchedChange ||
+      (previous?.observedAt && Date.parse(observedAt) - Date.parse(previous.observedAt) <= 60000);
+    const done = /^DONE\b/i.test(item.status);
+    const blocked = /^BLOCKED\b/i.test(item.status);
+    const completedAt = done
+      ? (item.completedAt ??
+        previous?.completedAt ??
+        (continuous && previous && !/^DONE\b/i.test(previous.status) ? observedAt : undefined))
+      : undefined;
+    const blockedAt = blocked
+      ? (item.blockedAt ??
+        previous?.blockedAt ??
+        (continuous && previous && !/^BLOCKED\b/i.test(previous.status) ? observedAt : undefined))
+      : undefined;
+    transitions[key] = { status: item.status, observedAt, completedAt, blockedAt };
+    return { ...item, completedAt, blockedAt };
+  }
+  let historyUnavailable = false;
+  function saveHistory() {
+    if (!historyFile) return;
+    const temporary = `${historyFile}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ version: 1, rows: transitions }), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      fs.renameSync(temporary, historyFile);
+      historyUnavailable = false;
+    } catch {
+      historyUnavailable = true;
+    }
+  }
+  function observeFile(name: string, watchedChange: boolean) {
+    if (!historyFile) return;
+    try {
+      const file = path.join(root, name, "OPEN-ITEMS.md"),
+        stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2097152) return;
+      const rows = parseLedger(fs.readFileSync(file, "utf8")).items;
+      const at = new Date().toISOString();
+      rows.forEach((item) => track(name, item, at, watchedChange));
+      saveHistory();
+    } catch {
+      /* A missing or unreadable list cannot supply a date. */
+    }
+  }
+  const results = new Map<string, string>();
+  const ledgers = new Map<string, { items: BoardItem[]; state: string; signature?: string }>();
   const hooks = [
     server.on("agent.turn_ended", (event) => {
       const last = event.timeline.toReversed().find((entry) => entry.type === "assistant_message");
@@ -250,9 +331,18 @@ export function createProgressBoard(
     }),
   ];
   const watchers: fs.FSWatcher[] = [];
+  const watched = new Set<string>();
   function watch(directory: string, key?: string) {
     try {
-      const watcher = fs.watch(directory, () => (key ? ledgers.delete(key) : ledgers.clear()));
+      const watcher = fs.watch(directory, () => {
+        if (key) {
+          observeFile(key, true);
+          ledgers.delete(key);
+        } else {
+          discoverLedgers();
+          ledgers.clear();
+        }
+      });
       watcher.on("error", () => {
         watcher.close();
         ledgers.clear();
@@ -262,8 +352,21 @@ export function createProgressBoard(
       /* Snapshot stat checks also detect changes when watching is unavailable. */
     }
   }
+  function discoverLedgers() {
+    if (!historyFile) return;
+    try {
+      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.isSymbolicLink() || watched.has(entry.name)) continue;
+        observeFile(entry.name, false);
+        watch(path.join(root, entry.name), entry.name);
+        watched.add(entry.name);
+      }
+    } catch {
+      /* Snapshot reads name unavailable project lists. */
+    }
+  }
   watch(root);
-  const watched = new Set<string>();
+  discoverLedgers();
   let flight: Promise<ProgressBoard> | undefined;
   let ownerSignature: string | undefined;
   async function read(paseo: PaseoApi): Promise<ProgressBoard> {
@@ -282,7 +385,7 @@ export function createProgressBoard(
         .map((d) => d.name)
         .sort();
     } catch {
-      warnings.push("Ledger directory unavailable on this host.");
+      warnings.push("Project lists are unavailable on this computer.");
     }
     const [workspaces, agents] = await Promise.all([
       paseo.workspaces.list({ page: { limit: 100 } }),
@@ -310,175 +413,138 @@ export function createProgressBoard(
     }
     if (workspaces.pageInfo.hasMore || agents.pageInfo.hasMore)
       warnings.push("More workspaces or jobs could not be read on this host.");
-    const leadProjects = new Set(
-      agents.entries
-        .map((entry) => entry.agent)
-        .filter(
-          (agent) =>
-            !agent.archivedAt &&
-            ["lead", "orchestration", "project-lead"].includes(agent.labels?.["fulcra.role"] ?? ""),
-        )
-        .map(
-          (agent) => agent.labels?.["project"]?.trim() || agent.labels?.["fulcra.project"]?.trim(),
-        )
-        .filter((name): name is string => !!name),
-    );
-    const groups = new Map<string, PaseoWorkspace[]>();
-    const workspaceLabels = new Map<string, Set<string>>();
-    for (const { agent } of agents.entries) {
-      if (agent.archivedAt || !agent.workspaceId) continue;
-      const label = agent.labels?.["project"]?.trim() || agent.labels?.["fulcra.project"]?.trim();
-      if (!label) continue;
-      const labels = workspaceLabels.get(agent.workspaceId) ?? new Set<string>();
-      labels.add(label);
-      workspaceLabels.set(agent.workspaceId, labels);
-    }
-    const workspaceOwners = new Map<string, string | null>();
-    for (const w of workspaces.entries) {
-      const name = w.projectDisplayName;
-      const key =
+    const agentRows = agents.entries.map((entry) => entry.agent).filter((a) => !a.archivedAt);
+    const workspaceById = new Map(workspaces.entries.map((w) => [w.id, w]));
+    // Each session has exactly one project. A session without a workspace is still visible.
+    const projectOf = (a: PaseoAgent) => {
+      const label = a.labels?.["project"]?.trim() || a.labels?.["fulcra.project"]?.trim();
+      if (label) return label;
+      const workspace = a.workspaceId ? workspaceById.get(a.workspaceId) : undefined;
+      if (!workspace) return "Other sessions";
+      const name = workspace.projectDisplayName;
+      return (
         names.find(
           (n) =>
             n.toLowerCase() === name.toLowerCase() ||
-            n.toLowerCase() === path.basename(w.projectRootPath).toLowerCase(),
-        ) ?? name;
-      const labels = workspaceLabels.get(w.id);
-      workspaceOwners.set(w.id, labels?.size === 1 ? [...labels][0]! : null);
-      for (const group of labels?.size ? labels : [key])
-        groups.set(group, [...(groups.get(group) ?? []), w]);
-    }
-    const projects: ProgressBoard["projects"] = [];
-    const agentWorkspaceIds = new Set(agents.entries.map((e) => e.agent.workspaceId));
-    const candidates = [...groups]
-      .filter(
-        ([name, work]) => names.includes(name) || work.some((w) => agentWorkspaceIds.has(w.id)),
-      )
-      .flatMap(([, work]) => work.slice(0, 16));
-    const branchKeys = [
-      ...new Set(candidates.map((w) => w.workspaceDirectory ?? w.projectRootPath)),
-    ];
-    const scheduled = new Set(
-      branchKeys
-        .filter(
-          (key) =>
-            !pending.has(key) &&
-            (!branches.has(key) || Date.now() - branches.get(key)!.at >= 60000),
-        )
-        .sort((a, b) => (branches.get(a)?.at ?? 0) - (branches.get(b)?.at ?? 0))
-        .slice(0, 16),
-    );
-    for (const name of [...leadProjects].sort()) {
-      const work = groups.get(name) ?? [];
-      const jobRows = jobList(
-        agents.entries.map((e) => e.agent),
-        new Set(work.map((w) => w.id)),
-        machine,
-        results,
-        name,
-        workspaceOwners,
+            n.toLowerCase() === path.basename(workspace.projectRootPath).toLowerCase(),
+        ) ?? (/^[a-f0-9-]{24,}$/i.test(name) ? "Other sessions" : name)
       );
-      if (!names.includes(name) && !jobRows.length) continue;
-      let signature: string | undefined;
-      if (names.includes(name)) {
-        try {
-          const stat = fs.lstatSync(path.join(root, name, "OPEN-ITEMS.md"));
-          signature = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-        } catch {
-          /* Missing file is shown below. */
-        }
+    };
+    names = names.filter((name) => {
+      try {
+        return fs.lstatSync(path.join(root, name, "OPEN-ITEMS.md")).isFile();
+      } catch {
+        return false;
       }
-      if (!signature || ledgers.get(name)?.signature !== signature) ledgers.delete(name);
-      if (!ledgers.has(name)) {
-        try {
-          if (!names.includes(name)) throw Error("No ledger");
-          const file = path.join(root, name, "OPEN-ITEMS.md");
-          const stat = fs.lstatSync(file);
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2097152)
-            throw Error("Invalid ledger");
+    });
+    const projectNames = new Set([
+      ...names,
+      ...agentRows
+        .filter((a) => a.status === "running" || a.status === "initializing")
+        .map(projectOf),
+    ]);
+    const previousTransitions = JSON.stringify(transitions);
+    const observedAt = new Date().toISOString();
+    const projects: ProgressBoard["projects"] = [];
+    for (const name of [...projectNames].sort()) {
+      const projectAgents = agentRows.filter((a) => projectOf(a) === name);
+      const file = path.join(root, name, "OPEN-ITEMS.md");
+      let signature: string | undefined;
+      try {
+        if (!names.includes(name)) throw Error("No ledger");
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2097152)
+          throw Error("Invalid ledger");
+        signature = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        if (ledgers.get(name)?.signature !== signature) {
           const parsed = parseLedger(fs.readFileSync(file, "utf8"), humanOwners);
           ledgers.set(name, {
             items: parsed.items,
             signature,
             state: parsed.malformed
-              ? `${parsed.malformed} invalid rows skipped`
+              ? `${parsed.malformed} unreadable rows`
               : parsed.items.length
                 ? "Current"
                 : "Empty ledger",
           });
-          if (!watched.has(name)) {
-            watch(path.dirname(file), name);
-            watched.add(name);
-          }
-        } catch {
-          ledgers.set(name, { items: [], state: "Ledger unavailable" });
         }
+        if (!watched.has(name)) {
+          watch(path.dirname(file), name);
+          watched.add(name);
+        }
+      } catch {
+        ledgers.set(name, {
+          items: [],
+          state: "No readable ledger for this project on this computer.",
+        });
       }
+      // Read the most recent activity for running sessions, including after daemon restarts.
+      await Promise.all(
+        projectAgents
+          .filter((a) => a.status === "running" || a.status === "initializing")
+          .map(async (a) => {
+            try {
+              const page = await paseo.agents.ref(a.id).timeline.refetch({ limit: 6 });
+              const last = page.entries
+                .toReversed()
+                .find((e) => e.item.type === "assistant_message" || e.item.type === "tool_call");
+              if (last?.item.type === "assistant_message") {
+                const line = oneLine(last.item.text);
+                if (line) results.set(a.id, line);
+              } else if (last?.item.type === "tool_call") {
+                const detail = last.item.detail;
+                const activity =
+                  detail.type === "shell"
+                    ? `Running: ${detail.command}`
+                    : detail.type === "read"
+                      ? `Reading ${detail.filePath}`
+                      : detail.type === "edit" || detail.type === "write"
+                        ? `Editing ${detail.filePath}`
+                        : detail.type === "search"
+                          ? `Searching: ${detail.query}`
+                          : detail.type === "plain_text"
+                            ? (detail.text ?? detail.label ?? `Using ${last.item.name}`)
+                            : `Using ${last.item.name}`;
+                results.set(a.id, oneLine(activity) ?? "Using a tool");
+              }
+            } catch {
+              /* The UI names missing activity. Session status remains authoritative. */
+            }
+          }),
+      );
       const ledger = ledgers.get(name)!;
-      for (const a of agents.entries
-        .map((e) => e.agent)
-        .filter(
-          (a) => jobRows.some((j) => j.id === a.id) && a.status !== "running" && !results.has(a.id),
-        )) {
-        const key = `result:${a.id}`;
-        if (!attemptedResults.has(key)) {
-          attemptedResults.add(key);
-          pending.add(key);
-          enqueue(() =>
-            paseo.agents
-              .ref(a.id)
-              .timeline.refetch({ limit: 20 })
-              .then((page) => {
-                const last = page.entries
-                  .toReversed()
-                  .find((e) => e.item.type === "assistant_message");
-                if (!closed && last?.item.type === "assistant_message") {
-                  const text = oneLine(last.item.text);
-                  if (text) results.set(a.id, text);
-                }
-              })
-              .catch(() => {})
-              .finally(() => pending.delete(key)),
-          );
-        }
-      }
-      const branchRows = work.slice(0, 16).map((w) => {
-        const key = w.workspaceDirectory ?? w.projectRootPath;
-        const cached = branches.get(key);
-        if (scheduled.has(key) && !pending.has(key)) {
-          pending.add(key);
-          enqueue(() =>
-            readBranch(w, options.run)
-              .then((row) => {
-                if (!closed) branches.set(key, { row, at: Date.now() });
-              })
-              .finally(() => pending.delete(key)),
-          );
-        }
-        return (
-          cached?.row ?? {
-            workspace: w.name,
-            branch: null,
-            head: null,
-            state: "Reading branch",
-            ci: "Unavailable",
-            observedAt: null,
-          }
-        );
-      });
-      if (work.length > 16) warnings.push(`${name}: showing the first 16 branches.`);
+      const items = ledger.items.map((item) => track(name, item, observedAt));
+      const jobs = projectAgents.map((a) => ({
+        id: a.id,
+        title: scrubFreeText(a.title ?? "Untitled session", null),
+        status: a.status,
+        machine: "This computer",
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+        startedAt: a.activeTurn?.startedAt ?? null,
+        model: a.runtimeInfo?.model ?? a.model,
+        permissions: a.pendingPermissions.length,
+        result: oneLine(results.get(a.id) ?? a.lastError ?? ""),
+      }));
       projects.push({
         id: name,
         name,
         ledgerState: ledger.state,
-        items: ledger.items,
-        jobs: jobRows,
-        branches: branchRows,
+        ledgerUpdatedAt: names.includes(name)
+          ? new Date(fs.statSync(file).mtimeMs).toISOString()
+          : undefined,
+        items,
+        jobs,
+        branches: [],
       });
     }
+    if (previousTransitions !== JSON.stringify(transitions)) saveHistory();
+    if (historyUnavailable)
+      warnings.push("Completion history could not be saved. Dates may be missing after a restart.");
     const scrub = (value: string) => scrubFreeText(value, null);
     return {
       observedAt: new Date().toISOString(),
-      machine: scrub(machine),
+      machine: "This computer",
       projects: projects.map((project) => ({
         ...project,
         id: scrub(project.id),
@@ -509,12 +575,10 @@ export function createProgressBoard(
       );
     },
     close() {
-      closed = true;
-      queue.length = 0;
       hooks.forEach((stop) => stop());
       watchers.forEach((w) => w.close());
       results.clear();
-      branches.clear();
+
       ledgers.clear();
     },
   };

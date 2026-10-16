@@ -749,6 +749,9 @@ it("binds imported getters to each originating installation across delayed callb
     hosts: {
       getSnapshot: () => [],
       subscribe: () => () => {},
+      getClientForRpc() {
+        throw Error("No RPC client in this fixture");
+      },
       getPaseoClient(serverId) {
         calls.push(`${installation}/${serverId}`);
         return runtime.paseo;
@@ -776,4 +779,33 @@ it("binds imported getters to each originating installation across delayed callb
   ]);
   await first.cleanup();
   await second.cleanup();
+});
+
+it("binds cross-host RPC to the calling plugin and the selected connection", async () => {
+  const calls: unknown[][] = [];
+  const client = {
+    invokePluginRpc: async (...args: unknown[]) => {
+      calls.push(args);
+      return { ok: true };
+    },
+  };
+  const source = bundle(`
+    const { invokeHostRpc } = require("@getpaseo/plugin/client");
+    plugin.addCommandCenterItem({ id: "read", title: "Read", icon: "Server", context: "global", onSelect: () => invokeHostRpc("target-host", "progress.board.snapshot", {}) });
+  `);
+  const plugin = runPluginClientBundle("own-plugin", source, {
+    ...runtime,
+    hosts: {
+      getSnapshot: () => [],
+      subscribe: () => () => {},
+      getPaseoClient: () => runtime.paseo,
+      getClientForRpc(serverId) {
+        expect(serverId).toBe("target-host");
+        return client as never;
+      },
+    },
+  });
+  await plugin.commandCenterItems[0]!.onSelect({} as never);
+  expect(calls).toEqual([["own-plugin", "progress.board.snapshot", {}]]);
+  await plugin.cleanup();
 });

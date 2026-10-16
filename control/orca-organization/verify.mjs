@@ -31,6 +31,7 @@ const files = [
   "shared/progress-board.ts",
   "shared/progress-board.test.ts",
   "screens/progress-board-entry.mjs",
+  "screens/progress-board-runtime.mjs",
   "verify-progress-board-screens.mjs",
   "client/progress-board.tsx",
   "shared/organization.ts",

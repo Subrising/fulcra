@@ -132,3 +132,99 @@ test("age uses singular and plural units", () => {
     assert.equal(ageLabel(new Date(now - minutes * 60000).toISOString(), now), label);
   }
 });
+
+test("24-hour completions exclude undated, old, moved, and future work", async () => {
+  const { recentDone, readyItems } = await import("./progress-board");
+  const now = Date.parse("2026-10-16T10:00:00Z");
+  const item = (id: string, status: string, completedAt?: string, kind = "FIX") => ({
+    id,
+    status,
+    kind,
+    completedAt,
+    owner: "Worker",
+    item: "Task",
+    evidence: "PR 1",
+    source: "Brief",
+  });
+  const items = [
+    item("recent", "DONE", "2026-10-15T11:00:00Z"),
+    item("old", "DONE", "2026-10-15T09:00:00Z"),
+    item("unknown", "DONE"),
+    item("future", "DONE", "2026-10-17T00:00:00Z"),
+    item("moved", "MOVED", "2026-10-16T00:00:00Z"),
+    item("ready", "READY"),
+    item("open", "OPEN"),
+    item("blocked", "BLOCKED: review"),
+    item("rule", "OPEN", undefined, "RULE"),
+    item("decision", "OPEN", undefined, "DECIDE"),
+    item("active", "IN PROGRESS"),
+  ];
+  assert.deepEqual(
+    recentDone(items, now).map((row) => row.id),
+    ["recent"],
+  );
+  assert.deepEqual(
+    readyItems(items).map((row) => row.id),
+    ["ready", "open"],
+  );
+});
+
+test("All hosts uses one mirrored ledger and keeps each host's running sessions", async () => {
+  const { combineProjects } = await import("./progress-board");
+  const project = {
+    id: "shared",
+    name: "Shared",
+    ledgerState: "Current",
+    ledgerUpdatedAt: "2026-10-16T00:00:00Z",
+    branches: [],
+    items: [
+      {
+        id: "EX-1",
+        item: "Old text",
+        kind: "FIX",
+        owner: "Worker",
+        status: "OPEN",
+        evidence: "",
+        source: "",
+      },
+    ],
+    jobs: [
+      {
+        id: "a",
+        title: "Session",
+        status: "running",
+        machine: "This computer",
+        createdAt: "",
+        updatedAt: "",
+        permissions: 0,
+        result: null,
+      },
+    ],
+  };
+  const snapshot = { observedAt: "", machine: "", warnings: [], projects: [project] };
+  const result = combineProjects([
+    { id: "a", label: "Alpha", data: snapshot },
+    {
+      id: "b",
+      label: "Beta",
+      data: {
+        ...snapshot,
+        projects: [
+          {
+            ...project,
+            ledgerUpdatedAt: "2026-10-16T01:00:00Z",
+            items: [{ ...project.items[0]!, item: "New text" }],
+            jobs: [{ ...project.jobs[0]!, id: "b" }],
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(result.length, 1);
+  assert.equal(result[0]!.items.length, 1);
+  assert.equal(result[0]!.items[0]!.item, "New text");
+  assert.deepEqual(
+    result[0]!.jobs.map((job) => job.hostId),
+    ["a", "b"],
+  );
+});

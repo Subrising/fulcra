@@ -216,7 +216,7 @@ test("snapshot reads the ledger, updates on a file event, and cleans up", async 
   }
   assert.equal(removed, 1);
 });
-test("board uses lead labels and groups worker jobs across folders", async () => {
+test("board includes ledger projects without a lead and groups workers across folders", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-groups-"));
   fs.mkdirSync(path.join(root, "fixture"));
   fs.writeFileSync(path.join(root, "fixture", "OPEN-ITEMS.md"), `${header}\n${row}`);
@@ -270,7 +270,7 @@ test("board uses lead labels and groups worker jobs across folders", async () =>
     const snapshot = await board.read(api);
     assert.deepEqual(
       snapshot.projects.map((project) => project.name),
-      ["fixture"],
+      ["fixture", "unrelated"],
     );
     assert.deepEqual(snapshot.projects[0]!.jobs.map((job) => job.id).sort(), ["lead", "worker"]);
   } finally {
@@ -314,14 +314,17 @@ test("an unlabelled session in a shared workspace has one owner at most", async 
     const shared = await board.read(api([alpha, beta, unlabelled]));
     assert.deepEqual(
       shared.projects.map((project) => project.name),
-      ["alpha", "beta"],
+      ["alpha", "beta", "fixture"],
     );
     assert.deepEqual(
       shared.projects.flatMap((project) => project.jobs.map((job) => job.id)).sort(),
-      ["alpha", "beta"],
+      ["alpha", "beta", "unlabelled"],
     );
     const unique = await board.read(api([alpha, unlabelled]));
-    assert.deepEqual(unique.projects[0]!.jobs.map((job) => job.id).sort(), ["alpha", "unlabelled"]);
+    assert.deepEqual(unique.projects.flatMap((p) => p.jobs.map((job) => job.id)).sort(), [
+      "alpha",
+      "unlabelled",
+    ]);
   } finally {
     board.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -433,3 +436,116 @@ for (const hold of ["done", "paused", "blocked"]) {
     assert.equal(rows[0]!.status, hold === "done" ? "done" : "running");
   });
 }
+
+test("configured mirror includes ledger-only projects and every running session", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-mirror-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "ledger-only"));
+  fs.writeFileSync(path.join(root, "ledger-only", "OPEN-ITEMS.md"), `${header}\n${row}`);
+  const previous = process.env.FULCRA_LEDGER_DIR;
+  process.env.FULCRA_LEDGER_DIR = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.FULCRA_LEDGER_DIR;
+    else process.env.FULCRA_LEDGER_DIR = previous;
+  });
+  const board = createProgressBoard({ on: () => () => {} });
+  t.after(() => board.close());
+  const agent = {
+    ...boardLead,
+    workspaceId: undefined,
+    labels: {},
+    model: "gpt-test",
+    activeTurn: { turnId: "turn", startedAt: "2026-10-16T00:00:00Z" },
+  };
+  const api = {
+    agents: {
+      list: async () => ({ entries: [{ agent }], pageInfo: { hasMore: false } }),
+      ref: () => ({
+        timeline: {
+          refetch: async () => ({
+            entries: [
+              { item: { type: "assistant_message", text: "Checking the layout.\nDetails" } },
+            ],
+          }),
+        },
+      }),
+    },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  const result = await board.read(api);
+  assert.deepEqual(
+    result.projects.map((p) => p.name),
+    ["Other sessions", "ledger-only"],
+  );
+  assert.equal(result.projects[0]!.jobs[0]!.result, "Checking the layout.");
+  assert.equal(result.projects[0]!.jobs[0]!.model, "gpt-test");
+  assert.equal(result.projects[0]!.jobs[0]!.startedAt, "2026-10-16T00:00:00Z");
+  assert.equal(result.projects[1]!.items.length, 1);
+  assert.equal(result.machine, "This computer");
+});
+
+test("observed transitions survive a restart without dating existing closed work", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-history-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "fixture"));
+  const file = path.join(root, "fixture", "OPEN-ITEMS.md");
+  const historyFile = path.join(root, "history.json");
+  const api = {
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as unknown as PaseoApi;
+  const write = (status: string) =>
+    fs.writeFileSync(
+      file,
+      `${header}\n| FU-1 | Task | FIX | Worker | ${status} | PR 12 | brief |\n| FU-2 | Old task | FIX | Worker | DONE | commit abcdef1 | brief |`,
+    );
+  write("OPEN");
+  const board = createProgressBoard({ on: () => () => {} }, { root, historyFile });
+  t.after(() => board.close());
+  assert.equal((await board.read(api)).projects[0]!.items[1]!.completedAt, undefined);
+  write("BLOCKED: waiting for review");
+  const blockedAt = (await board.read(api)).projects[0]!.items[0]!.blockedAt;
+  assert.ok(blockedAt);
+  write("DONE");
+  const completedAt = (await board.read(api)).projects[0]!.items[0]!.completedAt;
+  assert.ok(completedAt);
+  board.close();
+  const restarted = createProgressBoard({ on: () => () => {} }, { root, historyFile });
+  t.after(() => restarted.close());
+  assert.equal((await restarted.read(api)).projects[0]!.items[0]!.completedAt, completedAt);
+});
+
+test("ledger changes record completion while no screen is mounted", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "board-background-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "fixture"));
+  const file = path.join(root, "fixture", "OPEN-ITEMS.md"),
+    historyFile = path.join(root, "history.json");
+  fs.writeFileSync(file, `${header}\n| FU-1 | Task | FIX | Worker | OPEN | — | brief |`);
+  const board = createProgressBoard({ on: () => () => {} }, { root, historyFile });
+  t.after(() => board.close());
+  const observed = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      watcher.close();
+      reject(Error("No completion observation"));
+    }, 2000);
+    const watcher = fs.watch(root, (_event, name) => {
+      if (name !== "history.json") return;
+      try {
+        const saved = JSON.parse(fs.readFileSync(historyFile, "utf8"));
+        if (saved.rows["fixture:FU-1"]?.completedAt) {
+          clearTimeout(timer);
+          watcher.close();
+          resolve();
+        }
+      } catch {
+        /* Atomic replacement can briefly remove the old inode. */
+      }
+    });
+  });
+  fs.writeFileSync(file, `${header}\n| FU-1 | Task | FIX | Worker | DONE | PR 12 | brief |`);
+  await observed;
+  const saved = JSON.parse(fs.readFileSync(historyFile, "utf8"));
+  assert.equal(saved.rows["fixture:FU-1"].status, "DONE");
+  assert.ok(Number.isFinite(Date.parse(saved.rows["fixture:FU-1"].completedAt)));
+});

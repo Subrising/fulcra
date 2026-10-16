@@ -11,6 +11,7 @@ const item = z.object({
   source: z.string(),
   createdAt: z.string().optional(),
   completedAt: z.string().optional(),
+  blockedAt: z.string().optional(),
   needsHuman: z.boolean().optional(),
 });
 const job = z.object({
@@ -21,6 +22,8 @@ const job = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   permissions: z.number(),
+  model: z.string().nullable().optional(),
+  startedAt: z.string().nullable().optional(),
   result: z.string().nullable(),
 });
 const branch = z.object({
@@ -43,6 +46,7 @@ export const progressBoardRpc = defineContract({
         id: z.string(),
         name: z.string(),
         ledgerState: z.string(),
+        ledgerUpdatedAt: z.string().optional(),
         items: z.array(item),
         jobs: z.array(job),
         branches: z.array(branch),
@@ -108,4 +112,51 @@ export function ageLabel(createdAt: string, now: number): string {
   if (minutes < 1440) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
   const days = Math.floor(minutes / 1440);
   return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+// Completion age must come from a recorded completion, never a request date or file mtime.
+export function recentDone(items: readonly BoardItem[], now: number): BoardItem[] {
+  return items
+    .filter((row) => {
+      const at = Date.parse(row.completedAt ?? "");
+      return (
+        /^DONE\b/i.test(row.status) && Number.isFinite(at) && at <= now && now - at <= 86400000
+      );
+    })
+    .sort((a, b) => Date.parse(b.completedAt!) - Date.parse(a.completedAt!));
+}
+export function readyItems(items: readonly BoardItem[]): BoardItem[] {
+  return items.filter(
+    (row) =>
+      /^(OPEN|READY|NEXT)\b/i.test(row.status) &&
+      !["RULE", "DECIDE"].includes(row.kind.toUpperCase()),
+  );
+}
+
+// Mirrored ledgers represent the same work. Prefer the newest readable copy in All hosts.
+export function combineProjects(
+  boards: readonly { id: string; label: string; data: ProgressBoard | null }[],
+) {
+  const grouped = new Map<
+    string,
+    { project: ProgressBoard["projects"][number]; jobs: Array<BoardJob & { hostId: string }> }
+  >();
+  for (const board of boards)
+    for (const project of board.data?.projects ?? []) {
+      const key = project.name.toLowerCase();
+      let group = grouped.get(key);
+      if (!group) {
+        group = { project, jobs: [] };
+        grouped.set(key, group);
+      }
+      if (
+        (Date.parse(project.ledgerUpdatedAt ?? "") || 0) >
+        (Date.parse(group.project.ledgerUpdatedAt ?? "") || 0)
+      )
+        group.project = project;
+      group.jobs.push(
+        ...project.jobs.map((job) => ({ ...job, hostId: board.id, machine: board.label })),
+      );
+    }
+  return [...grouped.values()].map(({ project, jobs }) => ({ ...project, jobs }));
 }
