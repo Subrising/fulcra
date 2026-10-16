@@ -3,15 +3,26 @@
 // The same enum-validated `permissions` field shipped in v0.7.0 and v0.8.0 (commit adf80a9fe), so released
 // DaemonClient/app/Android builds and the V2 controller's pinned client 0.8.0 behave like the base parser.
 import { expect, test } from "vitest";
+import pino from "pino";
+import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import { parseServerInfoStatusPayload as parseCurrent } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload as parseReleased } from "./test-utils/frozen-v11a-permissions.js";
 
-test("B1: a pre-V1.1b client must still accept an owner server_info (no Command Centre configured)", () => {
+test("B1: a pre-V1.1b client must still accept an owner server_info (no Command Centre configured)", ({
+  onTestFinished,
+}) => {
   // Real payload builder. The owner Session carries OWNER_PERMISSIONS whether or not any controller is installed.
   const server = Object.create(VoiceAssistantWebSocketServer.prototype);
-  Object.assign(server, { serverId: "srv", daemonVersion: "0.9.1", workspaceLabelService: null });
+  const providerSnapshotManager = new ProviderSnapshotManager({ logger: pino({ enabled: false }) });
+  onTestFinished(() => providerSnapshotManager.destroy());
+  Object.assign(server, {
+    serverId: "srv",
+    daemonVersion: "0.9.1",
+    workspaceLabelService: null,
+    providerSnapshotManager,
+  });
   const payload = Reflect.get(server, "buildServerInfoStatusPayload").call(server, {
     getPermissions: () => [...OWNER_PERMISSIONS],
   });

@@ -719,7 +719,7 @@ core-fixes	M	40	28	packages/server/src/server/push/push-service.ts
 core-fixes	A	636	0	packages/server/src/server/queued-agent-messages.ts
 core-fixes	A	81	0	packages/server/src/server/r-v11b-controller-id-squat.test.ts
 core-fixes	A	44	0	packages/server/src/server/r-v11b-ordinary-rpc-input.test.ts
-core-fixes	A	25	0	packages/server/src/server/r-v11b-server-info-compat.test.ts
+core-fixes	A	36	0	packages/server/src/server/r-v11b-server-info-compat.test.ts
 core-fixes	A	207	0	packages/server/src/server/report-batch.ts
 core-fixes	A	62	0	packages/server/src/server/report-origin.ts
 core-fixes	A	16	0	packages/server/src/server/report-publication.ts
@@ -1392,7 +1392,7 @@ orchestration	M	16	7	packages/server/src/server/snapshot-mutation-ownership.test
 orchestration	M	18	4	packages/server/src/server/test-utils/session-stubs.ts
 orchestration	M	4	3	packages/server/src/server/websocket-server.browser-tools.test.ts
 orchestration	A	757	0	packages/server/src/server/websocket-server.management-connection.test.ts
-orchestration	A	86	0	packages/server/src/server/websocket-server.management.test.ts
+orchestration	A	92	0	packages/server/src/server/websocket-server.management.test.ts
 orchestration	M	188	30	packages/server/src/server/websocket-server.notifications.test.ts
 orchestration	M	436	81	packages/server/src/server/websocket-server.relay-reconnect.test.ts
 orchestration	M	1	0	packages/server/src/server/websocket-server.terminal-notifications.test.ts

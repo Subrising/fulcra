@@ -3,17 +3,23 @@ import pino from "pino";
 import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 import { ServerInfoStatusPayloadSchema } from "@getpaseo/protocol/messages";
 import { PluginRuntime } from "./plugins/runtime.js";
+import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import { SessionAuthorization } from "./authorization/index.js";
 
 const hash = "$2b$12$OLxyuuP9uLK30Uzc4wQX0O6liuU/Q1t5P2b0Ebf36mULvpVK3DRZW";
-test("Draft and catalog availability preserves permissions and requires a concrete guarded pager", () => {
+test("Draft and catalog availability preserves permissions and requires a concrete guarded pager", ({
+  onTestFinished,
+}) => {
   const runtime = new PluginRuntime(pino({ enabled: false }), "0.10.2");
   const authorization = new SessionAuthorization(["workspace.read"]);
+  const providerSnapshotManager = new ProviderSnapshotManager({ logger: pino({ enabled: false }) });
+  onTestFinished(() => providerSnapshotManager.destroy());
   for (const pager of [undefined, runtime.catalogPaging]) {
     const server = Object.create(VoiceAssistantWebSocketServer.prototype);
     Object.assign(server, {
       serverId: "availability-fixture",
       daemonVersion: "0.10.2",
+      providerSnapshotManager,
       pluginRuntime: { catalogPaging: () => pager },
     });
     const payload = ServerInfoStatusPayloadSchema.parse(
