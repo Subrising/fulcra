@@ -34,6 +34,8 @@ never mistaken for a missing item. A host without one of these
 stores has no credential store; `server_info.features.credentials` is then false. Mobile apps never
 store tracker secrets; they read through the host.
 
+Pooled Claude API accounts use a separate store. See [API key storage](api-key-storage.md) for transport, revoke, and migration.
+
 ## Sign-in methods
 
 Each connector lists its methods in preference order. **Token always works.** A method that needs

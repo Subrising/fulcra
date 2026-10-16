@@ -3,6 +3,7 @@
 // It creates no agent, no workspace and no session record, so nothing shows in any list. A usage limit marks the
 // account limited (kind and reset time) and the call is tried once more on the next usable account. The machine's own
 // login is never used: with no pooled account the call fails.
+import { createApiRuntimeChannel } from "./api-runtime-channel.mjs";
 import { randomUUID } from "node:crypto";
 import { recordAccountCost, recordBillingError, isBillingError } from "./account-billing.mjs";
 import fs from "node:fs";
@@ -12,6 +13,7 @@ import { spawn } from "node:child_process";
 import { parseLimitLine, parseRevokedLine } from "./limit-line.mjs";
 import {
   accountStatus,
+  launchEnv,
   credentialKind,
   setAccount,
   isApiAccount,
@@ -50,9 +52,12 @@ export const DEFAULT_ASK_TIMEOUT_MS = 120_000;
 /** A retry with less time than this left is not started. */
 export const MIN_ATTEMPT_MS = 1000;
 
-/** Runs the Claude CLI once. The credential goes in the environment of this one process, never in argv or a file. */
+/** Runs the Claude CLI once. API keys reach only apiKeyHelper stdout. Subscription tokens use the child environment. */
 export function spawnClaudeOnce({
   token,
+  root,
+  accountId,
+  keyEpoch,
   model,
   prompt,
   schema,
@@ -74,6 +79,20 @@ export function spawnClaudeOnce({
     "",
     "--disable-slash-commands",
   ];
+  const api = credentialKind(token) === "api-key";
+  if (api) {
+    try {
+      const helper = launchEnv(
+        "claude",
+        { id: accountId, keyEpoch },
+        { token, root, env },
+      ).FULCRA_API_KEY_HELPER;
+      args.push("--settings", JSON.stringify({ apiKeyHelper: helper }));
+    } catch {
+      removeScratch(scratch);
+      return Promise.reject(new AskError("The API key helper could not start", "NO_CREDENTIAL"));
+    }
+  }
   if (schema) args.push("--json-schema", JSON.stringify(schema));
   const childEnv = {
     PATH: env.PATH ?? "",
@@ -84,7 +103,7 @@ export function spawnClaudeOnce({
     // A scratch config home: nothing is read from, or written to, the machine's own Claude settings or login.
     CLAUDE_CONFIG_DIR: path.join(scratch, "config"),
     CLAUDE_CODE_OAUTH_TOKEN: credentialKind(token) === "api-key" ? "" : token,
-    ANTHROPIC_API_KEY: credentialKind(token) === "api-key" ? token : "",
+    ANTHROPIC_API_KEY: "",
     ANTHROPIC_AUTH_TOKEN: "",
   };
   const command = bin ?? env.FULCRA_CLAUDE_BIN ?? "claude";
@@ -94,6 +113,16 @@ export function spawnClaudeOnce({
     removeScratch(scratch);
     return Promise.reject(error);
   }
+  let requestStop = () => {};
+  const channel = api
+    ? createApiRuntimeChannel({
+        root,
+        accountId,
+        epoch: keyEpoch ?? null,
+        onStop: () => requestStop(),
+      })
+    : null;
+  const releaseLease = () => channel?.release();
   return new Promise((resolve, reject) => {
     // On Unix the child leads its own process group, so a timeout can stop it and everything it started (FU-93).
     const child = spawn(command, args, {
@@ -104,6 +133,7 @@ export function spawnClaudeOnce({
       detached: process.platform !== "win32",
       shell: false,
     });
+    let watcher;
     let out = "";
     let settled = false;
     let leaderExited = false;
@@ -111,11 +141,13 @@ export function spawnClaudeOnce({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      watcher?.close();
       removeScratch(scratch);
       settle();
     };
     child.on("exit", () => {
       leaderExited = true;
+      releaseLease();
     });
     // The call ends at the deadline, without waiting for a process that holds the pipes. While the leader runs, its
     // process tree is stopped. Once it has exited, its numeric ID may belong to another process now, so nothing is
@@ -125,6 +157,42 @@ export function spawnClaudeOnce({
       else killProcessTree(child);
       finish(() => reject(new AskError("The call timed out", "TIMEOUT")));
     }, timeoutMs);
+    requestStop = () => {
+      killProcessTree(child);
+      finish(() =>
+        reject(new AskError("The API account is revoked or unavailable", "ACCOUNT_REVOKED")),
+      );
+    };
+    if (api) {
+      const check = () => {
+        try {
+          const a = JSON.parse(
+            fs.readFileSync(path.join(root, "accounts/accounts.json"), "utf8"),
+          ).accounts.find((a) => a.id === accountId);
+          if (
+            !a ||
+            !a.enabled ||
+            a.revoked ||
+            a.localRevoked ||
+            a.auth !== "ok" ||
+            (a.keyEpoch ?? null) !== (keyEpoch ?? null)
+          )
+            throw Error();
+        } catch {
+          killProcessTree(child);
+          finish(() =>
+            reject(new AskError("The API account is revoked or unavailable", "ACCOUNT_REVOKED")),
+          );
+        }
+      };
+      try {
+        watcher = fs.watch(path.join(root, "accounts"), check);
+        check();
+      } catch {
+        killProcessTree(child);
+        finish(() => reject(new AskError("The API account cannot be watched", "NO_CREDENTIAL")));
+      }
+    }
     child.stdout.on("data", (d) => {
       if (out.length < 5_000_000) out += d;
     });
@@ -132,6 +200,7 @@ export function spawnClaudeOnce({
     // A CLI that exits before it reads a large prompt closes the pipe; the close handler reports it (FU-93 review).
     child.stdin.on("error", () => {});
     child.on("error", (e) => {
+      releaseLease();
       // A fixed text, with only a short system code: a spawn error's own message can name the command line.
       const code =
         typeof e?.code === "string" && /^[A-Z0-9_]{2,24}$/.test(e.code) ? e.code : "unknown";
@@ -358,6 +427,16 @@ export async function askOnce({
     const token = await lookupCredential(keychain, picked.id, deadline - now());
     if (!token)
       throw new AskError(`The credential for "${picked.name}" is not available`, "NO_CREDENTIAL");
+    const current = (await readAccountsAsync(root)).accounts.find((a) => a.id === picked.id);
+    if (
+      !current ||
+      !current.enabled ||
+      current.localRevoked ||
+      current.revoked ||
+      current.auth !== "ok" ||
+      (current.keyEpoch ?? null) !== (picked.keyEpoch ?? null)
+    )
+      throw new AskError("The API account changed during credential lookup", "NO_CREDENTIAL");
     const kind = credentialKind(token);
     await setAccount(root, picked.id, { credentialKind: kind });
     picked.credentialKind = kind;
@@ -371,7 +450,16 @@ export async function askOnce({
     let structuredCutoff = false;
     try {
       result = scrubCredential(
-        await spawnClaude({ token, model, prompt, schema, timeoutMs: spawnMs }),
+        await spawnClaude({
+          token,
+          root,
+          accountId: picked.id,
+          keyEpoch: picked.keyEpoch,
+          model,
+          prompt,
+          schema,
+          timeoutMs: spawnMs,
+        }),
         token,
         {
           onCutoff: (key) => {

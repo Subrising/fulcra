@@ -1,8 +1,13 @@
 // Update-7: the Settings -> Accounts & models handlers. Reads return names, order, status, sessions and defaults only;
 // a Claude token is accepted on add/replace and goes straight to the Keychain, never to a store, a log or a reply.
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import {
   readAccountsAsync,
+  revokeLocalAccount,
+  withCredentialLock,
+  waitForApiRuntimes,
+  isApiAccount,
   credentialKind,
   publicView,
   addAccount,
@@ -189,67 +194,111 @@ export function createAccountHandlers(d: Deps) {
         return refused(plain(e, "The account could not be added"));
       }
       if (input.provider === "claude") {
-        try {
-          await keychain.put(account.id, input.token!.trim());
-        } catch (e) {
-          await removeAccount(d.root(), account.id).catch(() => {});
-          return refused(plain(e, "The token could not be kept in the Keychain"));
-        }
-        await setAccount(d.root(), account.id, {
-          credentialKind: credentialKind(input.token!.trim()),
+        return withCredentialLock(d.root(), account.id, async () => {
+          if (
+            (await readAccountsAsync(d.root())).accounts.find((a) => a.id === account.id)
+              ?.localRevoked
+          )
+            return refused("The new account was revoked before its key was saved");
+          try {
+            await setAccount(d.root(), account.id, {
+              auth: "expired",
+              keyEpoch: randomUUID(),
+              credentialKind: credentialKind(input.token!.trim()),
+            });
+            await keychain.put(account.id, input.token!.trim());
+          } catch (e) {
+            return refused(
+              plain(
+                e,
+                "The key could not be verified. The account stays blocked; replace or revoke its key.",
+              ),
+            );
+          }
+          await setAccount(d.root(), account.id, {
+            credentialKind: credentialKind(input.token!.trim()),
+            auth: "ok",
+          });
+          return ok("Added. New Claude sessions can use it now.");
         });
-        return ok("Added. New Claude sessions can use it now.");
       }
       signIn(account.id);
       return ok(
         "A browser sign-in opened on the Mac that runs this host. The account is ready when it finishes.",
       );
     },
-    async update(input: {
-      id: string;
-      name?: string;
-      enabled?: boolean;
-      priority?: number;
-      clearLimit?: true;
-      budget?: { limitUsd: number; startAt: string };
-      token?: string;
-      signIn?: true;
-      remove?: true;
-      move?: "up" | "down";
-    }) {
-      const a = (await readAccountsAsync(d.root())).accounts.find((x) => x.id === input.id);
-      if (!a) return refused("No such account");
-      try {
-        if (input.move) {
-          await moveAccount(d.root(), a.id, input.move);
-          return ok();
+    async update(
+      input: {
+        id: string;
+        name?: string;
+        enabled?: boolean;
+        priority?: number;
+        clearLimit?: true;
+        budget?: { limitUsd: number; startAt: string };
+        token?: string;
+        signIn?: true;
+        remove?: true;
+        revoke?: true;
+        move?: "up" | "down";
+      },
+      _paseo?: Paseo,
+    ) {
+      return withCredentialLock(d.root(), input.id, async () => {
+        const a = (await readAccountsAsync(d.root())).accounts.find((x) => x.id === input.id);
+        if (!a) return refused("No such account");
+        try {
+          if (input.move) {
+            await moveAccount(d.root(), a.id, input.move);
+            return ok();
+          }
+          if (input.revoke) {
+            if (!isApiAccount(a)) return refused("Only API keys can be revoked here");
+            await revokeLocalAccount(d.root(), a.id, now());
+            const results = await Promise.allSettled([
+              keychain.remove(a.id),
+              waitForApiRuntimes(d.root(), a.id),
+            ]);
+            if (results.some((r) => r.status === "rejected"))
+              return refused(
+                "The account is blocked. Retry revoke to remove its key and confirm all API processes stopped.",
+              );
+            return ok(
+              "Revoked locally. API processes stopped. Revoke the key in Claude Console to invalidate it everywhere.",
+            );
+          }
+          if (input.remove) {
+            if (a.provider === "claude") await keychain.remove(a.id);
+            else fs.rmSync(codexHome(d.root(), a.id), { recursive: true, force: true });
+            await removeAccount(d.root(), a.id);
+            return ok("Removed. Sessions using it move to another account at their next launch.");
+          }
+          if (input.token !== undefined) {
+            if (a.provider !== "claude") return refused("A Codex account signs in in the browser");
+            // Deny old helpers before the secret changes. A failed readback leaves this generation blocked.
+            await setAccount(d.root(), a.id, { auth: "expired", keyEpoch: randomUUID() });
+            await waitForApiRuntimes(d.root(), a.id);
+            await keychain.put(a.id, input.token.trim());
+            await setAccount(d.root(), a.id, {
+              auth: "ok",
+              localRevoked: false,
+              credentialKind: credentialKind(input.token.trim()),
+            });
+          }
+          if (input.signIn) {
+            if (a.provider !== "codex") return refused("Replace a Claude account's token instead");
+            signIn(a.id);
+          }
+          const patch: Record<string, unknown> = {};
+          for (const k of ["name", "enabled", "priority", "clearLimit", "budget"] as const)
+            if (input[k] !== undefined) patch[k] = input[k];
+          if (Object.keys(patch).length) await setAccount(d.root(), a.id, patch);
+          return ok(
+            input.signIn ? "A browser sign-in opened on the Mac that runs this host." : null,
+          );
+        } catch (e) {
+          return refused(plain(e, "The account could not be changed"));
         }
-        if (input.remove) {
-          if (a.provider === "claude") await keychain.remove(a.id);
-          else fs.rmSync(codexHome(d.root(), a.id), { recursive: true, force: true });
-          await removeAccount(d.root(), a.id);
-          return ok("Removed. Sessions using it move to another account at their next launch.");
-        }
-        if (input.token !== undefined) {
-          if (a.provider !== "claude") return refused("A Codex account signs in in the browser");
-          await keychain.put(a.id, input.token.trim());
-          await setAccount(d.root(), a.id, {
-            auth: "ok",
-            credentialKind: credentialKind(input.token.trim()),
-          });
-        }
-        if (input.signIn) {
-          if (a.provider !== "codex") return refused("Replace a Claude account's token instead");
-          signIn(a.id);
-        }
-        const patch: Record<string, unknown> = {};
-        for (const k of ["name", "enabled", "priority", "clearLimit", "budget"] as const)
-          if (input[k] !== undefined) patch[k] = input[k];
-        if (Object.keys(patch).length) await setAccount(d.root(), a.id, patch);
-        return ok(input.signIn ? "A browser sign-in opened on the Mac that runs this host." : null);
-      } catch (e) {
-        return refused(plain(e, "The account could not be changed"));
-      }
+      });
     },
     async session(input: { agentId: string }, paseo: Paseo): Promise<SessionAccountsView> {
       readable();
@@ -401,10 +450,10 @@ export function createAccountHandlers(d: Deps) {
         const reply = await add(input);
         return { reply, audit: { action: "add", accountLabel: input.name.trim() } };
       }),
-    update: (input: Parameters<typeof update>[0]) =>
+    update: (input: Parameters<typeof update>[0], paseo?: Paseo) =>
       gate(async () => {
         const before = await nameOf(input.id),
-          reply = await update(input);
+          reply = await update(input, paseo);
         return {
           reply,
           audit: before

@@ -1,0 +1,81 @@
+# Claude API key storage
+
+Fulcra stores pooled Claude API keys in the macOS Keychain or Windows DPAPI storage.
+Other platforms refuse API key launches.
+The key reaches Claude through `apiKeyHelper` stdout.
+The helper command contains account references and fixed code only.
+API keys do not enter launch arguments, launch environments, chat environments, or session settings.
+Subscription token transport and Codex authentication use their existing paths.
+
+The helper checks account state before and after each store read.
+Credential writes and revokes run one at a time for each account.
+Replacement blocks the account and changes its generation before the OS store write.
+A disabled, revoked, missing, replaced, or reassigned account cannot supply a key.
+Account replacement changes the credential generation.
+Old helper commands cannot read the replacement key.
+The daemon removes inherited authentication variables and copied API key values from pooled API launches.
+It refuses native settings that supply authentication or conflict with the helper.
+Other native settings keep their normal behavior.
+The preflight uses the SDK settings resolver for managed files, MDM, registry, and cached server settings.
+It refuses a managed policy helper because the resolver cannot inspect its future output.
+Pooled API settings cannot replace the helper or inject authentication through settings `env`.
+
+## Revoke a key locally
+
+Run `fulcra account revoke <name-or-id>`.
+The command blocks the account first, removes its stored credential, and stops its API processes.
+Session history remains available.
+Running one-shot calls stop when account state becomes unavailable.
+If deletion or process stopping fails, the command reports failure and keeps the account blocked.
+Run the same command again to complete removal.
+
+Local revoke does not invalidate the provider's key.
+Use Claude Console to revoke the key for all applications and machines.
+An HTTP request already accepted by the provider can finish.
+Runtime stop checks use process leases and private stop channels, independent of bounded assignment history.
+The channel carries a stop capability and a completion reply. It never carries an API key.
+An uncertain lease after a crash causes a stop failure; it never counts as proof that a process ended.
+A stale credential lock also fails closed and needs operator inspection before removal.
+
+## Storage before this change
+
+The base account implementation uses these locations:
+
+| Data                      | Location                                                                                |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| macOS pooled Claude key   | Keychain generic password, service `Fulcra account`, account UUID                       |
+| Windows pooled Claude key | `<Command Centre home>/accounts/secrets/<UUID>.dpapi`, protected with DPAPI CurrentUser |
+| Account metadata          | `<Command Centre home>/accounts/accounts.json`; no credential field                     |
+| Interactive API transport | `ANTHROPIC_API_KEY` in the Claude launch environment                                    |
+| One-shot API transport    | `ANTHROPIC_API_KEY` in the one-shot Claude environment                                  |
+
+The previous hook supplied launch credentials without saving them in account metadata.
+The previous process environment exposed keys to process inspection and child tools.
+Provider configuration can also contain user-supplied environment values.
+Native Claude user, project, local, or managed settings can contain an authentication `env` map.
+Those values can remain in provider configuration files and native shell snapshots.
+Shell profiles, service definitions, shell history, copied diagnostics, and prior external scripts need separate operator inspection.
+This change does not inspect or modify those live locations.
+
+## Move existing keys safely
+
+1. Stop the affected sessions and one-shot calls.
+2. Revoke the old API key in Claude Console.
+3. Remove old API authentication entries from provider settings, shell profiles, and service definitions.
+4. Remove exposed environment values from provider configuration.
+5. Treat old process captures, logs, chat records, and backups as exposed data.
+6. Create a replacement key in Claude Console.
+7. Enter the replacement through Settings → Accounts on the trusted host connection.
+8. Start a new session with that account.
+
+Do not paste keys into a chat, terminal command, environment variable, or helper script.
+Do not export a live Keychain item or decrypt a live DPAPI file to perform this migration.
+Existing protected items need no export or relocation.
+Fulcra uses them through the helper after the update.
+Rotate any key previously exposed through an environment or file.
+
+Native setting behavior follows [Claude settings precedence](https://code.claude.com/docs/en/settings) and [authentication precedence](https://code.claude.com/docs/en/authentication).
+
+The OS account remains a trust boundary.
+Programs with that user's Keychain or DPAPI access can request credentials directly.
+`apiKeyHelper` removes accidental file and environment transport; it does not isolate hostile programs with equal OS access.

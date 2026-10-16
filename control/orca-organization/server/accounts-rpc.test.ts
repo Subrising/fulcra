@@ -434,3 +434,224 @@ test("remote account switch and explicit takeover audit operation intent; revoke
   assert.equal(continued.length, 2);
   assert.equal(audit.length, 2);
 });
+
+for (const fail of [false, true]) {
+  test(`one-step revoke blocks before deletion and preserves archive safety (delete failure: ${fail})`, async (t) => {
+    const root = scratch();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const a = await addAccount(root, { provider: "claude", name: "API fixture" });
+    const { update, accountStatus } = await import("./accounts.mjs");
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    await update(root, (s) => {
+      s.assignments["test-session"] = {
+        accountId: a.id,
+        provider: "claude",
+        at: new Date().toISOString(),
+        ended: false,
+      };
+    });
+    let deletes = 0,
+      archives = 0;
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      keychain: {
+        put: async () => {},
+        get: async () => null,
+        remove: async () => {
+          assert.equal(accountStatus(readAccounts(root).accounts[0]).state, "revoked");
+          deletes++;
+          if (fail) throw Error("synthetic private store failure");
+        },
+      },
+    });
+    const p = {
+      agents: {
+        ref: () => ({
+          current: () => ({ provider: "claude" }),
+          archive: async () => {
+            archives++;
+          },
+        }),
+      },
+    };
+    const result = await asOwner(() => h.update({ id: a.id, revoke: true }, p));
+    assert.equal(result.ok, !fail);
+    assert.equal(accountStatus(readAccounts(root).accounts[0]).state, "revoked");
+    assert.equal(deletes, 1);
+    assert.equal(archives, 0);
+    assert.equal(JSON.stringify(result).includes("synthetic private"), false);
+    if (fail) {
+      assert.match(result.message!, /Retry revoke/);
+      const epoch = readAccounts(root).accounts[0].keyEpoch;
+      await asOwner(() => h.update({ id: a.id, clearLimit: true, enabled: true }));
+      await asOwner(() => h.update({ id: a.id, enabled: false }));
+      await asOwner(() => h.update({ id: a.id, enabled: true }));
+      assert.equal(accountStatus(readAccounts(root).accounts[0]).state, "revoked");
+      assert.equal(readAccounts(root).accounts[0].localRevoked, true);
+      assert.equal(readAccounts(root).accounts[0].keyEpoch, epoch);
+    }
+    const denied = await withManagementInvocation(
+      { management: { ...OWNER.management, accountsManage: false } },
+      false,
+      () => h.update({ id: a.id, revoke: true }, p),
+    );
+    assert.equal(denied.ok, false);
+    assert.equal(deletes, 1);
+  });
+}
+
+function latch() {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+for (const first of ["replace", "revoke"] as const) {
+  test(`credential operations are serialized across readback: ${first} starts first`, async (t) => {
+    const root = scratch();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const a = await addAccount(root, { provider: "claude", name: "API fixture" });
+    await setAccount(root, a.id, {
+      credentialKind: "api-key",
+      keyEpoch: "00000000-0000-4000-8000-000000000001",
+    });
+    const entered = latch(),
+      release = latch();
+    const events: string[] = [];
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      keychain: {
+        get: async () => null,
+        put: async () => {
+          events.push("put");
+          assert.equal(readAccounts(root).accounts[0].auth, "expired");
+          assert.notEqual(
+            readAccounts(root).accounts[0].keyEpoch,
+            "00000000-0000-4000-8000-000000000001",
+          );
+          if (first === "replace") {
+            entered.open();
+            await release.promise;
+          }
+        },
+        remove: async () => {
+          events.push("remove");
+          if (first === "revoke") {
+            entered.open();
+            await release.promise;
+          }
+        },
+      },
+    });
+    const replace = () =>
+      asOwner(() => h.update({ id: a.id, token: "sk-ant-api03-SYNTHETIC-REPLACEMENT-ONLY" }));
+    const revoke = () => asOwner(() => h.update({ id: a.id, revoke: true }));
+    const pending = first === "replace" ? replace() : revoke();
+    await entered.promise;
+    const next = first === "replace" ? revoke() : replace();
+    release.open();
+    assert.equal((await pending).ok, true);
+    assert.equal((await next).ok, true);
+    assert.deepEqual(events, first === "replace" ? ["put", "remove"] : ["remove", "put"]);
+    assert.equal(readAccounts(root).accounts[0].localRevoked, first === "replace");
+  });
+}
+
+test("failed replacement readback cannot restore availability or an old credential generation", async (t) => {
+  const root = scratch();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const a = await addAccount(root, { provider: "claude", name: "API fixture" });
+  await setAccount(root, a.id, {
+    credentialKind: "api-key",
+    keyEpoch: "00000000-0000-4000-8000-000000000001",
+  });
+  const h = createAccountHandlers({
+    root: () => root,
+    configRoles: () => null,
+    keychain: {
+      get: async () => null,
+      remove: async () => {},
+      put: async () => {
+        throw Error("synthetic readback failure");
+      },
+    },
+  });
+  assert.equal(
+    (await asOwner(() => h.update({ id: a.id, token: "sk-ant-api03-SYNTHETIC-REPLACEMENT-ONLY" })))
+      .ok,
+    false,
+  );
+  const current = readAccounts(root).accounts[0];
+  assert.equal(current.auth, "expired");
+  assert.notEqual(current.keyEpoch, "00000000-0000-4000-8000-000000000001");
+});
+
+test(
+  "native old helpers cannot read a replacement during readback or recover a failed local revoke",
+  { skip: !["darwin", "win32"].includes(process.platform), timeout: 90000 },
+  async (t) => {
+    const { scratchKeychain } = await import("./scratch-keychain.fixture.mjs");
+    const { apiKeyHelperCommand } = await import("./api-key-helper.mjs");
+    const { exec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { randomUUID } = await import("node:crypto");
+    const root = scratch();
+    const { store, env } = scratchKeychain(root);
+    const a = await addAccount(root, { provider: "claude", name: "API native fixture" });
+    t.after(async () => {
+      await store.remove(a.id);
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+    const oldEpoch = randomUUID();
+    const first = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    const second = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    await store.put(a.id, first);
+    await setAccount(root, a.id, { credentialKind: "api-key", keyEpoch: oldEpoch });
+    const command = apiKeyHelperCommand({ root, id: a.id, epoch: oldEpoch, env });
+    const run = () =>
+      promisify(exec)(command, {
+        env: { HOME: process.env.HOME, SystemRoot: process.env.SystemRoot, PATH: process.env.PATH },
+        timeout: 20000,
+      });
+    assert.equal((await run()).stdout === first, true);
+    const entered = latch(),
+      release = latch();
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      keychain: {
+        ...store,
+        put: async (id, key) => {
+          await store.put(id, key);
+          entered.open();
+          await release.promise;
+          throw Error("synthetic readback failure");
+        },
+        remove: async () => {
+          throw Error("synthetic deletion refusal");
+        },
+      },
+    });
+    const replace = asOwner(() => h.update({ id: a.id, token: second }));
+    await entered.promise;
+    try {
+      assert.equal((await store.get(a.id)) === second, true);
+      await assert.rejects(
+        run,
+        (error: any) =>
+          !String(error.stdout).includes(first) && !String(error.stdout).includes(second),
+      );
+    } finally {
+      release.open();
+    }
+    assert.equal((await replace).ok, false);
+    assert.equal((await asOwner(() => h.update({ id: a.id, revoke: true }))).ok, false);
+    await asOwner(() => h.update({ id: a.id, clearLimit: true, enabled: true }));
+    await assert.rejects(run, (error: any) => !String(error.stdout).includes(second));
+    assert.equal((await store.get(a.id)) === second, true);
+    assert.equal(readAccounts(root).accounts[0].localRevoked, true);
+  },
+);

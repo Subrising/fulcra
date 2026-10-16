@@ -47,3 +47,18 @@ The limit test runs a scratch CLI through `askOnce` before it accepts a limit ma
 The resume-cost test uses actual Claude CLI processes with a loopback API and synthetic keys.
 It makes no external provider request and does not read live credentials.
 It skips when no native Claude CLI exists. Run it on a host with the CLI before accepting cost changes.
+
+For API key storage changes, run the protected transport checks:
+
+```sh
+node --test control/orca-organization/server/accounts.test.mjs control/orca-organization/server/ask.test.mjs control/orca-organization/server/claude-resume-cost.test.mjs
+node --import tsx --test control/orca-organization/server/accounts-rpc.test.ts
+npx vitest run --maxWorkers=1 packages/server/src/server/agent/providers/claude/claude-launch-credential.test.ts packages/server/src/server/agent/providers/claude/agent.spawn.test.ts packages/cli/src/commands/account.test.ts
+```
+
+Run native store tests on macOS or Windows. Use fake keys and scratch stores only.
+The macOS fixture calls `SecKeychainCreate` without changing the default Keychain or search list.
+The real CLI test uses a loopback API and scans actual session files for its fake key.
+The SDK test captures arguments, environment, settings, and logs.
+Revoke tests cover permission refusal, successful removal, failed removal, replacement races, persistent local revocation, and process stop acknowledgements.
+The spawn tests cover pruned assignments, switched but running processes, copied environment values, and native settings conflicts.

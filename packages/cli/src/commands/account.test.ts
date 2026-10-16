@@ -95,3 +95,22 @@ describe("account commands", () => {
     expect(statusReason({ state: "revoked" })).toBe("token revoked or invalid");
   });
 });
+
+it("revokes an account in one management request and returns deletion failures", async () => {
+  const { revokeAccount } = await import("./account.js");
+  const calls: unknown[] = [];
+  const client = {
+    fetchAgent: async () => null,
+    invokePluginRpc: async (_plugin: string, method: string, input: unknown) => {
+      calls.push({ method, input });
+      return method === "organization.accounts"
+        ? { accounts: [{ id: "account-id", name: "API fixture", status: { state: "ok" } }] }
+        : { ok: false, message: "The account is blocked. Retry revoke." };
+    },
+  };
+  await expect(revokeAccount(client, "API fixture")).rejects.toThrow("Retry revoke");
+  expect(calls).toEqual([
+    { method: "organization.accounts", input: {} },
+    { method: "organization.accounts.update", input: { id: "account-id", revoke: true } },
+  ]);
+});

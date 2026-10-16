@@ -1,3 +1,5 @@
+import { guardClaudeApiRuntime } from "./api-key-runtime.js";
+import { assertSafeClaudeApiSettings, assertClaudeApiCommand } from "./api-key-settings.js";
 import { trustedClaudeDenyRules } from "../../../plugins/trusted.js";
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { query, type Options, type Query, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
@@ -8,7 +10,7 @@ import {
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
 import { buildSelfNodeCommand } from "../../../paseo-env.js";
-import { spawnProcess } from "../../../../utils/spawn.js";
+import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
 
 // Keep the raw SDK query import in this module only. Claude process launch behavior
 // must stay shared between production and tests so Windows .cmd/.bat handling cannot
@@ -24,6 +26,20 @@ export interface ClaudeQueryContext {
   queryFactory?: ClaudeQueryFactory;
   /** Called with the spawned child process so the caller can tree-kill it on close. */
   onChildProcess?: (child: ChildProcess) => void;
+}
+
+// Apply this at the final spawn boundary too: the SDK and runtime overlays rebuild the environment.
+export function sanitizeClaudeApiEnv(env: Record<string, string | undefined>): void {
+  for (const name of Object.keys(env)) {
+    if (
+      /^(ANTHROPIC_|CLAUDE_CODE_OAUTH_TOKEN$|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY)$|FULCRA_API_KEY_)/i.test(
+        name,
+      ) ||
+      /sk-ant-api/i.test(name) ||
+      /sk-ant-api/i.test(env[name] ?? "")
+    )
+      delete env[name];
+  }
 }
 
 function isChildProcessWithStreams(child: ChildProcess): child is ChildProcessWithoutNullStreams {
@@ -55,6 +71,20 @@ function resolveClaudeSpawnCommand(
   };
 }
 
+function prepareApiKeyGuard(
+  launchEnv: Record<string, string> | undefined,
+  cwd: string | undefined,
+  env: Record<string, string>,
+  args: string[],
+) {
+  if (!launchEnv?.FULCRA_API_KEY_HELPER) return null;
+  assertClaudeApiCommand(args, launchEnv.FULCRA_API_KEY_HELPER);
+  assertSafeClaudeApiSettings(cwd ?? process.cwd(), env);
+  if (args.some((arg) => /sk-ant-api/i.test(arg)))
+    throw new Error("Remove API keys from the Claude command arguments");
+  return guardClaudeApiRuntime(launchEnv.FULCRA_API_KEY_ACCOUNT);
+}
+
 function applyRuntimeSettingsToClaudeOptions(
   options: ClaudeOptions,
   context: ClaudeQueryContext,
@@ -69,7 +99,8 @@ function applyRuntimeSettingsToClaudeOptions(
       // PATH lookup failures in the managed runtime bundle.
       // When the SDK passes a native binary path (from pathToClaudeCodeExecutable)
       // or the user overrides the command via runtime settings, use that directly.
-      const isDefaultRuntime = resolved.command === "node" || resolved.command === "bun";
+      const isDefaultRuntime = ["node", "bun"].includes(resolved.command);
+      const api = Boolean(launchEnv?.FULCRA_API_KEY_HELPER);
       const providerEnvSpec = createProviderEnvSpec({
         baseEnv: spawnOptions.env,
         runtimeSettings,
@@ -80,23 +111,34 @@ function applyRuntimeSettingsToClaudeOptions(
         runtimeSettings,
         overlays: [launchEnv],
       });
+      if (api) sanitizeClaudeApiEnv(providerEnv);
       const selfNodeCommand = isDefaultRuntime
         ? buildSelfNodeCommand(resolved.args, providerEnv)
         : null;
+      if (api && selfNodeCommand) sanitizeClaudeApiEnv(selfNodeCommand.env);
       const command = selfNodeCommand?.command ?? resolved.command;
       const args = selfNodeCommand?.args ?? resolved.args;
-      const child = spawnProcess(command, args, {
-        cwd: spawnOptions.cwd,
-        ...(selfNodeCommand
-          ? { env: selfNodeCommand.env, envMode: "internal" as const }
-          : providerEnvSpec),
-        signal: spawnOptions.signal,
-        stdio: ["pipe", "pipe", "pipe"],
-        // Bypass cmd.exe on Windows: the SDK passes --mcp-config with inline JSON
-        // containing double quotes, which cmd.exe mangles (strips quotes, breaks parsing).
-        // The command is always a resolved binary path, so shell routing is unnecessary.
-        shell: false,
-      });
+      const guard = prepareApiKeyGuard(launchEnv, spawnOptions.cwd, providerEnv, args);
+      let spawnEnv: SpawnProcessOptions = providerEnvSpec;
+      if (api) spawnEnv = { baseEnv: providerEnv, envOverlay: {} };
+      if (selfNodeCommand) spawnEnv = { env: selfNodeCommand.env, envMode: "internal" };
+      let child: ChildProcess;
+      try {
+        child = spawnProcess(command, args, {
+          cwd: spawnOptions.cwd,
+          ...spawnEnv,
+          signal: spawnOptions.signal,
+          stdio: ["pipe", "pipe", "pipe"],
+          // Bypass cmd.exe on Windows: the SDK passes --mcp-config with inline JSON
+          // containing double quotes, which cmd.exe mangles (strips quotes, breaks parsing).
+          // The command is always a resolved binary path, so shell routing is unnecessary.
+          shell: false,
+        });
+      } catch (error) {
+        guard?.close();
+        throw error;
+      }
+      guard?.attach(child);
       onChildProcess?.(child);
       if (typeof options.stderr === "function") {
         child.stderr?.on("data", (chunk: Buffer | string) => {

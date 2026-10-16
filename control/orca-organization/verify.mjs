@@ -101,6 +101,9 @@ files.push("client/inbox-model.ts", "client/inbox-model.test.ts");
 // Update-7: the account pool, rotation, role defaults, orchestration, Accounts & models.
 files.push(
   "server/accounts.mjs",
+  "server/api-key-helper.mjs",
+  "server/api-runtime-channel.mjs",
+  "server/scratch-keychain.fixture.mjs",
   "server/account-billing.mjs",
   "server/account-billing.d.mts",
   "server/account-billing.test.mjs",

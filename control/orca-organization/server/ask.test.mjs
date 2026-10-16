@@ -835,3 +835,52 @@ test("a depth cutoff fails structured output instead of returning a changed sche
   });
   assert.deepEqual((await run(ok("", { structured_output: {}, modelUsage: deep }))).output, {});
 });
+
+test(
+  "revoking an API account stops a running one-shot process without exposing its key",
+  { ...posix, skip: process.platform !== "darwin", timeout: 90000 },
+  async () => {
+    const { scratchKeychain } = await import("./scratch-keychain.fixture.mjs");
+    const { markAccountRevoked, setAccount, waitForApiRuntimes } = await import("./accounts.mjs");
+    const { root, a } = await pool();
+    const { store, env } = scratchKeychain(root);
+    const key = `sk-ant-api03-${a.id}-${a.id}`;
+    await store.put(a.id, key);
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const marker = path.join(root, "started.json");
+    const { file } = fakeClaude(`
+    (await import('node:fs')).writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ argv: process.argv, env: process.env }));
+    setTimeout(() => process.stdout.write(JSON.stringify({result: 'late'})), 30000);
+  `);
+    let observer;
+    const started = new Promise((resolve, reject) => {
+      observer = fs.watch(root, (_event, name) => {
+        if (name === "started.json") resolve();
+      });
+      observer.on("error", reject);
+    });
+    try {
+      const pending = spawnClaudeOnce({
+        token: key,
+        root,
+        accountId: a.id,
+        model: "claude-haiku-5-5",
+        prompt: "x",
+        timeoutMs: 10000,
+        bin: file,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
+      }).then(
+        () => "unexpected success",
+        (e) => e.code,
+      );
+      await started;
+      assert.equal(fs.readFileSync(marker, "utf8").includes(key), false);
+      await markAccountRevoked(root, a.id);
+      await waitForApiRuntimes(root, a.id);
+      assert.equal(await pending, "ACCOUNT_REVOKED");
+    } finally {
+      observer.close();
+      await store.remove(a.id);
+    }
+  },
+);

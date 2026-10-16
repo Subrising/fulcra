@@ -1108,3 +1108,74 @@ test("a revoked token moves a session at once even when moving on a limit is off
   assert.equal(accountOf(readAccounts(root), S(7)).id, b.id);
   assert.equal(readAccounts(root).accounts.find((x) => x.id === a.id).limitedUntil, null);
 });
+
+// Real native store, fake key. The helper is the only subprocess allowed to output it.
+test(
+  "API helper uses a native scratch store and refuses stale, disabled and revoked accounts",
+  {
+    skip: !["darwin", "win32"].includes(process.platform),
+    timeout: 90000,
+  },
+  async (t) => {
+    const { exec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { apiKeyHelperCommand } = await import("./api-key-helper.mjs");
+    const { scratchKeychain } = await import("./scratch-keychain.fixture.mjs");
+    const root = scratch();
+    const { store, env } = scratchKeychain(root);
+    const a = await addAccount(root, { provider: "claude", name: "API fixture" });
+    const key = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    t.after(async () => {
+      await store.remove(a.id);
+    });
+    await store.put(a.id, key);
+    await setAccount(root, a.id, { credentialKind: "api-key" });
+    const command = apiKeyHelperCommand({ root, id: a.id, env });
+    assert.equal(command.includes(key), false);
+    const runHelper = () =>
+      promisify(exec)(command, {
+        env: { HOME: process.env.HOME, SystemRoot: process.env.SystemRoot, PATH: process.env.PATH },
+        timeout: 20000,
+      });
+    const result = await runHelper();
+    assert.equal(result.stdout === key, true);
+    assert.equal(result.stderr, "");
+    await setAccount(root, a.id, { enabled: false });
+    await assert.rejects(
+      runHelper,
+      (e) => !String(e.stdout).includes(key) && !String(e.stderr).includes(key),
+    );
+    await setAccount(root, a.id, { enabled: true, keyEpoch: randomUUID() });
+    await assert.rejects(runHelper);
+    await markAccountRevoked(root, a.id);
+    await assert.rejects(runHelper);
+    await store.remove(a.id);
+    assert.equal(await store.get(a.id), null);
+    const json = fs.readFileSync(path.join(root, "accounts/accounts.json"), "utf8");
+    assert.equal(json.includes(key), false);
+  },
+);
+
+test(
+  "API launch records contain only account references and the helper, including copied authentication values",
+  { skip: !["darwin", "win32"].includes(process.platform) },
+  async () => {
+    const root = scratch();
+    const key = `sk-ant-api03-${randomUUID()}-${randomUUID()}`;
+    const a = await addAccount(root, { provider: "claude", name: "API fixture" });
+    const hook = sessionOpenHook({ root: () => root, keychain: { get: async () => key } });
+    const out = await hook({
+      request: {
+        agentId: S(1),
+        provider: "claude",
+        purpose: "interactive",
+        env: { ANTHROPIC_API_KEY: key, COPY: key },
+      },
+    });
+    assert.equal(JSON.stringify(out).includes(key), false);
+    assert.equal(JSON.stringify(readAccounts(root)).includes(key), false);
+    assert.equal(out.env.ANTHROPIC_API_KEY, "");
+    assert.equal(typeof out.env.FULCRA_API_KEY_HELPER, "string");
+    assert.equal(out.env.FULCRA_ACCOUNT_ID, a.id);
+  },
+);
