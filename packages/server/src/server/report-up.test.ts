@@ -105,7 +105,8 @@ function fixture(
     ...(options.ledgerDir ? { ledgerDir: options.ledgerDir } : {}),
     readLedger:
       options.readLedger ??
-      (() => (options.ledgerDir ? readOpenLedgerRows(options.ledgerDir) : (options.ledger ?? []))),
+      (() =>
+        options.ledgerDir ? readOpenLedgerRows(options.ledgerDir, true) : (options.ledger ?? [])),
     setTimer: (run, ms) => timers.push({ run, ms }),
     deliver: async (leadId, prompt) => {
       await options.deliver?.(leadId, prompt);
@@ -1380,27 +1381,181 @@ describe("idle-lead nudge", () => {
     },
   );
 
-  test("a ledger event makes a stopped lead eligible again", async () => {
+  test("ledger changes only re-arm a stopped lead whose owned READY rows grew", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nudge-stopped-ledger-"));
     mkdirSync(join(dir, "fixture"));
     const file = join(dir, "fixture", "OPEN-ITEMS.md");
+    const peer = { ...lead, id: "33333333-3333-4333-8333-333333333333", title: "Peer" };
+    const row = (id: string, owner: string, status = "OPEN", evidence = "—") =>
+      `| ${id} | Work | FIX | ${owner} | ${status} | ${evidence} | fixture |\n`;
+    const initial = row("FX-1", "Lead (11111111)") + row("FX-2", "Peer (33333333)");
+    writeFileSync(file, initial);
+    const g = fixture([lead, peer], { ledgerDir: dir, enabled: false });
+    const update = async (text: string) => {
+      writeFileSync(file, text);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await g.settle();
+    };
+    try {
+      await g.service.prepareLedgerObservation();
+      for (const id of [LEAD, peer.id]) {
+        g.stream(id, { type: "turn_started" });
+        g.stream(id, { type: "turn_canceled" });
+      }
+      await g.settle();
+      expect(g.delivered).toEqual([]);
+      await update(initial + row("FX-3", "Other"));
+      expect(g.delivered).toEqual([]);
+      await update(
+        row("FX-1", "Lead (11111111)", "OPEN", "Changed") +
+          row("FX-2", "Peer (33333333)", "BLOCKED"),
+      );
+      expect(g.delivered).toEqual([]);
+      await update(initial);
+      expect(g.delivered).toEqual([]);
+      await update(initial + row("FX-4", "Lead (11111111)"));
+      expect(g.delivered).toHaveLength(1);
+      expect(g.delivered[0]!.leadId).toBe(LEAD);
+      expect(g.delivered[0]!.prompt).toContain("FX-1, FX-4");
+      await update(initial + row("FX-4", "Lead (11111111)"));
+      expect(g.delivered).toHaveLength(1);
+      await update(initial + row("FX-4", "Lead (11111111)") + row("FX-5", "Peer (33333333)"));
+      expect(g.delivered.map(({ leadId }) => leadId)).toEqual([LEAD, peer.id]);
+    } finally {
+      g.service.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed stop snapshot keeps the lead stopped when its ledger becomes readable", async () => {
+    let readable = false;
+    const ledger = [...owned];
+    const f = fixture([lead, idleWorker()], {
+      enabled: false,
+      readLedger: () => {
+        if (!readable) throw new Error("fixture ledger unavailable");
+        return ledger;
+      },
+    });
+    try {
+      f.stream(LEAD, { type: "turn_started" });
+      f.stream(LEAD, { type: "turn_canceled" });
+      await f.settle();
+      readable = true;
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      ledger.push({ ...owned[0]!, id: "FU-13" });
+      f.turn(WORKER);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("FU-12, FU-13");
+    } finally {
+      f.service.stop();
+    }
+  });
+
+  test("a stopped lead uses its validated snapshot while a newer read waits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nudge-stop-snapshot-"));
+    mkdirSync(join(dir, "fixture"));
+    const ledger = [...owned];
+    let delay = false;
+    let entered!: () => void;
+    let release!: (rows: typeof owned) => void;
     let wake!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pending = new Promise<typeof owned>((resolve) => {
+      release = resolve;
+    });
     const delivered = new Promise<void>((resolve) => {
       wake = resolve;
     });
-    const g = fixture([lead], { ledgerDir: dir, enabled: false, deliver: async () => wake() });
+    const f = fixture([lead], {
+      ledgerDir: dir,
+      enabled: false,
+      deliver: async () => wake(),
+      readLedger: () => {
+        if (delay) {
+          delay = false;
+          entered();
+          return pending;
+        }
+        return ledger;
+      },
+    });
     try {
-      g.stream(LEAD, { type: "turn_started" });
-      g.stream(LEAD, { type: "turn_canceled" });
-      await g.settle();
-      expect(g.delivered).toEqual([]);
-      writeFileSync(file, "| FX-1 | Work | FIX | Lead (11111111) | OPEN | — | fixture |\n");
+      await f.service.prepareLedgerObservation();
+      delay = true;
+      f.stream(LEAD, { type: "turn_started" });
+      f.stream(LEAD, { type: "turn_canceled" });
+      await reading;
+      ledger.push({ ...owned[0]!, id: "FU-13" });
+      writeFileSync(join(dir, "fixture", "OPEN-ITEMS.md"), "changed");
       await delivered;
-      await g.settle();
-      expect(g.delivered).toHaveLength(1);
-      expect(g.delivered[0]!.leadId).toBe(LEAD);
+      release(ledger);
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("FU-12, FU-13");
     } finally {
-      g.service.stop();
+      release([]);
+      f.service.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an invalidated stop snapshot recovers before later READY growth", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nudge-invalidated-stop-"));
+    mkdirSync(join(dir, "fixture"));
+    const file = join(dir, "fixture", "OPEN-ITEMS.md");
+    const ledger = [...owned];
+    let release!: (rows: typeof owned) => void;
+    let revised!: () => void;
+    let wake!: () => void;
+    let reads = 0;
+    const pending = new Promise<typeof owned>((resolve) => {
+      release = resolve;
+    });
+    const newerRead = new Promise<void>((resolve) => {
+      revised = resolve;
+    });
+    const delivered = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    const f = fixture([lead], {
+      ledgerDir: dir,
+      enabled: false,
+      deliver: async () => wake(),
+      readLedger: () => {
+        reads++;
+        if (reads === 1) return pending;
+        if (reads >= 3) revised();
+        return ledger;
+      },
+    });
+    try {
+      f.stream(LEAD, { type: "turn_started" });
+      f.stream(LEAD, { type: "turn_canceled" });
+      await f.settle();
+      ledger.push({ ...owned[0]!, id: "FU-13" });
+      writeFileSync(file, "first change");
+      await newerRead;
+      release(owned);
+      await f.settle();
+      expect(f.delivered).toEqual([]);
+      ledger.push({ ...owned[0]!, id: "FU-14" });
+      writeFileSync(file, "second change");
+      await delivered;
+      await f.settle();
+      expect(f.delivered).toHaveLength(1);
+      expect(f.delivered[0]!.prompt).toContain("FU-12, FU-13, FU-14");
+    } finally {
+      release([]);
+      f.service.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });

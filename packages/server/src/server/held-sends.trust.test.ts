@@ -744,6 +744,55 @@ test("an owner's message without provenance is still held while the chat is busy
   expect(f.pending()).toBe(1);
 });
 
+test("archive combines all queued messages per sender and retries do not repeat notices", async () => {
+  const f = await fixture("codex");
+  const peer = await f.manager.createAgent(
+    { provider: "codex", model: "fixture-model", cwd: f.sender.config.cwd },
+    undefined,
+    { workspaceId: undefined },
+  );
+  cleanup.push(() => f.host.daemon(() => f.manager.closeAgent(peer.id)));
+  f.busy.add(f.target.id);
+  for (let index = 0; index < 15; index++) {
+    await f.queue.enqueue(
+      f.target.id,
+      {
+        text: `queued ${index}`,
+        messageId: `archive-message-${index}`,
+        sender: { agentId: index < 13 ? f.sender.id : peer.id },
+        sessionMode: index % 2 === 0 ? "default" : "plan",
+      },
+      undefined,
+      Date.now() + 3600_000,
+    );
+  }
+  await f.host.daemon(() => f.manager.archiveAgent(f.target.id));
+  await f.endTurnIn((run) => f.host.daemon(run));
+  await vi.waitFor(() => expect(f.prompts).toHaveLength(2));
+  expect(f.prompts.map(String).sort()).toEqual([
+    expect.stringContaining("Your 13 messages"),
+    expect.stringContaining("Your 2 messages"),
+  ]);
+  const records = JSON.parse(await readFile(f.storage.heldMessagesPath, "utf8"));
+  expect(records).toHaveLength(15);
+  expect(records.every((record: { state: string }) => record.state === "refused")).toBe(true);
+  await f.queue.start();
+  await f.queue.close();
+  const restored = new QueuedAgentMessages({
+    agentManager: f.manager,
+    agentStorage: f.storage,
+    logger: f.logger,
+  });
+  try {
+    await restored.start();
+    await restored.start();
+    expect(restored.pending(f.target.id)).toBe(0);
+    expect(f.prompts).toHaveLength(2);
+  } finally {
+    await restored.close();
+  }
+});
+
 test.each([false, true])(
   "archive returns held Codex messages and keeps the session archived (owner queue: %s)",
   async (queueOwner) => {
