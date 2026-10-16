@@ -6,6 +6,10 @@ import fs from "fs";
 
 const appNodeModules = path.resolve(__dirname, "node_modules");
 const rootNodeModules = path.resolve(__dirname, "../../node_modules");
+const appTestWorkers = Number(process.env.APP_TEST_MAX_WORKERS ?? 2);
+if (!Number.isInteger(appTestWorkers) || appTestWorkers < 1) {
+  throw new Error("APP_TEST_MAX_WORKERS must be a positive integer");
+}
 const resolvePackageEntry = (packageName: string) => {
   const appPackagePath = path.resolve(appNodeModules, packageName);
   return fs.existsSync(appPackagePath)
@@ -83,7 +87,8 @@ export default defineConfig({
      * keeps `process.send` intact so the app tests can boot before hitting the intentional failures.
      */
     pool: "forks",
-    maxWorkers: 2,
+    // Project configuration takes precedence over Vitest's root CLI limit.
+    maxWorkers: appTestWorkers,
     server: {
       deps: {
         fallbackCJS: true,

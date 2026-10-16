@@ -138,7 +138,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server stack
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -201,7 +201,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -277,7 +277,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-deps-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -315,7 +315,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server stack
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -449,7 +449,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build app dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -462,6 +462,7 @@ jobs:
         run: npm run test --workspace=@getpaseo/app
         env:
           PASEO_SKIP_PROTOCOL_BUILD: "1"
+          APP_TEST_MAX_WORKERS: "4"
 
   sdk-tests:
     name: sdk-tests
@@ -480,7 +481,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build SDK dependencies
         if: steps.sdk-build.outputs.cache-hit != 'true'
@@ -535,13 +536,13 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
       - name: Restore exact web export
         id: web-build
         uses: actions/cache@v4
         with:
           path: packages/app/.e2e-web
-          key: browser-web-v2-${{ runner.os }}-${{ hashFiles('.github/scripts/export-browser-web.sh', 'package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/playwright.config.ts', '!packages/app/src/**/*.test.*', '!packages/app/src/**/*.spec.*', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: browser-web-v2-${{ runner.os }}-${{ hashFiles('.github/scripts/export-browser-web.sh', 'package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/app/src/**/*.test.*', '!packages/app/src/**/*.spec.*', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
       - name: Restore Metro transform cache
         uses: actions/cache@v4
         with:
@@ -1080,7 +1081,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-relay-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-relay-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build relay
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -1107,7 +1108,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build server dependencies
         if: steps.build-cache.outputs.cache-hit != 'true'
@@ -1142,7 +1143,7 @@ jobs:
           path: |
             packages/*/dist
             plugins/dist
-          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
+          key: build-v2-${{ runner.os }}-node22-server-${{ hashFiles('package-lock.json', 'package.json', 'tsconfig*.json', 'packages/**', '!packages/app/src/**', '!packages/*/playwright.config.ts', '!packages/app/vitest.config.ts', '!packages/cli/src/commands/daemon/lifecycle.e2e.test.ts', '!packages/*/e2e/**', '!packages/*/tests/**', 'plugins/**', 'control/**', 'skills/**', 'scripts/**', '!scripts/ci-workflow.test.mjs', 'patches/**') }}
 
       - name: Build CLI test dependencies
         if: steps.cli-build.outputs.cache-hit != 'true'

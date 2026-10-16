@@ -64,3 +64,26 @@ CI=1 E2E_STATIC_WEB=1 E2E_USE_BUILT_DAEMON=1 E2E_REPORT_CI=1 node .github/script
 Compare its case count with the manifest. Full PR timing still needs a real GitHub run.
 Unknown install lifecycle commands or workspace paths must use fresh npm ci.
 They must not read or save the installed dependency cache.
+
+For app unit worker changes, set `APP_TEST_MAX_WORKERS` in the environment.
+A root Vitest CLI worker limit can leave an inherited project limit unchanged.
+Check the resolved project value before measuring. Keep test isolation and forked processes enabled.
+
+```sh
+APP_TEST_MAX_WORKERS=2 PASEO_SKIP_PROTOCOL_BUILD=1 npm run test --workspace=@getpaseo/app
+APP_TEST_MAX_WORKERS=4 PASEO_SKIP_PROTOCOL_BUILD=1 npm run test --workspace=@getpaseo/app
+```
+
+Run these checks in sequence. Compare complete file and case counts with the same source.
+Use a warm baseline to separate worker changes from dependency cache effects.
+Record local times separately from real CI times.
+
+For lifecycle fixture changes, retain the real CLI listen setter and private home creation.
+Keep authentication, ownership, selector, configuration and cancellation assertions.
+Measure the same file with the same concurrency before comparing timings.
+Then run the complete CLI source suite.
+
+```sh
+PASEO_SKIP_PROTOCOL_BUILD=1 npm exec --workspace=@getpaseo/cli -- vitest run src/commands/daemon/lifecycle.e2e.test.ts --maxConcurrency=2
+PASEO_SKIP_PROTOCOL_BUILD=1 npm run test:unit --workspace=@getpaseo/cli -- --maxConcurrency=2 --maxWorkers=3
+```
