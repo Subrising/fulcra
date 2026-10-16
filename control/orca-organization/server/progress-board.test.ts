@@ -502,7 +502,7 @@ test("observed transitions survive a restart without dating existing closed work
   write("OPEN");
   const board = createProgressBoard({ on: () => () => {} }, { root, historyFile });
   t.after(() => board.close());
-  assert.equal((await board.read(api)).projects[0]!.items[1]!.completedAt, undefined);
+  assert.equal((await board.read(api)).projects[0]!.items[1]!.completedSource, "file");
   write("BLOCKED: waiting for review");
   const blockedAt = (await board.read(api)).projects[0]!.items[0]!.blockedAt;
   assert.ok(blockedAt);
@@ -573,4 +573,97 @@ test("running activity uses readable updates instead of raw commands", async (t)
   assert.equal((await board.read(api)).projects[0]!.jobs[0]!.result, "Running checks");
   timeline = [{ item: { type: "assistant_message", text: "Checking the phone layout." } }, tool];
   assert.equal((await board.read(api)).projects[0]!.jobs[0]!.result, "Checking the phone layout.");
+});
+
+test("ledger close records preserve ISO dates and evidence", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const output = execFileSync(
+    "python3",
+    [fileURLToPath(new URL("../../../scripts/ledger/ledger.test.py", import.meta.url))],
+    { encoding: "utf8" },
+  );
+  assert.match(output, /Closed at \d{4}-\d{2}-\d{2}T/);
+});
+
+test("close records outrank line history, with marked file dates when history is absent", async () => {
+  const { dateLedgerItems } = await import("./progress-board");
+  const at = "2026-10-16T02:00:00Z";
+  const rows = parseLedger(
+    `${header}\n| FU-1 | Task | FIX | Worker | DONE | Closed at ${at}; PR 50 | brief |\n| FU-2 | Task | FIX | Worker | DONE | PR 51 | brief |\n| FU-3 | Task | FIX | Worker | BLOCKED: review | PR 52 | brief |`,
+  ).items;
+  const mtime = "2026-10-16T08:00:00Z";
+  const result = await dateLedgerItems(
+    rows,
+    "/fixture/OPEN-ITEMS.md",
+    mtime,
+    async () =>
+      `${"a".repeat(40)} 1 1 1\ncommitter-time 1792116000\n\t| FU-2 | Task | FIX | Worker | DONE | PR 51 | brief |\n`,
+  );
+  assert.equal(result[0]!.completedAt, at);
+  assert.equal(result[0]!.completedSource, "record");
+  assert.equal(result[1]!.completedSource, "git");
+  assert.equal(result[1]!.completedAt, new Date(1792116000000).toISOString());
+  assert.equal(result[2]!.blockedAt, mtime);
+  assert.equal(result[2]!.blockedApprox, true);
+  const fallback = await dateLedgerItems(rows, "/fixture/OPEN-ITEMS.md", mtime, async () => {
+    throw Error("No history");
+  });
+  assert.equal(fallback[1]!.completedAt, mtime);
+  assert.equal(fallback[1]!.completedSource, "file");
+});
+
+test("session model ID outranks stale runtime information", () => {
+  const rows = jobList(
+    [
+      {
+        ...boardLead,
+        model: "claude-opus-5-5",
+        runtimeInfo: { model: "claude-opus-4-8" },
+      } as PaseoAgent,
+    ],
+    new Set(["w"]),
+    "Host",
+    new Map(),
+  );
+  assert.equal(rows[0]!.model, "claude-opus-5-5");
+});
+
+test("each host reads native running sessions even without a board plugin", async () => {
+  const { readProgressHost } = await import("../client/read-progress-host");
+  for (const host of ["Mini", "Book", "PC"]) {
+    const agents = Array.from({ length: host === "Book" ? 25 : 2 }, (_, n) => ({
+      ...boardLead,
+      id: `${host}-${n}`,
+      model: "claude-opus-5-5",
+      runtimeInfo: { model: "claude-opus-4-8" },
+    }));
+    const calls: (string | undefined)[] = [];
+    const api = {
+      agents: {
+        list: async ({ page }: { page: { cursor?: string } }) => {
+          calls.push(page.cursor);
+          return page.cursor
+            ? { entries: agents.slice(1).map((agent) => ({ agent })), pageInfo: { hasMore: false } }
+            : { entries: [{ agent: agents[0] }], pageInfo: { hasMore: true, nextCursor: "next" } };
+        },
+        ref: () => ({
+          timeline: {
+            refetch: async () => ({
+              entries: [{ item: { type: "assistant_message", text: "---\nChecking the task." } }],
+            }),
+          },
+        }),
+      },
+      workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    } as unknown as PaseoApi;
+    const board = await readProgressHost(api, async () => {
+      throw Error("Old host has no board plugin");
+    });
+    assert.equal(board.projects.flatMap((p) => p.jobs).length, agents.length);
+    assert.equal(board.projects[0]!.jobs[0]!.model, "claude-opus-5-5");
+    assert.equal(board.projects[0]!.jobs[0]!.result, "Checking the task.");
+    assert.deepEqual(calls, [undefined, "next"]);
+    assert.match(board.warnings[0]!, /Project lists are unavailable/);
+  }
 });

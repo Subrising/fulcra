@@ -9,7 +9,7 @@ import { matchesHumanOwner, type BoardItem, type ProgressBoard } from "../shared
 import { scrubFreeText } from "../shared/privacy-scrub";
 
 const COLUMNS = ["id", "item", "kind", "owner", "status", "evidence", "source"] as const;
-// Only explicit ISO dates carry age. File modification times cannot date individual ledger rows.
+// Request dates do not date completion. Explicit close records take priority.
 export function ledgerDate(text: string): string | undefined {
   const date = text.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0];
   if (!date) return undefined;
@@ -71,6 +71,7 @@ export function parseLedger(
       return match && Number.isFinite(Date.parse(match[1]!)) ? match[1] : undefined;
     };
     row.completedAt = transition("(?:closed|completed)");
+    if (row.completedAt) row.completedSource = "record";
     row.blockedAt = transition("blocked");
     // Match original labels. Redaction can map different owners to the same display text.
     row.needsHuman = matchesHumanOwner(cells[3]!, humanOwners);
@@ -118,7 +119,7 @@ export function jobList(
       createdAt: a.createdAt,
       updatedAt: a.updatedAt,
       permissions: a.pendingPermissions.length,
-      model: a.runtimeInfo?.model ?? a.model,
+      model: a.model ?? null,
       startedAt: a.activeTurn?.startedAt ?? null,
       result: oneLine(results.get(a.id) ?? a.lastError ?? ""),
     }));
@@ -133,13 +134,71 @@ export const runRead: RunRead = (command, args, cwd) =>
       {
         cwd,
         timeout: 4000,
-        maxBuffer: 262144,
+        maxBuffer: 8 * 1024 * 1024,
         windowsHide: true,
         env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1" },
       },
       (error, stdout) => (error ? reject(error) : resolve(stdout)),
     );
   });
+
+export async function ledgerLineDates(file: string, run = runRead): Promise<Map<string, string>> {
+  const dates = new Map<string, string>();
+  try {
+    const text = await run(
+      "git",
+      ["blame", "--line-porcelain", "--", path.basename(file)],
+      path.dirname(file),
+    );
+    let committed = false,
+      at: string | undefined;
+    for (const line of text.split("\n")) {
+      if (/^[a-f0-9]{40} \d+ \d+/.test(line)) {
+        committed = !line.startsWith("0".repeat(40));
+        at = undefined;
+      } else if (line.startsWith("committer-time ")) {
+        const seconds = Number(line.slice(15));
+        if (Number.isFinite(seconds)) at = new Date(seconds * 1000).toISOString();
+      } else if (line.startsWith("\t") && committed && at) {
+        const cells = line
+          .slice(1)
+          .trim()
+          .replace(/^\||\|$/g, "")
+          .split(/(?<!\\)\|/)
+          .map((c) => c.trim());
+        if (cells.length === 7 && /^(DONE|BLOCKED)\b/i.test(cells[4]!)) dates.set(cells[0]!, at);
+      }
+    }
+  } catch {
+    /* Untracked files and mirrors use a marked file-time estimate. */
+  }
+  return dates;
+}
+
+export async function dateLedgerItems(
+  items: BoardItem[],
+  file: string,
+  mtime: string,
+  run = runRead,
+): Promise<BoardItem[]> {
+  if (
+    !items.some(
+      (item) =>
+        (/^DONE\b/i.test(item.status) && !item.completedAt) ||
+        (/^BLOCKED\b/i.test(item.status) && !item.blockedAt),
+    )
+  )
+    return items;
+  const dates = await ledgerLineDates(file, run);
+  return items.map((item) => {
+    const at = dates.get(item.id);
+    if (/^DONE\b/i.test(item.status) && !item.completedAt)
+      return { ...item, completedAt: at ?? mtime, completedSource: at ? "git" : "file" };
+    if (/^BLOCKED\b/i.test(item.status) && !item.blockedAt)
+      return { ...item, blockedAt: at ?? mtime, blockedApprox: true };
+    return item;
+  });
+}
 
 export async function readBranch(
   workspace: PaseoWorkspace,
@@ -367,6 +426,7 @@ export function createProgressBoard(
   }
   watch(root);
   discoverLedgers();
+  const dated = new Map<string, { signature: string | undefined; items: BoardItem[] }>();
   let flight: Promise<ProgressBoard> | undefined;
   let ownerSignature: string | undefined;
   async function read(paseo: PaseoApi): Promise<ProgressBoard> {
@@ -374,6 +434,7 @@ export function createProgressBoard(
     const signature = JSON.stringify(humanOwners.map((owner) => owner.trim().toLowerCase()).sort());
     if (signature !== ownerSignature) {
       ledgers.clear();
+      dated.clear();
       ownerSignature = signature;
     }
     const warnings: string[] = [];
@@ -520,7 +581,21 @@ export function createProgressBoard(
           }),
       );
       const ledger = ledgers.get(name)!;
-      const items = ledger.items.map((item) => track(name, item, observedAt));
+      const tracked = ledger.items.map((item) => track(name, item, observedAt));
+      if (dated.get(name)?.signature !== signature || !dated.has(name)) {
+        dated.set(name, {
+          signature,
+          items: names.includes(name)
+            ? await dateLedgerItems(
+                tracked,
+                file,
+                new Date(fs.statSync(file).mtimeMs).toISOString(),
+                options.run,
+              )
+            : tracked,
+        });
+      }
+      const items = dated.get(name)!.items;
       const jobs = projectAgents.map((a) => ({
         id: a.id,
         title: scrubFreeText(a.title ?? "Untitled session", null),
@@ -529,7 +604,7 @@ export function createProgressBoard(
         createdAt: a.createdAt,
         updatedAt: a.updatedAt,
         startedAt: a.activeTurn?.startedAt ?? null,
-        model: a.runtimeInfo?.model ?? a.model,
+        model: a.model ?? null,
         permissions: a.pendingPermissions.length,
         result: oneLine(results.get(a.id) ?? a.lastError ?? ""),
       }));

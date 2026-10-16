@@ -5,7 +5,7 @@ description: Check the Progress board data, host selection, and browser layout.
 
 # Verify the Progress board
 
-Run from the repository root. Use the existing dependencies. Keep live hosts unchanged.
+Run from the repository root. Use the existing dependencies. Keep host config and sessions unchanged. Use temporary ledgers for close-time tests.
 
 1. Run the focused server and shared tests with the existing `tsx` test runner.
 2. Run the app host-runtime tests in `packages/app/src/plugins/hosts/index.test.ts`.
@@ -23,6 +23,9 @@ Record how each snapshot was obtained. Fixture data do not prove live host integ
 Check 375×812, 768×1024, 1440×900, and 812×375 in both themes.
 Fail on overflow, overlaps, clipped text, sideways scrolling, or controls below 48×48 pixels.
 Inspect the Running now, Next, Blocked, and Done captures.
+Check both Done filters. Check each host through its native session API.
+Do not infer running work from the number of retained sessions.
+Check the model ID against the native session record.
 The default output is `docs/qa-evidence/progress-board/`. A folder argument overrides it.
 Start Expo with `BROWSER=none` when Playwright owns the browser. This avoids a blocked macOS browser-launch request.
 

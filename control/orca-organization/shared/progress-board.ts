@@ -11,7 +11,9 @@ const item = z.object({
   source: z.string(),
   createdAt: z.string().optional(),
   completedAt: z.string().optional(),
+  completedSource: z.enum(["record", "git", "file", "observed"]).optional(),
   blockedAt: z.string().optional(),
+  blockedApprox: z.boolean().optional(),
   needsHuman: z.boolean().optional(),
 });
 const job = z.object({
@@ -114,13 +116,16 @@ export function ageLabel(createdAt: string, now: number): string {
   return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
-// Completion age must come from a recorded completion, never a request date or file mtime.
-export function recentDone(items: readonly BoardItem[], now: number): BoardItem[] {
+// Old ledgers use a dated line change, or a clearly marked file-time estimate.
+export function recentDone(items: readonly BoardItem[], now: number, days = 1): BoardItem[] {
   return items
     .filter((row) => {
       const at = Date.parse(row.completedAt ?? "");
       return (
-        /^DONE\b/i.test(row.status) && Number.isFinite(at) && at <= now && now - at <= 86400000
+        /^DONE\b/i.test(row.status) &&
+        Number.isFinite(at) &&
+        at <= now &&
+        now - at <= days * 86400000
       );
     })
     .sort((a, b) => Date.parse(b.completedAt!) - Date.parse(a.completedAt!));

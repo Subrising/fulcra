@@ -43,6 +43,10 @@ const snapshot = {
         }),
         fixtureItem("EX-4", "DONE"),
         fixtureItem("EX-5", "IN PROGRESS"),
+        fixtureItem("EX-6", "DONE", {
+          completedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+          completedSource: "git",
+        }),
       ],
       jobs: [
         {
@@ -161,6 +165,18 @@ try {
         assert.deepEqual(faults, [], `${width}x${height}/${theme}`);
         assert.deepEqual(errors, []);
       }
+      await page.getByRole("button", { name: "Last 7 days", exact: true }).click();
+      if (!liveFile)
+        assert.match(
+          await page.getByTestId("board-section-done").innerText(),
+          /Example project · 2/,
+        );
+      await page.getByRole("button", { name: "Last 24 hours", exact: true }).click();
+      if (!liveFile)
+        assert.match(
+          await page.getByTestId("board-section-done").innerText(),
+          /Example project · 1/,
+        );
       await measure();
       await page.screenshot({
         path: path.join(output, `${width}x${height}-${theme}.png`),

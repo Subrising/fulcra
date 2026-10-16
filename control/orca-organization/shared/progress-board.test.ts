@@ -228,3 +228,24 @@ test("All hosts uses one mirrored ledger and keeps each host's running sessions"
     ["a", "b"],
   );
 });
+
+test("Done can switch from one day to seven days", async () => {
+  const { recentDone } = await import("./progress-board");
+  const now = Date.parse("2026-10-16T12:00:00Z");
+  const rows = [1, 3, 8].map(
+    (days) =>
+      ({
+        id: String(days),
+        status: "DONE",
+        completedAt: new Date(now - days * 86400000).toISOString(),
+      }) as BoardItem,
+  );
+  assert.deepEqual(
+    recentDone(rows, now).map((row) => row.id),
+    ["1"],
+  );
+  assert.deepEqual(
+    recentDone(rows, now, 7).map((row) => row.id),
+    ["1", "3"],
+  );
+});

@@ -3,9 +3,11 @@ import { Pressable, ScrollView, Text, View, useWindowDimensions } from "react-na
 import {
   useHosts,
   invokeHostRpc,
+  getPaseoClient,
   type PluginSurfaceProps,
   type PluginHostSummary,
 } from "@getpaseo/plugin/client";
+import { readProgressHost } from "./read-progress-host";
 import { useContract } from "./use-contract";
 import { WorkButton } from "./work-button";
 import {
@@ -64,6 +66,8 @@ export function ProgressBoardView({
   const c = theme.colors;
   const wide = width >= 1100 && !layout.compact;
   const now = Date.now();
+  const [doneDays, setDoneDays] = useState(1);
+  const [moreDone, setMoreDone] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const summary = (text: string) =>
     text.length <= 150 ? text : `${text.slice(0, 145).replace(/\s+\S*$/, "")}…`;
@@ -106,25 +110,15 @@ export function ProgressBoardView({
       return project.jobs.filter(
         (job) => job.status === "running" || job.status === "initializing",
       );
-    if (section === "done") return recentDone(project.items, now);
+    if (section === "done") return recentDone(project.items, now, doneDays);
     if (section === "next") return readyItems(project.items);
     return project.items.filter((item) => /^BLOCKED\b/i.test(item.status));
   };
   function section(section: Section) {
     const count = projects.reduce((sum, project) => sum + rows(project, section).length, 0);
-    const unknown =
-      section === "done"
-        ? projects.reduce(
-            (sum, project) =>
-              sum +
-              project.items.filter((item) => /^DONE\b/i.test(item.status) && !item.completedAt)
-                .length,
-            0,
-          )
-        : 0;
     const empty: Record<Section, string> = {
       running: "No sessions are running on the connected computers.",
-      done: "No dated completions in the last 24 hours.",
+      done: `No work closed in the last ${doneDays === 1 ? "24 hours" : "7 days"}.`,
       next: "No open work is ready in the available project lists.",
       blocked: "No work is marked blocked in the available project lists.",
     };
@@ -160,7 +154,22 @@ export function ProgressBoardView({
             {count}
           </Text>
         </View>
-        {section === "done" && <Text style={muted}>Closed in the last 24 hours</Text>}
+        {section === "done" && (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            <WorkButton
+              theme={theme}
+              label="Last 24 hours"
+              selected={doneDays === 1}
+              onPress={() => setDoneDays(1)}
+            />
+            <WorkButton
+              theme={theme}
+              label="Last 7 days"
+              selected={doneDays === 7}
+              onPress={() => setDoneDays(7)}
+            />
+          </View>
+        )}
         {!count && (
           <Text style={muted}>
             {projects.length
@@ -170,12 +179,12 @@ export function ProgressBoardView({
                 : "Connect a computer with sessions or a project list to see work here."}
           </Text>
         )}
-        {!!unknown && (
-          <Text style={muted}>
-            {unknown} closed {unknown === 1 ? "item has" : "items have"} no completion date. They
-            are outside this view.
-          </Text>
-        )}
+        {section === "done" &&
+          projects.some((project) =>
+            rows(project, "done").some(
+              (item) => "completedSource" in item && item.completedSource === "file",
+            ),
+          ) && <Text style={muted}>Approximate times use the project list’s last change.</Text>}
         {projects.map((project) => {
           const entries = rows(project, section);
           if (!entries.length) return null;
@@ -184,13 +193,16 @@ export function ProgressBoardView({
               <Text style={{ ...muted, fontWeight: "700", paddingBottom: 6 }}>
                 {plain(project.name)} · {entries.length}
               </Text>
-              {entries.map((entry) => {
+              {(section === "done" && !moreDone.has(project.id)
+                ? entries.slice(0, 10)
+                : entries
+              ).map((entry) => {
                 if ("title" in entry) {
                   const contents = (
                     <View style={{ gap: 6, minWidth: 0 }}>
                       <Text style={{ ...body, fontWeight: "600" }}>{plain(entry.title)}</Text>
                       <Text style={{ ...muted, color: colors.running }}>
-                        {modelName(entry.model)} · {selected === "all" ? `${entry.machine} · ` : ""}
+                        {modelName(entry.model)} · {entry.machine} ·
                         {entry.startedAt
                           ? `Running for ${ageLabel(entry.startedAt, now)}`
                           : "Start time unavailable"}
@@ -275,15 +287,28 @@ export function ProgressBoardView({
                     ) : (
                       <Text style={muted}>{plain(entry.owner) || "Owner unavailable"}</Text>
                     )}
+                    {section === "done" && entry.completedAt && (
+                      <Text style={muted}>
+                        Closed {ageLabel(entry.completedAt, now)} ago
+                        {entry.completedSource === "file"
+                          ? " · approx"
+                          : entry.completedSource === "git"
+                            ? " · from file history"
+                            : ""}
+                      </Text>
+                    )}
                     {section === "blocked" && (
                       <>
                         <Text style={{ ...body, color: colors.blocked }}>
-                          {plain(entry.status.replace(/^BLOCKED\s*:?\s*/i, "")) ||
-                            "No block reason recorded."}
+                          {plain(
+                            entry.status
+                              .replace(/^BLOCKED\s*:?\s*/i, "")
+                              .replace(/\s*blocked\s+(?:at|since)\s*:?\s*\d{4}-\S+/i, ""),
+                          ) || "No block reason recorded."}
                         </Text>
                         <Text style={muted}>
                           {entry.blockedAt
-                            ? `Blocked for ${ageLabel(entry.blockedAt, now)}`
+                            ? `Blocked for ${ageLabel(entry.blockedAt, now)}${entry.blockedApprox ? " · approx" : ""}`
                             : "Block start time not recorded."}
                         </Text>
                       </>
@@ -291,6 +316,24 @@ export function ProgressBoardView({
                   </View>
                 );
               })}
+              {section === "done" && entries.length > 10 && (
+                <WorkButton
+                  theme={theme}
+                  label={
+                    moreDone.has(project.id)
+                      ? "Show fewer closed items"
+                      : `Show all ${entries.length} closed items`
+                  }
+                  onPress={() =>
+                    setMoreDone((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(project.id)) next.delete(project.id);
+                      else next.add(project.id);
+                      return next;
+                    })
+                  }
+                />
+              )}
             </View>
           );
         })}
@@ -382,10 +425,8 @@ export function ProgressBoardView({
         }}
       >
         <View style={{ flex: wide ? 1.15 : undefined, minWidth: 0 }}>{section("running")}</View>
-        <View style={{ flex: wide ? 1 : undefined, minWidth: 0, gap: 36 }}>
-          {section("next")}
-          {section("blocked")}
-        </View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("next")}</View>
+        <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("blocked")}</View>
         <View style={{ flex: wide ? 1 : undefined, minWidth: 0 }}>{section("done")}</View>
       </View>
     </ScrollView>
@@ -395,13 +436,12 @@ export function ProgressBoardView({
 export function ProgressBoardSurface(props: PluginSurfaceProps) {
   const read = useContract(progressBoardRpc);
   const configured = useHosts();
-  const hosts = useMemo(
-    () =>
-      configured.length
-        ? configured
-        : [{ serverId: props.host.id, label: props.host.label, status: "online" as const }],
-    [configured, props.host.id, props.host.label],
-  );
+  const hosts = useMemo(() => {
+    const all = [...configured];
+    if (!all.some((host) => host.serverId === props.host.id))
+      all.push({ serverId: props.host.id, label: props.host.label, status: "online" });
+    return all;
+  }, [configured, props.host.id, props.host.label]);
   const [selected, selectHost] = useState("all");
   const [boards, setBoards] = useState<HostBoard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -425,12 +465,13 @@ export function ProgressBoardSurface(props: PluginSurfaceProps) {
               error: "This computer is offline. Connect it to read its work.",
             };
           try {
-            const data =
+            const data = await readProgressHost(getPaseoClient(host.serverId), async () =>
               host.serverId === props.host.id
                 ? await read({})
                 : progressBoardRpc.output.parse(
                     await invokeHostRpc(host.serverId, progressBoardRpc.name, {}),
-                  );
+                  ),
+            );
             return { id: host.serverId, label: host.label, data, error: null };
           } catch {
             return {
