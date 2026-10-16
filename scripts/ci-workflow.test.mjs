@@ -1,5 +1,17 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
 
@@ -309,5 +321,649 @@ test("packaging runs on main without allocating pull-request runners", () => {
     assert.match(trigger, /push:\s*\n\s+branches: \[main\]/);
     assert.doesNotMatch(trigger, /pull_request/);
     assert.doesNotMatch(source, /dorny\/paths-filter/);
+  }
+});
+
+const mergeWorkflow = () =>
+  readFileSync(new URL(".github/workflows/merge-pr.yml", repoRoot), "utf8");
+function mergeStep(name) {
+  const block = mergeWorkflow().split(`      - name: ${name}\n`)[1]?.split("\n      - ")[0];
+  assert.ok(block, `missing merge step: ${name}`);
+  return block
+    .split("        run: |\n")[1]
+    .split("\n")
+    .map((line) => line.replace(/^          /, ""))
+    .join("\n");
+}
+function executable(path, source) {
+  writeFileSync(path, source);
+  chmodSync(path, 0o755);
+}
+
+test("merge workflow limits writes and authenticates check reads", () => {
+  const source = mergeWorkflow();
+  assert.match(
+    source,
+    /permissions:\n  contents: write\n  pull-requests: write\n  checks: read\n\n/,
+  );
+  assert.equal((source.match(/permissions:/g) ?? []).length, 1);
+  assert.match(source, /persist-credentials: false/);
+  assert.match(source, /group: merge-pr-main/);
+  assert.match(mergeStep("Check the PR, tested SHA, and merge title"), /gh api .*check-runs/);
+  assert.doesNotMatch(source, /curl/);
+  assert.ok(
+    source.indexOf("- name: Check candidate commit identities") <
+      source.indexOf("- name: Merge with the workflow token"),
+  );
+  assert.ok(
+    source.indexOf("- name: Scan candidate commit metadata") <
+      source.indexOf("- name: Merge with the workflow token"),
+  );
+  assert.match(mergeStep("Scan candidate commit metadata"), /--commits "origin\/main\.\.\$SHA"/);
+  assert.match(
+    mergeStep("Scan the merge commit and source"),
+    /node "\$RUNNER_TEMP\/check-machine-data.mjs" --commits "\$MERGED\^1\.\.\$MERGED"/,
+  );
+});
+
+test("merge workflow rejects unsafe callers, PRs, CI results, and identities", () => {
+  const root = mkdtempSync(join(tmpdir(), "fulcra-merge-test-"));
+  try {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    mkdirSync(join(root, "scripts"));
+    writeFileSync(
+      join(root, "scripts/check-machine-data.mjs"),
+      readFileSync(new URL("scripts/check-machine-data.mjs", repoRoot)),
+    );
+    const fixture = join(root, "fixture.json");
+    const calls = join(root, "calls.jsonl");
+    executable(
+      join(bin, "gh"),
+      `#!/usr/bin/env node
+const fs=require('node:fs'); const f=JSON.parse(fs.readFileSync(process.env.FIXTURE)); const a=process.argv.slice(2);
+fs.appendFileSync(process.env.CALLS,JSON.stringify(a)+'\\n');
+console.log(JSON.stringify(a.includes('PUT') ? f.merged : a.some(x=>x.includes('/check-runs')) ? f.checks : a.some(x=>x.includes('/commits/')) ? f.commit : f.pr));
+`,
+    );
+    const sha = "a".repeat(40);
+    const base = {
+      pr: {
+        state: "open",
+        base: { ref: "main" },
+        head: { sha },
+        draft: false,
+        title: "Safe title",
+      },
+      checks: {
+        check_runs: [
+          {
+            name: "ci-passed",
+            app: { id: 15368 },
+            head_sha: sha,
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
+      merged: { merged: true, sha: "b".repeat(40) },
+      commit: {
+        commit: {
+          author: {
+            name: "github-actions[bot]",
+            email: "41898282+github-actions[bot]@users.noreply.github.com",
+          },
+          committer: { name: "GitHub", email: "noreply@github.com" },
+        },
+      },
+    };
+    const env = {
+      ...process.env,
+      GH_TOKEN: "FU182_FAKE_TOKEN_NEVER_AUTHENTICATE",
+      PATH: `${bin}:${process.env.PATH}`,
+      GH_REPO: "Subrising/fulcra",
+      PR: "1",
+      SHA: sha,
+      MERGED: "b".repeat(40),
+      ACTOR: "Subrising",
+      TRIGGERING_ACTOR: "Subrising",
+      OWNER: "Subrising",
+      EVENT: "workflow_dispatch",
+      REF: "refs/heads/main",
+      RUNNER_TEMP: root,
+      GITHUB_API_URL: "https://api.github.com",
+      FULCRA_PRIVATE_PATTERNS: "i\tDO_NOT_PUBLISH",
+      FIXTURE: fixture,
+      CALLS: calls,
+      GITHUB_OUTPUT: join(root, "output"),
+    };
+    const run = (name, data = base, overrides = {}) => {
+      writeFileSync(fixture, JSON.stringify(data));
+      return spawnSync("bash", ["-c", mergeStep(name)], {
+        cwd: root,
+        env: { ...env, ...overrides },
+        encoding: "utf8",
+      }).status;
+    };
+    assert.equal(run("Check the caller and inputs"), 0);
+    for (const overrides of [
+      { ACTOR: "other-user" },
+      { TRIGGERING_ACTOR: "other-user" },
+      { GH_REPO: "other/repo" },
+      { PR: "1;exit 0" },
+      { SHA: "abc" },
+      { REF: "refs/heads/other" },
+      { FULCRA_PRIVATE_PATTERNS: "" },
+      { EVENT: "pull_request", HEAD_REF: "other", HEAD_REPO: "Subrising/fulcra" },
+    ]) {
+      assert.notEqual(
+        run("Check the caller and inputs", base, overrides),
+        0,
+        JSON.stringify(overrides),
+      );
+    }
+    // Both the temporary bootstrap and the final dispatch must use the same guards.
+    if (mergeWorkflow().includes("fu182-bootstrap"))
+      assert.equal(
+        run("Check the caller and inputs", base, {
+          EVENT: "pull_request",
+          HEAD_REF: "fix/merge-bot",
+          HEAD_REPO: "Subrising/fulcra",
+        }),
+        0,
+      );
+    assert.equal(run("Check the PR, tested SHA, and merge title"), 0);
+    for (const change of [
+      (f) => (f.pr.draft = true),
+      (f) => (f.pr.base.ref = "next"),
+      (f) => (f.pr.head.sha = "c".repeat(40)),
+      (f) => (f.pr.state = "closed"),
+      (f) => (f.pr.title = "DO_NOT_PUBLISH"),
+      (f) => (f.checks.check_runs = []),
+      (f) => (f.checks.check_runs[0].head_sha = "c".repeat(40)),
+      (f) => (f.checks.check_runs[0].conclusion = "failure"),
+      (f) => (f.checks.check_runs[0].status = "in_progress"),
+      (f) => (f.checks.check_runs[0].app.id = 1),
+      (f) => f.checks.check_runs.push(f.checks.check_runs[0]),
+    ]) {
+      const data = structuredClone(base);
+      change(data);
+      assert.notEqual(run("Check the PR, tested SHA, and merge title", data), 0);
+    }
+    const literalTitle = structuredClone(base);
+    literalTitle.pr.title = "Literal $(touch injected) `touch injected`";
+    assert.equal(run("Check the PR, tested SHA, and merge title", literalTitle), 0);
+    assert.equal(run("Merge with the workflow token", literalTitle), 0);
+    assert.equal(existsSync(join(root, "injected")), false);
+    const mergeCall = readFileSync(calls, "utf8")
+      .trim()
+      .split("\n")
+      .map(JSON.parse)
+      .find((args) => args.includes("PUT"));
+    assert.ok(mergeCall.includes(`commit_title=Fulcra ${literalTitle.pr.title} (#1)`));
+    assert.ok(mergeCall.includes("commit_message="));
+    assert.ok(mergeCall.includes(`sha=${sha}`));
+    assert.ok(mergeCall.includes("merge_method=merge"));
+    assert.equal(run("Check the merge identity"), 0);
+    for (const change of [
+      (f) => (f.commit.commit.author.name = "other-user"),
+      (f) => (f.commit.commit.author.email = "invalid"),
+      (f) => (f.commit.commit.committer.name = "Subrising"),
+      (f) => (f.commit.commit.committer.email = "invalid"),
+    ]) {
+      const data = structuredClone(base);
+      change(data);
+      assert.notEqual(run("Check the merge identity", data), 0);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function identityFixture({ upstreamMessage = "Upstream ancestor fixture" } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "fulcra-identities-test-"));
+  const project = join(root, "project"),
+    upstream = join(root, "upstream.git"),
+    bin = join(root, "bin");
+  mkdirSync(project);
+  mkdirSync(bin);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Fulcra",
+    GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+    GIT_COMMITTER_NAME: "Fulcra",
+    GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+    RUNNER_TEMP: root,
+    FULCRA_PRIVATE_PATTERNS: "i\tDO_NOT_PUBLISH",
+  };
+  const gitAt = (cwd, ...args) =>
+    execFileSync(realGit, args, {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  const git = (...args) => gitAt(project, ...args);
+  git("init", "--initial-branch=main");
+  writeFileSync(join(project, "fixture"), "Identity fixture.\n");
+  git("add", ".");
+  git("commit", "-qm", "Identity fixture base");
+  const main = git("rev-parse", "HEAD"),
+    tree = git("rev-parse", "HEAD^{tree}");
+  gitAt(root, "clone", "--bare", project, upstream);
+  const createAt = (cwd, parent, message, identity = {}) =>
+    execFileSync(realGit, ["commit-tree", tree, "-p", parent, "-m", message], {
+      cwd,
+      env: { ...env, ...identity },
+      encoding: "utf8",
+    }).trim();
+  const upstreamIdentity = {
+    GIT_AUTHOR_NAME: "Upstream Fixture",
+    GIT_AUTHOR_EMAIL: "upstream@fixture.invalid",
+    GIT_COMMITTER_NAME: "Upstream Fixture",
+    GIT_COMMITTER_EMAIL: "upstream@fixture.invalid",
+  };
+  const ancestor = createAt(upstream, main, upstreamMessage, upstreamIdentity);
+  const release = createAt(upstream, ancestor, "Upstream release fixture", upstreamIdentity);
+  gitAt(upstream, "tag", "-a", "v0.11.4", "-m", "Release fixture", release);
+  git("fetch", "--no-tags", upstream, "refs/tags/v0.11.4:refs/fixture/upstream-release");
+  git("update-ref", "refs/remotes/origin/main", main);
+  git("remote", "add", "origin", project);
+  const calls = join(root, "calls.jsonl");
+  executable(
+    join(bin, "git"),
+    `#!/usr/bin/env node
+const fs=require('node:fs');const {spawnSync}=require('node:child_process');const a=process.argv.slice(2);
+fs.appendFileSync(process.env.CALLS,JSON.stringify(a)+'\\n');
+if(a[0]==='fetch'){
+ const at=a.indexOf('https://github.com/getpaseo/paseo.git');
+ if(at>=0){if(process.env.FAIL_UPSTREAM_FETCH==='1')process.exit(1);a[at]=process.env.FIXTURE_UPSTREAM;}
+ else if(!a.includes('origin'))process.exit(2);
+}
+const r=spawnSync(process.env.REAL_GIT,a,{stdio:'inherit'});process.exit(r.status??1);
+`,
+  );
+  writeFileSync(
+    join(root, "check-machine-data.mjs"),
+    readFileSync(new URL("scripts/check-machine-data.mjs", repoRoot)),
+  );
+  return {
+    ancestor,
+    release,
+    upstreamIdentity,
+    git,
+    create: (identity = {}) => createAt(project, main, "Candidate fixture", identity),
+    prerelease(tag) {
+      const sha = createAt(upstream, release, `Prerelease fixture ${tag}`, upstreamIdentity);
+      gitAt(upstream, "tag", tag, sha);
+      git("fetch", "--no-tags", upstream, `refs/tags/${tag}:refs/fixture/${tag}`);
+      return sha;
+    },
+    deleteFinalTag: () => gitAt(upstream, "tag", "-d", "v0.11.4"),
+    calls: () => readFileSync(calls, "utf8"),
+    run(name, sha, overrides = {}) {
+      git("update-ref", "refs/heads/candidate", sha);
+      return spawnSync("bash", ["-c", mergeStep(name)], {
+        cwd: project,
+        encoding: "utf8",
+        env: {
+          ...env,
+          SHA: sha,
+          PATH: `${bin}:${env.PATH}`,
+          REAL_GIT: realGit,
+          FIXTURE_UPSTREAM: upstream,
+          CALLS: calls,
+          ...overrides,
+        },
+      });
+    },
+    close: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+test("workflow identity gate accepts the allowlist and rejects other commit identities", () => {
+  const f = identityFixture();
+  const run = (identity) => f.run("Check candidate commit identities", f.create(identity));
+  try {
+    assert.equal(run({}).status, 0);
+    assert.equal(
+      run({
+        GIT_AUTHOR_NAME: "github-actions[bot]",
+        GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+        GIT_COMMITTER_NAME: "GitHub",
+        GIT_COMMITTER_EMAIL: "noreply@github.com",
+      }).status,
+      0,
+    );
+    for (const identity of [
+      { GIT_AUTHOR_NAME: "unlisted" },
+      { GIT_AUTHOR_EMAIL: "invalid" },
+      { GIT_COMMITTER_NAME: "unlisted" },
+      { GIT_COMMITTER_EMAIL: "invalid" },
+    ])
+      assert.notEqual(run(identity).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate accepts an upstream ancestor of a fetched release tag", () => {
+  const f = identityFixture();
+  try {
+    assert.notEqual(f.ancestor, f.release);
+    const result = f.run("Check candidate commit identities", f.ancestor);
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate trusts only final release tag names", () => {
+  const f = identityFixture();
+  try {
+    for (const tag of ["v0.12.0-beta.1", "v0.12.0-rc.1", "v0.12.0+build.1", "v0.12"]) {
+      const sha = f.prerelease(tag);
+      assert.notEqual(f.run("Check candidate commit identities", sha).status, 0, tag);
+    }
+    assert.equal(f.run("Check candidate commit identities", f.ancestor).status, 0);
+    f.deleteFinalTag();
+    assert.notEqual(f.run("Check candidate commit identities", f.ancestor).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate skips upstream fetch for approved identities during an outage", () => {
+  const f = identityFixture();
+  try {
+    for (const identity of [
+      {},
+      {
+        GIT_AUTHOR_NAME: "github-actions[bot]",
+        GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+        GIT_COMMITTER_NAME: "GitHub",
+        GIT_COMMITTER_EMAIL: "noreply@github.com",
+      },
+    ]) {
+      const result = f.run("Check candidate commit identities", f.create(identity), {
+        FAIL_UPSTREAM_FETCH: "1",
+      });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    assert.doesNotMatch(f.calls(), /https:\/\/github\.com\/getpaseo\/paseo\.git/);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate refuses a non-Fulcra commit outside upstream releases", () => {
+  const f = identityFixture();
+  try {
+    const sha = f.create({ GIT_AUTHOR_NAME: "Other Fixture" });
+    assert.notEqual(f.run("Check candidate commit identities", sha).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate refuses a matching upstream name without ancestry", () => {
+  const f = identityFixture();
+  try {
+    const sha = f.create(f.upstreamIdentity);
+    assert.notEqual(sha, f.ancestor);
+    assert.notEqual(f.run("Check candidate commit identities", sha).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate refuses an upstream fetch failure without using cached refs", () => {
+  const f = identityFixture();
+  try {
+    assert.equal(f.run("Check candidate commit identities", f.ancestor).status, 0);
+    assert.notEqual(
+      f.run("Check candidate commit identities", f.ancestor, { FAIL_UPSTREAM_FETCH: "1" }).status,
+      0,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("workflow identity gate ignores fork-only tags and clears stale verification refs", () => {
+  const f = identityFixture();
+  try {
+    const sha = f.create(f.upstreamIdentity);
+    f.git("tag", "v99.0.0", sha);
+    f.git("update-ref", "refs/verified-paseo-release-tags/v99.0.0", sha);
+    assert.notEqual(f.run("Check candidate commit identities", sha).status, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("candidate scanner still refuses personal data in an accepted upstream ancestor", () => {
+  const f = identityFixture({ upstreamMessage: "DO_NOT_PUBLISH" });
+  try {
+    const identity = f.run("Check candidate commit identities", f.release);
+    assert.equal(identity.status, 0, identity.stderr);
+    const scan = f.run("Scan candidate commit metadata", f.release);
+    assert.notEqual(scan.status, 0);
+    assert.match(scan.stderr, /private-1/);
+    assert.ok(scan.stderr.includes(f.ancestor.slice(0, 12)));
+    assert.ok(!scan.stderr.includes("DO_NOT_PUBLISH"));
+  } finally {
+    f.close();
+  }
+});
+
+test("source release rejects every active tag or release trigger with a generic YAML check", () => {
+  const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
+  const code = source.split("<<'RUBY'\n")[1].split("\nRUBY")[0];
+  const root = mkdtempSync(join(tmpdir(), "fulcra-triggers-test-"));
+  try {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Fulcra",
+      GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Fulcra",
+      GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+    };
+    const git = (...args) =>
+      execFileSync("git", args, {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "--initial-branch=main");
+    mkdirSync(join(root, ".github/workflows"), { recursive: true });
+    const path = ".github/workflows/future-publisher.yaml";
+    const cases = [
+      ["on: {push: {branches: [main]}}\n", "active", true],
+      ["on: {push: {branches-ignore: [archive]}}\n", "active", true],
+      ["on: [workflow_dispatch, pull_request]\n", "active", true],
+      ["on: {workflow_dispatch: {inputs: {tags: {type: string}}}}\n", "active", true],
+      ["on: release\n", "disabled_manually", true],
+      ["on: release\n", "active", false],
+      ["'on': [workflow_dispatch, release]\n", "active", false],
+      ["on: {release: {types: [published]}}\n", "active", false],
+      ["on:\n  push:\n    tags: [v*]\n", "active", false],
+      ['"on": {push: {"tags": ["v*"]}}\n', "active", false],
+      ["filters: &filters {tags: ['v*']}\non: {push: *filters}\n", "active", false],
+      ["on: {push: {tags-ignore: ['*']}}\n", "active", false],
+      ["on: push\n", "active", false],
+      ["on: [push, workflow_dispatch]\n", "active", false],
+      ["on:\n  push:\n", "active", false],
+      ["on: {push: {paths: ['src/**']}}\n", "active", false],
+      ["on: create\n", "active", false],
+      ["on: [release\n", "active", false],
+      ["on: workflow_dispatch\n---\non: release\n", "active", false],
+      ["on: release\n", null, false],
+      ["on: {push: {branches: [main]}}\n", null, true],
+    ];
+    for (const [yaml, state, allowed] of cases) {
+      writeFileSync(join(root, path), yaml);
+      git("add", ".github/workflows");
+      const sha = git("commit-tree", git("write-tree"), "-m", "Workflow trigger fixture");
+      // A second page proves that the check includes every workflow page.
+      const workflows = state ? [{ path, state }] : [];
+      const metadata = join(root, "workflows.json");
+      writeFileSync(
+        metadata,
+        JSON.stringify([
+          { workflows: [{ path: ".github/workflows/deleted.yml", state: "active" }] },
+          { workflows },
+        ]),
+      );
+      const result = spawnSync("ruby", ["-rjson", "-ryaml", "-ropen3", "-", metadata, sha], {
+        cwd: root,
+        env,
+        input: code,
+        encoding: "utf8",
+      });
+      assert.equal(result.status === 0, allowed, `${yaml}: ${result.stderr}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("source release uses one workflow wait and refuses unsafe candidates", () => {
+  const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
+  assert.doesNotMatch(source, /pulls\/[^"\s]+\/merge["\s]|gh pr merge|refs\/heads\/main/);
+  assert.equal((source.match(/gh run watch /g) ?? []).length, 1);
+  const root = mkdtempSync(join(tmpdir(), "fulcra-release-test-"));
+  try {
+    const remote = join(root, "origin.git"),
+      checkout = join(root, "repo"),
+      bin = join(root, "bin");
+    mkdirSync(bin);
+    mkdirSync(checkout);
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const env = {
+      ...process.env,
+      GH_TOKEN: "FU182_FAKE_TOKEN_NEVER_AUTHENTICATE",
+      GIT_AUTHOR_NAME: "Fulcra",
+      GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Fulcra",
+      GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+      FULCRA_RELEASE_REPO: checkout,
+      ROOT: root,
+      REAL_GIT: realGit,
+      PATH: `${bin}:${process.env.PATH}`,
+    };
+    const git = (...args) =>
+      execFileSync(realGit, args, {
+        cwd: checkout,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git("init", "--bare", "--initial-branch=main", remote);
+    git("init", "--initial-branch=main");
+    git("remote", "add", "origin", remote);
+    mkdirSync(join(checkout, "scripts"));
+    mkdirSync(join(checkout, "local"));
+    writeFileSync(
+      join(checkout, "scripts/check-machine-data.mjs"),
+      readFileSync(new URL("scripts/check-machine-data.mjs", repoRoot)),
+    );
+    writeFileSync(join(checkout, "local/personal-patterns.tsv"), "i\tDO_NOT_PUBLISH\n");
+    writeFileSync(join(checkout, ".gitignore"), "local/\n");
+    mkdirSync(join(checkout, ".github/workflows"), { recursive: true });
+    writeFileSync(join(checkout, ".github/workflows/ci.yml"), "on: {push: {branches: [main]}}\n");
+    writeFileSync(join(checkout, ".github/workflows/new-publisher.yml"), "on: release\n");
+    git("add", ".");
+    git("commit", "-qm", "Release fixture base");
+    git("tag", "v1.0.0");
+    const main = git("rev-parse", "HEAD");
+    git("push", "-q", "origin", "main", "refs/tags/v1.0.0");
+    writeFileSync(join(checkout, "RELEASE-NOTES-1.0.1.md"), "Fixture release.\n");
+    git("add", ".");
+    git("commit", "-qm", "Release fixture candidate");
+    const sha = git("rev-parse", "HEAD"),
+      tree = git("rev-parse", "HEAD^{tree}");
+    const merged = execFileSync(
+      realGit,
+      ["commit-tree", tree, "-p", main, "-p", sha, "-m", "Fulcra fixture merge"],
+      {
+        cwd: checkout,
+        env: {
+          ...env,
+          GIT_AUTHOR_NAME: "github-actions[bot]",
+          GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+          GIT_COMMITTER_NAME: "GitHub",
+          GIT_COMMITTER_EMAIL: "noreply@github.com",
+        },
+        encoding: "utf8",
+      },
+    ).trim();
+    git(
+      "--git-dir",
+      remote,
+      "fetch",
+      "-q",
+      checkout,
+      `${sha}:refs/pull/1/head`,
+      `${merged}:refs/pull/1/merge`,
+    );
+    writeFileSync(join(root, "fixture.json"), JSON.stringify({ main, sha, merged }));
+    executable(
+      join(bin, "git"),
+      `#!/usr/bin/env node
+const {spawnSync}=require('node:child_process'); const a=process.argv.slice(2);
+if(a.join(' ')==='remote get-url origin'){console.log('https://github.com/Subrising/fulcra.git');process.exit(0)}
+const r=spawnSync(process.env.REAL_GIT,a,{stdio:'inherit'}); process.exit(r.status??1);
+`,
+    );
+    executable(
+      join(bin, "gh"),
+      `#!/usr/bin/env node
+const fs=require('node:fs'),{execFileSync}=require('node:child_process'),p=process.env.ROOT,a=process.argv.slice(2),f=JSON.parse(fs.readFileSync(p+'/fixture.json'));
+fs.appendFileSync(p+'/calls',JSON.stringify(a)+'\\n');
+if(a[0]==='workflow'){fs.writeFileSync(p+'/dispatched','');execFileSync(process.env.REAL_GIT,['--git-dir',p+'/origin.git','fetch','-q',process.cwd(),f.merged+':refs/heads/main']);console.log('https://github.com/Subrising/fulcra/actions/runs/123');}
+else if(a[0]==='run') process.exit(0);
+else if(a[0]==='release'){if(a[1]==='create')fs.writeFileSync(p+'/released','');else console.log(a.includes('assets,isDraft,tagName')?'true':'v1.0.0');}
+else if(a.includes('repos/Subrising/fulcra/actions/workflows?per_page=100'))console.log(JSON.stringify([{workflows:[{path:'.github/workflows/ci.yml',state:'active'},{path:'.github/workflows/new-publisher.yml',state:process.env.BAD_PUBLISHER?'active':'disabled_manually'}]}]));
+else if(a[1].includes('/pulls/'))console.log(JSON.stringify({state:'open',base:{ref:'main'},head:{sha:f.sha},draft:false,merged:fs.existsSync(p+'/dispatched'),merge_commit_sha:f.merged}));
+else if(a[1].includes('/check-runs'))console.log(JSON.stringify({check_runs:[{name:'ci-passed',app:{id:15368},head_sha:f.sha,status:'completed',conclusion:process.env.BAD_CI?'failure':'success'}]}));
+else if(a[1].includes('/git/ref/heads/main'))console.log(f.merged);
+else process.exit(2);
+`,
+    );
+    const script = new URL(".github/scripts/release.sh", repoRoot).pathname;
+    const bad = spawnSync("bash", [script, "1.0.1", "1", sha], {
+      cwd: checkout,
+      env: { ...env, BAD_CI: "1" },
+      encoding: "utf8",
+    });
+    assert.notEqual(bad.status, 0);
+    assert.equal(existsSync(join(root, "dispatched")), false);
+    const publisher = spawnSync("bash", [script, "1.0.1", "1", sha], {
+      cwd: checkout,
+      env: { ...env, BAD_PUBLISHER: "1" },
+      encoding: "utf8",
+    });
+    assert.notEqual(publisher.status, 0);
+    assert.equal(existsSync(join(root, "dispatched")), false);
+    const good = spawnSync("bash", [script, "1.0.1", "1", sha], {
+      cwd: checkout,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(good.status, 0, `${good.stdout}\n${good.stderr}`);
+    assert.equal(existsSync(join(root, "released")), true);
+    assert.equal(git("rev-parse", "v1.0.1^{}"), merged);
+    const calls = readFileSync(join(root, "calls"), "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(calls.filter((a) => a[0] === "workflow").length, 1);
+    assert.equal(calls.filter((a) => a[0] === "run").length, 1);
+    assert.equal(
+      calls.some((a) => a.some((x) => x.endsWith("/merge"))),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

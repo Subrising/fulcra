@@ -279,7 +279,9 @@ function tables(rows, base) {
 function main() {
   const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
   const args = process.argv.slice(2);
-  const base = args.includes("--base") ? args[args.indexOf("--base") + 1] : "v0.11.2";
+  // Pin the upstream commit so fresh fork clones need no separately fetched upstream tags.
+  const upstreamBase = "dc5b02f7d7c120baea380d76def8b968020d8823";
+  const base = args.includes("--base") ? args[args.indexOf("--base") + 1] : upstreamBase;
   const rows = ledger(root, base).sort(
     (x, y) => x.patch.localeCompare(y.patch) || x.file.localeCompare(y.file),
   );
@@ -288,7 +290,7 @@ function main() {
     rows.map((r) => [r.patch, r.status, r.added, r.deleted, r.file].join("\t")).join("\n") +
     "\n";
   const tsvPath = path.join(root, "docs/fork-patches.tsv");
-  const table = tables(rows, base);
+  const table = tables(rows, base === upstreamBase ? "v0.11.4" : base);
   if (args.includes("--write")) {
     fs.writeFileSync(tsvPath, tsv);
     const mdPath = path.join(root, "docs/fork-patches.md");

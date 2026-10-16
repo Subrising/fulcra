@@ -631,6 +631,12 @@ Get the session ID from the agent JSON (`persistence.sessionId`), then:
 ~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-{timestamp}-{session-id}.jsonl
 ```
 
+## Browser test options
+
+The app browser suites use pinned Chromium by default. Set `E2E_BROWSER_CHANNEL=chrome` to use an existing Chrome installation.
+Set `E2E_RECORD_VIDEO=0` to disable video when the encoder is absent. Screenshots and traces remain available.
+See [the provider intake check](../.agents/skills/verify-provider-intake/SKILL.md) for isolated provider tests and layout measurements.
+
 ## Testing with Playwright MCP
 
 Point Playwright MCP at the running Expo web target. For root checkout dev, `npm run dev:app` reserves `http://localhost:8081`. For Paseo-managed worktree app services, use the service URL or port shown by Paseo for that worktree.

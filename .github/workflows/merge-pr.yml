@@ -1,0 +1,155 @@
+name: Merge PR
+run-name: Merge PR ${{ inputs.pr }} at ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+      sha:
+        description: Full tested head SHA
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: merge-pr-main
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ inputs.pr }}
+      SHA: ${{ inputs.sha }}
+      ACTOR: ${{ github.actor }}
+      TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      OWNER: ${{ github.repository_owner }}
+      FULCRA_PRIVATE_PATTERNS: ${{ secrets.FULCRA_PRIVATE_PATTERNS }}
+    steps:
+      - name: Check the caller and inputs
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$GH_REPO" = Subrising/fulcra
+          test "$ACTOR" = "$OWNER"
+          test "$TRIGGERING_ACTOR" = "$OWNER"
+          test "$EVENT" = workflow_dispatch
+          test "$REF" = refs/heads/main
+          [[ "$PR" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test -n "$FULCRA_PRIVATE_PATTERNS"
+
+      # Keep the scanner from the trusted base, outside the candidate checkout.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the PR, tested SHA, and merge title
+        run: |
+          set -euo pipefail
+          cp scripts/check-machine-data.mjs "$RUNNER_TEMP/check-machine-data.mjs"
+          gh api "repos/$GH_REPO/pulls/$PR" > "$RUNNER_TEMP/pr.json"
+          jq -e --arg sha "$SHA" '.state == "open" and .base.ref == "main" and .head.sha == $sha and .draft == false' "$RUNNER_TEMP/pr.json"
+          gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=ci-passed&filter=latest&per_page=100" > "$RUNNER_TEMP/checks.json"
+          jq -e --arg sha "$SHA" '[.check_runs[] | select(.name == "ci-passed" and .app.id == 15368)] | length == 1 and all(.head_sha == $sha and .status == "completed" and .conclusion == "success")' "$RUNNER_TEMP/checks.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { findInText, parsePrivateRules, genericRules } = await import(`${process.env.RUNNER_TEMP}/check-machine-data.mjs`);
+          const pr = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/pr.json`, 'utf8'));
+          const title = `Fulcra ${pr.title} (#${process.env.PR})`;
+          const privateRules = parsePrivateRules(process.env.FULCRA_PRIVATE_PATTERNS);
+          if (!privateRules.length) process.exit(1);
+          const found = findInText(title, [...genericRules, ...privateRules], 'merge-title');
+          console.log(found.length === 0);
+          if (found.length) process.exit(1);
+          NODE
+
+      - name: Check candidate commit identities
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$SHA"
+          git merge-base --is-ancestor origin/main "$SHA"
+          commits=$(git rev-list "origin/main..$SHA")
+          test -n "$commits"
+          : > "$RUNNER_TEMP/paseo-required-commits"
+          while IFS= read -r commit; do
+            identity=$(git show -s --format='%an <%ae>|%cn <%ce>' "$commit")
+            case "$identity" in
+              'Fulcra <fulcra@users.noreply.github.com>|Fulcra <fulcra@users.noreply.github.com>'|'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>|GitHub <noreply@github.com>') ;;
+              *) echo "$commit" >> "$RUNNER_TEMP/paseo-required-commits" ;;
+            esac
+          done <<< "$commits"
+          if test -s "$RUNNER_TEMP/paseo-required-commits"; then
+            # Rebuild this namespace from the upstream server. Fork tags never establish trust.
+            git for-each-ref --format='%(refname)' refs/verified-paseo-release-tags/ > "$RUNNER_TEMP/paseo-old-refs"
+            while IFS= read -r ref; do
+              git update-ref -d "$ref"
+            done < "$RUNNER_TEMP/paseo-old-refs"
+            git fetch --no-tags https://github.com/getpaseo/paseo.git '+refs/tags/v*:refs/verified-paseo-release-tags/v*'
+            git for-each-ref --format='%(refname)' refs/verified-paseo-release-tags/ > "$RUNNER_TEMP/paseo-fetched-refs"
+            : > "$RUNNER_TEMP/paseo-final-refs"
+            while IFS= read -r ref; do
+              tag=${ref#refs/verified-paseo-release-tags/}
+              if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "$ref" >> "$RUNNER_TEMP/paseo-final-refs"
+              fi
+            done < "$RUNNER_TEMP/paseo-fetched-refs"
+            test -s "$RUNNER_TEMP/paseo-final-refs"
+            git rev-list --stdin < "$RUNNER_TEMP/paseo-final-refs" > "$RUNNER_TEMP/paseo-release-commits"
+            test -s "$RUNNER_TEMP/paseo-release-commits"
+            while IFS= read -r commit; do
+              grep -Fxq "$commit" "$RUNNER_TEMP/paseo-release-commits" || { echo false; exit 1; }
+            done < "$RUNNER_TEMP/paseo-required-commits"
+          fi
+          echo true
+
+      - name: Scan candidate commit metadata
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/check-machine-data.mjs" --commits "origin/main..$SHA"
+
+      - name: Merge with the workflow token
+        id: merge
+        run: |
+          set -euo pipefail
+          title=$(jq -r --arg pr "$PR" '"Fulcra " + .title + " (#" + $pr + ")"' "$RUNNER_TEMP/pr.json")
+          gh api --method PUT "repos/$GH_REPO/pulls/$PR/merge" \
+            -f sha="$SHA" -f merge_method=merge \
+            -f commit_title="$title" -f commit_message='' > "$RUNNER_TEMP/merged.json"
+          jq -e '.merged == true' "$RUNNER_TEMP/merged.json"
+          merged=$(jq -er '.sha' "$RUNNER_TEMP/merged.json")
+          [[ "$merged" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$merged" >> "$GITHUB_OUTPUT"
+
+      - name: Check the merge identity
+        env:
+          MERGED: ${{ steps.merge.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/commits/$MERGED" > "$RUNNER_TEMP/commit.json"
+          jq -e '[(.commit.author.name == "github-actions[bot]" and .commit.author.email == "41898282+github-actions[bot]@users.noreply.github.com"), (.commit.committer.name == "GitHub" and .commit.committer.email == "noreply@github.com")] | all' "$RUNNER_TEMP/commit.json"
+
+      - name: Scan the merge commit and source
+        env:
+          MERGED: ${{ steps.merge.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$MERGED"
+          git checkout --detach "$MERGED"
+          node "$RUNNER_TEMP/check-machine-data.mjs" --commits "$MERGED^1..$MERGED"
+          echo "merge_verified=true" >> "$GITHUB_STEP_SUMMARY"

@@ -111,3 +111,6 @@ app.json
 **/evidence/
 /orca-organization/docs/screens/
 /control/orca-organization/docs/screens/
+
+# Project-local Serena configuration and memories.
+.serena/
