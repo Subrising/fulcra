@@ -1,23 +1,22 @@
-"""Keep close times with their evidence. Preserve private tool settings."""
-import re
-import time
+"""Compatibility names. The functions live only in the private ledger command."""
+import importlib.util
+import os
+from pathlib import Path
 
-VERSION = "2026-10-16-close-time"
-RECORD = re.compile(r"Closed at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
-
-
-def close_evidence(evidence, previous):
-    closed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    earlier = re.sub(RECORD.pattern + r";?\s*", "", previous)
-    proof = evidence if earlier in ("—", "") else f"{evidence}; earlier: {earlier}"
-    return f"Closed at {closed_at}; {proof}"
-
-
-def keep_close_time(status, previous, evidence):
-    record = RECORD.search(previous)
-    return f"{record.group(0)}; {evidence}" if status == "DONE" and record else evidence
+path = Path(os.environ.get("LEDGER_TEST_MODULE", Path.home() / ".local/share/ledger/ledger.py"))
+spec = importlib.util.spec_from_file_location("_ledger_close_source", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+close_evidence = module.close_evidence
+keep_close_time = module.keep_close_time
+VERSION = module.VERSION
+RECORD = module.RECORD
 
 
 def prepare_ledger(source):
-    """Retired: update the command through the ledger source package."""
-    raise ValueError("The legacy ledger patch is retired. Use the ledger source package.")
+    """Accept the self-contained command. Refuse the old import patch."""
+    if ("def close_evidence(" not in source or "def keep_close_time(" not in source
+            or "from ledger_close_time import" in source):
+        raise ValueError("Install the canonical ledger source; do not patch a runtime helper import.")
+    compile(source, "ledger.py", "exec")
+    return source
