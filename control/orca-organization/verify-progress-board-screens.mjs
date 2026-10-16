@@ -212,5 +212,5 @@ try {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
 }
-await fs.writeFile(path.join(output, "checks.json"), JSON.stringify(results, null, 2));
+await fs.writeFile(path.join(output, "checks.json"), JSON.stringify(results, null, 2) + "\n");
 console.log(`Progress board: ${results.length} viewport checks passed.`);

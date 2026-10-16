@@ -11,7 +11,8 @@ Private live-data captures remain local in `live/`. They are not part of this pu
 The new reader queried the existing Mini and MacBook through authenticated, read-only APIs.
 Both hosts returned five project ledgers. Their running-session counts matched the live agent directory.
 The old installed board returned zero projects on both hosts.
-No live config, session, or ledger file was changed.
+The read-only checks did not change live config, sessions, or ledger files.
+FU-191 tracking used the ledger command.
 
 Old ledger rows have no close dates. Their completion dates remain unknown.
 The board excludes them from its 24-hour Done count.
