@@ -433,7 +433,7 @@ build-ci	D	0	91	.github/workflows/desktop-packages.yml
 build-ci	M	30	7	.github/workflows/desktop-release.yml
 build-ci	D	0	152	.github/workflows/desktop-rollout.yml
 build-ci	M	5	1	.github/workflows/docker.yml
-build-ci	A	126	0	.github/workflows/merge-pr.yml
+build-ci	A	155	0	.github/workflows/merge-pr.yml
 build-ci	D	0	61	.github/workflows/nix-update-hash.yml
 build-ci	D	0	123	.github/workflows/nix.yml
 build-ci	A	206	0	.github/workflows/orca-private-preview.yml
@@ -522,7 +522,7 @@ build-ci	A	151	0	scripts/c2c-ui-fixture/source-smoke.test.mjs
 build-ci	A	15	0	scripts/c2c-ui-fixture/unistyles.tsx
 build-ci	A	87	0	scripts/check-machine-data.mjs
 build-ci	A	25	0	scripts/check-machine-data.test.mjs
-build-ci	M	497	17	scripts/ci-workflow.test.mjs
+build-ci	M	681	17	scripts/ci-workflow.test.mjs
 build-ci	A	35	0	scripts/client-reproducibility.test.mjs
 build-ci	A	22	0	scripts/command-centre-build-config.mjs
 build-ci	A	90	0	scripts/command-centre-build-config.test.mjs
