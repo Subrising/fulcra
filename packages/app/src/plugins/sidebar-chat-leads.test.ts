@@ -27,6 +27,21 @@ describe("chatLeads", () => {
     ]);
   });
 
+  it("includes a labeled nested lead without changing its reporting line", () => {
+    const sessions = {
+      book: {
+        agents: new Map([
+          ["lead", chat("lead", "Game lead", { role: "game-lead", "fulcra.reports-to": "parent" })],
+          [
+            "worker",
+            chat("worker", "Worker", { role: "implementation", "fulcra.reports-to": "parent" }),
+          ],
+        ]),
+      },
+    };
+    expect(chatLeads(sessions, new Set()).map((lead) => lead.agentId)).toEqual(["lead"]);
+  });
+
   it("leaves out shown, archived, closed, main assistant and other-line chats", () => {
     const sessions = {
       mini: {

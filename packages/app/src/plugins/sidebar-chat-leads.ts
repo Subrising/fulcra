@@ -28,8 +28,14 @@ export interface ChatLead {
 
 type Sessions = Record<string, { agents: ReadonlyMap<string, ChatRecord> } | undefined>;
 
+function isLead(agent: ChatRecord): boolean {
+  if (agent.labels?.[REPORTS_TO_LABEL]?.trim() === MAIN_ASSISTANT_REF) return true;
+  const role = agent.labels?.role?.trim() || agent.labels?.["fulcra.role"]?.trim();
+  return role === "lead" || role?.endsWith("-lead") === true;
+}
+
 /**
- * Open chats, on every connected computer, whose reporting line is the main assistant and that hold no seat: they act
+ * Open chats, on every connected computer, that report to the main assistant or carry an explicit lead role: they act
  * as leads. Chats already shown from the role directory (`shownIds`) and the main assistant itself are left out.
  */
 export function chatLeads(sessions: Sessions, shownIds: ReadonlySet<string>): ChatLead[] {
@@ -37,7 +43,7 @@ export function chatLeads(sessions: Sessions, shownIds: ReadonlySet<string>): Ch
   for (const [serverId, session] of Object.entries(sessions)) {
     for (const agent of session?.agents.values() ?? []) {
       if (agent.archivedAt || agent.status === "closed" || shownIds.has(agent.id)) continue;
-      if (agent.labels?.[REPORTS_TO_LABEL]?.trim() !== MAIN_ASSISTANT_REF) continue;
+      if (!isLead(agent)) continue;
       if (agent.labels?.[SEAT_LABEL]?.trim() === MAIN_ASSISTANT_ROLE) continue;
       leads.push({
         serverId,

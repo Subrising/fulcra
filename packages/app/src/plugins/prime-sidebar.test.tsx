@@ -1303,3 +1303,26 @@ it("a chat-list lead opens its chat even when the host registry check refuses, n
   expect(f.open).toHaveBeenCalledWith({ serverId: "book", agentId: GAG_CHAT });
   expect(f.push).not.toHaveBeenCalled();
 });
+
+it("lists session leads without a selected or installed Command Centre", async () => {
+  gagChat();
+  f.controller = null;
+  mountPinned();
+  expect(await screen.findByTestId(`sidebar-chat-lead-book-${GAG_CHAT}`)).toBeTruthy();
+  expect(f.read).not.toHaveBeenCalled();
+});
+
+it("shows each session lead once when the Command Centre section is mounted", async () => {
+  gagChat();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  render(
+    <QueryClientProvider client={client}>
+      <PinnedMainAssistant />
+      <PrimeSidebarRows serverId="mini" retryDelay={fastRetry} />
+    </QueryClientProvider>,
+  );
+  await vi.waitFor(() =>
+    expect(screen.getAllByTestId(`sidebar-chat-lead-book-${GAG_CHAT}`)).toHaveLength(1),
+  );
+});
