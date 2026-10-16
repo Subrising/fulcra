@@ -6,6 +6,9 @@ node_modules/
 # Expo
 .expo/
 dist/
+.e2e-web/
+.e2e-plan/
+.e2e-retry/
 web-build/
 expo-env.d.ts
 

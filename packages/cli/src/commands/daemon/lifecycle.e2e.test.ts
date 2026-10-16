@@ -7,8 +7,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hashDaemonPassword } from "@getpaseo/server/auth";
 import { startDaemonInstance, readDaemonInstance } from "@getpaseo/server/daemon-control";
-import { expect, test } from "vitest";
+import { expect, test as baseTest } from "vitest";
 import { connectToDaemon } from "../../utils/client.js";
+
+// Each case owns its homes, environment, ports and process cleanup.
+// The CI command bounds concurrency at two private fixtures.
+const test = baseTest.concurrent;
 
 const repo = fileURLToPath(new URL("../../../../..", import.meta.url));
 const cli = path.join(repo, "packages/cli/dist/index.js");
@@ -86,15 +90,17 @@ async function fixture() {
     return status;
   }
   async function configure(home: string, listen: string) {
-    for (const [field, value] of [
-      ["daemon.listen", listen],
-      ["daemon.relay.enabled", "false"],
-      ["features.webUi.enabled", "false"],
-      ["features.dictation.enabled", "false"],
-      ["features.voiceMode.enabled", "false"],
-    ]) {
-      await ok(["daemon", "config", "set", field!, value!, "--home", home]);
+    // Keep the real selector, config writer and private-home creation. The
+    // feature values below only disable unrelated services in this fixture.
+    await ok(["daemon", "config", "set", "daemon.listen", listen, "--home", home]);
+    const configPath = path.join(home, "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.daemon.relay = { ...config.daemon.relay, enabled: false };
+    config.features ??= {};
+    for (const feature of ["webUi", "dictation", "voiceMode"]) {
+      config.features[feature] = { ...config.features[feature], enabled: false };
     }
+    await writeFile(configPath, JSON.stringify(config));
   }
   async function close() {
     for (const [home, captured] of owned) {

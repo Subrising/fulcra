@@ -181,6 +181,16 @@ test("three queued agent messages start one combined turn and retain each receip
   await f.send("one", f.sender.id);
   await f.send("two", f.sender.id);
   await f.send("three", f.sender.id);
+  expect(f.messages.filter((m) => m.type === "send_agent_message_response")).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          accepted: true,
+          deliveryNote: "accepted; delivered after the current turn",
+        }),
+      }),
+    ]),
+  );
   expect(f.pending()).toBe(3);
   expect(f.prompts).toEqual([]);
   await f.endTurnIn((run) => f.host.rpc(undefined, run));
@@ -196,6 +206,21 @@ test("three queued agent messages start one combined turn and retain each receip
     "delivered",
   ]);
   expect(new Set(records.map((r: { id: string }) => r.id)).size).toBe(3);
+});
+
+test("an idle receiver returns the immediate delivery receipt", async () => {
+  const f = await fixture();
+  await f.send("start now", f.sender.id);
+  expect(f.messages).toContainEqual(
+    expect.objectContaining({
+      type: "send_agent_message_response",
+      payload: expect.objectContaining({
+        accepted: true,
+        deliveryNote: "accepted; delivered now",
+      }),
+    }),
+  );
+  await vi.waitFor(() => expect(f.prompts).toEqual(["start now"]));
 });
 
 test("an OpenCode queue starts one combined turn through the manager boundary", async () => {

@@ -5,7 +5,7 @@
 // Output names the file or commit, the line and the rule number only, never the matched text.
 // Usage: node scripts/check-machine-data.mjs [--commits <rev-range>]
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // A shape no fixture needs: an iPhone UDID (8 digits, dash, 16 hex).
@@ -67,7 +67,11 @@ function privateText(root) {
   return existsSync(local) ? readFileSync(local, "utf8") : "";
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (
+  process.argv[1] &&
+  existsSync(process.argv[1]) &&
+  realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+) {
   const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
   const privateRules = parsePrivateRules(privateText(root));
   if (!privateRules.length)

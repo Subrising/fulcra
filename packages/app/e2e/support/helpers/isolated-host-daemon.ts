@@ -174,9 +174,10 @@ export async function startIsolatedHostDaemon(
       stdio: ["ignore", "ignore", "pipe"],
       detached: false,
     };
-    const child = publishedPackageRoot
-      ? spawn(process.execPath, ["dist/scripts/supervisor-entrypoint.js"], spawnOptions)
-      : spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], spawnOptions);
+    const child =
+      publishedPackageRoot || process.env.E2E_USE_BUILT_DAEMON === "1"
+        ? spawn(process.execPath, ["dist/scripts/supervisor-entrypoint.js"], spawnOptions)
+        : spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], spawnOptions);
 
     let stderr = "";
     child.stderr?.on("data", (chunk: Buffer) => {
