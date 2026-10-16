@@ -145,11 +145,23 @@ export const runRead: RunRead = (command, args, cwd) =>
 export async function ledgerLineDates(file: string, run = runRead): Promise<Map<string, string>> {
   const dates = new Map<string, string>();
   try {
-    const text = await run(
-      "git",
-      ["blame", "--line-porcelain", "--", path.basename(file)],
-      path.dirname(file),
-    );
+    const name = path.basename(file),
+      cwd = path.dirname(file);
+    let text: string;
+    try {
+      text = await run("git", ["blame", "--line-porcelain", "HEAD", "--", name], cwd);
+    } catch {
+      // The current copy can be untracked after a ledger was removed from the vault.
+      const revision = (
+        await run(
+          "git",
+          ["log", "-1", "--format=%H", "--diff-filter=AM", "--no-renames", "--", name],
+          cwd,
+        )
+      ).trim();
+      if (!/^[a-f0-9]{40}$/.test(revision)) return dates;
+      text = await run("git", ["blame", "--line-porcelain", revision, "--", name], cwd);
+    }
     let committed = false,
       at: string | undefined;
     for (const line of text.split("\n")) {
@@ -170,7 +182,7 @@ export async function ledgerLineDates(file: string, run = runRead): Promise<Map<
       }
     }
   } catch {
-    /* Untracked files and mirrors use a marked file-time estimate. */
+    /* A file without committed rows cannot supply completion dates. */
   }
   return dates;
 }
@@ -184,7 +196,7 @@ export async function dateLedgerItems(
   if (
     !items.some(
       (item) =>
-        (/^DONE\b/i.test(item.status) && !item.completedAt) ||
+        (/^DONE\b/i.test(item.status) && item.completedSource !== "record") ||
         (/^BLOCKED\b/i.test(item.status) && !item.blockedAt),
     )
   )
@@ -192,8 +204,8 @@ export async function dateLedgerItems(
   const dates = await ledgerLineDates(file, run);
   return items.map((item) => {
     const at = dates.get(item.id);
-    if (/^DONE\b/i.test(item.status) && !item.completedAt)
-      return { ...item, completedAt: at ?? mtime, completedSource: at ? "git" : "file" };
+    if (/^DONE\b/i.test(item.status) && item.completedSource !== "record")
+      return { ...item, completedAt: at, completedSource: at ? "git" : undefined };
     if (/^BLOCKED\b/i.test(item.status) && !item.blockedAt)
       return { ...item, blockedAt: at ?? mtime, blockedApprox: true };
     return item;
@@ -333,11 +345,7 @@ export function createProgressBoard(
       (previous?.observedAt && Date.parse(observedAt) - Date.parse(previous.observedAt) <= 60000);
     const done = /^DONE\b/i.test(item.status);
     const blocked = /^BLOCKED\b/i.test(item.status);
-    const completedAt = done
-      ? (item.completedAt ??
-        previous?.completedAt ??
-        (continuous && previous && !/^DONE\b/i.test(previous.status) ? observedAt : undefined))
-      : undefined;
+    const completedAt = done && item.completedSource === "record" ? item.completedAt : undefined;
     const blockedAt = blocked
       ? (item.blockedAt ??
         previous?.blockedAt ??
@@ -445,8 +453,12 @@ export function createProgressBoard(
         .filter((d) => d.isDirectory() && !d.isSymbolicLink())
         .map((d) => d.name)
         .sort();
-    } catch {
-      warnings.push("Project lists are unavailable on this computer.");
+    } catch (error) {
+      warnings.push(
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? "This computer has no project lists."
+          : "Project lists cannot be read on this computer.",
+      );
     }
     const [workspaces, agents] = await Promise.all([
       paseo.workspaces.list({ page: { limit: 100 } }),

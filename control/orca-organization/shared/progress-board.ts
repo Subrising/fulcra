@@ -116,11 +116,19 @@ export function ageLabel(createdAt: string, now: number): string {
   return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
-// Old ledgers use a dated line change, or a clearly marked file-time estimate.
+// Only ledger records and committed row dates can date completed work.
+export function completionDate(row: BoardItem): string | undefined {
+  if (!["record", "git"].includes(row.completedSource ?? "")) return undefined;
+  return Number.isFinite(Date.parse(row.completedAt ?? "")) ? row.completedAt : undefined;
+}
+
+export function unknownDone(items: readonly BoardItem[]): BoardItem[] {
+  return items.filter((row) => /^DONE\b/i.test(row.status) && !completionDate(row)).toReversed();
+}
 export function recentDone(items: readonly BoardItem[], now: number, days = 1): BoardItem[] {
   return items
     .filter((row) => {
-      const at = Date.parse(row.completedAt ?? "");
+      const at = Date.parse(completionDate(row) ?? "");
       return (
         /^DONE\b/i.test(row.status) &&
         Number.isFinite(at) &&
@@ -144,14 +152,18 @@ export function combineProjects(
 ) {
   const grouped = new Map<
     string,
-    { project: ProgressBoard["projects"][number]; jobs: Array<BoardJob & { hostId: string }> }
+    {
+      project: ProgressBoard["projects"][number];
+      jobs: Array<BoardJob & { hostId: string }>;
+      datedItems: BoardItem[];
+    }
   >();
   for (const board of boards)
     for (const project of board.data?.projects ?? []) {
       const key = project.name.toLowerCase();
       let group = grouped.get(key);
       if (!group) {
-        group = { project, jobs: [] };
+        group = { project, jobs: [], datedItems: [] };
         grouped.set(key, group);
       }
       if (
@@ -159,9 +171,25 @@ export function combineProjects(
         (Date.parse(group.project.ledgerUpdatedAt ?? "") || 0)
       )
         group.project = project;
+      group.datedItems.push(
+        ...project.items.filter((item) => /^DONE\b/i.test(item.status) && completionDate(item)),
+      );
       group.jobs.push(
         ...project.jobs.map((job) => ({ ...job, hostId: board.id, machine: board.label })),
       );
     }
-  return [...grouped.values()].map(({ project, jobs }) => ({ ...project, jobs }));
+  return [...grouped.values()].map(({ project, jobs, datedItems }) => ({
+    ...project,
+    jobs,
+    items: project.items.map((item) => {
+      if (!/^DONE\b/i.test(item.status) || completionDate(item)) return item;
+      const dated = datedItems.find(
+        (other) =>
+          other.id === item.id && other.item === item.item && other.evidence === item.evidence,
+      );
+      return dated
+        ? { ...item, completedAt: dated.completedAt, completedSource: dated.completedSource }
+        : item;
+    }),
+  }));
 }

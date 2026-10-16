@@ -19,15 +19,5 @@ def keep_close_time(status, previous, evidence):
 
 
 def prepare_ledger(source):
-    """Apply only close-time changes to the existing private command."""
-    replacements = [
-        ('HOME = os.path.expanduser("~")', 'from ledger_close_time import close_evidence, keep_close_time, VERSION\n\nHOME = os.path.expanduser("~")'),
-        ('        c[5] = ev if c[5] in ("—", "") else f"{ev}; earlier: {c[5]}"', '        c[5] = close_evidence(ev, c[5])'),
-        ('            c[5] = clean(o["evidence"], "--evidence")', '            c[5] = keep_close_time(c[4], c[5], clean(o["evidence"], "--evidence"))'),
-        ('    return p, open(p).read().split("\\n")', '    with open(p) as f:\n        return p, f.read().split("\\n")'),
-    ]
-    for old, new in replacements:
-        if source.count(old) != 1:
-            raise ValueError("The installed tool changed. Review it before applying the close-time update.")
-        source = source.replace(old, new)
-    return source
+    """Retired: update the command through the ledger source package."""
+    raise ValueError("The legacy ledger patch is retired. Use the ledger source package.")
