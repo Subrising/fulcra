@@ -417,6 +417,14 @@ for (const size of SIZES)
     );
     await vi.waitFor(() => expect(container!.textContent).toContain("Game lead"));
     expect(container.textContent).toContain("Project lead");
+    const nested = container.querySelector(
+      '[data-testid="sidebar-chat-lead-book-nested"]',
+    ) as HTMLElement;
+    expect(
+      [...nested.querySelectorAll("*")].some(
+        (element) => getComputedStyle(element).webkitLineClamp === "2",
+      ),
+    ).toBe(true);
     expect(measure(container)).toEqual([]);
     (
       container.querySelector('[data-testid="sidebar-chat-lead-book-nested"]') as HTMLElement

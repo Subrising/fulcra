@@ -1326,3 +1326,20 @@ it("shows each session lead once when the Command Centre section is mounted", as
     expect(screen.getAllByTestId(`sidebar-chat-lead-book-${GAG_CHAT}`)).toHaveLength(1),
   );
 });
+
+it("keeps an unlabelled main assistant out of fallback leads once its pin is known", async () => {
+  f.remote.mini = { directory: { available: true, primes: [prime()] } };
+  f.chats = {
+    mini: {
+      "original-prime": {
+        id: "original-prime",
+        title: "Main",
+        status: "idle",
+        labels: { "fulcra.reports-to": "role:main-assistant" },
+      },
+    },
+  };
+  mountPinned();
+  await screen.findByTestId("sidebar-pinned-main-assistant");
+  expect(screen.queryByTestId("sidebar-chat-lead-mini-original-prime")).toBeNull();
+});

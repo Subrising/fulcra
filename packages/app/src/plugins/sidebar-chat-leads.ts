@@ -28,10 +28,14 @@ export interface ChatLead {
 
 type Sessions = Record<string, { agents: ReadonlyMap<string, ChatRecord> } | undefined>;
 
+// Display labels recognized by report-up/project cleanup, plus the existing game-lead label.
+// These labels grant no authority. Unknown suffixes do not define a lead.
+const LEAD_ROLES = new Set(["lead", "project-lead", "game-lead"]);
+
 function isLead(agent: ChatRecord): boolean {
   if (agent.labels?.[REPORTS_TO_LABEL]?.trim() === MAIN_ASSISTANT_REF) return true;
   const role = agent.labels?.role?.trim() || agent.labels?.["fulcra.role"]?.trim();
-  return role === "lead" || role?.endsWith("-lead") === true;
+  return LEAD_ROLES.has(role ?? "");
 }
 
 /**

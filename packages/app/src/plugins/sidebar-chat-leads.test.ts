@@ -42,6 +42,19 @@ describe("chatLeads", () => {
     expect(chatLeads(sessions, new Set()).map((lead) => lead.agentId)).toEqual(["lead"]);
   });
 
+  it.each(["lead", "project-lead", "game-lead"])("accepts the exact role %s", (role) => {
+    const sessions = { book: { agents: new Map([["lead", chat("lead", "Lead", { role })]]) } };
+    expect(chatLeads(sessions, new Set()).map((lead) => lead.agentId)).toEqual(["lead"]);
+  });
+
+  it.each(["unknown-lead", "team-lead", "game-lead-extra", "Lead"])(
+    "rejects the unknown role %s",
+    (role) => {
+      const sessions = { book: { agents: new Map([["other", chat("other", "Other", { role })]]) } };
+      expect(chatLeads(sessions, new Set())).toEqual([]);
+    },
+  );
+
   it("leaves out shown, archived, closed, main assistant and other-line chats", () => {
     const sessions = {
       mini: {

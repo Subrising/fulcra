@@ -779,17 +779,26 @@ export function PinnedMainAssistant({ onBeforeNavigate }: { onBeforeNavigate?: (
           />
         );
       })}
-      <SessionLeadRows onBeforeNavigate={onBeforeNavigate} />
+      <SessionLeadRows
+        shownIds={new Set(shown.map((entry) => entry.sessionId))}
+        onBeforeNavigate={onBeforeNavigate}
+      />
     </>
   );
 }
 
 /** List already-authorized session data when no Command Centre Leads section is mounted. */
-function SessionLeadRows({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
+function SessionLeadRows({
+  shownIds,
+  onBeforeNavigate,
+}: {
+  shownIds: ReadonlySet<string>;
+  onBeforeNavigate?: () => void;
+}) {
   const sections = useLeadsListedMainAssistant((state) => state.sections);
   const sessions = useSessionStore((state) => state.sessions);
   const hosts = useHosts();
-  const leads = useMemo(() => chatLeads(sessions, new Set()), [sessions]);
+  const leads = useMemo(() => chatLeads(sessions, shownIds), [sessions, shownIds]);
   const collapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedLeads);
   if (sections.size > 0 || collapsed) return null;
   return (
@@ -1229,7 +1238,7 @@ function LeadLine({
   wrap?: boolean;
 }) {
   return (
-    <Text style={styles.text} numberOfLines={wrap ? undefined : 1}>
+    <Text style={styles.text} numberOfLines={wrap ? 2 : 1}>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.status}>{" · "}</Text>
       <Text style={styles.status}>{status}</Text>
