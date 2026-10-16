@@ -82,7 +82,8 @@ import type { CreationSnapshot, AgentCreateRequest } from "@getpaseo/protocol/me
 import type { MessageReceipts } from "./message-receipts/index.js";
 import equal from "fast-deep-equal";
 import { SessionDelivery, type OwnedSubscription } from "./session/owned-subscriptions/index.js";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, validate as isUuid } from "uuid";
+import { DeviceRegistry } from "./pairing/device-registry.js";
 import { lstat, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, resolve, sep } from "path";
 import { homedir } from "node:os";
@@ -3241,6 +3242,7 @@ export class Session {
       const activity = this.getClientActivity(source);
       if (
         typeof accountSessionId !== "string" ||
+        !isUuid(accountSessionId) ||
         !ids.has(accountSessionId) ||
         !activity?.appVisible ||
         activity.focusedAgentId !== accountSessionId
@@ -3248,22 +3250,30 @@ export class Session {
         throw new Error("Open this session before changing its account");
     };
     assertAccountView();
+    const principalReader = () => {
+      assertAccountView();
+      const admission = source && this.managementSources.get(source);
+      if (!admission || this.isCleanedUp) return undefined;
+      if (
+        readOnlyCaller &&
+        !scopedAccount &&
+        admission.authentication.authentication === "paired-device" &&
+        (!admission.authentication.deviceId ||
+          !new DeviceRegistry(this.paseoHome).hasCommandCentre(admission.authentication.deviceId))
+      )
+        return undefined;
+      return {
+        ...admission.authentication,
+        permissions: this.authorization
+          .listPermissions()
+          .filter((permission) => admission.permissions.includes(permission)),
+      };
+    };
     const management =
       source && !this.pluginOriginId
         ? this.agentManager.trustedPlugins.management.open(
             this.pluginRuntime.managementTarget?.(msg.pluginId),
-            () => {
-              assertAccountView();
-              const admission = this.managementSources.get(source);
-              return admission && !this.isCleanedUp
-                ? {
-                    ...admission.authentication,
-                    permissions: this.authorization
-                      .listPermissions()
-                      .filter((permission) => admission.permissions.includes(permission)),
-                  }
-                : undefined;
-            },
+            principalReader,
             { readOnly: readOnlyCaller, ...(scopedAccount ? { accountSessionId } : {}) },
           )
         : undefined;
@@ -3279,7 +3289,12 @@ export class Session {
         if (management) this.managementInvocations.delete(management);
       })
       .then((output) => {
-        assertAccountView();
+        // A completed write keeps its result if the user changes focus after dispatch.
+        if (msg.method !== "organization.accounts.switch") {
+          assertAccountView();
+          if (readOnlyCaller && management && !principalReader())
+            throw new Error("Command Centre read authority changed");
+        }
         this.emit({
           type: "plugin.rpc.invoke.response",
           payload: { requestId: msg.requestId, output },

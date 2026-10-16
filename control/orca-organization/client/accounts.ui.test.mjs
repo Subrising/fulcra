@@ -780,7 +780,7 @@ test("normal phone lists and switches its bound session without credentials or p
     ).ok,
     true,
   );
-  assert.deepEqual(w.audit, [{ action: "switch", accountLabel: "Personal" }]);
+  assert.deepEqual(w.audit, [], "the host owns scoped switch audits");
   assert.equal(
     (await w.as(phone, () => w.handlers.switch({ agentId: "other", account: "Personal" }, w.paseo)))
       .ok,

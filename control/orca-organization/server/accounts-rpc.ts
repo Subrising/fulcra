@@ -139,7 +139,8 @@ export function createAccountHandlers(d: Deps) {
     const authority = accountAuthority(undefined, sessionId);
     if (!authority.allowed) return refused(ask());
     const { reply, audit } = await run();
-    if (!reply.ok || !audit || !authority.remote) return reply;
+    // A scoped switch is audited by the host before its result reaches this handler.
+    if (!reply.ok || !audit || !authority.remote || accountSessionScope()) return reply;
     try {
       await recordAccountAction(audit);
       return reply;

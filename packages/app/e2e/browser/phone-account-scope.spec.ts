@@ -210,5 +210,6 @@ test("normal paired phone lists and switches the viewed session through the real
     child.send({ type: "stop" });
     await Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, 10_000))]);
     await killProcessTree(child);
+    expect(child.exitCode).toBe(0);
   }
 });

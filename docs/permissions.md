@@ -46,11 +46,14 @@ See [device-key login on direct connections](direct-device-login.md) for the pla
 `accounts.manage` is a legacy device grant. It does not permit account administration or cross-session account switches on a paired device.
 
 A normal paired device can use `/account` without either management grant. It needs `daemon.read`, `workspace.read`, and `workspace.write`.
-The host binds the list and switch to the source socket's focused chat and live timeline. It checks this binding before dispatch and reply.
+The host binds account requests to the source socket's focused chat and live timeline. It checks this binding before dispatch and before list replies.
+The phone reports its focus and subscriptions. This intent check prevents cross-tab mistakes; it does not isolate a compromised device with `workspace.write`.
+A completed switch keeps its result when focus changes. Failed device audit writes return a warning with that successful result.
 A switch uses the existing idle, account-limit, history, and native recovery checks. A session under another owner's delegation refuses the switch.
 The account list contains routing IDs, names, provider, and status only. Status can include a limit reason and reset time.
-The list excludes credentials, pool settings, budgets, and other session assignments. Successful device switches record the device ID in `accounts-audit.json`.
+The list excludes credentials, pool settings, budgets, and other session assignments. Completed device switches record the device ID in `accounts-audit.json`. Uncertain outcomes remain in the controller journal with the device ID.
 Account creation, removal, credentials, pool settings, and explicit account takeover require the local owner on the host Mac.
+Read-only Command Centre calls also require a current host grant at invocation and dispatch. Removing or suspending that grant refuses later calls.
 Clients without `command_centre_permission` do not receive the management permissions on the wire because their permission enum is closed.
 
 An operation may require several existing permissions together. Session-bound quota reads require both `workspace.read` for the native session identity and `daemon.read` for account usage. Apply this conjunction to requests and replies so revocation also prevents delivery of an in-flight result. Existing arrays of alternative permissions remain any-of requirements.

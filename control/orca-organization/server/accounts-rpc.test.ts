@@ -445,7 +445,7 @@ test("normal paired phone lists a narrow projection and switches only its bound 
       true,
     );
     assert.equal(moves.length, 1);
-    assert.deepEqual(audits, [{ action: "switch", accountLabel: "Spare" }]);
+    assert.deepEqual(audits, [], "the host owns scoped switch audits");
     assert.equal(
       (await asPhone(() => h.switch({ agentId: "other", account: account.id }, native))).ok,
       false,
@@ -500,6 +500,37 @@ test("paired list removes secret-shaped legacy labels and status text", async ()
       },
     ]);
     assert.equal(JSON.stringify(view).includes(canary), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an old overlong account name is refused before a native switch", async () => {
+  const root = scratch();
+  try {
+    const account = await addAccount(root, { provider: "claude", name: "Spare" });
+    await update(root, (state) => {
+      state.accounts[0].name = "Legacy account ".repeat(8);
+      return null;
+    });
+    let moved = false;
+    const h = createAccountHandlers({
+      root: () => root,
+      configRoles: () => null,
+      takeOver: async () => {
+        moved = true;
+        return { ok: true };
+      },
+    });
+    const result = await asOwner(() =>
+      h.switch(
+        { agentId: "chat", account: account.id },
+        { agents: { ref: () => ({ current: () => ({ provider: "claude" }) }) } },
+      ),
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.message!, /valid name/);
+    assert.equal(moved, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

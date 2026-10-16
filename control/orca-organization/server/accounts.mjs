@@ -828,7 +828,7 @@ export async function switchSession(
       return {
         refused: `No ${LABEL[provider]} account has that name. Type /account to list them.`,
       };
-    if (publicAccountText(to.name, null) !== to.name)
+    if (to.name.length > 60 || publicAccountText(to.name, null) !== to.name)
       return { refused: "This account needs a valid name on the host" };
     const st = accountStatus(to, now);
     if (st.state === "limited") return { refused: `${to.name} is limited until ${st.until}.` };

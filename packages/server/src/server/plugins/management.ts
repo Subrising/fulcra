@@ -337,6 +337,7 @@ export class ManagementAuthority {
       () => invocation.bridge(command, principal),
     );
     return completion.then((result) => {
+      let output = result;
       // Record a completed effect even if the phone closes its view before the reply arrives.
       if (
         invocation.accountSessionId &&
@@ -346,16 +347,28 @@ export class ManagementAuthority {
         typeof result.account.name === "string" &&
         principal.deviceId
       ) {
-        const entry = AccountActionInputSchema.parse({
+        const parsed = AccountActionInputSchema.safeParse({
           action: "switch",
           accountLabel: result.account.name,
         });
-        this.accountActions!.record({
-          at: new Date().toISOString(),
-          deviceId: principal.deviceId,
-          ...entry,
-        });
-        invocation.accountRecorded = true;
+        const entry = parsed.success
+          ? parsed.data
+          : { action: "switch" as const, accountLabel: "Pooled account" };
+        try {
+          this.accountActions!.record({
+            at: new Date().toISOString(),
+            deviceId: principal.deviceId,
+            ...entry,
+          });
+          invocation.accountRecorded = true;
+        } catch {
+          const message =
+            typeof result.message === "string" ? result.message.slice(0, 200) : "Account switched.";
+          output = {
+            ...result,
+            message: `${message} The device audit could not record this switch.`,
+          };
+        }
       }
       // Only the actual consumed bridge's successful durable transfer is a host lifecycle fact.
       if (
@@ -372,7 +385,7 @@ export class ManagementAuthority {
           /* A report refusal cannot undo the completed transfer fact. */
         }
       }
-      return result;
+      return output;
     });
   }
   private check(id: string, pluginId: string): Invocation {

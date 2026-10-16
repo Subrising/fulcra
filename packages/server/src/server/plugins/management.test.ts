@@ -695,3 +695,47 @@ test("completed paired switch stays audited after the admitting source closes", 
   ]);
   authority.close();
 });
+
+test("audit failures keep a completed account switch result and invalid labels use a safe fallback", async () => {
+  for (const broken of [false, true]) {
+    const entries: unknown[] = [];
+    const authority = new ManagementAuthority(
+      { enabled: () => true, validate: (c) => c },
+      {
+        accountActions: {
+          record: (entry) => {
+            if (broken) throw Error("Synthetic audit failure");
+            entries.push(entry);
+          },
+        },
+      },
+    );
+    authority.register("orca-organization-next", async (accountCommand, principal) => {
+      consumeAccountDispatch(accountCommand, principal);
+      return { ok: true, message: "Switched.", account: { name: "Legacy account ".repeat(8) } };
+    });
+    const invocation = authority.open(
+      bundledTarget,
+      () => ({
+        id: "device:phone",
+        deviceId: "phone",
+        authentication: "paired-device",
+        permissions: ["daemon.read", "workspace.read", "workspace.write"],
+      }),
+      { accountSessionId: "chat" },
+    )!;
+    const result = await invocation.invoke("switch", {
+      method: "session-takeover",
+      input: { session: "chat", reason: "manual" },
+    });
+    expect(result).toEqual({
+      ok: true,
+      message: broken ? "Switched. The device audit could not record this switch." : "Switched.",
+      account: { name: "Legacy account ".repeat(8) },
+    });
+    expect(entries).toEqual(
+      broken ? [] : [expect.objectContaining({ action: "switch", accountLabel: "Pooled account" })],
+    );
+    authority.close();
+  }
+});
