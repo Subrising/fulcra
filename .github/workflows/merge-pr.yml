@@ -1,5 +1,5 @@
 name: Merge PR
-run-name: Merge PR ${{ inputs.pr || github.event.pull_request.number }} at ${{ inputs.sha || github.event.pull_request.head.sha }}
+run-name: Merge PR ${{ inputs.pr }} at ${{ inputs.sha }}
 
 on:
   workflow_dispatch:
@@ -12,10 +12,6 @@ on:
         description: Full tested head SHA
         required: true
         type: string
-  # FU-182 bootstrap only. Remove this trigger through the next checked PR.
-  pull_request:
-    types: [labeled]
-    branches: [main]
 
 permissions:
   contents: write
@@ -28,14 +24,14 @@ concurrency:
 
 jobs:
   merge:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'fu182-bootstrap'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      PR: ${{ inputs.pr || github.event.pull_request.number }}
-      SHA: ${{ inputs.sha || github.event.pull_request.head.sha }}
+      PR: ${{ inputs.pr }}
+      SHA: ${{ inputs.sha }}
       ACTOR: ${{ github.actor }}
       TRIGGERING_ACTOR: ${{ github.triggering_actor }}
       OWNER: ${{ github.repository_owner }}
@@ -45,20 +41,13 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
           test "$GH_REPO" = Subrising/fulcra
           test "$ACTOR" = "$OWNER"
           test "$TRIGGERING_ACTOR" = "$OWNER"
-          if [ "$EVENT" = workflow_dispatch ]; then
-            test "$REF" = refs/heads/main
-          else
-            test "$EVENT" = pull_request
-            test "$HEAD_REF" = fix/merge-bot
-            test "$HEAD_REPO" = "$GH_REPO"
-          fi
+          test "$EVENT" = workflow_dispatch
+          test "$REF" = refs/heads/main
           [[ "$PR" =~ ^[1-9][0-9]*$ ]] || exit 1
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
           test -n "$FULCRA_PRIVATE_PATTERNS"
