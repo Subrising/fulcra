@@ -15,6 +15,7 @@ import { tmpdir } from "os";
 import { join, dirname, delimiter } from "path";
 import { fileURLToPath } from "url";
 import { FIRST_TEST_PORT, LAST_TEST_PORT, TEST_PORT_BLOCK_SIZE } from "./helpers/network.ts";
+import { requireBuiltCli } from "../../../.github/scripts/ci-built-cli.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..", "..");
@@ -178,10 +179,15 @@ let passed = 0;
 let failed = 0;
 const failures: Failure[] = [];
 
-await runCommand(
-  "Building server stack",
-  `npm --prefix ${JSON.stringify(repoRoot)} run build:server`,
-);
+if (process.env.PASEO_CLI_TEST_USE_BUILT === "1") {
+  await requireBuiltCli(repoRoot);
+  console.log("Using the exact compiled stack restored or built by CI.");
+} else {
+  await runCommand(
+    "Building server stack",
+    `npm --prefix ${JSON.stringify(repoRoot)} run build:server`,
+  );
+}
 
 type TestOutcome =
   | { status: "passed"; durationMs: number }

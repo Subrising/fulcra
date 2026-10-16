@@ -1,0 +1,47 @@
+name: Exact CI dependencies
+description: Reuse patched dependencies for the same platform and install inputs.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+    - shell: bash
+      run: npm install --global npm@11.12.1
+    - id: key
+      shell: bash
+      env:
+        INPUT_HASH: ${{ hashFiles('package-lock.json', 'package.json', 'packages/*/package.json', 'plugins/package.json', 'scripts/postinstall-patches.mjs', 'scripts/install-git-hooks.mjs', 'scripts/npm-retry.mjs', 'patches/**', '.github/scripts/install-cache-inputs.mjs', '.npmrc', '.github/actions/ci-deps/action.yml') }}
+      run: echo "key=installed-v1-${{ runner.os }}-${{ runner.arch }}-${ImageOS:-unknown}-node22-npm11-${INPUT_HASH}" >> "$GITHUB_OUTPUT"
+    - id: lifecycle
+      shell: bash
+      run: node .github/scripts/install-cache-inputs.mjs
+    - id: dependencies
+      if: steps.lifecycle.outputs.reusable == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+          plugins/node_modules
+        key: ${{ steps.key.outputs.key }}
+    - if: steps.lifecycle.outputs.reusable != 'true' || steps.dependencies.outputs.cache-hit != 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+        cache: npm
+    - if: steps.lifecycle.outputs.reusable != 'true' || steps.dependencies.outputs.cache-hit != 'true'
+      shell: bash
+      run: node scripts/npm-retry.mjs ci
+    - if: steps.dependencies.outputs.cache-hit == 'true'
+      shell: bash
+      run: npm run prepare
+    # Save the clean install before any test changes its working files.
+    - if: steps.lifecycle.outputs.reusable == 'true' && steps.dependencies.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+          plugins/node_modules
+        key: ${{ steps.key.outputs.key }}

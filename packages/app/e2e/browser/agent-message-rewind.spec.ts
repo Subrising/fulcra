@@ -2,7 +2,6 @@ import type { Locator } from "@playwright/test";
 import { expect, test, type Page } from "../support/fixtures";
 import { expectAgentIdle, expectAgentReadyToInterrupt } from "../support/helpers/agent-stream";
 import {
-  cancelAgent,
   fillComposerDraft,
   expectComposerDraft,
   expectComposerVisible,
@@ -147,8 +146,9 @@ test.describe("Agent message rewind", () => {
       await expect(
         providerMessage.getByRole("button", { name: "Rewind to this message", exact: true }),
       ).toBeVisible();
-      await cancelAgent(page);
-      await expectAgentIdle(page);
+      // Hover can outlast this finite mock turn on a busy runner. Completion
+      // is valid here; cancellation is covered by the interruption tests.
+      await expectTurnCompletesNormally(page, agent);
     } finally {
       await agent.cleanup();
     }

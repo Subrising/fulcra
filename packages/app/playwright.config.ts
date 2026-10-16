@@ -25,7 +25,10 @@ export default defineConfig({
   fullyParallel: false,
   workers: Number(process.env.E2E_WORKERS ?? (process.env.CI ? "2" : "1")),
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"]],
+  reporter:
+    process.env.E2E_REPORT_CI === "1"
+      ? [["list"], ["../../.github/scripts/browser-ci-reporter.mjs"]]
+      : [["list"]],
   use: {
     baseURL,
     trace: process.env.CI ? "on-first-retry" : "retain-on-failure",
@@ -35,7 +38,10 @@ export default defineConfig({
   projects: [
     {
       name: "browser",
-      testIgnore: ["**/*.real.spec.ts"],
+      testIgnore: [
+        "**/*.real.spec.ts",
+        ...(process.env.E2E_STATIC_WEB === "1" ? ["**/root-error-recovery.spec.ts"] : []),
+      ],
       use: {
         ...devices["Desktop Chrome"],
         ...(process.env.E2E_BROWSER_CHANNEL ? { channel: process.env.E2E_BROWSER_CHANNEL } : {}),

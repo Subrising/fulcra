@@ -6,14 +6,607 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { relative as relativePath } from "node:path";
 import test from "node:test";
+import { requiresFullSuite } from "./ci-shared-changes.mjs";
+import { proveMerge, complete } from "../.github/scripts/ci-finished.mjs";
+import { balanceTests, testListPath, BROWSER_SHARDS } from "../.github/scripts/browser-shards.mjs";
+import { startStaticWeb } from "../.github/scripts/static-e2e-web.mjs";
+import { browserInputPaths } from "../.github/scripts/browser-inputs.mjs";
+import { watchOperation } from "../.github/scripts/watch-ci.mjs";
+import { runInNewContext } from "node:vm";
+
+test("costly Linux checks reuse preparation and still run when browsers are not selected", () => {
+  const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
+  for (const name of [
+    "typecheck",
+    "server-tests-ubuntu",
+    "server-tests-ubuntu-2",
+    "desktop-tests-ubuntu",
+    "desktop-renderer",
+    "desktop-renderer-2",
+    "app-tests",
+    "sdk-tests",
+    "relay-grant-e2e",
+    "cli-tests-1",
+    "cli-tests-2",
+    "cli-tests-3",
+    "cli-source-tests",
+  ]) {
+    const source = jobs.get(name).join("\n");
+    assert.match(source, /needs: \[changes, browser-prepare\]/, name);
+    const expression = source.match(/^    if: \$\{\{ (.+) \}\}$/m)[1];
+    assert.ok(expression.startsWith("!cancelled()"), name);
+    const evaluate = (selected, cancelled, result) =>
+      runInNewContext(expression, {
+        cancelled: () => cancelled,
+        needs: {
+          changes: {
+            outputs: new Proxy(
+              { full: selected ? "true" : "false" },
+              {
+                get: (outputs, key) => outputs[key] ?? "false",
+              },
+            ),
+          },
+          "browser-prepare": { result },
+        },
+      });
+    for (const result of ["success", "skipped"]) {
+      assert.equal(evaluate(true, false, result), true, `${name}: ${result}`);
+      assert.equal(evaluate(false, false, result), false, name);
+      assert.equal(evaluate(true, true, result), false, name);
+    }
+    if (source.includes("key: build-v2-")) {
+      assert.match(source, /key: build-v2-.*-node22-server-/, name);
+      assert.match(source, /run: npm run build:server\n/, name);
+      assert.doesNotMatch(source, /-node22-(server-deps|app-deps)-/, name);
+    }
+  }
+  assert.match(
+    jobs.get("app-tests").join("\n"),
+    /Build audio types\n\s+run: npm run build --workspace=@getpaseo\/expo-two-way-audio/,
+  );
+});
+
+test("both parallel browser build exits remain required", () => {
+  const source = readFileSync(ciWorkflowPath, "utf8");
+  const waits = source.slice(
+    source.indexOf("          daemon_status=0;"),
+    source.indexOf("          npm run test:e2e --workspace=@getpaseo/app -- --list"),
+  );
+  assert.ok(waits.includes("wait"));
+  for (const [daemon, web] of [
+    [0, 0],
+    [7, 0],
+    [0, 8],
+    [7, 8],
+  ]) {
+    const script = `(exit ${daemon}) & daemon_pid=$!\n(exit ${web}) & web_pid=$!\n${waits}\necho BUILDS_PASSED`;
+    const result = spawnSync("bash", ["-e", "-c", script], { encoding: "utf8" });
+    assert.equal(result.status, daemon || web ? 1 : 0);
+    assert.equal(result.stdout.includes("BUILDS_PASSED"), !daemon && !web);
+  }
+});
+
+test("clean browser packaging omits absent optional plugins and requires tested inputs", () => {
+  const root = mkdtempSync(join(tmpdir(), "browser-inputs-"));
+  try {
+    for (const file of [
+      "packages/app/.e2e-web/index.html",
+      "packages/app/.e2e-plan/manifest.json",
+      "packages/server/dist/scripts/supervisor-entrypoint.js",
+      "packages/cli/dist/index.js",
+    ]) {
+      mkdirSync(join(root, file, ".."), { recursive: true });
+      writeFileSync(join(root, file), "fixture");
+    }
+    const paths = browserInputPaths(root);
+    assert.ok(paths.includes("packages/server/dist"));
+    assert.ok(paths.includes("packages/app/.e2e-web"));
+    assert.ok(!paths.includes("plugins/dist"));
+    assert.equal(
+      spawnSync("tar", ["-czf", join(root, "inputs.tgz"), "-C", root, ...paths]).status,
+      0,
+    );
+    mkdirSync(join(root, "plugins/dist"), { recursive: true });
+    assert.ok(browserInputPaths(root).includes("plugins/dist"));
+    rmSync(join(root, "packages/server/dist"), { recursive: true });
+    assert.throws(() => browserInputPaths(root), /Missing browser input/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("main CI ignores a refused merge dispatch and retains CI failure detection", () => {
+  const result = spawnSync("python3", ["-B", ".github/scripts/test_main_ci_state.py"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("outbound watcher sends one native notice for successful and failed runs", async () => {
+  for (const conclusion of ["success", "failure", "cancelled", "timed_out"]) {
+    const operation = {
+      runId: 123,
+      attempt: 1,
+      headSha: "a".repeat(40),
+      workflow: ".github/workflows/ci.yml",
+      owner: "owner",
+      url: "https://github.com/Subrising/fulcra/actions/runs/123",
+      notice: "none",
+    };
+    const delivered = [],
+      states = [];
+    const ports = {
+      wait: async (id) => assert.equal(id, 123),
+      read: async () => ({
+        repository: { full_name: "Subrising/fulcra" },
+        id: 123,
+        run_attempt: 1,
+        head_sha: operation.headSha,
+        path: operation.workflow,
+        status: "completed",
+        name: "CI",
+        conclusion,
+      }),
+      deliver: async (owner, text) => {
+        assert.equal(states.at(-1), "attempted");
+        delivered.push({ owner, text });
+      },
+      persist: async (state) => states.push(state.notice),
+    };
+    await watchOperation(operation, ports);
+    assert.deepEqual(states, ["attempted", "accepted"]);
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].owner, "owner");
+    assert.match(delivered[0].text, conclusion === "success" ? /^PASS:/ : /^FAIL:/);
+    assert.ok(delivered[0].text.includes(operation.url));
+    await assert.rejects(watchOperation(operation, ports), /Reconcile/);
+    assert.equal(delivered.length, 1);
+  }
+});
+
+test("outbound watcher reports stale completion and never retries an uncertain notice", async () => {
+  const operation = {
+    runId: 123,
+    attempt: 1,
+    headSha: "a".repeat(40),
+    workflow: ".github/workflows/ci.yml",
+    owner: "owner",
+    url: "https://github.com/Subrising/fulcra/actions/runs/123",
+    notice: "none",
+  };
+  const messages = [];
+  const ports = {
+    wait: async () => {},
+    read: async () => ({ repository: { full_name: "another/repo" } }),
+    persist: async () => {},
+    deliver: async (_owner, text) => {
+      messages.push(text);
+      throw new Error("Receipt uncertain");
+    },
+  };
+  await assert.rejects(watchOperation(operation, ports), /Receipt uncertain/);
+  assert.match(messages[0], /^BLOCKED:/);
+  assert.equal(operation.notice, "attempted");
+  await assert.rejects(watchOperation(operation, ports), /Reconcile/);
+  assert.equal(messages.length, 1);
+});
+
+test("an annotation timeout resumes the same native wait without an intermediate notice", async () => {
+  const operation = {
+    runId: 123,
+    attempt: 1,
+    headSha: "a".repeat(40),
+    workflow: ".github/workflows/ci.yml",
+    owner: "owner",
+    url: "https://github.com/Subrising/fulcra/actions/runs/123",
+    notice: "none",
+  };
+  let waits = 0;
+  const notices = [],
+    states = [];
+  await watchOperation(operation, {
+    wait: async (id) => {
+      assert.equal(id, 123);
+      waits++;
+    },
+    read: async () => ({
+      repository: { full_name: "Subrising/fulcra" },
+      id: 123,
+      run_attempt: 1,
+      head_sha: operation.headSha,
+      path: operation.workflow,
+      status: waits === 1 ? "in_progress" : "completed",
+      conclusion: waits === 1 ? null : "success",
+    }),
+    persist: async (value) => states.push(value.notice),
+    deliver: async (_owner, text) => notices.push(text),
+  });
+  assert.equal(waits, 2);
+  assert.deepEqual(states, ["attempted", "accepted"]);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /^PASS:/);
+});
+
+test("shared dependencies and unknown root files run the full suite", () => {
+  for (const path of [
+    "package.json",
+    "new.config",
+    "scripts/check.mjs",
+    "control/src/config.mjs",
+    "packages/protocol/src/messages.ts",
+    "packages/client/src/client.ts",
+    "packages/new-package/index.ts",
+    "skills/verify/SKILL.md",
+  ]) {
+    assert.equal(requiresFullSuite([path]), true, path);
+  }
+  for (const path of [
+    "packages/app/src/index.tsx",
+    "packages/server/src/server/session.ts",
+    "packages/cli/src/index.ts",
+    "docs/testing.md",
+    "README.md",
+  ]) {
+    assert.equal(requiresFullSuite([path]), false, path);
+  }
+});
+
+function browserRouting(paths) {
+  const filters = loadFilters(filtersPath);
+  const outputs = Object.fromEntries(
+    ["routing", "workspace", "ci", "browser"].map((name) => [
+      name,
+      paths.some((path) => filters[name].some((pattern) => matchesGlob(path, pattern)))
+        ? "true"
+        : "false",
+    ]),
+  );
+  const changes = jobBlocks(readFileSync(ciWorkflowPath, "utf8")).get("changes").join("\n");
+  const context = {
+    github: { event_name: "pull_request" },
+    steps: {
+      filter: { outputs },
+      shared: { outputs: { full: String(requiresFullSuite(paths)) } },
+    },
+  };
+  const evaluate = (name) =>
+    runInNewContext(
+      changes.match(new RegExp(`^      ${name}: \\$\\{\\{ (.+) \\}\\}$`, "m"))[1],
+      context,
+    );
+  return { full: evaluate("full"), browser: evaluate("browser"), filter: outputs };
+}
+
+function requireBrowserJobs(path) {
+  const routing = browserRouting([path]);
+  const jobs = jobBlocks(readFileSync(ciWorkflowPath, "utf8"));
+  for (const name of [
+    "browser-prepare",
+    "browser-recovery",
+    ...Array.from({ length: BROWSER_SHARDS }, (_, index) => `playwright-${index + 1}`),
+  ]) {
+    const expression = jobs
+      .get(name)
+      .join("\n")
+      .match(/^    if: \$\{\{ (.+) \}\}$/m)[1]
+      .replaceAll("needs.browser-prepare", 'needs["browser-prepare"]');
+    const selected = runInNewContext(expression, {
+      cancelled: () => false,
+      needs: {
+        changes: {
+          result: "success",
+          outputs: { full: String(routing.full), browser: String(routing.browser) },
+        },
+        "browser-prepare": { result: "success" },
+      },
+    });
+    assert.equal(selected, true, `${path}: ${name} must run`);
+  }
+  return routing;
+}
+
+test("M1: shared and root changes retain every browser job", () => {
+  assert.equal(browserRouting(["docs/testing.md"]).browser, false);
+  assert.equal(browserRouting(["README.md"]).browser, false);
+  for (const path of [
+    "package-lock.json",
+    "package.json",
+    "packages/protocol/src/messages.ts",
+    "packages/client/src/index.ts",
+    "packages/plugin/src/index.ts",
+    "packages/server/src/server/session.ts",
+    "packages/server/src/server/agent/providers/mock-load-test-agent.ts",
+    "scripts/build-server.mjs",
+    "unknown.config",
+    ".github/actions/ci-deps/action.yml",
+    ".github/workflows/ci.yml",
+  ]) {
+    requireBrowserJobs(path);
+  }
+});
+
+test("M2: CI scripts and timing data select their real browser consumers", () => {
+  for (const path of [
+    ".github/scripts/run-browser-ci.mjs",
+    ".github/scripts/browser-shards.mjs",
+    ".github/scripts/browser-ci-reporter.mjs",
+    ".github/scripts/browser-inputs.mjs",
+    ".github/scripts/static-e2e-web.mjs",
+    ".github/scripts/export-browser-web.sh",
+    ".github/scripts/ci-built-cli.mjs",
+    ".github/scripts/install-cache-inputs.mjs",
+    ".github/browser-test-times.json",
+  ]) {
+    const routing = requireBrowserJobs(path);
+    assert.equal(routing.filter.ci, "true", path);
+    assert.equal(routing.full, true, path);
+  }
+});
+
+test("L2: moving a shared file into app keeps the full fallback", () => {
+  const root = mkdtempSync(join(tmpdir(), "ci-rename-routing-"));
+  try {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Fulcra",
+      GIT_AUTHOR_EMAIL: "fulcra@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Fulcra",
+      GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
+    };
+    const git = (...args) => execFileSync("git", args, { cwd: root, env, encoding: "utf8" }).trim();
+    git("init", "--initial-branch=main");
+    mkdirSync(join(root, "packages/protocol/src"), { recursive: true });
+    mkdirSync(join(root, "packages/app/src"), { recursive: true });
+    writeFileSync(join(root, "packages/protocol/src/moved.ts"), "export const fixture = true;\n");
+    git("add", ".");
+    const base = git("commit-tree", git("write-tree"), "-m", "Shared source fixture");
+    renameSync(
+      join(root, "packages/protocol/src/moved.ts"),
+      join(root, "packages/app/src/moved.ts"),
+    );
+    git("add", "-A");
+    const head = git(
+      "commit-tree",
+      git("write-tree"),
+      "-p",
+      base,
+      "-m",
+      "Move shared source fixture",
+    );
+    const output = join(root, "outputs");
+    const result = spawnSync(
+      process.execPath,
+      [new URL("scripts/ci-shared-changes.mjs", repoRoot).pathname],
+      {
+        cwd: root,
+        env: { ...env, EVENT: "pull_request", BASE: base, HEAD: head, GITHUB_OUTPUT: output },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(readFileSync(output, "utf8"), /full=true/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("every new shard and desktop lane remains failure-sensitive", () => {
+  const source = readFileSync(ciWorkflowPath, "utf8");
+  const jobs = jobBlocks(source);
+  const gate = jobs.get("ci-passed").join("\n");
+  for (const name of [
+    "desktop-renderer",
+    "desktop-renderer-2",
+    "server-tests-ubuntu-2",
+    "cli-source-tests",
+    "browser-prepare",
+    "browser-recovery",
+    ...Array.from({ length: BROWSER_SHARDS }, (_, i) => `playwright-${i + 1}`),
+  ]) {
+    assert.ok(jobs.has(name), name);
+    assert.ok(gate.includes(`- ${name}\n`), name);
+  }
+  assert.match(source, /schedule:\s*\n\s+- cron:/);
+  assert.match(source, /tags: \["v\*"\]/);
+  assert.doesNotMatch(source.split("jobs:")[0], /push:\s*\n\s+branches:/);
+  assert.ok(
+    source
+      .split("\n")
+      .filter((line) => line.includes("restore-keys:"))
+      .every((line) => line.includes("browser-failed-") || line.includes("metro-web-v1-")),
+  );
+  assert.match(source, /steps\.shared\.outputs\.full != 'false'/);
+});
+
+test("L5: the web cache key is captured before restored build outputs exist", () => {
+  const source = jobBlocks(readFileSync(ciWorkflowPath, "utf8")).get("browser-prepare").join("\n");
+  assert.ok(
+    source.indexOf("WEB_SOURCE_HASH:") < source.indexOf("name: Restore exact server build"),
+  );
+  assert.match(source, /WEB_SOURCE_HASH:.*'!packages\/\*\/dist\/\*\*'/);
+  assert.match(source, /WEB_SOURCE_HASH:.*'!plugins\/dist\/\*\*'/);
+  const restore = source.slice(
+    source.indexOf("name: Restore exact web export"),
+    source.indexOf("name: Restore Metro transform cache"),
+  );
+  assert.match(restore, /key: \$\{\{ steps\.inputs\.outputs\.web_key \}\}/);
+});
+
+function proofFixture() {
+  const sha = "a".repeat(40),
+    merged = "b".repeat(40),
+    tree = "c".repeat(40);
+  const run = {
+    id: 123,
+    run_attempt: 1,
+    path: ".github/workflows/merge-pr.yml",
+    event: "workflow_dispatch",
+    head_branch: "main",
+    conclusion: "success",
+    display_title: `Merge PR 1 at ${sha}`,
+    repository: { full_name: "Subrising/fulcra" },
+  };
+  const data = {
+    pr: {
+      merged: true,
+      base: { ref: "main", repo: run.repository },
+      head: { sha, repo: run.repository },
+      merge_commit_sha: merged,
+    },
+    merge: {
+      parents: [{ sha: "d".repeat(40) }, { sha }],
+      commit: {
+        tree: { sha: tree },
+        author: {
+          name: "github-actions[bot]",
+          email: "41898282+github-actions[bot]@users.noreply.github.com",
+        },
+        committer: { name: "GitHub", email: "noreply@github.com" },
+      },
+    },
+    head: { commit: { tree: { sha: tree } } },
+    checks: {
+      check_runs: [
+        {
+          name: "ci-passed",
+          app: { id: 15368 },
+          head_sha: sha,
+          status: "completed",
+          conclusion: "success",
+          details_url: "https://github.com/Subrising/fulcra/actions/runs/456/job/789",
+        },
+      ],
+    },
+    ci: {
+      id: 456,
+      run_attempt: 1,
+      status: "completed",
+      path: ".github/workflows/ci.yml",
+      event: "pull_request",
+      head_sha: sha,
+      conclusion: "success",
+      repository: run.repository,
+      pull_requests: [{ number: 1 }],
+      html_url: "https://github.com/Subrising/fulcra/actions/runs/456",
+    },
+  };
+  const writes = [];
+  const api = async (path, body) => {
+    if (body) {
+      writes.push(body);
+      return {};
+    }
+    if (path === "/pulls/1") return data.pr;
+    if (path === `/commits/${sha}`) return data.head;
+    if (path === `/commits/${merged}`) return data.merge;
+    if (path.startsWith(`/commits/${sha}/check-runs`)) return data.checks;
+    if (path.startsWith(`/commits/${merged}/check-runs`))
+      return { check_runs: writes.map((write) => ({ ...write, app: { id: 15368 } })) };
+    if (path === "/actions/runs/456") return data.ci;
+    throw new Error(`Unexpected API route ${path}`);
+  };
+  return { run, data, api, writes };
+}
+
+test("merge proof refuses changed trees, identities, workflows and stale checks", async () => {
+  const good = proofFixture();
+  assert.equal((await proveMerge(good.run, good.api)).number, 1);
+  for (const mutate of [
+    (f) => (f.data.head.commit.tree.sha = "e".repeat(40)),
+    (f) => (f.data.pr.head.sha = "e".repeat(40)),
+    (f) => (f.data.pr.base.ref = "other"),
+    (f) => f.data.merge.parents.pop(),
+    (f) => (f.data.merge.commit.author.name = "account"),
+    (f) => (f.data.checks.check_runs[0].conclusion = "failure"),
+    (f) => (f.data.checks.check_runs[0].app.id = 1),
+    (f) => f.data.checks.check_runs.push(f.data.checks.check_runs[0]),
+    (f) => (f.data.ci.path = ".github/workflows/other.yml"),
+    (f) => (f.data.ci.event = "push"),
+    (f) => (f.data.ci.id = 999),
+    (f) => (f.data.ci.run_attempt = 0),
+    (f) => (f.data.ci.status = "in_progress"),
+    (f) => (f.run.event = "pull_request"),
+    (f) => (f.run.display_title = "Merge PR 1 at invalid"),
+  ]) {
+    const f = proofFixture();
+    mutate(f);
+    await assert.rejects(proveMerge(f.run, f.api));
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test("completion reconciles its merge gate and sends one keyed notice per invocation", async () => {
+  const f = proofFixture(),
+    notices = [];
+  const event = { repository: f.run.repository, workflow_run: f.run };
+  await complete(event, f.api, async (notice) => notices.push(notice));
+  await complete(event, f.api, async (notice) => notices.push(notice));
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].conclusion, "success");
+  assert.equal(notices.length, 2);
+  assert.equal(notices[0].eventId, notices[1].eventId);
+  await assert.rejects(
+    complete(event, f.api, async () => {
+      throw new Error("Receiver unavailable");
+    }),
+  );
+});
+
+test("bot merge completion records main green without a main CI run", async () => {
+  const f = proofFixture();
+  const reads = [];
+  await complete(
+    { repository: f.run.repository, workflow_run: f.run },
+    async (path, body) => {
+      if (!body) reads.push(path);
+      return f.api(path, body);
+    },
+    async () => {},
+  );
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].name, "ci-passed");
+  assert.equal(f.writes[0].head_sha, f.data.pr.merge_commit_sha);
+  assert.equal(f.writes[0].external_id, `tested-tree:${f.data.pr.merge_commit_sha}:456:1`);
+  assert.equal(f.writes[0].details_url, f.data.ci.html_url);
+  assert.deepEqual(
+    reads.filter((path) => path.startsWith("/actions/")),
+    ["/actions/runs/456"],
+  );
+  const workflow = readFileSync(
+    new URL("../.github/workflows/ci-finished.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    workflow,
+    /workflow_run:\s*\n\s+workflows: \[Merge PR\]\s*\n\s+types: \[completed\]/,
+  );
+  assert.doesNotMatch(workflow.split("jobs:")[0], /^\s+(push|pull_request|pull_request_target):/m);
+  assert.match(workflow, /checks: write/);
+  assert.match(workflow, /ref: main/);
+  assert.match(workflow, /persist-credentials: false/);
+});
+
+test("M3 and L1: main proof binds the CI run and exact attempt outside the display URL", async () => {
+  const f = proofFixture();
+  f.data.ci.run_attempt = 2;
+  await complete({ repository: f.run.repository, workflow_run: f.run }, f.api, async () => {});
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].external_id, `tested-tree:${f.data.pr.merge_commit_sha}:456:2`);
+  f.writes[0].details_url = "https://github.com/Subrising/fulcra/actions/runs/123/job/999";
+  await complete({ repository: f.run.repository, workflow_run: f.run }, f.api, async () => {});
+  assert.equal(f.writes.length, 1, "a replaced display URL must not duplicate the bound gate");
+});
 
 const repoRoot = new URL("../", import.meta.url);
 const ciWorkflowPath = new URL(".github/workflows/ci.yml", repoRoot);
@@ -31,10 +624,10 @@ const gatedCiJobs = new Map([
   ["desktop-tests-ubuntu", { name: "desktop-tests (ubuntu-latest)", contract: "desktop" }],
   ["app-tests", { name: "app-tests", contract: "app" }],
   ["sdk-tests", { name: "sdk-tests", contract: "sdk" }],
-  ["playwright-1", { name: "playwright (shard 1/4)", contract: "browser" }],
-  ["playwright-2", { name: "playwright (shard 2/4)", contract: "browser" }],
-  ["playwright-3", { name: "playwright (shard 3/4)", contract: "browser" }],
-  ["playwright-4", { name: "playwright (shard 4/4)", contract: "browser" }],
+  ["playwright-1", { name: "playwright (shard 1/32)", contract: "browser" }],
+  ["playwright-2", { name: "playwright (shard 2/32)", contract: "browser" }],
+  ["playwright-3", { name: "playwright (shard 3/32)", contract: "browser" }],
+  ["playwright-4", { name: "playwright (shard 4/32)", contract: "browser" }],
   ["relay-tests", { name: "relay-tests", contract: "relay" }],
   ["cli-tests-1", { name: "cli-tests (shard 1/3)", contract: "cli" }],
   ["cli-tests-2", { name: "cli-tests (shard 2/3)", contract: "cli" }],
@@ -101,7 +694,9 @@ test("gated checks are statically named jobs with real job-level gating", () => 
     const job = jobs.get(jobId)?.join("\n");
     assert.ok(job, `missing static job ${jobId}`);
     assert.match(job, new RegExp(`^    name: ${expected.name.replace(/[()]/g, "\\$&")}$`, "m"));
-    assert.match(job, /needs\.changes\.outputs\.full != 'false'/);
+    if (expected.contract !== "browser")
+      assert.match(job, /needs\.changes\.outputs\.full != 'false'/);
+    else assert.doesNotMatch(job, /needs\.changes\.outputs\.full/);
     for (const contract of expected.contracts ?? [expected.contract]) {
       assert.match(job, new RegExp(`needs\\.changes\\.outputs\\.${contract} != 'false'`));
     }
@@ -129,7 +724,8 @@ test("focused contracts stay inside existing required checks", () => {
   assert.doesNotMatch(changes, /Install dependencies|npm run build/);
 
   assert.match(server, /test:hub-cli-contract/);
-  assert.match(server, /npm run test --workspace=@getpaseo\/server/);
+  assert.match(server, /npm run test:unit --workspace=@getpaseo\/server/);
+  assert.match(server, /npm run test:integration --workspace=@getpaseo\/server/);
   // FU-90: the Command Centre plugin is packaged in CI, inside the typecheck check.
   assert.match(jobs.get("typecheck")?.join("\n") ?? "", /node scripts\/build-command-centre\.mjs/);
   assert.ok(!jobs.has("hub-cli-contract"));
@@ -162,7 +758,12 @@ test("PR routing declares stable behavior ownership", () => {
       "tsconfig.base.json",
       "vitest.config.ts",
     ],
-    ci: [".github/actions/**", ".github/workflows/ci.yml"],
+    ci: [
+      ".github/actions/**",
+      ".github/workflows/ci.yml",
+      ".github/scripts/**",
+      ".github/browser-test-times.json",
+    ],
     format: [
       ".agents/**/*.{cjs,css,html,js,json,jsonc,jsx,md,mjs,ts,tsx,yaml,yml}",
       ".github/**/*.{cjs,css,html,js,json,jsonc,jsx,md,mjs,ts,tsx,yaml,yml}",
@@ -197,26 +798,11 @@ test("PR routing declares stable behavior ownership", () => {
       "packages/protocol/**",
     ],
     browser: [
-      "packages/server/src/server/agent/provider-snapshot-manager.ts",
-      "packages/server/src/server/session/provider/provider-catalog-session.ts",
-      "packages/client/src/compat/normalize-provider-models.ts",
-      "packages/protocol/src/client-capabilities.ts",
-      "packages/server/src/server/agent/provider-registry.ts",
-      "packages/server/src/server/agent/agent-sdk-types.ts",
-      "packages/server/src/server/agent/providers/codex-app-server-agent.ts",
-      "packages/server/src/server/agent/providers/claude/agent.ts",
-      "packages/server/src/server/agent/plugin-provider.ts",
-      "packages/server/src/server/plugins/{index,plugin-process,plugin-process-protocol,runtime}.ts",
-      "packages/server/src/executable-resolution/**",
-      "packages/plugin/src/server/provider.ts",
-      "packages/app/src/!(desktop)/**",
-      "packages/app/e2e/browser/**",
-      "packages/app/e2e/support/**",
-      "packages/app/assets/**",
-      "packages/app/public/**",
-      "packages/app/index.ts",
-      "packages/app/*config.{cjs,js,ts}",
-      "packages/app/package.json",
+      "packages/app/**",
+      "packages/server/**",
+      "packages/expo-two-way-audio/**",
+      "control/orca-organization/client/**",
+      "control/orca-organization/shared/**",
     ],
     relay: ["packages/relay/**"],
     cli: ["packages/cli/**"],
@@ -291,26 +877,11 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
     "packages/app/package.json",
   ]);
   assert.deepEqual(filters.browser, [
-    "packages/server/src/server/agent/provider-snapshot-manager.ts",
-    "packages/server/src/server/session/provider/provider-catalog-session.ts",
-    "packages/client/src/compat/normalize-provider-models.ts",
-    "packages/protocol/src/client-capabilities.ts",
-    "packages/server/src/server/agent/provider-registry.ts",
-    "packages/server/src/server/agent/agent-sdk-types.ts",
-    "packages/server/src/server/agent/providers/codex-app-server-agent.ts",
-    "packages/server/src/server/agent/providers/claude/agent.ts",
-    "packages/server/src/server/agent/plugin-provider.ts",
-    "packages/server/src/server/plugins/{index,plugin-process,plugin-process-protocol,runtime}.ts",
-    "packages/server/src/executable-resolution/**",
-    "packages/plugin/src/server/provider.ts",
-    "packages/app/src/!(desktop)/**",
-    "packages/app/e2e/browser/**",
-    "packages/app/e2e/support/**",
-    "packages/app/assets/**",
-    "packages/app/public/**",
-    "packages/app/index.ts",
-    "packages/app/*config.{cjs,js,ts}",
-    "packages/app/package.json",
+    "packages/app/**",
+    "packages/server/**",
+    "packages/expo-two-way-audio/**",
+    "control/orca-organization/client/**",
+    "control/orca-organization/shared/**",
   ]);
 });
 
@@ -758,7 +1329,7 @@ test("candidate scanner still refuses personal data in an accepted upstream ance
   }
 });
 
-test("source release rejects every active tag or release trigger with a generic YAML check", () => {
+test("L3: source release rejects tag publishers and job-level write permissions", () => {
   const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
   const code = source.split("<<'RUBY'\n")[1].split("\nRUBY")[0];
   const root = mkdtempSync(join(tmpdir(), "fulcra-triggers-test-"));
@@ -779,7 +1350,7 @@ test("source release rejects every active tag or release trigger with a generic 
       }).trim();
     git("init", "--initial-branch=main");
     mkdirSync(join(root, ".github/workflows"), { recursive: true });
-    const path = ".github/workflows/future-publisher.yaml";
+    const defaultPath = ".github/workflows/future-publisher.yaml";
     const cases = [
       ["on: {push: {branches: [main]}}\n", "active", true],
       ["on: {push: {branches-ignore: [archive]}}\n", "active", true],
@@ -803,7 +1374,30 @@ test("source release rejects every active tag or release trigger with a generic 
       ["on: release\n", null, false],
       ["on: {push: {branches: [main]}}\n", null, true],
     ];
-    for (const [yaml, state, allowed] of cases) {
+    const ciTag = (permissions) =>
+      `on: {push: {tags: ['v*']}}\npermissions: {contents: read}\njobs:\n  validate:\n${permissions === null ? "" : `    permissions: ${permissions}\n`}    runs-on: ubuntu-latest\n    steps: []\n`;
+    for (const [permissions, allowed] of [
+      [null, true],
+      ["{}", true],
+      ["read-all", true],
+      ["{checks: read, contents: none}", true],
+      ["{contents: write}", false],
+      ["{checks: write}", false],
+      ["{id-token: write}", false],
+      ["write-all", false],
+    ]) {
+      cases.push([ciTag(permissions), "active", allowed, ".github/workflows/ci.yml"]);
+    }
+    cases.push([
+      ciTag(null) +
+        "  publish:\n    permissions: {contents: write}\n    runs-on: ubuntu-latest\n    steps: []\n",
+      "active",
+      false,
+      ".github/workflows/ci.yml",
+    ]);
+    for (const [yaml, state, allowed, path = defaultPath] of cases) {
+      for (const file of readdirSync(join(root, ".github/workflows")))
+        rmSync(join(root, ".github/workflows", file));
       writeFileSync(join(root, path), yaml);
       git("add", ".github/workflows");
       const sha = git("commit-tree", git("write-tree"), "-m", "Workflow trigger fixture");
@@ -830,10 +1424,10 @@ test("source release rejects every active tag or release trigger with a generic 
   }
 });
 
-test("source release uses one workflow wait and refuses unsafe candidates", () => {
+test("source release returns after dispatch and resumes only from a matching completion", () => {
   const source = readFileSync(new URL(".github/scripts/release.sh", repoRoot), "utf8");
   assert.doesNotMatch(source, /pulls\/[^"\s]+\/merge["\s]|gh pr merge|refs\/heads\/main/);
-  assert.equal((source.match(/gh run watch /g) ?? []).length, 1);
+  assert.doesNotMatch(source, /gh run watch /);
   const root = mkdtempSync(join(tmpdir(), "fulcra-release-test-"));
   try {
     const remote = join(root, "origin.git"),
@@ -850,6 +1444,8 @@ test("source release uses one workflow wait and refuses unsafe candidates", () =
       GIT_COMMITTER_NAME: "Fulcra",
       GIT_COMMITTER_EMAIL: "fulcra@users.noreply.github.com",
       FULCRA_RELEASE_REPO: checkout,
+      PASEO_AGENT_ID: "",
+      FULCRA_CI_OWNER: "",
       ROOT: root,
       REAL_GIT: realGit,
       PATH: `${bin}:${process.env.PATH}`,
@@ -924,7 +1520,7 @@ const r=spawnSync(process.env.REAL_GIT,a,{stdio:'inherit'}); process.exit(r.stat
 const fs=require('node:fs'),{execFileSync}=require('node:child_process'),p=process.env.ROOT,a=process.argv.slice(2),f=JSON.parse(fs.readFileSync(p+'/fixture.json'));
 fs.appendFileSync(p+'/calls',JSON.stringify(a)+'\\n');
 if(a[0]==='workflow'){fs.writeFileSync(p+'/dispatched','');execFileSync(process.env.REAL_GIT,['--git-dir',p+'/origin.git','fetch','-q',process.cwd(),f.merged+':refs/heads/main']);console.log('https://github.com/Subrising/fulcra/actions/runs/123');}
-else if(a[0]==='run') process.exit(0);
+else if(a[1].includes('/actions/runs/'))console.log(JSON.stringify({path:'.github/workflows/merge-pr.yml',event:'workflow_dispatch',head_branch:'main',status:'completed',conclusion:process.env.BAD_MERGE?'failure':'success',display_title:'Merge PR 1 at '+f.sha,repository:{full_name:'Subrising/fulcra'}}));
 else if(a[0]==='release'){if(a[1]==='create')fs.writeFileSync(p+'/released','');else console.log(a.includes('assets,isDraft,tagName')?'true':'v1.0.0');}
 else if(a.includes('repos/Subrising/fulcra/actions/workflows?per_page=100'))console.log(JSON.stringify([{workflows:[{path:'.github/workflows/ci.yml',state:'active'},{path:'.github/workflows/new-publisher.yml',state:process.env.BAD_PUBLISHER?'active':'disabled_manually'}]}]));
 else if(a[1].includes('/pulls/'))console.log(JSON.stringify({state:'open',base:{ref:'main'},head:{sha:f.sha},draft:false,merged:fs.existsSync(p+'/dispatched'),merge_commit_sha:f.merged}));
@@ -934,6 +1530,21 @@ else process.exit(2);
 `,
     );
     const script = new URL(".github/scripts/release.sh", repoRoot).pathname;
+    for (const ownerEnv of [{ FULCRA_CI_OWNER: "8a195a05" }, { PASEO_AGENT_ID: "8a195a05" }]) {
+      const invalidOwner = spawnSync("bash", [script, "1.0.1", "1", sha], {
+        cwd: checkout,
+        env: { ...env, ...ownerEnv },
+        encoding: "utf8",
+      });
+      assert.notEqual(invalidOwner.status, 0);
+      assert.match(invalidOwner.stderr, /CI owner must be a full lowercase session UUID/);
+      assert.equal(existsSync(join(root, "dispatched")), false);
+      assert.equal(
+        existsSync(join(root, "calls")),
+        false,
+        "L6: owner validation must precede GitHub calls",
+      );
+    }
     const bad = spawnSync("bash", [script, "1.0.1", "1", sha], {
       cwd: checkout,
       env: { ...env, BAD_CI: "1" },
@@ -954,16 +1565,75 @@ else process.exit(2);
       encoding: "utf8",
     });
     assert.equal(good.status, 0, `${good.stdout}\n${good.stderr}`);
+    assert.equal(existsSync(join(root, "released")), false);
+    assert.match(good.stdout, /merge_dispatched=123/);
+    assert.match(good.stdout, /Resume only after the completion event/);
+    const resumeArgs = [script, "1.0.1", "1", sha, "--after-merge", "123"];
+    const failedMerge = spawnSync("bash", resumeArgs, {
+      cwd: checkout,
+      env: { ...env, BAD_MERGE: "1" },
+      encoding: "utf8",
+    });
+    assert.notEqual(failedMerge.status, 0);
+    assert.equal(existsSync(join(root, "released")), false);
+    const resumed = spawnSync("bash", resumeArgs, { cwd: checkout, env, encoding: "utf8" });
+    assert.equal(resumed.status, 0, `${resumed.stdout}\n${resumed.stderr}`);
     assert.equal(existsSync(join(root, "released")), true);
     assert.equal(git("rev-parse", "v1.0.1^{}"), merged);
     const calls = readFileSync(join(root, "calls"), "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(calls.filter((a) => a[0] === "workflow").length, 1);
-    assert.equal(calls.filter((a) => a[0] === "run").length, 1);
+    assert.equal(calls.filter((a) => a[0] === "run").length, 0);
     assert.equal(
       calls.some((a) => a.some((x) => x.endsWith("/merge"))),
       false,
     );
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("timed browser planning assigns every case once and splits a slow file", () => {
+  const tests = Array.from({ length: 64 }, (_, index) => ({
+    file: "slow.spec.ts",
+    key: `same-file case ${index}`,
+    line: `case ${index}`,
+  }));
+  const seconds = Object.fromEntries(tests.map((item, index) => [item.key, index < 16 ? 100 : 10]));
+  const shards = balanceTests(tests, seconds);
+  assert.equal(shards.length, BROWSER_SHARDS);
+  assert.equal(shards.flatMap((shard) => shard.tests).length, 64);
+  assert.equal(new Set(shards.flatMap((shard) => shard.tests.map((item) => item.key))).size, 64);
+  assert.ok(Math.max(...shards.map((shard) => shard.seconds)) <= 130);
+});
+
+test("a browser job retry selects only failures and fails closed without them", () => {
+  const files = new Map([
+    ["packages/app/.e2e-plan/shard-1.txt", "first\nsecond"],
+    ["packages/app/.e2e-retry/failed.txt", "second"],
+  ]);
+  const ports = { exists: (file) => files.has(file), read: (file) => files.get(file) };
+  assert.equal(testListPath(1, 1, ports), ".e2e-plan/shard-1.txt");
+  assert.equal(testListPath(1, 2, ports), ".e2e-retry/failed.txt");
+  files.delete("packages/app/.e2e-retry/failed.txt");
+  assert.throws(() => testListPath(1, 2, ports), /Refusing to rerun a whole shard/);
+  files.set("packages/app/.e2e-retry/failed.txt", "");
+  assert.equal(testListPath(1, 2, ports), null);
+  files.set("packages/app/.e2e-retry/incomplete", "failed setup");
+  assert.throws(() => testListPath(1, 2, ports), /incomplete/);
+});
+
+test("prebuilt web server serves SPA routes without masking missing bundle assets", async () => {
+  const root = mkdtempSync(join(tmpdir(), "browser-static-"));
+  writeFileSync(join(root, "index.html"), "<main>built app</main>");
+  writeFileSync(join(root, "app.js"), "console.log(1)");
+  const server = await startStaticWeb(root);
+  try {
+    const origin = `http://127.0.0.1:${server.port}`;
+    assert.equal(await (await fetch(`${origin}/host/workspace`)).text(), "<main>built app</main>");
+    assert.equal((await fetch(`${origin}/missing.js`)).status, 404);
+    assert.match((await fetch(`${origin}/app.js`)).headers.get("content-type"), /javascript/);
+  } finally {
+    await server.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
