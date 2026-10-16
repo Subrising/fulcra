@@ -1356,6 +1356,55 @@ describe("idle-lead nudge", () => {
     }
   });
 
+  test.each(["failed", "canceled"])(
+    "a %s lead stays quiet while its project peers remain eligible",
+    async (outcome) => {
+      const peerId = "33333333-3333-4333-8333-333333333333";
+      const peer = { ...lead, id: peerId, title: "Peer" };
+      const rows = [...owned, { ...owned[0]!, id: "FU-13", owner: `Peer (${peerId})` }];
+      const f = fixture([lead, peer, idleWorker()], { ledger: rows, enabled: false });
+      try {
+        f.stream(LEAD, { type: "turn_started" });
+        f.stream(LEAD, { type: `turn_${outcome}`, error: "Fixture failure" });
+        await f.settle();
+        expect(f.delivered.map((entry) => entry.leadId)).toEqual([peerId]);
+        f.turn(WORKER);
+        await f.settle();
+        expect(f.delivered.map((entry) => entry.leadId)).toEqual([peerId]);
+        f.turn(LEAD);
+        await f.settle();
+        expect(f.delivered.map((entry) => entry.leadId)).toEqual([peerId, LEAD]);
+      } finally {
+        f.service.stop();
+      }
+    },
+  );
+
+  test("a ledger event makes a stopped lead eligible again", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nudge-stopped-ledger-"));
+    mkdirSync(join(dir, "fixture"));
+    const file = join(dir, "fixture", "OPEN-ITEMS.md");
+    let wake!: () => void;
+    const delivered = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    const g = fixture([lead], { ledgerDir: dir, enabled: false, deliver: async () => wake() });
+    try {
+      g.stream(LEAD, { type: "turn_started" });
+      g.stream(LEAD, { type: "turn_canceled" });
+      await g.settle();
+      expect(g.delivered).toEqual([]);
+      writeFileSync(file, "| FX-1 | Work | FIX | Lead (11111111) | OPEN | — | fixture |\n");
+      await delivered;
+      await g.settle();
+      expect(g.delivered).toHaveLength(1);
+      expect(g.delivered[0]!.leadId).toBe(LEAD);
+    } finally {
+      g.service.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a canceled worker turn checks its idle lead without a finish notice", async () => {
     const f = fixture([lead, idleWorker()], { ledger: owned, enabled: false });
     try {
@@ -1449,6 +1498,13 @@ describe("ledger items", () => {
     ["BLOCKED: x", []],
     ["OPEN: BLOCKED: x", []],
     ["OPEN (BLOCKED on owner): x", []],
+    ["OPEN, BLOCKED", []],
+    ["OPEN — BLOCKED", []],
+    ["IN PROGRESS, BLOCKED", []],
+    ["IN PROGRESS – BLOCKED", []],
+    ["OPEN - not blocked", ["FU-1"]],
+    ["OPEN (blocker removed)", ["FU-1"]],
+    ["OPENBLOCKED", ["FU-1"]],
     ["IN PROGRESS: BLOCKED x", []],
     ["open: blocked: x", []],
     ["in progress - ( blocked: x", []],

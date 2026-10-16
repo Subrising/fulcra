@@ -122,7 +122,7 @@ export function rowsEligibleForNudge({
     return (
       !isNudgeOwnerSkipped(row.owner, skipOwners) &&
       !/^(DONE|MOVED|DECIDE|STANDING)\b/i.test(status) &&
-      !/^(?:(?:OPEN|IN PROGRESS)\b)?[\s:(-]*BLOCKED\b/i.test(status) &&
+      !/^(?:(?:OPEN|IN PROGRESS)\b)?[\s:(,–—-]*BLOCKED\b/i.test(status) &&
       !/^(RULE|DECIDE|STANDING)\b/i.test(kind)
     );
   });

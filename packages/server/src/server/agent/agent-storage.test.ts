@@ -179,6 +179,24 @@ describe("AgentStorage", () => {
     });
   });
 
+  test("a stopped turn keeps one pending notice across restart", async () => {
+    const parentId = "11111111-1111-4111-8111-111111111111";
+    const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
+    child.labels = { "paseo.parent-agent-id": parentId };
+    await storage.applySnapshot(child);
+    const armed = await storage.armFinishNotice(child, parentId, "report-up");
+    await storage.recordFinishNotice(child.id, "stopped-turn", "stopped");
+    const recovered = new AgentStorage(storagePath, logger);
+    expect(await recovered.getFinishNotice(child.id)).toMatchObject({
+      status: "pending",
+      reason: "stopped",
+      messageId: armed.messageId,
+    });
+    expect(await recovered.recordFinishNotice(child.id, "different-turn", "stopped")).toBeNull();
+    await recovered.settleFinishNotice(child.id, armed.messageId, "delivered", "report-up");
+    expect(await recovered.recordFinishNotice(child.id, "stopped-turn", "stopped")).toBeNull();
+  });
+
   test("a cancelled finish notice survives restart and permits rearming without dropping pending results", async () => {
     const parentId = "11111111-1111-4111-8111-111111111111";
     const child = createManagedAgent({ id: "22222222-2222-4222-8222-222222222222" });
